@@ -2899,9 +2899,13 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   group with no pending attempt and a publication that is `not-needed`, `confirmed`, or `owed` with no dispatch
   token is read by its id in both layers (`readSystemFormRootPresence`); only `absent` (the 0x80040217 404 in the
   saved AND the published read) retires it (`retireAbsentGroup` at its committed generation and root, two-layer
-  evidence, bound to the `observeRetirement` observation taken before the reads, so a change to the group while
-  the build reads refuses it and a later build reads again) with the `managed-root-retired` notice naming the
-  key. Present in either layer, a 403, a timeout or any other answer keeps the group untouched. A `dispatching`/`unconfirmed` publication is never read or retired
+  evidence, bound to the `observeRetirement` observation taken before the reads) with the `managed-root-retired`
+  notice naming the key. Present in either layer, a 403, a timeout or any other answer keeps the group untouched.
+  A retirement this build cannot confirm (the store could not be observed, the group changed while the build read
+  it, or the store refused or failed the write) is never retried in that build: it warns that the retirement
+  could not be confirmed, quarantines the form's table for the rest of the invocation (no app write admits it, no
+  publish names it), and the run ends incomplete naming the form; the next invocation rereads the durable result.
+  A `dispatching`/`unconfirmed` publication is never read or retired
   (the publish could still land: it is confirmed read-only or accepted as `publication-risk:<scopeKey>`), nor is
   a group the spec still declares (`form-layout-bound-row-missing`, repaired explicitly). A store with no such
   group adds no request. Tests: `tests/sdk-build-declared-forms.test.js` ("removed declared form", "deleted form
@@ -2937,8 +2941,11 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   group with no attempt and an owed, definitely-unsent publish (or none to settle) has its root read fresh in
   both layers (`readSystemFormRootPresence`); only `absent` (the missing-row 404 in both) lets the store retire
   it (`retireAbsentGroup`, generation- and root-checked, and bound to the `observeRetirement` observation taken
-  before the reads, so a change to the group while the build reads refuses it) with the notice
-  `managed-dashboard-retired`. A row in
+  before the reads) with the notice `managed-dashboard-retired`. A retirement this build cannot confirm (the
+  store could not be observed, the group changed while the build read it, or the store refused or failed the
+  write) is never retried in that build: it warns that the retirement could not be confirmed, quarantines the
+  dashboard for the rest of the invocation whatever it owed before, and the run ends incomplete naming it; the
+  next invocation rereads the durable result. A row in
   either layer, a 403, a timeout or any other failed read keeps the group and its fence; a block this
   invocation already holds is never cleared, so that invocation stays stopped and the next one is clean.
   The store's classification of owed debt (`classifyPersisted`) is unchanged; the fence is the build's. A withheld publish leaves the run
@@ -3007,21 +3014,29 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   stored rule attempt whose declaration left the spec keeps the run incomplete (`managed-not-settled`) while
   any of its effects may have been sent (`holdRemovedWorkflowAttempts`): the legacy path neither reads nor
   creates a rule of the table and name that attempt declared (its create may not be visible yet), nor writes
-  the row it holds; one whose effects are all unsent only warns. A removed group whose row is proved gone is
+  the row it holds; one whose effects are all unsent only warns (or is retired, below, when it was based on a
+  committed group whose row is gone). A removed group whose row is proved gone is
   retired (`retireAbsentGroup`, workflow evidence `{ kind: 'root-absent', rootId, row: 'not-found' }`) when a
   fresh exact-id `GET workflows(<id>)` this run made answered 404 `0x80040217` (`readWorkflowRowPresence`):
   an attempt whose effects are all settled (`confirmed`, `fulfilled`, or `definitely-unsent` with no dispatch
   token; e.g. a confirmed create whose activation was refused unapplied), with its token, at the generation it
-  is based on (`null` when nothing was committed); or a committed group with no attempt or effect. The notice
-  is a warning `managed-root-retired: declared <noun> "<key>" …` and never claims an activation. A present row,
-  any other answer (403, a 404 without that code, another row, a lost answer) or a store refusal keeps the hold;
-  a `dispatching`/`unconfirmed` effect is held without a read, and an attempt with an empty effect journal is
+  is based on (`null` when nothing was committed); a committed group with no attempt or effect; or an attempt on
+  a committed group whose own record says nothing was sent (prepared with nothing planned, or
+  `attemptProvenUnsent`: a send window that counted no possible send), such as a change of the security roles
+  alone that failed before it committed, retired with its token even with an empty effect journal. The notice
+  is a warning `managed-root-retired: declared <noun> "<key>" …` and never claims an activation. A present row
+  or any other answer (403, a 404 without that code, another row, a lost answer) keeps the hold;
+  a `dispatching`/`unconfirmed` effect is held without a read, and a sent attempt with an empty effect journal is
   never retired; the store also refuses an attempt with no record that nothing it sent can still land (its own
   create confirmed by a read, or a send window that counted no possible send). The order is the store's
   contract, in one place (`retire` in `holdRemovedWorkflowAttempts`): `observeRetirement` first, then the
   fresh row read, then `retireAbsentGroup` with that `observation`; a group, attempt or effect that moved since
   the observation (an effect dispatched, a send counted) is refused `managed-binding-generation-conflict` with
-  nothing written, and the group is kept for a later run to observe and read again. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
+  nothing written. A retirement this build cannot confirm (that refusal, any other refusal or failure of the
+  write, or a store that could not be observed) is never retried in that build: the key's row, its declared
+  table and name, and those of any attempt the store file now holds for it stay held for the rest of the
+  invocation (`holdUnconfirmed`), the run ends incomplete (`managed-not-settled`, "its retirement could not be
+  confirmed"), and the next invocation rereads the durable result. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
   rules with one key. Nothing is published: a rule's activation is its state write.
   **Verify and download** (`lib/declared-rule-io.js`): verify reads each bound declared rule fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredRule`) and runs `verifyDeclaredRule`
@@ -3073,7 +3088,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   declaration left the spec holds the run (`managed-not-settled`) exactly as a rule's does
   (`holdRemovedWorkflowAttempts`): the legacy path neither reads nor creates a flow of the table and name that
   attempt declared (a create whose answer was lost may not be visible yet, or may still arrive), nor writes the
-  row it holds, and a removed flow whose row is proved gone is retired as a rule's is. A declaration that changes
+  row it holds, and a removed flow whose row is proved gone is retired as a rule's is (a failed `declaration`-mode
+  attempt, below, included). A declaration that changes
   nothing of the workflow but differs from the group's `originalDeclaration` (its `securityRoles`, say) is the
   plan's `declaration` mode: no workflow request, and a commit that records it, so the managed download restores
   the current intent; an identical one is a no-op with no store write. Nothing is published.

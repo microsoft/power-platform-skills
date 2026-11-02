@@ -779,7 +779,7 @@ test('a committed rule the spec no longer declares is retired once its row is pr
 
 // The store's observation is taken BEFORE the row is read. Another run that counts a send of the removed rule's attempt while that
 // read is on the wire may put the row back after the 404; every effect is still settled and the create confirmed, so only the
-// observation refuses the retirement. Nothing is written and the attempt is kept.
+// observation refuses the retirement. Nothing is written, the attempt is kept, and this run cannot confirm the retirement.
 test('a removed rule whose attempt another run counts a send for while its row is read is not retired by that read', async () => {
   await withRules(true, async () => {
     const wire = createWorkflowWire();
@@ -797,7 +797,7 @@ test('a removed rule whose attempt another run counts a send for while its row i
     const res = await build(wire, dir, specWith([]));
     assert.equal(raced, true);
     assert.equal(res.err && res.err.code, 'managed-not-settled', chainText(res.err));
-    assert.match(chainText(res.err), /it is not retired: the binding store did not retire it \(managed-binding-generation-conflict: .*changed since it was observed/);
+    assert.match(chainText(res.err), /its retirement could not be confirmed \(the binding store did not confirm the retirement \(managed-binding-generation-conflict: .*changed since it was observed.*keeps its row, table and name held, and the next invocation rereads the durable result/);
     assert.deepEqual(res.writes, []);
     assert.doesNotMatch(res.warnings.join('\n'), RETIRED);
     assert.equal((storeOf(dir).snapshot().envelope.retiredGroups || []).length, 0);

@@ -62,8 +62,7 @@ const rootOrigin = (g) => (g.records.find((r) => r.kind === 'form' && r.key === 
 const storeOf = (org, dir) => openManagedBindings({ workspaceDir: dir, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION });
 
 // One invocation: a fresh barrier, observer and SDK over `dir` (a stopped invocation's SDK and observer are retired).
-async function build(org, dir, spec, opts = {}) {
-  const barrier = createPublicationBarrier();
+async function build(org, dir, spec, { barrier = createPublicationBarrier(), ...opts } = {}) {
   const sendObserver = createAttemptSendObserver();
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, sendObserver) });
   await sdk.initWorkspace();
@@ -76,7 +75,7 @@ async function build(org, dir, spec, opts = {}) {
     err = e;
   }
   const calls = org.calls.slice(mark);
-  return { out, err, calls, writes: calls.filter((c) => c.method !== 'GET'), tablePublishes: org.tablePublishes(mark) };
+  return { out, err, calls, writes: calls.filter((c) => c.method !== 'GET'), tablePublishes: org.tablePublishes(mark), barrier };
 }
 
 const formPosts = (r) => r.writes.filter((c) => c.method === 'POST' && /^\/systemforms(?:\?|$)/.test(c.path));
@@ -971,8 +970,8 @@ test('a deleted form is never retired over a publish that may have been sent, wh
 // The retirement is bound to the store as observed BEFORE the two layer reads. Here another run settles the owed publish
 // against a live published layer (confirmPublished, no dispatch: owed becomes not-needed) while this build reads the saved
 // layer: the same generation and root, and a state that is itself retirable. Only the observation tells the store the
-// group moved after the proof's read, so the retirement is refused and nothing is written for it; the next build observes
-// and reads again.
+// group moved after the proof's read, so the retirement is refused and nothing is written for it: this invocation keeps the
+// form's table fenced and ends incomplete, and the next build observes and reads again.
 test('a store change between the observation and the retirement refuses the retirement of a removed deleted form; the next build retires it', async () => {
   await withForms(true, async () => {
     const org = createFakeBuildOrg({ entities: ENTITIES });
@@ -992,7 +991,9 @@ test('a store change between the observation and the retirement refuses the reti
     assert.equal(raced, 1, 'the concurrent change landed between the observation and the retirement');
     assert.deepEqual(retiredNotices(r.warns), []);
     assert.deepEqual(retiredOf(org, dir), [], 'nothing is retired on a proof about an older state');
-    assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('managed-binding-generation-conflict') && w.includes('not retired')), r.warns.join('\n'));
+    assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('managed-binding-generation-conflict') && w.includes('its retirement could not be confirmed')), r.warns.join('\n'));
+    assert.notEqual(r.err, undefined, 'this invocation does not end clean');
+    assert.equal(r.barrier.checkAppWrite({ added: ['contoso_item'] }).ok, false, 'and keeps the table fenced in it');
     assert.deepEqual(r.writes, []);
     const kept = storeOf(org, dir).readGroup('form', KEY).committed;
     assert.deepEqual([kept.generation, kept.root.id, kept.publication.state], [before.generation, before.root.id, 'not-needed'], 'the concurrent change is kept');
@@ -1005,3 +1006,50 @@ test('a store change between the observation and the retirement refuses the reti
     assert.deepEqual(retiredOf(org, dir).map((e) => [e.key, e.publication]), [[KEY, 'not-needed']]);
   });
 });
+
+// A refused retirement leaves this invocation's cached store from before the race. Another invocation that, while this one
+// reads the published layer, commits a new owed generation, prepares an attempt, or marks a carried publish dispatching, and a
+// form that is there again, must still find the form's table fenced for the rest of this invocation: no app write admits the
+// table, a plain publish naming it is not sent, and the run ends incomplete naming the form.
+for (const state of ['owed', 'pending', 'dispatching']) {
+  test(`a retirement refused because another invocation left the removed form ${state} fences its table for the rest of this invocation`, async () => {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      assert.equal((await build(org, dir, makeSpec())).err, undefined);
+      const g = storeOf(org, dir).readGroup('form', KEY).committed;
+      let raced = 0;
+      let restore = () => {};
+      const published = (rowId) => {
+        if (!raced) {
+          raced += 1;
+          const other = storeOf(org, dir);
+          if (state === 'dispatching') {
+            other.markPublishDispatch({ groups: [], carried: [{ family: 'form', key: KEY, generation: g.generation, savedSha256: 'a'.repeat(64), publishedSha256: 'a'.repeat(64) }], scope: g.publication.scope, token: 'concurrent-publish' });
+          } else {
+            const token = other.prepareAttempt({ family: 'form', key: KEY, baseGeneration: g.generation, root: g.root, knownScopes: [g.publication.scope], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+            if (state === 'owed') {
+              other.markSending(token, { proofVersion: 1, proofSchema: g.proofSchema, rootId: g.root.id, baseProofSha256: null, sentProjectionSha256: 'b'.repeat(64), preservationSha256: 'c'.repeat(64), baseObservation: null, children: [] });
+              other.noteSaved(token, { proof: g.proof, acknowledgedRoot: false });
+              other.commitGroup({ token, baseGeneration: g.generation, records: g.records, proof: g.proof, consumerState: g.consumerState, publication: { scope: g.publication.scope, state: 'owed', desiredSha256: 'd'.repeat(64), dispatchToken: null } });
+            }
+          }
+          restore();
+        }
+        return missingRow(rowId);
+      };
+      ({ restore } = deleteForm(org, g.root.id, { published }));
+      const r = await buildWarned(org, dir, removedForm());
+      restore();
+      assert.equal(raced, 1, 'the concurrent change landed during the published read');
+      assert.deepEqual(retiredOf(org, dir), []);
+      assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('managed-binding-generation-conflict') && w.includes('its retirement could not be confirmed') && w.includes('the next invocation rereads')), r.warns.join('\n'));
+      assert.match(chainText(r.err), new RegExp(`managed form "${KEY}" \\(its retirement could not be confirmed`));
+      assert.deepEqual([r.writes, r.tablePublishes], [[], []]);
+      assert.equal(r.barrier.checkAppWrite({ added: ['contoso_item'] }).ok, false, 'no app write admits its table');
+      const mark = org.calls.length;
+      await gatedClient(org, r.barrier).post(`${org.origin}/api/data/v9.2/PublishXml`, { ParameterXml: '<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>' }).catch(() => {});
+      assert.deepEqual(org.tablePublishes(mark), [], 'a plain publish naming its table is not sent');
+    });
+  });
+}

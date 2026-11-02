@@ -15,11 +15,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
-const { openManagedBindings } = require('../lib/managed-bindings.js');
+const { openManagedBindings, attemptProvenUnsent } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { createDeferredWorkflowGate } = require('../lib/deferred-workflow-gate.js');
 const { DECLARED_FEATURES } = require('../lib/declared-features.js');
+const { currentWorkflowEffect } = require('../lib/workflow-effect-context.js');
 const { RETRY } = require('../lib/retry-policy.js');
 const { createWorkflowWire, ORIGIN } = require('./helpers/workflow-wire.js');
 const { sdkOver, clientOver } = require('./helpers/managed-wire.js');
@@ -828,7 +829,7 @@ test('a committed flow the spec no longer declares is retired once its row is pr
   });
 });
 
-test('a removed flow whose binding store changes while its row is read is not retired by that read', async () => {
+test('a removed flow whose binding store changes while its row is read is not retired by that read, and stays held for the rest of the run', async () => {
   await withBpf(true, async () => {
     const wire = createWorkflowWire();
     const dir = makeTempDir('declared-bpf-');
@@ -850,11 +851,47 @@ test('a removed flow whose binding store changes while its row is read is not re
     }, null);
     const res = await build(wire, dir, specWith([]));
     assert.equal(raced, true);
-    assert.equal(res.err, undefined);
+    // The other run's retirement is durable, but this run cannot confirm it: it ends incomplete, and the next run is clean.
+    assert.equal(res.err && res.err.code, 'managed-not-settled', chainText(res.err));
     assert.deepEqual(res.writes, []);
     assert.doesNotMatch(res.warnings.join('\n'), RETIRED);
-    assert.match(res.warnings.join('\n'), /declared business process flow "new_ticket\/Ticket process": the spec no longer declares it, and it stays in the binding store: the binding store did not retire it \(managed-not-settled: /);
+    assert.match(chainText(res.err), /declared business process flow "new_ticket\/Ticket process": the spec no longer declares it, and its retirement could not be confirmed \(the binding store did not confirm the retirement \(managed-not-settled: .*\); this run wrote nothing to it and keeps its row, table and name held, and the next invocation rereads the durable result/);
     assert.equal(storeOf(dir).snapshot().envelope.retiredGroups.length, 1, 'only the other run\'s retirement is recorded');
+    const next = await build(wire, dir, specWith([]));
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.deepEqual([next.writes, next.lines.filter((l) => /workflows/i.test(l))], [[], []]);
+  });
+});
+
+// A refused retirement leaves this run's cached store from before the race. Another run that, while this run's exact read is on
+// the wire, retires the group and prepares a fresh create of the same flow (a new row id, the same table and name) must still
+// find that table and name held in this run: a legacy entry of the same name reads and creates nothing beside the other run's
+// create, and the run ends incomplete.
+test('a removed flow whose retirement could not be confirmed keeps its table and name held: a legacy entry of the same name creates nothing', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    const committed = storeOf(dir).readGroup('bpf', GROUP).committed;
+    const id = committed.root.id;
+    wire.rows.delete(id);
+    let raced = false;
+    wire.script((e) => {
+      if (!raced && idReadOf(id)(e)) {
+        raced = true;
+        const other = storeOf(dir);
+        const { observation } = other.observeRetirement({ family: 'bpf', key: GROUP });
+        other.retireAbsentGroup({ family: 'bpf', key: GROUP, generation: committed.generation, rootId: id, evidence: { kind: 'root-absent', rootId: id, row: 'not-found' }, observation });
+        other.prepareAttempt({ family: 'bpf', key: GROUP, baseGeneration: null, root: { ...committed.root, id: '99999999-9999-4999-8999-999999999999' }, knownScopes: [], declarationSha256: 'a'.repeat(64), declaration: committed.originalDeclaration });
+      }
+      return false;
+    }, null);
+    const res = await build(wire, dir, specWith([legacy(FLOW)]));
+    assert.equal(raced, true);
+    assert.equal(res.err && res.err.code, 'managed-not-settled', chainText(res.err));
+    assert.match(chainText(res.err), /its retirement could not be confirmed .*keeps its row, table and name held/);
+    assert.deepEqual(res.writes, [], 'no legacy create beside the other run\'s');
+    assert.deepEqual(res.lines.filter((l) => /\bname eq\b/i.test(decodeURIComponent(l))), [], 'not even read by name');
   });
 });
 
@@ -885,7 +922,7 @@ for (const [how, move] of [
       const res = await build(wire, dir, specWith([]));
       assert.equal(raced, true);
       assert.equal(res.err && res.err.code, 'managed-not-settled', chainText(res.err));
-      assert.match(chainText(res.err), /it is not retired: the binding store did not retire it \(managed-binding-generation-conflict: .*changed since it was observed/);
+      assert.match(chainText(res.err), /its retirement could not be confirmed \(the binding store did not confirm the retirement \(managed-binding-generation-conflict: .*changed since it was observed.*keeps its row, table and name held, and the next invocation rereads the durable result/);
       assert.deepEqual(res.writes, []);
       assert.doesNotMatch(res.warnings.join('\n'), RETIRED);
       const after = storeOf(dir);
@@ -911,6 +948,194 @@ test('a removed flow whose operation was never sent is only noted: no read of it
     assert.deepEqual(removed.lines.filter((l) => /workflows/i.test(l)), [], 'nothing sent, so nothing to read');
     assert.match(removed.warnings.join('\n'), /declared business process flow "new_ticket\/Ticket process": an earlier run prepared it and sent nothing/);
   });
+});
+
+// --- a removed declaration whose attempt sent nothing, on a committed flow or rule ----------------------------------------------
+
+// A change of the security roles alone is a declaration-only attempt on the committed flow: it sends no workflow write, so its
+// journal is empty. When it fails before it commits, its own record still says nothing was sent (a send window that counted no
+// possible send). A maker who then deletes the flow and removes the entry must not leave the group and attempt held forever:
+// once a fresh read by the row's id answers not found, the store retires both. The rest pins what must not change around it.
+const ROLE_FLOW = { ...FLOW, securityRoles: { personas: ['Ops'] } };
+const roleSpec = () => ({ ...specWith([ROLE_FLOW]), personas: [
+  { persona: 'Ops', appAccess: false, jobs: [{ name: 'Triage', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+] });
+const workflowWrites = (r) => r.writes.filter((e) => /^workflows/i.test(e.path));
+// The run's saved proof of a change of a committed flow fails to persist, before the attempt can commit.
+const failSavedNote = (sdk, gate) => {
+  const bind = gate.bind;
+  gate.bind = (store) => {
+    const note = store.noteSaved;
+    store.noteSaved = (token, ...args) => {
+      const a = store.readGroup('bpf', GROUP).pending;
+      if (a && a.baseGeneration !== null) throw Object.assign(new Error('the store refused the write'), { code: 'managed-binding-write-failed' });
+      return note(token, ...args);
+    };
+    return bind(store);
+  };
+};
+async function rolesOnlyFailed(wire, dir) {
+  assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+  assert.deepEqual(validateAppSpec(roleSpec(), { profile: 'deploy' }).errors, []);
+  assert.ok((await build(wire, dir, roleSpec(), { configureSdk: failSavedNote })).err);
+  const held = storeOf(dir).readGroup('bpf', GROUP);
+  assert.deepEqual(held.effects, [], 'a declaration-only attempt journals nothing');
+  assert.equal(attemptProvenUnsent(held.pending, held.effects), true, 'its record says nothing was sent');
+  return held;
+}
+
+test('a declaration-only attempt that failed recovers the recorded roles with no workflow write while its flow is there', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    await rolesOnlyFailed(wire, dir);
+    const recovered = await build(wire, dir, roleSpec());
+    assert.equal(recovered.err, undefined, chainText(recovered.err));
+    assert.deepEqual(workflowWrites(recovered), []);
+    assert.deepEqual(storeOf(dir).readGroup('bpf', GROUP).committed.originalDeclaration, ROLE_FLOW);
+  });
+});
+
+test('a removed declaration-only attempt whose flow was deleted is retired with its group once a read by its id answers not found', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    const held = await rolesOnlyFailed(wire, dir);
+    const id = held.pending.root.id;
+
+    // The flow is there: only noted, as before; nothing is written.
+    const present = await build(wire, dir, specWith([]));
+    assert.equal(present.err, undefined, chainText(present.err));
+    assert.deepEqual(present.writes, []);
+    assert.match(present.warnings.join('\n'), /an earlier run prepared it and sent nothing/);
+    assert.equal(storeOf(dir).readGroup('bpf', GROUP).pending.token, held.pending.token);
+
+    wire.rows.delete(id);
+    const retired = await build(wire, dir, specWith([]));
+    assert.equal(retired.err, undefined, chainText(retired.err));
+    assert.deepEqual(retired.writes, []);
+    assert.equal(retired.lines.filter((l) => l === 'GET workflows(<id>)?$select').length, 1, 'one read by its exact id');
+    assert.match(retired.warnings.join('\n'), RETIRED);
+    assert.deepEqual(storeOf(dir).readGroup('bpf', GROUP), { committed: null, pending: null, effects: [] });
+    const entry = storeOf(dir).snapshot().envelope.retiredGroups.at(-1);
+    assert.deepEqual([entry.key, entry.rootId, entry.generation, entry.attempt && entry.attempt.effects], [GROUP, id, held.committed.generation, []]);
+    const again = await build(wire, dir, specWith([]));
+    assert.equal(again.err, undefined, chainText(again.err));
+    assert.deepEqual(again.lines.filter((l) => /workflows/i.test(l)), [], 'nothing left to read');
+  });
+});
+
+// The same shape for both families through the store API: an attempt prepared on the committed group (nothing planned, nothing
+// sent) by a run that stopped before its send. A rule has no declaration-only change, so this is how its shape is reached.
+const RULE = {
+  entity: 'new_ticket', name: 'Hide notes when closed', reconcile: 'declared',
+  conditions: [{ key: 'closed', field: 'new_status', operator: 'Equals', value: '100000001', dataType: 'Picklist' }],
+  actions: [{ key: 'hide-notes', type: 'SetVisibility', field: 'new_notes', visible: false }],
+};
+async function withRules(on, fn) {
+  const was = DECLARED_FEATURES.rules;
+  DECLARED_FEATURES.rules = on;
+  try { return await fn(); } finally { DECLARED_FEATURES.rules = was; }
+}
+const FAMILIES = {
+  bpf: { on: withBpf, decl: FLOW, key: GROUP, spec: (d) => specWith(d ? [d] : []), opts: {} },
+  rule: { on: withRules, decl: RULE, key: `new_ticket/${RULE.name}`, spec: (d) => ({ ...specWith([]), businessRules: d ? [d] : [] }), opts: { phases: ['business-rules'] } },
+};
+
+for (const [family, f] of Object.entries(FAMILIES)) {
+  test(`${family}: a removed attempt prepared on its committed group and never sent is retired with the group once its row is gone`, async () => {
+    await f.on(true, async () => {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-bpf-');
+      assert.equal((await build(wire, dir, f.spec(f.decl), f.opts)).err, undefined);
+      const g = storeOf(dir).readGroup(family, f.key).committed;
+      storeOf(dir).prepareAttempt({ family, key: f.key, baseGeneration: g.generation, root: g.root, knownScopes: [], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+      wire.rows.delete(g.root.id);
+      const retired = await build(wire, dir, f.spec(null), f.opts);
+      assert.equal(retired.err, undefined, chainText(retired.err));
+      assert.deepEqual(retired.writes, []);
+      assert.equal(retired.warnings.filter((w) => w.startsWith('managed-root-retired:')).length, 1, retired.warnings.join('\n'));
+      assert.deepEqual(storeOf(dir).readGroup(family, f.key), { committed: null, pending: null, effects: [] });
+    });
+  });
+
+  test(`${family}: every managed workflow write is journaled before it is sent, a retry reuses its effect, and an unchanged or refused build writes nothing`, async () => {
+    await f.on(true, async () => {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-bpf-');
+      const observed = [];
+      const raw = wire.request;
+      wire.request = async (req) => {
+        if (req.method !== 'GET' && /\/workflows/i.test(req.url)) {
+          const context = currentWorkflowEffect();
+          assert.ok(context, 'a managed workflow write runs inside its effect');
+          const record = storeOf(dir).readGroup(family, f.key).effects.find((e) => e.token === context.token);
+          assert.equal(record && record.state, 'dispatching');
+          if (req.method === 'PATCH') assert.ok(Object.entries(req.headers || {}).some(([k, v]) => k.toLowerCase() === 'if-match' && v));
+          observed.push({ token: record.token, effect: record.effect });
+        }
+        return raw(req);
+      };
+      const failFirst = await build(wire, dir, f.spec(f.decl), { ...f.opts, configureSdk: (sdk) => {
+        sdk.executePrepared = async () => { throw Object.assign(new Error('before transport'), { code: 'ECONNREFUSED' }); };
+      } });
+      assert.ok(failFirst.err);
+      const firstToken = storeOf(dir).readGroup(family, f.key).effects[0].token;
+      const resumed = await build(wire, dir, f.spec(f.decl), f.opts);
+      assert.equal(resumed.err, undefined, chainText(resumed.err));
+      assert.deepEqual(observed.map((x) => x.effect), ['create', 'state']);
+      assert.equal(observed[0].token, firstToken, 'the retry reuses the persisted create effect');
+      const id = storeOf(dir).readGroup(family, f.key).committed.root.id;
+      const noop = await build(wire, dir, f.spec(f.decl), f.opts);
+      assert.equal(noop.err, undefined, chainText(noop.err));
+      assert.deepEqual(workflowWrites(noop), []);
+      const edit = await build(wire, dir, f.spec({ ...f.decl, status: 'Draft' }), f.opts);
+      assert.ok(edit.err);
+      assert.deepEqual(workflowWrites(edit), []);
+      assert.equal(wire.row(id).statecode, 1);
+    });
+  });
+
+  test(`${family}: a held activation whose answer was lost settles by its late arrival without a second send`, async () => {
+    await f.on(true, async () => {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-bpf-');
+      wire.script((e) => e.method === 'PATCH', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+      assert.ok((await build(wire, dir, f.spec(f.decl), f.opts)).err);
+      const a = storeOf(dir).readGroup(family, f.key);
+      const id = a.pending.root.id;
+      const late = wire.log.find((e) => e.method === 'PATCH');
+      const legacyDecl = family === 'bpf' ? legacy(f.decl) : { entity: RULE.entity, name: RULE.name, conditions: RULE.conditions.map(({ key, ...c }) => c), actions: RULE.actions.map(({ key, ...x }) => x) };
+      const held = await build(wire, dir, f.spec(legacyDecl), f.opts);
+      assert.ok(held.err);
+      assert.deepEqual(held.writes, []);
+      assert.equal(storeOf(dir).readGroup(family, f.key).pending.token, a.pending.token);
+      await wire.request({ method: late.method, url: late.url, headers: late.headers, body: JSON.stringify(late.body) });
+      assert.equal(wire.row(id).statecode, 1);
+      const recovered = await build(wire, dir, f.spec(f.decl), f.opts);
+      assert.equal(recovered.err, undefined, chainText(recovered.err));
+      assert.deepEqual(workflowWrites(recovered), []);
+      assert.equal(storeOf(dir).readGroup(family, f.key).pending, null);
+    });
+  });
+}
+
+test('retiring a removed flow leaves an unrelated rule attempt and its effects exactly as they were', async () => {
+  await withBpf(true, () => withRules(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    wire.script((e) => e.method === 'PATCH', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+    assert.ok((await build(wire, dir, { ...specWith([FLOW]), businessRules: [RULE] }, { phases: ['business-rules'] })).err);
+    const before = storeOf(dir).readGroup('rule', FAMILIES.rule.key);
+    assert.ok(before.pending);
+    wire.rows.delete(storeOf(dir).readGroup('bpf', GROUP).committed.root.id);
+    const result = await build(wire, dir, specWith([]));
+    assert.equal(result.err, undefined, chainText(result.err));
+    assert.deepEqual(result.writes, []);
+    assert.deepEqual(storeOf(dir).readGroup('rule', FAMILIES.rule.key), before);
+    assert.equal(storeOf(dir).readGroup('bpf', GROUP).committed, null);
+  }));
 });
 
 // --- a change of the authored flow alone -------------------------------------------------------------------------------------

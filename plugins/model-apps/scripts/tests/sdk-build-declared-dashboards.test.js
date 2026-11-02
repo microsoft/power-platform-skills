@@ -1221,8 +1221,10 @@ test('removed owed: a store change between the observation and the retirement re
     const kept = committedGroup(w.dir);
     assert.equal(kept.generation, w.group.generation);
     assert.equal(kept.publication.state, 'not-needed', 'the concurrent change is kept');
-    assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('managed-binding-generation-conflict') && m.includes('not retired')), warnings.join('\n'));
+    assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('managed-binding-generation-conflict') && m.includes('its retirement could not be confirmed')), warnings.join('\n'));
     assert.ok(!warnings.some((m) => m.includes('managed-dashboard-retired')), warnings.join('\n'));
+    assert.match(chainText(r.err), new RegExp(`managed dashboard "${KEY}" \\(its retirement could not be confirmed`), 'the unconfirmed retirement ends this invocation incomplete');
+    assert.equal(r.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false, 'and keeps the dashboard fenced in it');
     const next = await buildWith(w.wire, w.dir, removed);
     assert.equal(next.err, undefined, chainText(next.err));
     assert.equal(next.calls.filter(savedReadOf(w.id)).length, 1, 'the next build reads the root again');
@@ -1230,3 +1232,57 @@ test('removed owed: a store change between the observation and the retirement re
     assert.equal(retiredOf(w.dir)[0].publication, 'not-needed');
   });
 });
+
+// A refused retirement leaves this invocation's cached store from before the race. Another invocation that, while this one
+// reads the published layer, commits a new owed generation, prepares an attempt, or marks a carried publish dispatching, and
+// a saved row that is there again, must still find the dashboard fenced for the rest of this invocation: no app write admits
+// it, a scoped publish naming it is not sent, and the run ends incomplete naming it.
+for (const state of ['owed', 'pending', 'dispatching']) {
+  test(`removed settled: a retirement refused because another invocation left the dashboard ${state} fences it for the rest of this invocation`, async () => {
+    await withDashboards(true, async () => {
+      const wire = wireWithIdReads();
+      const dir = makeTempDir('declared-dash-');
+      assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+      const g = committedGroup(dir);
+      const id = g.root.id;
+      const row = { ...wire.saved.get(id), description: 'Concurrent later draft' };
+      wire.saved.delete(id);
+      wire.published.delete(id);
+      const request = wire.request;
+      let raced = 0;
+      wire.request = async (req) => {
+        const answer = await request(req);
+        if (!raced && String(req.method).toUpperCase() === 'GET' && req.url.includes(id) && !/RetrieveUnpublished/.test(req.url)) {
+          raced += 1;
+          const other = storeOf(dir);
+          if (state === 'dispatching') {
+            other.markPublishDispatch({ groups: [], carried: [{ family: 'dashboard', key: KEY, generation: g.generation, savedSha256: g.publication.desiredSha256, publishedSha256: g.publication.desiredSha256 }], scope: g.publication.scope, token: 'concurrent-publish' });
+          } else {
+            const token = other.prepareAttempt({ family: 'dashboard', key: KEY, baseGeneration: g.generation, root: g.root, knownScopes: [g.publication.scope], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+            if (state === 'owed') {
+              other.markSending(token, { proofVersion: 1, proofSchema: 'dashboard-v1', rootId: id, baseProofSha256: null, sentProjectionSha256: 'b'.repeat(64), preservationSha256: 'c'.repeat(64), baseObservation: null, children: [] });
+              other.noteSaved(token, { proof: g.proof, acknowledgedRoot: false });
+              other.commitGroup({ token, baseGeneration: g.generation, records: g.records, proof: g.proof, consumerState: g.consumerState, publication: { scope: g.publication.scope, state: 'owed', desiredSha256: g.publication.desiredSha256, dispatchToken: null } });
+            }
+          }
+          wire.putForm(row);
+        }
+        return answer;
+      };
+      const warnings = [];
+      const r = await buildWith(wire, dir, dropDashboard(makeSpec()), { warn: (m) => warnings.push(String(m)) });
+      wire.request = request;
+      assert.equal(raced, 1, 'the concurrent change landed during the published read');
+      assert.deepEqual(retiredOf(dir), []);
+      assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('managed-binding-generation-conflict') && m.includes('its retirement could not be confirmed') && m.includes('the next invocation rereads')), warnings.join('\n'));
+      assert.match(chainText(r.err), new RegExp(`managed dashboard "${KEY}" \\(its retirement could not be confirmed`));
+      assert.equal(serviceWrites(r.calls).length, 0);
+      assert.equal(r.barrier.checkAppWrite({ addedDashboards: [id] }).ok, false, 'no app write admits it');
+      const mark = wire.log.length;
+      const client = clientOver(wire, { barrier: r.barrier, observer: createAttemptSendObserver() });
+      await client.post(`${ORIGIN}/api/data/v9.0/PublishXml`, { ParameterXml: `<importexportxml><dashboards><dashboard>${id}</dashboard></dashboards></importexportxml>` });
+      assert.deepEqual(wire.log.slice(mark), [], 'a scoped publish naming it is not sent');
+      assert.equal(wire.published.get(id), undefined, 'the concurrent saved row is not put live');
+    });
+  });
+}

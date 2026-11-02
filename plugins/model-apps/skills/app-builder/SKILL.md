@@ -169,7 +169,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   file>`; it carries no binding, so the first build that binds each form from the downloaded folder needs
   `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
-  `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below).
+  `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below). A
+  build that warns a form's or dashboard's retirement could not be confirmed keeps it blocked and ends incomplete;
+  the next build reads it again.
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
   dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
   `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are
@@ -210,7 +212,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   (`securityRoles`) writes nothing to the flow; the build records it, and a managed download brings it back. A
   declared rule or flow removed from the spec whose row was deleted is no longer managed once the build reads it gone
   by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
-  change is still waiting to be proved keeps the build incomplete.
+  change is still waiting to be proved keeps the build incomplete. A retirement a build reports it could not
+  confirm also ends that build incomplete; tell the maker to run the build again, which reads the record afresh.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run

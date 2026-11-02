@@ -746,8 +746,10 @@ are only added.
   say it does not exist, the build stops managing it, including a publish of its table it still owed: it
   writes nothing, prints `managed-root-retired` with the form's key, and `--verify` no longer checks it.
   Until that build runs, `--verify` fails the form. A form found in either layer, or a read that fails (no
-  access, a timeout), is kept as it is, and so is one whose record changes while the build reads it (another
-  build settled or changed it): a later build reads it again. A form whose last publish is unconfirmed is not released this way,
+  access, a timeout), is kept as it is. If the build cannot confirm the retirement (another build settled or
+  changed the record while this one read it, or the record could not be written), it warns that the retirement
+  could not be confirmed, keeps the form's table blocked for the rest of that build, and ends incomplete; the
+  next build reads the record again. A form whose last publish is unconfirmed is not released this way,
   because that publish may still complete: it stays blocked until a read confirms it or the maker accepts
   `publication-risk:table:<table>` (see "An unconfirmed publish" above). A form the spec still declares is
   not released either: its missing form stops the build (`form-layout-bound-row-missing`).
@@ -829,8 +831,10 @@ existing one is reused and its tiles are never edited.
     its id in both the saved and the published layer. When both answer that the row does not exist, the
     build retires its record and reports `managed-dashboard-retired`; nothing is sent, and its unpublished
     change is dropped with it. A row in either layer, or a read that fails (no access, a timeout), keeps the
-    block. If the record changes while the build reads it (another build settled or changed it), it is not
-    retired in that build; a later build reads it again. A dashboard you declare under that key later is a new one.
+    block. If the build cannot confirm the retirement (another build settled or changed the record while this
+    one read it, or the record could not be written), it warns that the retirement could not be confirmed,
+    keeps the dashboard blocked for the rest of that build, and ends incomplete; the next build reads the
+    record again. A dashboard you declare under that key later is a new one.
   - A plain `dashboards[]` entry with that dashboard's id or name stops the build before it sends anything,
     so it never makes a second dashboard in its place.
 
@@ -894,7 +898,10 @@ Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exa
   holds for a rule whose last change was proved, and for one whose create was proved but whose activation
   was never sent. The notice says only that the row is gone, never that a change of it was made. A row that
   is there, a read that is refused or cannot be read, and a change that may have been sent and is not proved
-  keep it as above. Once retired, `--verify` no longer checks it.
+  keep it as above. If the build cannot confirm the retirement (another build changed the record while this
+  one read the row, or the record could not be written), it ends incomplete (`managed-not-settled`) and, for
+  the rest of that build, neither reads nor creates a rule of that table and name; the next build reads the
+  record again. Once retired, `--verify` no longer checks it.
 - **Publishing.** A rule is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared rule again by its id and holds it to what its last
   build proved: its whole body (every condition and action, the spec's and any other) and its status. It
@@ -967,8 +974,10 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   row of a create whose answer was lost may not be visible yet.
 - **A removed flow whose row is gone.** When a read by the flow's own id answers that the row does not
   exist, the build stops managing it and warns `managed-root-retired` with its `<table>/<name>`, as for a
-  rule (above): a flow whose last change was proved, and one whose create was proved but whose activation
-  was never sent. Anything less than that answer keeps it as above. Once retired, `--verify` no longer
+  rule (above): a flow whose last change was proved, one whose create was proved but whose activation
+  was never sent, and one whose change of the security roles alone failed before it was recorded. Anything
+  less than that answer keeps it as above, and a retirement the build cannot confirm ends it incomplete as
+  for a rule. Once retired, `--verify` no longer
   checks it.
 - **Publishing.** A flow is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared flow again by its id and holds it to what its last

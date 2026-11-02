@@ -168,7 +168,7 @@ const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approval
 const { createPassthroughCreates } = require('./creates-passthrough.js');
 const { isDeclaredView, declaredViewKey, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
 const { isDeclaredChart, declaredChartKey, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
-const { openManagedContext, isStoreEnvironment } = require('./managed-bindings.js');
+const { openManagedContext, isStoreEnvironment, attemptProvenUnsent } = require('./managed-bindings.js');
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
@@ -3732,8 +3732,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // either layer, a 403, a timeout, a malformed answer or any read that fails keeps the fence (and keeps the group). On
   // that evidence the store retires the group in one change checked against what it observed before the reads
   // (retireAbsentGroup: the same observation, generation and root, no attempt, no publish that may have been sent; it
-  // refuses with nothing written otherwise, and the fence stays), which records that the root was proved gone and the
-  // group retired, NOT that its content was published or its debt paid. A retired group installs no fence; a block this
+  // refuses with nothing written otherwise), which records that the root was proved gone and the group retired, NOT that
+  // its content was published or its debt paid. A retirement that cannot be confirmed (a refusal, a failed store write, a
+  // group that moved after this run read the store) fences the dashboard for the rest of this invocation and leaves the
+  // run incomplete; the next invocation rereads the file. A retired group installs no fence; a block this
   // invocation already holds on the scope (a caller's barrier) is never cleared, so that invocation stays stopped and the
   // next proceeds from the file. A group with a pending attempt, or a publish that may have been sent, is not read here:
   // the store holds those (openManagedContext).
@@ -3759,15 +3761,37 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // retiring on a proof about an older state. An observation taken after the reads proves nothing (the row may have come
     // back between the read and it), so a refusal is never retried here with a new one: the next build observes and
     // reads again. The generation and root retired are the ones the observation saw, taken from the reread store.
-    const retireIfAbsent = async (key) => {
+    //
+    // A retirement this invocation cannot confirm fences the dashboard for the rest of the invocation, whatever state the
+    // group had before: the store could not be observed, the observed group is no longer one this sweep may retire, or
+    // the store refused or failed the retirement. Each of those can mean another invocation moved the group after this one
+    // read the store (a new owed generation, a pending attempt, a carried publish marked dispatching), and a store error
+    // after the file was replaced leaves the durable result unknown. None of that is in this run's cached store (a refusal
+    // updates nothing, and snapshot() is a copy of the cache), so the fence loop below and every later gate would admit an
+    // app write or a scoped publish of a saved layer nothing proved. The quarantine holds the dashboard instead, the run
+    // ends incomplete naming it (publication-withheld), and the next invocation rereads the store file as it is.
+    const unconfirmed = (key, ids, why) => {
+      const roots = [...new Set(ids.filter(Boolean).map((id) => String(id).toLowerCase()))];
+      owed.barrier.quarantine(roots.map((id) => ({ type: 'dashboard', id })), roots, `managed dashboard "${key}" (its retirement could not be confirmed: ${why}; this invocation keeps it fenced, and the next invocation rereads the durable result)`);
+      if (typeof opts.warn === 'function') {
+        opts.warn(`declared dashboard "${key}": its retirement could not be confirmed (${why}); this invocation keeps dashboard ${roots.join(', ')} fenced, and the next invocation rereads the durable result.`);
+      }
+      return false;
+    };
+    const failure = (err) => `${(err && err.code) || 'error'}: ${String((err && err.message) || err)}`;
+    const retireIfAbsent = async (selected) => {
+      const { key } = selected;
+      const selectedRoot = selected.group.root.id;
       let observation;
       try {
         ({ observation } = store.observeRetirement({ family: 'dashboard', key }));
-      } catch {
-        return false; // the file no longer vouches for a group to retire: the fence below decides from the reread store
+      } catch (err) {
+        return unconfirmed(key, [selectedRoot], `the binding store could not be observed (${failure(err)})`);
       }
       const unit = store.snapshot().units().find((u) => u.family === 'dashboard' && u.key === key);
-      if (!retirable(unit)) return false;
+      if (!retirable(unit)) {
+        return unconfirmed(key, [selectedRoot, unit && unit.group && unit.group.root && unit.group.root.id], 'the binding store changed before its dashboard was read');
+      }
       const { generation, publication } = unit.group;
       const rootId = unit.group.root.id;
       let presence;
@@ -3781,11 +3805,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         store.retireAbsentGroup({ family: 'dashboard', key, generation, rootId, observation, evidence: { kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' } });
       } catch (err) {
         // The store refused (it changed since the observation, another generation or root, a publish that may have been
-        // sent, a failed write): nothing was retired, and the group and its fence stay as they were.
-        if (typeof opts.warn === 'function') {
-          opts.warn(`declared dashboard "${key}": its dashboard ${rootId} read as gone from both layers, but its managed record was not retired (${(err && err.code) || 'error'}: ${String((err && err.message) || err)}); it is kept as it was, and a later build reads it again.`);
-        }
-        return false;
+        // sent) or its write failed: whether the group is retired is not confirmed here, and the store as cached is not
+        // what the file holds now.
+        return unconfirmed(key, [selectedRoot, rootId], `its dashboard ${rootId} read as gone from both layers, but the binding store did not confirm the retirement (${failure(err)})`);
       }
       if (typeof opts.warn === 'function') {
         opts.warn(`declared dashboard "${key}": managed-dashboard-retired — its dashboard ${rootId} is gone from both the saved and the published layer, and the spec no longer declares it, so its managed record was retired${publication && publication.state === 'owed' ? ' with its unpublished change, which was never published' : ''}. Nothing was sent for it; a dashboard declared under this key again is a new one.`);
@@ -3794,7 +3816,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     };
     // Nothing is read when the store holds no retirable group, so every other build sends what it always sent.
     if (client) {
-      for (const key of store.snapshot().units().filter(retirable).map((u) => u.key)) await retireIfAbsent(key);
+      for (const unit of store.snapshot().units().filter(retirable)) await retireIfAbsent(unit);
     }
     for (const unit of store.snapshot().units()) {
       const pub = unit.group && unit.group.publication;
@@ -3844,22 +3866,42 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // observes and reads again. The observation and the store call live only in `observeRemovedForm` and
   // `retireObservedForm`. A pending attempt is never retired here (whatever its effect journal or send window shows):
   // the filter leaves out every group that has one.
+  //
+  // A retirement this run cannot confirm (the store could not be observed, the observed group is no longer one this
+  // sweep may retire, or the store refused or failed the retirement) fences the form's table for the rest of this
+  // invocation, whatever the group owed before: another run may have moved the group after this one read the store (a
+  // new owed generation, a pending attempt, a carried publish marked dispatching), and a store error after the file was
+  // replaced leaves the durable result unknown. This run's cached store shows none of that (a refusal updates nothing),
+  // so the routed table publisher and the app writer would otherwise go ahead on the table. The run ends incomplete
+  // naming the form (publication-withheld), and the next invocation rereads the store file.
   const retirableForm = (u, declared) => {
     if (u.family !== 'form' || u.invalid || u.attempt || !u.group || declared.has(u.key)) return false;
     const p = u.group.publication;
     return !p || p.state === 'not-needed' || p.state === 'confirmed' || (p.state === 'owed' && p.dispatchToken === null);
   };
+  // The table a form group publishes in: its publication's scope, else the table its key names (`<table>/<type>/<name>`,
+  // formLayoutKey).
+  const formScopeOf = (u) => {
+    const p = u && u.group && u.group.publication;
+    return p && p.scope && p.scope.type === 'table' ? p.scope : { type: 'table', table: String(u.key).split('/')[0] };
+  };
+  const unconfirmedForm = (u, why) => {
+    const scope = formScopeOf(u);
+    const rootId = u.group && u.group.root && u.group.root.id;
+    owed.barrier.quarantine([scope], rootId ? [rootId] : [], `managed form "${u.key}" (its retirement could not be confirmed: ${why}; this invocation keeps table ${scope.table} fenced, and the next invocation rereads the durable result)`);
+    if (typeof opts.warn === 'function') opts.warn(`declared form "${u.key}": its retirement could not be confirmed (${why}); this invocation keeps table ${scope.table} fenced, and the next invocation rereads the durable result.`);
+  };
   // Step 1, taken just before the group's fresh read: the store's observation, and the generation and root it saw (from
-  // the store as reread by observeRetirement). null when there is no longer a retirable group to observe.
+  // the store as reread by observeRetirement). `{ unconfirmed }` when there is no longer a retirable group to observe.
   const observeRemovedForm = (key, declared) => {
     let observation;
     try {
       ({ observation } = bindingGroups.store.observeRetirement({ family: 'form', key }));
-    } catch {
-      return null; // the file no longer vouches for a group to retire: kept, as before
+    } catch (err) {
+      return { unconfirmed: `the binding store could not be observed (${(err && err.code) || 'error'}: ${String((err && err.message) || err)})` };
     }
     const u = bindingGroups.store.snapshot().units().find((x) => x.family === 'form' && x.key === key);
-    return u && retirableForm(u, declared) ? { key, observation, generation: u.group.generation, rootId: u.group.root.id } : null;
+    return u && retirableForm(u, declared) ? { key, observation, generation: u.group.generation, rootId: u.group.root.id } : { unconfirmed: 'the binding store changed before its form was read' };
   };
   // Step 3: retire the observed group on its two-layer absence proof. The store rereads under its lease and refuses when
   // the group changed since the observation, is no longer at the observed generation and root, or now has an attempt or
@@ -3875,10 +3917,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const retireAbsentRemovedForms = async () => {
     if (!declaredFeatureOn('forms') || !provision.dataverse) return;
     const declared = new Set((spec.forms || []).filter(isDeclaredFormOn).map((f) => formLayoutKey(f)));
-    const keys = bindingGroups.store.snapshot().units().filter((u) => retirableForm(u, declared)).map((u) => u.key);
-    for (const key of keys) {
+    const units = bindingGroups.store.snapshot().units().filter((u) => retirableForm(u, declared));
+    for (const selected of units) {
+      const { key } = selected;
       const observed = observeRemovedForm(key, declared);
-      if (!observed) continue;
+      if (observed.unconfirmed) {
+        unconfirmedForm(selected, observed.unconfirmed);
+        continue;
+      }
       const { rootId } = observed;
       let presence;
       try {
@@ -3890,9 +3936,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       try {
         retireObservedForm(observed);
       } catch (err) {
-        // The store changed since the observation (another run's commit, a new attempt, a settled publish) or refused
-        // the write: nothing was retired, and the group stays exactly as it was.
-        if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": its form ${rootId} is gone, and its managed group was not retired (${(err && err.code) || 'error'}: ${String((err && err.message) || err)}); it is kept as it was, and a later build reads it again.`);
+        // The store changed since the observation (another run's commit, a new attempt, a settled publish), refused the
+        // write, or failed it after the replace: whether the group is retired is not confirmed in this run.
+        unconfirmedForm(selected, `its form ${rootId} is gone, but the binding store did not confirm the retirement (${(err && err.code) || 'error'}: ${String((err && err.message) || err)})`);
         continue;
       }
       if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": managed-root-retired — the spec no longer declares it and its form ${rootId} is gone (not found in the saved or the published layer), so its managed group was retired: it no longer holds or publishes its table, and verify no longer checks it. Nothing was written to the environment.`);
@@ -7296,13 +7342,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //     the attempt sent outside its journal can still land (its own create confirmed by a read, or a send window that counted no
   //     possible send), and refuses it otherwise: such an attempt stays on its recovery path;
   //   - a committed group with no attempt and no effect, whose declaration was removed: retired at its generation. A present row
-  //     keeps it as it is (verify still checks it); one that cannot be read keeps it too, with a warning.
+  //     keeps it as it is (verify still checks it); one that cannot be read keeps it too, with a warning;
+  //   - an attempt on a committed group whose own record says nothing was sent (prepared with nothing planned, or a send window
+  //     that counted no possible send, managed-bindings.js attemptProvenUnsent), such as a change of the security roles alone
+  //     that failed before it committed: retired with its attempt even with an empty journal, the store making the same checks.
+  //     A fresh create that sent nothing has no row to read and is only noted.
   // An attempt with an effect that may have been sent and is not proved (dispatching, unconfirmed) is held without a read: no
-  // answer about the row now can say what that send will do. A row that is present, a read that is unreadable, refused or
-  // malformed, and a store that refuses the retirement all keep the hold above, unchanged. Workflows have one layer (no saved and
-  // published pair), so the one exact read is the whole proof. The store is observed BEFORE that read and the retirement is made
-  // against that observation (retire, below), so a managed write that lands during the read keeps the group. The retirement says
-  // the row was proved gone and the group dropped, never that an activation or any other change was made.
+  // answer about the row now can say what that send will do. A row that is present, and a read that is unreadable, refused or
+  // malformed, keep the hold above, unchanged. A retirement the store refuses, or that fails or cannot be observed, could not be
+  // confirmed: the key is held for the rest of this invocation (its row, its declared table and name, and those of any attempt
+  // the store file now holds for it), the run ends incomplete, and the next invocation rereads the durable result. Workflows
+  // have one layer (no saved and published pair), so the one exact read is the whole proof. The store is observed BEFORE that
+  // read and the retirement is made against that observation (retire, below), so a managed write that lands during the read
+  // keeps the group. The retirement says the row was proved gone and the group dropped, never that an activation or any other
+  // change was made.
   const settledEffect = (e) => e && (e.state === 'confirmed' || e.state === 'fulfilled' || (e.state === 'definitely-unsent' && (e.dispatchToken === null || e.dispatchToken === undefined)));
   const holdRemovedWorkflowAttempts = async (family, declaredKeys, { phase, noun, short, entries }) => {
     const rows = new Map();
@@ -7314,14 +7367,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // settles, re-sends or re-creates it while the read is on the wire (an effect dispatched or confirmed, a send counted) may put
     // the row back after the 404, so the store rereads its file under its lease and refuses (managed-binding-generation-conflict,
     // nothing written) any group, attempt or effect that moved since the observation. An observation taken after the read would
-    // prove nothing, so a refusal is never retried here with a fresh one: the group is kept and a later run observes and reads
-    // again. The generation is the one this sweep decided on (`unit`), so a group committed again since is refused as well.
+    // prove nothing, so a refusal is never retried here with a fresh one: the key is held for the rest of this run (holdUnconfirmed)
+    // and a later run observes and reads again. The generation is the one this sweep decided on (`unit`), so a group committed
+    // again since is refused as well.
     const retire = async (unit, rootId, attemptToken) => {
       let observation;
       try {
         ({ observation } = bindingGroups.store.observeRetirement({ family, key: unit.key }));
       } catch (err) {
-        return { kept: `the binding store could not be observed before its row was read (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})` };
+        return { kept: `the binding store could not be observed before its row was read (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})`, unconfirmed: true };
       }
       const read = await readWorkflowRowPresence(provision, opts.env, rootId);
       if (read.state !== 'absent') return { kept: read.state === 'present' ? 'its row is still there' : `its row could not be read (${read.why})` };
@@ -7333,12 +7387,39 @@ async function runSdkBuildPhases(spec, opts, owed) {
           ...(attemptToken ? { attemptToken } : {}),
         });
       } catch (err) {
-        return { kept: `the binding store did not retire it (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})` };
+        // Refused (the group moved since the observation) or failed after the file was replaced: either way this run does not
+        // know the durable result, so the caller holds the key (`unconfirmed`) instead of reading the cached store again.
+        return { kept: `the binding store did not confirm the retirement (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})`, unconfirmed: true };
       }
       if (typeof opts.warn === 'function') {
         opts.warn(`managed-root-retired: declared ${noun} "${unit.key}": its row ${rootId} is gone (a read by its exact id answered not found) and the spec no longer declares it, so the build no longer manages it. This run sent nothing for it; the notice says only that the row is gone, not that any change of it was made.`);
       }
       return { retired: true };
+    };
+    // Hold a key's row and its declared table and name for the rest of this run (heldRow / heldName below).
+    const hold = (key, rootId, d) => {
+      if (rootId) rows.set(String(rootId).toLowerCase(), key);
+      if (d && typeof d.entity === 'string' && d.entity && typeof d.name === 'string' && d.name) names.set(`${d.entity.toLowerCase()}|${d.name.toLowerCase()}`, key);
+      else if (!all) all = key;
+    };
+    const rootIdOf = (x) => (x && x.root && typeof x.root.id === 'string' ? x.root.id.toLowerCase() : null);
+    // A retirement this run could not confirm: another run may have moved the group after this one observed it (retired it,
+    // prepared a new attempt for the key, re-created its row), or the store failed after the file was replaced, and this run's
+    // cached store shows none of it. So the key stays held for the rest of this invocation, with every attempt the store file
+    // now holds for it (a fresh create of the same name included; a file that cannot be reread fences every legacy entry of the
+    // family), the run ends incomplete, and the next invocation rereads the durable result.
+    const holdUnconfirmed = (key, rootId, declaration, why) => {
+      hold(key, rootId, declaration);
+      try {
+        for (const a of bindingGroups.store.refresh().envelope.attempts || []) if (a && a.family === family && a.key === key) hold(key, rootIdOf(a), a.declaration);
+      } catch {
+        if (!all) all = key;
+      }
+      markIncomplete({
+        phase,
+        code: 'managed-not-settled',
+        message: `declared ${noun} "${key}": the spec no longer declares it, and its retirement could not be confirmed (${why}); this run wrote nothing to it and keeps its row, table and name held, and the next invocation rereads the durable result.`,
+      });
     };
     if (bindingGroups && bindingGroups.store) {
       const snap = bindingGroups.store.snapshot();
@@ -7348,24 +7429,39 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (!a || a.family !== family || declaredKeys.has(a.key)) continue;
         const owned = (envelope.workflowEffects || []).filter((e) => e && e.attemptToken === a.token);
         const sent = owned.some((e) => e.state !== 'definitely-unsent');
+        const unit = unitOf.get(a.key);
+        const rootId = rootIdOf(a);
         if (!sent) {
+          // An attempt on a committed group whose record says nothing was sent (prepared with nothing planned, or a send window
+          // that counted no possible send with every effect unsent), for example a change of the security roles alone that
+          // failed before it committed, holds the committed row: once that row is gone it is retired here, with its attempt,
+          // even with an empty journal. The store makes the affirmative-record, generation, token and observation checks; an
+          // empty journal is not taken as permission. A fresh create that sent nothing has no committed group and no row to
+          // read, so it is only noted, as before.
+          if (unit && !unit.invalid && unit.group && rootId && ((a.phase === 'prepared' && a.expected === null) || attemptProvenUnsent(a, envelope.workflowEffects || []))) {
+            const outcome = await retire(unit, rootId, a.token);
+            if (outcome.retired) continue;
+            if (outcome.unconfirmed) {
+              holdUnconfirmed(a.key, rootId, a.declaration, outcome.kept);
+              continue;
+            }
+          }
           if (typeof opts.warn === 'function') opts.warn(`declared ${noun} "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
           continue;
         }
-        const unit = unitOf.get(a.key);
-        const rootId = a.root && typeof a.root.id === 'string' ? a.root.id.toLowerCase() : null;
         let why = null;
         // Only an attempt with a journal is retired: one whose journal is empty has no recorded effect to show what it sent, and
         // its send window (absent, or counting a possible send) cannot say nothing landed, so it is never retired here.
         if (unit && !unit.invalid && rootId && owned.length && owned.every(settledEffect)) {
           const outcome = await retire(unit, rootId, a.token);
           if (outcome.retired) continue;
+          if (outcome.unconfirmed) {
+            holdUnconfirmed(a.key, rootId, a.declaration, outcome.kept);
+            continue;
+          }
           why = outcome.kept;
         }
-        if (rootId) rows.set(rootId, a.key);
-        const d = a.declaration;
-        if (d && typeof d.entity === 'string' && d.entity && typeof d.name === 'string' && d.name) names.set(`${d.entity.toLowerCase()}|${d.name.toLowerCase()}`, a.key);
-        else if (!all) all = a.key;
+        hold(a.key, rootId, a.declaration);
         markIncomplete({
           phase,
           code: 'managed-not-settled',
@@ -7374,10 +7470,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       for (const unit of unitOf.values()) {
         if (declaredKeys.has(unit.key) || unit.invalid || unit.attempt || unit.effects.length || !unit.group) continue;
-        const rootId = unit.group.root && typeof unit.group.root.id === 'string' ? unit.group.root.id.toLowerCase() : null;
+        const rootId = rootIdOf(unit.group);
         if (!rootId) continue;
         const outcome = await retire(unit, rootId);
-        if (!outcome.retired && outcome.kept !== 'its row is still there' && typeof opts.warn === 'function') {
+        if (outcome.retired) continue;
+        if (outcome.unconfirmed) {
+          holdUnconfirmed(unit.key, rootId, unit.group.originalDeclaration, outcome.kept);
+          continue;
+        }
+        if (outcome.kept !== 'its row is still there' && typeof opts.warn === 'function') {
           opts.warn(`declared ${noun} "${unit.key}": the spec no longer declares it, and it stays in the binding store: ${outcome.kept}. A later run reads it again.`);
         }
       }
