@@ -824,3 +824,34 @@ test('a removed rule whose create never reached the transport is only noted: no 
     assert.doesNotMatch(removed.warnings.join('\n'), RETIRED);
   });
 });
+
+// A refused retirement leaves this run's cached store from before the race. Another run that, while this run's exact read is on
+// the wire, retires the committed rule and prepares a fresh create of it (a new row id, the same table and name) must still find
+// that table and name held in this run: a legacy rule of the same name reads and creates nothing beside the other run's create.
+test('a removed rule whose retirement could not be confirmed keeps its table and name held: a legacy rule of the same name creates nothing', async () => {
+  await withRules(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    assert.equal((await build(wire, dir, specWith([RULE]))).err, undefined);
+    const committed = storeOf(dir).readGroup('rule', KEY).committed;
+    const id = committed.root.id;
+    wire.rows.delete(id);
+    let raced = false;
+    wire.script((e) => {
+      if (!raced && idReadOf(id)(e)) {
+        raced = true;
+        const other = storeOf(dir);
+        const { observation } = other.observeRetirement({ family: 'rule', key: KEY });
+        other.retireAbsentGroup({ family: 'rule', key: KEY, generation: committed.generation, rootId: id, evidence: { kind: 'root-absent', rootId: id, row: 'not-found' }, observation });
+        other.prepareAttempt({ family: 'rule', key: KEY, baseGeneration: null, root: { ...committed.root, id: '99999999-9999-4999-8999-999999999999' }, knownScopes: [], declarationSha256: 'a'.repeat(64), declaration: committed.originalDeclaration });
+      }
+      return false;
+    }, null);
+    const res = await build(wire, dir, specWith([legacy(RULE)]));
+    assert.equal(raced, true);
+    assert.equal(res.err && res.err.code, 'managed-not-settled', chainText(res.err));
+    assert.match(chainText(res.err), /its retirement could not be confirmed .*keeps its row, table and name held/);
+    assert.deepEqual(res.writes, [], 'no legacy create beside the other run\'s');
+    assert.deepEqual(res.lines.filter((l) => /\bname eq\b/i.test(decodeURIComponent(l))), [], 'not even read by name');
+  });
+});

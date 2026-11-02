@@ -1053,3 +1053,60 @@ for (const state of ['owed', 'pending', 'dispatching']) {
     });
   });
 }
+
+// The same race, with the spec now holding a plain form of the removed one's name and the app written and published. This
+// invocation's cached store is from before the race, so nothing in it says the form is held: the plain path must still not
+// write the form (a push over a saved layer another invocation owes or is changing), create a second one, or let the app or
+// a publish of its table go ahead.
+for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
+  test(`after a retirement refused because another invocation left the removed form ${state}, a plain form of its name writes and publishes nothing`, async () => {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      assert.equal((await build(org, dir, makeSpec())).err, undefined);
+      const g = storeOf(org, dir).readGroup('form', KEY).committed;
+      const newId = '99999999-9999-4999-8999-999999999999';
+      let raced = 0;
+      let restore = () => {};
+      const published = (rowId) => {
+        if (!raced) {
+          raced += 1;
+          const other = storeOf(org, dir);
+          if (state === 'dispatching') {
+            other.markPublishDispatch({ groups: [], carried: [{ family: 'form', key: KEY, generation: g.generation, savedSha256: 'a'.repeat(64), publishedSha256: 'a'.repeat(64) }], scope: g.publication.scope, token: 'concurrent-publish' });
+          } else if (state === 'replacement') {
+            const { observation } = other.observeRetirement({ family: 'form', key: KEY });
+            other.retireAbsentGroup({ family: 'form', key: KEY, generation: g.generation, rootId: g.root.id, observation, evidence: { kind: 'root-absent', rootId: g.root.id, saved: 'not-found', published: 'not-found' } });
+            other.prepareAttempt({ family: 'form', key: KEY, baseGeneration: null, root: { ...g.root, id: newId }, knownScopes: [g.publication.scope], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+          } else {
+            const token = other.prepareAttempt({ family: 'form', key: KEY, baseGeneration: g.generation, root: g.root, knownScopes: [g.publication.scope], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+            if (state === 'owed') {
+              other.markSending(token, { proofVersion: 1, proofSchema: g.proofSchema, rootId: g.root.id, baseProofSha256: null, sentProjectionSha256: 'b'.repeat(64), preservationSha256: 'c'.repeat(64), baseObservation: null, children: [] });
+              other.noteSaved(token, { proof: g.proof, acknowledgedRoot: false });
+              other.commitGroup({ token, baseGeneration: g.generation, records: g.records, proof: g.proof, consumerState: g.consumerState, publication: { scope: g.publication.scope, state: 'owed', desiredSha256: 'd'.repeat(64), dispatchToken: null } });
+            }
+          }
+          // The replacement's old form stays deleted; the others' form is there again.
+          if (state !== 'replacement') restore();
+        }
+        return missingRow(rowId);
+      };
+      ({ restore } = deleteForm(org, g.root.id, { published }));
+      const r = await buildWarned(org, dir, makeSpec({ declared: false, form: { tabs: [{ name: 'general', label: 'General', sections: [{ name: 'main', label: 'Main', fields: ['contoso_code', 'contoso_name'] }] }] } }), { phases: ['forms', 'app-shell', 'publish'], publish: true });
+      restore();
+      assert.equal(raced, 1, 'the concurrent change landed during the published read');
+      assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('its retirement could not be confirmed')), r.warns.join('\n'));
+      // The plain path keeps its name lookup (a removed declaration has no plain-form identity hold): with the old form gone it
+      // may create one of its own name, but the table stays fenced, so nothing it makes or holds reaches the app or goes live.
+      if (state !== 'replacement') assert.deepEqual(shape(formWrites(r)), [], 'the plain path writes no form');
+      assert.deepEqual(shape(r.writes.filter((c) => /^\/(appmodules|sitemaps|PublishXml|PublishAllXml|AddAppComponents)/i.test(c.path))), [], 'no app write or publish goes ahead');
+      assert.deepEqual(r.tablePublishes, []);
+      assert.notEqual(r.err, undefined);
+      const now = storeOf(org, dir).readGroup('form', KEY);
+      if (state === 'owed') assert.equal(now.committed.publication.state, 'owed', 'the concurrent debt is kept, not paid');
+      if (state === 'dispatching') assert.equal(now.committed.publication.state, 'dispatching', 'the concurrent dispatch is kept');
+      if (state === 'pending' || state === 'replacement') assert.notEqual(now.pending, null, 'the concurrent attempt is kept');
+      assert.equal(r.barrier.checkAppWrite({ added: ['contoso_item'] }).ok, false, 'no app write admits its table');
+    });
+  });
+}

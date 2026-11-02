@@ -1286,3 +1286,67 @@ for (const state of ['owed', 'pending', 'dispatching']) {
     });
   });
 }
+
+// The same race, with the spec now holding a plain dashboard of the removed one's name. The plain path looks a dashboard up by
+// name in the PUBLISHED layer only, so a saved-only row is found by nothing there; reading this invocation's cached store from
+// before the race, it would see no unsettled group and create a second dashboard, then write and publish the app. In the
+// fourth case the other invocation retires the group and starts a fresh create of the same key under another root, which is
+// visible in the service: that replacement must not be reused or admitted either.
+for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
+  test(`removed settled: after a retirement refused because another invocation left the dashboard ${state}, a plain dashboard of its name creates, reuses and publishes nothing`, async () => {
+    await withDashboards(true, async () => {
+      const wire = wireWithIdReads();
+      const dir = makeTempDir('declared-dash-');
+      assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+      const g = committedGroup(dir);
+      const id = g.root.id;
+      const newId = '99999999-9999-4999-8999-999999999999';
+      const row = { ...wire.saved.get(id), description: 'Concurrent later draft' };
+      wire.saved.delete(id);
+      wire.published.delete(id);
+      const request = wire.request;
+      let raced = 0;
+      wire.request = async (req) => {
+        const answer = await request(req);
+        if (!raced && String(req.method).toUpperCase() === 'GET' && req.url.includes(id) && !/RetrieveUnpublished/.test(req.url)) {
+          raced += 1;
+          const other = storeOf(dir);
+          if (state === 'dispatching') {
+            other.markPublishDispatch({ groups: [], carried: [{ family: 'dashboard', key: KEY, generation: g.generation, savedSha256: g.publication.desiredSha256, publishedSha256: g.publication.desiredSha256 }], scope: g.publication.scope, token: 'concurrent-publish' });
+          } else {
+            if (state === 'replacement') {
+              const { observation } = other.observeRetirement({ family: 'dashboard', key: KEY });
+              other.retireAbsentGroup({ family: 'dashboard', key: KEY, generation: g.generation, rootId: id, observation, evidence: { kind: 'root-absent', rootId: id, saved: 'not-found', published: 'not-found' } });
+            }
+            const root = state === 'replacement' ? { ...g.root, id: newId } : g.root;
+            const token = other.prepareAttempt({ family: 'dashboard', key: KEY, baseGeneration: state === 'replacement' ? null : g.generation, root, knownScopes: [{ type: 'dashboard', id: root.id }], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+            if (state === 'owed') {
+              other.markSending(token, { proofVersion: 1, proofSchema: 'dashboard-v1', rootId: id, baseProofSha256: null, sentProjectionSha256: 'b'.repeat(64), preservationSha256: 'c'.repeat(64), baseObservation: null, children: [] });
+              other.noteSaved(token, { proof: g.proof, acknowledgedRoot: false });
+              other.commitGroup({ token, baseGeneration: g.generation, records: g.records, proof: g.proof, consumerState: g.consumerState, publication: { scope: g.publication.scope, state: 'owed', desiredSha256: g.publication.desiredSha256, dispatchToken: null } });
+            }
+          }
+          wire.putForm({ ...row, ...(state === 'replacement' ? { formid: newId } : {}) }, { publishedToo: state === 'replacement' });
+        }
+        return answer;
+      };
+      const spec = makeSpec({ declared: false });
+      spec.app.icon = 'existing-icon';
+      scriptIcon(wire);
+      const warnings = [];
+      const r = await buildWith(wire, dir, spec, { phases: ['dashboards', 'app-shell', 'publish'], publish: true, warn: (m) => warnings.push(String(m)) });
+      wire.request = request;
+      assert.equal(raced, 1, 'the concurrent change landed during the published read');
+      assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('its retirement could not be confirmed')), warnings.join('\n'));
+      assert.equal(r.calls.filter((c) => c.method === 'POST' && c.path === 'systemforms').length, 0, 'no second plain dashboard is created');
+      assert.deepEqual(appWrites(r.calls).map((c) => `${c.method} ${c.path}`), [], 'no app write or publish goes ahead');
+      assert.match(chainText(r.err), /managed-dashboard-unsettled/);
+      assert.equal(r.barrier.checkAppWrite({ addedDashboards: [id] }).ok, false);
+      if (state === 'replacement') assert.equal(r.barrier.checkAppWrite({ addedDashboards: [newId] }).ok, false, 'the replacement with a pending attempt is not admitted');
+      const now = storeOf(dir).readGroup('dashboard', KEY);
+      if (state === 'owed') assert.equal(now.committed.publication.state, 'owed', 'the concurrent debt is kept, not paid');
+      if (state === 'dispatching') assert.equal(now.committed.publication.state, 'dispatching', 'the concurrent dispatch is kept');
+      if (state === 'pending' || state === 'replacement') assert.notEqual(now.pending, null, 'the concurrent attempt is kept');
+    });
+  });
+}

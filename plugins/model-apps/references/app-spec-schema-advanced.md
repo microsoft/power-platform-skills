@@ -834,7 +834,8 @@ existing one is reused and its tiles are never edited.
     block. If the build cannot confirm the retirement (another build settled or changed the record while this
     one read it, or the record could not be written), it warns that the retirement could not be confirmed,
     keeps the dashboard blocked for the rest of that build, and ends incomplete; the next build reads the
-    record again. A dashboard you declare under that key later is a new one.
+    record again. In that build a plain dashboard of its name or id is refused too, as is any dashboard another
+    build has started under that key. A dashboard you declare under that key later is a new one.
   - A plain `dashboards[]` entry with that dashboard's id or name stops the build before it sends anything,
     so it never makes a second dashboard in its place.
 

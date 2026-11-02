@@ -2945,7 +2945,10 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   store could not be observed, the group changed while the build read it, or the store refused or failed the
   write) is never retried in that build: it warns that the retirement could not be confirmed, quarantines the
   dashboard for the rest of the invocation whatever it owed before, and the run ends incomplete naming it; the
-  next invocation rereads the durable result. A row in
+  next invocation rereads the durable result. It rereads the store once (never to retry): every root the key now
+  has (a new owed generation, a pending attempt, a fresh create under another id) joins that quarantine, and the
+  key with its names is held (heldDashboards), so a plain dashboard of that name or id is refused before any
+  request; a reread that fails holds what the run already knew. A row in
   either layer, a 403, a timeout or any other failed read keeps the group and its fence; a block this
   invocation already holds is never cleared, so that invocation stays stopped and the next one is clean.
   The store's classification of owed debt (`classifyPersisted`) is unchanged; the fence is the build's. A withheld publish leaves the run

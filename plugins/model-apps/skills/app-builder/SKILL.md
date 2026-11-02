@@ -171,7 +171,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
   `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below). A
   build that warns a form's or dashboard's retirement could not be confirmed keeps it blocked and ends incomplete;
-  the next build reads it again.
+  a plain dashboard of that name is refused too, and the next build reads it again.
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
   dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
   `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are

@@ -3739,6 +3739,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // invocation already holds on the scope (a caller's barrier) is never cleared, so that invocation stays stopped and the
   // next proceeds from the file. A group with a pending attempt, or a publish that may have been sent, is not read here:
   // the store holds those (openManagedContext).
+  const heldDashboards = new Map();
   if (bindingGroups && bindingGroups.store) {
     const store = bindingGroups.store;
     const declaredOn = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
@@ -3770,11 +3771,39 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // updates nothing, and snapshot() is a copy of the cache), so the fence loop below and every later gate would admit an
     // app write or a scoped publish of a saved layer nothing proved. The quarantine holds the dashboard instead, the run
     // ends incomplete naming it (publication-withheld), and the next invocation rereads the store file as it is.
-    const unconfirmed = (key, ids, why) => {
-      const roots = [...new Set(ids.filter(Boolean).map((id) => String(id).toLowerCase()))];
-      owed.barrier.quarantine(roots.map((id) => ({ type: 'dashboard', id })), roots, `managed dashboard "${key}" (its retirement could not be confirmed: ${why}; this invocation keeps it fenced, and the next invocation rereads the durable result)`);
+    //
+    // Fencing only the root this run had read is not enough: the other invocation may have moved the key to ANOTHER root
+    // (it retired the group and started a fresh create under a new id) or left it owed, pending or dispatching, and the
+    // plain dashboard path later in this run looks those up in the store to refuse a plain dashboard of the same name. So
+    // the store is reread here, once, without retrying the retirement against it: every root the reread group or its
+    // attempt names joins the quarantine (checkAppWrite then refuses an app that adds or holds a replacement root too), the
+    // cache the later gates read is the file as it is now, and the key with every name it is known by is held for the
+    // rest of this invocation (heldDashboards), so a plain dashboard of that name or id is refused before any request
+    // whatever the reread shows. A reread that fails holds the same key and names on what this run already knew (fail
+    // closed). Nothing here clears a quarantine, retires, pays or publishes anything the reread shows.
+    const unconfirmed = (key, ids, why, selected) => {
+      const found = [...ids];
+      const names = new Set();
+      const nameOf = (decl) => { if (decl && typeof decl.name === 'string' && decl.name) names.add(dashboardNameKey(decl.name)); };
+      nameOf(selected && selected.group && selected.group.originalDeclaration);
+      nameOf(selected && selected.attempt && selected.attempt.declaration);
+      let reread = '';
+      try {
+        const now = store.refresh().units().find((u) => u.family === 'dashboard' && u.key === key);
+        if (now && !now.invalid) {
+          const { group, attempt } = now;
+          found.push(group && group.root && group.root.id, attempt && attempt.root && attempt.root.id, attempt && attempt.expected && attempt.expected.rootId);
+          nameOf(group && group.originalDeclaration);
+          nameOf(attempt && attempt.declaration);
+        }
+      } catch (err) {
+        reread = `; the binding store could not be reread either (${failure(err)}), so it stays held as this run last read it`;
+      }
+      const roots = [...new Set(found.filter(Boolean).map((id) => String(id).replace(/[{}]/g, '').toLowerCase()))];
+      owed.barrier.quarantine(roots.map((id) => ({ type: 'dashboard', id })), roots, `managed dashboard "${key}" (its retirement could not be confirmed: ${why}${reread}; this invocation keeps it fenced, and the next invocation rereads the durable result)`);
+      heldDashboards.set(key, { ids: new Set(roots), names, why: `${why}${reread}` });
       if (typeof opts.warn === 'function') {
-        opts.warn(`declared dashboard "${key}": its retirement could not be confirmed (${why}); this invocation keeps dashboard ${roots.join(', ')} fenced, and the next invocation rereads the durable result.`);
+        opts.warn(`declared dashboard "${key}": its retirement could not be confirmed (${why}${reread}); this invocation keeps dashboard ${roots.join(', ')} fenced, and the next invocation rereads the durable result.`);
       }
       return false;
     };
@@ -3786,11 +3815,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       try {
         ({ observation } = store.observeRetirement({ family: 'dashboard', key }));
       } catch (err) {
-        return unconfirmed(key, [selectedRoot], `the binding store could not be observed (${failure(err)})`);
+        return unconfirmed(key, [selectedRoot], `the binding store could not be observed (${failure(err)})`, selected);
       }
       const unit = store.snapshot().units().find((u) => u.family === 'dashboard' && u.key === key);
       if (!retirable(unit)) {
-        return unconfirmed(key, [selectedRoot, unit && unit.group && unit.group.root && unit.group.root.id], 'the binding store changed before its dashboard was read');
+        return unconfirmed(key, [selectedRoot, unit && unit.group && unit.group.root && unit.group.root.id], 'the binding store changed before its dashboard was read', selected);
       }
       const { generation, publication } = unit.group;
       const rootId = unit.group.root.id;
@@ -3807,7 +3836,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // The store refused (it changed since the observation, another generation or root, a publish that may have been
         // sent) or its write failed: whether the group is retired is not confirmed here, and the store as cached is not
         // what the file holds now.
-        return unconfirmed(key, [selectedRoot, rootId], `its dashboard ${rootId} read as gone from both layers, but the binding store did not confirm the retirement (${failure(err)})`);
+        return unconfirmed(key, [selectedRoot, rootId], `its dashboard ${rootId} read as gone from both layers, but the binding store did not confirm the retirement (${failure(err)})`, selected);
       }
       if (typeof opts.warn === 'function') {
         opts.warn(`declared dashboard "${key}": managed-dashboard-retired — its dashboard ${rootId} is gone from both the saved and the published layer, and the spec no longer declares it, so its managed record was retired${publication && publication.state === 'owed' ? ' with its unpublished change, which was never published' : ''}. Nothing was sent for it; a dashboard declared under this key again is a new one.`);
@@ -8371,8 +8400,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
     //    app write and publish of this run.
     //  - Each stays the identity it was: a plain dashboard naming its id (dashboardId) or its declared name is refused before
     //    any request (retainedDashboards), so a mode change or a missing published row never loses it or replaces it.
+    //  - A removed dashboard whose retirement this invocation could not confirm (heldDashboards, above) is held first, by
+    //    every root and name the reread store knew it by, whatever that reread shows now: another invocation may have left it
+    //    owed, pending, dispatching or under a new root, and a plain dashboard of its name must not create or reuse one
+    //    beside that.
     const removedDashboardStops = [];
     const retainedDashboards = [];
+    for (const [key, held] of heldDashboards) {
+      const label = `declared dashboard "${key}"`;
+      retainedDashboards.push({
+        ids: held.ids,
+        names: held.names,
+        stop: (dash) => {
+          const message = `dashboard "${dash.name}" is the dashboard the removed managed declaration "${key}" held, and its retirement could not be confirmed (${held.why}); it is not built as a plain dashboard, which could make a second one beside a change another build left on it. The next build rereads the durable result; nothing was sent`;
+          return managedStop('dashboards', label, 'managed-dashboard-unsettled', { cause: refusal(message, { code: 'managed-dashboard-unsettled' }), findings: [{ key, code: 'managed-dashboard-unsettled', message }] });
+        },
+      });
+    }
     const dashboardStore = bindingGroups && bindingGroups.store;
     if (dashboardStore) {
       const declaredKeys = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
@@ -8380,6 +8424,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const bareId = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
       for (const unit of dashboardStore.snapshot().units()) {
         if (unit.invalid || unit.family !== 'dashboard' || declaredKeys.has(unit.key)) continue;
+        // Held above: its stop, its fence and its reread roots already cover it. Its reread state is not offered as a
+        // publish this run could approve (a dispatch another invocation may still be sending).
+        if (heldDashboards.has(unit.key)) continue;
         const group = unit.group;
         const attempt = unit.attempt;
         const publication = group && group.publication;
