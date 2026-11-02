@@ -167,7 +167,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
   not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
   file>`; it carries no binding, so the first build that binds each form from the downloaded folder needs
-  `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound).
+  `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
+  then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
+  `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below).
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
   dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
   `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are

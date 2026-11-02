@@ -2893,6 +2893,18 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
   downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.
+  **A removed form deleted in Maker** (`retireAbsentRemovedForms` in `sdk-build.js`, before the store's tables
+  are routed): a committed form group the spec no longer declares would otherwise block every run that publishes
+  its table (the pre-send layer read of a deleted form fails) and fail every verify. With the path on, each such
+  group with no pending attempt and a publication that is `not-needed`, `confirmed`, or `owed` with no dispatch
+  token is read by its id in both layers (`readSystemFormRootPresence`); only `absent` (the 0x80040217 404 in the
+  saved AND the published read) retires it (`retireAbsentGroup` at its committed generation and root, two-layer
+  evidence) with the `managed-root-retired` notice naming the key. Present in either layer, a 403, a timeout or
+  any other answer keeps the group untouched. A `dispatching`/`unconfirmed` publication is never read or retired
+  (the publish could still land: it is confirmed read-only or accepted as `publication-risk:<scopeKey>`), nor is
+  a group the spec still declares (`form-layout-bound-row-missing`, repaired explicitly). A store with no such
+  group adds no request. Tests: `tests/sdk-build-declared-forms.test.js` ("removed declared form", "deleted form
+  is never retired").
 - **Dashboard** (`dashboards[].reconcile: "declared"`, `lib/dashboard-reconcile.js`, enabled by
   `DECLARED_FEATURES.dashboards` in `lib/declared-features.js`): a global Standard dashboard follows the
   spec tile by tile. Each tile has a `key`; a bound tile gets only what it authors written (target, `name`,

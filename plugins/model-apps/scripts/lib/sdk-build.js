@@ -3820,6 +3820,71 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
   }
   const stableCtx = stable ? { ...featureCtx, managed: stable.managed, creates: stable.port } : featureCtx;
+  // A declared form the spec no longer declares, whose form a maker then deleted. Its committed group stays in the store,
+  // so without this every run ends on it: an owed publish of its table reads the layers of every form on the table first,
+  // a deleted one cannot be read, and the publish of the table (a sibling form's included) stops each time; and verify
+  // checks the bound form by its id each time and fails. Declaring it again cannot help (its bound form is gone).
+  // So, before the store's tables are routed, each such group whose form a FRESH read by its id shows gone from BOTH
+  // layers (readSystemFormRootPresence: the missing-row 404, 0x80040217, in the saved and the published read) is retired
+  // (managed-bindings.js retireAbsentGroup, at its committed generation and root), with a notice naming it. Only that
+  // answer retires: a form present in either layer, a 403, a timeout or any other answer keeps the group, and the run
+  // goes on as it would have. A group still declared (its bound form missing is form-layout-bound-row-missing, repaired
+  // explicitly), one with a pending attempt, or one whose publish may have been sent (dispatching, unconfirmed, or owed
+  // under a dispatch token) is never read here: such a publish could still land, so it is settled or accepted as a risk
+  // (publication-risk:<scopeKey>), never retired. Nothing is read when the store holds no such group, so every other
+  // build sends what it always sent. With the forms flag off nothing is declared and nothing runs here: a kill switch
+  // must not retire a group the spec still declares.
+  //
+  // The order is fixed: observe the group in the store, THEN read the service fresh, THEN retire against that
+  // observation, so a managed write that lands between the observation and the retirement invalidates the proof
+  // instead of being retired over. The observation and the store call live only in `observeRemovedForm` and
+  // `retireObservedForm`. A pending attempt is never retired here (whatever its effect journal or send window shows):
+  // the filter leaves out every group that has one.
+  const retirableForm = (u, declared) => {
+    if (u.family !== 'form' || u.invalid || u.attempt || !u.group || declared.has(u.key)) return false;
+    const p = u.group.publication;
+    return !p || p.state === 'not-needed' || p.state === 'confirmed' || (p.state === 'owed' && p.dispatchToken === null);
+  };
+  // The store's view of one group, taken just before its fresh read: null when it is no longer retirable.
+  const observeRemovedForm = (key, declared) => {
+    const u = bindingGroups.store.snapshot().units().find((x) => x.family === 'form' && x.key === key);
+    return u && retirableForm(u, declared) ? { key, generation: u.group.generation, rootId: u.group.root.id } : null;
+  };
+  // Retire the observed group on its two-layer absence proof. The store rereads under its lease and refuses when the
+  // group is no longer at the observed generation and root, or now has an attempt or a publish that could land.
+  const retireObservedForm = (observation) => bindingGroups.store.retireAbsentGroup({
+    family: 'form',
+    key: observation.key,
+    generation: observation.generation,
+    rootId: observation.rootId,
+    evidence: { kind: 'root-absent', rootId: observation.rootId, saved: 'not-found', published: 'not-found' },
+  });
+  const retireAbsentRemovedForms = async () => {
+    if (!declaredFeatureOn('forms') || !provision.dataverse) return;
+    const declared = new Set((spec.forms || []).filter(isDeclaredFormOn).map((f) => formLayoutKey(f)));
+    const keys = bindingGroups.store.snapshot().units().filter((u) => retirableForm(u, declared)).map((u) => u.key);
+    for (const key of keys) {
+      const observation = observeRemovedForm(key, declared);
+      if (!observation) continue;
+      const { rootId } = observation;
+      let presence;
+      try {
+        presence = await readSystemFormRootPresence(provision.dataverse, rootId);
+      } catch {
+        continue; // not proved absent: kept, as before
+      }
+      if (presence !== 'absent') continue;
+      try {
+        retireObservedForm(observation);
+      } catch (err) {
+        // The store changed under the read (another run's commit, a new attempt) or refused the write: nothing was
+        // retired, and the group stays exactly as it was.
+        if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": its form ${rootId} is gone, and its managed group was not retired (${(err && err.code) || 'error'}: ${String((err && err.message) || err)}); it is kept as it was.`);
+        continue;
+      }
+      if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": managed-root-retired — the spec no longer declares it and its form ${rootId} is gone (not found in the saved or the published layer), so its managed group was retired: it no longer holds or publishes its table, and verify no longer checks it. Nothing was written to the environment.`);
+    }
+  };
   // The publishes of every table a committed managed group publishes in (lib/managed-scope-publisher.js): the store's tables
   // are routed now, a declared view's or chart's when it commits, and each is paid through the managed coverage protocol at
   // the points below where the build would have published it. With no store file nothing is routed, and every request is the
@@ -3827,6 +3892,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const managedTables = bindingGroups && bindingGroups.store && provision.dataverse
     ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: (...args) => managedStop(...args) })
     : null;
+  if (managedTables) await retireAbsentRemovedForms();
   if (managedTables) managedTables.routeStored();
   const isRouted = (logical) => !!managedTables && managedTables.routed(logical);
   const settleStableResult = stable

@@ -796,3 +796,174 @@ test('a declared form too large for one attempt\'s reservation is refused throug
     assert.deepEqual(storeOf(org, dir).readGroup('form', KEY), { committed: null, pending: null, effects: [] }, 'nothing prepared');
   });
 });
+
+// --- a removed declaration whose form a maker deleted ---------------------------------------------------------------------
+
+// A maker deleted the form `id`: each request by its id answers the missing-row 404 (0x80040217), and every systemforms
+// collection read leaves it out. `saved`/`published` answer one layer otherwise ('present' passes it through, a function
+// answers or throws) to show what is NOT absence.
+const missingRow = (id) => ({ status: 404, headers: {}, body: { error: { code: '0x80040217', message: `systemform With Id = ${id} Does Not Exist` } } });
+const passThrough = (org, r) => org.fake.httpClient.get(`${org.origin}/api/data/v9.2${r.path}`);
+function deleteForm(org, rawId, { saved = missingRow, published = missingRow } = {}) {
+  const id = String(rawId).toLowerCase();
+  const byId = (r) => r.path.toLowerCase().startsWith(`/systemforms(${id})`);
+  const presenceReads = [];
+  const restore = org.intercept((r) => byId(r) || (r.method === 'GET' && /^\/systemforms(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\))?\?/.test(r.path)), async (r) => {
+    if (byId(r)) {
+      const layer = /\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\)/.test(r.path) ? saved : published;
+      presenceReads.push(r.path);
+      return r.method === 'GET' && layer === 'present' ? passThrough(org, r) : (typeof layer === 'function' ? layer(id) : missingRow(id));
+    }
+    const res = await passThrough(org, r);
+    return res.body && Array.isArray(res.body.value) ? { ...res, body: { ...res.body, value: res.body.value.filter((row) => String(row.formid || '').toLowerCase() !== id) } } : res;
+  });
+  return { restore, presenceReads };
+}
+const removedForm = () => { const s = makeSpec(); s.forms = []; return s; };
+const retiredOf = (org, dir) => storeOf(org, dir).snapshot().envelope.retiredGroups || [];
+const retiredNotices = (warns) => warns.filter((w) => /managed-root-retired/.test(w));
+const buildWarned = async (org, dir, spec, opts = {}) => { const warns = []; const r = await build(org, dir, spec, { ...opts, warn: (m) => warns.push(m) }); return { ...r, warns }; };
+
+// A committed form owing its table's publish, definitely not sent: a changed declaration commits, then the read of its
+// layers before the publish fails, so nothing is sent and the debt stays owed with no dispatch token.
+async function owedForm(org, dir) {
+  assert.equal((await build(org, dir, makeSpec())).err, undefined);
+  const { root, generation } = storeOf(org, dir).readGroup('form', KEY).committed;
+  const recommitted = () => { const c = storeOf(org, dir).readGroup('form', KEY).committed; return !!c && c.generation !== generation; };
+  const restore = org.intercept((r) => r.method === 'GET' && r.path === `/systemforms(${root.id})?$select=formid,name,description,formxml` && recommitted(),
+    async () => ({ status: 503, headers: {}, body: { error: { code: '0x80040216', message: 'unavailable' } } }));
+  const second = await build(org, dir, reordered());
+  restore();
+  assert.equal(second.err && second.err.code, 'managed-publication-unverified', chainText(second.err));
+  const pub = storeOf(org, dir).readGroup('form', KEY).committed.publication;
+  assert.deepEqual([pub.state, pub.dispatchToken], ['owed', null]);
+  return root.id;
+}
+
+test('a removed declared form whose form was deleted, owing an unsent publish of its table, is retired once on two-layer proof, and the next build is clean', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const id = await owedForm(org, dir);
+    const { presenceReads } = deleteForm(org, id);
+    const first = await buildWarned(org, dir, removedForm());
+    assert.equal(first.err, undefined, chainText(first.err));
+    assert.deepEqual(first.writes, [], 'nothing written to the environment');
+    assert.deepEqual(first.tablePublishes, []);
+    assert.equal(retiredNotices(first.warns).length, 1);
+    assert.match(retiredNotices(first.warns)[0], new RegExp(`declared form "${KEY}": managed-root-retired .*${id}`));
+    assert.deepEqual(presenceReads.slice(0, 2).map((p) => p.replace(GUID, '<id>')), [
+      '/systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,name,description,formxml',
+      '/systemforms(<id>)?$select=formid,name,description,formxml',
+    ], 'the saved layer, then the published one, by the bound id');
+    assert.deepEqual(storeOf(org, dir).readGroup('form', KEY), { committed: null, pending: null, effects: [] });
+    assert.deepEqual(retiredOf(org, dir).map((e) => [e.family, e.key, e.rootId, e.reason, e.publication]), [['form', KEY, id, 'root-absent', 'owed']]);
+    const again = await buildWarned(org, dir, removedForm());
+    assert.equal(again.err, undefined, chainText(again.err));
+    assert.deepEqual([again.writes, again.tablePublishes, retiredNotices(again.warns)], [[], [], []]);
+    assert.equal(retiredOf(org, dir).length, 1, 'retired once');
+  });
+});
+
+test('a removed declared form whose form was deleted fails verify until a build retires it; a legacy form on its table then publishes', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const { root, publication } = storeOf(org, dir).readGroup('form', KEY).committed;
+    assert.equal(publication.state, 'confirmed');
+    deleteForm(org, root.id);
+    const { read } = await verifyReader(org);
+    const before = await verifySpec(removedForm(), read, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(managedChecks(before).map((c) => c.present), [false], 'the bound form is gone');
+    const r = await buildWarned(org, dir, removedForm());
+    assert.equal(r.err, undefined, chainText(r.err));
+    assert.equal(retiredNotices(r.warns).length, 1);
+    assert.deepEqual(retiredOf(org, dir).map((e) => [e.key, e.publication]), [[KEY, 'confirmed']]);
+    const after = await verifySpec(removedForm(), read, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(managedChecks(after), []);
+    assert.deepEqual((after.unverified || []).filter((u) => u.startsWith('managed:')), []);
+    // A legacy form on the same table: its publish no longer covers the deleted form.
+    const legacy = removedForm();
+    legacy.forms = [{ entity: 'contoso_item', name: 'Legacy Item', formType: 'Main', tabs: [{ name: 'general', label: 'General', sections: [{ name: 'main', label: 'Main', fields: ['contoso_name'] }] }] }];
+    for (let n = 0; n < 2; n += 1) {
+      const b = await build(org, dir, legacy);
+      assert.equal(b.err, undefined, chainText(b.err));
+    }
+  });
+});
+
+test('a removed declared form is kept, and nothing retired, unless both layers answer the missing row: present, 403, timeout or another 404', async () => {
+  const timeout = () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }); };
+  const forbidden = () => ({ status: 403, headers: {}, body: { error: { code: '0x80040220', message: 'no privilege' } } });
+  const otherNotFound = () => ({ status: 404, headers: {}, body: { error: { code: '0x80060888', message: 'Resource not found for the segment' } } });
+  const cases = [
+    ['the saved layer present', { saved: 'present' }],
+    ['the published layer present', { published: 'present' }],
+    ['a 403 on the saved read', { saved: forbidden }],
+    ['a timeout on the published read', { published: timeout }],
+    ['a 404 with another code', { published: otherNotFound }],
+  ];
+  for (const [name, layers] of cases) {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      const id = await owedForm(org, dir);
+      const before = storeOf(org, dir).readGroup('form', KEY).committed;
+      deleteForm(org, id, layers);
+      const r = await buildWarned(org, dir, removedForm());
+      assert.deepEqual(retiredNotices(r.warns), [], name);
+      assert.deepEqual(retiredOf(org, dir), [], name);
+      const kept = storeOf(org, dir).readGroup('form', KEY).committed;
+      assert.deepEqual([kept.generation, kept.root.id], [before.generation, before.root.id], `${name}: kept`);
+      // A form present in either layer is not gone: the run goes on as it always did. Any other answer proves nothing,
+      // so the owed publish still stops on the unreadable layers, nothing sent.
+      if (Object.values(layers).includes('present')) return;
+      assert.equal(r.err && r.err.code, 'managed-publication-unverified', `${name}: ${chainText(r.err)}`);
+      assert.deepEqual([r.writes, r.tablePublishes], [[], []], name);
+      assert.deepEqual(kept, before, `${name}: kept as it was`);
+    });
+  }
+});
+
+test('a deleted form is never retired over a publish that may have been sent, while still declared, or with the build path off', async () => {
+  // A publish whose answer was lost: it could still land, so the scope stays blocked with its typed approval.
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const restore = losePublish(org, { applied: false });
+    await build(org, dir, makeSpec());
+    restore();
+    const { root, publication } = storeOf(org, dir).readGroup('form', KEY).committed;
+    assert.equal(publication.state, 'unconfirmed');
+    deleteForm(org, root.id);
+    for (let n = 0; n < 2; n += 1) {
+      const r = await buildWarned(org, dir, removedForm());
+      assert.equal(r.err && r.err.code, 'managed-publication-unconfirmed', chainText(r.err));
+      assert.deepEqual([r.writes, retiredNotices(r.warns)], [[], []]);
+    }
+    assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'unconfirmed');
+    assert.deepEqual(retiredOf(org, dir), []);
+  });
+  // Still declared: its bound form missing is repaired explicitly, never retired by the build.
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    deleteForm(org, storeOf(org, dir).readGroup('form', KEY).committed.root.id);
+    const r = await buildWarned(org, dir, makeSpec());
+    assert.match(chainText(r.err), /form-layout-bound-row-missing/);
+    assert.deepEqual(retiredNotices(r.warns), []);
+    assert.deepEqual(retiredOf(org, dir), []);
+  });
+  // The build path off: nothing is declared, so nothing is read for the group or retired.
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  await withForms(true, async () => { assert.equal((await build(org, dir, makeSpec())).err, undefined); });
+  const { presenceReads } = deleteForm(org, storeOf(org, dir).readGroup('form', KEY).committed.root.id);
+  await withForms(false, async () => {
+    const r = await buildWarned(org, dir, removedForm());
+    assert.deepEqual([presenceReads, retiredNotices(r.warns), retiredOf(org, dir)], [[], [], []]);
+    assert.notEqual(storeOf(org, dir).readGroup('form', KEY).committed, null);
+  });
+});
