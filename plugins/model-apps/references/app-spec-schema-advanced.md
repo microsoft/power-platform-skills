@@ -669,7 +669,8 @@ validation error, and the build's existing behaviour for each is unchanged. A co
 `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
 
 **An unconfirmed publish.** A table (or dashboard) publish whose answer was lost may still have run. The
-next build confirms it with a fresh read of the published layers, never by sending it again; that run
+next build confirms it with a fresh read of the published layers, never by sending it again (for a declared
+form's table, also when the spec no longer declares the form); that run
 publishes nothing more on that table, and the build after it goes on as usual. When no read can confirm
 it (the publish carried only layers that were already live), the table stays blocked in every build, and
 the build stops and prints the approval that releases it: `--authorize publication-risk:table:<table>`
@@ -715,19 +716,26 @@ are only added.
   change on it succeeded. A table publish puts live every saved change on that table, not only this
   form's, so the build withholds it while another managed change on the table is not proved. A saved
   form that is definitely unpublished is published without a rewrite.
-- **Concurrent edits.** Dataverse does not version a form's saved layer, so a conditional write cannot
-  reject a stale edit of it. The build re-reads the saved form just before it writes and stops when it
-  changed since the build read it. An edit made in Maker in the instant between that check and the
-  write cannot be detected: do not edit a declared form while a build runs.
+- **Concurrent edits.** Dataverse does not provide a working conditional-write guard for a form's saved
+  layer, so a conditional write cannot reject a stale edit of it. The build re-reads the saved form just
+  before it writes and stops when it changed since the build read it. An edit made in Maker in the
+  instant between that check and the write cannot be detected: do not edit a declared form while a build
+  runs.
 - **Verify.** `--verify` reads each bound declared form again by its id and checks it against the spec:
   field order, sections, spans, stated flags, sub-grids, quick views and handlers, and the controls the
   build added. A form whose last publish is not confirmed is listed as unverified, not passed. A
-  sub-grid's view is not compared; a quick view whose form name matches more than one form is unverified.
+  sub-grid must show the view the build would choose (the view it names, else the first view the spec
+  declares on that table, else the table's default view): a different view fails, a view the spec
+  declares that is not in the environment fails, and one whose name matches more than one view, or that
+  cannot be read, is unverified. A quick view whose form name matches more than one form is unverified.
 - **Download.** A plain download leaves declared forms out. To bring them back, pass both
   `--include-managed` and `--managed-manifest <store file>`, the `managed-bindings.<hash>.json` file in the
   build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
-  `reconcile: "declared"`; a form that is pending, gone or not valid is left out and named. The downloaded
-  folder has no store, so its first rebuild needs `--authorize "adopt:form:<key>"` for each form.
+  `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
+  that is pending, gone or not valid is left out and named. The download transfers no binding: the
+  downloaded folder has no store, so the first build that binds a form there needs
+  `--authorize "adopt:form:<key>"`. A rebuild that finds the form already as declared writes nothing and
+  may leave it unbound.
 
 ## dashboards[].reconcile (optional — declared dashboards)
 

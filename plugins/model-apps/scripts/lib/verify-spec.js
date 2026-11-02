@@ -2768,10 +2768,43 @@ function declaredFormsByKey(spec) {
   return out;
 }
 
+// The view the build embeds in a sub-grid of a declared form, resolved the way the build resolves it (sdk-build.js
+// subgridViewId): the spec view the sub-grid names on its child table, else the first spec view of that table, else the
+// table's default public view. A spec view is found in the environment by its (table, name), exactly one row; the default
+// view as the build finds it (the `isdefault` row of the table's public views, else the first). Answers { id }, or
+// { missing } when a view the spec declares is not in the environment (the grid the build would embed cannot be there),
+// or { unverified } when the answer is ambiguous, unreadable or empty: never an unconstrained target.
+async function resolveSubgridView(spec, sg, child, read) {
+  if (!read || typeof read.queryRecords !== 'function') return { unverified: 'this reader cannot read views' };
+  const own = (spec.views || []).filter((v) => v && v.entity && String(v.entity).toLowerCase() === child);
+  const named = (sg.view && own.find((v) => v.name === sg.view)) || own[0];
+  if (named) {
+    const label = `the view '${named.name}' of '${child}' that the sub-grid shows`;
+    let rows;
+    try {
+      rows = await read.queryRecords('savedquery', { select: ['savedqueryid'], filter: `returnedtypecode eq '${odataLit(child)}' and name eq '${odataLit(named.name)}' and querytype eq 0`, top: 2 });
+    } catch (error) {
+      return { unverified: `${label} could not be read: ${String((error && error.message) || error)}` };
+    }
+    rows = rows || [];
+    if (!rows.length) return { missing: `${label} is not in the environment` };
+    if (rows.length > 1 || !rows[0].savedqueryid) return { unverified: `${label} could not be identified: more than one view answers its name` };
+    return { id: rows[0].savedqueryid };
+  }
+  let rows;
+  try {
+    rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'isdefault'], filter: `returnedtypecode eq '${odataLit(child)}' and querytype eq 0`, top: 20 });
+  } catch (error) {
+    return { unverified: `the default view of '${child}' that the sub-grid shows could not be read: ${String((error && error.message) || error)}` };
+  }
+  const def = (rows || []).find((r) => r.isdefault) || (rows || [])[0];
+  return def && def.savedqueryid ? { id: def.savedqueryid } : { unverified: `'${child}' has no public view the sub-grid could show` };
+}
+
 // One committed form group the spec still declares, held to its declaration by the helper's oracle (verifyDeclaredForm) over a
 // fresh read of the bound form. What verify cannot rebuild exactly as the build did is checked as far as it can be, and said so:
-//   - a sub-grid's view is the build's resolved view id, which verify does not have: the host is matched on its relationship and
-//     child table with any view (the oracle's '' wildcard);
+//   - a sub-grid's view is resolved as the build resolves it (resolveSubgridView) and matched exactly; a declared view the
+//     environment does not hold fails the form, and one that cannot be identified leaves the host out, listed as unverified;
 //   - a quick view's form is found by its (table, name) as a QuickView form; none or several answering cannot be judged, so the
 //     host is left out and listed as unverified rather than failed.
 // A group whose publication is still in flight (dispatching or unconfirmed) is checked on its saved form like any other, and listed
@@ -2790,6 +2823,7 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
     return;
   }
   const subgrids = [];
+  const missingViews = [];
   const subgridSpecs = [...(f.subgrids || [])];
   if (f.autoSubgrids) {
     const declared = new Set(subgridSpecs.map((s) => String(s.childEntity).toLowerCase()));
@@ -2798,7 +2832,11 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
   for (const sg of subgridSpecs) {
     const rel = sg && sg.childEntity ? subgridRelationshipName(spec, f.entity, sg.childEntity) : null;
     if (!rel) { unverified.push(`managed:form ${g.key} (the sub-grid for '${sg && sg.childEntity}' names no relationship the spec declares)`); continue; }
-    subgrids.push({ targetEntity: String(sg.childEntity).toLowerCase(), relationshipName: rel, viewId: '' });
+    const child = String(sg.childEntity).toLowerCase();
+    const view = await resolveSubgridView(spec, sg, child, read);
+    if (view.missing) { missingViews.push(`form-host: ${view.missing}`); continue; }
+    if (view.unverified) { unverified.push(`managed:form ${g.key} (${view.unverified})`); continue; }
+    subgrids.push({ targetEntity: child, relationshipName: rel, viewId: view.id });
   }
   const quickViews = [];
   for (const qv of f.quickViews || []) {
@@ -2815,7 +2853,8 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
   }
   const intentTabs = compileFormIntent(spec, f, { notesClassId: TIMELINE_CLASS_ID }).tabs;
   const issues = verifyDeclaredForm({ form: f, spec, intentTabs, hosts: { subgrids, quickViews }, events: f.events || [], liveForm, group: g });
-  add('managed-form', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
+  const problems = [...missingViews, ...issues.map((i) => `${i.code}: ${i.message}`)];
+  add('managed-form', name, problems.length === 0, problems.join('; '));
 }
 
 // The declared dashboards (dashboards[].reconcile "declared") the spec holds while the declared dashboard build is on

@@ -2863,13 +2863,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   stops before a write. The forms phase settles each declared form as one managed group
   (`reconcileDeclaredForm` through `runManagedFeature`, with the run's store, barrier, creation catalog,
   halt factory, solution membership and `sendObserver`); QuickView forms first, the others after the
-  legacy form steps; then ONE managed publish per table through the shared table publisher (also for a
-  table that holds an unconfirmed earlier publish, which it confirms read-only first). Default-form
+  legacy form steps (the legacy QuickView ids are keyed before any declared host resolves its quick views);
+  then ONE managed publish per table through the shared table publisher (also for a table that holds an
+  unconfirmed earlier publish, which it confirms read-only first, and for the table of every STORED form
+  group, so omitting a declaration, or every form, never skips an owed or uncertain publish). Default-form
   promotion and Main Form Set order skip declared forms (`formOrderSpecOf`), and validation refuses
   `isDefault`, `deactivateOtherMainForms`, `securityRoles`, `mainFormOrder`, `prune` and `genPages`
   on them, because each would rewrite the proved saved layer. Approvals are typed:
   `adopt|overwrite:form:<table>/<formtype>/<name>` (lower case); an adopted form's first binding needs
-  `form:<key>`, later commits do not. **Concurrent edits:** a `systemforms` GET answers the PUBLISHED
+  `form:<key>`, later commits do not. **Concurrent edits:** the service does not provide a working
+  conditional-write guard for a form's saved layer. A `systemforms` GET answers the PUBLISHED
   row's ETag, which a saved-layer edit does not move, so `If-Match` does not protect a form's saved layer
   (and the saved layer's own ETag is refused with 412 even when current). The real guard is the SDK's
   content-token check: just before the PATCH it re-reads the saved layer and refuses when it changed. An
@@ -2881,11 +2884,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   recorded id through the isolated reader (`readerFor(...).declaredForm`, never `readGroup`) and runs
   `verifyDeclaredForm` against the declaration and the store's recorded children (`managed-form` check);
   a form whose publication is `dispatching` or `unconfirmed`, or a reader that cannot read by id, is listed
-  unverified, never passed. A sub-grid's view matches any view, and a quick view's target is looked up by
+  unverified, never passed. A sub-grid's view is resolved as the build resolves it (`resolveSubgridView`
+  mirrors `subgridViewId`: the named spec view, else the first spec view of the child table, else the default
+  public view) and matched exactly: a declared view the environment lacks fails, an ambiguous or unreadable
+  one leaves the host out as unverified, and the oracle has no wildcard. A quick view's target is looked up by
   name (ambiguous → unverified). `download-model-app.js --include-managed --managed-manifest <store file>`
   (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
-  pending, unreadable or invalid one is left out and named. A plain download reads no form. The download
-  writes no store, so a rebuild from the downloaded folder needs `adopt:form:<key>` once.
+  pending, unreadable or invalid one is left out and named. The restored form is the group's
+  `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
+  The download writes no store and transfers no binding authority: the first binding of a form from the
+  downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.
 - **Dashboard** (`dashboards[].reconcile: "declared"`, `lib/dashboard-reconcile.js`, enabled by
   `DECLARED_FEATURES.dashboards` in `lib/declared-features.js`): a global Standard dashboard follows the
   spec tile by tile. Each tile has a `key`; a bound tile gets only what it authors written (target, `name`,

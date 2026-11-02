@@ -1415,9 +1415,10 @@ function withHandlers(bag, handlers) {
 }
 
 // The raw spec keys of a declared form the managed group keeps so verify and an explicit download can restore it:
-// what the spec declared, never the stored form's content. `fieldOptions` is kept as written, so an explicit false
-// stays distinct from an absent flag.
-const DECLARATION_KEYS = ['entity', 'table', 'name', 'formType', 'reconcile', 'layout', 'notes', 'tabs', 'fieldOptions', 'subgrids', 'quickViews', 'events'];
+// what the spec declared, never the stored form's content. `fieldOptions` and `autoSubgrids` are kept as written, so an
+// explicit false stays distinct from an absent flag. autoSubgrids adds the generated sub-grids the group proves, so a
+// declaration without it would restore, through a download, a form that no longer declares them.
+const DECLARATION_KEYS = ['entity', 'table', 'name', 'formType', 'reconcile', 'layout', 'notes', 'tabs', 'fieldOptions', 'subgrids', 'autoSubgrids', 'quickViews', 'events'];
 function declarationOf(form) {
   const out = {};
   for (const k of DECLARATION_KEYS) if (form && form[k] !== undefined) out[k] = clone(form[k]);
@@ -2132,8 +2133,8 @@ async function publishDeclaredFormTable({ store, barrier, sdk, table, keys = [] 
  *                 `group` of a snapshot unit). With it the stored form must also be that id (form-identity) and
  *                 hold every child of the group's last proof as what and where it was proved — a sub-grid or
  *                 quick view still showing its target, a field cell in its section and slot (form-managed-child).
- * A sub-grid host whose viewId is '' (verify cannot resolve the build's created views) matches any
- * stored sub-grid of the same relationship and child table.
+ * Each host is matched exactly, a sub-grid by its relationship, child table and view id: a caller that cannot resolve
+ * the view the build embeds leaves the host out (and says so), never passes a wildcard.
  */
 function verifyDeclaredForm({ form, spec, intentTabs, hosts, events, liveForm, group } = {}) {
   const issues = [];
@@ -2194,9 +2195,7 @@ function verifyDeclaredForm({ form, spec, intentTabs, hosts, events, liveForm, g
   }
   if (wantsTimeline(spec, form) && !timelinesOf(tabs).some((t) => !timelineProblem(t, { host: false }))) issue('form-timeline', 'the form has no timeline that renders');
   const shown = new Set(hostTargetsShown(tabs));
-  // A sub-grid whose view the reader could not resolve (viewId '') is matched on its relationship and target.
-  const isShown = (t) => shown.has(t) || (/^subgrid\|[^|]*\|[^|]*\|$/.test(t) && [...shown].some((s) => s.startsWith(t)));
-  for (const t of hostTargetsOf(hosts)) if (!isShown(t)) issue('form-host', `the form does not show ${t.replace(/\|+$/, '').replace(/\|/g, ' ')}`);
+  for (const t of hostTargetsOf(hosts)) if (!shown.has(t)) issue('form-host', `the form does not show ${t.replace(/\|+$/, '').replace(/\|/g, ' ')}`);
   const have = handlerKeysOf(liveForm);
   const requested = events || form.events;
   for (const ev of requestedHandlers(requested)) if (!have.has(handlerKey(ev))) issue('form-event', `${handlerLabel(ev)} is missing`);

@@ -6793,9 +6793,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const declaredIdOf = new Map(); // raw spec form -> the id its committed group binds
     const declaredTables = []; // the tables of the declared forms that settled, in settle order
     // `${entity}|${name}` -> id of every QuickView form this run built or settled: a quick view on a legacy host or a declared
-    // one names its form by (target table, name). The declared QuickView forms settle first, so a declared host can use them.
+    // one names its form by (target table, name). The declared QuickView forms settle first, then the legacy forms are built
+    // and their QuickView ids are added beside them, and only then do the declared hosts settle, so a declared host can embed
+    // a QuickView form of either kind built in the same run.
     const quickViewIds = {};
-    const keyQuickView = (d, id) => { if (id && d.f.name && (d.f.formType || 'Main') === 'QuickView') quickViewIds[`${String(d.f.entity).toLowerCase()}|${d.f.name}`] = id; };
+    const keyQuickView = (d, id, { keep = false } = {}) => {
+      if (!id || !d.f.name || (d.f.formType || 'Main') !== 'QuickView') return;
+      const k = `${String(d.f.entity).toLowerCase()}|${d.f.name}`;
+      if (!(keep && quickViewIds[k])) quickViewIds[k] = id;
+    };
     let formCatalog = null;
     // The helper calls the halt factory with { cause } only; the build's halt names the finding the cause carries, so the
     // printed line says the code, the message and the approval that settles it (cliApproval: `declared form "<key>"`).
@@ -6862,6 +6868,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       return id;
     });
+    // The legacy QuickView ids, before any declared host resolves its quick views (they settle further down). A declared
+    // QuickView of the same (table, name) keeps its entry for the declared hosts; the legacy placement below re-keys the
+    // legacy ids over it for the legacy hosts, as it always did.
+    defs.forEach((d, i) => keyQuickView(d, ids[i], { keep: true }));
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
     //
@@ -6913,7 +6923,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     for (const entityLogical of mainIdsByEntity.keys()) {
       await applyMainFormOrder(entityLogical, idOfForm);
     }
-    // The declared Main and QuickCreate forms, after the legacy forms (whose QuickView ids a declared host may name).
+    // The declared Main and QuickCreate forms, after the legacy forms (whose QuickView ids a declared host may name; they are
+    // keyed above).
     for (const d of declaredDefs) if ((d.f.formType || 'Main') !== 'QuickView') await settleDeclaredForm(d);
     // The id of every form, legacy or declared, in spec order: what the output maps below report.
     const legacyIdOf = new Map(defs.map((d, i) => [d, ids[i]]));
@@ -7008,10 +7019,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // again, and the scope stays quarantined for this run (openManagedContext's block is never cleared), so the next run
     // is the clean one. One it cannot confirm stops here with the dispatch as data, which the CLI offers to the maker as
     // the typed publication-risk:<scopeKey> approval (build-model-app.js offerPublicationRisk).
-    if (managedTables && declaredDefs.length) {
+    // The form tables are those of the declared forms AND those of every stored form group, so a table whose declared form
+    // the spec no longer declares (or a spec that declares no form at all) still has its earlier owed or uncertain publish
+    // settled here: omitting a declaration never skips that check.
+    if (managedTables) {
+      const stored = bindingGroups.store.snapshot().units();
       const formTables = new Set([...declaredTables, ...declaredDefs.map((d) => String(d.f.entity).toLowerCase())]);
+      for (const unit of stored) {
+        const scope = unit.family === 'form' && !unit.invalid && unit.group && unit.group.publication && unit.group.publication.scope;
+        if (scope && scope.type === 'table' && scope.table) formTables.add(String(scope.table).toLowerCase());
+      }
       const due = managedTables.owedTables().filter((t) => formTables.has(t));
-      for (const unit of bindingGroups.store.snapshot().units()) {
+      for (const unit of stored) {
         const pub = !unit.invalid && unit.group && unit.group.publication;
         if (!pub || (pub.state !== 'dispatching' && pub.state !== 'unconfirmed') || !pub.scope || pub.scope.type !== 'table') continue;
         const t = String(pub.scope.table || '').toLowerCase();

@@ -558,3 +558,241 @@ test('the enabled feature through the CLI: the printed typed approval binds the 
     assert.deepEqual(downloaded.written.forms, changed.forms);
   });
 });
+
+// --- the wiring's edges: hosts resolved the way the build resolves them, earlier publications, the kept declaration ---------
+
+// A self-related table: a lookup to its own parent, so a form of it can host a quick view and a sub-grid of the same table.
+const LINKED = { contoso_item: { attributes: { contoso_name: 'String', contoso_code: 'String', contoso_parent: 'Lookup' } } };
+function linkedSpec() {
+  const s = makeSpec();
+  s.relationships = [{ type: 'OneToMany', schemaName: 'contoso_item_parent', referenced: 'contoso_item', referencing: 'contoso_item', lookup: { schemaName: 'contoso_parent', displayName: 'Parent' } }];
+  return s;
+}
+const formXmlOf = async (org, id) => String((await org.fake.httpClient.get(`${org.origin}/api/data/v9.2/systemforms(${id})?$select=formxml`)).body.formxml || '');
+
+test('a declared Main embeds a QuickView built in the same run, legacy or declared: both forms are made and the table is published once', async () => {
+  await withForms(true, async () => {
+    for (const declaredTarget of [false, true]) {
+      const s = linkedSpec();
+      s.forms[0].quickViews = [{ lookup: 'contoso_parent', targetEntity: 'contoso_item', form: 'Item QV' }];
+      const qv = { ...makeSpec().forms[0], name: 'Item QV', formType: 'QuickView' };
+      if (!declaredTarget) delete qv.reconcile;
+      s.forms.push(qv);
+      assert.equal(validateAppSpec(s, { profile: 'deploy' }).ok, true, 'the mixed spec is valid');
+      const org = createFakeBuildOrg({ entities: LINKED });
+      const dir = newDir();
+      const r = await build(org, dir, s);
+      assert.equal(r.err, undefined, `${declaredTarget ? 'declared' : 'legacy'} target: ${chainText(r.err)}`);
+      assert.equal(formPosts(r).length, 2);
+      assert.deepEqual(r.tablePublishes, [['contoso_item']], 'one publish, after both forms');
+      const qvId = r.out.created.formIds['contoso_item|QuickView|Item QV'];
+      assert.match(String(qvId), /^[0-9a-f-]{36}$/i);
+      const mainId = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+      assert.ok((await formXmlOf(org, mainId)).toLowerCase().includes(qvId.toLowerCase()), 'the declared host shows the QuickView built this run');
+    }
+  });
+});
+
+test('verify resolves a sub-grid\'s view the way the build does: a changed view name fails, an unknown or ambiguous one is never matched by any view', async () => {
+  await withForms(true, async () => {
+    const s = linkedSpec();
+    s.views = [{ entity: 'contoso_item', name: 'First View', columns: ['contoso_name'] }, { entity: 'contoso_item', name: 'Second View', columns: ['contoso_name', 'contoso_code'] }];
+    s.forms[0].subgrids = [{ childEntity: 'contoso_item', view: 'First View', label: 'Children' }];
+    const org = createFakeBuildOrg({ entities: LINKED });
+    const dir = newDir();
+    const built = await build(org, dir, s, { phases: ['views', 'forms'] });
+    assert.equal(built.err, undefined, chainText(built.err));
+    const { read } = await verifyReader(org);
+    const run = (spec) => verifySpec(spec, read, { phases: ['forms'], managedManifest: manifestOf(org, dir) });
+    const managedUnverified = (r) => (r.unverified || []).filter((u) => u.startsWith('managed:'));
+    const same = await run(s);
+    assert.deepEqual(managedChecks(same).map((c) => c.present), [true], JSON.stringify(managedChecks(same)));
+    assert.deepEqual(managedUnverified(same), []);
+    // The spec now names the other view: the form still shows the first, so it is not what the spec declares.
+    const renamed = structuredClone(s);
+    renamed.forms[0].subgrids[0].view = 'Second View';
+    const [changed] = managedChecks(await run(renamed));
+    assert.equal(changed.present, false, 'a different declared view is not the stored target');
+    assert.match(changed.detail, /form-host: the form does not show subgrid contoso_item_parent contoso_item [0-9a-f-]{36}/);
+    // A view the spec declares and the environment does not hold: the grid the build would embed cannot exist.
+    const ghost = structuredClone(s);
+    ghost.views.push({ entity: 'contoso_item', name: 'Ghost View', columns: ['contoso_name'] });
+    ghost.forms[0].subgrids[0].view = 'Ghost View';
+    const [missing] = managedChecks(await run(ghost));
+    assert.equal(missing.present, false);
+    assert.match(missing.detail, /the view 'Ghost View' of 'contoso_item' that the sub-grid shows is not in the environment/);
+    // Two views answer the name, or the read fails: the host is listed unverified and left out, never matched to any view.
+    for (const [why, answer, words] of [
+      ['ambiguous', () => ({ status: 200, headers: {}, body: { value: [{ savedqueryid: '00000000-0000-0000-0000-0000000000b1' }, { savedqueryid: '00000000-0000-0000-0000-0000000000b2' }] } }), /could not be identified: more than one view answers/],
+      ['unreadable', () => ({ status: 500, headers: {}, body: { error: { code: '0x80040216', message: 'unexpected' } } }), /could not be read/],
+    ]) {
+      const restore = org.intercept((c) => c.method === 'GET' && /^\/savedqueries\?/.test(c.path) && decodeURIComponent(c.path).includes("name eq 'First View'"), answer);
+      const r = await run(s);
+      restore();
+      assert.deepEqual(managedChecks(r).map((c) => c.present), [true], why);
+      assert.equal(managedUnverified(r).length, 1, `${why}: ${JSON.stringify(r.unverified)}`);
+      assert.match(managedUnverified(r)[0], new RegExp(`^managed:form ${KEY} \\(the view 'First View' of 'contoso_item' that the sub-grid shows ${words.source}`), why);
+    }
+  });
+});
+
+test('an earlier publication of a form table is confirmed read-only when its declaration is gone, beside a form still declared on another table', async () => {
+  await withForms(true, async () => {
+    const entities = { ...ENTITIES, contoso_other: { attributes: { contoso_name: 'String' } } };
+    const twoTables = () => {
+      const s = makeSpec();
+      s.entities.push({ schemaName: 'contoso_other', displayName: 'Other', existing: true, primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } });
+      s.forms.push({ entity: 'contoso_other', name: 'Declared Other', formType: 'Main', reconcile: 'declared', tabs: [{ name: 'general', label: 'General', sections: [{ name: 'main', label: 'Main', fields: ['contoso_name'] }] }] });
+      return s;
+    };
+    for (const kept of [true, false]) {
+      const org = createFakeBuildOrg({ entities });
+      const dir = newDir();
+      const restore = losePublish(org, { applied: true });
+      const first = await build(org, dir, twoTables());
+      restore();
+      assert.ok(first.err, 'the lost answer stops the build');
+      assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'unconfirmed');
+      // The next build declares no form on contoso_item: only the other form, or none at all.
+      const omitted = twoTables();
+      omitted.forms = kept ? omitted.forms.slice(1) : [];
+      const next = await build(org, dir, omitted);
+      assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'confirmed', `kept=${kept}: confirmed by its changed published layer`);
+      assert.equal(next.tablePublishes.some((t) => t.includes('contoso_item')), false, `kept=${kept}: never sent again`);
+      const after = await build(org, dir, omitted);
+      assert.equal(after.err, undefined, `kept=${kept}: ${chainText(after.err)}`);
+      assert.equal(after.tablePublishes.some((t) => t.includes('contoso_item')), false);
+    }
+  });
+});
+
+test('autoSubgrids is kept in the declaration the form commits and comes back from the managed download, true or false as written', async () => {
+  await withForms(true, async () => {
+    for (const auto of [true, false]) {
+      const s = linkedSpec();
+      s.forms[0].autoSubgrids = auto;
+      s.views = [{ entity: 'contoso_item', name: 'Children', columns: ['contoso_name'] }];
+      assert.equal(validateAppSpec(s, { profile: 'deploy' }).ok, true);
+      const org = createFakeBuildOrg({ entities: LINKED });
+      const dir = newDir();
+      const r = await build(org, dir, s, { phases: ['views', 'forms'] });
+      assert.equal(r.err, undefined, chainText(r.err));
+      const group = storeOf(org, dir).readGroup('form', KEY).committed;
+      const formXml = await formXmlOf(org, group.root.id);
+      assert.equal(/contoso_item_parent/i.test(formXml), auto, `auto=${auto}: the generated grid is on the form only when asked`);
+      assert.equal('control:subgrid:contoso_item_parent' in group.consumerState.children, auto, `auto=${auto}: the generated grid is a child the group proves`);
+      assert.equal(group.originalDeclaration.autoSubgrids, auto, `auto=${auto}: the original declaration`);
+      assert.equal(group.consumerState.declaration.autoSubgrids, auto, `auto=${auto}: the declaration the download restores`);
+      const downloaded = await download(org, newDir(), ['--include-managed', '--managed-manifest', storeFileOf(org, dir)]);
+      assert.deepEqual(downloaded.emitted[0].payload.managedForms, { restored: [KEY], stale: [] });
+      assert.equal(downloaded.written.forms[0].autoSubgrids, auto);
+    }
+  });
+});
+
+test('a managed download carries no binding: an identical rebuild elsewhere stays unbound, and its first binding needs adopt:form', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const downloaded = await download(org, newDir(), ['--include-managed', '--managed-manifest', storeFileOf(org, dir)]);
+    const fresh = newDir();
+    const same = await build(org, fresh, downloaded.written);
+    assert.equal(same.err, undefined, chainText(same.err));
+    assert.deepEqual(same.writes, []);
+    assert.equal(storeOf(org, fresh).readGroup('form', KEY).committed, null, 'an identical no-op binds nothing');
+    const changed = structuredClone(downloaded.written);
+    changed.forms[0].tabs[0].sections[0].fields.reverse();
+    const halted = await build(org, fresh, changed);
+    assert.equal(halted.err && halted.err.code, 'form-layout-adoption-not-authorized');
+    assert.deepEqual(halted.writes, []);
+    assert.equal((await build(org, fresh, changed, { authorizedAdoption: new Set([`form:${KEY}`]) })).err, undefined);
+  });
+});
+
+test('a build with no binding store halts through the build halt before any form write; one with an unreadable store before any read', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const noStore = await build(org, newDir(), makeSpec(), { bindingGroups: { store: null, debt: [], absent: true } });
+    const own = (() => { for (let e = noStore.err; e; e = e.cause) if (Array.isArray(e.findings)) return e; return null; })();
+    assert.ok(own, chainText(noStore.err));
+    assert.equal(own.name, 'BuildHalt');
+    assert.equal(own.code, 'managed-binding-port-unavailable');
+    assert.deepEqual(noStore.writes, []);
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    fs.writeFileSync(storeFileOf(org, dir), '{ not json');
+    const corrupt = await build(org, dir, makeSpec());
+    assert.equal(corrupt.err && corrupt.err.code, 'managed-binding-store-unreadable');
+    assert.deepEqual(corrupt.calls, [], 'nothing is read or written');
+  });
+});
+
+test('a bound form whose local copy holds unsent edits stops the build before anything is fetched over it or written', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const id = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+    const local = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+    await local.initWorkspace();
+    await local.fetchArtifact('form', id, { overwrite: true });
+    await local.updateElement('form', id, '/tabs/0/label', 'UNSENT MAKER CAPTION');
+    for (const n of [1, 2]) {
+      const r = await build(org, dir, reordered());
+      assert.equal(r.err && r.err.code, 'create-completion-required', `run ${n}: ${chainText(r.err)}`);
+      assert.match(chainText(r.err), /the local copy of the form .* differs from the server's/);
+      assert.deepEqual(r.writes, [], `run ${n}: nothing written`);
+      assert.deepEqual(r.tablePublishes, []);
+      const copy = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+      await copy.initWorkspace();
+      assert.equal((await copy.getArtifact('form', id)).tabs[0].label, 'UNSENT MAKER CAPTION', `run ${n}: the copy is kept`);
+    }
+  });
+});
+
+test('a form create whose answer is lost is never sent again: the next build binds it only under adopt:form, then publishes once', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    let n = 0;
+    const restore = org.intercept((c) => c.method === 'POST' && /^\/systemforms(?:\?|$)/.test(c.path) && n++ === 0, async (c) => {
+      await org.fake.httpClient.post(`${org.origin}/api/data/v9.2${c.path}`, c.body);
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    });
+    const lost = await build(org, dir, makeSpec());
+    restore();
+    assert.ok(lost.err, 'the lost answer stops the build');
+    assert.equal(storeOf(org, dir).readGroup('form', KEY).committed, null);
+    const unapproved = await build(org, dir, makeSpec());
+    assert.equal(unapproved.err && unapproved.err.code, 'managed-adoption-required', chainText(unapproved.err));
+    assert.ok(chainText(unapproved.err).includes(`adopt:form:${KEY}`), chainText(unapproved.err));
+    assert.deepEqual(unapproved.writes, []);
+    const approved = await build(org, dir, makeSpec(), { authorizedAdoption: new Set([`form:${KEY}`]) });
+    assert.equal(approved.err, undefined, chainText(approved.err));
+    assert.deepEqual(formPosts(approved), [], 'no second form');
+    assert.deepEqual(approved.tablePublishes, [['contoso_item']]);
+    assert.equal(rootOrigin(storeOf(org, dir).readGroup('form', KEY).committed), 'adopted');
+    assert.equal(org.calls.filter((c) => c.method === 'POST' && /^\/systemforms(?:\?|$)/.test(c.path)).length, 1, 'one create in all');
+  });
+});
+
+test('a declared form too large for one attempt\'s reservation is refused through the build halt before anything is prepared or sent', async () => {
+  await withForms(true, async () => {
+    const attributes = { contoso_name: 'String' };
+    const sections = [];
+    for (let s = 0; s < 64; s += 1) {
+      const fields = Array.from({ length: 64 }, (_, f) => `contoso_f${String(s).padStart(2, '0')}_${String(f).padStart(2, '0')}`);
+      for (const f of fields) attributes[f] = 'String';
+      sections.push({ name: `sec_${s}`, label: `Section ${s}`, columns: 2, fields });
+    }
+    const spec = makeSpec({ form: { tabs: [{ name: 'general', label: 'General', sections }] } });
+    const org = createFakeBuildOrg({ entities: { contoso_item: { attributes } } });
+    const dir = newDir();
+    const r = await build(org, dir, spec);
+    assert.equal(r.err && r.err.code, 'managed-binding-store-full', chainText(r.err));
+    assert.match(chainText(r.err), /nothing was sent/);
+    assert.deepEqual(r.writes, []);
+    assert.deepEqual(storeOf(org, dir).readGroup('form', KEY), { committed: null, pending: null, effects: [] }, 'nothing prepared');
+  });
+});

@@ -160,14 +160,15 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   handlers); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
   declare stay where they are and nothing is deleted; a layout the build cannot place safely stops before any
   write; a table publish puts live every saved change on that table, not only this form; and Dataverse does
-  not version a form's saved layer, so the build re-checks it just before writing, but an edit made in Maker
-  at that instant cannot be detected. Never write `genPages`, `prune`, `isDefault`,
+  not provide a working conditional-write guard for a form's saved layer, so the build re-checks it just
+  before writing, but an edit made in Maker at that instant cannot be detected. Never write `genPages`, `prune`, `isDefault`,
   `deactivateOtherMainForms`, `securityRoles` or a `mainFormOrder` place on a declared form (refused).
   An existing form is bound only with `--authorize "adopt:form:<table>/<formtype>/<name>"` (lower case;
   `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
-  declared form against the spec (a form whose publish is unconfirmed is unverified, not passed). A download
-  brings declared forms back only with `--include-managed --managed-manifest <store file>`; its first rebuild
-  needs `adopt:form:<key>` for each, because the downloaded folder has no store.
+  declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
+  not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
+  file>`; it carries no binding, so the first build that binds each form from the downloaded folder needs
+  `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound).
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
   dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
   `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are
