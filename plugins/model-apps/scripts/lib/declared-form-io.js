@@ -19,6 +19,9 @@ const { hydrateDeclaredForm } = require('./form-layout-reconcile.js');
 const FORM = 'form';
 // lib/dashboard-reconcile.js KIND; kept as a literal so verify's manifest read does not load the dashboard helper.
 const DASHBOARD = 'dashboard';
+// The declared workflow families (lib/rule-settlement.js, lib/bpf-settlement.js), as literals for the same reason.
+const RULE = 'rule';
+const BPF = 'bpf';
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const codeError = (code, message) => Object.assign(new Error(message), { code });
 
@@ -56,6 +59,19 @@ function readVerifyManifest(args) {
   }
   if (found.absent) return managedManifestView(null);
   const view = managedManifestView(found.loaded);
+  // A pending business rule's or process flow's entry carries the row its attempt holds (`root`, the id reserved before anything
+  // was sent; null when the attempt names none), so verify checks that row's presence and state by its id and never lets a
+  // same-named row stand in for it (verify-spec.js boundWorkflowOf). The other families' pending entries are unchanged.
+  const pendingRoots = new Map();
+  for (const unit of found.loaded.units()) {
+    if ((unit.family === RULE || unit.family === BPF) && unit.attempt && !unit.invalid) {
+      pendingRoots.set(`${unit.family}\u0000${unit.key}`, unit.attempt.root || (unit.group && unit.group.root) || null);
+    }
+  }
+  for (const p of view.pending) {
+    const k = `${p.family}\u0000${p.key}`;
+    if (pendingRoots.has(k)) p.root = clone(pendingRoots.get(k));
+  }
   const committed = { [FORM]: committedUnits(found.loaded, FORM).groups, [DASHBOARD]: committedUnits(found.loaded, DASHBOARD).groups };
   for (const g of view.groups) {
     const full = committed[g.family] ? committed[g.family].get(g.key) : null;

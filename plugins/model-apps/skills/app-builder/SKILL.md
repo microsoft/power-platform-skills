@@ -201,8 +201,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `--authorize adopt:bpf:<table>/<name>` and a declaration naming its whole body. Explain the approval and let
   the maker choose. `--verify` holds a declared flow to its last build (a flow changed in Maker since fails until
   it is re-adopted). A download brings it back declared, keys included, only with `--include-managed
-  --managed-manifest <store file>` (otherwise it is left out); its first rebuild needs `adopt:bpf:<table>/<name>`,
-  because the downloaded folder has no store.
+  --managed-manifest <store file>` (otherwise it is left out); the first build that binds it from the downloaded folder
+  needs `adopt:bpf:<table>/<name>`, because that folder has no store.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run

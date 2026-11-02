@@ -7073,6 +7073,50 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
   }
 
+  // A declared workflow's attempt (a business rule's, family 'rule', or a process flow's, 'bpf') that is still waiting to be proved
+  // when its declaration has left the spec (the entry was removed, or no longer says reconcile "declared"). Nothing in this run will
+  // finish it, so it is not dropped silently: the run ends incomplete (managed-not-settled) with what to do, and the legacy path of
+  // the same phase writes nothing it could collide with. Every write of a declared workflow is recorded as an effect before it is
+  // sent, so an attempt whose effects all still say definitely-unsent changed nothing and holds nothing: it is only noted, and it
+  // finishes if the declaration comes back.
+  //
+  // The fence is the row the attempt holds AND the table and name it declared. The row id alone is not enough: a create whose
+  // answer was lost may not be visible yet (or may arrive after this run reads), so a legacy entry of the same name would find no
+  // row and create a second one beside it. The name is compared without case, as the service's `name eq` filter compares it. The
+  // attempt keeps the declaration it was prepared from (managed-bindings.js prepareAttempt `declaration`); one that names no
+  // readable table and name fences every legacy entry of its family, never none.
+  //   heldName(table, name)  the key of the attempt fencing that table and name, before any legacy read or create
+  //   heldRow(ids)           the key of the attempt holding one of those row ids (a held row renamed to another entry's name)
+  const holdRemovedWorkflowAttempts = (family, declaredKeys, { phase, noun, short, entries }) => {
+    const rows = new Map();
+    const names = new Map();
+    let all = null;
+    if (bindingGroups && bindingGroups.store) {
+      const envelope = bindingGroups.store.snapshot().envelope;
+      for (const a of envelope.attempts || []) {
+        if (!a || a.family !== family || declaredKeys.has(a.key)) continue;
+        const sent = (envelope.workflowEffects || []).some((e) => e && e.attemptToken === a.token && e.state !== 'definitely-unsent');
+        if (!sent) {
+          if (typeof opts.warn === 'function') opts.warn(`declared ${noun} "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
+          continue;
+        }
+        if (a.root && typeof a.root.id === 'string') rows.set(a.root.id.toLowerCase(), a.key);
+        const d = a.declaration;
+        if (d && typeof d.entity === 'string' && d.entity && typeof d.name === 'string' && d.name) names.set(`${d.entity.toLowerCase()}|${d.name.toLowerCase()}`, a.key);
+        else if (!all) all = a.key;
+        markIncomplete({
+          phase,
+          code: 'managed-not-settled',
+          message: `declared ${noun} "${a.key}": an earlier run's change of this ${short} is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it. Put its ${entries} entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
+        });
+      }
+    }
+    return {
+      heldName: (table, name) => all || names.get(`${String(table).toLowerCase()}|${String(name).toLowerCase()}`),
+      heldRow: (ids) => (ids || []).map((id) => rows.get(String(id).toLowerCase())).find(Boolean),
+    };
+  };
+
   // 6b. Commands (modern command-bar buttons). One command artifact per entity; a button with a
   //     library+function gets a functional JS on-click action bound to the created web resource.
   //     Pushed via the workspace-owning `provision` client (the appaction lands in the Default
@@ -7556,27 +7600,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
       });
     };
     // A declared flow's attempt still waiting to be proved after its declaration left the spec: the same hold as a declared rule's
-    // (see the business-rules phase). The legacy path below does not write the row it holds.
-    const heldBpfRows = new Map();
-    if (declaredFeatureOn('bpf') && bindingGroups && bindingGroups.store) {
-      const { bpfKey } = require('./bpf-settlement.js');
-      const declared = new Set((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => bpfKey(f)));
-      const envelope = bindingGroups.store.snapshot().envelope;
-      for (const a of envelope.attempts || []) {
-        if (!a || a.family !== 'bpf' || declared.has(a.key)) continue;
-        const sent = (envelope.workflowEffects || []).some((e) => e && e.attemptToken === a.token && e.state !== 'definitely-unsent');
-        if (!sent) {
-          if (typeof opts.warn === 'function') opts.warn(`declared business process flow "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
-          continue;
-        }
-        if (a.root && typeof a.root.id === 'string') heldBpfRows.set(a.root.id.toLowerCase(), a.key);
-        markIncomplete({
-          phase: 'business-process-flows',
-          code: 'managed-not-settled',
-          message: `declared business process flow "${a.key}": an earlier run's change of this flow is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it. Put its businessProcessFlows[] entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
-        });
-      }
-    }
+    // (holdRemovedWorkflowAttempts). The legacy path below neither reads nor creates a flow of the table and name it declared, and
+    // does not write the row it holds.
+    const bpfHold = declaredFeatureOn('bpf')
+      ? holdRemovedWorkflowAttempts('bpf', new Set((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => require('./bpf-settlement.js').bpfKey(f))), {
+        phase: 'business-process-flows', noun: 'business process flow', short: 'flow', entries: 'businessProcessFlows[]',
+      })
+      : { heldName: () => undefined, heldRow: () => undefined };
     for (const flow of spec.businessProcessFlows || []) {
       if (isDeclaredBpfOn(flow)) {
         await settleDeclaredBpfOf(flow);
@@ -7584,6 +7614,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       const entityLogical = String(flow.entity).toLowerCase();
       const key = `${entityLogical}|${flow.name}`;
+      const fencedBy = bpfHold.heldName(entityLogical, flow.name);
+      if (fencedBy) {
+        runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (not read, created or changed: declared flow "${fencedBy}" still has a change waiting to be proved under this table and name, and its row may not be visible yet)`);
+        continue;
+      }
       const existing = await provision.queryRecords('workflow', {
         // `uniquename` is selected, not derived. Activation creates the flow's backing TABLE with
         // exactly this name, and the security phase grants privileges on that table. For a flow this
@@ -7601,7 +7636,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         top: 50,
       });
       const existingId = existing && existing[0] && existing[0].workflowid;
-      const heldBpfBy = existingId ? (existing || []).map((w) => heldBpfRows.get(String(w.workflowid).toLowerCase())).find(Boolean) : undefined;
+      const heldBpfBy = existingId ? bpfHold.heldRow((existing || []).map((w) => w.workflowid)) : undefined;
       if (heldBpfBy) {
         runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (not changed: declared flow "${heldBpfBy}" still has a change waiting to be proved on it)`);
         continue;

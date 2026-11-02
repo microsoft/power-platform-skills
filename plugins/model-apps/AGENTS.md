@@ -2984,7 +2984,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   `declaredWorkflowStop` halt factory, solution membership, typed approvals and `sendObserver`); an undeclared
   flow keeps the legacy create-or-reuse path byte for byte. A new flow is created **Draft** with one
   `POST workflows` whose XAML carries every reserved id, proved by a fresh read, and then activated by ONE
-  state write carrying the version of that read (`If-Match`), with the same 412 handling as a rule; the guard
+  state write carrying the version of that read (`If-Match`), with the same 412 handling as a rule (after an
+  answered 412 no further state write is sent); the guard
   is service-backed in the same way (a client-supplied id is honoured, a repeated create answers 412 with no
   duplicate, and `If-Match` is enforced on the state and body writes). The default path never edits a flow
   that already exists (`workflow-edit-refused`, conditional edits stay off); removing or reordering a stage or
@@ -2999,8 +3000,10 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   derived from the display name; the security phase reads it from `created.bpfBackingTables`. The workflow
   effect gate is bound as for rules (a declared flow, or a stored workflow effect); a declared flow with no
   bound gate stops before any request (`workflow-state-path-unavailable`). A stored flow attempt whose
-  declaration left the spec holds the run (`managed-not-settled`) exactly as a rule's does, and the legacy
-  path does not write its row. Nothing is published.
+  declaration left the spec holds the run (`managed-not-settled`) exactly as a rule's does
+  (`holdRemovedWorkflowAttempts`): the legacy path neither reads nor creates a flow of the table and name that
+  attempt declared (a create whose answer was lost may not be visible yet, or may still arrive), nor writes the
+  row it holds. Nothing is published.
   **Verify and download** (`lib/declared-bpf-io.js`): verify reads each bound declared flow fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredBpf`) and runs `verifyDeclaredBpf`
   (`managed-bpf` check): the helper's one read-only `projectBpf`, certified only when it is a shape the
@@ -3012,13 +3015,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   description, order or status is not a change, as it is not for the build. A group with no declaration
   state or proof, or a reader that cannot read a flow by id, is listed unverified, never passed; a flow the
   spec no longer declares, or any with the path off, is held to its bound workflow id as before. The legacy
-  business-process-flow checks still run for a declared flow too.
+  business-process-flow check of a declared flow bound in the store, or of any flow whose attempt is pending, reads
+  that row by its id for presence and state before any name lookup (`boundWorkflowOf`; the manifest's pending
+  entry carries the attempt's row), so a namesake never passes for it; with no id, a failed read or a read that
+  answers another row it is unverified.
   `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
   `originalDeclaration` (stage and step keys included) into `businessProcessFlows[]`, which a plain download
   leaves out (replacing an entry with the same table and name, appended otherwise), validating
   incrementally; a pending, unreadable, changed or invalid one is left out and named (`managedBpfs.stale`).
-  The download writes no store, so a rebuild from the downloaded folder needs `adopt:bpf:<table>/<name>`
-  once.
+  The download writes no store, so the first binding of each flow from the downloaded folder needs
+  `adopt:bpf:<table>/<name>`.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.

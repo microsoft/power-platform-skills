@@ -914,20 +914,23 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   as the build read it, never on a name derived from the display name.
 - **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
   an earlier build sent to it is still waiting to be proved, the build ends incomplete
-  (`managed-not-settled`) and does not touch that flow: put its entry back and build again.
+  (`managed-not-settled`) and does not touch that flow: put its entry back and build again. Until then
+  an undeclared flow with the same table and name is not read, created or changed either, because the
+  row of a create whose answer was lost may not be visible yet.
 - **Publishing.** A flow is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared flow again by its id and holds it to what its last
   build proved: its whole body (every stage and step, with their ids) and its status. It also fails when
   the spec now declares the flow differently from what the flow holds (a stage or step added, renamed or
   changed, or one left out or moved, which a build refuses), or names it with another table or name (a
   build never renames or moves a managed flow). A flow changed in Maker since that build fails until it is
-  re-adopted.
+  re-adopted. Its presence and status are read by its own id too, as is a flow whose last change is still
+  waiting to be proved, so a flow with the same name never passes for it.
 - **Download.** A plain download writes no business process flow. With both `--include-managed` and
   `--managed-manifest <store file>`, each declared flow the store proves (a fresh read still shows what its
   last build proved) comes back in `businessProcessFlows[]` as the declaration it was built from, stage and
   step keys included, with `reconcile: "declared"`; one that is pending, gone, changed since, or not valid
-  is left out and named. The downloaded folder has no store, so its first rebuild needs
-  `--authorize "adopt:bpf:<table>/<name>"` for each.
+  is left out and named. The downloaded folder has no store, so the first build that binds each flow there
+  needs `--authorize "adopt:bpf:<table>/<name>"`.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

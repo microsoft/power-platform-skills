@@ -376,10 +376,11 @@ async function verifyReader(wire) {
     read: {
       findTable: async () => ({ logicalName: 'new_ticket' }),
       findColumns: async () => ['new_subject', 'new_status', 'new_notes', 'new_owner'],
-      // The bound-id read verify makes of a group it does not hold as declared: workflow by workflowid, answered from the wire.
+      // The bound-id reads verify makes: of a group it does not hold as declared, and the presence and state of a declared flow's
+      // own row (workflow by workflowid), answered from the wire. A read by name answers nothing.
       queryRecords: async (table, o) => {
         const id = (/workflowid eq (\S+)/.exec((o && o.filter) || '') || [])[1];
-        if (table === 'workflow' && id) { idReads.push(id); return wire.row(id) ? [{ workflowid: id }] : []; }
+        if (table === 'workflow' && id) { idReads.push(id); return wire.row(id) ? [{ workflowid: id, statecode: wire.row(id).statecode }] : []; }
         return [];
       },
       sitemapXml: async () => '',
@@ -442,16 +443,19 @@ test('verify lists a reader that cannot read a flow as unverified, and a flow th
     const blind = await verifySpec(specWith([FLOW]), plain, { managedManifest: manifestOf(dir) });
     assert.deepEqual(bpfChecks(blind), []);
     assert.ok(blind.unverified.includes(`managed:bpf ${GROUP} (this reader cannot read a business process flow by id)`), JSON.stringify(blind.unverified));
+    // The flow's presence and state are still read by its bound id, never by its name.
+    assert.deepEqual(blind.checks.filter((c) => c.kind === 'business-process-flow').map((c) => c.present), [true]);
+    assert.deepEqual(idReads, [id]);
     // A flow is keyed by its table and name, so a renamed flow is another flow: the bound one is held to its id.
     const renamed = await verifySpec(specWith([{ ...FLOW, name: 'Ticket journey' }]), read, { managedManifest: manifestOf(dir) });
     assert.deepEqual(bpfChecks(renamed).map((c) => [c.name, c.present, c.detail]), [[`${GROUP} (${id})`, true, '']]);
     assert.deepEqual(bpfReads, [], 'not read as a declared flow');
-    assert.deepEqual(idReads, [id]);
+    assert.deepEqual(idReads, [id, id]);
     await withBpf(false, async () => {
       const off = await verifySpec(specWith([legacy(FLOW)]), read, { managedManifest: manifestOf(dir) });
       assert.deepEqual(bpfChecks(off).map((c) => [c.name, c.present]), [[`${GROUP} (${id})`, true]]);
       assert.deepEqual(bpfReads, []);
-      assert.deepEqual(idReads, [id, id], 'held to its bound workflow id');
+      assert.deepEqual(idReads, [id, id, id], 'held to its bound workflow id');
     });
   });
 });
@@ -579,5 +583,88 @@ test('the enabled feature through the CLI: the printed typed approval binds the 
     const downloaded = await download(wire, makeTempDir('declared-bpf-'), ['--include-managed', '--managed-manifest', storeFileOf(dir)]);
     assert.deepEqual(downloaded.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] });
     assert.deepEqual(downloaded.written.businessProcessFlows, [FLOW]);
+  });
+});
+// --- a removed or pending flow's identity -------------------------------------------------------------------------------------
+
+test('a removed declared flow whose create answer was lost fences its table and name: the legacy path reads and creates nothing, even with the row not visible yet, and a late arrival leaves one flow', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    const isCreate = (e) => e.method === 'POST' && /^workflows$/i.test(e.path);
+    wire.script(isCreate, { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+    const lost = await build(wire, dir, specWith([FLOW]));
+    assert.ok(lost.err, 'the lost create stops the run');
+    assert.equal(wire.rows.size, 0, 'the create has not arrived');
+    const original = wire.log.find(isCreate);
+    const held = storeOf(dir).readGroup('bpf', GROUP);
+    assert.ok(held.pending && typeof held.pending.root.id === 'string');
+    // Undeclared under the same table and name, in the same case or another (the service compares names without case).
+    for (const flows of [[legacy(FLOW)], [{ ...legacy(FLOW), name: FLOW.name.toUpperCase() }], []]) {
+      const next = await build(wire, dir, specWith(flows));
+      assert.equal(next.err && next.err.code, 'managed-not-settled', chainText(next.err));
+      assert.match(chainText(next.err), /declared business process flow "new_ticket\/Ticket process": an earlier run's change of this flow is still waiting to be proved/);
+      assert.deepEqual(next.writes, [], 'no legacy create beside the unproved one');
+      assert.deepEqual(next.lines.filter((l) => /workflows/i.test(l)), [], 'the table and name are not even read');
+      assert.equal(wire.rows.size, 0);
+    }
+    // The first request arrives late: still one flow, the held one.
+    await wire.request({ method: original.method, url: original.url, headers: original.headers, body: JSON.stringify(original.body) });
+    assert.deepEqual([...wire.rows.keys()].map((k) => k.toLowerCase()), [held.pending.root.id.toLowerCase()]);
+  });
+});
+
+test('verify reads a pending or bound declared flow by its own id before any name lookup, so a namesake never passes for it', async () => {
+  await withBpf(true, async () => {
+    const namesake = '77777777-7777-4777-8777-777777777777';
+    const legacyChecks = (r) => r.checks.filter((c) => c.kind === 'business-process-flow').map((c) => [c.present, c.detail]);
+    const DRAFT = 'deployed but DRAFT — the process does not appear on the form';
+    const readOver = async (wire, queries) => {
+      const { sdk } = await sdkOver(wire);
+      const { read } = await verifyReader(wire);
+      return { ...read, queryRecords: async (table, o) => { queries.push(String((o && o.filter) || '')); return table === 'workflow' ? sdk.queryRecords(table, o) : []; } };
+    };
+
+    // Pending: the activation's answer was lost, so the Draft row is held; a maker renames it, and an Active flow takes its name.
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    wire.script((e) => e.method === 'PATCH', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+    assert.ok((await build(wire, dir, specWith([FLOW]))).err);
+    const id = storeOf(dir).readGroup('bpf', GROUP).pending.root.id;
+    const manifest = manifestOf(dir);
+    assert.deepEqual(manifest.pending.map((p) => [p.family, p.key, p.root && p.root.id]), [['bpf', GROUP, id]], 'the pending entry carries the row its attempt holds');
+    wire.rows.set(namesake, { ...wire.row(id), workflowid: namesake, statecode: 1, statuscode: 2 });
+    wire.row(id).name = 'Renamed in Maker';
+    const queries = [];
+    const read = await readOver(wire, queries);
+    const pending = await verifySpec(specWith([FLOW]), read, { managedManifest: manifest });
+    assert.deepEqual(legacyChecks(pending), [[false, DRAFT]], 'its own Draft row, not the Active namesake');
+    assert.ok(queries.includes(`workflowid eq ${id}`), JSON.stringify(queries));
+    assert.ok(!queries.some((q) => /\bname eq/.test(q)), 'never looked up by name');
+    assert.ok(!pending.ok);
+
+    // What cannot be read safely is unverified, never a pass and never a name read: no row named, a failed read, another row answered.
+    const unnamed = { ...manifest, pending: manifest.pending.map((p) => ({ ...p, root: null })) };
+    const failing = { ...read, queryRecords: async () => { throw new Error('connection reset'); } };
+    const other = { ...read, queryRecords: async (table) => (table === 'workflow' ? [{ workflowid: namesake, statecode: 1 }] : []) };
+    for (const [r, m, why] of [[read, unnamed, /the store does not name its row/], [failing, manifest, /could not be read: connection reset/], [other, manifest, /answered another row/]]) {
+      queries.length = 0;
+      const out = await verifySpec(specWith([FLOW]), r, { managedManifest: m });
+      assert.deepEqual(legacyChecks(out), []);
+      assert.ok(out.unverified.some((u) => u.startsWith('business-process-flow:new_ticket.Ticket process (') && why.test(u)), JSON.stringify(out.unverified));
+      assert.ok(!queries.some((q) => /\bname eq/.test(q)));
+    }
+
+    // Bound: the same holds for a committed flow — its row deactivated and renamed beside an Active namesake fails as Draft.
+    const bound = createWorkflowWire();
+    const bdir = makeTempDir('declared-bpf-');
+    assert.equal((await build(bound, bdir, specWith([FLOW]))).err, undefined);
+    const bid = storeOf(bdir).readGroup('bpf', GROUP).committed.root.id;
+    bound.rows.set(namesake, { ...bound.row(bid), workflowid: namesake });
+    Object.assign(bound.row(bid), { statecode: 0, statuscode: 1, name: 'Renamed in Maker' });
+    const bq = [];
+    const committed = await verifySpec(specWith([FLOW]), await readOver(bound, bq), { managedManifest: manifestOf(bdir) });
+    assert.deepEqual(legacyChecks(committed), [[false, DRAFT]]);
+    assert.ok(!bq.some((q) => /\bname eq/.test(q)));
   });
 });

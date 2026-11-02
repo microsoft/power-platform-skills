@@ -1441,6 +1441,15 @@ async function verifySpec(spec, read, opts = {}) {
   for (const flow of flows) {
     const entityLogical = String(flow.entity).toLowerCase();
     const name = `${entityLogical}.${flow.name}`;
+    // A declared flow bound in this workspace's store, or one whose attempt is still pending, is checked by its own row id first
+    // (boundWorkflowOf), never by name: a namesake must not pass for it.
+    const boundFlow = boundWorkflowOf(opts.managedManifest, 'bpf', `${entityLogical}/${flow.name}`, flow.reconcile === 'declared');
+    if (boundFlow) {
+      await checkBoundWorkflow(read, 'business-process-flow', name, boundFlow, (flow.status || 'Active') === 'Active', { add, unverified }, {
+        draft: 'deployed but DRAFT — the process does not appear on the form', active: 'deployed ACTIVE but the spec asks for Draft — the process is running',
+      });
+      continue;
+    }
     let rows;
     try {
       // DEFINITION rows only, BusinessFlow only (see bpfFilter) — counting the platform's activated
@@ -2427,6 +2436,48 @@ function workflowRowsOf(rows) {
 
 function incompleteDuplicateRead(n) {
   return `the read answered ${n} definition row(s) and said more exist, so neither "deployed once" nor "not deployed" is proven`;
+}
+
+// The row a declared workflow (a business rule, family 'rule', or a process flow, 'bpf') is bound to in this workspace's store,
+// taken BEFORE any lookup by name: a name read cannot tell the bound row from a same-named one, so a pending rule renamed in Maker
+// beside an Active namesake would pass on the namesake's state. Answers
+//   null                   the store holds nothing for `key` (or the entry is not declared and nothing of it is pending):
+//                          the name check stands, as it always did;
+//   { id, pending }        the committed group's root, or the pending attempt's root (lib/declared-form-io.js readVerifyManifest
+//                          carries it on the pending entry);
+//   { id: null, pending }  a pending attempt whose row the view does not name: nothing can be checked safely, so it is unverified.
+// A committed group whose entry is no longer declared is left to the name check here: the build's legacy path reuses the oldest
+// namesake for it, and the managed section still holds the group to its bound id.
+function boundWorkflowOf(manifest, family, key, declared) {
+  if (!manifest) return null;
+  const p = (manifest.pending || []).find((x) => x && x.family === family && x.key === key);
+  if (p) return { id: p.root && typeof p.root.id === 'string' && p.root.id ? p.root.id : null, pending: true };
+  if (!declared) return null;
+  const g = (manifest.groups || []).find((x) => x && x.family === family && x.key === key);
+  if (g && g.root && typeof g.root.id === 'string' && g.root.id) return { id: g.root.id, pending: false };
+  return null;
+}
+
+// Presence and state of a bound declared workflow, by a fresh read of its own id (boundWorkflowOf). Fails closed without ever
+// reading by name: no id, a read that failed, or a reader that answered another row than the bound one is unverified, never a pass.
+// `words` = { draft, active } are the kind's own failure details.
+async function checkBoundWorkflow(read, kind, name, bound, wantActive, { add, unverified }, words) {
+  const pendingNote = bound.pending ? 'an earlier build\'s change of it is still waiting to be proved, and ' : '';
+  if (!bound.id) { unverified.push(`${kind}:${name} (${pendingNote}the store does not name its row, so it is not looked up by name)`); return; }
+  const want = String(bound.id).toLowerCase().replace(/^\{|\}$/g, '');
+  let rows;
+  try {
+    rows = await read.queryRecords('workflow', { select: ['workflowid', 'statecode'], filter: `workflowid eq ${bound.id}`, top: 1 });
+  } catch (e) {
+    unverified.push(`${kind}:${name} (its bound row ${bound.id} could not be read: ${String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 200)})`);
+    return;
+  }
+  const list = Array.from(rows || []);
+  const row = list.find((w) => w && String(w.workflowid || '').toLowerCase().replace(/^\{|\}$/g, '') === want);
+  if (!row && list.length) { unverified.push(`${kind}:${name} (the read of its bound row ${bound.id} answered another row)`); return; }
+  if (!row) { add(kind, name, false, `not deployed — its bound row ${bound.id} is not there${bound.pending ? ' (an earlier build\'s change of it is still waiting to be proved)' : ''}`); return; }
+  const isActive = row.statecode === 1;
+  add(kind, name, wantActive === isActive, wantActive === isActive ? '' : (wantActive ? words.draft : words.active));
 }
 
 function escapeRe(s) {
