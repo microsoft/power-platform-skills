@@ -506,6 +506,36 @@ function offerPublicationRisk(err, { accepted, store, say } = {}) {
   }
 }
 
+// What a run says when a halt that ends the invocation before any service write (`stopsServiceWrites`, sdk-build.js
+// haltOnUnconfirmedRetirements) stops it. The final cleanup sends nothing after such a halt (buildModelApp), so what an
+// EARLIER attempt of this run left unsettled is warned about instead, with what recovers it:
+//  - a table publish it deferred (`owedPublishes`, `[type, id, names?]` targets): the change is saved and not live, and the
+//    next build publishes it (it reconciles the same views and forms and publishes their tables, unchanged ones too);
+//  - a name column length it owed for a table it created (`owedLengths`, `{ table, column, asked, tried }`; one marked
+//    `tried` already had its own warning): a later build leaves the column of a table it finds as it is, so the maker sets it.
+// The halt's own words ("the build stopped before writing anything") are true of the attempt that raised it. A run past its
+// first attempt had an earlier one end on a transient failure, and what that attempt sent stays sent, so from the second
+// attempt on the halt is said again with that told apart. Its code, phase, retry policy, findings and signal are the halt's
+// own, so nothing that reads them changes; on the first attempt the halt is returned as it is.
+function stoppedAfterEarlierAttempts(err, attempt, owedPublishes, owedLengths, warn) {
+  const say = (message) => { if (typeof warn === 'function') warn(message); };
+  const nameOf = (t) => (Array.isArray(t[2]) && t[2].length ? t[2].join(', ') : `${t[0]} ${t[1]}`);
+  const publishes = (Array.isArray(owedPublishes) ? owedPublishes : []).filter((t) => Array.isArray(t) && t[0] && t[1]);
+  if (publishes.length) {
+    say(`the build stopped before its publish phase and sends nothing more in this run; an earlier attempt of this run saved and did not publish ${publishes.map(nameOf).join('; ')} — the change is SAVED but the runtime still serves the previously published copy until the next build publishes it`);
+  }
+  for (const d of (Array.isArray(owedLengths) ? owedLengths : []).filter((x) => x && typeof x.table === 'string' && x.tried !== true)) {
+    say(`table ${d.table}, which an earlier attempt of this run created, still has its name column ${d.column} at the length the environment gave it, not ${d.asked} characters; this run sends nothing more, and a later build leaves the column of a table it finds as it is, so set ${d.column} to ${d.asked} characters in Maker`);
+  }
+  if (!(attempt > 1)) return err;
+  const halt = new BuildHalt(`${err.message} That is attempt ${attempt} of this run: an earlier attempt ended on a transient failure and was retried, and what it had already sent stays as it is; nothing more is sent in this run.`, {
+    phase: err.phase, code: err.code, recoverable: !!err.recoverable, retry: err.retry, cause: err,
+  });
+  Object.defineProperty(halt, 'findings', { value: err.findings, enumerable: false, configurable: true });
+  Object.defineProperty(halt, 'stopsServiceWrites', { value: true, enumerable: false, configurable: true });
+  return halt;
+}
+
 async function buildModelApp(spec, opts, deps) {
   const v = validateAppSpec(spec, { profile: opts.profile || 'deploy' });
   if (!v.ok) {
@@ -909,10 +939,23 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       // (`owedPaid`: the halt of a step that runs after it, the AI features' re-confirmation, say). What the phase
       // published is live, and a line that says the build stopped before it would be false.
       const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight') && !(err && err.owedPaid);
-      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()].filter((t) => publicationBarrier.allowTarget(t, 'settle after a halt')), deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
+      // A halt that ends the invocation before any service write (`stopsServiceWrites`: a dashboard or form retirement
+      // the build could not confirm, sdk-build.js haltOnUnconfirmedRetirements) sends nothing here either: neither the
+      // publish an EARLIER attempt of this run deferred, nor the name column length it owed. The store that attempt and
+      // this one read can no longer be trusted, so this run stops sending. What is left is said instead, and stays
+      // recoverable: the next build reconciles the same views and forms and publishes their tables again (publishReconciled,
+      // which publishes a form or view it finds unchanged too); a name column length it cannot set, because a build never
+      // rewrites the column of a table it finds (provisionDataModel), so the warning says the length to set. Every other
+      // halt settles as before.
+      const writesStopped = !!(err && err.stopsServiceWrites === true);
+      if (writesStopped) {
+        halted = stoppedAfterEarlierAttempts(err, attempt, [...owedAcrossAttempts.values()], owedLengths, deps.warn);
+      } else {
+        await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()].filter((t) => publicationBarrier.allowTarget(t, 'settle after a halt')), deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
+      }
       if (typeof deps.warn === 'function') for (const w of publicationBarrier.withheld()) deps.warn(describeWithheld(w));
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
-      await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
+      if (!writesStopped) await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
       // A managed publish no fresh read can settle: say what the maker may decide, and record the decision only when this
       // run was given that exact typed approval (offerPublicationRisk). The halt stands either way.
       offerPublicationRisk(halted, { accepted: opts.publicationRisk, store: bindingGroups && bindingGroups.store, say: deps.warn || log });

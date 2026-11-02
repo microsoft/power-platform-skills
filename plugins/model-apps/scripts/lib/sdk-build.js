@@ -3992,13 +3992,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
     : null;
   if (managedTables) await retireAbsentRemovedForms();
   // haltOnUnconfirmedRetirements: a dashboard or form retirement the sweeps above could not confirm ends this invocation
-  // here. Both sweeps run before the first service write of the invocation (everything above only reads), so nothing has
-  // been sent: no plain dashboard or form, no app shell, no publish, no page. One finding per key, incomplete
+  // here. Both sweeps run before the first service write of the attempt (everything above only reads), so this attempt
+  // has sent nothing: no plain dashboard or form, no app shell, no publish, no page. One finding per key, incomplete
   // (managed-not-settled, never retried automatically); the next invocation observes the store file afresh and retires
   // the group or proceeds as it then shows.
+  //
+  // `stopsServiceWrites` (not enumerable, like `findings`) tells the CLI that nothing may be sent after this halt either.
+  // Its final cleanup would otherwise publish what an EARLIER attempt of the same run saved and deferred, and set a name
+  // column length that attempt owed (build-model-app.js: settleOwedPublishes, settleOwedLengths): the store this run read
+  // can no longer be trusted, so the invocation ends here and the CLI says what that earlier attempt left instead.
   if (unconfirmedRetirements.length) {
     const keys = unconfirmedRetirements.map(({ family, key }) => `${family} "${key}"`).join(', ');
-    throw managedStop('preflight', `retirement of ${keys}`, 'managed-not-settled', {
+    const halt = managedStop('preflight', `retirement of ${keys}`, 'managed-not-settled', {
       cause: refusal(`the retirement of ${keys} could not be confirmed; the build stopped before writing anything, and the next build reads it again`, { code: 'managed-not-settled' }),
       findings: unconfirmedRetirements.map(({ family, key, why }) => ({
         key,
@@ -4007,6 +4012,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         message: `managed ${family} "${key}" (its retirement could not be confirmed: ${why}); the build stopped before writing anything, and the next build reads it again`,
       })),
     });
+    Object.defineProperty(halt, 'stopsServiceWrites', { value: true, enumerable: false, configurable: true });
+    throw halt;
   }
   if (managedTables) managedTables.routeStored();
   const isRouted = (logical) => !!managedTables && managedTables.routed(logical);
@@ -7171,8 +7178,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // is gone or never answered, create a second form of that name beside the one that may still land. So a plain form that
     // is one of them, by its key (`<table>/<type>/<name>`, formLayoutKey), or by its formId naming a root the group or its
     // attempt holds, is refused before any request for it, coded managed-form-unsettled; every other plain form builds as
-    // before. A settled group (no attempt, its publish confirmed or not needed) is not held: switching a settled declared
-    // form back to the plain path stays allowed. Nothing is read when the store holds no such group.
+    // before. The key is taken with the name the plain path finds the form by, which is the COMPILED name: a plain form with
+    // no `name` is compiled as `<entity> form` (artifact-intent.js), so `{ entity: "contoso_item" }` is looked up as the
+    // form "contoso_item form" and must be held as `contoso_item/main/contoso_item form`, not as `contoso_item/main/`. The
+    // raw spec key is kept beside it. Both stay scoped to the table and the form type, so a form of the same name and
+    // another type (a Quick Create beside a held Main form) still builds. A settled group (no attempt, its publish confirmed
+    // or not needed) is not held: switching a settled declared form back to the plain path stays allowed. Nothing is read
+    // when the store holds no such group.
     const unsettledForms = [];
     const formStore = bindingGroups && bindingGroups.store;
     if (formStore && defs.length) {
@@ -7191,18 +7203,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
         unsettledForms.push({ key: unit.key, ids, why });
       }
     }
-    const unsettledFormOf = (f) => {
-      const key = formLayoutKey(f);
+    const unsettledFormOf = ({ f, def }) => {
+      const keys = new Set([formLayoutKey(f), formLayoutKey({ ...f, name: (def && def.name) || f.name })]);
       const pinned = f.formId ? String(f.formId).replace(/[{}]/g, '').toLowerCase() : null;
-      return unsettledForms.find((u) => u.key === key || (pinned && u.ids.has(pinned))) || null;
+      return unsettledForms.find((u) => keys.has(u.key) || (pinned && u.ids.has(pinned))) || null;
     };
     for (const d of declaredDefs) if ((d.f.formType || 'Main') === 'QuickView') await settleDeclaredForm(d);
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
-      const held = unsettledForms.length ? unsettledFormOf(d.f) : null;
+      const held = unsettledForms.length ? unsettledFormOf(d) : null;
       if (held) {
         const label = `declared form "${held.key}"`;
         await runner.run('forms', `form ${d.f.name || d.f.entity}`, async () => {
-          const message = `form "${d.f.name || d.f.entity}" of ${String(d.f.entity).toLowerCase()} is the form the removed managed declaration "${held.key}" holds, and ${held.why}; it is not built as a plain form, which could change a saved layer that change owes or make a second form in its place. Declare it again with reconcile: "declared" and its key so the build settles it, or run the build again once that change has settled; nothing was sent for it`;
+          const message = `form "${(d.def && d.def.name) || d.f.name || d.f.entity}" of ${String(d.f.entity).toLowerCase()} is the form the removed managed declaration "${held.key}" holds, and ${held.why}; it is not built as a plain form, which could change a saved layer that change owes or make a second form in its place. Declare it again with reconcile: "declared" and its key so the build settles it, or run the build again once that change has settled; nothing was sent for it`;
           throw managedStop('forms', label, 'managed-form-unsettled', { cause: refusal(message, { code: 'managed-form-unsettled' }), findings: [{ key: held.key, code: 'managed-form-unsettled', message }] });
         });
       }

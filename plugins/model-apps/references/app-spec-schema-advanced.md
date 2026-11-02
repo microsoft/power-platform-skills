@@ -748,8 +748,11 @@ are only added.
   Until that build runs, `--verify` fails the form. A form found in either layer, or a read that fails (no
   access, a timeout), is kept as it is. If the build cannot confirm the retirement (another build settled or
   changed the record while this one read it, or the record could not be written), it warns that the retirement
-  could not be confirmed and stops before it writes anything (incomplete, `managed-not-settled`): no form,
-  dashboard, app or publish is sent in that run. Running the build again reads the record afresh. A form
+  could not be confirmed and stops before it writes anything (incomplete, `managed-not-settled`): after it, the
+  build sends no form, dashboard, app or publish, not even the publish of a change an earlier attempt of the
+  same run saved before a temporary failure (the warning names it, and the next build publishes it; a name
+  column length that attempt still owed is named with how to set it in Maker). Running the build again reads
+  the record afresh. A form
   whose last publish is unconfirmed is not released this way,
   because that publish may still complete: it stays blocked until a read confirms it or the maker accepts
   `publication-risk:table:<table>` (see "An unconfirmed publish" above). A form the spec still declares is
@@ -757,7 +760,8 @@ are only added.
   declare under that key after it was released is a new one: the build creates it under a new id, never
   the id of the deleted form, unless you approve adopting a form found by name (`adopt:form:<key>`).
 - **A plain form in place of a removed declared form that has not settled.** When the spec turns a declared
-  form into a plain one (no `reconcile`), or names its id in a plain form's `formId`, while its managed record
+  form into a plain one (no `reconcile`; a plain form with no `name` is named `<table> form`, and that name
+  counts), or names its id in a plain form's `formId`, while its managed record
   still has unfinished work (a change an earlier build started, such as a create whose answer was lost, or a
   publish that is owed or not confirmed), the build refuses that form before it sends anything for it
   (`managed-form-unsettled`), so it never changes what that work owes or makes a second form. Other forms of the
@@ -843,8 +847,10 @@ existing one is reused and its tiles are never edited.
     change is dropped with it. A row in either layer, or a read that fails (no access, a timeout), keeps the
     block. If the build cannot confirm the retirement (another build settled or changed the record while this
     one read it, or the record could not be written), it warns that the retirement could not be confirmed
-    and stops before it writes anything (incomplete, `managed-not-settled`): no dashboard, app or publish is
-    sent in that run. Running the build again reads the record afresh. A dashboard you declare under that key
+    and stops before it writes anything (incomplete, `managed-not-settled`): after it, the build sends no
+    dashboard, app or publish, not even the publish of a change an earlier attempt of the same run saved
+    before a temporary failure (the warning names it, and the next build publishes it). Running the build
+    again reads the record afresh. A dashboard you declare under that key
     later is a new one.
   - A plain `dashboards[]` entry with that dashboard's id or name stops the build before it sends anything,
     so it never makes a second dashboard in its place.

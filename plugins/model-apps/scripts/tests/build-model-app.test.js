@@ -1001,6 +1001,69 @@ test('a build that succeeds after a retry settles nothing: what the retry owed i
   assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []]);
 });
 
+// A halt that ends the invocation before any service write (`stopsServiceWrites`: a dashboard or form retirement the build could not
+// confirm, sdk-build.js haltOnUnconfirmedRetirements) settles nothing an earlier attempt of the same run left: no table publish and no
+// name column length, because nothing may be sent after it. It says what is left instead, and the halt says which attempt stopped.
+// Every other halt settles as before (the control).
+const { BuildHalt: StopHalt } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { RETRY: STOP_RETRY } = require(path.join(__dirname, '..', 'lib', 'retry-policy.js'));
+const STOP_FINDINGS = [{ key: 'contoso_item/main/declared item', code: 'managed-not-settled', message: 'managed form "contoso_item/main/declared item" (its retirement could not be confirmed: busy); the build stopped before writing anything, and the next build reads it again' }];
+function retirementStop({ signal = true } = {}) {
+  const halt = new StopHalt('retirement of form "contoso_item/main/declared item": managed-not-settled — the build stopped before writing anything, and the next build reads it again', { phase: 'preflight', code: 'managed-not-settled', recoverable: false, retry: STOP_RETRY.NEVER });
+  Object.defineProperty(halt, 'findings', { value: STOP_FINDINGS, enumerable: false, configurable: true });
+  if (signal) Object.defineProperty(halt, 'stopsServiceWrites', { value: true, enumerable: false, configurable: true });
+  return halt;
+}
+const owingBoth = () => Object.defineProperties(new Error(TRANSIENT), { owedPublishes: { value: [['view', 'v1', ['view Open Tickets']]] }, owedLengths: { value: [lengthDebt()] } });
+const publishSpy = (sdk) => {
+  const published = [];
+  sdk.publishArtifacts = async (targets) => { published.push(targets); return targets.map(({ type, id }) => ({ type, id, shipped: true })); };
+  sdk.publishArtifact = async (type, id) => { published.push([{ type, id }]); return { shipped: true }; };
+  return published;
+};
+
+test('a halt that stops service writes settles neither the publish nor the length an earlier attempt owed, and says what is left', async () => {
+  let spy;
+  let published;
+  const stop = retirementStop();
+  const out = await attemptsOf([owingBoth(), stop], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); published = publishSpy(sdk); } });
+  assert.strictEqual(out.attempts, 2);
+  assert.deepStrictEqual(published, [], 'no publish is sent after the halt');
+  assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []], 'no name column length is read or set after the halt');
+  assert.strictEqual(out.error.code, 'managed-not-settled');
+  assert.strictEqual(out.error.phase, 'preflight');
+  assert.strictEqual(out.error.transient, false);
+  assert.strictEqual(out.error.stopsServiceWrites, true);
+  assert.deepStrictEqual(out.error.findings, STOP_FINDINGS);
+  assert.strictEqual(out.error.cause, stop);
+  assert.match(out.error.message, /the build stopped before writing anything, and the next build reads it again/);
+  assert.match(out.error.message, /That is attempt 2 of this run: an earlier attempt ended on a transient failure and was retried, and what it had already sent stays as it is; nothing more is sent in this run\.$/);
+  assert.strictEqual(out.warnings.length, 2, out.warnings.join('\n'));
+  assert.match(out.warnings[0], /^the build stopped before its publish phase and sends nothing more in this run; an earlier attempt of this run saved and did not publish view Open Tickets — the change is SAVED but the runtime still serves the previously published copy until the next build publishes it$/);
+  assert.match(out.warnings[1], /^table new_ticket, which an earlier attempt of this run created, still has its name column new_name at the length the environment gave it, not 120 characters; .* set new_name to 120 characters in Maker$/);
+});
+
+test('a halt that stops service writes on the first attempt is reported as it is, with nothing to settle or say', async () => {
+  let spy;
+  let published;
+  const stop = retirementStop();
+  const out = await attemptsOf([stop], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); published = publishSpy(sdk); } });
+  assert.strictEqual(out.error, stop, 'the first attempt sent nothing, so its own words are true of the run');
+  assert.deepStrictEqual(published, []);
+  assert.deepStrictEqual(spy.writes, []);
+  assert.deepStrictEqual(out.warnings, []);
+});
+
+test('the same halt without the signal still settles what an earlier attempt owed (cleanup for every other halt is unchanged)', async () => {
+  let spy;
+  let published;
+  const out = await attemptsOf([owingBoth(), retirementStop({ signal: false })], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); published = publishSpy(sdk); } });
+  assert.strictEqual(out.error.code, 'managed-not-settled');
+  assert.doesNotMatch(out.error.message, /That is attempt/);
+  assert.deepStrictEqual(published.map((targets) => targets.map((t) => t.id)), [['v1']], 'the owed publish is settled');
+  assert.strictEqual(spy.writes.length, 1, 'and the owed length is set');
+});
+
 test('a settle that cannot set the length warns, names the table and the length, and the halt is still what is reported', async () => {
   let spy;
   const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], {

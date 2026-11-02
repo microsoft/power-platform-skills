@@ -171,8 +171,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
   `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below). A
   build that warns a form's or dashboard's retirement could not be confirmed stops before it writes anything
-  (`managed-not-settled`); running it again reads it afresh. A plain form that replaces a removed declared form
-  with unfinished work (a lost create, an owed or unconfirmed publish) is refused (`managed-form-unsettled`):
+  (`managed-not-settled`) and sends nothing more in that run, not even an earlier attempt's deferred publish;
+  running it again reads it afresh and publishes that. A plain form (by its name, `<table> form` when it has
+  none, or its `formId`) that replaces a removed declared form with unfinished work (a lost create, an owed or
+  unconfirmed publish) is refused (`managed-form-unsettled`):
   restore the declaration and let it settle, or run the build again later.
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
   dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a

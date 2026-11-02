@@ -1214,6 +1214,199 @@ test('a settled removed declared form does not hold an unchanged plain form of i
   });
 });
 
+// The plain path finds a form by the name it is COMPILED with, and a plain form with no `name` is compiled as `<entity> form`. So a
+// declared form named "contoso_item form" whose create lost its answer (a pending attempt under `contoso_item/main/contoso_item form`)
+// is held for a plain form that omits its name too, before any request: the guard keys the compiled name, not the raw spec. The
+// control writes the name out.
+const { formLayoutKey } = require('../lib/form-layout-reconcile.js');
+for (const mode of ['no name', 'the same name']) {
+  test(`a declared create whose answer was lost keeps its compiled name held: a plain form with ${mode} is refused before any write`, async () => {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      const declared = makeSpec({ form: { name: 'contoso_item form' } });
+      assert.deepEqual(validateAppSpec(declared, { profile: 'deploy' }).errors, []);
+      let intercepted = 0;
+      const restore = org.intercept((c) => c.method === 'POST' && /^\/systemforms(?:\?|$)/.test(c.path) && intercepted++ === 0, async (c) => {
+        await org.fake.httpClient.post(`${org.origin}/api/data/v9.2${c.path}`, c.body);
+        throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+      });
+      const first = await build(org, dir, declared);
+      restore();
+      assert.ok(first.err);
+      const key = formLayoutKey(declared.forms[0]);
+      const before = storeOf(org, dir).readGroup('form', key);
+      assert.ok(before.pending, chainText(first.err));
+      const spec = makeSpec({ declared: false, form: { name: 'contoso_item form' } });
+      if (mode === 'no name') delete spec.forms[0].name;
+      spec.forms[0].tabs[0].label = 'Changed plain label';
+      assert.deepEqual(validateAppSpec(spec, { profile: 'deploy' }).errors, []);
+      const r = await build(org, dir, spec, { phases: ['forms', 'app-shell', 'publish'], publish: true });
+      assert.deepEqual(shape(formWrites(r)), [], 'a defaulted name does not get past the hold on the pending form');
+      assert.equal(r.err && r.err.code, 'managed-form-unsettled', chainText(r.err));
+      assert.match(chainText(r.err), /form "contoso_item form" of contoso_item is the form the removed managed declaration "contoso_item\/main\/contoso_item form" holds/);
+      assert.deepEqual(appOrPublish(r), []);
+      assert.equal(org.fake.rows('systemforms').filter((row) => /Changed plain label/.test(row.data.formxml || '')).length, 0);
+      assert.deepEqual(storeOf(org, dir).readGroup('form', key), before, 'the pending attempt is kept as it was');
+    });
+  });
+}
+
+// What the compiled-name hold must not reach: it stays scoped to the table and the form type, so a Quick Create form of the held Main
+// form's name is still created; a formId names the held root whatever its case; and a SETTLED removed declared form with a changed
+// plain form keeps the behaviour it had (the plain path saves it, and the managed table publisher stops the publish of the table its
+// committed group still holds, create-completion-required), which this hold is not about.
+const prepareKey = (org, dir, g) => storeOf(org, dir).prepareAttempt({ family: 'form', key: KEY, baseGeneration: g.generation, root: g.root, knownScopes: [g.publication.scope], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+test('a plain form of the held form\u2019s name and another type is not the held managed form: it is created', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    prepareKey(org, dir, storeOf(org, dir).readGroup('form', KEY).committed);
+    const r = await build(org, dir, makeSpec({ declared: false, form: { formType: 'QuickCreate' } }));
+    assert.notEqual(r.err && r.err.code, 'managed-form-unsettled', chainText(r.err));
+    assert.ok(r.writes.some((c) => c.method === 'POST' && /^\/systemforms/.test(c.path) && c.body.type === 7), 'the Quick Create form is created');
+  });
+});
+test('a plain form whose formId names the held root in upper case is refused before any write', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const g = storeOf(org, dir).readGroup('form', KEY).committed;
+    prepareKey(org, dir, g);
+    const r = await build(org, dir, makeSpec({ declared: false, form: { name: 'Different', formId: g.root.id.toUpperCase() } }));
+    assert.equal(r.err && r.err.code, 'managed-form-unsettled', chainText(r.err));
+    assert.deepEqual(r.writes, []);
+  });
+});
+test('a settled removed declared form with a changed plain form keeps its earlier behaviour: saved, then its table publish is stopped', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const spec = makeSpec({ declared: false });
+    spec.forms[0].tabs[0].label = 'Changed plain label';
+    const r = await build(org, dir, spec);
+    assert.notEqual(r.err && r.err.code, 'managed-form-unsettled', chainText(r.err));
+    assert.match(chainText(r.err), /create-completion-required/);
+    assert.ok(r.writes.some((c) => c.method === 'PATCH' && /^\/systemforms/.test(c.path)));
+    assert.equal(r.writes.some((c) => /PublishXml|PublishAllXml/.test(c.path)), false);
+  });
+});
+
+// Both retirement passes run before the first service write, in order (dashboards, then forms), and one halt names every key they
+// could not confirm; the next invocation proceeds.
+test('both retirement passes run before any write, the halt names every key, and the next invocation proceeds', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const seeded = makeSpec();
+    seeded.dashboards = [{ name: 'Ops', key: 'ops', reconcile: 'declared', description: 'Daily', tiles: [{ key: 'map', type: 'iframe', url: 'https://contoso.example/map', name: 'Map' }] }];
+    // The fake org publishes tables only; a dashboard's publish promotes its saved layer the same way.
+    const restoreDashboardPublish = org.intercept((c) => c.method === 'POST' && c.path === '/PublishXml' && /<dashboards>/.test(c.body.ParameterXml), async (c) => {
+      for (const [, id] of c.body.ParameterXml.matchAll(/<dashboard>([^<]+)<\/dashboard>/g)) {
+        const row = org.fake.rows('systemforms').find((x) => x.data.formid.toLowerCase() === id.replace(/[{}]/g, '').toLowerCase());
+        assert.ok(row);
+        row.version += 1;
+        row.publishedVersion = row.version;
+        row.publishedData = structuredClone(row.data);
+      }
+      return { status: 204, headers: {}, body: null };
+    });
+    assert.equal((await build(org, dir, seeded, { phases: ['forms', 'dashboards'] })).err, undefined);
+    restoreDashboardPublish();
+    const store = storeOf(org, dir);
+    const order = [];
+    store.observeRetirement = (arg) => {
+      order.push(`${arg.family}:${arg.key}`);
+      throw Object.assign(new Error('observation unavailable once'), { code: 'managed-binding-store-busy' });
+    };
+    const spec = makeSpec();
+    spec.forms = [];
+    spec.dashboards = [];
+    const r = await build(org, dir, spec, { bindingGroups: { store }, phases: undefined, publish: true });
+    assert.deepEqual(order, ['dashboard:ops', `form:${KEY}`]);
+    assert.equal(r.err && r.err.code, 'managed-not-settled', chainText(r.err));
+    assert.equal(r.err.name, 'BuildHalt');
+    assert.equal(r.err.phase, 'preflight');
+    assert.equal(r.err.transient, false);
+    assert.equal(r.err.stopsServiceWrites, true);
+    assert.deepEqual(r.err.findings.map((f) => f.key), ['ops', KEY]);
+    assert.doesNotMatch(chainText(r.err), /approve with|--authorize|--allow-destructive/);
+    assert.deepEqual(r.writes, []);
+    assert.equal((await build(org, dir, spec, { phases: [] })).err, undefined);
+  });
+});
+
+// Through the CLI's retry loop: an earlier attempt saved a change to another table's form and its publish failed transiently (the
+// halt carries the publish it owes); the retry stops at a retirement it cannot confirm. Nothing is sent after that halt, not even
+// the earlier attempt's owed publish. The halt says which attempt stopped and what the earlier one left, and the next invocation
+// publishes it (the debt stays recoverable). With no earlier attempt, the halt is the attempt's own.
+for (const retry of [false, true]) {
+  test(`through the CLI, a retirement it cannot confirm ends the run with nothing sent after it (earlier attempt: ${retry})`, async () => {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: { ...ENTITIES, contoso_other: { attributes: { contoso_name: 'String', contoso_code: 'String' } } } });
+      const dir = newDir();
+      assert.equal((await build(org, dir, makeSpec())).err, undefined);
+      const spec = makeSpec({ declared: false, form: { entity: 'contoso_other', name: 'Other Item' } });
+      spec.entities.push({ ...spec.entities[0], schemaName: 'contoso_other' });
+      assert.equal((await build(org, dir, spec)).err, undefined);
+      spec.forms[0].tabs[0].label = 'Changed for retry';
+      const store = storeOf(org, dir);
+      const originalObserve = store.observeRetirement;
+      const barrier = createPublicationBarrier();
+      const observer = createAttemptSendObserver();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, observer) });
+      await sdk.initWorkspace();
+      let attempts = 0;
+      let afterHalt = null;
+      let error;
+      const halts = [];
+      const warnings = [];
+      store.observeRetirement = (arg) => {
+        if (!retry || attempts === 2) {
+          afterHalt = org.calls.length;
+          throw Object.assign(new Error('observation unavailable'), { code: 'managed-binding-store-busy' });
+        }
+        return originalObserve(arg);
+      };
+      const restore = org.intercept((c) => retry && attempts === 1 && c.method === 'POST' && c.path === '/PublishXml' && /contoso_other/.test(JSON.stringify(c.body)),
+        async () => ({ status: 503, headers: {}, body: { error: { code: '0x8004f50c', message: 'Service unavailable' } } }));
+      try {
+        await buildModelApp(spec, { apply: true, publish: true, env: org.origin, workspaceDir: dir, appDir: dir, retryDelayMs: 0, maxRetries: 1 }, {
+          sdk, provisionSdk: sdk, bindingGroups: { store }, publicationBarrier: barrier, sendObserver: observer,
+          runBuild: async (s, o) => {
+            attempts += 1;
+            try { return await runSdkBuild(s, { ...o, phases: ['forms', 'app-shell', 'publish'] }); } catch (e) { halts.push({ code: e.code, owed: e.owedPublishes }); throw e; }
+          },
+          log: () => {}, warn: (m) => warnings.push(m), sleep: async () => {},
+        });
+      } catch (e) {
+        error = e;
+      }
+      restore();
+      assert.equal(attempts, retry ? 2 : 1);
+      assert.equal(error && error.code, 'managed-not-settled', chainText(error));
+      assert.notEqual(afterHalt, null);
+      assert.deepEqual(shape(org.calls.slice(afterHalt).filter((c) => c.method !== 'GET')), [], 'no service write is sent after the unconfirmed retirement');
+      if (!retry) {
+        assert.doesNotMatch(error.message, /That is attempt/);
+        return;
+      }
+      assert.deepEqual(halts.map((h) => h.code), ['reconciled-publish-failed', 'managed-not-settled']);
+      assert.ok(halts[0].owed && halts[0].owed.length, 'the first attempt owed its table publish');
+      assert.match(error.message, /That is attempt 2 of this run: an earlier attempt ended on a transient failure and was retried, and what it had already sent stays as it is; nothing more is sent in this run\./);
+      assert.deepEqual(error.findings.map((f) => f.key), [KEY]);
+      assert.ok(warnings.some((w) => /an earlier attempt of this run saved and did not publish .*Other Item.* until the next build publishes it/.test(w)), warnings.join('\n'));
+      // The debt stays recoverable: the next invocation reads the store afresh, keeps the form it finds, and publishes the table.
+      const next = await build(org, dir, spec, { phases: ['forms', 'app-shell', 'publish'], publish: true });
+      assert.equal(next.err, undefined, chainText(next.err));
+      assert.ok(next.writes.some((c) => c.method === 'POST' && c.path === '/PublishXml' && /contoso_other/.test(JSON.stringify(c.body))), 'the next build publishes the saved change');
+    });
+  });
+}
+
 // --- a key declared again after its root was retired -------------------------------------------------------------------------
 
 // A form made by a build, then retired once both layers proved it gone (an org with no form row stands in for the deletion), so
