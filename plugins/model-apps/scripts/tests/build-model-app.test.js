@@ -1198,52 +1198,51 @@ test('a printed --authorize approval reaches the CLI parser as ONE argument and 
   assert.strictEqual(authorizeFlag('adopt:view:contoso_item/Items'), '--authorize adopt:view:contoso_item/Items');
 });
 
-// An approval with white space or a shell-special character is double-quoted; one a double-quoted spelling cannot carry (PowerShell and POSIX shells expand `$` and the
-// backtick, and a double quote or backslash ends or escapes the quoting) is a placeholder, with the value given as data. Checked in each real shell found.
-test('authorizeFlag double-quotes what needs it, hands a real shell exactly the key, and gives a key it cannot quote as data', () => {
-  const { authorizeFlag, commandArg } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
-  const { spawnSync } = require('node:child_process');
-  const os = require('node:os');
-  const fs = require('node:fs');
-  const quotable = ['adopt:view:t/Declared Items', 'adopt:form:t/main/Item (open) & more', 'overwrite:view:t/It\'s; mine', 'adopt:rule:t/a|b #c', 'adopt:bpf:t/100% {x} @y, z', 'adopt:view:t/café page', 'adopt:view:t/a\tb'];
-  for (const key of quotable) assert.strictEqual(authorizeFlag(key), `--authorize "${key}"`, key);
-  const unquotable = ['adopt:view:t/say "hi"', 'adopt:view:t/cost $5', 'adopt:view:t/a`b', 'adopt:view:t/C:\\x y', 'adopt:view:t/Wow!', 'adopt:view:t/\u201Cq\u201D', 'adopt:view:t/a\nb'];
-  for (const key of unquotable) {
-    const flag = authorizeFlag(key);
-    assert.ok(flag.startsWith('--authorize <approval> — <approval> is '), flag);
-    assert.ok(flag.includes(JSON.stringify(key)), `${flag} gives the value as data`);
-    // The data note spells the value as JSON, which for a key with no quote or backslash looks like a double-quoted argument; only the command part must not carry it.
-    const command = flag.split(' — ')[0];
-    assert.strictEqual(command, '--authorize <approval>', 'the value is not written into the command');
+// Which spelling a printed approval gets: bare when plain, double-quoted when only white space or shell punctuation needs quoting, the single-quoted spelling
+// every shell reads literally for `$`, a backtick, `\` and `!`, and one spelling per shell family only when a quote makes the shells differ.
+test('authorizeFlag picks the spelling by what the key holds, and never claims there is none for a key with a spelling', () => {
+  const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  assert.strictEqual(authorizeFlag('adopt:view:t/Items'), '--authorize adopt:view:t/Items');
+  for (const name of ['Declared Items', 'Item (open) & more', 'a|b #c', 'caf\u00E9 page', 'It\'s; mine', 'a\tb', 'it\u2019s']) {
+    assert.strictEqual(authorizeFlag(`adopt:view:t/${name}`), `--authorize "adopt:view:t/${name}"`, name);
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'authorize-flag-'));
-  try {
-    const probe = path.join(dir, 'argv.js');
-    fs.writeFileSync(probe, "require('node:fs').writeFileSync(process.env.AUTHORIZE_OUT, JSON.stringify(process.argv.slice(2)));\n", 'utf8');
-    const windows = process.platform === 'win32';
-    const shells = windows ? ['powershell.exe', 'pwsh'] : ['sh', 'bash', 'zsh', 'pwsh'];
-    const ran = [];
-    for (const shell of shells) {
-      const powershell = shell === 'powershell.exe' || shell === 'pwsh';
-      const name = shell.replace(/\W/g, '');
-      const lines = quotable.map((key) => `${powershell ? '& ' : ''}${commandArg(process.execPath)} ${commandArg(probe)} ${authorizeFlag(key)}`);
-      let ok = 0;
-      for (const [i, line] of lines.entries()) {
-        const script = path.join(dir, `probe-${name}-${i}.${powershell ? 'ps1' : 'sh'}`);
-        fs.writeFileSync(script, `${powershell ? '\uFEFF' : ''}${line}\n`, 'utf8');
-        const out = path.join(dir, `argv-${name}-${i}.json`);
-        const r = spawnSync(shell, powershell ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script] : [script], { encoding: 'utf8', env: { ...process.env, AUTHORIZE_OUT: out } });
-        if (r.error && r.error.code === 'ENOENT') break;
-        assert.ifError(r.error);
-        assert.strictEqual(r.status, 0, `${shell}: ${r.stderr}`);
-        assert.deepStrictEqual(JSON.parse(fs.readFileSync(out, 'utf8')), ['--authorize', quotable[i]], `${shell}: ${line}`);
-        ok += 1;
-      }
-      if (ok === lines.length) ran.push(shell);
+  for (const name of ['cost $5', 'a`b', 'C:\\x y', 'Wow!', '\u201Cq\u201D']) {
+    assert.strictEqual(authorizeFlag(`adopt:view:t/${name}`), `--authorize 'adopt:view:t/${name}'`, name);
+  }
+  const labels = (text) => text.split('; in ').map((part) => part.replace(/^.* (?=--authorize )/, ''));
+  const quoted = authorizeFlag('adopt:view:t/say "hi"');
+  assert.deepStrictEqual(labels(quoted).slice(-3), ['--authorize \'adopt:view:t/say "hi"\'', '--authorize \'adopt:view:t/say "hi"\'', '--authorize \'adopt:view:t/say \\"hi\\"\'']);
+  assert.ok(!/no way of writing|no spelling/.test(quoted), quoted);
+  const apostrophe = authorizeFlag('adopt:view:t/it\'s $5');
+  assert.deepStrictEqual(labels(apostrophe).slice(-3), ['--authorize \'adopt:view:t/it\'\\\'\'s $5\'', '--authorize \'adopt:view:t/it\'\'s $5\'', '--authorize \'adopt:view:t/it\'\'s $5\'']);
+  // Windows PowerShell 5.1 wraps an argument that holds white space in double quotes and reads a final backslash as escaping the closing one.
+  assert.ok(authorizeFlag('adopt:view:t/say "hi" \\').endsWith('--authorize \'adopt:view:t/say \\"hi\\" \\\\\''));
+  const control = authorizeFlag('adopt:view:t/a\nb');
+  assert.ok(control.startsWith('--authorize <approval>') && /rename/.test(control) && !/in a POSIX shell/.test(control), control);
+});
+
+// The printed text itself goes through each real shell this machine has, and the arguments it delivers go through the CLI's own parser: the approval a maker
+// pastes is exactly the one the build named, for a plain key, white space, an apostrophe with a semicolon, an ampersand, `$`, a backtick, a double quote and
+// their combinations.
+test('the printed --authorize hint, pasted into each real shell, reaches the CLI parser as exactly the key it names', () => {
+  const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const { runPrintedFlags } = require('./helpers/printed-flag-shells.js');
+  const names = ['Plain', 'Declared Items', 'It\'s; mine', 'a & b', 'cost $5', 'a`b', 'say "hi"', 'it\'s $5', 'it\'s `x` "q"', 'say "hi" \\', 'say "hi"\\', 'C:\\x y', 'Wow!', 'it\u2019s $5', 'q\u201Cr\u201D'];
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [] }],
+    views: names.map((name) => ({ entity: 'new_ticket', name, reconcile: 'declared', columns: ['new_name'] })),
+  };
+  const keys = names.map((name) => `adopt:view:new_ticket/${name}`);
+  const printed = keys.map((key) => `view new_ticket/x: view-not-adopted — to manage it, run the build again with ${authorizeFlag(key)}`);
+  const ran = runPrintedFlags(printed);
+  for (const { shell, argv } of ran) {
+    for (const [i, key] of keys.entries()) {
+      assert.deepStrictEqual(argv[i], ['--authorize', key], `${shell}: ${printed[i]}`);
+      const r = authorizationKeys(argv[i], spec);
+      assert.strictEqual(r.error, null, `${shell}: ${printed[i]}: ${r.error}`);
+      assert.deepStrictEqual([...r.adopt], [`view:new_ticket/${names[i]}`], shell);
     }
-    assert.ok(ran.includes(windows ? 'powershell.exe' : 'sh'), `ran in ${ran.join(', ')}`);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

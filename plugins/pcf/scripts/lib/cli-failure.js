@@ -103,20 +103,54 @@ function commandArgOrPlaceholder(value, placeholder) {
 // a dashboard key), so it can hold white space — `adopt:view:contoso_item/Declared Items` — and an unquoted paste reaches the CLI as two arguments
 // (`adopt:view:contoso_item/Declared`, `Items`), which it rejects as an approval nothing declares.
 //   plain (letters, digits, `_ . / : -`)   written bare, exactly as before: `--authorize adopt:view:contoso_item/Items`
-//   anything else                          double-quoted, the spelling the printed approvals already used for a form, a rule and a process flow:
+//   nothing a double-quoted string reads   double-quoted, the spelling the printed approvals already used for a form, a rule and a process flow:
 //                                          `--authorize "adopt:view:contoso_item/Declared Items"`
-//   a double quote, `$`, a backtick, `\`, `!`, a curly double quote, a line break or another control character
-//                                          no double-quoted spelling is literal in both PowerShell and a POSIX shell (they expand `$` and the backtick, and a
-//                                          double quote or `\` ends or escapes the quoting, differently in Windows PowerShell 5.1 and 7), so the flag
-//                                          carries a placeholder and a note that gives the value as data, as commandArgOrPlaceholder does.
+//   a `$`, a backtick, `\`, `!` or a curly double quote (which PowerShell reads as a double quote) makes a double-quoted spelling unsafe, but when the key
+//                                          has no quote of any kind commandArg's single-quoted spelling is literal in Windows PowerShell 5.1, PowerShell 7 and the
+//                                          POSIX shells alike: `--authorize 'adopt:view:contoso_item/cost $5'`
+//   a double quote, or an apostrophe together with one of the characters above
+//                                          no ONE spelling is literal everywhere, so the flag is written once per shell (shellSpellings below).
+//   a line break or another control character
+//                                          cannot be pasted as one line; the message gives the value as data and says to rename the item.
 // Double quotes rather than commandArg's single quotes keep the spelling already printed (and pinned) for forms, rules and process flows.
 const DOUBLE_QUOTE_UNSAFE = /["$`\\!\u201C\u201D\u201E\u201F\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
+const CANNOT_BE_ONE_LINE = /[\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
+
+// The value as one single-quoted argument in each family of shells, for a value no common spelling carries:
+//   posix        sh, bash, zsh: nothing is read inside '…', and a quote is written by closing the string, adding an escaped quote and reopening: 'it'\''s $5'
+//   powershell   PowerShell on any system, and PowerShell 7.3 and later on Windows: inside '…' a quote is doubled, and PowerShell reads the curly single quotes
+//                (‘ ’ ‚ ‛) as quotes too, so those are doubled as well: 'it''s $5'. From 7.3 it hands a native program each argument exactly, a `"` included.
+//   windowsPowerShell   Windows PowerShell 5.1 and PowerShell 7.0–7.2 on Windows do not: they join the arguments into one command line, wrapping one that holds
+//                white space in double quotes and escaping nothing, so a `"` is dropped by the program and a final `\` before the closing quote swallows it. The
+//                value is written the way the program's own command-line reader (CommandLineToArgvW) reads it back: each `"` as `\"` with the backslashes before it
+//                doubled, and, when the value holds white space and so gets wrapped, the final backslashes doubled. See
+//                https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#passing-arguments-that-contain-quote-characters
+//                and https://learn.microsoft.com/cpp/c-language/parsing-c-command-line-arguments.
+function shellSpellings(value) {
+  const text = String(value);
+  const powershell = (s) => `'${s.replace(/['\u2018\u2019\u201A\u201B]/gu, (q) => q + q)}'`;
+  let commandLine = text.replace(/(\\*)"/g, '$1$1\\"');
+  if (/\s/u.test(text)) commandLine = commandLine.replace(/(\\+)$/, '$1$1');
+  return {
+    posix: `'${text.replace(/'/g, "'\\''")}'`,
+    powershell: powershell(text),
+    windowsPowerShell: powershell(commandLine),
+  };
+}
+
 function authorizeFlag(approval) {
   const text = String(approval);
   if (BARE_ARG.test(text)) return `--authorize ${text}`;
   if (text !== '' && !DOUBLE_QUOTE_UNSAFE.test(text)) return `--authorize "${text}"`;
-  return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell. Type it as one argument in your shell, or rename the item so its name has no quote, backslash, $, backtick or !.`;
+  const single = text !== '' && !CANNOT_BE_ONE_LINE.test(text) ? commandArg(text) : null;
+  if (single !== null) return `--authorize ${single}`;
+  if (text === '' || CANNOT_BE_ONE_LINE.test(text)) {
+    return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it holds a line break or another control character, so it cannot be pasted as one line: rename the item so its name has none`;
+  }
+  // The approval is written once per shell because it holds a quote that the shells spell differently. Each spelling is the whole flag, to be pasted as it is.
+  const s = shellSpellings(text);
+  return `the --authorize flag, which this approval's quote or special character makes depend on your shell: in a POSIX shell (sh, bash, zsh) --authorize ${s.posix}; in PowerShell 7.3 or later --authorize ${s.powershell}; in Windows PowerShell 5.1 or PowerShell 7.0–7.2 on Windows --authorize ${s.windowsPowerShell}`;
 }
 
 module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice, commandArg,
-  commandArgOrPlaceholder, authorizeFlag };
+  commandArgOrPlaceholder, authorizeFlag, shellSpellings };

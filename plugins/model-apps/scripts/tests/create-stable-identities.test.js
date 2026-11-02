@@ -205,6 +205,38 @@ test('a fresh workspace on the same environment finds the rows at the derived id
   assert.equal(store.readGroup('chart', CHART_KEY).committed.records[0].origin, 'adopted');
 });
 
+// The warning a build really prints for a view or a chart whose name holds `$`, a backtick or a double quote, pasted into each real shell, names exactly that row to the CLI's parser.
+for (const name of ['cost $5', 'a`b', 'say "hi"', 'it\'s $5']) {
+  test(`the not-adopted warning for a view and a chart named ${JSON.stringify(name)} is an approval each real shell passes on as the one key it names`, async () => {
+    const { runPrintedFlags } = require('./helpers/printed-flag-shells.js');
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const spec = stableSpec({
+      views: [{ entity: 'contoso_item', name, reconcile: 'declared', columns: ['contoso_name', 'contoso_code'] }],
+      charts: [{ entity: 'contoso_item', name, chartType: 'Pie', groupBy: 'contoso_kind', reconcile: 'declared' }],
+    });
+    const first = await build(org, newDir(), spec);
+    assert.equal(first.err, undefined, first.err && first.err.message);
+    const said = [];
+    const fresh = await build(org, newDir(), spec, { warn: (m) => said.push(String(m)) });
+    assert.equal(fresh.err, undefined, fresh.err && fresh.err.message);
+    const printed = ['view', 'chart'].map((kind) => {
+      const lines = said.filter((m) => m.includes(`${kind}-not-adopted`));
+      assert.equal(lines.length, 1, `${kind}: one warning\n${said.join('\n')}`);
+      return lines[0];
+    });
+    assert.ok(printed.every((p) => !/<approval>/.test(p)), `a spelling is printed, not a placeholder: ${printed[0]}`);
+    for (const { shell, argv } of runPrintedFlags(printed)) {
+      for (const [i, kind] of ['view', 'chart'].entries()) {
+        const key = `adopt:${kind}:contoso_item/${name}`;
+        assert.deepEqual(argv[i], ['--authorize', key], `${shell}: ${printed[i]}`);
+        const parsed = authorizationKeys(argv[i], spec);
+        assert.equal(parsed.error, null, `${shell}: ${parsed.error}`);
+        assert.deepEqual([...parsed.adopt], [`${kind}:contoso_item/${name}`]);
+      }
+    }
+  });
+}
+
 test('a spec without createIdentity is unchanged: a fresh id per workspace, no store file, and the same requests', async () => {
   const org = createFakeBuildOrg({ entities: ENTITIES });
   const spec = makeSpec();
