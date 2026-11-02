@@ -806,10 +806,17 @@ existing one is reused and its tiles are never edited.
 - **Identity.** A declared dashboard is found by its binding first, then by an earlier build's unfinished
   attempt, then by its `dashboardId`, and only then by its name. A `dashboardId` that is not the bound
   dashboard stops the build. `--verify` uses the same bound dashboard for every dashboard check, the site
-  map's included.
-- **A removed declaration.** When the spec no longer declares a dashboard whose last publish is not
-  confirmed, the build still reads it and confirms that publish when a fresh read proves it live. It never
-  publishes it again. One it cannot confirm stops the build with `publication-risk:dashboard:<id>`.
+  map's included. Before its first binding, `--verify` holds a declared dashboard to its `dashboardId`: if
+  that id names no dashboard, the check fails, even when another dashboard has the same name.
+- **A removed declaration.** When the spec no longer declares a dashboard whose last change is not
+  settled, the build reads it before it builds any other dashboard:
+  - A publish that is not confirmed is confirmed when a fresh read proves it live. It is never published
+    again. One it cannot confirm stops the build with `publication-risk:dashboard:<id>`.
+  - A publish that is still owed (saved, never sent) is not paid by a build that does not declare the
+    dashboard. That build keeps the dashboard out of every app write and publish, and it ends incomplete.
+    Declare the dashboard again with `reconcile: "declared"` to publish it.
+  - A plain `dashboards[]` entry with that dashboard's id or name stops the build before it sends anything,
+    so it never makes a second dashboard in its place.
 
 ## businessRules[].reconcile (optional — declared business rules)
 

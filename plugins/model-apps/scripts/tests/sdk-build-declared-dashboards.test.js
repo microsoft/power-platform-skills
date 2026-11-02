@@ -878,3 +878,161 @@ test('publication risk through the CLI: an unchanged all-carried dashboard stays
     assert.equal(next.calls.filter((c) => c.path === 'PublishXml').length, 0);
   });
 });
+// One invocation with the caller's barrier (shared by the SDK's send boundary and the build), as build() makes its own.
+async function buildWith(wire, dir, spec, { barrier = createPublicationBarrier(), ...opts } = {}) {
+  const sendObserver = createAttemptSendObserver();
+  const { sdk } = await sdkOver(wire, { barrier, observer: sendObserver });
+  const mark = wire.log.length;
+  let err;
+  try {
+    await runSdkBuild(spec, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: ORIGIN, phases: ['dashboards'], publicationBarrier: barrier, sendObserver, ...opts });
+  } catch (e) { err = e; }
+  return { err, barrier, calls: wire.log.slice(mark) };
+}
+const appWrites = (calls) => calls.filter((c) => c.method !== 'GET' && /^(appmodules|sitemaps|PublishXml)/i.test(c.path));
+const scriptIcon = (wire) => wire.script((e) => e.method === 'GET' && /^webresources(?:et)?$/i.test(e.path) && e.url.includes('existing-icon'), {
+  statusCode: 200, body: { value: [{ webresourceid: '66666666-6666-4666-8666-666666666666', name: 'existing-icon', webresourcetype: 11 }] },
+});
+// A bound dashboard whose last change is saved and whose publish is owed: the send boundary held its scope, so it was definitely not sent.
+async function owedDashboard() {
+  const wire = wireWithIdReads();
+  const dir = makeTempDir('declared-dash-');
+  assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+  const id = committedGroup(dir).root.id;
+  const barrier = createPublicationBarrier();
+  barrier.blockScope({ type: 'dashboard', id }, 'held before dispatch');
+  const changed = makeSpec({ dashboard: { description: 'Saved but not published' } });
+  assert.ok((await buildWith(wire, dir, changed, { barrier })).err);
+  const group = committedGroup(dir);
+  assert.equal(group.publication.state, 'owed');
+  assert.equal(group.publication.dispatchToken, null);
+  assert.equal(wire.saved.get(id).description, 'Saved but not published');
+  assert.equal(wire.published.get(id).description, 'Daily');
+  return { wire, dir, id, changed, group };
+}
+
+test('removed owed: a removed declaration\'s owed publish is neither paid nor discarded, its scope is fenced for the run, and declaring it again pays it through its proof', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    const before = clone(w.group);
+    const removed = await buildWith(w.wire, w.dir, dropDashboard(w.changed));
+    assert.equal(serviceWrites(removed.calls).length, 0);
+    assert.deepEqual(committedGroup(w.dir), before, 'the debt is kept exactly as it was');
+    assert.equal(removed.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false);
+    assert.equal(removed.barrier.checkAppWrite({ existingApp: true, heldDashboards: [w.id] }).ok, false);
+    const declared = await buildWith(w.wire, w.dir, w.changed);
+    assert.equal(declared.err, undefined, chainText(declared.err));
+    assert.equal(committedGroup(w.dir).publication.state, 'confirmed');
+    assert.equal(w.wire.published.get(w.id).description, 'Saved but not published');
+  });
+});
+
+for (const path_ of ['app', 'final publish']) {
+  test(`removed owed: a plain entry pinned to its dashboard, with a later maker draft, sends no ${path_} request and is refused before the plain path`, async () => {
+    await withDashboards(true, async () => {
+      const w = await owedDashboard();
+      const spec = makeSpec({ declared: false, dashboard: { dashboardId: w.id } });
+      if (path_ === 'app') { spec.app.icon = 'existing-icon'; scriptIcon(w.wire); }
+      w.wire.saved.get(w.id).description = 'Later maker draft';
+      const r = await buildWith(w.wire, w.dir, spec, path_ === 'app' ? { phases: ['dashboards', 'app-shell'] } : { phases: ['dashboards', 'publish'], publish: true });
+      assert.match(chainText(r.err), /managed-dashboard-unsettled/);
+      assert.equal(appWrites(r.calls).length, 0, JSON.stringify(appWrites(r.calls).map((c) => c.path)));
+      assert.equal(r.calls.filter((c) => c.method !== 'GET' && /^systemforms/i.test(c.path)).length, 0);
+      assert.equal(committedGroup(w.dir).publication.state, 'owed');
+      assert.equal(w.wire.published.get(w.id).description, 'Daily', 'the maker draft is not published');
+    });
+  });
+}
+
+test('removed owed: a run without the dashboards phase fences the owed dashboard from the app writer too', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    const spec = clone(w.changed);
+    spec.app.icon = 'existing-icon';
+    scriptIcon(w.wire);
+    w.wire.saved.get(w.id).description = 'Later maker draft';
+    const r = await buildWith(w.wire, w.dir, spec, { phases: ['app-shell'] });
+    assert.equal(r.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false);
+    assert.equal(appWrites(r.calls).filter((c) => /^PublishXml/i.test(c.path) || JSON.stringify(c.body || '').includes(w.id)).length, 0, JSON.stringify(appWrites(r.calls).map((c) => c.path)));
+    assert.equal(committedGroup(w.dir).publication.state, 'owed');
+    assert.equal(w.wire.published.get(w.id).description, 'Daily');
+  });
+});
+
+// A never-published root an earlier run left unsettled: its publish lost and not applied (uncertain), held at the send boundary
+// (owed), or its create retained as a pending attempt. A plain entry that names it, by its id or by its declared name, must not
+// make a second dashboard in its place.
+async function retainedRoot(kind) {
+  const wire = wireWithIdReads();
+  const dir = makeTempDir('declared-dash-');
+  let opts = {};
+  if (kind === 'uncertain') wire.script((e) => e.method === 'POST' && e.path === 'PublishXml', { error: new Error('lost unapplied publication'), unapplied: true });
+  if (kind === 'pending') wire.script((e) => e.method === 'POST' && e.path === 'systemforms', { statusCode: 400, body: { error: { code: '0x80040216', message: 'create rejected after dispatch' } }, unapplied: true });
+  if (kind === 'owed') {
+    // Hold the new root's scope the moment it is created, so its first publish is definitely not sent.
+    const barrier = createPublicationBarrier();
+    const request = wire.request.bind(wire);
+    wire.request = async (req) => {
+      const known = new Set(wire.saved.keys());
+      const res = await request(req);
+      for (const id of wire.saved.keys()) if (!known.has(id)) barrier.blockScope({ type: 'dashboard', id }, 'held before its first publish');
+      return res;
+    };
+    opts = { barrier };
+  }
+  assert.ok((await buildWith(wire, dir, makeSpec(), opts)).err);
+  const { committed, pending } = storeOf(dir).readGroup('dashboard', KEY);
+  const id = committed ? committed.root.id : (pending.root && pending.root.id) || pending.expected.rootId;
+  if (kind === 'uncertain') assert.equal(committed.publication.state, 'unconfirmed');
+  if (kind === 'owed') assert.equal(committed.publication.state, 'owed');
+  if (kind === 'pending') assert.equal(committed, null);
+  assert.equal(wire.published.has(id), false);
+  return { wire, dir, id, saved: [...wire.saved.keys()] };
+}
+for (const kind of ['uncertain', 'owed', 'pending']) {
+  for (const by of ['id', 'name']) {
+    test(`retained identity: a plain entry naming an unsettled ${kind} dashboard by its ${by} creates no second dashboard`, async () => {
+      await withDashboards(true, async () => {
+        const w = await retainedRoot(kind);
+        const legacy = makeSpec({ declared: false, dashboard: by === 'id' ? { dashboardId: w.id } : {} });
+        const r = await buildWith(w.wire, w.dir, legacy);
+        assert.ok(r.err);
+        assert.equal(r.calls.filter((c) => c.method === 'POST' && c.path === 'systemforms').length, 0, chainText(r.err));
+        assert.deepEqual([...w.wire.saved.keys()], w.saved);
+        assert.equal(r.calls.filter((c) => c.method === 'POST' && c.path === 'PublishXml').length, 0);
+        if (kind === 'uncertain') {
+          let cause = null;
+          for (let e = r.err; e; e = e.cause) if (e.dispatchToken) { cause = e; break; }
+          assert.ok(cause, chainText(r.err));
+          assert.equal(cause.approval, `publication-risk:dashboard:${w.id}`);
+        } else {
+          assert.match(chainText(r.err), /managed-dashboard-unsettled/);
+        }
+      });
+    });
+  }
+}
+
+test('verify: a declared dashboard held to a deleted dashboardId fails, and a namesake is never taken in its place', async () => {
+  await withDashboards(true, async () => {
+    const wire = wireWithIdReads();
+    const dir = makeTempDir('declared-dash-');
+    assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+    const id = committedGroup(dir).root.id;
+    const out = makeTempDir('declared-dash-');
+    const dl = await download(wire, out, ['--include-managed', '--managed-manifest', storeFileOf(dir)], { plainId: id });
+    assert.equal(dl.emitted[0].ok, true);
+    wire.saved.delete(id);
+    wire.published.delete(id);
+    await makerDashboard(wire, { name: 'Ops', formid: NAMESAKE });
+    const { sdk } = await sdkOver(wire);
+    const read = readerFor(sdk, APP, { isolatedReader: isolatedReaderFor(ORIGIN, { httpClient: clientOver(wire) }) });
+    const r = await verifySpec(dl.written, read, { managedManifest: manifestOf(path.join(out, '.maker-workspace')) });
+    const checks = r.checks.filter((c) => c.kind === 'dashboard');
+    assert.ok(checks.length > 0, JSON.stringify(r.checks));
+    assert.ok(checks.every((c) => !c.present), JSON.stringify(checks));
+    // A plain (undeclared) entry keeps its name fallback.
+    const plain = await verifySpec(makeSpec({ declared: false, dashboard: { dashboardId: id } }), read, {});
+    assert.ok(plain.checks.filter((c) => c.kind === 'dashboard').some((c) => c.present), JSON.stringify(plain.checks));
+  });
+});

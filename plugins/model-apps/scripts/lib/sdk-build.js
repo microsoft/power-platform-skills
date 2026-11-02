@@ -3714,6 +3714,25 @@ async function runSdkBuildPhases(spec, opts, owed) {
       || (workflowStore.snapshot().envelope.workflowEffects || []).length > 0)) {
     opts.workflowEffectGate.bind(workflowStore);
   }
+  // A stored dashboard group whose last change is saved and whose publish is owed (state 'owed', no dispatch token: definitely
+  // not sent) is ordinary debt to the store (managed-bindings.js classifyPersisted: eligible), and holds nothing, because the
+  // run that settles that dashboard pays it, through its managed coverage and proof (publishDeclaredDashboard). A run that
+  // does NOT settle it (the spec no longer declares it, declares it with the build path off, or the dashboards phase is not
+  // run) has no such payer, and nothing else would stop an app write or app publish that adds or holds that dashboard, or a
+  // plain publish naming it, from going ahead past a saved layer nothing proved (a later maker draft included). So this run
+  // blocks its scope for the whole run: checkAppWrite refuses an app that adds or holds it, a publish naming it is not sent,
+  // and the run ends incomplete naming it. Nothing is paid, discarded or marked: the store keeps the debt exactly as it was,
+  // and the run that declares the dashboard again and runs its phase pays it through its proof, as it always did.
+  if (bindingGroups && bindingGroups.store) {
+    const settledHere = has('dashboards') ? new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey)) : new Set();
+    for (const unit of bindingGroups.store.snapshot().units()) {
+      const pub = unit.group && unit.group.publication;
+      if (unit.invalid || unit.attempt || unit.family !== 'dashboard' || settledHere.has(unit.key)) continue;
+      if (!pub || pub.state !== 'owed' || !pub.scope || pub.scope.type !== 'dashboard') continue;
+      const why = has('dashboards') ? 'this spec does not declare it' : 'this run does not run the dashboards phase';
+      owed.barrier.quarantine([pub.scope], [pub.scope.id], `managed dashboard "${unit.key}" (its last change is saved and its publish is owed, and ${why}; declare it with reconcile: "declared" and run the dashboards phase to publish it through its proof)`);
+    }
+  }
   // Stable create identities (createIdentity: "stable-v1"; lib/creates-stable-build.js), for declared views and charts only: their
   // two call sites below are handed `stableCtx` — the composite create port, a binding lookup by id, and a settlement that records
   // each settled view or chart in the store. A spec without the field loads none of it, and every other create keeps the build's
@@ -8084,10 +8103,78 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (id) result.created.dashboards[dash.name] = id;
       });
     };
+    // Stored dashboard groups this run does not settle (the spec no longer declares them, or declares them with the build path
+    // off) and whose last change is not settled: a publish that may have been sent and is not confirmed ('dispatching' or
+    // 'unconfirmed'), a publish still owed ('owed': saved and definitely not sent), or an attempt an earlier run started. Read
+    // here, BEFORE any plain dashboard below is built, because the plain path knows nothing of them: it looks a dashboard up by
+    // its dashboardId and its name in the PUBLISHED layer, so a root that was created and never published is found by neither,
+    // and it would create a second dashboard in its place under a new id, which the original's quarantine cannot stop.
+    //  - An uncertain publish is confirmed read-only by the registered layer readers when a fresh read proves what the send
+    //    shipped is live (confirmUncertainPublication). Nothing is replayed, nothing is bound, and the scope stays quarantined
+    //    for this run (openManagedContext's block is never cleared), so the next run is the clean one. One it cannot confirm
+    //    stops the build at the end of this phase, after this run's own declared dashboards (each its own scope), with its
+    //    dispatch as data on the cause ({ dispatchToken, approval, remedy }, managed-bindings.js blockedPublication), which
+    //    build-model-app.js offerPublicationRisk reads; never from the message.
+    //  - An owed publish is not paid here (no declaration of this run authorizes that content), and it is not left open: the
+    //    run-long block installed when the store was opened (above, after openBuildBindingGroups) withholds its scope from every
+    //    app write and publish of this run.
+    //  - Each stays the identity it was: a plain dashboard naming its id (dashboardId) or its declared name is refused before
+    //    any request (retainedDashboards), so a mode change or a missing published row never loses it or replaces it.
+    const removedDashboardStops = [];
+    const retainedDashboards = [];
+    const dashboardStore = bindingGroups && bindingGroups.store;
+    if (dashboardStore) {
+      const declaredKeys = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
+      const uncertain = (pub) => !!pub && (pub.state === 'dispatching' || pub.state === 'unconfirmed') && !!pub.scope && pub.scope.type === 'dashboard';
+      const bareId = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
+      for (const unit of dashboardStore.snapshot().units()) {
+        if (unit.invalid || unit.family !== 'dashboard' || declaredKeys.has(unit.key)) continue;
+        const group = unit.group;
+        const attempt = unit.attempt;
+        const publication = group && group.publication;
+        const state = attempt ? 'pending' : publication && publication.state === 'owed' ? 'owed' : uncertain(publication) ? 'uncertain' : null;
+        if (!state) continue;
+        const label = `declared dashboard "${unit.key}"`;
+        let stop;
+        if (state === 'uncertain') {
+          let unconfirmed = [publication];
+          if (provision.dataverse) {
+            const { confirmUncertainPublication } = require('./managed-feature-contract.js');
+            unconfirmed = await runner.run('dashboards', `${label} (its last publish, by a fresh read)`, async () => (await confirmUncertainPublication({ store: dashboardStore, barrier: owed.barrier, scope: publication.scope, client: provision.dataverse })).unconfirmed);
+            if (!unconfirmed.length) continue;
+          }
+          const { blockedPublication } = require('./managed-bindings.js');
+          const now = dashboardStore.readGroup('dashboard', unit.key).committed;
+          const pub = (now && now.publication) || publication;
+          const message = `${label} is no longer declared, and a publish of it may have been sent and is not confirmed by a fresh read; it is not sent again, no dashboard is built in its place, and the build stopped before any app write`;
+          stop = () => {
+            const cause = refusal(message, { code: 'managed-publication-unconfirmed', ...(uncertain(pub) && typeof pub.dispatchToken === 'string' ? blockedPublication(pub.scope, pub.dispatchToken) : {}) });
+            return managedStop('dashboards', label, cause.code, { cause, findings: [{ key: unit.key, code: cause.code, message }] });
+          };
+          if (provision.dataverse) removedDashboardStops.push({ label, stop });
+        } else {
+          const why = state === 'owed' ? 'its last change is saved and its publish is still owed' : 'a change an earlier build started on it is not finished';
+          stop = (dash) => {
+            const message = `dashboard "${dash.name}" is the dashboard the managed declaration "${unit.key}" holds, and ${why}; it is not built as a plain dashboard, which could make a second one in its place or publish that change unproved. Declare it again with reconcile: "declared" and its key "${unit.key}" so the build settles it; nothing was sent`;
+            return managedStop('dashboards', label, 'managed-dashboard-unsettled', { cause: refusal(message, { code: 'managed-dashboard-unsettled' }), findings: [{ key: unit.key, code: 'managed-dashboard-unsettled', message }] });
+          };
+        }
+        const decl = (group && group.originalDeclaration) || (attempt && attempt.declaration) || null;
+        retainedDashboards.push({
+          ids: new Set([group && group.root && group.root.id, attempt && attempt.root && attempt.root.id, attempt && attempt.expected && attempt.expected.rootId].filter(Boolean).map(bareId)),
+          names: new Set([decl && decl.name, attempt && attempt.declaration && attempt.declaration.name].filter((n) => typeof n === 'string' && n).map(dashboardNameKey)),
+          stop,
+        });
+      }
+    }
     for (const dash of spec.dashboards || []) {
       if (isDeclaredDashboardOn(dash)) {
         await settleDeclaredDashboardOf(dash);
         continue;
+      }
+      const retained = retainedDashboards.find((r) => (dash.dashboardId && r.ids.has(String(dash.dashboardId).replace(/[{}]/g, '').toLowerCase())) || (dash.name && r.names.has(dashboardNameKey(dash.name))));
+      if (retained) {
+        await runner.run('dashboards', `dashboard "${dash.name}"`, async () => { throw retained.stop(dash); });
       }
       // AB#6726727: a DOWNLOADED dashboard is bound by the id it was read from before anything is tried
       // by name. Renamed in the designer since, its spec name finds nothing — and the name path below
@@ -8237,34 +8324,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
         result.created.dashboards[dash.name] = pushed.id;
       });
     }
-    // A stored dashboard group whose publish may have been sent and is not confirmed ('dispatching' or 'unconfirmed') is
-    // settled here even when the spec no longer declares it (or declares it with the build path off): a declared one is
-    // confirmed by its own settlement above, but an undeclared one reaches no settlement, so without this no run would
-    // confirm it, and the CLI could never offer its typed publication-risk approval. It is a read and nothing else: the
-    // registered layer readers confirm it when a fresh read proves what the send shipped is live (confirmUncertainPublication);
-    // nothing is replayed, no owed publish of it is paid (no declaration authorizes that content now), nothing is bound, and
-    // the scope stays quarantined for this run (openManagedContext's block is never cleared), so the next run is the clean
-    // one. One it cannot confirm stops here with its dispatch as data on the cause ({ dispatchToken, approval, remedy },
-    // managed-bindings.js blockedPublication), which build-model-app.js offerPublicationRisk reads; never from the message.
-    const dashboardStore = bindingGroups && bindingGroups.store;
-    if (dashboardStore && provision.dataverse) {
-      const declaredKeys = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
-      const uncertain = (pub) => !!pub && (pub.state === 'dispatching' || pub.state === 'unconfirmed') && !!pub.scope && pub.scope.type === 'dashboard';
-      for (const unit of dashboardStore.snapshot().units()) {
-        if (unit.invalid || unit.family !== 'dashboard' || declaredKeys.has(unit.key) || !uncertain(unit.group && unit.group.publication)) continue;
-        const label = `declared dashboard "${unit.key}"`;
-        await runner.run('dashboards', label, async () => {
-          const { confirmUncertainPublication } = require('./managed-feature-contract.js');
-          const { blockedPublication } = require('./managed-bindings.js');
-          const { unconfirmed } = await confirmUncertainPublication({ store: dashboardStore, barrier: owed.barrier, scope: unit.group.publication.scope, client: provision.dataverse });
-          if (!unconfirmed.length) return;
-          const now = dashboardStore.readGroup('dashboard', unit.key).committed;
-          const pub = (now && now.publication) || unit.group.publication;
-          const message = `${label} is no longer declared, and a publish of it may have been sent and is not confirmed by a fresh read; it is not sent again, and the build stopped before any app write`;
-          const cause = refusal(message, { code: 'managed-publication-unconfirmed', ...(uncertain(pub) && typeof pub.dispatchToken === 'string' ? blockedPublication(pub.scope, pub.dispatchToken) : {}) });
-          throw managedStop('dashboards', label, cause.code, { cause, findings: [{ key: unit.key, code: cause.code, message }] });
-        });
-      }
+    // The halts the pre-pass above deferred: a stored publish a fresh read could not confirm, of a dashboard this run does not
+    // declare. Raised only now, so the dashboards this run declares are settled first, each in its own scope, exactly as when
+    // nothing was stored; nothing in between could have made a replacement for it (the legacy guard above refused that).
+    for (const { label, stop } of removedDashboardStops) {
+      await runner.run('dashboards', label, async () => { throw stop(); });
     }
   }
 

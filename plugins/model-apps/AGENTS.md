@@ -2906,12 +2906,21 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   from the binding is `dashboard-binding-mismatch`). It
   then publishes it on EVERY run, a no-op included, through `publishDeclaredDashboard` (one scope, the
   dashboard's own `<dashboard>` PublishXml; a pending or uncertain earlier publish is confirmed or paid
-  there). A stored dashboard group the spec no longer declares (or declares with the path off) whose
-  publish is `dispatching` or `unconfirmed` is visited at the end of the phase: `confirmUncertainPublication`
-  confirms it read-only with the registered layer readers; nothing is replayed, no owed debt of it is
-  paid, nothing is bound and this run's quarantine is not cleared. One it cannot confirm halts
-  (`managed-publication-unconfirmed`) with `{dispatchToken, approval, remedy}` on the cause, so the shared
-  `publication-risk` decision works without the old spec entry. A withheld publish leaves the run
+  there). A stored dashboard group the spec no longer declares (or declares with the path off) whose last
+  change is not settled is read at the START of the phase, before any plain dashboard is built: a
+  `dispatching` or `unconfirmed` publish is confirmed read-only by `confirmUncertainPublication` with the
+  registered layer readers (nothing is replayed, nothing is bound, this run's quarantine is not cleared);
+  one it cannot confirm halts at the end of the phase, after this run's own declared dashboards
+  (`managed-publication-unconfirmed`, with `{dispatchToken, approval, remedy}` on the cause, so the shared
+  `publication-risk` decision works without the old spec entry). Such a group, an `owed` one and a pending
+  attempt keep their identity: a plain entry naming its root id or its declared name is refused before any
+  request (`managed-dashboard-unsettled`, or the structured publication stop), because the plain path looks
+  only in the published layer and would create a second root for a never-published one. An `owed` publish
+  (saved, definitely not sent) of a dashboard this run does not settle (not declared, path off, or no
+  dashboards phase) is never paid, discarded or marked: the run blocks its scope from the start
+  (`runSdkBuildPhases`, after the store opens), so `checkAppWrite` refuses an app that adds or holds it, no
+  publish names it, and the run ends incomplete until it is declared again and its phase pays it through its
+  proof. The store's classification of owed debt (`classifyPersisted`) is unchanged; the fence is the build's. A withheld publish leaves the run
   incomplete (`managed-publication-owed`, or
   `managed-publication-unverified` when a layer read failed), and the app write is checked with the
   dashboards the app would hold (`checkAppWrite` `addedDashboards`), so an app publish never puts an
@@ -2935,7 +2944,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   other dashboard identity consumer in verify (`identifyDashboard`: the generic dashboard and tile checks
   and the site map's dashboard subareas) uses the bound root of a declared dashboard before its pin and
   name; a pin that differs from it fails, and a pending or unusable group is unverified, never resolved by
-  name.
+  name. An unbound declared dashboard is held to its `dashboardId`: a pin that names no dashboard fails and
+  an unreadable one is unverified, never resolved by a namesake (a plain entry keeps the name fallback).
   `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
   `originalDeclaration` in place of the plain `dashboards[]` entry with the same `dashboardId` (appended when
   there is none), plus the certified root `dashboardId` and each declared tile's `componentId`

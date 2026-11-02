@@ -458,6 +458,7 @@ async function verifySpec(spec, read, opts = {}) {
   // A downloaded dashboard's pinned id (dashboards[].dashboardId) is what the build binds first, so it
   // is what verify checks first — after a rename in the designer the name alone finds nothing.
   const pinByName = new Map((spec.dashboards || []).filter((d) => d && d.name && d.dashboardId).map((d) => [d.name, d.dashboardId]));
+  const declaredPinNames = new Set([...declaredDashboardsByKey(spec).values()].filter((d) => d.name && d.dashboardId).map((d) => d.name));
   // A DECLARED dashboard (dashboards[].reconcile "declared", its build path on) that the managed bindings of this workspace
   // (`opts.managedManifest`) bind is identified by its binding, before its pin and its name: the build resolves it so
   // (committed root first), and keeps a maker's rename, so its spec name may find nothing, or a namesake made since. Every
@@ -501,6 +502,13 @@ async function verifySpec(spec, read, opts = {}) {
         if (pinned) return { id: pinned.id };
       } catch (e) {
         return { id: null, detail: `its dashboardId could not be resolved (${(e && e.message) || e}) — unverified, not proven correct` };
+      }
+      // An unbound DECLARED dashboard is held to its dashboardId as the build holds it (the pin is resolved before any name
+      // lookup there, and a pin that names no dashboard is refused, never replaced by a namesake). Its name is not evidence
+      // that the pinned row exists: a downloaded declaration whose dashboard was deleted, with another made since under
+      // its old name, would otherwise pass here. A legacy dashboard (or the build path off) keeps the name fallback.
+      if (declaredPinNames.has(name)) {
+        return { id: null, detail: `its dashboardId ${String(pinByName.get(name))} names no dashboard; a declared dashboard is held to its dashboardId and is never found by its name instead` };
       }
     }
     let rows = null;
