@@ -19,6 +19,11 @@ const DECLARED_FEATURES = {
   // build, verify (verify-spec.js verifyManagedRule), the explicit managed download (lib/declared-rule-io.js) and the typed approval
   // (adopt:rule:<table>/<name>) are wired.
   rules: true,
+  // businessProcessFlows[].reconcile: "declared" — a business process flow managed whole as one workflow
+  // (lib/bpf-settlement.js settleDeclaredBpf): its stage and step ids come from explicit keys and stay stable on retry; a new flow
+  // is created Draft, then activated by a conditional write; an existing flow's body or state is never edited. Off: the build
+  // dispatch, grammar and docs are in place; verify, download and the typed approval land with the commit that turns it on.
+  bpf: false,
 };
 
 const declaredFeatureOn = (name) => DECLARED_FEATURES[name] === true;

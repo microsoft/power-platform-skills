@@ -2853,8 +2853,7 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   existing row asks for it). Emptying the content of one that has content also needs `--allow-destructive`
   (`web-resource-clear-not-authorized`); the adoption approval is not consent to it. Unlike the kinds above, a declared web resource that does not settle stops the
   build at once (`managedStop`, never retried); its solution membership is added before its binding is
-  recorded. Declared process flows are not reconciled in this release; the build keeps its existing
-  behaviour for them.
+  recorded.
 - **Form layout** (`forms[].reconcile: "declared"`, `lib/form-layout-reconcile.js`, enabled by
   `DECLARED_FEATURES.forms` in `lib/declared-features.js`): the order, section and spans of declared
   fields, the declared tabs and sections, a stated section width, stated `readOnly` / `hidden` (an
@@ -2974,6 +2973,34 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   same table and name, appended otherwise), validating incrementally; a pending, unreadable, changed or
   invalid one is left out and named (`managedRules.stale`). The download writes no store, so a rebuild from
   the downloaded folder needs `adopt:rule:<table>/<name>` once.
+- **Business process flow** (`businessProcessFlows[].reconcile: "declared"`, `lib/bpf-settlement.js`, enabled by
+  `DECLARED_FEATURES.bpf` in `lib/declared-features.js`): a flow is ONE `workflows` row (category 4) managed whole
+  as one group: the root (kind `bpf`), one `bpfStage` record per stage and one `bpfStep` record per step, under
+  its stage. Unlike a rule's nodes, a stage and a step keep the id they were written with, so every stage and
+  step has a `key` (unique in its level) and the creation catalog gives each its id before anything is sent: a
+  retry in a fresh workspace derives the same ids, and a step's id sits under its actual stage. The group key
+  and the approval id are `<table>/<name>` (lower-case table). The business-process-flows phase settles each
+  declared flow with `settleDeclaredBpf` (the run's store, barrier, its own creation catalog, the
+  `declaredWorkflowStop` halt factory, solution membership, typed approvals and `sendObserver`); an undeclared
+  flow keeps the legacy create-or-reuse path byte for byte. A new flow is created **Draft** with one
+  `POST workflows` whose XAML carries every reserved id, proved by a fresh read, and then activated by ONE
+  state write carrying the version of that read (`If-Match`), with the same 412 handling as a rule; the guard
+  is service-backed in the same way (a client-supplied id is honoured, a repeated create answers 412 with no
+  duplicate, and `If-Match` is enforced on the state and body writes). The default path never edits a flow
+  that already exists (`workflow-edit-refused`, conditional edits stay off); removing or reordering a stage or
+  step is refused even then (`bpf-structure-refused`), and a branch, a stage action, a stage on another table
+  or any XAML the module does not write is `bpf-shape-unsupported`, before any request. A flow found unbound is
+  bound only read-only, with `adopt:bpf:<table>/<name>` and a declaration naming its whole current body in
+  order (`create-ownership-required`, `bpf-whole-body-required`, `managed-adoption-required`); one changed
+  outside the spec is `bpf-drift` and needs the same complete re-adoption. A declared flow may omit `stages`
+  to manage only its own settings once bound; creating or adopting one needs them. The flow's backing table
+  (what `securityRoles` is granted on) is the `uniquename` the platform STORED, as the helper proved it, or
+  read by the flow's id when the helper answers none (`bpf-backing-unproved` when it cannot be read), never
+  derived from the display name; the security phase reads it from `created.bpfBackingTables`. The workflow
+  effect gate is bound as for rules (a declared flow, or a stored workflow effect); a declared flow with no
+  bound gate stops before any request (`workflow-state-path-unavailable`). A stored flow attempt whose
+  declaration left the spec holds the run (`managed-not-settled`) exactly as a rule's does, and the legacy
+  path does not write its row. Nothing is published.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.
@@ -3094,7 +3121,7 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 
 | Remedy | Codes |
 | --- | --- |
-| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>`; a declared dashboard's is `adopt:dashboard:<key>`; a declared business rule's is `adopt:rule:<table>/<name>`, also for its drift (a rule is re-adopted whole, never overwritten) | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `dashboard-adoption-not-authorized`, `managed-adoption-required` (form, dashboard, rule), `create-ownership-required` (rule), `rule-drift` |
+| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>`; a declared dashboard's is `adopt:dashboard:<key>`; a declared business rule's is `adopt:rule:<table>/<name>`, also for its drift (a rule is re-adopted whole, never overwritten); a declared process flow's is `adopt:bpf:<table>/<name>`, likewise | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `dashboard-adoption-not-authorized`, `managed-adoption-required` (form, dashboard, rule, process flow), `create-ownership-required` (rule, process flow), `rule-drift`, `bpf-drift` |
 | Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>`; a declared form's is `overwrite:form:<table>/<formtype>/<name>`; a declared dashboard's is `overwrite:dashboard:<key>`, one tile's `overwrite:dashboard:<key>/<tile>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift`, `form-layout-drift`, `dashboard-drift`, `dashboard-tile-drift` |
 | Risk approval: `--authorize publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, only as printed; read from the refusal's data (`dispatchToken`, `approval`, `remedy`), recorded with `acceptUncertainPublication`; the run stays stopped | `managed-publication-unconfirmed` when no fresh read can settle a lost publish |
 | Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized`, `dashboard-description-clear-not-authorized` |

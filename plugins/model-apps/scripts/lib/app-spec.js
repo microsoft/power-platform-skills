@@ -2047,7 +2047,8 @@ function usesDeclaredReconcile(spec) {
     || any(spec.entities, (e) => e.quickFind !== undefined)
     || (declaredFeatureOn('forms') && any(spec.forms, (f) => f.reconcile !== undefined))
     || (declaredFeatureOn('dashboards') && any(spec.dashboards, (d) => d.reconcile !== undefined))
-    || (declaredFeatureOn('rules') && any(spec.businessRules, (r) => r.reconcile !== undefined));
+    || (declaredFeatureOn('rules') && any(spec.businessRules, (r) => r.reconcile !== undefined))
+    || (declaredFeatureOn('bpf') && any(spec.businessProcessFlows, (p) => p.reconcile !== undefined));
 }
 
 // A declared dashboard (dashboards[].reconcile: "declared", lib/dashboard-reconcile.js) is one managed group: its root row, its seed
@@ -3457,13 +3458,14 @@ function validateAppSpec(spec, opts = {}) {
       if (!e || typeof e !== 'object' || e.quickFind === undefined) return;
       for (const f of validateQuickFindSpec({ quickFind: e.quickFind }, `entities[${i}] (${e.schemaName})`)) errors.push(`${f.path}: ${f.message}`);
     });
-    // Business process flows are left out: their key allow-list already refuses `reconcile`. A kind whose declared build is
-    // switched on (lib/declared-features.js) takes `reconcile` and is checked below instead; while it is off, the refusal and
-    // its words are exactly what they were.
+    // Business process flows are left out: while their declared build is off, their key allow-list refuses `reconcile` (below), and
+    // once it is on they take it there. A kind whose declared build is switched on (lib/declared-features.js) takes `reconcile` and
+    // is checked below instead; while it is off, the refusal and its words are exactly what they were.
     const formsDeclarable = declaredFeatureOn('forms');
     const dashboardsDeclarable = declaredFeatureOn('dashboards');
     const rulesDeclarable = declaredFeatureOn('rules');
-    const declarable = ['views', 'charts', formsDeclarable && 'forms', dashboardsDeclarable && 'dashboards', rulesDeclarable && 'business rules', 'web resources'].filter(Boolean);
+    const bpfDeclarable = declaredFeatureOn('bpf');
+    const declarable = ['views', 'charts', formsDeclarable && 'forms', dashboardsDeclarable && 'dashboards', rulesDeclarable && 'business rules', bpfDeclarable && 'business process flows', 'web resources'].filter(Boolean);
     const reconcilable = `${declarable.slice(0, -1).join(', ')} and ${declarable[declarable.length - 1]}`;
     for (const kind of ['dashboards', 'forms', 'businessRules']) {
       if (kind === 'forms' && formsDeclarable) continue;
@@ -3605,10 +3607,20 @@ function validateAppSpec(spec, opts = {}) {
   // accepts a BPF whose step names a column that does not exist, materializes its stages, and then
   // simply renders a step bound to nothing — no error at deploy time, and nothing downstream to
   // catch it. So every field is checked against the flow's own entity here.
+  //
+  // A declared flow (reconcile: "declared", while its build is switched on in lib/declared-features.js) is managed whole by
+  // lib/bpf-settlement.js: it must also carry the helper's grammar (validateDeclaredBpf: a key on every stage and step, unique in
+  // its level, closed key sets), because the keys are what keep a stage's and a step's id across a rename or a retry. It may omit
+  // `stages` to manage only the flow's own settings (name, description, order, status) of a flow already bound; the helper refuses
+  // to create or adopt one without them. Its approval is `bpf:<table>/<name>`; two flows cannot share a name (the derived unique
+  // name check below), so one approval never names two flows.
+  const bpfDeclared = declaredFeatureOn('bpf');
   const bpfUniques = new Map();
   for (const p of spec.businessProcessFlows || []) {
     const label = `business process flow '${(p && p.name) || '(unnamed)'}'`;
     if (!p || typeof p !== 'object' || Array.isArray(p)) { errors.push('businessProcessFlows[] entries must be objects'); continue; }
+    const declaredFlow = bpfDeclared && p.reconcile === 'declared';
+    if (bpfDeclared && p.reconcile !== undefined && !declaredFlow) errors.push(`${label}: reconcile must be "declared" (or left out)`);
     if (!p.name) errors.push(`${label}: name is required`);
     else if (typeof p.name !== 'string' || !p.name.trim()) {
       // The SDK derives the server unique name by lower-casing this value, so a non-string reaches
@@ -3654,7 +3666,7 @@ function validateAppSpec(spec, opts = {}) {
     // Allow-list the flow's own keys for the same reason as the stage/step ones below: naming only the
     // three knobs we knew about left others (the SDK also models `globalActions`) neither mapped nor
     // rejected — silently dropped, which is the failure this guard exists to prevent.
-    const BPF_FLOW_KEYS = new Set(['name', 'entity', 'description', 'status', 'order', 'stages', 'securityRoles']);
+    const BPF_FLOW_KEYS = new Set(['name', 'entity', ...(bpfDeclared ? ['reconcile'] : []), 'description', 'status', 'order', 'stages', 'securityRoles']);
     for (const k of Object.keys(p)) {
       if (!BPF_FLOW_KEYS.has(k)) {
         errors.push(`${label}: unsupported key '${k}' (allowed: ${[...BPF_FLOW_KEYS].join(', ')}). Branching and process actions are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker after the flow deploys.`);
@@ -3663,6 +3675,15 @@ function validateAppSpec(spec, opts = {}) {
     validateBpfSecurityRoles(p, spec, label, errors);
     const cols = declaredColumnLogicals(spec, p.entity);
     validateDescription(p.description, label, errors);
+    if (declaredFlow) {
+      // Loaded here, not at the top: the helper pulls in the stable-identity modules, which a spec with no declared flow never needs.
+      const { validateDeclaredBpf } = require('./bpf-settlement.js');
+      for (const e of validateDeclaredBpf(p)) errors.push(`${label}: ${e}`);
+      if (p.stages === undefined) continue;
+    }
+    // A declared flow's stages and steps also take their `key`; checked by validateDeclaredBpf above.
+    const stageKeys = declaredFlow ? new Set([...BPF_STAGE_KEYS, 'key']) : BPF_STAGE_KEYS;
+    const stepKeys = declaredFlow ? new Set([...BPF_STEP_KEYS, 'key']) : BPF_STEP_KEYS;
     if (!Array.isArray(p.stages) || !p.stages.length) {
       errors.push(`${label}: stages[] is required (a flow with no stage is not a process)`);
       continue;
@@ -3685,8 +3706,8 @@ function validateAppSpec(spec, opts = {}) {
       // an author would write them — and bpfDef maps only name/entity/steps, so without this they
       // would vanish silently.
       for (const k of Object.keys(st)) {
-        if (!BPF_STAGE_KEYS.has(k)) {
-          errors.push(`${label}: stage '${st.name}' has unsupported key '${k}' (allowed: ${[...BPF_STAGE_KEYS].join(', ')}). Branching, stage actions and cross-entity flow are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker.`);
+        if (!stageKeys.has(k)) {
+          errors.push(`${label}: stage '${st.name}' has unsupported key '${k}' (allowed: ${[...stageKeys].join(', ')}). Branching, stage actions and cross-entity flow are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker.`);
         }
       }
       // v1 is single-entity: a stage on another table is a cross-entity flow, which changes what the
@@ -3718,8 +3739,8 @@ function validateAppSpec(spec, opts = {}) {
         // `fieldLogicalName` (the name used elsewhere in the SDK's own artifact shapes) is dropped by
         // the step normalizer and deploys bound to nothing.
         for (const k of Object.keys(step)) {
-          if (!BPF_STEP_KEYS.has(k)) {
-            errors.push(`${label}: stage '${st.name}' step '${step.name}' has unsupported key '${k}' (allowed: ${[...BPF_STEP_KEYS].join(', ')}${k === 'fieldLogicalName' ? " — the column key is 'field'" : ''})`);
+          if (!stepKeys.has(k)) {
+            errors.push(`${label}: stage '${st.name}' step '${step.name}' has unsupported key '${k}' (allowed: ${[...stepKeys].join(', ')}${k === 'fieldLogicalName' ? " — the column key is 'field'" : ''})`);
           }
         }
         // `field` is REQUIRED on every step. This was originally modelled as optional — a step with

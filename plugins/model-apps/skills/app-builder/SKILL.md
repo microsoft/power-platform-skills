@@ -151,7 +151,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   that differs from the server's stops it the same way (`workspace-copy-unsent-edits`) and is kept: ask
   whether to put that change into the spec and refresh the local copy, or approve the `overwrite:` key
   it prints (`overwrite:quickfind:<table>` for search columns); pass a key exactly as printed. Never write
-  `reconcile` on flows (they are not reconciled in this release; the build keeps its existing behaviour),
+  `reconcile` on flows (declared flows are not enabled in this build; the build keeps its existing behaviour),
   on a web resource only as the web-resource bullet above says, on a form, a dashboard or a business rule only
   as their bullets below say, and never write a command `key` (keyed command bars are refused
   in this version). Leave a downloaded or older spec without these fields as it is — see the advanced reference.
@@ -193,6 +193,14 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   brings it back declared only with `--include-managed --managed-manifest <store file>` (otherwise it is left
   out, as every business rule is); its first rebuild needs `adopt:rule:<table>/<name>`, because the downloaded
   folder has no store.
+- **Declared business process flows** (`minimumPluginVersion: "2.21.0"`, once this build enables them) — write
+  `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow; give every
+  stage and step a `key`. Tell the maker: a key keeps a stage's or step's id, so a rename keeps the records on it;
+  a new flow is created Draft and activated only if nobody changed it in between; a flow that already exists is
+  never edited by the build, and removing or reordering a stage or step is always refused (change it in Maker,
+  then re-adopt it); a flow changed outside the spec stops the build until it is re-adopted whole with
+  `--authorize adopt:bpf:<table>/<name>` and a declaration naming its whole body. Explain the approval and let
+  the maker choose.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run

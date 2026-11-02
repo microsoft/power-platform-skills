@@ -197,6 +197,9 @@ const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey: declare
 // The helper is required at first use, not here: it pulls in the stable-identity modules (creates-catalog.js), which a build with
 // no declared rule must not load (tests/creates-port.test.js).
 const isDeclaredRuleOn = (r) => declaredFeatureOn('rules') && !!r && r.reconcile === 'declared';
+// Declared business process flows (businessProcessFlows[].reconcile "declared", lib/bpf-settlement.js) likewise, and for the same
+// reason the helper is required at first use.
+const isDeclaredBpfOn = (f) => declaredFeatureOn('bpf') && !!f && f.reconcile === 'declared';
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -3677,7 +3680,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // unbound and passes every request, so a build with neither sends what it always sent.
   const workflowStore = bindingGroups && bindingGroups.store;
   if (opts.workflowEffectGate && workflowStore
-    && ((spec.businessRules || []).some(isDeclaredRuleOn) || (workflowStore.snapshot().envelope.workflowEffects || []).length > 0)) {
+    && ((spec.businessRules || []).some(isDeclaredRuleOn) || (spec.businessProcessFlows || []).some(isDeclaredBpfOn)
+      || (workflowStore.snapshot().envelope.workflowEffects || []).length > 0)) {
     opts.workflowEffectGate.bind(workflowStore);
   }
   // Stable create identities (createIdentity: "stable-v1"; lib/creates-stable-build.js), for declared views and charts only: their
@@ -7469,7 +7473,115 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // leaves every deployed stage where it is in the process is applied in place, and one that would
   // remove or move a stage or a step is refused (see lib/bpf-stages.js for which, and why).
   if (has('business-process-flows')) {
+    // A declared flow (businessProcessFlows[].reconcile "declared", its flag on) is one managed workflow, settled whole by
+    // lib/bpf-settlement.js settleDeclaredBpf: its workflow, stage and step ids come from one create catalog before anything is
+    // sent, so a retry in a fresh workspace derives the same ids; a new flow is created Draft, proved by a fresh read, then
+    // activated by its own conditional state write; an existing flow's body or state is never edited while conditional writes are
+    // off (they are off in the build). Built at first use, with the helper, so a build with no declared flow loads neither
+    // (tests/creates-port.test.js).
+    let bpfCatalog = null;
+    const settleDeclaredBpfOf = async (flow) => {
+      const { settleDeclaredBpf, bpfKey } = require('./bpf-settlement.js');
+      const entityLogical = String(flow.entity).toLowerCase();
+      const key = `${entityLogical}|${flow.name}`;
+      const approvalId = `${entityLogical}/${flow.name}`;
+      const label = `declared business process flow "${flow.name}" on ${entityLogical}`;
+      const halt = declaredWorkflowStop('bpf', approvalId);
+      await runner.run('business-process-flows', label, async () => {
+        const store = bindingGroups && bindingGroups.store;
+        // As for a declared rule: every write of the flow is screened by the gate of THIS store, so a build whose client has no
+        // gate bound to it stops here, before any request for the flow.
+        if (!store || !opts.workflowEffectGate || !opts.workflowEffectGate.boundTo(store)) {
+          throw halt('business-process-flows', label, 'workflow-state-path-unavailable', {
+            cause: refusal(`${label}: the build's client has no workflow effect gate bound to its managed binding store, so the flow's writes cannot be held to their persisted effects; nothing was sent for it`, { code: 'workflow-state-path-unavailable' }),
+          });
+        }
+        if (!bpfCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          bpfCatalog = createIntentCatalog((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => ({
+            catalogKind: 'bpf',
+            key: bpfKey(f),
+            scope: { kind: 'table', solution: sol && sol.uniqueName, table: String(f.entity).toLowerCase() },
+            declaration: f,
+          })));
+        }
+        let out;
+        try {
+          out = await settleDeclaredBpf({
+            flow,
+            sdk: provision,
+            store,
+            catalog: bpfCatalog,
+            // The run's typed approvals: only `bpf:<table>/<name>` (adopt) approves binding a flow this build did not create.
+            approvals: featureCtx.authorizedAdoption,
+            // The edit switch stays off: an existing flow's body or state is never changed by the build.
+            opts: {},
+            halt,
+            ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.workflow); },
+            phase: 'business-process-flows',
+            label,
+            barrier: owed.barrier,
+            // The raw conditional state write (If-Match) goes through the same gated client the SDK sends through.
+            httpClient: provision.dataverse && provision.dataverse.httpClient,
+            instanceUrl: opts.env,
+            sendObserver: opts.sendObserver || null,
+          });
+        } catch (err) {
+          // Every stop of a declared flow is final for this run (bpf-structure-refused, workflow-edit-refused, bpf-drift, a held
+          // attempt, …): never retried by the runner and never read as a match. The helper's own halts already are.
+          if (err instanceof BuildHalt) throw err;
+          throw halt('business-process-flows', label, (err && typeof err.code === 'string' && err.code) || 'managed-not-settled', { cause: err });
+        }
+        if (!out || typeof out.id !== 'string') {
+          throw halt('business-process-flows', label, 'managed-not-settled', { cause: refusal(`${label}: the settlement answered no workflow id, so nothing is granted or mapped for it`, { code: 'managed-not-settled' }) });
+        }
+        // The backing table is the name the platform STORED for the flow, which the helper proved and kept; it is never derived from
+        // the display name (a flow adopted from Maker, or renamed, keeps another). Should the helper answer none (or anything that is
+        // not a table's logical name), it is read here by the flow's id, and a flow whose stored name cannot be read stops the run
+        // before any grant is made on a guessed table.
+        const TABLE_NAME = /^[a-z][a-z0-9_]{0,127}$/;
+        let backing = out.uniqueName && TABLE_NAME.test(String(out.uniqueName).toLowerCase()) ? String(out.uniqueName).toLowerCase() : null;
+        if (!backing) {
+          const rows = await provision.queryRecords('workflow', { select: ['workflowid', 'uniquename'], filter: `workflowid eq ${out.id}`, top: 1 });
+          const row = (rows || []).find((w) => w && String(w.workflowid).toLowerCase() === out.id.toLowerCase());
+          if (row && typeof row.uniquename === 'string' && TABLE_NAME.test(row.uniquename.toLowerCase())) backing = row.uniquename.toLowerCase();
+          else {
+            throw halt('business-process-flows', label, 'bpf-backing-unproved', {
+              cause: refusal(`${label}: the flow ${out.id} is settled, but the name of its backing table could not be read, so no role is granted on it and nothing refers to it; run the build again`, { code: 'bpf-backing-unproved' }),
+            });
+          }
+        }
+        result.created.businessProcessFlows[key] = out.id;
+        result.created.bpfBackingTables[key] = backing;
+      });
+    };
+    // A declared flow's attempt still waiting to be proved after its declaration left the spec: the same hold as a declared rule's
+    // (see the business-rules phase). The legacy path below does not write the row it holds.
+    const heldBpfRows = new Map();
+    if (declaredFeatureOn('bpf') && bindingGroups && bindingGroups.store) {
+      const { bpfKey } = require('./bpf-settlement.js');
+      const declared = new Set((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => bpfKey(f)));
+      const envelope = bindingGroups.store.snapshot().envelope;
+      for (const a of envelope.attempts || []) {
+        if (!a || a.family !== 'bpf' || declared.has(a.key)) continue;
+        const sent = (envelope.workflowEffects || []).some((e) => e && e.attemptToken === a.token && e.state !== 'definitely-unsent');
+        if (!sent) {
+          if (typeof opts.warn === 'function') opts.warn(`declared business process flow "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
+          continue;
+        }
+        if (a.root && typeof a.root.id === 'string') heldBpfRows.set(a.root.id.toLowerCase(), a.key);
+        markIncomplete({
+          phase: 'business-process-flows',
+          code: 'managed-not-settled',
+          message: `declared business process flow "${a.key}": an earlier run's change of this flow is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it. Put its businessProcessFlows[] entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
+        });
+      }
+    }
     for (const flow of spec.businessProcessFlows || []) {
+      if (isDeclaredBpfOn(flow)) {
+        await settleDeclaredBpfOf(flow);
+        continue;
+      }
       const entityLogical = String(flow.entity).toLowerCase();
       const key = `${entityLogical}|${flow.name}`;
       const existing = await provision.queryRecords('workflow', {
@@ -7489,6 +7601,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
         top: 50,
       });
       const existingId = existing && existing[0] && existing[0].workflowid;
+      const heldBpfBy = existingId ? (existing || []).map((w) => heldBpfRows.get(String(w.workflowid).toLowerCase())).find(Boolean) : undefined;
+      if (heldBpfBy) {
+        runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (not changed: declared flow "${heldBpfBy}" still has a change waiting to be proved on it)`);
+        continue;
+      }
       if (existingId) {
         if ((existing || []).length > 1 && typeof opts.warn === 'function') {
           opts.warn(`business process flow "${flow.name}" on ${flow.entity}: ${existing.length} definitions exist with this name — the oldest is being reused. Remove the extras in Maker so users are not offered the same process twice.`);

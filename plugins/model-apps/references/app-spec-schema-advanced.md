@@ -284,6 +284,9 @@ works through.
   The flow's own `description` and `order` are not reapplied, and `--verify` does not compare stages.
 - Verified by `--verify` on three axes: it exists, there is exactly **one** of it (duplicates would
   offer users the same process twice), and its deployed state matches `status`.
+- **Managed as one flow.** Everything above is a flow without `reconcile`. To have the build create a
+  flow whose stages and steps keep the ids it gave them, and prove it on every rebuild, declare it: see
+  `businessProcessFlows[].reconcile` below.
 
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
@@ -666,8 +669,8 @@ fails, the build reports the table as withheld, publishes the other tables, and 
 
 Declared upkeep of web resources is described with `webResources[]` above, of form layouts with
 `forms[].reconcile` below, of dashboards with `dashboards[].reconcile` below, and of business rules with
-`businessRules[].reconcile` below. Declared process flows are not reconciled in this release:
-`reconcile` on a flow is a validation error, and the build's existing behaviour for it is unchanged. A command bar with
+`businessRules[].reconcile` below. Declared business process flows (`businessProcessFlows[].reconcile`,
+below) are not enabled in this build: `reconcile` on a flow is a validation error, and the build's existing behaviour for it is unchanged. A command bar with
 `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
 
 **An unconfirmed publish.** A table (or dashboard) publish whose answer was lost may still have run. The
@@ -862,6 +865,57 @@ Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exa
   `reconcile: "declared"`; one that is pending, gone, changed since, or not valid is left out and named. The
   downloaded folder has no store, so its first rebuild needs `--authorize "adopt:rule:<table>/<name>"` for
   each.
+
+## businessProcessFlows[].reconcile (optional — declared business process flows)
+
+Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exactly as before (see
+`businessProcessFlows[]` above).
+
+```jsonc
+{ "entity": "new_ticket", "name": "Ticket Handling", "reconcile": "declared",
+  "description": "How support tickets move to resolution",
+  "status": "Active",              // Active (default) | Draft
+  "order": 1,
+  "stages": [
+    { "key": "triage", "name": "Triage", "steps": [
+        { "key": "subject",  "name": "Subject",  "field": "new_subject", "required": true },
+        { "key": "priority", "name": "Priority", "field": "new_priority" } ] },
+    { "key": "resolve", "name": "Resolve", "steps": [
+        { "key": "notes", "name": "Resolution notes", "field": "new_notes" } ] } ] }
+```
+
+- **One flow, managed whole.** A flow is one row; its stages and steps keep the ids they were written
+  with, and a record sits on a stage by that id. The build gives every stage and step its id before it
+  sends anything, so a retry derives the same ids, and it proves the whole flow on every rebuild.
+- **Keys.** Every stage and every step needs a `key` (letters, digits, `_`, `-`, `.`; at most 64),
+  unique among its stage's steps or among the stages. A key is the identity: renaming a stage or step
+  under the same key keeps its id, and a step added later lands under its actual stage. The flow's own
+  key is `<table>/<name>`; a declared flow beside an undeclared one with the same table and name is
+  refused. Everything in `businessProcessFlows[]` above still applies (a single table, linear, at
+  least one step per stage, a step bound to a column, the name rules).
+- **Settings only.** A declared flow that the build already manages may leave out `stages` to keep
+  only its description, order and status in the spec. Creating or adopting a flow needs its stages.
+- **Creating.** A new flow is created **Draft** with every id, read back, and only then activated
+  (when its `status` is `Active`). The activation carries the version of that read, and Dataverse
+  enforces it: if the flow was changed in Maker after the build read it, the build does not activate it
+  and stops. A repeated create of the same flow is answered by Dataverse without a duplicate, so a
+  create whose answer was lost is proved by reading it, never sent twice.
+- **Editing.** A flow that already exists is never edited: a change of its body or its status is
+  refused before any write (`workflow-edit-refused`). Removing or reordering a stage or a step is
+  refused in every case (`bpf-structure-refused`). Branching, stage actions, a stage on another table
+  and anything else the build does not write are refused (`bpf-shape-unsupported`). Change the flow in
+  Maker, then re-adopt it.
+- **Approvals.** The key is `bpf:<table>/<name>` (lower-case table). A flow that already exists and
+  that this build did not create is bound only with `--authorize adopt:bpf:<table>/<name>`, and only when
+  the declaration names its whole current body in order (`bpf-whole-body-required`); nothing is written.
+  A flow changed outside the spec stops the build (`bpf-drift`) and needs the same complete
+  re-adoption. There is no `overwrite:` approval for a flow.
+- **The backing table.** `securityRoles` are granted on the table name Dataverse stored for the flow,
+  as the build read it, never on a name derived from the display name.
+- **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
+  an earlier build sent to it is still waiting to be proved, the build ends incomplete
+  (`managed-not-settled`) and does not touch that flow: put its entry back and build again.
+- **Publishing.** A flow is not published; its activation is the state change above.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

@@ -226,12 +226,13 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // --- no regression: a default build cannot reach any of this ---------------------------------------------------------------------
 // Walks the build's relative require graph from its entry points. The port is wired in at exactly two edges: the engine requires
 // creates-stable-build.js inside the branch a spec with createIdentity takes, and creates-catalog.js inside the settlement of a
-// declared form (forms[].reconcile "declared"), a declared dashboard (dashboards[].reconcile "declared") or a declared business rule
-// (businessRules[].reconcile "declared"), the only places a build without createIdentity takes ids from a catalog. The business-rule
+// declared form (forms[].reconcile "declared"), a declared dashboard (dashboards[].reconcile "declared"), a declared business rule
+// (businessRules[].reconcile "declared") or a declared process flow (businessProcessFlows[].reconcile "declared"), the only places a build without createIdentity takes ids from a catalog. The business-rule
 // helper (rule-settlement.js) loads the catalog itself, so the engine's, the spec gate's and the rule reader's (declared-rule-io.js,
-// for verify and the managed download) requires of it are gated edges too. Apart
+// for verify and the managed download) requires of it are gated edges too. The process-flow helper (bpf-settlement.js) does the same,
+// so the engine's and the spec gate's requires of it are gated edges as well. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
-const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js']];
+const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -262,11 +263,15 @@ test('the default build loads none of the stable-identity modules and still wire
   assert.match(engine, /if \(!formCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
   assert.match(engine, /if \(!dashboardCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
   assert.match(engine, /if \(!ruleCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
-  assert.equal(engine.match(/require\('\.\/creates-catalog\.js'\)/g).length, 3, 'the catalog is required only where a declared form, dashboard or business rule settles');
+  assert.match(engine, /if \(!bpfCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
+  assert.equal(engine.match(/require\('\.\/creates-catalog\.js'\)/g).length, 4, 'the catalog is required only where a declared form, dashboard, business rule or process flow settles');
   // The business-rule helper is required only inside the rules phase's declared branches (its dispatch and the sweep of a stored
   // attempt whose declaration was removed, both behind the flag) and by the spec gate for a declared rule.
   assert.equal(engine.match(/require\('\.\/rule-settlement\.js'\)/g).length, 2);
   assert.equal(fs.readFileSync(path.join(SCRIPTS, 'lib', 'app-spec.js'), 'utf8').match(/require\('\.\/rule-settlement\.js'\)/g).length, 1);
+  // The process-flow helper likewise: the dispatch and the sweep in the engine, and the spec gate for a declared flow.
+  assert.equal(engine.match(/require\('\.\/bpf-settlement\.js'\)/g).length, 2);
+  assert.equal(fs.readFileSync(path.join(SCRIPTS, 'lib', 'app-spec.js'), 'utf8').match(/require\('\.\/bpf-settlement\.js'\)/g).length, 1);
   // The rule reader loads it only through one lazy accessor, which verify and the download call only for a committed rule group.
   assert.match(fs.readFileSync(path.join(SCRIPTS, 'lib', 'declared-rule-io.js'), 'utf8'), /^const settlement = \(\) => require\('\.\/rule-settlement\.js'\);$/m);
   assert.equal(fs.readFileSync(path.join(SCRIPTS, 'lib', 'declared-rule-io.js'), 'utf8').match(/require\('\.\/rule-settlement\.js'\)/g).length, 1);
