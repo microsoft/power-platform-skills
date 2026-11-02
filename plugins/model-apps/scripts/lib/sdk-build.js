@@ -193,6 +193,10 @@ const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent
 // off, validation refuses `reconcile` on a dashboard, and every dashboard takes the build's own create-or-reuse path below.
 const isDeclaredDashboardOn = (d) => declaredFeatureOn('dashboards') && !!d && d.reconcile === 'declared';
 const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey: declaredDashboardKey } = require('./dashboard-reconcile.js');
+// Declared business rules (businessRules[].reconcile "declared", lib/rule-settlement.js) the same way: only while their flag is on.
+// The helper is required at first use, not here: it pulls in the stable-identity modules (creates-catalog.js), which a build with
+// no declared rule must not load (tests/creates-port.test.js).
+const isDeclaredRuleOn = (r) => declaredFeatureOn('rules') && !!r && r.reconcile === 'declared';
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -3529,10 +3533,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // A declared dashboard's the same way: `declared dashboard "<key>"` for the dashboard (dashboard-adoption-not-authorized,
     // dashboard-drift) and `declared dashboard "<key>/<tile>"` for one tile's drift (dashboard-tile-drift), whose overwrite
     // approval is that tile's own (lib/dashboard-reconcile.js asks for dashboard:<key>/<tile>).
+    // A declared business rule's or process flow's halt carries a finding labelled `declared rule "<table>/<name>"` /
+    // `declared bpf "<table>/<name>"` (declaredWorkflowStop). Those families are managed whole and have no overwrite: every
+    // stop an approval settles is a complete read-only adoption (adopt:rule:<table>/<name>, adopt:bpf:<table>/<name>) — a
+    // match this build did not create (managed-adoption-required, create-ownership-required) or one changed outside the spec
+    // (rule-drift, bpf-drift), which only a re-adoption whose declaration names the whole current body records again.
     const formAt = label.indexOf(`: ${code} — `);
-    const form = formAt > 0 ? /^declared (form|dashboard) "(.+)"$/.exec(label.slice(0, formAt)) : null;
+    const form = formAt > 0 ? /^declared (form|dashboard|rule|bpf) "(.+)"$/.exec(label.slice(0, formAt)) : null;
     if (form) {
-      const formVerb = code === 'managed-adoption-required' || /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
+      const wholeWorkflow = form[1] === 'rule' || form[1] === 'bpf';
+      const formVerb = wholeWorkflow
+        ? (code === 'managed-adoption-required' || code === 'create-ownership-required' || /-drift$/.test(code) ? 'adopt' : '')
+        : code === 'managed-adoption-required' || /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
       // A form name may hold spaces (`contoso_item/main/declared item`), so the printed key is quoted for the shell then.
       const formKey = formVerb ? `${formVerb}:${approvalKey(form[1], form[2])}` : '';
       return formKey ? `--authorize ${/\s/.test(formKey) ? `"${formKey}"` : formKey}` : '';
@@ -3659,6 +3671,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // The managed binding store: the handle the CLI opened (opts.bindingGroups) is reused, never a second writer; a direct call opens
   // its own (openBuildBindingGroups).
   const bindingGroups = opts.bindingGroups || openBuildBindingGroups(spec, { ...opts, barrier: owed.barrier });
+  // The client's workflow effect gate (lib/deferred-workflow-gate.js, made by build-model-app.js while declared rules or process
+  // flows are on) is bound to this store when the spec declares one, or the store already holds a workflow effect: an earlier run's
+  // write whose outcome is still being proved keeps its row screened even after its declaration left the spec. Otherwise it stays
+  // unbound and passes every request, so a build with neither sends what it always sent.
+  const workflowStore = bindingGroups && bindingGroups.store;
+  if (opts.workflowEffectGate && workflowStore
+    && ((spec.businessRules || []).some(isDeclaredRuleOn) || (workflowStore.snapshot().envelope.workflowEffects || []).length > 0)) {
+    opts.workflowEffectGate.bind(workflowStore);
+  }
   // Stable create identities (createIdentity: "stable-v1"; lib/creates-stable-build.js), for declared views and charts only: their
   // two call sites below are handed `stableCtx` — the composite create port, a binding lookup by id, and a settlement that records
   // each settled view or chart in the store. A spec without the field loads none of it, and every other create keeps the build's
@@ -3759,6 +3780,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
     Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
     return err;
   };
+  // The halt factory handed to the declared business-rule and process-flow helpers (lib/rule-settlement.js, lib/bpf-settlement.js),
+  // which call it with { cause } only. Such a workflow is managed whole, so its stop is one finding labelled with its family and the
+  // approval id the helper names (`<table>/<name>`): cliApproval reads that label to print the adoption flag.
+  const declaredWorkflowStop = (family, approvalId) => (phase, label, code, { cause } = {}) => managedStop(phase, label, code, {
+    cause,
+    findings: [{ key: approvalId, label: `declared ${family} "${approvalId}"`, code, message: String((cause && cause.message) || code).replace(/\s+/g, ' ') }],
+  });
   // Settle one declared artifact's result, in order:
   //   1. every publication target it carries is noted on the barrier (a web resource carries none);
   //   2. a clean result's rows join the app's solution: `memberIds` when the caller names them (a declared web resource
@@ -7123,7 +7151,130 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       return { nothing: true };
     };
+    // A declared rule (businessRules[].reconcile "declared", its flag on) is one managed workflow, settled whole by
+    // lib/rule-settlement.js settleDeclaredRule: created Draft under a stable id, proved by a fresh read, then activated by a
+    // conditional state write; an existing rule is never edited unless conditional writes are switched on (they are off in the
+    // build). One create catalog for the run's declared rules, so a new one takes the same id on every plan; built at first use,
+    // with the helper, so a build with no declared rule loads neither (tests/creates-port.test.js).
+    let ruleCatalog = null;
+    const settleDeclaredRuleOf = async (rule) => {
+      const { settleDeclaredRule, ruleKey } = require('./rule-settlement.js');
+      const entityLogical = String(rule.entity).toLowerCase();
+      const approvalId = `${entityLogical}/${rule.name}`;
+      const label = `declared business rule "${rule.name}" on ${entityLogical}`;
+      const halt = declaredWorkflowStop('rule', approvalId);
+      if (businessRulesSwitchedOff) {
+        // The first create of this build showed that this environment does not host rules: nothing more is sent for one.
+        result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
+        runner.skip('business-rules', `${label} (unsupported in this environment)`);
+        return;
+      }
+      let unavailable = null;
+      await runner.run('business-rules', label, async () => {
+        const store = bindingGroups && bindingGroups.store;
+        // Every write of the rule is screened by the gate of THIS store (its effect record is what makes the write send-once).
+        // A build whose client has no gate bound to it — no store (a dry run, no app), or a caller that wired none — stops
+        // here, before any request for the rule.
+        if (!store || !opts.workflowEffectGate || !opts.workflowEffectGate.boundTo(store)) {
+          throw halt('business-rules', label, 'workflow-state-path-unavailable', {
+            cause: Object.assign(new Error(`${label}: the build's client has no workflow effect gate bound to its managed binding store, so the rule's writes cannot be held to their persisted effects; nothing was sent for it`), { code: 'workflow-state-path-unavailable' }),
+          });
+        }
+        if (!ruleCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          ruleCatalog = createIntentCatalog((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => ({
+            catalogKind: 'businessRule',
+            key: ruleKey(r),
+            scope: { kind: 'table', solution: sol && sol.uniqueName, table: String(r.entity).toLowerCase() },
+            declaration: r,
+          })));
+        }
+        let out;
+        try {
+          out = await settleDeclaredRule({
+            rule,
+            sdk: provision,
+            store,
+            catalog: ruleCatalog,
+            // The run's typed approvals: only `rule:<table>/<name>` (adopt) approves binding a rule this build did not create.
+            approvals: featureCtx.authorizedAdoption,
+            // The edit switch stays off: an existing rule's body or state is never changed by the build.
+            opts: {},
+            halt,
+            ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.workflow); },
+            phase: 'business-rules',
+            label,
+            barrier: owed.barrier,
+            // The raw conditional state write (If-Match) goes through the same gated client the SDK sends through.
+            httpClient: provision.dataverse && provision.dataverse.httpClient,
+            instanceUrl: opts.env,
+            sendObserver: opts.sendObserver || null,
+          });
+        } catch (err) {
+          // Every stop of a declared rule is final for this run: a refusal (workflow-edit-refused, rule-drift, …) or a held
+          // attempt is never retried by the runner and never read as a match. The helper's own halts already are.
+          if (err instanceof BuildHalt) throw err;
+          throw halt('business-rules', label, (err && typeof err.code === 'string' && err.code) || 'managed-not-settled', { cause: err });
+        }
+        if (out && out.skipped === 'unavailable') {
+          // The documented "this environment cannot host rules" answer to a create that wrote nothing. It means that only for the
+          // first create of this build: once a rule was created here, the environment plainly hosts them and the answer is a failure.
+          if (businessRulesCreated > 0) {
+            throw halt('business-rules', label, 'business-rule-unavailable-after-create', {
+              cause: Object.assign(new Error(`${label}: the create was refused as if this environment could not host business rules, but this build already created ${businessRulesCreated === 1 ? 'a rule' : `${businessRulesCreated} rules`} here, so the refusal is a failure, not a platform limit: ${String((out.cause && out.cause.message) || out.cause || '').replace(/\s+/g, ' ').slice(0, 300)}`), { code: 'business-rule-unavailable-after-create' }),
+            });
+          }
+          unavailable = out.cause || new Error('business rules are unavailable in this environment');
+          throw unavailable;
+        }
+        if (out && out.committed && !out.noop) businessRulesCreated += 1;
+        if (out && out.id) result.created.businessRules[`${entityLogical}|${rule.name}`] = out.id;
+      }, {
+        skipIf: (err) => {
+          if (!unavailable || err !== unavailable) return false;
+          businessRulesSwitchedOff = true;
+          result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
+          if (!businessRuleApiWarned && typeof opts.warn === 'function') {
+            businessRuleApiWarned = true;
+            opts.warn(`business rules were NOT created: this environment refused the first rule's create with the answer that means business-rule creation is not available on it, and a fresh read showed nothing was created. Everything else in the app was built normally. Use an environment where business-rule creation is available, or drop businessRules[] from the spec. Detail: ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}`);
+          }
+          return 'unsupported in this environment';
+        },
+      });
+    };
+    // A declared rule's attempt that is still waiting to be proved when its declaration has left the spec (the entry was removed,
+    // or no longer says reconcile "declared"). Nothing in this run will finish it, so it is not dropped silently: the run ends
+    // incomplete with what to do, and the legacy path below does not write to the row that attempt holds (an uncertain write's
+    // row is refused by the client's gate as well). A committed group with no attempt needs nothing: the rule simply leaves
+    // management, as a removed declared form does.
+    const heldRuleRows = new Map();
+    if (declaredFeatureOn('rules') && bindingGroups && bindingGroups.store) {
+      const { ruleKey } = require('./rule-settlement.js');
+      const declared = new Set((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => ruleKey(r)));
+      const envelope = bindingGroups.store.snapshot().envelope;
+      for (const a of envelope.attempts || []) {
+        if (!a || a.family !== 'rule' || declared.has(a.key)) continue;
+        // Every write of a declared rule is recorded as an effect before it is sent. An attempt whose effects all still say
+        // definitely-unsent (a create refused before it started, as on an environment that cannot host rules) changed nothing,
+        // so it holds nothing: it is only noted, and it finishes if the declaration comes back.
+        const sent = (envelope.workflowEffects || []).some((e) => e && e.attemptToken === a.token && e.state !== 'definitely-unsent');
+        if (!sent) {
+          if (typeof opts.warn === 'function') opts.warn(`declared business rule "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
+          continue;
+        }
+        if (a.root && typeof a.root.id === 'string') heldRuleRows.set(a.root.id.toLowerCase(), a.key);
+        markIncomplete({
+          phase: 'business-rules',
+          code: 'managed-not-settled',
+          message: `declared business rule "${a.key}": an earlier run's change of this rule is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it. Put its businessRules[] entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
+        });
+      }
+    }
     for (const rule of spec.businessRules || []) {
+      if (isDeclaredRuleOn(rule)) {
+        await settleDeclaredRuleOf(rule);
+        continue;
+      }
       const entityLogical = String(rule.entity).toLowerCase();
       const existing = await provision.queryRecords('workflow', {
         select: ['workflowid', 'statecode', 'createdon'],
@@ -7136,6 +7287,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
         paginate: true,
       });
       const existingId = existing && existing[0] && existing[0].workflowid;
+      const heldBy = existingId ? (existing || []).map((w) => heldRuleRows.get(String(w.workflowid).toLowerCase())).find(Boolean) : undefined;
+      if (heldBy) {
+        runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (not changed: declared rule "${heldBy}" still has a change waiting to be proved on it)`);
+        continue;
+      }
       if (existingId) {
         for (const extra of (existing || []).slice(1)) {
           if (typeof opts.warn === 'function') {

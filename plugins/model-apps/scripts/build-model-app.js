@@ -102,7 +102,7 @@ function assertWorkspaceDir(workspaceDir, { create }) {
 //                  which environment it belongs to, and the answer comes back as `folderNote` so the
 //                  preview can warn that an --apply would stop. Construction is offline (no token
 //                  until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false, publicationBarrier, sendObserver } = {}) {
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false, publicationBarrier, sendObserver, workflowEffectGate } = {}) {
   // A link at the workspace root would make the provision SDK's storage follow it. Refuse
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
@@ -116,7 +116,10 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // as sent; with no attempt's window open it passes every request untouched.
   // A configuration write (lib/configuration-transport.js) is sent once too: a re-sent create can make a second row, and a re-sent PATCH or
   // DELETE can hide that the first send's outcome was never seen. Outside that scope the predicate answers false, so nothing else changes.
-  const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest(sendObserver ? sendObserver.wrap() : undefined) } : {}) });
+  // A declared business rule's or process flow's workflow write is screened by the gate of the store that holds its effect
+  // (lib/deferred-workflow-gate.js): main() makes the gate only when one of those features is on, and the build binds it to its
+  // store; with no gate the client is made exactly as before.
+  const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest(sendObserver ? sendObserver.wrap() : undefined) } : {}), ...(workflowEffectGate ? { workflowEffectGate } : {}) });
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -801,6 +804,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         publicationBarrier,
         ...(bindingGroups ? { bindingGroups } : {}),
         ...(deps.sendObserver ? { sendObserver: deps.sendObserver } : {}),
+        // The client's workflow effect gate (lib/deferred-workflow-gate.js), which the engine binds to this store.
+        ...(deps.workflowEffectGate ? { workflowEffectGate: deps.workflowEffectGate } : {}),
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         owedLengths,
@@ -1769,7 +1774,10 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   const throttle = makeThrottleBudget({ warn: (m) => process.stderr.write(`⚠ ${m}\n`) });
   const publicationBarrier = createPublicationBarrier();
   const sendObserver = createAttemptSendObserver();
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver });
+  // The workflow effect gate of declared business rules and process flows, bound to the managed binding store once the build opens
+  // it (lib/deferred-workflow-gate.js). Made only while one of those features is on, so with both off the client is unchanged.
+  const workflowEffectGate = declaredFeatureOn('rules') || declaredFeatureOn('bpf') ? require('./lib/deferred-workflow-gate.js').createDeferredWorkflowGate() : null;
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver, ...(workflowEffectGate ? { workflowEffectGate } : {}) });
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -1825,6 +1833,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal, throttle, stepTally, publicationBarrier, sendObserver,
+      ...(workflowEffectGate ? { workflowEffectGate } : {}),
       ...(previewHttpClient ? { previewHttpClient } : {}),
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to

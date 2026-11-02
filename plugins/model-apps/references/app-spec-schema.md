@@ -840,6 +840,7 @@ list with "reach for it when…" guidance.
 | `views[].reconcile` | declared views and charts (`reconcile: "declared"` on a view or chart: the rebuild applies the spec's columns, filters, sort and joins), a table's Quick Find columns (`entities[].quickFind`), and a declared web resource's content (`webResources[].reconcile`) |
 | `forms[].reconcile` | a declared form layout (`reconcile: "declared"` on a form: the rebuild places the spec's fields, spans, sections and field options and adds missing sub-grids, quick views and handlers, keeping every control the spec does not declare) |
 | `dashboards[].reconcile` | a declared dashboard (`reconcile: "declared"` on a global dashboard: the rebuild applies the spec's tiles by key and its description, adds new tiles, and keeps every tile the spec does not declare) |
+| `businessRules[].reconcile` | a declared business rule (`reconcile: "declared"` on a rule: created Draft under an id the build keeps, then activated; managed and proved whole, with keyed conditions and actions, OR logic, default values, error messages and recommendations; an existing rule is adopted read-only, never edited) |
 | `createIdentity` | stable create ids for declared views and charts, on a new app only (`createIdentity: "stable-v1"`) |
 | `columns[].dateTimeBehavior` | portable schema: calendar-day dates, fixed option values (`{ "value", "label" }`), table search and duplicate detection (`searchEnabled` / `changeTrackingEnabled` / `duplicateDetectionEnabled`) |
 

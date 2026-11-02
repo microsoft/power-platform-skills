@@ -198,6 +198,8 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   rule genuinely would not have worked.
 - **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
   edits are **not** re-applied. Recreate the rule to change it.
+- **Managed as one rule.** Everything above is a rule without `reconcile`. To have the build create a
+  rule with an id it keeps and prove it on every rebuild, declare it: see `businessRules[].reconcile` below.
 
 ## businessProcessFlows[] (optional — guided, staged process on a table)
 
@@ -663,9 +665,9 @@ the `overwrite:` key the refusal prints (`--authorize overwrite:view:<table>/<na
 fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
 
 Declared upkeep of web resources is described with `webResources[]` above, of form layouts with
-`forms[].reconcile` below, and of dashboards with `dashboards[].reconcile` below. Declared process flows
-and business rules are not reconciled in this release: `reconcile` on a business rule or flow is a
-validation error, and the build's existing behaviour for each is unchanged. A command bar with
+`forms[].reconcile` below, of dashboards with `dashboards[].reconcile` below, and of business rules with
+`businessRules[].reconcile` below. Declared process flows are not reconciled in this release:
+`reconcile` on a flow is a validation error, and the build's existing behaviour for it is unchanged. A command bar with
 `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
 
 **An unconfirmed publish.** A table (or dashboard) publish whose answer was lost may still have run. The
@@ -795,6 +797,60 @@ existing one is reused and its tiles are never edited.
   from, with `reconcile: "declared"`, in place of that entry; one that is pending, gone, changed since, or not
   valid stays the plain entry and is named. The downloaded folder has no store, so its first rebuild needs
   `--authorize "adopt:dashboard:<key>"` for each.
+
+## businessRules[].reconcile (optional — declared business rules)
+
+Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exactly as before (see
+`businessRules[]` above).
+
+```jsonc
+{ "entity": "new_ticket", "name": "Hide notes when closed", "key": "ticket-closed", "reconcile": "declared",
+  "description": "Closed tickets are read-only history.",
+  "scope": "Entity",               // Entity (default) | AllForms
+  "status": "Active",              // Active (default) | Draft
+  "conditionLogic": "AND",         // AND (default) | OR
+  "conditions": [
+    { "key": "closed", "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" } ],
+  "actions": [
+    { "key": "hide-notes", "type": "SetVisibility", "field": "new_notes", "visible": false },
+    { "key": "reason-default", "type": "SetDefaultValue", "field": "new_reason", "value": "Resolved" },
+    { "key": "owner-check", "type": "ShowErrorMessage", "field": "new_owner", "errorMessage": "Set an owner first." },
+    { "key": "suggest", "type": "Recommendation", "field": "new_priority", "recommendationTitle": "Lower the priority",
+      "messageText": "Closed tickets need no priority.",
+      "applyActions": [ { "key": "suggest-low", "field": "new_priority", "value": "1", "dataType": "Picklist" } ] } ] }
+```
+
+- **One rule, managed whole.** A rule is one row; its conditions and actions are not, and the platform
+  gives them new ids on every read, so the build never matches one by its text. The build follows the rule
+  by the id it created it with, and proves the whole rule on every rebuild.
+- **Keys.** The rule's key is its `key` (letters, digits, `_`, `.`, `-`; at most 64), or
+  `<table>/<name>` when it has none. Every condition, action and recommendation apply-action needs a
+  `key` of the same grammar, unique in the rule. Two declared rules with one key are refused, and so is a
+  declared rule beside an undeclared one with the same table and name.
+- **What a declared rule can say**, beyond `businessRules[]` above: `conditionLogic` `OR`; the actions
+  `SetDefaultValue` (`value`), `ShowErrorMessage` (`errorMessage`) and `Recommendation`
+  (`recommendationTitle`, `messageText`, optional `acceptanceText`, and a non-empty `applyActions[]` of
+  `{ key, field, value, dataType }`; a `label`, when given, must equal the title); and the `AllForms` scope.
+  An action or condition takes only its own fields: anything else is refused.
+- **Creating.** A new rule is created **Draft** under an id that stays the same for the spec, read back,
+  and only then activated (when its `status` is `Active`). The activation carries the version of that
+  read, and Dataverse enforces it: if the rule was changed in Maker after the build read it, the build
+  does not activate it and stops. A repeated create of the same rule is answered by Dataverse without a
+  duplicate, so a create whose answer was lost is proved by reading it, never sent twice.
+- **Editing.** A rule that already exists is never edited: a change of its body or its status is
+  refused before any write (`workflow-edit-refused`). Change it in Maker, then re-adopt it.
+- **Approvals.** The key is `rule:<table>/<name>` (lower-case table). A rule that already exists and
+  that this build did not create is bound only with `--authorize adopt:rule:<table>/<name>`, and only when
+  the declaration names its whole current body in order; nothing is written. A rule changed outside the
+  spec stops the build (`rule-drift`) and needs the same complete re-adoption. There is no `overwrite:`
+  approval for a rule.
+- **Environment.** An environment that cannot host business rules skips every declared rule with one
+  warning and writes nothing for it, as above. The same answer after a declared rule was created in this
+  build stops it (`business-rule-unavailable-after-create`).
+- **Removing one.** A declared rule taken out of the spec leaves management and is kept. When a change an
+  earlier build sent to it is still waiting to be proved, the build ends incomplete (`managed-not-settled`)
+  and does not touch that rule: put its entry back and build again.
+- **Publishing.** A rule is not published; its activation is the state change above.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

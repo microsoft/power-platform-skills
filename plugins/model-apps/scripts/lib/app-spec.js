@@ -693,6 +693,9 @@ const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotConta
 // does the wrong thing. Expose them from an environment where they can be live-verified.
 const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };
 const BUSINESS_RULE_ACTION_TYPES = Object.keys(BUSINESS_RULE_ACTIONS);
+// The three shapes above that a DECLARED business rule takes (lib/rule-settlement.js compiles, proves and live-verifies them as
+// one managed workflow). An undeclared rule still refuses them, for the reason above.
+const DECLARED_RULE_ONLY_ACTION_TYPES = ['SetDefaultValue', 'ShowErrorMessage', 'Recommendation'];
 // Boolean-payload actions, so a string "false" (truthy in JS) is rejected rather than silently
 // inverting the author's intent — the same trap `app.newLook` validation exists to close.
 const BUSINESS_RULE_BOOLEAN_ACTIONS = new Set(['SetVisibility', 'LockUnlock', 'SetBusinessRequired']);
@@ -2043,7 +2046,8 @@ function usesDeclaredReconcile(spec) {
     || any(spec.commands, keyed)
     || any(spec.entities, (e) => e.quickFind !== undefined)
     || (declaredFeatureOn('forms') && any(spec.forms, (f) => f.reconcile !== undefined))
-    || (declaredFeatureOn('dashboards') && any(spec.dashboards, (d) => d.reconcile !== undefined));
+    || (declaredFeatureOn('dashboards') && any(spec.dashboards, (d) => d.reconcile !== undefined))
+    || (declaredFeatureOn('rules') && any(spec.businessRules, (r) => r.reconcile !== undefined));
 }
 
 // A declared dashboard (dashboards[].reconcile: "declared", lib/dashboard-reconcile.js) is one managed group: its root row, its seed
@@ -3458,11 +3462,13 @@ function validateAppSpec(spec, opts = {}) {
     // its words are exactly what they were.
     const formsDeclarable = declaredFeatureOn('forms');
     const dashboardsDeclarable = declaredFeatureOn('dashboards');
-    const declarable = ['views', 'charts', formsDeclarable && 'forms', dashboardsDeclarable && 'dashboards', 'web resources'].filter(Boolean);
+    const rulesDeclarable = declaredFeatureOn('rules');
+    const declarable = ['views', 'charts', formsDeclarable && 'forms', dashboardsDeclarable && 'dashboards', rulesDeclarable && 'business rules', 'web resources'].filter(Boolean);
     const reconcilable = `${declarable.slice(0, -1).join(', ')} and ${declarable[declarable.length - 1]}`;
     for (const kind of ['dashboards', 'forms', 'businessRules']) {
       if (kind === 'forms' && formsDeclarable) continue;
       if (kind === 'dashboards' && dashboardsDeclarable) continue;
+      if (kind === 'businessRules' && rulesDeclarable) continue;
       for (const x of spec[kind] || []) {
         if (x && typeof x === 'object' && x.reconcile !== undefined) {
           errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on ${reconcilable}; leave it out (this artifact keeps the existing build behaviour)`);
@@ -3478,13 +3484,26 @@ function validateAppSpec(spec, opts = {}) {
   // Business rules. Every reference is checked against the spec's own columns, because a rule that
   // names a column the app does not create is authored against nothing — and the platform accepts it
   // silently (the rule just never fires), so nothing downstream would catch it.
+  //
+  // A declared rule (reconcile: "declared", while its build is switched on in lib/declared-features.js) is managed whole by
+  // lib/rule-settlement.js, which compiles and proves every action shape the SDK models. So it also takes the three shapes the
+  // rules below keep closed (SetDefaultValue, ShowErrorMessage, Recommendation), the AllForms scope and conditionLogic, and must
+  // carry the helper's grammar (validateDeclaredRule: a key on every condition, action and apply-action, closed key sets, literal
+  // values). Its approval is typed by the table and name (rule:<table>/<name>, whatever its key), so two rules on one table with
+  // one name (any case) cannot both be declared: one approval would approve both, and the undeclared one's state convergence
+  // would write to the declared one's row.
+  const rulesDeclared = declaredFeatureOn('rules');
+  const declaredRuleKeys = new Map();
+  const ruleApprovalIds = new Map();
   for (const r of spec.businessRules || []) {
     const label = `business rule '${(r && r.name) || '(unnamed)'}'`;
     if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push('businessRules[] entries must be objects'); continue; }
     validateDescription(r.description, label, errors);
     if (!r.name) errors.push(`${label}: name is required`);
     if (!r.entity || !entityNames.has(r.entity)) { errors.push(`${label}: references unknown entity '${r.entity}'`); continue; }
-    if (r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
+    const declaredRule = rulesDeclared && r.reconcile === 'declared';
+    if (rulesDeclared && r.reconcile !== undefined && !declaredRule) errors.push(`${label}: reconcile must be "declared" (or left out)`);
+    if (!declaredRule && r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
       errors.push(`${label}: scope must be ${BUSINESS_RULE_SCOPES.join('|')} (a form-scoped rule needs a form id that does not exist until the forms phase runs)`);
     }
     if (r.status !== undefined && !['Active', 'Draft'].includes(r.status)) {
@@ -3543,8 +3562,13 @@ function validateAppSpec(spec, opts = {}) {
     }
     for (const a of r.actions || []) {
       if (!a || typeof a !== 'object') { errors.push(`${label}: each action must be an object`); continue; }
+      if (declaredRule && DECLARED_RULE_ONLY_ACTION_TYPES.includes(a.type)) {
+        // Its payload is checked by validateDeclaredRule, below.
+        checkField(a.field, `action '${a.type}'`);
+        continue;
+      }
       if (!BUSINESS_RULE_ACTION_TYPES.includes(a.type)) {
-        errors.push(`${label}: action type must be one of ${BUSINESS_RULE_ACTION_TYPES.join('|')} (got '${a.type}')`);
+        errors.push(`${label}: action type must be one of ${(declaredRule ? [...BUSINESS_RULE_ACTION_TYPES, ...DECLARED_RULE_ONLY_ACTION_TYPES] : BUSINESS_RULE_ACTION_TYPES).join('|')} (got '${a.type}')`);
         continue;
       }
       checkField(a.field, `action '${a.type}'`);
@@ -3558,6 +3582,23 @@ function validateAppSpec(spec, opts = {}) {
       if (a.type === 'SetFieldValue' && a.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(a.dataType)) {
         errors.push(`${label}: action dataType must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
       }
+    }
+    if (rulesDeclared) {
+      const approvalId = `${String(r.entity).toLowerCase()}/${String(r.name || '').toLowerCase()}`;
+      const seen = ruleApprovalIds.get(approvalId);
+      if (seen && (seen.declared || declaredRule)) {
+        sameKeyFindings.push(`${seen.label} and ${label} are business rules on ${r.entity} with the same name: a declared rule is approved and found by its table and name (rule:${String(r.entity).toLowerCase()}/${r.name}), so give each its own name`);
+      } else if (!seen) ruleApprovalIds.set(approvalId, { label, declared: declaredRule });
+      else if (declaredRule) seen.declared = true;
+    }
+    if (declaredRule) {
+      // Loaded here, not at the top: the helper pulls in the stable-identity modules, which a spec with no declared rule never needs.
+      const { validateDeclaredRule, ruleKey } = require('./rule-settlement.js');
+      errors.push(...validateDeclaredRule(r, { checkField: (field, what) => checkField(field, what) }));
+      const key = ruleKey(r);
+      const folded = key.toLowerCase();
+      if (declaredRuleKeys.has(folded)) sameKeyFindings.push(`${declaredRuleKeys.get(folded)} and ${label} are declared business rules with the same key (${key}): give each its own key`);
+      else declaredRuleKeys.set(folded, label);
     }
   }
   // Business process flows. Same discipline as business rules and for the same reason: the platform

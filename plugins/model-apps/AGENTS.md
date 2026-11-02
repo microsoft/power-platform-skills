@@ -2853,8 +2853,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   existing row asks for it). Emptying the content of one that has content also needs `--allow-destructive`
   (`web-resource-clear-not-authorized`); the adoption approval is not consent to it. Unlike the kinds above, a declared web resource that does not settle stops the
   build at once (`managedStop`, never retried); its solution membership is added before its binding is
-  recorded. Declared process flows and business rules are not reconciled in this release; the
-  build keeps its existing behaviour for each.
+  recorded. Declared process flows are not reconciled in this release; the build keeps its existing
+  behaviour for them.
 - **Form layout** (`forms[].reconcile: "declared"`, `lib/form-layout-reconcile.js`, enabled by
   `DECLARED_FEATURES.forms` in `lib/declared-features.js`): the order, section and spans of declared
   fields, the declared tabs and sections, a stated section width, stated `readOnly` / `hidden` (an
@@ -2929,6 +2929,35 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   there is none), validating incrementally; a pending, unreadable, changed or invalid one stays plain and is
   named (`managedDashboards.stale`). The download writes no store, so a rebuild from the downloaded folder
   needs `adopt:dashboard:<key>` once.
+- **Business rule** (`businessRules[].reconcile: "declared"`, `lib/rule-settlement.js`, enabled by
+  `DECLARED_FEATURES.rules` in `lib/declared-features.js`): a rule is ONE `workflows` row managed whole (one
+  binding, kind `business-rule`); its nodes are not rows and a read gives them new ids, so they are never
+  matched by text. Every condition, action and apply-action has a `key`, unique in the rule; the group key is
+  `key`, else `<table>/<name>`, and the approval id is always `<table>/<name>` (lower-case table). The
+  business-rules phase settles each declared rule with `settleDeclaredRule` (the run's store, barrier,
+  creation catalog, `declaredWorkflowStop` halt factory, solution membership, typed approvals and
+  `sendObserver`); an undeclared rule keeps the legacy create-or-reuse path byte for byte. A new rule is
+  created **Draft** under the id the creation catalog keeps for it, proved by a fresh read, and then
+  activated by ONE state write carrying the version of that read (`If-Match`); a 412 is re-read, and the
+  activation is either already met (Active with the proved body: nothing is sent) or refused with the
+  attempt kept. This guard is **service-backed**: Dataverse honours a client-supplied workflow id, answers a
+  repeated create with the same id with 412 and no duplicate, and enforces `If-Match` on a workflow's state
+  and body writes (a stale version gets 412). The default path never edits a rule that already exists: a body
+  or state change of one is refused (`workflow-edit-refused`) because conditional edits stay off, and the
+  build gives no way to turn them on in this release. A rule found unbound is bound only read-only, with
+  `adopt:rule:<table>/<name>` and a declaration naming its whole body (`create-ownership-required`,
+  `managed-adoption-required`); one changed outside the spec is `rule-drift` and needs the same complete
+  re-adoption. Every workflow write runs inside its persisted effect, so the build's HTTP client screens each
+  request with the store's workflow effect gate: the client is made before the store opens, so it takes a
+  stand-in (`lib/deferred-workflow-gate.js`) that the build binds to its store when the spec declares a rule
+  or the store already holds a workflow effect; a declared rule whose client gate is not bound to that store
+  stops before any request (`workflow-state-path-unavailable`). An environment that cannot host rules skips
+  every declared rule with zero writes and the same one warning as the legacy path, except after a declared
+  rule was created in the same run (`business-rule-unavailable-after-create`, a halt). A stored rule attempt
+  whose declaration left the spec keeps the run incomplete (`managed-not-settled`) while any of its effects
+  may have been sent, and the legacy path does not write its row; one whose effects are all unsent only
+  warns. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
+  rules with one key. Nothing is published: a rule's activation is its state write.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.
@@ -3049,7 +3078,7 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 
 | Remedy | Codes |
 | --- | --- |
-| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>`; a declared dashboard's is `adopt:dashboard:<key>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `dashboard-adoption-not-authorized`, `managed-adoption-required` (form, dashboard) |
+| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>`; a declared dashboard's is `adopt:dashboard:<key>`; a declared business rule's is `adopt:rule:<table>/<name>`, also for its drift (a rule is re-adopted whole, never overwritten) | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `dashboard-adoption-not-authorized`, `managed-adoption-required` (form, dashboard, rule), `create-ownership-required` (rule), `rule-drift` |
 | Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>`; a declared form's is `overwrite:form:<table>/<formtype>/<name>`; a declared dashboard's is `overwrite:dashboard:<key>`, one tile's `overwrite:dashboard:<key>/<tile>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift`, `form-layout-drift`, `dashboard-drift`, `dashboard-tile-drift` |
 | Risk approval: `--authorize publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, only as printed; read from the refusal's data (`dispatchToken`, `approval`, `remedy`), recorded with `acceptUncertainPublication`; the run stays stopped | `managed-publication-unconfirmed` when no fresh read can settle a lost publish |
 | Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized`, `dashboard-description-clear-not-authorized` |

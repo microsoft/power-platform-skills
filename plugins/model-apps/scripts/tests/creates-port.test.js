@@ -226,10 +226,11 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // --- no regression: a default build cannot reach any of this ---------------------------------------------------------------------
 // Walks the build's relative require graph from its entry points. The port is wired in at exactly two edges: the engine requires
 // creates-stable-build.js inside the branch a spec with createIdentity takes, and creates-catalog.js inside the settlement of a
-// declared form (forms[].reconcile "declared") or a declared dashboard (dashboards[].reconcile "declared"), the only places a build
-// without createIdentity takes ids from a catalog. Apart
+// declared form (forms[].reconcile "declared"), a declared dashboard (dashboards[].reconcile "declared") or a declared business rule
+// (businessRules[].reconcile "declared"), the only places a build without createIdentity takes ids from a catalog. The business-rule
+// helper (rule-settlement.js) loads the catalog itself, so the engine's and the spec gate's requires of it are gated edges too. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
-const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js']];
+const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -259,7 +260,12 @@ test('the default build loads none of the stable-identity modules and still wire
   assert.equal(engine.match(/require\('\.\/creates-stable-build\.js'\)/g).length, 1, 'the only edge into the stable modules is the gated one');
   assert.match(engine, /if \(!formCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
   assert.match(engine, /if \(!dashboardCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
-  assert.equal(engine.match(/require\('\.\/creates-catalog\.js'\)/g).length, 2, 'the catalog is required only where a declared form or a declared dashboard settles');
+  assert.match(engine, /if \(!ruleCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
+  assert.equal(engine.match(/require\('\.\/creates-catalog\.js'\)/g).length, 3, 'the catalog is required only where a declared form, dashboard or business rule settles');
+  // The business-rule helper is required only inside the rules phase's declared branches (its dispatch and the sweep of a stored
+  // attempt whose declaration was removed, both behind the flag) and by the spec gate for a declared rule.
+  assert.equal(engine.match(/require\('\.\/rule-settlement\.js'\)/g).length, 2);
+  assert.equal(fs.readFileSync(path.join(SCRIPTS, 'lib', 'app-spec.js'), 'utf8').match(/require\('\.\/rule-settlement\.js'\)/g).length, 1);
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');
