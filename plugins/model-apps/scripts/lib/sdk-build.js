@@ -8261,7 +8261,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const now = dashboardStore.readGroup('dashboard', unit.key).committed;
           const pub = (now && now.publication) || unit.group.publication;
           const message = `${label} is no longer declared, and a publish of it may have been sent and is not confirmed by a fresh read; it is not sent again, and the build stopped before any app write`;
-          const cause = Object.assign(new Error(message), { code: 'managed-publication-unconfirmed' }, uncertain(pub) && typeof pub.dispatchToken === 'string' ? blockedPublication(pub.scope, pub.dispatchToken) : {});
+          const cause = refusal(message, { code: 'managed-publication-unconfirmed', ...(uncertain(pub) && typeof pub.dispatchToken === 'string' ? blockedPublication(pub.scope, pub.dispatchToken) : {}) });
           throw managedStop('dashboards', label, cause.code, { cause, findings: [{ key: unit.key, code: cause.code, message }] });
         });
       }
