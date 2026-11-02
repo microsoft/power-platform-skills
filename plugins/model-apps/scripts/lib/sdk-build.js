@@ -7123,7 +7123,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // this run, answers not found (readWorkflowRowPresence). Two shapes reach it:
   //   - a removed attempt whose every effect is settled (confirmed, fulfilled, or definitely-unsent with no dispatch token), for
   //     example a confirmed create whose activation was never sent: retired with its attempt (attemptToken), at the generation of
-  //     the committed group it is based on, or null when nothing was ever committed;
+  //     the committed group it is based on, or null when nothing was ever committed. The store also needs a record that nothing
+  //     the attempt sent outside its journal can still land (its own create confirmed by a read, or a send window that counted no
+  //     possible send), and refuses it otherwise: such an attempt stays on its recovery path;
   //   - a committed group with no attempt and no effect, whose declaration was removed: retired at its generation. A present row
   //     keeps it as it is (verify still checks it); one that cannot be read keeps it too, with a warning.
   // An attempt with an effect that may have been sent and is not proved (dispatching, unconfirmed) is held without a read: no
@@ -7137,49 +7139,35 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const rows = new Map();
     const names = new Map();
     let all = null;
-    // The store's view of one group, taken BEFORE the row is read: its generation and its attempt and effects as they stand. The
-    // proof that the row is gone holds only for the group as it was when the read began; a managed write that lands while the read
-    // is in flight (another run settling, re-sending or re-creating it) makes it a proof about something else. So the order is
-    // fixed: observe, read fresh, retire against the observation. Until the store takes an observation token, the file is read
-    // again (refresh, so another process's change is seen) before and after the row read, and anything that moved keeps the
-    // group; the store also rereads its file under its lease and refuses a generation, attempt or effect that no longer matches
-    // (retireAbsentGroup).
-    const observeGroup = (key) => {
-      let units;
-      try { units = bindingGroups.store.refresh().units(); } catch (err) { return null; }
-      const unit = units.find((u) => u.family === family && u.key === key) || null;
-      if (!unit) return null;
-      const a = unit.attempt;
-      return {
-        generation: unit.group ? unit.group.generation : null,
-        print: JSON.stringify({
-          invalid: !!unit.invalid,
-          generation: unit.group ? unit.group.generation : null,
-          root: unit.group && unit.group.root ? unit.group.root.id : null,
-          attempt: a ? { token: a.token, phase: a.phase, root: a.root ? a.root.id : null, sendWindow: a.sendWindow === undefined ? null : a.sendWindow } : null,
-          effects: (unit.effects || []).map((e) => [e.token, e.state, e.dispatchToken === undefined ? null : e.dispatchToken]),
-        }),
-      };
-    };
-    // The one place a removed declared workflow is retired, so the store's observation contract changes one call.
+    // The one place a removed declared workflow is retired. The order is the store's contract (managed-bindings.js
+    // observeRetirement, then retireAbsentGroup): observe the group, THEN read its row fresh by its exact id, THEN retire against
+    // that observation. The proof that the row is gone holds only for the group as it was when the read began: another run that
+    // settles, re-sends or re-creates it while the read is on the wire (an effect dispatched or confirmed, a send counted) may put
+    // the row back after the 404, so the store rereads its file under its lease and refuses (managed-binding-generation-conflict,
+    // nothing written) any group, attempt or effect that moved since the observation. An observation taken after the read would
+    // prove nothing, so a refusal is never retried here with a fresh one: the group is kept and a later run observes and reads
+    // again. The generation is the one this sweep decided on (`unit`), so a group committed again since is refused as well.
     const retire = async (unit, rootId, attemptToken) => {
-      const observed = observeGroup(unit.key);
-      if (!observed) return { kept: 'the binding store could not be read again before its row was read' };
+      let observation;
+      try {
+        ({ observation } = bindingGroups.store.observeRetirement({ family, key: unit.key }));
+      } catch (err) {
+        return { kept: `the binding store could not be observed before its row was read (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})` };
+      }
       const read = await readWorkflowRowPresence(provision, opts.env, rootId);
       if (read.state !== 'absent') return { kept: read.state === 'present' ? 'its row is still there' : `its row could not be read (${read.why})` };
-      const now = observeGroup(unit.key);
-      if (!now || now.print !== observed.print) return { kept: 'the binding store changed while its row was read' };
       try {
         bindingGroups.store.retireAbsentGroup({
-          family, key: unit.key, generation: observed.generation, rootId,
+          family, key: unit.key, generation: unit.group ? unit.group.generation : null, rootId,
           evidence: { kind: 'root-absent', rootId, row: 'not-found' },
+          observation,
           ...(attemptToken ? { attemptToken } : {}),
         });
       } catch (err) {
         return { kept: `the binding store did not retire it (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})` };
       }
       if (typeof opts.warn === 'function') {
-        opts.warn(`managed-root-retired: declared ${noun} "${unit.key}": its row ${rootId} is gone (a read by its exact id answered not found) and the spec no longer declares it, so the build no longer manages it. Nothing was sent for it; this says the row is gone, not that any change of it was made.`);
+        opts.warn(`managed-root-retired: declared ${noun} "${unit.key}": its row ${rootId} is gone (a read by its exact id answered not found) and the spec no longer declares it, so the build no longer manages it. This run sent nothing for it; the notice says only that the row is gone, not that any change of it was made.`);
       }
       return { retired: true };
     };

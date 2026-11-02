@@ -711,6 +711,7 @@ test('the enabled feature through the CLI: the printed typed approval binds the 
 
 const RETIRED = /^managed-root-retired: declared business rule "new_ticket\/Hide notes when closed": its row [0-9a-f-]{36} is gone \(a read by its exact id answered not found\) and the spec no longer declares it/;
 const isStateChange = (e) => e.method === 'PATCH' && /^workflows\(/i.test(e.path);
+const idReadOf = (id) => (e) => e.method === 'GET' && e.path.toLowerCase() === `workflows(${id})`;
 
 for (const [how, refuse] of [
   ['answered 412 and was not applied', (wire) => wire.script(isStateChange, { statusCode: 412, body: { error: { code: '0x80060882', message: 'version mismatch' } }, unapplied: true })],
@@ -732,10 +733,19 @@ for (const [how, refuse] of [
       assert.deepEqual(present.writes, []);
 
       wire.rows.delete(id);
+      // Gone, but a refusal proves nothing: held, nothing written.
+      wire.script(idReadOf(id), { statusCode: 403, body: { error: { code: '0x80040220', message: 'Principal user is missing prvReadWorkflow privilege' } } });
+      const refused = await build(wire, dir, specWith([]));
+      assert.equal(refused.err && refused.err.code, 'managed-not-settled', chainText(refused.err));
+      assert.match(chainText(refused.err), /it is not retired: its row could not be read \(HTTP 403/);
+      assert.deepEqual(refused.writes, []);
+      assert.ok(storeOf(dir).readGroup('rule', KEY).pending, 'still pending');
+
       const retired = await build(wire, dir, specWith([]));
       assert.equal(retired.err, undefined, chainText(retired.err));
       assert.deepEqual(retired.writes, []);
       assert.match(retired.warnings.join('\n'), RETIRED);
+      assert.doesNotMatch(retired.warnings.join('\n'), /\bactivated\b/, 'the notice never claims an activation');
       assert.deepEqual(storeOf(dir).readGroup('rule', KEY), { committed: null, pending: null, effects: [] });
       const entry = storeOf(dir).snapshot().envelope.retiredGroups.at(-1);
       assert.deepEqual([entry.family, entry.key, entry.generation, entry.rootId], ['rule', KEY, null, id]);
@@ -764,5 +774,53 @@ test('a committed rule the spec no longer declares is retired once its row is pr
     assert.match(retired.warnings.join('\n'), RETIRED);
     const verified = await verifySpec({}, read, { managedManifest: manifestOf(dir) });
     assert.equal(verified.ok, true, JSON.stringify(verified.checks));
+  });
+});
+
+// The store's observation is taken BEFORE the row is read. Another run that counts a send of the removed rule's attempt while that
+// read is on the wire may put the row back after the 404; every effect is still settled and the create confirmed, so only the
+// observation refuses the retirement. Nothing is written and the attempt is kept.
+test('a removed rule whose attempt another run counts a send for while its row is read is not retired by that read', async () => {
+  await withRules(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    wire.script(isStateChange, { statusCode: 412, body: { error: { code: '0x80060882', message: 'version mismatch' } }, unapplied: true });
+    assert.ok((await build(wire, dir, specWith([RULE]))).err);
+    const held = storeOf(dir).readGroup('rule', KEY);
+    const id = held.pending.root.id;
+    wire.rows.delete(id);
+    let raced = false;
+    wire.script((e) => {
+      if (!raced && idReadOf(id)(e)) { raced = true; storeOf(dir).noteAttemptDispatch(held.pending.token); }
+      return false;
+    }, null);
+    const res = await build(wire, dir, specWith([]));
+    assert.equal(raced, true);
+    assert.equal(res.err && res.err.code, 'managed-not-settled', chainText(res.err));
+    assert.match(chainText(res.err), /it is not retired: the binding store did not retire it \(managed-binding-generation-conflict: .*changed since it was observed/);
+    assert.deepEqual(res.writes, []);
+    assert.doesNotMatch(res.warnings.join('\n'), RETIRED);
+    assert.equal((storeOf(dir).snapshot().envelope.retiredGroups || []).length, 0);
+    assert.equal(storeOf(dir).readGroup('rule', KEY).pending.token, held.pending.token, 'the attempt is kept');
+  });
+});
+
+test('a removed rule whose create never reached the transport is only noted: no read of its row, nothing written, and the run goes on', async () => {
+  await withRules(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    const denied = await build(wire, dir, specWith([RULE]), {
+      configureSdk: (sdk) => { sdk.executePrepared = async () => { throw Object.assign(new Error('rule operation failed before transport'), { code: 'ECONNREFUSED' }); }; },
+    });
+    assert.ok(denied.err);
+    assert.deepEqual(denied.writes, []);
+    const stored = storeOf(dir).readGroup('rule', KEY);
+    assert.ok(stored.pending && stored.effects.every((e) => e.state === 'definitely-unsent'), JSON.stringify(stored.effects));
+    const removed = await build(wire, dir, specWith([]));
+    assert.equal(removed.err, undefined, chainText(removed.err));
+    assert.deepEqual(removed.writes, []);
+    assert.deepEqual(removed.lines.filter((l) => /workflows/i.test(l)), [], 'nothing sent, so nothing to read');
+    assert.match(removed.warnings.join('\n'), /declared business rule "new_ticket\/Hide notes when closed": an earlier run prepared it and sent nothing/);
+    assert.doesNotMatch(removed.warnings.join('\n'), RETIRED);
   });
 });

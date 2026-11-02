@@ -2969,9 +2969,12 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   is a warning `managed-root-retired: declared <noun> "<key>" …` and never claims an activation. A present row,
   any other answer (403, a 404 without that code, another row, a lost answer) or a store refusal keeps the hold;
   a `dispatching`/`unconfirmed` effect is held without a read, and an attempt with an empty effect journal is
-  never retired. The order is observe, read, retire: the store file is re-read before and after the row read,
-  and a group that changed in between is kept (one place, `retire` in `holdRemovedWorkflowAttempts`, so a store
-  observation token replaces it there). Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
+  never retired; the store also refuses an attempt with no record that nothing it sent can still land (its own
+  create confirmed by a read, or a send window that counted no possible send). The order is the store's
+  contract, in one place (`retire` in `holdRemovedWorkflowAttempts`): `observeRetirement` first, then the
+  fresh row read, then `retireAbsentGroup` with that `observation`; a group, attempt or effect that moved since
+  the observation (an effect dispatched, a send counted) is refused `managed-binding-generation-conflict` with
+  nothing written, and the group is kept for a later run to observe and read again. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
   rules with one key. Nothing is published: a rule's activation is its state write.
   **Verify and download** (`lib/declared-rule-io.js`): verify reads each bound declared rule fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredRule`) and runs `verifyDeclaredRule`

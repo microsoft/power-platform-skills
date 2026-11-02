@@ -836,12 +836,15 @@ test('a removed flow whose binding store changes while its row is read is not re
     const committed = storeOf(dir).readGroup('bpf', GROUP).committed;
     const id = committed.root.id;
     wire.rows.delete(id);
-    // Another run retires the group from its own store handle while this run's read of the row is on the wire.
+    // Another run retires the group from its own store handle (observing it first, as the store requires) while this run's read
+    // of the row is on the wire.
     let raced = false;
     wire.script((e) => {
       if (!raced && idReadOf(id)(e)) {
         raced = true;
-        storeOf(dir).retireAbsentGroup({ family: 'bpf', key: GROUP, generation: committed.generation, rootId: id, evidence: { kind: 'root-absent', rootId: id, row: 'not-found' } });
+        const other = storeOf(dir);
+        const { observation } = other.observeRetirement({ family: 'bpf', key: GROUP });
+        other.retireAbsentGroup({ family: 'bpf', key: GROUP, generation: committed.generation, rootId: id, evidence: { kind: 'root-absent', rootId: id, row: 'not-found' }, observation });
       }
       return false;
     }, null);
@@ -850,10 +853,47 @@ test('a removed flow whose binding store changes while its row is read is not re
     assert.equal(res.err, undefined);
     assert.deepEqual(res.writes, []);
     assert.doesNotMatch(res.warnings.join('\n'), RETIRED);
-    assert.match(res.warnings.join('\n'), /declared business process flow "new_ticket\/Ticket process": the spec no longer declares it, and it stays in the binding store: the binding store changed while its row was read/);
+    assert.match(res.warnings.join('\n'), /declared business process flow "new_ticket\/Ticket process": the spec no longer declares it, and it stays in the binding store: the binding store did not retire it \(managed-not-settled: /);
     assert.equal(storeOf(dir).snapshot().envelope.retiredGroups.length, 1, 'only the other run\'s retirement is recorded');
   });
 });
+
+// The store's observation is taken BEFORE the row is read. Another run that moves the removed flow's attempt on while that read is on
+// the wire (it counts a send of the activation, or marks it dispatching) may put the row back after the 404, so the retirement is
+// refused against that observation: nothing is written, the attempt and its effects stay as the other run left them, and the run
+// ends incomplete. A counted send leaves every effect settled and the create confirmed, so only the observation refuses it: an
+// observation taken after the read would let it through.
+for (const [how, move] of [
+  ['counts a send', (s, held) => s.noteAttemptDispatch(held.pending.token)],
+  ['marks its activation dispatching', (s, held) => s.markEffectDispatching(held.effects.find((e) => e.effect === 'state').token, 'another-run-dispatch')],
+]) {
+  test(`a removed flow whose attempt another run ${how} while its row is read is not retired by that read`, async () => {
+    await withBpf(true, async () => {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-bpf-');
+      wire.script(isStateChange, { statusCode: 412, body: { error: { code: '0x80060882', message: 'version mismatch' } }, unapplied: true });
+      assert.ok((await build(wire, dir, specWith([FLOW]))).err);
+      const held = storeOf(dir).readGroup('bpf', GROUP);
+      const id = held.pending.root.id;
+      wire.rows.delete(id);
+      let raced = false;
+      wire.script((e) => {
+        if (!raced && idReadOf(id)(e)) { raced = true; move(storeOf(dir), held); }
+        return false;
+      }, null);
+      const before = storeOf(dir).readGroup('bpf', GROUP);
+      const res = await build(wire, dir, specWith([]));
+      assert.equal(raced, true);
+      assert.equal(res.err && res.err.code, 'managed-not-settled', chainText(res.err));
+      assert.match(chainText(res.err), /it is not retired: the binding store did not retire it \(managed-binding-generation-conflict: .*changed since it was observed/);
+      assert.deepEqual(res.writes, []);
+      assert.doesNotMatch(res.warnings.join('\n'), RETIRED);
+      const after = storeOf(dir);
+      assert.equal((after.snapshot().envelope.retiredGroups || []).length, 0);
+      assert.equal(after.readGroup('bpf', GROUP).pending.token, before.pending.token, 'the attempt is kept');
+    });
+  });
+}
 
 test('a removed flow whose operation was never sent is only noted: no read of its row, nothing written, and the run goes on', async () => {
   await withBpf(true, async () => {
