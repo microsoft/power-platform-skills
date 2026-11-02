@@ -526,7 +526,7 @@ function stoppedAfterEarlierAttempts(err, attempt, owedPublishes, owedLengths, w
     say(`the build stopped before its publish phase and sends nothing more in this run; an earlier attempt of this run saved and did not publish ${publishes.map(nameOf).join('; ')} — the change is SAVED but the runtime still serves the previously published copy until the next build publishes it`);
   }
   for (const d of (Array.isArray(owedLengths) ? owedLengths : []).filter((x) => x && typeof x.table === 'string' && x.tried !== true)) {
-    say(`table ${d.table}, which an earlier attempt of this run created, still has its name column ${d.column} at the length the environment gave it, not ${d.asked} characters; this run sends nothing more, and a later build leaves the column of a table it finds as it is, so set ${d.column} to ${d.asked} characters in Maker`);
+    say(`table ${d.table}, which an earlier attempt of this run created, may not have its name column ${d.column} at ${d.asked} characters: the environment may have given it another length, and this run did not check (it sends nothing more); a later build leaves the column of a table it finds as it is, so check ${d.column} in Maker and set it to ${d.asked} characters if it differs`);
   }
   if (!(attempt > 1)) return err;
   const halt = new BuildHalt(`${err.message} That is attempt ${attempt} of this run: an earlier attempt ended on a transient failure and was retried, and what it had already sent stays as it is; nothing more is sent in this run.`, {

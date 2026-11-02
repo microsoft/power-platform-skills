@@ -1040,7 +1040,7 @@ test('a halt that stops service writes settles neither the publish nor the lengt
   assert.match(out.error.message, /That is attempt 2 of this run: an earlier attempt ended on a transient failure and was retried, and what it had already sent stays as it is; nothing more is sent in this run\.$/);
   assert.strictEqual(out.warnings.length, 2, out.warnings.join('\n'));
   assert.match(out.warnings[0], /^the build stopped before its publish phase and sends nothing more in this run; an earlier attempt of this run saved and did not publish view Open Tickets — the change is SAVED but the runtime still serves the previously published copy until the next build publishes it$/);
-  assert.match(out.warnings[1], /^table new_ticket, which an earlier attempt of this run created, still has its name column new_name at the length the environment gave it, not 120 characters; .* set new_name to 120 characters in Maker$/);
+  assert.match(out.warnings[1], /^table new_ticket, which an earlier attempt of this run created, may not have its name column new_name at 120 characters: .*this run did not check .* check new_name in Maker and set it to 120 characters if it differs$/);
 });
 
 test('a halt that stops service writes on the first attempt is reported as it is, with nothing to settle or say', async () => {
