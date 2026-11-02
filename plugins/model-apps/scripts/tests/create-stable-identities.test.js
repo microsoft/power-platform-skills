@@ -205,10 +205,11 @@ test('a fresh workspace on the same environment finds the rows at the derived id
   assert.equal(store.readGroup('chart', CHART_KEY).committed.records[0].origin, 'adopted');
 });
 
-// The warning a build really prints for a view or a chart whose name holds `$`, a backtick or a double quote, pasted into each real shell, names exactly that row to the CLI's parser.
-for (const name of ['cost $5', 'a`b', 'say "hi"', 'it\'s $5']) {
-  test(`the not-adopted warning for a view and a chart named ${JSON.stringify(name)} is an approval each real shell passes on as the one key it names`, async () => {
-    const { runPrintedFlags } = require('./helpers/printed-flag-shells.js');
+// The warning a build really prints for a view or a chart whose name holds `$`, a backtick or a double quote. A spelling every shell passes on unchanged is pasted into each
+// real shell and names exactly that row to the CLI's parser; a name with none (a `"`, an apostrophe with `$`) gets the exact key as a JSON string and no spelling.
+for (const [name, spelled] of [['cost $5', true], ['a`b', true], ['say "hi"', false], ['n" end', false], ['it\'s $5', false]]) {
+  test(`the not-adopted warning for a view and a chart named ${JSON.stringify(name)} ${spelled ? 'is an approval each real shell passes on as the one key it names' : 'gives the exact key and no shell spelling'}`, async (t) => {
+    const { runPrintedFlags, skipWithoutShells } = require('./helpers/printed-flag-shells.js');
     const org = createFakeBuildOrg({ entities: ENTITIES });
     const spec = stableSpec({
       views: [{ entity: 'contoso_item', name, reconcile: 'declared', columns: ['contoso_name', 'contoso_code'] }],
@@ -224,8 +225,17 @@ for (const name of ['cost $5', 'a`b', 'say "hi"', 'it\'s $5']) {
       assert.equal(lines.length, 1, `${kind}: one warning\n${said.join('\n')}`);
       return lines[0];
     });
+    if (!spelled) {
+      for (const [i, kind] of ['view', 'chart'].entries()) {
+        assert.ok(printed[i].includes(JSON.stringify(`adopt:${kind}:contoso_item/${name}`)), `the exact key is printed as a JSON string: ${printed[i]}`);
+        assert.ok(/ONE --authorize argument/.test(printed[i]) && !/rename|no spelling|no way of writing/.test(printed[i]), printed[i]);
+      }
+      return;
+    }
     assert.ok(printed.every((p) => !/<approval>/.test(p)), `a spelling is printed, not a placeholder: ${printed[0]}`);
-    for (const { shell, argv } of runPrintedFlags(printed)) {
+    const ran = runPrintedFlags(printed);
+    if (skipWithoutShells(t, ran)) return;
+    for (const { shell, argv } of ran) {
       for (const [i, kind] of ['view', 'chart'].entries()) {
         const key = `adopt:${kind}:contoso_item/${name}`;
         assert.deepEqual(argv[i], ['--authorize', key], `${shell}: ${printed[i]}`);

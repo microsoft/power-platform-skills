@@ -8,57 +8,49 @@ const { spawnSync } = require('node:child_process');
 const { commandArg } = require('../../lib/cli-failure.js');
 
 // Runs the `--authorize …` text a build PRINTED (not a value the test spelled itself) through the real shells this machine has, into a program that reports the
-// arguments it received, and returns what each shell handed it. A shell that is not installed is skipped, so the same test passes on Windows, macOS and Linux.
-//   Windows          powershell.exe (Windows PowerShell 5.1, always there) and pwsh (PowerShell 7) when installed
+// arguments it received, and returns what each shell handed it. Each shell that is installed is run and each one that is not is skipped, so the same test passes
+// on Windows, macOS and Linux — and when none can run, skipWithoutShells reports a skip, never a failure.
+//   Windows          powershell.exe (Windows PowerShell 5.1), pwsh (PowerShell 7) and Git for Windows' sh when installed
 //   elsewhere        sh, and bash, zsh and pwsh when installed
-// A printed hint is either one spelling for every shell (`--authorize "adopt:view:t/a b"`) or one per shell family, introduced by a label (lib/cli-failure.js
-// authorizeFlag); the spelling for the family of the shell under test is the one that is run.
-const LABELS = {
-  posix: 'in a POSIX shell (sh, bash, zsh) ',
-  powershell: 'in PowerShell 7.3 or later ',
-  windowsPowerShell: 'in Windows PowerShell 5.1 or PowerShell 7.0\u20137.2 on Windows ',
-};
+// The printed hint is one spelling for every shell (lib/cli-failure.js authorizeFlag), so the same text is run in all of them.
 
-function spellingFor(printed, family) {
-  const label = LABELS[family];
-  const at = printed.indexOf(label);
-  if (at < 0) return printed.slice(printed.lastIndexOf('--authorize'));
-  const from = at + label.length;
-  const next = printed.indexOf('; in ', from);
-  return printed.slice(from, next < 0 ? printed.length : next);
+function probeShell(shell, powershell) {
+  const r = spawnSync(shell, powershell ? ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'] : ['-c', 'exit 0'], { encoding: 'utf8' });
+  return !r.error && r.status === 0;
 }
 
-function installedShells() {
+// probe(shell, powershell) → true when that shell runs; a test passes its own to stand in for a machine without a shell.
+function installedShells(probe = probeShell) {
   const windows = process.platform === 'win32';
-  const found = [];
-  // Git for Windows ships a POSIX sh; when it is installed the POSIX spelling is run on Windows too.
+  // Git for Windows ships a POSIX sh; when it is installed the same text is run through it on Windows too.
   const gitSh = windows ? path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'sh.exe') : null;
-  for (const shell of windows ? ['powershell.exe', 'pwsh', ...(gitSh && fs.existsSync(gitSh) ? [gitSh] : [])] : ['sh', 'bash', 'zsh', 'pwsh']) {
+  const candidates = windows ? ['powershell.exe', 'pwsh', ...(gitSh && fs.existsSync(gitSh) ? [gitSh] : [])] : ['sh', 'bash', 'zsh', 'pwsh'];
+  const found = [];
+  for (const shell of candidates) {
     const powershell = shell === 'powershell.exe' || shell === 'pwsh';
-    const probe = spawnSync(shell, powershell ? ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'] : ['-c', 'exit 0'], { encoding: 'utf8' });
-    if (probe.error || probe.status !== 0) continue;
-    let family = 'posix';
-    if (shell === 'powershell.exe') family = 'windowsPowerShell';
-    else if (shell === 'pwsh') {
-      // PowerShell 7.0-7.2 on Windows still joins the arguments into one command line the way Windows PowerShell does; from 7.3 (and on every other system) they are exact.
-      const [major, minor] = String(probe.stdout).trim().split('.').map(Number);
-      family = windows && (major < 7 || (major === 7 && minor < 3)) ? 'windowsPowerShell' : 'powershell';
-    }
-    found.push({ shell, family, powershell });
+    if (probe(shell, powershell)) found.push({ shell, powershell });
   }
   return found;
 }
 
-// printedTexts: the printed texts, each holding one `--authorize …` hint. Returns [{ shell, family, argv: [[...args of text 0], ...] }].
-function runPrintedFlags(printedTexts) {
+// Marks the running test skipped when no shell can run and returns true, so the caller returns; false when there is something to check.
+function skipWithoutShells(t, ran) {
+  if (ran.length > 0) return false;
+  t.skip('no shell (powershell.exe, pwsh, sh, bash or zsh) is installed on this machine');
+  return true;
+}
+
+// printedTexts: the printed texts, each holding one `--authorize …` hint. Returns [{ shell, argv: [[...args of text 0], ...] }], one entry per shell that ran.
+function runPrintedFlags(printedTexts, shells = installedShells()) {
+  if (shells.length === 0) return [];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'printed-flag-'));
   try {
     const probe = path.join(dir, 'argv.js');
     fs.writeFileSync(probe, "require('node:fs').appendFileSync(process.env.PRINTED_FLAG_OUT, JSON.stringify(process.argv.slice(2)) + '\\n');\n", 'utf8');
     const ran = [];
-    for (const { shell, family, powershell } of installedShells()) {
+    for (const { shell, powershell } of shells) {
       const out = path.join(dir, `argv-${shell.replace(/\W/g, '')}.jsonl`);
-      const lines = printedTexts.map((text) => `${powershell ? '& ' : ''}${commandArg(process.execPath)} ${commandArg(probe)} ${spellingFor(text, family)}`);
+      const lines = printedTexts.map((text) => `${powershell ? '& ' : ''}${commandArg(process.execPath)} ${commandArg(probe)} ${text.slice(text.lastIndexOf('--authorize'))}`);
       const script = path.join(dir, `run-${shell.replace(/\W/g, '')}.${powershell ? 'ps1' : 'sh'}`);
       // A BOM so Windows PowerShell 5.1 reads the script as UTF-8 and not in the ANSI code page.
       fs.writeFileSync(script, `${powershell ? '\uFEFF' : ''}${lines.join('\n')}\n`, 'utf8');
@@ -67,13 +59,12 @@ function runPrintedFlags(printedTexts) {
       assert.strictEqual(r.status, 0, `${shell}: ${r.stderr}\n${lines.join('\n')}`);
       const argv = fs.readFileSync(out, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
       assert.strictEqual(argv.length, printedTexts.length, `${shell} ran every command`);
-      ran.push({ shell, family, argv });
+      ran.push({ shell, argv });
     }
-    assert.ok(ran.some((r) => r.shell === (process.platform === 'win32' ? 'powershell.exe' : 'sh')), `the platform's own shell ran: ${ran.map((r) => r.shell).join(', ')}`);
     return ran;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-module.exports = { runPrintedFlags, spellingFor, LABELS };
+module.exports = { runPrintedFlags, installedShells, skipWithoutShells };

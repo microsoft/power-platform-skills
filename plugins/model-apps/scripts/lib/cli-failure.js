@@ -102,55 +102,35 @@ function commandArgOrPlaceholder(value, placeholder) {
 // The `--authorize <approval>` flag a message tells the maker to paste, as ONE argument. An approval is built from a name the maker wrote (a view, a form, a rule,
 // a dashboard key), so it can hold white space — `adopt:view:contoso_item/Declared Items` — and an unquoted paste reaches the CLI as two arguments
 // (`adopt:view:contoso_item/Declared`, `Items`), which it rejects as an approval nothing declares.
+// A spelling is printed only when it reaches Windows PowerShell 5.1, PowerShell 7 and the POSIX shells as that one unchanged argument (measured in each):
 //   plain (letters, digits, `_ . / : -`)   written bare, exactly as before: `--authorize adopt:view:contoso_item/Items`
-//   nothing a double-quoted string reads   double-quoted, the spelling the printed approvals already used for a form, a rule and a process flow:
+//   white space and ordinary punctuation   double-quoted, the spelling the printed approvals already used for a form, a rule and a process flow:
 //                                          `--authorize "adopt:view:contoso_item/Declared Items"`
-//   a `$`, a backtick, `\`, `!` or a curly double quote (which PowerShell reads as a double quote) makes a double-quoted spelling unsafe, but when the key
-//                                          has no quote of any kind commandArg's single-quoted spelling is literal in Windows PowerShell 5.1, PowerShell 7 and the
-//                                          POSIX shells alike: `--authorize 'adopt:view:contoso_item/cost $5'`
-//   a double quote, or an apostrophe together with one of the characters above
-//                                          no ONE spelling is literal everywhere, so the flag is written once per shell (shellSpellings below).
-//   a line break or another control character
-//                                          cannot be pasted as one line; the message gives the value as data and says to rename the item.
+//   a `$`, a backtick, `\`, `!` or a curly double quote, and no quote of any kind
+//                                          commandArg's single-quoted spelling, literal in all three: `--authorize 'adopt:view:contoso_item/cost $5'`
+//   anything else (a `"`; an apostrophe together with one of the characters above; a final `\`; a control character)
+//                                          no spelling is printed. The three shells quote these characters differently — Windows PowerShell 5.1 in particular joins
+//                                          its arguments into one command line and re-splits it, so a `"` followed by white space is cut in two whatever is written
+//                                          around it — and a spelling that is wrong in one of them hands the CLI a different, shortened key. The message gives the
+//                                          exact key as a JSON string and says to pass that key as ONE `--authorize` argument.
+//   a line break (`\n`, `\r`, U+2028, U+2029)
+//                                          cannot be given at all: the approval parser (build-model-app.js authorizationKeys) reads a name with `.`, which stops at a
+//                                          line break, so it refuses such a key whatever the shell does; the message says so.
 // Double quotes rather than commandArg's single quotes keep the spelling already printed (and pinned) for forms, rules and process flows.
 const DOUBLE_QUOTE_UNSAFE = /["$`\\!\u201C\u201D\u201E\u201F\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
-const CANNOT_BE_ONE_LINE = /[\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
-
-// The value as one single-quoted argument in each family of shells, for a value no common spelling carries:
-//   posix        sh, bash, zsh: nothing is read inside '…', and a quote is written by closing the string, adding an escaped quote and reopening: 'it'\''s $5'
-//   powershell   PowerShell on any system, and PowerShell 7.3 and later on Windows: inside '…' a quote is doubled, and PowerShell reads the curly single quotes
-//                (‘ ’ ‚ ‛) as quotes too, so those are doubled as well: 'it''s $5'. From 7.3 it hands a native program each argument exactly, a `"` included.
-//   windowsPowerShell   Windows PowerShell 5.1 and PowerShell 7.0–7.2 on Windows do not: they join the arguments into one command line, wrapping one that holds
-//                white space in double quotes and escaping nothing, so a `"` is dropped by the program and a final `\` before the closing quote swallows it. The
-//                value is written the way the program's own command-line reader (CommandLineToArgvW) reads it back: each `"` as `\"` with the backslashes before it
-//                doubled, and, when the value holds white space and so gets wrapped, the final backslashes doubled. See
-//                https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#passing-arguments-that-contain-quote-characters
-//                and https://learn.microsoft.com/cpp/c-language/parsing-c-command-line-arguments.
-function shellSpellings(value) {
-  const text = String(value);
-  const powershell = (s) => `'${s.replace(/['\u2018\u2019\u201A\u201B]/gu, (q) => q + q)}'`;
-  let commandLine = text.replace(/(\\*)"/g, '$1$1\\"');
-  if (/\s/u.test(text)) commandLine = commandLine.replace(/(\\+)$/, '$1$1');
-  return {
-    posix: `'${text.replace(/'/g, "'\\''")}'`,
-    powershell: powershell(text),
-    windowsPowerShell: powershell(commandLine),
-  };
-}
-
+const LINE_BREAK = /[\n\r\u2028\u2029]/;
 function authorizeFlag(approval) {
   const text = String(approval);
   if (BARE_ARG.test(text)) return `--authorize ${text}`;
   if (text !== '' && !DOUBLE_QUOTE_UNSAFE.test(text)) return `--authorize "${text}"`;
-  const single = text !== '' && !CANNOT_BE_ONE_LINE.test(text) ? commandArg(text) : null;
-  if (single !== null) return `--authorize ${single}`;
-  if (text === '' || CANNOT_BE_ONE_LINE.test(text)) {
-    return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it holds a line break or another control character, so it cannot be pasted as one line: rename the item so its name has none`;
+  if (LINE_BREAK.test(text)) {
+    return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it holds a line break, which the build's approval reader does not accept in a name, so this approval cannot be given: rename the item so its name has none`;
   }
-  // The approval is written once per shell because it holds a quote that the shells spell differently. Each spelling is the whole flag, to be pasted as it is.
-  const s = shellSpellings(text);
-  return `the --authorize flag, which this approval's quote or special character makes depend on your shell: in a POSIX shell (sh, bash, zsh) --authorize ${s.posix}; in PowerShell 7.3 or later --authorize ${s.powershell}; in Windows PowerShell 5.1 or PowerShell 7.0–7.2 on Windows --authorize ${s.windowsPowerShell}`;
+  // Windows PowerShell 5.1 wraps an argument that holds white space in double quotes itself, so a final `\` would escape that closing quote.
+  const single = text.endsWith('\\') ? null : commandArg(text);
+  if (single !== null) return `--authorize ${single}`;
+  return `--authorize <approval> — <approval> is exactly the JSON string ${JSON.stringify(text)} (decode its escapes); its characters are quoted differently by each shell, so pass that exact key as ONE --authorize argument, for example by asking the agent to run the build with it`;
 }
 
 module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice, commandArg,
-  commandArgOrPlaceholder, authorizeFlag, shellSpellings };
+  commandArgOrPlaceholder, authorizeFlag };

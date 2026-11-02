@@ -1198,10 +1198,12 @@ test('a printed --authorize approval reaches the CLI parser as ONE argument and 
   assert.strictEqual(authorizeFlag('adopt:view:contoso_item/Items'), '--authorize adopt:view:contoso_item/Items');
 });
 
-// Which spelling a printed approval gets: bare when plain, double-quoted when only white space or shell punctuation needs quoting, the single-quoted spelling
-// every shell reads literally for `$`, a backtick, `\` and `!`, and one spelling per shell family only when a quote makes the shells differ.
-test('authorizeFlag picks the spelling by what the key holds, and never claims there is none for a key with a spelling', () => {
+// Which spelling a printed approval gets: bare when plain, double-quoted when only white space or ordinary punctuation needs quoting, and the single-quoted spelling
+// every shell reads literally for `$`, a backtick, `\` and `!`. A key no spelling is proven for (a `"`, an apostrophe together with one of those, a control character)
+// gets none: the exact key as a JSON string, to pass as ONE argument, and never a claim that no spelling exists.
+test('authorizeFlag prints a spelling only when every shell passes it on unchanged, and otherwise gives the exact key', () => {
   const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   assert.strictEqual(authorizeFlag('adopt:view:t/Items'), '--authorize adopt:view:t/Items');
   for (const name of ['Declared Items', 'Item (open) & more', 'a|b #c', 'caf\u00E9 page', 'It\'s; mine', 'a\tb', 'it\u2019s']) {
     assert.strictEqual(authorizeFlag(`adopt:view:t/${name}`), `--authorize "adopt:view:t/${name}"`, name);
@@ -1209,26 +1211,30 @@ test('authorizeFlag picks the spelling by what the key holds, and never claims t
   for (const name of ['cost $5', 'a`b', 'C:\\x y', 'Wow!', '\u201Cq\u201D']) {
     assert.strictEqual(authorizeFlag(`adopt:view:t/${name}`), `--authorize 'adopt:view:t/${name}'`, name);
   }
-  const labels = (text) => text.split('; in ').map((part) => part.replace(/^.* (?=--authorize )/, ''));
-  const quoted = authorizeFlag('adopt:view:t/say "hi"');
-  assert.deepStrictEqual(labels(quoted).slice(-3), ['--authorize \'adopt:view:t/say "hi"\'', '--authorize \'adopt:view:t/say "hi"\'', '--authorize \'adopt:view:t/say \\"hi\\"\'']);
-  assert.ok(!/no way of writing|no spelling/.test(quoted), quoted);
-  const apostrophe = authorizeFlag('adopt:view:t/it\'s $5');
-  assert.deepStrictEqual(labels(apostrophe).slice(-3), ['--authorize \'adopt:view:t/it\'\\\'\'s $5\'', '--authorize \'adopt:view:t/it\'\'s $5\'', '--authorize \'adopt:view:t/it\'\'s $5\'']);
-  // Windows PowerShell 5.1 wraps an argument that holds white space in double quotes and reads a final backslash as escaping the closing one.
-  assert.ok(authorizeFlag('adopt:view:t/say "hi" \\').endsWith('--authorize \'adopt:view:t/say \\"hi\\" \\\\\''));
-  const control = authorizeFlag('adopt:view:t/a\nb');
-  assert.ok(control.startsWith('--authorize <approval>') && /rename/.test(control) && !/in a POSIX shell/.test(control), control);
+  for (const name of ['say "hi"', 'n" end', 'a" b"c', 'it\'s $5', 'it\'s `x`', 'it\'s\\x', 'Wow it\'s!', 'it\u2019s $5', 'say \\', 'a\u0001b', 'a\u000Bb']) {
+    const key = `adopt:view:t/${name}`;
+    const hard = authorizeFlag(key);
+    assert.ok(hard.startsWith('--authorize <approval> '), hard);
+    assert.ok(hard.includes(JSON.stringify(key)), `the exact key is printed as a JSON string: ${hard}`);
+    assert.ok(/ONE --authorize argument/.test(hard), hard);
+    assert.ok(!/no way of writing|no spelling|rename|cannot be given/.test(hard), `a key the parser accepts is neither refused nor renamed: ${hard}`);
+    assert.strictEqual(authorizationKeys(['--authorize', key], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name, reconcile: 'declared', columns: ['x'] }] }).error, null, 'the parser accepts it');
+  }
+  // A line break is the one thing the approval parser refuses in a name, so only that key is said to be impossible to give.
+  for (const name of ['a\nb', 'a\rb', 'a\u2028b']) {
+    const hard = authorizeFlag(`adopt:view:t/${name}`);
+    assert.ok(hard.startsWith('--authorize <approval> ') && /line break/.test(hard) && /cannot be given/.test(hard), hard);
+    assert.ok(authorizationKeys(['--authorize', `adopt:view:t/${name}`], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name, reconcile: 'declared', columns: ['x'] }] }).error, 'the parser refuses it');
+  }
 });
 
 // The printed text itself goes through each real shell this machine has, and the arguments it delivers go through the CLI's own parser: the approval a maker
-// pastes is exactly the one the build named, for a plain key, white space, an apostrophe with a semicolon, an ampersand, `$`, a backtick, a double quote and
-// their combinations.
-test('the printed --authorize hint, pasted into each real shell, reaches the CLI parser as exactly the key it names', () => {
+// pastes is exactly the one the build named, for a plain key, white space, an apostrophe with a semicolon, an ampersand, `$`, a backtick, `\` and `!`.
+test('the printed --authorize hint, pasted into each real shell, reaches the CLI parser as exactly the key it names', (t) => {
   const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
-  const { runPrintedFlags } = require('./helpers/printed-flag-shells.js');
-  const names = ['Plain', 'Declared Items', 'It\'s; mine', 'a & b', 'cost $5', 'a`b', 'say "hi"', 'it\'s $5', 'it\'s `x` "q"', 'say "hi" \\', 'say "hi"\\', 'C:\\x y', 'Wow!', 'it\u2019s $5', 'q\u201Cr\u201D'];
+  const { runPrintedFlags, skipWithoutShells } = require('./helpers/printed-flag-shells.js');
+  const names = ['Plain', 'Declared Items', 'It\'s; mine', 'a & b', 'cost $5', 'a`b', 'C:\\x y', 'C:\\x y\\z', 'Wow!', 'it\u2019s', 'q\u201Cr\u201D'];
   const spec = {
     entities: [{ schemaName: 'new_Ticket', columns: [] }],
     views: names.map((name) => ({ entity: 'new_ticket', name, reconcile: 'declared', columns: ['new_name'] })),
@@ -1236,6 +1242,7 @@ test('the printed --authorize hint, pasted into each real shell, reaches the CLI
   const keys = names.map((name) => `adopt:view:new_ticket/${name}`);
   const printed = keys.map((key) => `view new_ticket/x: view-not-adopted — to manage it, run the build again with ${authorizeFlag(key)}`);
   const ran = runPrintedFlags(printed);
+  if (skipWithoutShells(t, ran)) return;
   for (const { shell, argv } of ran) {
     for (const [i, key] of keys.entries()) {
       assert.deepStrictEqual(argv[i], ['--authorize', key], `${shell}: ${printed[i]}`);
@@ -1245,6 +1252,24 @@ test('the printed --authorize hint, pasted into each real shell, reaches the CLI
     }
   }
 });
+
+test('the shell test helper runs the shells that are installed, skips the ones that are not, and reports a skip, not a failure, when none can run', (t) => {
+  const { installedShells, runPrintedFlags, skipWithoutShells } = require('./helpers/printed-flag-shells.js');
+  const platformShell = process.platform === 'win32' ? 'powershell.exe' : 'sh';
+  // The platform's default shell is missing but another one is installed: the others still run, and nothing fails.
+  const withoutDefault = installedShells((shell) => shell === 'pwsh');
+  assert.ok(!withoutDefault.some((s) => s.shell === platformShell), 'the absent default shell is skipped');
+  assert.deepStrictEqual(withoutDefault.map((s) => s.shell), ['pwsh']);
+  assert.strictEqual(skipWithoutShells({ skip() { throw new Error('skipped though a shell ran'); } }, withoutDefault), false);
+  // No shell at all: nothing is run, and the test is reported as skipped.
+  assert.deepStrictEqual(installedShells(() => false), []);
+  assert.deepStrictEqual(runPrintedFlags(['--authorize x'], []), []);
+  const skipped = [];
+  assert.strictEqual(skipWithoutShells({ skip: (why) => skipped.push(why) }, []), true);
+  assert.strictEqual(skipped.length, 1);
+  assert.match(skipped[0], /no shell/);
+});
+
 
 test('--authorize overwrite:quickfind:<table> approves replacing the local copy of a declared Quick Find view, and nothing else', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
