@@ -15,9 +15,10 @@ const DECLARED_FEATURES = {
   // typed approvals are wired.
   dashboards: true,
   // businessRules[].reconcile: "declared" — a business rule managed whole as one workflow (lib/rule-settlement.js settleDeclaredRule):
-  // created Draft under a stable id, then activated by a conditional write; an existing rule's body or state is never edited.
-  // Off: the dispatch, grammar and docs are in; verify, the managed download and the typed approvals are not wired yet.
-  rules: false,
+  // created Draft under a stable id, then activated by a conditional write; an existing rule's body or state is never edited. On: the
+  // build, verify (verify-spec.js verifyManagedRule), the explicit managed download (lib/declared-rule-io.js) and the typed approval
+  // (adopt:rule:<table>/<name>) are wired.
+  rules: true,
 };
 
 const declaredFeatureOn = (name) => DECLARED_FEATURES[name] === true;

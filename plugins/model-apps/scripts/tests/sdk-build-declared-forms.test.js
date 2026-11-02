@@ -109,7 +109,7 @@ test('with the build path off, a declared form is refused with the words it alwa
   await withForms(false, () => {
     const v = validateAppSpec(makeSpec(), { profile: 'deploy' });
     assert.equal(v.ok, false);
-    assert.ok(v.errors.includes("forms: 'Declared Item' — reconcile is supported only on views, charts, dashboards and web resources; leave it out (this artifact keeps the existing build behaviour)"), JSON.stringify(v.errors));
+    assert.ok(v.errors.includes("forms: 'Declared Item' — reconcile is supported only on views, charts, dashboards, business rules and web resources; leave it out (this artifact keeps the existing build behaviour)"), JSON.stringify(v.errors));
   });
 });
 

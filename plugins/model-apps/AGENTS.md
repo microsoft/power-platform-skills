@@ -2958,6 +2958,22 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   may have been sent, and the legacy path does not write its row; one whose effects are all unsent only
   warns. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
   rules with one key. Nothing is published: a rule's activation is its state write.
+  **Verify and download** (`lib/declared-rule-io.js`): verify reads each bound declared rule fresh by its
+  recorded id through the isolated reader (`readerFor(...).declaredRule`) and runs `verifyDeclaredRule`
+  (`managed-rule` check): the helper's one read-only `projectRule`, certified only when the hash of that
+  projection and the rule's status equals the proof's `savedSha256` (the projection holds every node in
+  order, so the body and the state are both covered), plus the helper's own `editsOf` over the group's
+  declaration state finding nothing for the spec's rule, and the same table and name (a build never renames
+  or moves a managed rule). `editsOf` rather than the stored `originalDeclaration` is compared because an
+  omitted node, description or condition logic is not a change for the build either. A group with no
+  declaration state or proof, or a reader that cannot read a rule by id, is listed unverified, never passed;
+  with the path off, the group is held to its bound workflow id as before. The legacy business-rule checks
+  (existence, duplicates, state) still run for a declared rule too.
+  `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
+  `originalDeclaration` into `businessRules[]`, which a plain download leaves out (replacing an entry with the
+  same table and name, appended otherwise), validating incrementally; a pending, unreadable, changed or
+  invalid one is left out and named (`managedRules.stale`). The download writes no store, so a rebuild from
+  the downloaded folder needs `adopt:rule:<table>/<name>` once.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.

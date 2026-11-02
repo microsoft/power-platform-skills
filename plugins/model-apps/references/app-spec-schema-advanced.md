@@ -851,6 +851,17 @@ Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exa
   earlier build sent to it is still waiting to be proved, the build ends incomplete (`managed-not-settled`)
   and does not touch that rule: put its entry back and build again.
 - **Publishing.** A rule is not published; its activation is the state change above.
+- **Verify.** `--verify` reads each bound declared rule again by its id and holds it to what its last
+  build proved: its whole body (every condition and action, the spec's and any other) and its status. It
+  also fails when the spec now declares the rule differently from what the rule holds, or names it with
+  another table or name (a build never renames or moves a managed rule). A rule changed in Maker since that
+  build fails until it is re-adopted.
+- **Download.** A plain download writes no business rule. With both `--include-managed` and
+  `--managed-manifest <store file>`, each declared rule the store proves (a fresh read still shows what its
+  last build proved) comes back in `businessRules[]` as the declaration it was built from, with
+  `reconcile: "declared"`; one that is pending, gone, changed since, or not valid is left out and named. The
+  downloaded folder has no store, so its first rebuild needs `--authorize "adopt:rule:<table>/<name>"` for
+  each.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

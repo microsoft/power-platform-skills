@@ -7177,7 +7177,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // here, before any request for the rule.
         if (!store || !opts.workflowEffectGate || !opts.workflowEffectGate.boundTo(store)) {
           throw halt('business-rules', label, 'workflow-state-path-unavailable', {
-            cause: Object.assign(new Error(`${label}: the build's client has no workflow effect gate bound to its managed binding store, so the rule's writes cannot be held to their persisted effects; nothing was sent for it`), { code: 'workflow-state-path-unavailable' }),
+            cause: refusal(`${label}: the build's client has no workflow effect gate bound to its managed binding store, so the rule's writes cannot be held to their persisted effects; nothing was sent for it`, { code: 'workflow-state-path-unavailable' }),
           });
         }
         if (!ruleCatalog) {
@@ -7221,10 +7221,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // first create of this build: once a rule was created here, the environment plainly hosts them and the answer is a failure.
           if (businessRulesCreated > 0) {
             throw halt('business-rules', label, 'business-rule-unavailable-after-create', {
-              cause: Object.assign(new Error(`${label}: the create was refused as if this environment could not host business rules, but this build already created ${businessRulesCreated === 1 ? 'a rule' : `${businessRulesCreated} rules`} here, so the refusal is a failure, not a platform limit: ${String((out.cause && out.cause.message) || out.cause || '').replace(/\s+/g, ' ').slice(0, 300)}`), { code: 'business-rule-unavailable-after-create' }),
+              cause: refusal(`${label}: the create was refused as if this environment could not host business rules, but this build already created ${businessRulesCreated === 1 ? 'a rule' : `${businessRulesCreated} rules`} here, so the refusal is a failure, not a platform limit: ${String((out.cause && out.cause.message) || out.cause || '').replace(/\s+/g, ' ').slice(0, 300)}`, { code: 'business-rule-unavailable-after-create' }),
             });
           }
-          unavailable = out.cause || new Error('business rules are unavailable in this environment');
+          unavailable = out.cause || refusal('business rules are unavailable in this environment');
           throw unavailable;
         }
         if (out && out.committed && !out.noop) businessRulesCreated += 1;

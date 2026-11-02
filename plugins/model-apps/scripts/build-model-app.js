@@ -990,8 +990,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
           // verify that does not know it holds them to the organization's and reports the captions it was just given as missing. And the app
           // folder, from which a web resource's `contentPath` is read to compare its deployed content (verify-spec.js, the web-resource check).
           // And the managed bindings the same workspace holds, read afresh after the build, exactly as the standalone verify reads them
-          // (verify-model-app.js): a bound view or chart is held to its bound id, a bound declared form or dashboard to its declaration and
-          // last proof, and a pending or unusable group is listed as unverified.
+          // (verify-model-app.js): a bound view or chart is held to its bound id, a bound declared form, dashboard or business rule to its
+          // declaration and last proof, and a pending or unusable group is listed as unverified.
           const managedManifest = spec.solution && spec.solution.uniqueName
             ? readVerifyManifest({ workspaceDir: applyWorkspaceOf(opts), environment: opts.env, appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
             : undefined;
@@ -1190,6 +1190,9 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 // view named "quickFind" on a table that declares quickFind, is refused, before any write, with the typed keys it could mean. Every refusal prints its artifact's typed key.
 // The two approvals are separate Sets (opts.authorizedAdoption, opts.authorizedOverwrite), so consent to one is never consent to the
 // other or to a destructive schema change.
+// A declared business rule (businessRules[].reconcile "declared", lib/rule-settlement.js) takes adopt only, by its table and name:
+//   adopt:rule:<table>/<name>           binding an existing rule of that name whole, or re-adopting one changed outside the spec
+// (the untyped adopt:<table>/<name> reads it too when it names nothing else). A rule is never overwritten by an approval.
 // and to ONE approval a declared web resource (reconcile: "declared", lib/web-resource-reconcile.js) asks for, by its whole name:
 //   adopt:webresource:<name>            writing the spec's content to an existing web resource the spec has not managed before
 //   overwrite:webresource:<name>        replacing content changed on the server since the build last wrote it
@@ -1262,6 +1265,23 @@ function authorizationKeys(argv, spec) {
     }
     return out;
   };
+  // A declared business rule's (businessRules[].reconcile "declared", lib/rule-settlement.js) approval id is `<table>/<name>`, the
+  // table in lower case and the name as written: the helper's approval id, whatever `key` the rule has. Only while the declared rule
+  // build is on. The helper matches approvals exactly, so a key typed in any case is mapped back to that spelling here (validation
+  // refuses two declared rules on one table whose names differ only in case). A rule is adopted whole and never overwritten by an
+  // approval, so it takes adopt only. `reconcile === 'declared'` is rule-settlement.js isDeclaredRule, inlined: that helper loads the
+  // creates catalog, which a default build must not reach (tests/creates-port.test.js).
+  //   workflows.rule: Map(lower id -> id)
+  const workflows = { rule: new Map() };
+  const workflowNoun = { rule: 'business rule' };
+  if (declaredFeatureOn('rules')) {
+    for (const r of (spec && Array.isArray(spec.businessRules) ? spec.businessRules : [])) {
+      if (r && r.reconcile === 'declared' && typeof r.entity === 'string' && typeof r.name === 'string') workflows.rule.set(lower(`${r.entity}/${r.name}`), `${lower(r.entity)}/${r.name}`);
+    }
+  }
+  // Why `verb` cannot approve the declared workflow `id` of `family`, or null when it can: only adopt binds one.
+  const workflowVerbProblem = (key, verb, family, id) => (verb === 'adopt' ? null
+    : `'${key}' is not an approval a declared ${workflowNoun[family]} takes: it is adopted whole, never overwritten by an approval (use adopt:${approvalKey(family, id)} with a declaration that names its whole current body)`);
   for (const v of (spec && Array.isArray(spec.views) ? spec.views : [])) {
     if (isDeclaredView(v)) { const { intent } = compileViewIntent(v); if (intent) declared.view.add(intent.key); }
   }
@@ -1335,6 +1355,16 @@ function authorizationKeys(argv, spec) {
       else approve(verb, 'dashboard', targets[0].id);
       continue;
     }
+    // adopt:rule:account/Require Email — a declared business rule by its table and name, in any case.
+    const typedWorkflow = /^(adopt|overwrite):(rule):(.+)$/.exec(text);
+    if (typedWorkflow) {
+      const [, verb, family, idText] = typedWorkflow;
+      const id = workflows[family].get(lower(idText));
+      if (!id) problems.push(`'${key}' approves an artifact the spec does not declare (it would need a ${workflowNoun[family]} with reconcile: "declared" named ${idText}, as <table>/<name>)`);
+      else if (workflowVerbProblem(key, verb, family, id)) problems.push(workflowVerbProblem(key, verb, family, id));
+      else approve(verb, family, id);
+      continue;
+    }
     // overwrite:quickfind:contoso_item | adopt:view:account/My Accounts | overwrite:chart:new_ticket/By Status
     const typed = /^(adopt|overwrite):([a-z]+):(.*)$/.exec(text);
     if (typed && Object.prototype.hasOwnProperty.call(families, typed[2])) {
@@ -1364,6 +1394,11 @@ function authorizationKeys(argv, spec) {
       // A declared dashboard's tile key, `<key>/<tile key>`, has the same shape too (a dashboard key may be a bare word): one more
       // candidate, matched in any case and approved in the helper's own spelling.
       for (const t of dashboardTargets(`${untyped[2]}/${untyped[3]}`)) candidates.push({ family: 'dashboard', id: t.id, root: t.root });
+      // A declared business rule's id is `<table>/<name>` too: one more candidate, matched in any case and approved in the helper's spelling.
+      for (const family of Object.keys(workflows)) {
+        const id = workflows[family].get(lower(`${untyped[2]}/${untyped[3]}`));
+        if (id) candidates.push({ family, id });
+      }
       // A table's Quick Find view is a view too, and takes an overwrite: an overwrite whose name is "quickFind" on a table that
       // declares quickFind might mean it. It is one more candidate: alone, overwrite:<table>/quickFind (that exact name) means it.
       const table = lower(untyped[2]);
@@ -1374,14 +1409,16 @@ function authorizationKeys(argv, spec) {
         problems.push(`'${key}' could approve more than one declared artifact; name the one you mean with its typed key: ${typedKeys.join(' or ')}`);
       } else if (candidates.length === 1 && candidates[0].family === 'dashboard' && !candidates[0].root && verb === 'adopt') {
         problems.push(`'${key}' names the tile ${candidates[0].id} of a declared dashboard, which takes only overwrite:dashboard:${candidates[0].id} (adopt:dashboard:<key> binds the whole dashboard)`);
-      } else if (candidates.length === 1 && (candidates[0].family === 'form' || candidates[0].family === 'dashboard' || candidates[0].id === wanted)) {
+      } else if (candidates.length === 1 && workflows[candidates[0].family] && workflowVerbProblem(key, verb, candidates[0].family, candidates[0].id)) {
+        problems.push(workflowVerbProblem(key, verb, candidates[0].family, candidates[0].id));
+      } else if (candidates.length === 1 && (candidates[0].family === 'form' || candidates[0].family === 'dashboard' || workflows[candidates[0].family] || candidates[0].id === wanted)) {
         approve(verb, candidates[0].family, candidates[0].id);
       } else if (quickFindToo && candidates.length === 0 && untyped[3] === 'quickFind') {
         approve(verb, 'quickfind', table);
       } else if (quickFindToo) {
         problems.push(`'${key}' does not name a declared view or chart; to replace the local copy of ${table}'s Quick Find view use overwrite:${approvalKey('quickfind', table)}`);
       } else {
-        const others = [declared.form.size ? 'a form' : '', dashboards.size ? 'a dashboard tile' : ''].filter(Boolean);
+        const others = [declared.form.size ? 'a form' : '', dashboards.size ? 'a dashboard tile' : '', ...Object.keys(workflows).map((f) => (workflows[f].size ? `a ${workflowNoun[f]}` : ''))].filter(Boolean);
         problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart${others.length ? `, or ${others.join(' or ')},` : ''} with reconcile: "declared" keyed ${wanted})`);
       }
       continue;
@@ -1401,7 +1438,7 @@ function authorizationKeys(argv, spec) {
     }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, adopt:form:<table>/<form type>/<name>, overwrite:form:<table>/<form type>/<name>, adopt:dashboard:<key>, overwrite:dashboard:<key>, overwrite:dashboard:<key>/<tile>, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name>, publication-risk:table:<table> or publication-risk:dashboard:<dashboard id>)`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, adopt:form:<table>/<form type>/<name>, overwrite:form:<table>/<form type>/<name>, adopt:dashboard:<key>, overwrite:dashboard:<key>, overwrite:dashboard:<key>/<tile>, adopt:rule:<table>/<name>, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name>, publication-risk:table:<table> or publication-risk:dashboard:<dashboard id>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);

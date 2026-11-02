@@ -188,7 +188,11 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   activated only if nobody changed it in between; a rule that already exists is never edited by the build
   (change it in Maker, then re-adopt it); a rule changed outside the spec stops the build until it is re-adopted
   whole with `--authorize adopt:rule:<table>/<name>` and a declaration naming its whole body; and an environment
-  that cannot host business rules skips them. Explain the approval and let the maker choose.
+  that cannot host business rules skips them. Explain the approval and let the maker choose. `--verify` holds a
+  declared rule to its last build (a rule changed in Maker since fails until it is re-adopted). A download
+  brings it back declared only with `--include-managed --managed-manifest <store file>` (otherwise it is left
+  out, as every business rule is); its first rebuild needs `adopt:rule:<table>/<name>`, because the downloaded
+  folder has no store.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run

@@ -228,9 +228,10 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // creates-stable-build.js inside the branch a spec with createIdentity takes, and creates-catalog.js inside the settlement of a
 // declared form (forms[].reconcile "declared"), a declared dashboard (dashboards[].reconcile "declared") or a declared business rule
 // (businessRules[].reconcile "declared"), the only places a build without createIdentity takes ids from a catalog. The business-rule
-// helper (rule-settlement.js) loads the catalog itself, so the engine's and the spec gate's requires of it are gated edges too. Apart
+// helper (rule-settlement.js) loads the catalog itself, so the engine's, the spec gate's and the rule reader's (declared-rule-io.js,
+// for verify and the managed download) requires of it are gated edges too. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
-const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js']];
+const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -266,6 +267,9 @@ test('the default build loads none of the stable-identity modules and still wire
   // attempt whose declaration was removed, both behind the flag) and by the spec gate for a declared rule.
   assert.equal(engine.match(/require\('\.\/rule-settlement\.js'\)/g).length, 2);
   assert.equal(fs.readFileSync(path.join(SCRIPTS, 'lib', 'app-spec.js'), 'utf8').match(/require\('\.\/rule-settlement\.js'\)/g).length, 1);
+  // The rule reader loads it only through one lazy accessor, which verify and the download call only for a committed rule group.
+  assert.match(fs.readFileSync(path.join(SCRIPTS, 'lib', 'declared-rule-io.js'), 'utf8'), /^const settlement = \(\) => require\('\.\/rule-settlement\.js'\);$/m);
+  assert.equal(fs.readFileSync(path.join(SCRIPTS, 'lib', 'declared-rule-io.js'), 'utf8').match(/require\('\.\/rule-settlement\.js'\)/g).length, 1);
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');

@@ -34,6 +34,7 @@ const { wantsTimeline, timelineVerifyProblem, FULL_BUILD, TIMELINE_CLASS_ID } = 
 const { isDeclaredForm, formLayoutKey, verifyDeclaredForm } = require('./form-layout-reconcile.js');
 const { isDeclaredDashboard, dashboardKey, committedDeclaration } = require('./dashboard-reconcile.js');
 const { verifyDeclaredDashboard } = require('./declared-dashboard-io.js');
+const { verifyDeclaredRule, declaredRulesByKey } = require('./declared-rule-io.js');
 const { declaredFeatureOn } = require('./declared-features.js');
 const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
@@ -2291,14 +2292,21 @@ async function verifySpec(spec, read, opts = {}) {
   // by the dashboard helper's one read-only projection (lib/declared-dashboard-io.js verifyDeclaredDashboard): a fresh read of the
   // dashboard by the bound id through a throwaway workspace (`read.declaredDashboard`), its root and seed, every managed tile once, both
   // proof hashes, and the spec's declaration against the one the group settled. One the spec no longer declares is held to its bound id.
+  //
+  // A committed business RULE group the spec still declares (businessRules[].reconcile "declared") is held to its last proof and its
+  // declaration (lib/declared-rule-io.js verifyDeclaredRule): a fresh read of the rule by the bound id through a throwaway workspace
+  // (`read.declaredRule`), its whole body and state against the proof's hash, and the spec's declaration against the one the group has
+  // applied. One the spec no longer declares is held to its bound workflow id.
   const managedManifest = opts.managedManifest;
   if (managedManifest && (managedManifest.groups.length || managedManifest.pending.length || managedManifest.invalid.length)) {
     plan.section(async ({ add, unverified }) => {
       for (const p of managedManifest.pending) unverified.push(`managed:${p.family} ${p.key} (${p.code})`);
       for (const p of managedManifest.invalid) unverified.push(`managed:${p.family} ${p.key} (${p.code || 'managed-binding-group-invalid'})`);
-      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'], form: ['systemform', 'formid'], dashboard: ['systemform', 'formid'] };
+      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'], form: ['systemform', 'formid'], dashboard: ['systemform', 'formid'], rule: ['workflow', 'workflowid'] };
       const declaredForms = declaredFormsByKey(spec);
       const declaredDashboards = declaredDashboardsByKey(spec);
+      // Read only when a committed rule group is there: the rule helper loads the creates catalog (lib/declared-rule-io.js).
+      const declaredRules = declaredFeatureOn('rules') && managedManifest.groups.some((g) => g.family === 'rule') ? declaredRulesByKey(spec.businessRules) : new Map();
       for (const g of managedManifest.groups) {
         const t = tables[g.family];
         if (!t) continue;
@@ -2308,6 +2316,10 @@ async function verifySpec(spec, read, opts = {}) {
         }
         if (g.family === 'dashboard' && declaredDashboards.has(g.key)) {
           await verifyManagedDashboard(declaredDashboards.get(g.key), g, read, { add, unverified });
+          continue;
+        }
+        if (g.family === 'rule' && declaredRules.has(g.key)) {
+          await verifyManagedRule(declaredRules.get(g.key), g, read, { add, unverified });
           continue;
         }
         if (!read || typeof read.queryRecords !== 'function') { unverified.push(`managed:${g.family} ${g.key} (this reader cannot read by id)`); continue; }
@@ -2887,6 +2899,24 @@ async function verifyManagedDashboard(d, g, read, { add, unverified }) {
   }
   const issues = verifyDeclaredDashboard({ dashboard: d, group: g, art: live && live.artifact, languageCode: live && live.languageCode });
   add('managed-dashboard', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
+}
+
+// One committed rule group the spec still declares, held to its last proof and its declaration (verifyDeclaredRule) over a fresh read of
+// the bound rule. `read.declaredRule(id)` answers { artifact }. A group that keeps no declaration state or no proof proves nothing verify
+// can check, so it is listed as unverified, never passed.
+async function verifyManagedRule(rule, g, read, { add, unverified }) {
+  const name = `${g.key} (${g.root.id})`;
+  if (!read || typeof read.declaredRule !== 'function') { unverified.push(`managed:rule ${g.key} (this reader cannot read a business rule by id)`); return; }
+  if (!g.declaration || !g.declaration.rule || !g.declaration.nodes || !g.proof) { unverified.push(`managed:rule ${g.key} (the managed group keeps no declaration or proof to check)`); return; }
+  let live;
+  try {
+    live = await read.declaredRule(g.root.id);
+  } catch (error) {
+    add('managed-rule', name, false, String((error && error.message) || error));
+    return;
+  }
+  const issues = verifyDeclaredRule({ rule, group: g, art: live && live.artifact });
+  add('managed-rule', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
 }
 
 // Whether each sub-grid that declares where it goes (`tab` / `column` / `after` / `before`) is where the spec

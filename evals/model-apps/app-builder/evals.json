@@ -546,6 +546,24 @@
         "pages": []
       },
       "expectations": []
+    },
+    {
+      "id": 23,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A Service Desk app for service requests. Keep two business rules the way the spec says on every rebuild: a closed request needs a resolution and its notes lock, and a request in progress with no assignee shows an error on every form.",
+      "expect": {
+        "tables": [
+          "cnt_request"
+        ],
+        "relationships": [],
+        "views": [
+          "Open Requests"
+        ],
+        "charts": [],
+        "pages": []
+      },
+      "expectations": []
     }
   ]
 }
