@@ -8,12 +8,17 @@
 // the group keeps, both in the group's consumer state (`consumerState.children`, `consumerState.declaration`), which
 // managedManifestView leaves out. They take the group of a snapshot unit, never store.readGroup: verify and download read
 // a discovery of the store, not an open store.
+//
+// The store-file reader and the verify manifest serve declared dashboards too (dashboards[].reconcile "declared"); the
+// dashboard's own read and restore are in lib/declared-dashboard-io.js.
 const path = require('node:path');
 const { discoverManagedStore, managedManifestView, readManagedManifest, isStoreEnvironment, storeFileName, CODES } = require('./managed-bindings.js');
 const { environmentFingerprint } = require('./page-ownership-records.js');
 const { hydrateDeclaredForm } = require('./form-layout-reconcile.js');
 
 const FORM = 'form';
+// lib/dashboard-reconcile.js KIND; kept as a literal so verify's manifest read does not load the dashboard helper.
+const DASHBOARD = 'dashboard';
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const codeError = (code, message) => Object.assign(new Error(message), { code });
 
@@ -34,10 +39,12 @@ function committedUnits(loaded, family) {
 }
 
 /**
- * What verify reads for one workspace: managedManifestView of the store found there, with each committed FORM group also
- * carrying its `consumerState` and `publication` — read from the SAME discovery, so the view and the form state are one
- * revision. Like readManagedManifest: no store, or a target no store can be kept for, is an empty view, and a store that
- * cannot be trusted is one invalid entry (readManagedManifest builds it), never an error of the verify run.
+ * What verify reads for one workspace: managedManifestView of the store found there, with each committed FORM or DASHBOARD
+ * group also carrying its `consumerState` and `publication` — read from the SAME discovery, so the view and the group state
+ * are one revision. A declared dashboard's oracle (lib/dashboard-reconcile.js committedProjectionInput) reads its managed
+ * tiles and catalog seed from the consumer state, as the form's reads its children. Like readManagedManifest: no store, or a
+ * target no store can be kept for, is an empty view, and a store that cannot be trusted is one invalid entry
+ * (readManagedManifest builds it), never an error of the verify run.
  */
 function readVerifyManifest(args) {
   if (!isStoreEnvironment(args && args.environment)) return managedManifestView(null);
@@ -49,9 +56,9 @@ function readVerifyManifest(args) {
   }
   if (found.absent) return managedManifestView(null);
   const view = managedManifestView(found.loaded);
-  const { groups } = committedUnits(found.loaded, FORM);
+  const committed = { [FORM]: committedUnits(found.loaded, FORM).groups, [DASHBOARD]: committedUnits(found.loaded, DASHBOARD).groups };
   for (const g of view.groups) {
-    const full = g.family === FORM ? groups.get(g.key) : null;
+    const full = committed[g.family] ? committed[g.family].get(g.key) : null;
     if (full) {
       g.consumerState = clone(full.consumerState);
       g.publication = clone(full.publication);
@@ -61,14 +68,15 @@ function readVerifyManifest(args) {
 }
 
 /**
- * The explicit download's source (--include-managed --managed-manifest <file>): the form groups of ONE binding store file,
- * read only. The file must be the store a build keeps for THIS environment, app and solution: its name is derived from
+ * The explicit download's source (--include-managed --managed-manifest <file>): the groups of one `family` (a declared form's,
+ * by default, or a declared dashboard's) in ONE binding store file, read only. The file must be the store a build keeps for
+ * THIS environment, app and solution: its name is derived from
  * the three (managed-bindings.js storeFileName) and its envelope names them (parseEnvelope refuses another's). A copy of
  * another app's store, a manifest view saved to a file, or any other JSON is refused, so the flag can never lend one app's
  * declarations to another — and reading it creates no authority: the download writes no store and binds nothing.
  * Answers { groups: Map<key, group>, pending: [{key, code}], invalid: [{key, reason}] }; throws `managed-manifest-unusable`.
  */
-function readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName }) {
+function readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName }, family = FORM) {
   if (typeof file !== 'string' || file === '') throw codeError('managed-manifest-unusable', '--managed-manifest needs the path of the managed binding store file');
   if (!isStoreEnvironment(environment)) throw codeError('managed-manifest-unusable', `no managed binding store is kept for ${environment}`);
   if (!appUniqueName || !solutionUniqueName) throw codeError('managed-manifest-unusable', 'the app and its solution must be known to read its managed binding store');
@@ -84,7 +92,7 @@ function readManagedFormFile({ file, environment, appUniqueName, solutionUniqueN
     throw codeError('managed-manifest-unusable', `the managed binding store ${full} could not be read: ${(e && e.message) || e}`);
   }
   if (found.absent) throw codeError('managed-manifest-unusable', `the managed binding store ${full} was not found`);
-  return committedUnits(found.loaded, FORM);
+  return committedUnits(found.loaded, family);
 }
 
 /**

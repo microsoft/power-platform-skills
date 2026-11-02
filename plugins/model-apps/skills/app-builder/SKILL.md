@@ -176,7 +176,11 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   Dataverse does not version a dashboard's saved layer, so an edit made in Maker at the instant of the write
   cannot be detected. An existing dashboard is bound only with `--authorize adopt:dashboard:<key>`
   (`overwrite:dashboard:<key>` or `overwrite:dashboard:<key>/<tile>` for changes made elsewhere,
-  `--allow-destructive` to clear its description with `""`): explain it and let the maker choose.
+  `--allow-destructive` to clear its description with `""`): explain it and let the maker choose. `--verify`
+  holds a declared dashboard to its last build (a dashboard changed in Maker since fails until a build
+  settles it; one whose publish is unconfirmed is unverified, not passed). A download brings it back declared
+  only with `--include-managed --managed-manifest <store file>` (otherwise it is an undeclared entry); its
+  first rebuild needs `adopt:dashboard:<key>`, because the downloaded folder has no store.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run

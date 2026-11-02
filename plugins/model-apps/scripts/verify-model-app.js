@@ -51,6 +51,7 @@ const { readTranslationLabels, isTranslationExport } = require('./lib/translatio
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readBaseline } = require('./lib/deployed-baseline.js');
 const { readVerifyManifest, readLiveForm } = require('./lib/declared-form-io.js');
+const { readLiveDashboard } = require('./lib/declared-dashboard-io.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
@@ -506,6 +507,20 @@ function readerFor(sdk, appUnique, opts) {
         reader.dispose();
       }
     },
+    // declaredDashboard (verify-spec verifyManagedDashboard): the dashboard a committed managed dashboard group binds, read by its id on a
+    // throwaway workspace, like declaredForm, with the reading SDK's language (the label a tile's name is read in, as the build's proof
+    // read it). With no isolated reader it throws, so the group is reported failed-to-read rather than passed.
+    declaredDashboard: async (dashboardId) => {
+      if (!opts.isolatedReader) throw new Error('the declared dashboard reader needs an isolated reader');
+      const reader = await opts.isolatedReader();
+      try {
+        const artifact = await readLiveDashboard(reader.sdk, dashboardId);
+        if (!artifact) throw new Error(`dashboard ${dashboardId} was not found`);
+        return { artifact, languageCode: reader.sdk.languageCode };
+      } finally {
+        reader.dispose();
+      }
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
@@ -808,7 +823,7 @@ async function main() {
     const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
     // The managed bindings recorded in the same workspace for this environment, app and solution (lib/managed-bindings.js), read only:
     // a bound view or chart is held to its bound id by a fresh read, a bound declared form to its declaration and last proof (with the
-    // group's consumer state, readVerifyManifest), and a pending or unusable group is listed as unverified.
+    // group's consumer state, readVerifyManifest), a bound declared dashboard likewise, and a pending or unusable group is listed as unverified.
     const managedManifest = spec.solution && spec.solution.uniqueName
       ? readVerifyManifest({ workspaceDir, environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
       : undefined;

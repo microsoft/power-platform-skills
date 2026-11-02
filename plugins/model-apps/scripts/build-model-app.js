@@ -62,6 +62,7 @@ const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js')
 const { approvalKey } = require('./lib/reconcile-common.js');
 const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
 const { isDeclaredForm, formLayoutKey } = require('./lib/form-layout-reconcile.js');
+const { isDeclaredDashboard, dashboardKey } = require('./lib/dashboard-reconcile.js');
 const { declaredFeatureOn } = require('./lib/declared-features.js');
 const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
@@ -984,8 +985,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
           // verify that does not know it holds them to the organization's and reports the captions it was just given as missing. And the app
           // folder, from which a web resource's `contentPath` is read to compare its deployed content (verify-spec.js, the web-resource check).
           // And the managed bindings the same workspace holds, read afresh after the build, exactly as the standalone verify reads them
-          // (verify-model-app.js): a bound view or chart is held to its bound id, a bound declared form to its declaration and last proof,
-          // and a pending or unusable group is listed as unverified.
+          // (verify-model-app.js): a bound view or chart is held to its bound id, a bound declared form or dashboard to its declaration and
+          // last proof, and a pending or unusable group is listed as unverified.
           const managedManifest = spec.solution && spec.solution.uniqueName
             ? readVerifyManifest({ workspaceDir: applyWorkspaceOf(opts), environment: opts.env, appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
             : undefined;
@@ -1226,6 +1227,36 @@ function authorizationKeys(argv, spec) {
   if (declaredFeatureOn('forms')) {
     for (const f of (spec && Array.isArray(spec.forms) ? spec.forms : [])) if (isDeclaredForm(f)) declared.form.add(formLayoutKey(f));
   }
+  // A declared dashboard's (dashboards[].reconcile "declared", lib/dashboard-reconcile.js) is its key as the helper spells it
+  // (dashboardKey: its `key`, or its name in lower case), and each of its tiles' is `<key>/<tile key>`; only while the declared
+  // dashboard build is on. The helper matches approvals exactly, so a key typed in any case is mapped back to that spelling here
+  // (validation refuses two declared dashboards whose keys differ only in case, and two tiles of one dashboard alike).
+  //   dashboards: Map(lower key -> { key, tiles: Map(lower tile key -> '<key>/<tile key>') })
+  const dashboards = new Map();
+  if (declaredFeatureOn('dashboards')) {
+    for (const d of (spec && Array.isArray(spec.dashboards) ? spec.dashboards : [])) {
+      if (!isDeclaredDashboard(d)) continue;
+      const key = dashboardKey(d);
+      const tiles = new Map();
+      for (const t of (Array.isArray(d.tiles) ? d.tiles : [])) if (t && typeof t.key === 'string' && t.key) tiles.set(lower(t.key), `${key}/${t.key}`);
+      if (key) dashboards.set(lower(key), { key, tiles });
+    }
+  }
+  // The declared dashboard or tile `text` names: { root: true, id } for a dashboard, { root: false, id } for one tile, or null.
+  // A dashboard key never holds '/' (validation), so only the last '/' can split a tile key off; both readings are still tried,
+  // and a text that could be either is refused by the caller as ambiguous.
+  const dashboardTargets = (text) => {
+    const out = [];
+    const root = dashboards.get(lower(text));
+    if (root) out.push({ root: true, id: root.key });
+    const cut = String(text).lastIndexOf('/');
+    if (cut > 0) {
+      const owner = dashboards.get(lower(String(text).slice(0, cut)));
+      const tile = owner && owner.tiles.get(lower(String(text).slice(cut + 1)));
+      if (tile) out.push({ root: false, id: tile });
+    }
+    return out;
+  };
   for (const v of (spec && Array.isArray(spec.views) ? spec.views : [])) {
     if (isDeclaredView(v)) { const { intent } = compileViewIntent(v); if (intent) declared.view.add(intent.key); }
   }
@@ -1286,6 +1317,19 @@ function authorizationKeys(argv, spec) {
     const spelled = /^(adopt|overwrite):(.+)$/.exec(String(key));
     if (spelled && declaredWebResources.has(lower(spelled[2]))) webResourceHints.push({ key: String(key), hint: `use ${spelled[1]}:webresource:${spelled[2]} for the declared web resource of that name` });
     const text = String(key);
+    // adopt:dashboard:operations | overwrite:dashboard:operations | overwrite:dashboard:operations/open-orders — a declared
+    // dashboard by its key, or one of its tiles by `<key>/<tile key>`, in any case. Only the dashboard takes adopt: the
+    // dashboard is bound whole, so a tile has nothing to adopt on its own.
+    const typedDashboard = /^(adopt|overwrite):dashboard:(.+)$/.exec(text);
+    if (typedDashboard) {
+      const [, verb, idText] = typedDashboard;
+      const targets = dashboardTargets(idText);
+      if (targets.length > 1) problems.push(`'${key}' could name the declared dashboard ${targets[0].id} or the tile ${targets[1].id}; give that dashboard a key without '/'`);
+      else if (!targets.length) problems.push(`'${key}' approves an artifact the spec does not declare (it would need a dashboard with reconcile: "declared" keyed ${idText}, or a tile <key>/<tile key> of one)`);
+      else if (verb === 'adopt' && !targets[0].root) problems.push(`'${key}' is not an approval a dashboard tile takes (a tile takes only overwrite:dashboard:<key>/<tile key>; adopt:dashboard:<key> binds the whole dashboard)`);
+      else approve(verb, 'dashboard', targets[0].id);
+      continue;
+    }
     // overwrite:quickfind:contoso_item | adopt:view:account/My Accounts | overwrite:chart:new_ticket/By Status
     const typed = /^(adopt|overwrite):([a-z]+):(.*)$/.exec(text);
     if (typed && Object.prototype.hasOwnProperty.call(families, typed[2])) {
@@ -1312,6 +1356,9 @@ function authorizationKeys(argv, spec) {
       // A declared form's key has the same <table>/... shape (`<table>/<form type>/<name>`), so an untyped key may name one; its
       // key is lower case, so it matches in any case. It is one more candidate: a key that could also be a view or chart is refused.
       for (const id of declared.form) if (id === lower(wanted)) candidates.push({ family: 'form', id });
+      // A declared dashboard's tile key, `<key>/<tile key>`, has the same shape too (a dashboard key may be a bare word): one more
+      // candidate, matched in any case and approved in the helper's own spelling.
+      for (const t of dashboardTargets(`${untyped[2]}/${untyped[3]}`)) candidates.push({ family: 'dashboard', id: t.id, root: t.root });
       // A table's Quick Find view is a view too, and takes an overwrite: an overwrite whose name is "quickFind" on a table that
       // declares quickFind might mean it. It is one more candidate: alone, overwrite:<table>/quickFind (that exact name) means it.
       const table = lower(untyped[2]);
@@ -1320,20 +1367,36 @@ function authorizationKeys(argv, spec) {
         const typedKeys = candidates.map((c) => `${verb}:${approvalKey(c.family, c.id)}`);
         if (quickFindToo) typedKeys.push(`overwrite:${approvalKey('quickfind', table)}`);
         problems.push(`'${key}' could approve more than one declared artifact; name the one you mean with its typed key: ${typedKeys.join(' or ')}`);
-      } else if (candidates.length === 1 && (candidates[0].family === 'form' || candidates[0].id === wanted)) {
+      } else if (candidates.length === 1 && candidates[0].family === 'dashboard' && !candidates[0].root && verb === 'adopt') {
+        problems.push(`'${key}' names the tile ${candidates[0].id} of a declared dashboard, which takes only overwrite:dashboard:${candidates[0].id} (adopt:dashboard:<key> binds the whole dashboard)`);
+      } else if (candidates.length === 1 && (candidates[0].family === 'form' || candidates[0].family === 'dashboard' || candidates[0].id === wanted)) {
         approve(verb, candidates[0].family, candidates[0].id);
       } else if (quickFindToo && candidates.length === 0 && untyped[3] === 'quickFind') {
         approve(verb, 'quickfind', table);
       } else if (quickFindToo) {
         problems.push(`'${key}' does not name a declared view or chart; to replace the local copy of ${table}'s Quick Find view use overwrite:${approvalKey('quickfind', table)}`);
       } else {
-        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart${declared.form.size ? ', or a form,' : ''} with reconcile: "declared" keyed ${wanted})`);
+        const others = [declared.form.size ? 'a form' : '', dashboards.size ? 'a dashboard tile' : ''].filter(Boolean);
+        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart${others.length ? `, or ${others.join(' or ')},` : ''} with reconcile: "declared" keyed ${wanted})`);
       }
+      continue;
+    }
+    // The untyped dashboard, adopt:operations | overwrite:operations | overwrite:ops-board/map: a declared dashboard's key alone, or
+    // a tile key the branch above could not read (a dashboard key may hold '.' or '-'), in any case. A declared web resource of the
+    // same name makes it ambiguous.
+    const bareDashboard = /^(adopt|overwrite):(.+)$/.exec(text);
+    const bareTargets = bareDashboard ? dashboardTargets(bareDashboard[2]) : [];
+    if (bareTargets.length) {
+      const [, verb, idText] = bareDashboard;
+      if (bareTargets.length > 1) problems.push(`'${key}' could name the declared dashboard ${bareTargets[0].id} or the tile ${bareTargets[1].id}; give that dashboard a key without '/'`);
+      else if (declaredWebResources.has(lower(idText))) problems.push(`'${key}' could approve more than one declared artifact; name the one you mean with its typed key: ${verb}:dashboard:${bareTargets[0].id} or ${verb}:webresource:${idText}`);
+      else if (verb === 'adopt' && !bareTargets[0].root) problems.push(`'${key}' names the tile ${bareTargets[0].id} of a declared dashboard, which takes only overwrite:dashboard:${bareTargets[0].id} (adopt:dashboard:<key> binds the whole dashboard)`);
+      else approve(verb, 'dashboard', bareTargets[0].id);
       continue;
     }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, adopt:form:<table>/<form type>/<name>, overwrite:form:<table>/<form type>/<name>, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name> or publication-risk:table:<table>)`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, adopt:form:<table>/<form type>/<name>, overwrite:form:<table>/<form type>/<name>, adopt:dashboard:<key>, overwrite:dashboard:<key>, overwrite:dashboard:<key>/<tile>, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name>, publication-risk:table:<table> or publication-risk:dashboard:<dashboard id>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);

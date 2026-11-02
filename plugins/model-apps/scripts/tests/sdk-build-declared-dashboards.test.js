@@ -4,7 +4,9 @@
 // given, the publish by the dashboard's own id, and the typed approvals the halts name. Everything runs through the real engine
 // (lib/sdk-build.js runSdkBuild) and the real vendored SDK over a fake Dataverse wire that models a dashboard's saved and published
 // layers (helpers/managed-wire.js), with the CLI's transport shape: the publication barrier with the send observer inside it.
-// The build path is behind lib/declared-features.js; each test that needs it switches it on and back.
+// The round trip is covered too: the CLI's approval parsing (authorizationKeys), verify's managed-dashboard check through
+// lib/declared-dashboard-io.js, and the managed download that restores a certified dashboard's original declaration.
+// The build path is behind lib/declared-features.js (on in this release); each test sets it explicitly and restores it.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -14,7 +16,17 @@ const { openManagedBindings } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { DECLARED_FEATURES } = require('../lib/declared-features.js');
-const { ORIGIN, createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+const { buildModelApp, authorizationKeys } = require('../build-model-app.js');
+const { readerFor, isolatedReaderFor } = require('../verify-model-app.js');
+const { main: downloadMain } = require('../download-model-app.js');
+const { verifySpec } = require('../lib/verify-spec.js');
+const { readVerifyManifest } = require('../lib/declared-form-io.js');
+const { storeFileName } = require('../lib/managed-bindings.js');
+const { environmentFingerprint } = require('../lib/page-ownership-records.js');
+const { ORIGIN, createManagedWire, clientOver, sdkOver } = require('./helpers/managed-wire.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 const SOLUTION = 'ContosoDash';
@@ -249,5 +261,245 @@ test('a lost dashboard publish the org never applied blocks the dashboard in lat
       assert.match(blocked.remedy, /\S/);
       assert.deepEqual(r.publishes, [], `run ${n} sends no publish`);
     }
+  });
+});
+
+// --- the round trip: the typed dashboard approvals, verify and the explicit managed download ----------------------------------
+
+test('--authorize adopt|overwrite:dashboard:<key> and a tile\'s overwrite are read in any case, typed or not; an adopt of a tile, an undeclared key or an ambiguous one is refused', async () => {
+  await withDashboards(true, () => {
+    const spec = makeSpec();
+    const keys = (...list) => authorizationKeys(list.flatMap((k) => ['--authorize', k]), spec);
+    const typed = keys('adopt:dashboard:OPS', 'overwrite:dashboard:Ops/MAP');
+    assert.equal(typed.error, null);
+    assert.deepEqual([...typed.adopt], [`dashboard:${KEY}`]);
+    assert.deepEqual([...typed.overwrite], [`dashboard:${KEY}/map`]);
+    const untyped = keys('adopt:Ops', 'overwrite:ops/Map', 'overwrite:ops');
+    assert.equal(untyped.error, null);
+    assert.deepEqual([...untyped.adopt], [`dashboard:${KEY}`]);
+    assert.deepEqual([...untyped.overwrite].sort(), [`dashboard:${KEY}`, `dashboard:${KEY}/map`]);
+    for (const [key, words] of [
+      ['adopt:dashboard:ops/map', /is not an approval a dashboard tile takes/],
+      ['adopt:ops/map', /names the tile ops\/map of a declared dashboard, which takes only overwrite:dashboard:ops\/map/],
+      ['adopt:dashboard:other', /approves an artifact the spec does not declare \(it would need a dashboard with reconcile: "declared" keyed other/],
+      ['overwrite:dashboard:ops/other', /approves an artifact the spec does not declare/],
+      ['overwrite:ops/other', /or a dashboard tile, with reconcile: "declared" keyed ops\/other/],
+    ]) {
+      const r = keys(key);
+      assert.match(String(r.error), words, key);
+      assert.equal(r.adopt.size + r.overwrite.size, 0, key);
+    }
+    // A declared web resource of the same name: the untyped key could mean either.
+    const both = makeSpec();
+    both.webResources = [{ name: 'ops', type: 'js', content: 'x', reconcile: 'declared' }];
+    const ambiguous = authorizationKeys(['--authorize', 'adopt:ops'], both);
+    assert.match(String(ambiguous.error), /could approve more than one declared artifact; name the one you mean with its typed key: adopt:dashboard:ops or adopt:webresource:ops/);
+    assert.equal(ambiguous.adopt.size, 0);
+    // An undeclared dashboard of the same name takes no approval.
+    assert.match(String(authorizationKeys(['--authorize', 'adopt:dashboard:ops'], makeSpec({ declared: false })).error), /does not declare/);
+  });
+  await withDashboards(false, () => {
+    const off = authorizationKeys(['--authorize', `adopt:dashboard:${KEY}`], makeSpec());
+    assert.match(String(off.error), /approves an artifact the spec does not declare/);
+    assert.equal(off.adopt.size, 0);
+  });
+});
+
+// verify's reader as the CLI builds it (verify-model-app.js readerFor): a declared dashboard is read by its bound id on a throwaway
+// SDK (isolatedReaderFor) over the same wire, never the build's.
+async function verifyReader(wire) {
+  const { sdk } = await sdkOver(wire);
+  const cli = readerFor(sdk, APP, { isolatedReader: isolatedReaderFor(ORIGIN, { httpClient: clientOver(wire) }) });
+  const dashboardReads = [];
+  return {
+    dashboardReads,
+    read: {
+      findTable: async () => null,
+      findColumns: async () => [],
+      // The bound-id read verify makes of a group it does not hold as declared: systemform by formid, answered from the wire.
+      queryRecords: async (table, o) => {
+        const id = (/formid eq (\S+)/.exec((o && o.filter) || '') || [])[1];
+        return table === 'systemform' && id && wire.saved.has(id.toLowerCase()) ? [{ formid: id }] : [];
+      },
+      sitemapXml: async () => '',
+      declaredDashboard: async (id) => { dashboardReads.push(id); return cli.declaredDashboard(id); },
+    },
+  };
+}
+const managedChecks = (r) => r.checks.filter((c) => c.kind === 'managed-dashboard');
+const manifestOf = (dir) => readVerifyManifest({ workspaceDir: dir, environment: ORIGIN, appUniqueName: APP, solutionUniqueName: SOLUTION });
+const retile = (wire, from, to) => { for (const layer of [wire.saved, wire.published]) for (const r of layer.values()) r.formxml = r.formxml.split(from).join(to); };
+
+test('verify holds a bound declared dashboard to its declaration and last proof by a fresh read of its id', async () => {
+  await withDashboards(true, async () => {
+    const wire = createManagedWire();
+    const dir = makeTempDir('declared-dash-');
+    assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+    const id = storeOf(dir).readGroup('dashboard', KEY).committed.root.id;
+    const { read, dashboardReads } = await verifyReader(wire);
+    const pass = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(dir) });
+    assert.deepEqual(managedChecks(pass).map((c) => [c.name, c.present, c.detail]), [[`${KEY} (${id})`, true, '']]);
+    assert.deepEqual(dashboardReads, [id], 'read by the bound id');
+    assert.deepEqual((pass.unverified || []).filter((u) => u.startsWith('managed:')), []);
+    // A declaration the dashboard does not hold yet fails it, and says to build again.
+    const changed = await verifySpec(makeSpec({ dashboard: { description: 'Weekly' } }), read, { managedManifest: manifestOf(dir) });
+    assert.equal(managedChecks(changed)[0].present, false);
+    assert.match(managedChecks(changed)[0].detail, /^dashboard-declaration-changed: .*build again/);
+    assert.ok(changed.missing.some((m) => m.kind === 'managed-dashboard'), 'a failing bound dashboard fails verify');
+    // A managed tile changed outside the spec fails it under the unchanged declaration.
+    retile(wire, 'contoso.example/map', 'contoso.example/maker');
+    const drifted = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(dir) });
+    assert.equal(managedChecks(drifted)[0].present, false);
+    assert.match(managedChecks(drifted)[0].detail, /^dashboard-changed: /);
+    // And a dashboard no read can find is reported failed, never passed.
+    retile(wire, 'contoso.example/maker', 'contoso.example/map');
+    wire.saved.delete(id);
+    wire.published.delete(id);
+    const gone = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(dir) });
+    assert.equal(managedChecks(gone)[0].present, false);
+  });
+});
+
+test('verify lists a bound dashboard whose publication is not confirmed as unverified, and a reader that cannot read by id never passes it', async () => {
+  await withDashboards(true, async () => {
+    const wire = createManagedWire();
+    const dir = makeTempDir('declared-dash-');
+    wire.script((e) => e.method === 'POST' && /^PublishXml$/i.test(e.path), { error: new Error('socket hang up'), unapplied: true });
+    assert.ok((await build(wire, dir, makeSpec())).err);
+    const { read, dashboardReads } = await verifyReader(wire);
+    const r = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(dir) });
+    assert.ok(r.unverified.some((u) => u.startsWith(`managed:dashboard ${KEY} (its publication is not confirmed`)), JSON.stringify(r.unverified));
+    assert.equal(managedChecks(r)[0].present, true, 'the saved dashboard is still checked');
+    const { declaredDashboard, ...plain } = read;
+    void declaredDashboard;
+    const blind = await verifySpec(makeSpec(), plain, { managedManifest: manifestOf(dir) });
+    assert.deepEqual(managedChecks(blind), []);
+    assert.ok(blind.unverified.includes(`managed:dashboard ${KEY} (this reader cannot read a dashboard by id)`), JSON.stringify(blind.unverified));
+    // With the build path off, the group is held only to its bound id, as an undeclared one.
+    await withDashboards(false, async () => {
+      const before = dashboardReads.length;
+      const off = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(dir) });
+      assert.deepEqual(managedChecks(off).map((c) => [c.present, c.detail]), [[true, '']]);
+      assert.equal(dashboardReads.length, before, 'not read as a declared dashboard');
+    });
+  });
+});
+
+// download-model-app.js main with its side effects replaced: the download's SDK is a real one over the wire (it answers the app's
+// unique name itself), and runDownload answers the spec a download of this app hydrates: the site map's dashboard as a plain entry
+// pinned by its id.
+async function download(wire, out, argv, { plainId, ...extra } = {}) {
+  const { sdk } = await sdkOver(wire);
+  const dl = Object.create(sdk);
+  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
+  const downloaded = makeSpec({ declared: false });
+  downloaded.dashboards = plainId ? [{ name: 'Ops', dashboardId: plainId, description: 'Daily', tiles: [{ type: 'iframe', url: 'https://contoso.example/map', name: 'Map' }] }] : [];
+  // With no plain entry, the site map has no dashboard either (the download reconstructs the dashboards its site map names).
+  if (!plainId) downloaded.appShell.areas[0].groups[0].subAreas = [{ url: 'https://contoso.example/home', title: 'Home' }];
+  const emitted = [];
+  const said = [];
+  let exited = null;
+  const mark = wire.log.length;
+  await downloadMain({
+    argv: ['--env', ORIGIN, '--app', '00000000-0000-0000-0000-00000000a222', '--out', out, ...argv],
+    stderr: { write: (text) => { said.push(String(text)); return true; } },
+    exit: (code) => { exited = code; },
+    emitResult: (ok, payload) => emitted.push({ ok, payload }),
+    preflightAuth: async () => ({ ok: true }),
+    makeDownloadSdk: async () => ({ sdk: dl, cleanup() {} }),
+    makeGenpageSdk: () => ({}),
+    runDownload: async () => ({ ok: true, spec: downloaded, pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [] }),
+    ...extra,
+  });
+  const specFile = path.join(out, 'app-spec.json');
+  return { emitted, said: said.join(''), exited, calls: wire.log.slice(mark), written: fs.existsSync(specFile) ? JSON.parse(fs.readFileSync(specFile, 'utf8')) : null };
+}
+const storeFileOf = (dir) => path.join(dir, storeFileName(environmentFingerprint(ORIGIN), APP, SOLUTION));
+
+test('the explicit managed download restores a proved declared dashboard in place of its plain entry, and names any it cannot restore', async () => {
+  await withDashboards(true, async () => {
+    const wire = createManagedWire();
+    const dir = makeTempDir('declared-dash-');
+    assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+    const id = storeOf(dir).readGroup('dashboard', KEY).committed.root.id;
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    const restored = await download(wire, makeTempDir('declared-dash-'), flags, { plainId: id });
+    assert.equal(restored.emitted.length, 1);
+    assert.equal(restored.emitted[0].ok, true, JSON.stringify(restored.emitted));
+    assert.deepEqual(restored.emitted[0].payload.managedDashboards, { restored: [KEY], stale: [] });
+    assert.deepEqual(restored.written.dashboards, makeSpec().dashboards, 'the declaration it was built from, once, where the plain entry was');
+    // With no plain entry for it, the declaration is appended.
+    assert.deepEqual((await download(wire, makeTempDir('declared-dash-'), flags)).written.dashboards, makeSpec().dashboards);
+    // A dashboard changed since its last proof is named and kept as the plain entry; the rest of the download is written.
+    retile(wire, 'contoso.example/map', 'contoso.example/maker');
+    const changed = await download(wire, makeTempDir('declared-dash-'), flags, { plainId: id });
+    assert.equal(changed.emitted[0].ok, true);
+    assert.deepEqual(changed.emitted[0].payload.managedDashboards.restored, []);
+    assert.match(changed.emitted[0].payload.managedDashboards.stale[0].reason, new RegExp(`dashboard ${id} is not what its last build proved \\(dashboard-changed\\)`));
+    assert.match(changed.said, new RegExp(`WARNING: managed dashboard ${KEY} was not restored: `));
+    assert.deepEqual(changed.written.dashboards.map((d) => d.dashboardId), [id]);
+    assert.equal('reconcile' in changed.written.dashboards[0], false);
+  });
+});
+
+test('the explicit managed download refuses a store file that is not this app\'s; without the flags it reads no dashboard by id', async () => {
+  await withDashboards(true, async () => {
+    const wire = createManagedWire();
+    const dir = makeTempDir('declared-dash-');
+    assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+    const copy = path.join(makeTempDir('declared-dash-'), 'managed-manifest.json');
+    fs.copyFileSync(storeFileOf(dir), copy);
+    const wrong = await download(wire, makeTempDir('declared-dash-'), ['--include-managed', '--managed-manifest', copy]);
+    assert.equal(wrong.emitted[0].ok, false);
+    assert.equal(wrong.emitted[0].payload.code, 'managed-manifest-unusable');
+    assert.match(wrong.emitted[0].payload.error, /Nothing was written/);
+    assert.equal(wrong.written, null, 'nothing is written');
+    const plain = await download(wire, makeTempDir('declared-dash-'), []);
+    assert.equal(plain.emitted[0].ok, true, JSON.stringify(plain.emitted) + plain.said);
+    assert.equal('managedDashboards' in plain.emitted[0].payload, false);
+    assert.deepEqual(plain.calls.filter((c) => /^systemforms\(/i.test(c.path)), [], 'no dashboard is read');
+  });
+});
+
+test('the enabled feature through the CLI: the printed typed approval binds the dashboard, verify passes then fails a changed declaration, and the managed download restores it', async () => {
+  await withDashboards(true, async () => {
+    const wire = createManagedWire();
+    await makerDashboard(wire, { description: 'From the maker' });
+    const appDir = makeTempDir('declared-dash-');
+    const dir = path.join(appDir, '.maker-workspace');
+    fs.mkdirSync(dir);
+    const { read } = await verifyReader(wire);
+    const cli = async (spec, extra = {}) => {
+      const barrier = createPublicationBarrier();
+      const sendObserver = createAttemptSendObserver();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: ORIGIN, httpClient: clientOver(wire, { barrier, observer: sendObserver }) });
+      await sdk.initWorkspace();
+      let verified = null;
+      let err;
+      try {
+        await buildModelApp(spec, { apply: true, env: ORIGIN, workspaceDir: dir, appDir, retryDelayMs: 0, ...extra }, {
+          sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases: ['dashboards'] }), publicationBarrier: barrier, sendObserver, warn: () => {}, log: () => {},
+          verify: async (s, o) => { verified = await verifySpec(s, read, o); return verified; },
+        });
+      } catch (e) { err = e; }
+      return { err, verified };
+    };
+    const halted = await cli(makeSpec());
+    assert.ok(halted.err, 'the unbound dashboard is not taken over');
+    const printed = /--authorize "?(adopt:dashboard:[^"\s)]+)/.exec(chainText(halted.err));
+    assert.ok(printed, chainText(halted.err));
+    assert.equal(printed[1], `adopt:dashboard:${KEY}`);
+    const keys = authorizationKeys(['--authorize', printed[1]], makeSpec());
+    assert.equal(keys.error, null);
+    const bound = await cli(makeSpec(), { authorizedAdoption: keys.adopt, verify: true });
+    assert.equal(bound.err, undefined, chainText(bound.err));
+    const g = storeOf(dir).readGroup('dashboard', KEY).committed;
+    assert.equal(g.records.find((r) => r.kind === 'dashboard').origin, 'adopted');
+    assert.deepEqual(managedChecks(bound.verified).map((c) => c.present), [true], 'the inline verify reads the bound dashboard');
+    const standalone = await verifySpec(makeSpec({ dashboard: { description: 'Weekly' } }), read, { managedManifest: manifestOf(dir) });
+    assert.equal(managedChecks(standalone)[0].present, false, 'the dashboard does not hold a declaration it was never built from');
+    const downloaded = await download(wire, makeTempDir('declared-dash-'), ['--include-managed', '--managed-manifest', storeFileOf(dir)], { plainId: g.root.id });
+    assert.deepEqual(downloaded.emitted[0].payload.managedDashboards, { restored: [KEY], stale: [] });
+    assert.deepEqual(downloaded.written.dashboards, makeSpec().dashboards);
   });
 });

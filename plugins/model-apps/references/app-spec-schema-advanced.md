@@ -775,6 +775,18 @@ existing one is reused and its tiles are never edited.
   edit of it. The build re-reads the saved dashboard just before it writes and stops when it changed
   since the build read it. An edit made in Maker in the instant between that check and the write cannot
   be detected: do not edit a declared dashboard while a build runs.
+- **Verify.** `--verify` reads each bound declared dashboard again by its id and holds it to what its last
+  build proved: the managed tiles (each exactly once, with the target, name and size the build wrote), the
+  description, and everything the spec does not declare (other tiles, tabs, sections and a tile's other
+  settings). It also fails when the spec now declares the dashboard differently from the declaration the
+  last build settled (build again to apply it). A dashboard changed in Maker since that build fails until a
+  build settles it. A dashboard whose last publish is not confirmed is listed as unverified, not passed.
+- **Download.** A plain download writes each dashboard of the site map as an undeclared entry pinned by its
+  id. With both `--include-managed` and `--managed-manifest <store file>`, each declared dashboard the store
+  proves (a fresh read still shows what its last build proved) comes back as the declaration it was built
+  from, with `reconcile: "declared"`, in place of that entry; one that is pending, gone, changed since, or not
+  valid stays the plain entry and is named. The downloaded folder has no store, so its first rebuild needs
+  `--authorize "adopt:dashboard:<key>"` for each.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

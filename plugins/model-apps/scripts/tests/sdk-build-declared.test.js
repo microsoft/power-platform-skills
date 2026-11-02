@@ -873,10 +873,12 @@ test('a keyed command bar is refused without the managed-binding store, and noth
   assert.deepEqual(r.writes, []);
 });
 
-test('reconcile on a kind 2.21.0 does not reconcile is a validation error; a declared form layout is not', () => {
-  const spec = makeSpec({ dashboards: [{ name: 'Item Board', reconcile: 'declared' }] });
+test('reconcile on a kind 2.21.0 does not reconcile is a validation error; a declared form layout or dashboard is not', () => {
+  const spec = makeSpec({ businessRules: [{ name: 'Item Rule', reconcile: 'declared' }] });
   const v = validateAppSpec(spec);
-  assert.ok(v.errors.some((e) => /reconcile/.test(e) && /dashboard/i.test(e)), JSON.stringify(v.errors));
+  assert.ok(v.errors.some((e) => /reconcile/.test(e) && /businessRules/.test(e)), JSON.stringify(v.errors));
+  const declaredDashboard = validateAppSpec(makeSpec({ dashboards: [{ name: 'Item Board', reconcile: 'declared' }] }));
+  assert.ok(!declaredDashboard.errors.some((e) => /reconcile is supported only/.test(e)), JSON.stringify(declaredDashboard.errors));
   const declaredForm = validateAppSpec(makeSpec({ forms: [{ entity: 'contoso_item', name: 'Item', layout: 'auto', reconcile: 'declared' }] }));
   assert.ok(!declaredForm.errors.some((e) => /reconcile/.test(e)), JSON.stringify(declaredForm.errors));
   const legacy = validateAppSpec(makeSpec({ forms: [{ entity: 'contoso_item', name: 'Item', layout: 'auto' }] }));

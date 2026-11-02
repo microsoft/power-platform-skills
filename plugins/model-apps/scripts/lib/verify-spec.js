@@ -32,6 +32,8 @@ const { formRemovals } = require('./op-diff.js');
 const { rowOccupancy } = require('./form-occupancy.js');
 const { wantsTimeline, timelineVerifyProblem, FULL_BUILD, TIMELINE_CLASS_ID } = require('./form-timeline.js');
 const { isDeclaredForm, formLayoutKey, verifyDeclaredForm } = require('./form-layout-reconcile.js');
+const { isDeclaredDashboard, dashboardKey, committedDeclaration } = require('./dashboard-reconcile.js');
+const { verifyDeclaredDashboard } = require('./declared-dashboard-io.js');
 const { declaredFeatureOn } = require('./declared-features.js');
 const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
@@ -2284,18 +2286,28 @@ async function verifySpec(spec, read, opts = {}) {
   // and every child the group proved still what and where it was proved. It needs the group's consumer state, which the manifest view
   // leaves out: lib/declared-form-io.js readVerifyManifest adds it from the same discovery. One the spec no longer declares is held to
   // its bound id, like a view.
+  //
+  // A committed DASHBOARD group the spec still declares (dashboards[].reconcile "declared") is held to its last proof and its declaration
+  // by the dashboard helper's one read-only projection (lib/declared-dashboard-io.js verifyDeclaredDashboard): a fresh read of the
+  // dashboard by the bound id through a throwaway workspace (`read.declaredDashboard`), its root and seed, every managed tile once, both
+  // proof hashes, and the spec's declaration against the one the group settled. One the spec no longer declares is held to its bound id.
   const managedManifest = opts.managedManifest;
   if (managedManifest && (managedManifest.groups.length || managedManifest.pending.length || managedManifest.invalid.length)) {
     plan.section(async ({ add, unverified }) => {
       for (const p of managedManifest.pending) unverified.push(`managed:${p.family} ${p.key} (${p.code})`);
       for (const p of managedManifest.invalid) unverified.push(`managed:${p.family} ${p.key} (${p.code || 'managed-binding-group-invalid'})`);
-      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'], form: ['systemform', 'formid'] };
+      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'], form: ['systemform', 'formid'], dashboard: ['systemform', 'formid'] };
       const declaredForms = declaredFormsByKey(spec);
+      const declaredDashboards = declaredDashboardsByKey(spec);
       for (const g of managedManifest.groups) {
         const t = tables[g.family];
         if (!t) continue;
         if (g.family === 'form' && declaredForms.has(g.key)) {
           await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified });
+          continue;
+        }
+        if (g.family === 'dashboard' && declaredDashboards.has(g.key)) {
+          await verifyManagedDashboard(declaredDashboards.get(g.key), g, read, { add, unverified });
           continue;
         }
         if (!read || typeof read.queryRecords !== 'function') { unverified.push(`managed:${g.family} ${g.key} (this reader cannot read by id)`); continue; }
@@ -2804,6 +2816,38 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
   const intentTabs = compileFormIntent(spec, f, { notesClassId: TIMELINE_CLASS_ID }).tabs;
   const issues = verifyDeclaredForm({ form: f, spec, intentTabs, hosts: { subgrids, quickViews }, events: f.events || [], liveForm, group: g });
   add('managed-form', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
+}
+
+// The declared dashboards (dashboards[].reconcile "declared") the spec holds while the declared dashboard build is on
+// (lib/declared-features.js), by the key a committed dashboard group is stored under (dashboardKey: its `key`, else its name in
+// lower case).
+function declaredDashboardsByKey(spec) {
+  const out = new Map();
+  if (!declaredFeatureOn('dashboards')) return out;
+  for (const d of (spec && Array.isArray(spec.dashboards) ? spec.dashboards : [])) if (isDeclaredDashboard(d)) out.set(dashboardKey(d), d);
+  return out;
+}
+
+// One committed dashboard group the spec still declares, held to its last proof and its declaration (verifyDeclaredDashboard) over a
+// fresh read of the bound dashboard. `read.declaredDashboard(id)` answers { artifact, languageCode }: the language is the reading SDK's,
+// as the build's proof used its SDK's. A group that keeps no original declaration or no tile state proves nothing verify can check, so
+// it is listed as unverified, never passed. A publication still in flight (dispatching or unconfirmed) is checked on the saved
+// dashboard and listed as unverified too: the published layer it will show is not known yet.
+async function verifyManagedDashboard(d, g, read, { add, unverified }) {
+  const name = `${g.key} (${g.root.id})`;
+  if (!read || typeof read.declaredDashboard !== 'function') { unverified.push(`managed:dashboard ${g.key} (this reader cannot read a dashboard by id)`); return; }
+  if (!committedDeclaration(g) || !g.consumerState || !g.proof) { unverified.push(`managed:dashboard ${g.key} (the managed group keeps no original declaration or proof to check)`); return; }
+  const publication = g.publication && g.publication.state;
+  if (publication === 'dispatching' || publication === 'unconfirmed') unverified.push(`managed:dashboard ${g.key} (its publication is not confirmed: ${publication})`);
+  let live;
+  try {
+    live = await read.declaredDashboard(g.root.id);
+  } catch (error) {
+    add('managed-dashboard', name, false, String((error && error.message) || error));
+    return;
+  }
+  const issues = verifyDeclaredDashboard({ dashboard: d, group: g, art: live && live.artifact, languageCode: live && live.languageCode });
+  add('managed-dashboard', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
 }
 
 // Whether each sub-grid that declares where it goes (`tab` / `column` / `after` / `before`) is where the spec

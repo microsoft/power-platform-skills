@@ -18,8 +18,12 @@
 // settled: <file> is that build's managed binding store, `<app folder>/.maker-workspace/managed-bindings.<hash>.json`, read only and
 // refused unless it is the store of this app and solution on this environment. Each committed form group is restored as the
 // declaration it was built from only when a fresh read of its form still shows exactly what its last proof saw; any other is named
-// on stderr and in the result's `managedForms.stale`, and left out of forms[] as every form is without the flags. The download writes
-// no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>.
+// on stderr and in the result's `managedForms.stale`, and left out of forms[] as every form is without the flags. The declared
+// dashboards (dashboards[].reconcile "declared") the store holds are restored the same way, each in place of the plain dashboards[]
+// entry the download reconstructs for its id, only when a fresh read of it still certifies its last proof; any other is named in
+// `managedDashboards.stale` and kept as that plain entry. The download writes
+// no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>
+// (each dashboard: adopt:dashboard:<key>).
 // Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
@@ -53,6 +57,7 @@ const { makeGenpageSdk, unescapePacName, pageFolderFiles } = require('./lib/genp
 const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR } = require('./lib/page-manifest.js');
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { restoreManagedForms } = require('./lib/declared-form-io.js');
+const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -3712,7 +3717,7 @@ async function main(deps = {}) {
   // Off unless it is given: it is a decision about every environment that holds a copy of the earlier spec (see the header), never a default.
   const resetPageKeys = flags['reset-page-keys'] === true;
   const includeCapabilities = flags['include-capabilities'] === true;
-  // The explicit managed download (declared forms, forms[].reconcile "declared"): both flags or neither. `--include-managed` alone would
+  // The explicit managed download (declared forms and dashboards, reconcile "declared"): both flags or neither. `--include-managed` alone would
   // have to guess which binding store to trust, and `--managed-manifest` alone would be a store read for nothing, so either alone is a
   // usage error, before anything is opened. Without them the download is exactly what it always was.
   const includeManaged = flags['include-managed'] === true;
@@ -3835,25 +3840,31 @@ async function main(deps = {}) {
     // Preserve the author's higher capability floor BEFORE validation, never after the version gate.
     preserveAuthoredLanguageCode(spec, specPath);
     // The explicit managed download: each declared form a committed group of the named binding store proves is restored into forms[]
-    // as the declaration it was built from (lib/declared-form-io.js restoreManagedForms), and every other is named, never silently
-    // dropped. A store file that is not this app's on this environment stops the download before anything is written.
+    // as the declaration it was built from (lib/declared-form-io.js restoreManagedForms), and each declared dashboard likewise into
+    // dashboards[], in place of the plain entry the download reconstructed for it (lib/declared-dashboard-io.js restoreManagedDashboards);
+    // every other is named, never silently dropped. A store file that is not this app's on this environment stops the download before
+    // anything is written.
     let managedForms = null;
+    let managedDashboards = null;
     if (includeManaged) {
+      const source = {
+        sdk,
+        spec,
+        file: managedManifestFile,
+        environment: dataverseOrigin(env),
+        appUniqueName: appUnique,
+        solutionUniqueName: spec.solution && spec.solution.uniqueName,
+        validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
+      };
       try {
-        managedForms = await restoreManagedForms({
-          sdk,
-          spec,
-          file: managedManifestFile,
-          environment: dataverseOrigin(env),
-          appUniqueName: appUnique,
-          solutionUniqueName: spec.solution && spec.solution.uniqueName,
-          validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
-        });
+        managedForms = await restoreManagedForms(source);
+        managedDashboards = await restoreManagedDashboards(source);
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
         return;
       }
       for (const s of managedForms.stale) io.stderr.write(`WARNING: managed form ${s.key} was not restored: ${s.reason}. It is left out of forms[], as every form is without --include-managed.\n`);
+      for (const s of managedDashboards.stale) io.stderr.write(`WARNING: managed dashboard ${s.key} was not restored: ${s.reason}. Its dashboard is downloaded as every dashboard is without --include-managed.\n`);
     }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
@@ -3889,7 +3900,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

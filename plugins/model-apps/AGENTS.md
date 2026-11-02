@@ -2908,6 +2908,19 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   applies unchanged: a GET answers the PUBLISHED row's ETag and `If-Match` does not protect the saved
   layer. The SDK re-reads the saved layer just before its PATCH; an edit landing between that read and
   the write cannot be detected, and nothing here claims a stale saved-layer write is rejected.
+  **Verify and download** (`lib/declared-dashboard-io.js`): verify reads each bound declared dashboard fresh
+  by its recorded id through the isolated reader (`readerFor(...).declaredDashboard`, which answers the
+  artifact and the reading SDK's language) and runs `verifyDeclaredDashboard` (`managed-dashboard` check):
+  the helper's one read-only `projectDashboard` over `committedProjectionInput(group)`, certified only when
+  root and seed are valid, no managed tile is `missing` or `duplicated`, and BOTH hashes equal the proof's,
+  plus the spec's `canonicalDeclaration` equal to the group's `originalDeclaration`. A group with no original
+  declaration or proof, a `dispatching` or `unconfirmed` publication, or a reader that cannot read by id is
+  listed unverified, never passed; with the path off, the group is held to its bound id as before.
+  `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
+  `originalDeclaration` in place of the plain `dashboards[]` entry with the same `dashboardId` (appended when
+  there is none), validating incrementally; a pending, unreadable, changed or invalid one stays plain and is
+  named (`managedDashboards.stale`). The download writes no store, so a rebuild from the downloaded folder
+  needs `adopt:dashboard:<key>` once.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.

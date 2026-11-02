@@ -526,6 +526,26 @@
         "ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)",
         "ui: an authored colspan and rowspan survive into the compiled cell"
       ]
+    },
+    {
+      "id": 22,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A Field Ops app for work orders with a Field Operations dashboard: a wide list of open work orders, a chart of work orders by status and a tall crew map from https://contoso.example/field-map. Keep its tiles the way the spec says on every rebuild, but leave any tile I add in Maker alone.",
+      "expect": {
+        "tables": [
+          "cnt_workorder"
+        ],
+        "relationships": [],
+        "views": [
+          "Open Work Orders"
+        ],
+        "charts": [
+          "Work Orders by Status"
+        ],
+        "pages": []
+      },
+      "expectations": []
     }
   ]
 }

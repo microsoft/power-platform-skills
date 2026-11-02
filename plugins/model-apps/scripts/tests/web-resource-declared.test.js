@@ -242,12 +242,12 @@ test('validation: a declared web resource needs a name no other web resource sha
   assert.deepEqual(sameRow(validate(gateSpec({ minimumPluginVersion: '2.21.0', webResources: [wr({ reconcile: 'declared' }), wr({ name: 'contoso_/scripts/Other.js', reconcile: 'declared' })] }))), []);
 });
 
-test('validation: reconcile on a dashboard or business rule is still an error that names the kinds that take it; a form takes it', () => {
+test('validation: reconcile on a business rule is still an error that names the kinds that take it; a form and a dashboard take it', () => {
   const v = validate(gateSpec({ minimumPluginVersion: '2.21.0', dashboards: [{ name: 'D', reconcile: 'declared' }], forms: [{ name: 'F', entity: 'account', reconcile: 'declared' }], businessRules: [{ name: 'R', reconcile: 'declared' }] }));
-  for (const kind of ['dashboards', 'businessRules']) {
-    assert.ok(v.errors.some((e) => e.startsWith(`${kind}:`) && e.includes('only on views, charts, forms and web resources')), `${kind}: ${JSON.stringify(v.errors)}`);
+  assert.ok(v.errors.some((e) => e.startsWith('businessRules:') && e.includes('only on views, charts, forms, dashboards and web resources')), JSON.stringify(v.errors));
+  for (const kind of ['forms', 'dashboards']) {
+    assert.ok(!v.errors.some((e) => e.startsWith(`${kind}:`) && /reconcile is supported only/.test(e)), `${kind}: ${JSON.stringify(v.errors)}`);
   }
-  assert.ok(!v.errors.some((e) => e.startsWith('forms:') && /reconcile is supported only/.test(e)), JSON.stringify(v.errors));
 });
 
 test('verify: a declared web resource whose deployed content differs says to build again; an undeclared one keeps its message', async () => {
