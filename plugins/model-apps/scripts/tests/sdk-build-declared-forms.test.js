@@ -967,3 +967,41 @@ test('a deleted form is never retired over a publish that may have been sent, wh
     assert.notEqual(storeOf(org, dir).readGroup('form', KEY).committed, null);
   });
 });
+
+// The retirement is bound to the store as observed BEFORE the two layer reads. Here another run settles the owed publish
+// against a live published layer (confirmPublished, no dispatch: owed becomes not-needed) while this build reads the saved
+// layer: the same generation and root, and a state that is itself retirable. Only the observation tells the store the
+// group moved after the proof's read, so the retirement is refused and nothing is written for it; the next build observes
+// and reads again.
+test('a store change between the observation and the retirement refuses the retirement of a removed deleted form; the next build retires it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const id = await owedForm(org, dir);
+    const before = storeOf(org, dir).readGroup('form', KEY).committed;
+    let raced = 0;
+    const saved = (rowId) => {
+      if (!raced) {
+        raced += 1;
+        storeOf(org, dir).confirmPublished({ groups: [{ family: 'form', key: KEY, generation: before.generation }], token: null, proof: { publishedSha256: before.publication.desiredSha256 || 'a'.repeat(64) } });
+      }
+      return missingRow(rowId);
+    };
+    const { restore } = deleteForm(org, id, { saved });
+    const r = await buildWarned(org, dir, removedForm());
+    assert.equal(raced, 1, 'the concurrent change landed between the observation and the retirement');
+    assert.deepEqual(retiredNotices(r.warns), []);
+    assert.deepEqual(retiredOf(org, dir), [], 'nothing is retired on a proof about an older state');
+    assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('managed-binding-generation-conflict') && w.includes('not retired')), r.warns.join('\n'));
+    assert.deepEqual(r.writes, []);
+    const kept = storeOf(org, dir).readGroup('form', KEY).committed;
+    assert.deepEqual([kept.generation, kept.root.id, kept.publication.state], [before.generation, before.root.id, 'not-needed'], 'the concurrent change is kept');
+    restore();
+    const { presenceReads } = deleteForm(org, id);
+    const next = await buildWarned(org, dir, removedForm());
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.equal(presenceReads.length, 2, 'the next build reads both layers again');
+    assert.equal(retiredNotices(next.warns).length, 1);
+    assert.deepEqual(retiredOf(org, dir).map((e) => [e.key, e.publication]), [[KEY, 'not-needed']]);
+  });
+});

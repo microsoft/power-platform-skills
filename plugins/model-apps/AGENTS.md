@@ -2899,8 +2899,9 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   group with no pending attempt and a publication that is `not-needed`, `confirmed`, or `owed` with no dispatch
   token is read by its id in both layers (`readSystemFormRootPresence`); only `absent` (the 0x80040217 404 in the
   saved AND the published read) retires it (`retireAbsentGroup` at its committed generation and root, two-layer
-  evidence) with the `managed-root-retired` notice naming the key. Present in either layer, a 403, a timeout or
-  any other answer keeps the group untouched. A `dispatching`/`unconfirmed` publication is never read or retired
+  evidence, bound to the `observeRetirement` observation taken before the reads, so a change to the group while
+  the build reads refuses it and a later build reads again) with the `managed-root-retired` notice naming the
+  key. Present in either layer, a 403, a timeout or any other answer keeps the group untouched. A `dispatching`/`unconfirmed` publication is never read or retired
   (the publish could still land: it is confirmed read-only or accepted as `publication-risk:<scopeKey>`), nor is
   a group the spec still declares (`form-layout-bound-row-missing`, repaired explicitly). A store with no such
   group adds no request. Tests: `tests/sdk-build-declared-forms.test.js` ("removed declared form", "deleted form

@@ -746,7 +746,8 @@ are only added.
   say it does not exist, the build stops managing it, including a publish of its table it still owed: it
   writes nothing, prints `managed-root-retired` with the form's key, and `--verify` no longer checks it.
   Until that build runs, `--verify` fails the form. A form found in either layer, or a read that fails (no
-  access, a timeout), is kept as it is. A form whose last publish is unconfirmed is not released this way,
+  access, a timeout), is kept as it is, and so is one whose record changes while the build reads it (another
+  build settled or changed it): a later build reads it again. A form whose last publish is unconfirmed is not released this way,
   because that publish may still complete: it stays blocked until a read confirms it or the maker accepts
   `publication-risk:table:<table>` (see "An unconfirmed publish" above). A form the spec still declares is
   not released either: its missing form stops the build (`form-layout-bound-row-missing`).

@@ -3835,9 +3835,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // build sends what it always sent. With the forms flag off nothing is declared and nothing runs here: a kill switch
   // must not retire a group the spec still declares.
   //
-  // The order is fixed: observe the group in the store, THEN read the service fresh, THEN retire against that
-  // observation, so a managed write that lands between the observation and the retirement invalidates the proof
-  // instead of being retired over. The observation and the store call live only in `observeRemovedForm` and
+  // The order is fixed: observe the group in the store (managed-bindings.js observeRetirement, which rereads the file and
+  // fingerprints the group, its attempt and its effects as they are now), THEN read the service fresh, THEN retire
+  // against that observation, so a managed write that lands on the group between the observation and the retirement
+  // (another run's commit, a new attempt, a publish settled against a live layer) makes the store refuse the retirement
+  // instead of retiring on a proof about an older state. An observation taken after the read proves nothing (the form
+  // may have come back between the read and it), so a refusal is never retried here with a new one: the next build
+  // observes and reads again. The observation and the store call live only in `observeRemovedForm` and
   // `retireObservedForm`. A pending attempt is never retired here (whatever its effect journal or send window shows):
   // the filter leaves out every group that has one.
   const retirableForm = (u, declared) => {
@@ -3845,28 +3849,37 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const p = u.group.publication;
     return !p || p.state === 'not-needed' || p.state === 'confirmed' || (p.state === 'owed' && p.dispatchToken === null);
   };
-  // The store's view of one group, taken just before its fresh read: null when it is no longer retirable.
+  // Step 1, taken just before the group's fresh read: the store's observation, and the generation and root it saw (from
+  // the store as reread by observeRetirement). null when there is no longer a retirable group to observe.
   const observeRemovedForm = (key, declared) => {
+    let observation;
+    try {
+      ({ observation } = bindingGroups.store.observeRetirement({ family: 'form', key }));
+    } catch {
+      return null; // the file no longer vouches for a group to retire: kept, as before
+    }
     const u = bindingGroups.store.snapshot().units().find((x) => x.family === 'form' && x.key === key);
-    return u && retirableForm(u, declared) ? { key, generation: u.group.generation, rootId: u.group.root.id } : null;
+    return u && retirableForm(u, declared) ? { key, observation, generation: u.group.generation, rootId: u.group.root.id } : null;
   };
-  // Retire the observed group on its two-layer absence proof. The store rereads under its lease and refuses when the
-  // group is no longer at the observed generation and root, or now has an attempt or a publish that could land.
-  const retireObservedForm = (observation) => bindingGroups.store.retireAbsentGroup({
+  // Step 3: retire the observed group on its two-layer absence proof. The store rereads under its lease and refuses when
+  // the group changed since the observation, is no longer at the observed generation and root, or now has an attempt or
+  // a publish that could land.
+  const retireObservedForm = (observed) => bindingGroups.store.retireAbsentGroup({
     family: 'form',
-    key: observation.key,
-    generation: observation.generation,
-    rootId: observation.rootId,
-    evidence: { kind: 'root-absent', rootId: observation.rootId, saved: 'not-found', published: 'not-found' },
+    key: observed.key,
+    generation: observed.generation,
+    rootId: observed.rootId,
+    observation: observed.observation,
+    evidence: { kind: 'root-absent', rootId: observed.rootId, saved: 'not-found', published: 'not-found' },
   });
   const retireAbsentRemovedForms = async () => {
     if (!declaredFeatureOn('forms') || !provision.dataverse) return;
     const declared = new Set((spec.forms || []).filter(isDeclaredFormOn).map((f) => formLayoutKey(f)));
     const keys = bindingGroups.store.snapshot().units().filter((u) => retirableForm(u, declared)).map((u) => u.key);
     for (const key of keys) {
-      const observation = observeRemovedForm(key, declared);
-      if (!observation) continue;
-      const { rootId } = observation;
+      const observed = observeRemovedForm(key, declared);
+      if (!observed) continue;
+      const { rootId } = observed;
       let presence;
       try {
         presence = await readSystemFormRootPresence(provision.dataverse, rootId);
@@ -3875,11 +3888,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       if (presence !== 'absent') continue;
       try {
-        retireObservedForm(observation);
+        retireObservedForm(observed);
       } catch (err) {
-        // The store changed under the read (another run's commit, a new attempt) or refused the write: nothing was
-        // retired, and the group stays exactly as it was.
-        if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": its form ${rootId} is gone, and its managed group was not retired (${(err && err.code) || 'error'}: ${String((err && err.message) || err)}); it is kept as it was.`);
+        // The store changed since the observation (another run's commit, a new attempt, a settled publish) or refused
+        // the write: nothing was retired, and the group stays exactly as it was.
+        if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": its form ${rootId} is gone, and its managed group was not retired (${(err && err.code) || 'error'}: ${String((err && err.message) || err)}); it is kept as it was, and a later build reads it again.`);
         continue;
       }
       if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": managed-root-retired — the spec no longer declares it and its form ${rootId} is gone (not found in the saved or the published layer), so its managed group was retired: it no longer holds or publishes its table, and verify no longer checks it. Nothing was written to the environment.`);
