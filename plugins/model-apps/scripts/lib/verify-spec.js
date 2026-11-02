@@ -30,7 +30,10 @@ const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntr
 // The fields an explicit layout prunes, as the destructive gate and the build's prune pass both name them.
 const { formRemovals } = require('./op-diff.js');
 const { rowOccupancy } = require('./form-occupancy.js');
-const { wantsTimeline, timelineVerifyProblem, FULL_BUILD } = require('./form-timeline.js');
+const { wantsTimeline, timelineVerifyProblem, FULL_BUILD, TIMELINE_CLASS_ID } = require('./form-timeline.js');
+const { isDeclaredForm, formLayoutKey, verifyDeclaredForm } = require('./form-layout-reconcile.js');
+const { declaredFeatureOn } = require('./declared-features.js');
+const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
@@ -2274,15 +2277,27 @@ async function verifySpec(spec, read, opts = {}) {
   // chart group is held to the row it is bound to, by a fresh read of the service by that id — the name checks above cannot tell a namesake
   // from the bound row. A group with an attempt still pending, or one whose stored record is not usable, proves nothing yet: it is listed as
   // unverified, never as a pass or a failure. Verify only reads: nothing here writes, binds, clears a debt or publishes.
+  //
+  // A committed FORM group the spec still declares (forms[].reconcile "declared") is held to its declaration and its last proof by the
+  // form helper's own oracle (lib/form-layout-reconcile.js verifyDeclaredForm): a fresh read of the form by the bound id through a
+  // throwaway workspace (`read.declaredForm`, never the build's local copy), every declared field, section, span, flag, handler and host,
+  // and every child the group proved still what and where it was proved. It needs the group's consumer state, which the manifest view
+  // leaves out: lib/declared-form-io.js readVerifyManifest adds it from the same discovery. One the spec no longer declares is held to
+  // its bound id, like a view.
   const managedManifest = opts.managedManifest;
   if (managedManifest && (managedManifest.groups.length || managedManifest.pending.length || managedManifest.invalid.length)) {
     plan.section(async ({ add, unverified }) => {
       for (const p of managedManifest.pending) unverified.push(`managed:${p.family} ${p.key} (${p.code})`);
       for (const p of managedManifest.invalid) unverified.push(`managed:${p.family} ${p.key} (${p.code || 'managed-binding-group-invalid'})`);
-      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'] };
+      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'], form: ['systemform', 'formid'] };
+      const declaredForms = declaredFormsByKey(spec);
       for (const g of managedManifest.groups) {
         const t = tables[g.family];
         if (!t) continue;
+        if (g.family === 'form' && declaredForms.has(g.key)) {
+          await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified });
+          continue;
+        }
         if (!read || typeof read.queryRecords !== 'function') { unverified.push(`managed:${g.family} ${g.key} (this reader cannot read by id)`); continue; }
         let rows = [];
         let readError = null;
@@ -2730,6 +2745,65 @@ function layoutAutoMatch(deployed) {
       return undefined;
     },
   };
+}
+
+// The declared forms (forms[].reconcile "declared") the spec holds while the declared form build is on (lib/declared-features.js),
+// by layout key (`<table>/<form type>/<name>`, lower case: formLayoutKey) — the key a committed form group is stored under.
+function declaredFormsByKey(spec) {
+  const out = new Map();
+  if (!declaredFeatureOn('forms')) return out;
+  for (const f of (spec && Array.isArray(spec.forms) ? spec.forms : [])) if (isDeclaredForm(f)) out.set(formLayoutKey(f), f);
+  return out;
+}
+
+// One committed form group the spec still declares, held to its declaration by the helper's oracle (verifyDeclaredForm) over a
+// fresh read of the bound form. What verify cannot rebuild exactly as the build did is checked as far as it can be, and said so:
+//   - a sub-grid's view is the build's resolved view id, which verify does not have: the host is matched on its relationship and
+//     child table with any view (the oracle's '' wildcard);
+//   - a quick view's form is found by its (table, name) as a QuickView form; none or several answering cannot be judged, so the
+//     host is left out and listed as unverified rather than failed.
+// A group whose publication is still in flight (dispatching or unconfirmed) is checked on its saved form like any other, and listed
+// as unverified too: the published layer it will show is not known yet.
+async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
+  const name = `${g.key} (${g.root.id})`;
+  if (!read || typeof read.declaredForm !== 'function') { unverified.push(`managed:form ${g.key} (this reader cannot read a form by id)`); return; }
+  if (!g.consumerState || !g.consumerState.children) { unverified.push(`managed:form ${g.key} (the managed group carries no child state to check)`); return; }
+  const publication = g.publication && g.publication.state;
+  if (publication === 'dispatching' || publication === 'unconfirmed') unverified.push(`managed:form ${g.key} (its publication is not confirmed: ${publication})`);
+  let liveForm;
+  try {
+    liveForm = await read.declaredForm(g.root.id);
+  } catch (error) {
+    add('managed-form', name, false, String((error && error.message) || error));
+    return;
+  }
+  const subgrids = [];
+  const subgridSpecs = [...(f.subgrids || [])];
+  if (f.autoSubgrids) {
+    const declared = new Set(subgridSpecs.map((s) => String(s.childEntity).toLowerCase()));
+    for (const c of childRelationshipsFor(spec, f.entity)) if (!declared.has(c.childEntity)) subgridSpecs.push({ childEntity: c.childEntity });
+  }
+  for (const sg of subgridSpecs) {
+    const rel = sg && sg.childEntity ? subgridRelationshipName(spec, f.entity, sg.childEntity) : null;
+    if (!rel) { unverified.push(`managed:form ${g.key} (the sub-grid for '${sg && sg.childEntity}' names no relationship the spec declares)`); continue; }
+    subgrids.push({ targetEntity: String(sg.childEntity).toLowerCase(), relationshipName: rel, viewId: '' });
+  }
+  const quickViews = [];
+  for (const qv of f.quickViews || []) {
+    if (!qv || !qv.lookup || !qv.targetEntity || !qv.form) continue;
+    const target = String(qv.targetEntity).toLowerCase();
+    let rows = [];
+    try {
+      rows = typeof read.queryRecords === 'function'
+        ? await read.queryRecords('systemform', { select: ['formid'], filter: `type eq 6 and objecttypecode eq '${odataLit(target)}' and name eq '${odataLit(qv.form)}'`, top: 2 })
+        : [];
+    } catch { rows = []; }
+    if (!rows || rows.length !== 1 || !rows[0].formid) { unverified.push(`managed:form ${g.key} (the quick view form '${qv.form}' of '${target}' could not be identified)`); continue; }
+    quickViews.push({ lookupFieldName: String(qv.lookup).toLowerCase(), targetEntity: target, quickViewFormId: rows[0].formid });
+  }
+  const intentTabs = compileFormIntent(spec, f, { notesClassId: TIMELINE_CLASS_ID }).tabs;
+  const issues = verifyDeclaredForm({ form: f, spec, intentTabs, hosts: { subgrids, quickViews }, events: f.events || [], liveForm, group: g });
+  add('managed-form', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
 }
 
 // Whether each sub-grid that declares where it goes (`tab` / `column` / `after` / `before`) is where the spec

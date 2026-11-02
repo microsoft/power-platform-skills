@@ -2855,7 +2855,7 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   build at once (`managedStop`, never retried); its solution membership is added before its binding is
   recorded. Declared process flows, dashboards and business rules are not reconciled in this release; the
   build keeps its existing behaviour for each.
-- **Form layout** (`forms[].reconcile: "declared"`, `lib/form-layout-reconcile.js`, behind
+- **Form layout** (`forms[].reconcile: "declared"`, `lib/form-layout-reconcile.js`, enabled by
   `DECLARED_FEATURES.forms` in `lib/declared-features.js`): the order, section and spans of declared
   fields, the declared tabs and sections, a stated section width, stated `readOnly` / `hidden` (an
   explicit `false` clears), and a missing timeline, sub-grid, quick view or handler. Every control the spec
@@ -2877,6 +2877,15 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   form wire (`tests/helpers/managed-wire.js`) answers a version that moves with the saved layer, which
   the service does not do: a test through it proves the SDK's re-read and refusal path, and a test whose
   double answers a version conflict proves the build's handling of that refusal, never a service guard.
+  **Verify and download** (`lib/declared-form-io.js`): verify reads each bound declared form fresh by its
+  recorded id through the isolated reader (`readerFor(...).declaredForm`, never `readGroup`) and runs
+  `verifyDeclaredForm` against the declaration and the store's recorded children (`managed-form` check);
+  a form whose publication is `dispatching` or `unconfirmed`, or a reader that cannot read by id, is listed
+  unverified, never passed. A sub-grid's view matches any view, and a quick view's target is looked up by
+  name (ambiguous → unverified). `download-model-app.js --include-managed --managed-manifest <store file>`
+  (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
+  pending, unreadable or invalid one is left out and named. A plain download reads no form. The download
+  writes no store, so a rebuild from the downloaded folder needs `adopt:form:<key>` once.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.

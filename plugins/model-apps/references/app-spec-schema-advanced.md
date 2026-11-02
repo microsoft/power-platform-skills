@@ -715,6 +715,15 @@ are only added.
   reject a stale edit of it. The build re-reads the saved form just before it writes and stops when it
   changed since the build read it. An edit made in Maker in the instant between that check and the
   write cannot be detected: do not edit a declared form while a build runs.
+- **Verify.** `--verify` reads each bound declared form again by its id and checks it against the spec:
+  field order, sections, spans, stated flags, sub-grids, quick views and handlers, and the controls the
+  build added. A form whose last publish is not confirmed is listed as unverified, not passed. A
+  sub-grid's view is not compared; a quick view whose form name matches more than one form is unverified.
+- **Download.** A plain download leaves declared forms out. To bring them back, pass both
+  `--include-managed` and `--managed-manifest <store file>`, the `managed-bindings.<hash>.json` file in the
+  build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
+  `reconcile: "declared"`; a form that is pending, gone or not valid is left out and named. The downloaded
+  folder has no store, so its first rebuild needs `--authorize "adopt:form:<key>"` for each form.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

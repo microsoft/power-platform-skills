@@ -61,11 +61,14 @@ const { connectionRowFromSdk, listConnectionsWithPac } = require('./list-connect
 const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js');
 const { approvalKey } = require('./lib/reconcile-common.js');
 const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
+const { isDeclaredForm, formLayoutKey } = require('./lib/form-layout-reconcile.js');
+const { declaredFeatureOn } = require('./lib/declared-features.js');
 const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
-const { readManagedManifest, publicationRiskApproval } = require('./lib/managed-bindings.js');
+const { publicationRiskApproval } = require('./lib/managed-bindings.js');
+const { readVerifyManifest } = require('./lib/declared-form-io.js');
 const { createAttemptSendObserver } = require('./lib/managed-feature-contract.js');
 const { emitSkillCompleted, createStepTally } = require('./lib/telemetry/skill-completed.js');
 
@@ -981,9 +984,10 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
           // verify that does not know it holds them to the organization's and reports the captions it was just given as missing. And the app
           // folder, from which a web resource's `contentPath` is read to compare its deployed content (verify-spec.js, the web-resource check).
           // And the managed bindings the same workspace holds, read afresh after the build, exactly as the standalone verify reads them
-          // (verify-model-app.js): a bound view or chart is held to its bound id, and a pending or unusable group is listed as unverified.
+          // (verify-model-app.js): a bound view or chart is held to its bound id, a bound declared form to its declaration and last proof,
+          // and a pending or unusable group is listed as unverified.
           const managedManifest = spec.solution && spec.solution.uniqueName
-            ? readManagedManifest({ workspaceDir: applyWorkspaceOf(opts), environment: opts.env, appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
+            ? readVerifyManifest({ workspaceDir: applyWorkspaceOf(opts), environment: opts.env, appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
             : undefined;
           const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode, appDir: opts.appDir, configurationBindings: opts.configurationBindings, managedManifest });
           const present = vr.checks.length - vr.missing.length;
@@ -1216,7 +1220,12 @@ function authorizationKeys(argv, spec) {
   // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
   // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick
   // Find view's (entities[].quickFind, lib/quick-find.js) is its table, in lower case.
-  const declared = { view: new Set(), chart: new Set(), quickfind: new Set() };
+  // A declared form's (forms[].reconcile "declared", lib/form-layout-reconcile.js) is its layout key, `<table>/<form type>/<name>`,
+  // all in lower case (formLayoutKey); only while the declared form build is on (lib/declared-features.js), as validation allows it.
+  const declared = { view: new Set(), chart: new Set(), quickfind: new Set(), form: new Set() };
+  if (declaredFeatureOn('forms')) {
+    for (const f of (spec && Array.isArray(spec.forms) ? spec.forms : [])) if (isDeclaredForm(f)) declared.form.add(formLayoutKey(f));
+  }
   for (const v of (spec && Array.isArray(spec.views) ? spec.views : [])) {
     if (isDeclaredView(v)) { const { intent } = compileViewIntent(v); if (intent) declared.view.add(intent.key); }
   }
@@ -1247,6 +1256,8 @@ function authorizationKeys(argv, spec) {
     view: { verbs: ['adopt', 'overwrite'], id: tableAndName, needs: 'a view with reconcile: "declared"' },
     chart: { verbs: ['adopt', 'overwrite'], id: tableAndName, needs: 'a chart with reconcile: "declared"' },
     quickfind: { verbs: ['overwrite'], id: (text) => (/^[A-Za-z0-9_]+$/.test(text) ? lower(text) : null), needs: 'a table that declares quickFind' },
+    // <table>/<form type>/<name>, matched in any case: the form's key is lower case throughout (formLayoutKey), as the build matches forms.
+    form: { verbs: ['adopt', 'overwrite'], id: (text) => (/^[A-Za-z0-9_]+\/[A-Za-z]+\/.+$/.test(text) ? lower(text) : null), needs: 'a form with reconcile: "declared"' },
   };
   const approve = (verb, family, id) => (verb === 'adopt' ? adopt : overwrite).add(approvalKey(family, id));
   // publication-risk:table:<table> | publication-risk:dashboard:<id> — the maker accepts the risk of a managed publish whose
@@ -1286,9 +1297,10 @@ function authorizationKeys(argv, spec) {
       else approve(verb, family, id);
       continue;
     }
-    // The untyped form, adopt:account/My Accounts | overwrite:new_ticket/Open Tickets: whichever single declared view or chart it
+    // The untyped form, adopt:account/My Accounts | overwrite:new_ticket/Open Tickets: whichever single declared view, chart or form it
     // names. Candidates are found case-folded on both table and name, so two artifacts whose names differ only in case are both
-    // candidates and the key is refused as ambiguous; a single candidate is still approved only on an exact name match, as before.
+    // candidates and the key is refused as ambiguous; a single view or chart candidate is still approved only on an exact name match,
+    // as before (a form's key is lower case throughout, so it has no other spelling to match exactly).
     const untyped = /^(adopt|overwrite):([A-Za-z0-9_]+)\/(.+)$/.exec(text);
     if (untyped) {
       const verb = untyped[1];
@@ -1297,6 +1309,9 @@ function authorizationKeys(argv, spec) {
       for (const family of ['view', 'chart']) {
         for (const id of declared[family]) if (lower(id) === lower(wanted)) candidates.push({ family, id });
       }
+      // A declared form's key has the same <table>/... shape (`<table>/<form type>/<name>`), so an untyped key may name one; its
+      // key is lower case, so it matches in any case. It is one more candidate: a key that could also be a view or chart is refused.
+      for (const id of declared.form) if (id === lower(wanted)) candidates.push({ family: 'form', id });
       // A table's Quick Find view is a view too, and takes an overwrite: an overwrite whose name is "quickFind" on a table that
       // declares quickFind might mean it. It is one more candidate: alone, overwrite:<table>/quickFind (that exact name) means it.
       const table = lower(untyped[2]);
@@ -1305,20 +1320,20 @@ function authorizationKeys(argv, spec) {
         const typedKeys = candidates.map((c) => `${verb}:${approvalKey(c.family, c.id)}`);
         if (quickFindToo) typedKeys.push(`overwrite:${approvalKey('quickfind', table)}`);
         problems.push(`'${key}' could approve more than one declared artifact; name the one you mean with its typed key: ${typedKeys.join(' or ')}`);
-      } else if (candidates.length === 1 && candidates[0].id === wanted) {
-        approve(verb, candidates[0].family, wanted);
+      } else if (candidates.length === 1 && (candidates[0].family === 'form' || candidates[0].id === wanted)) {
+        approve(verb, candidates[0].family, candidates[0].id);
       } else if (quickFindToo && candidates.length === 0 && untyped[3] === 'quickFind') {
         approve(verb, 'quickfind', table);
       } else if (quickFindToo) {
         problems.push(`'${key}' does not name a declared view or chart; to replace the local copy of ${table}'s Quick Find view use overwrite:${approvalKey('quickfind', table)}`);
       } else {
-        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${wanted})`);
+        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart${declared.form.size ? ', or a form,' : ''} with reconcile: "declared" keyed ${wanted})`);
       }
       continue;
     }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name> or publication-risk:table:<table>)`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, adopt:form:<table>/<form type>/<name>, overwrite:form:<table>/<form type>/<name>, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name> or publication-risk:table:<table>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);

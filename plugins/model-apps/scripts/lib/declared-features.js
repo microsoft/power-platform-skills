@@ -7,8 +7,9 @@
 // One object, read at call time by both gates, so the two can never disagree. Tests that pin the dispatch before the flag is on
 // set the property for the duration of one test and restore it; production code never writes it.
 const DECLARED_FEATURES = {
-  // forms[].reconcile: "declared" — the managed form layout (lib/form-layout-reconcile.js reconcileDeclaredForm).
-  forms: false,
+  // forms[].reconcile: "declared" — the managed form layout (lib/form-layout-reconcile.js reconcileDeclaredForm). On: the build, verify
+  // (verify-spec.js verifyManagedForm), the explicit managed download (lib/declared-form-io.js) and the typed approvals are wired.
+  forms: true,
 };
 
 const declaredFeatureOn = (name) => DECLARED_FEATURES[name] === true;

@@ -164,7 +164,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   at that instant cannot be detected. Never write `genPages`, `prune`, `isDefault`,
   `deactivateOtherMainForms`, `securityRoles` or a `mainFormOrder` place on a declared form (refused).
   An existing form is bound only with `--authorize "adopt:form:<table>/<formtype>/<name>"` (lower case;
-  `overwrite:form:` for changes made elsewhere): explain it and let the maker choose.
+  `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
+  declared form against the spec (a form whose publish is unconfirmed is unverified, not passed). A download
+  brings declared forms back only with `--include-managed --managed-manifest <store file>`; its first rebuild
+  needs `adopt:form:<key>` for each, because the downloaded folder has no store.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run
@@ -866,7 +869,9 @@ not everything:**
   `connectorBindings` / `actionBindings`) into `pages[]` + their `.tsx`, the referenced
   entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
   carrying the deployed view/chart ids), the icon web resources, and the solution.
-- **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty.
+- **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty
+  (a declared form comes back only with `--include-managed --managed-manifest <store file>`; see
+  **Declared form layouts**).
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.
   The download names every one it leaves out — the command-bar buttons of the app's tables included —

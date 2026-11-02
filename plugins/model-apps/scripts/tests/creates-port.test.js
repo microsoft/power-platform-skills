@@ -224,10 +224,11 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 });
 
 // --- no regression: a default build cannot reach any of this ---------------------------------------------------------------------
-// Walks the build's relative require graph from its entry points. The port is wired in at exactly one edge: the engine requires
-// creates-stable-build.js inside the branch a spec with createIdentity takes. Apart from that gated edge the default build must load
-// none of the new modules, and must still hand the engine the plain pass-through.
-const GATED_EDGE = ['sdk-build.js', 'creates-stable-build.js'];
+// Walks the build's relative require graph from its entry points. The port is wired in at exactly two edges: the engine requires
+// creates-stable-build.js inside the branch a spec with createIdentity takes, and creates-catalog.js inside the settlement of a
+// declared form (forms[].reconcile "declared"), the only place a build without createIdentity takes ids from a catalog. Apart
+// from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
+const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -241,7 +242,7 @@ function requireGraph(entry, { gated = false } = {}) {
     for (const m of src.matchAll(/require\(\s*(['"])(\.{1,2}\/[^'"]+)\1\s*\)/g)) {
       let target = path.resolve(path.dirname(file), m[2]);
       if (!fs.existsSync(target) && fs.existsSync(`${target}.js`)) target = `${target}.js`;
-      if (gated && path.basename(file) === GATED_EDGE[0] && path.basename(target) === GATED_EDGE[1]) continue;
+      if (gated && GATED_EDGES.some(([from, to]) => path.basename(file) === from && path.basename(target) === to)) continue;
       if (/\.js$/.test(target) && fs.existsSync(target) && !target.includes(`${path.sep}vendor${path.sep}`)) stack.push(target);
     }
   }
@@ -255,6 +256,8 @@ test('the default build loads none of the stable-identity modules and still wire
   const engine = fs.readFileSync(path.join(SCRIPTS, 'lib', 'sdk-build.js'), 'utf8');
   assert.match(engine, /if \(spec\.createIdentity !== undefined\) \{\n {4}const \{ createStableCreates \} = require\('\.\/creates-stable-build\.js'\);/);
   assert.equal(engine.match(/require\('\.\/creates-stable-build\.js'\)/g).length, 1, 'the only edge into the stable modules is the gated one');
+  assert.match(engine, /if \(!formCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
+  assert.equal(engine.match(/require\('\.\/creates-catalog\.js'\)/g).length, 1, 'the catalog is required only where a declared form settles');
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');

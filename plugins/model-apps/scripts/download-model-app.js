@@ -7,12 +7,20 @@
 // pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities] [--include-managed --managed-manifest <file>]
 //
 // `--include-capabilities` also reads, per downloaded table, the Date and Time behaviours of its columns and its search, change tracking
 // and duplicate detection flags (one read each, and the date read only for a table with a Date and Time column), and writes the
 // non-default ones into the spec (downloadedColumnFeatures, downloadedTableFlags). Off by default, so a download makes the reads it
 // always made.
+//
+// `--include-managed --managed-manifest <file>` (both, or neither) restores the declared forms (forms[].reconcile "declared") a build
+// settled: <file> is that build's managed binding store, `<app folder>/.maker-workspace/managed-bindings.<hash>.json`, read only and
+// refused unless it is the store of this app and solution on this environment. Each committed form group is restored as the
+// declaration it was built from only when a fresh read of its form still shows exactly what its last proof saw; any other is named
+// on stderr and in the result's `managedForms.stale`, and left out of forms[] as every form is without the flags. The download writes
+// no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>.
+// Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
 // earlier download of the SAME app gave it (the app-spec.json already in --out, when its app.uniqueName is this app's). If that earlier spec gives a page keys that
@@ -44,6 +52,7 @@ const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./li
 const { makeGenpageSdk, unescapePacName, pageFolderFiles } = require('./lib/genpage-sdk.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR } = require('./lib/page-manifest.js');
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
+const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -3683,12 +3692,12 @@ async function main(deps = {}) {
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities]';
-  // `--allow-lossy-download`, `--reset-page-keys` and `--include-capabilities` are real boolean switches, so they stay out of needValue; everything else
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities] [--include-managed --managed-manifest <managed binding store file>]';
+  // `--allow-lossy-download`, `--reset-page-keys`, `--include-capabilities` and `--include-managed` are real boolean switches, so they stay out of needValue; everything else
   // feeds a URL, an app id, a path or an LCID and must not receive `true`.
   const flagError = validateFlags(argv, {
-    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode', 'include-capabilities'],
-    needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode'],
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode', 'include-capabilities', 'include-managed', 'managed-manifest'],
+    needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode', 'managed-manifest'],
   });
   if (flagError) {
     makeWritesBlocking(io.stderr);
@@ -3703,6 +3712,17 @@ async function main(deps = {}) {
   // Off unless it is given: it is a decision about every environment that holds a copy of the earlier spec (see the header), never a default.
   const resetPageKeys = flags['reset-page-keys'] === true;
   const includeCapabilities = flags['include-capabilities'] === true;
+  // The explicit managed download (declared forms, forms[].reconcile "declared"): both flags or neither. `--include-managed` alone would
+  // have to guess which binding store to trust, and `--managed-manifest` alone would be a store read for nothing, so either alone is a
+  // usage error, before anything is opened. Without them the download is exactly what it always was.
+  const includeManaged = flags['include-managed'] === true;
+  const managedManifestFile = typeof flags['managed-manifest'] === 'string' ? flags['managed-manifest'] : '';
+  if (includeManaged !== !!managedManifestFile) {
+    makeWritesBlocking(io.stderr);
+    io.stderr.write(`✗ --include-managed and --managed-manifest <file> are given together: --include-managed names what to restore, --managed-manifest the binding store it is restored from\n${USAGE}\n`);
+    io.exit(1);
+    return;
+  }
   if (!env || !appArg) {
     io.stderr.write(USAGE + '\n');
     io.exit(1);
@@ -3814,6 +3834,27 @@ async function main(deps = {}) {
     const specPath = path.join(outDir, 'app-spec.json');
     // Preserve the author's higher capability floor BEFORE validation, never after the version gate.
     preserveAuthoredLanguageCode(spec, specPath);
+    // The explicit managed download: each declared form a committed group of the named binding store proves is restored into forms[]
+    // as the declaration it was built from (lib/declared-form-io.js restoreManagedForms), and every other is named, never silently
+    // dropped. A store file that is not this app's on this environment stops the download before anything is written.
+    let managedForms = null;
+    if (includeManaged) {
+      try {
+        managedForms = await restoreManagedForms({
+          sdk,
+          spec,
+          file: managedManifestFile,
+          environment: dataverseOrigin(env),
+          appUniqueName: appUnique,
+          solutionUniqueName: spec.solution && spec.solution.uniqueName,
+          validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
+        });
+      } catch (e) {
+        finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
+        return;
+      }
+      for (const s of managedForms.stale) io.stderr.write(`WARNING: managed form ${s.key} was not restored: ${s.reason}. It is left out of forms[], as every form is without --include-managed.\n`);
+    }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
       finish(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
@@ -3848,7 +3889,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

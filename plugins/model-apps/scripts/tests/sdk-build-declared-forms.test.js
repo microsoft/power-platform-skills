@@ -19,6 +19,12 @@ const { openManagedBindings } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { buildModelApp, authorizationKeys } = require('../build-model-app.js');
+const { readerFor, isolatedReaderFor } = require('../verify-model-app.js');
+const { main: downloadMain } = require('../download-model-app.js');
+const { verifySpec } = require('../lib/verify-spec.js');
+const { readVerifyManifest } = require('../lib/declared-form-io.js');
+const { storeFileName } = require('../lib/managed-bindings.js');
+const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { DECLARED_FEATURES } = require('../lib/declared-features.js');
 const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
 const { gatedClient } = require('./helpers/gated-fake-client.js');
@@ -324,5 +330,231 @@ test('the CLI prints the remedy and typed approval from the refusal, records onl
     assert.equal(next.err, undefined, chainText(next.err));
     assert.deepEqual(next.tablePublishes, [['contoso_item']]);
     assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'confirmed');
+  });
+});
+
+// --- the round trip: the typed form approval, verify and the explicit managed download ----------------------------------------
+
+test('--authorize adopt|overwrite:form:<key> is read in any case; an untyped key names the single declared form; an ambiguous or undeclared one is refused', async () => {
+  await withForms(true, () => {
+    const spec = makeSpec();
+    const typed = authorizationKeys(['--authorize', 'adopt:form:Contoso_Item/Main/Declared Item', '--authorize', `overwrite:form:${KEY}`], spec);
+    assert.equal(typed.error, null);
+    assert.deepEqual([...typed.adopt], [`form:${KEY}`]);
+    assert.deepEqual([...typed.overwrite], [`form:${KEY}`]);
+    const untyped = authorizationKeys(['--authorize', 'adopt:contoso_item/Main/Declared Item'], spec);
+    assert.equal(untyped.error, null);
+    assert.deepEqual([...untyped.adopt], [`form:${KEY}`]);
+    for (const key of ['adopt:form:contoso_item/main/other form', 'adopt:form:contoso_item', 'adopt:contoso_item/main/other form']) {
+      const r = authorizationKeys(['--authorize', key], spec);
+      assert.match(String(r.error), /approves an artifact the spec does not declare/, key);
+      assert.equal(r.adopt.size + r.overwrite.size, 0, key);
+    }
+    // A declared view whose `<table>/<name>` spells the form's key: the untyped key could mean either.
+    const both = makeSpec();
+    both.views = [{ entity: 'contoso_item', name: 'Main/Declared Item', reconcile: 'declared', columns: ['contoso_name'] }];
+    const ambiguous = authorizationKeys(['--authorize', 'adopt:contoso_item/Main/Declared Item'], both);
+    assert.match(String(ambiguous.error), /could approve more than one declared artifact/);
+    assert.ok(ambiguous.error.includes(`adopt:form:${KEY}`) && ambiguous.error.includes('adopt:view:contoso_item/Main/Declared Item'), ambiguous.error);
+    assert.equal(ambiguous.adopt.size, 0);
+  });
+  await withForms(false, () => {
+    const off = authorizationKeys(['--authorize', `adopt:form:${KEY}`], makeSpec());
+    assert.match(String(off.error), /approves an artifact the spec does not declare/);
+    assert.equal(off.adopt.size, 0);
+  });
+});
+
+// verify's reader as the CLI builds it (verify-model-app.js readerFor): a declared form is read by its bound id on a throwaway SDK
+// (isolatedReaderFor), never the build's. The table, column and sitemap reads verify also makes are answered plainly.
+async function verifyReader(org) {
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(newDir()), instanceUrl: org.origin, httpClient: org.httpClient });
+  await sdk.initWorkspace();
+  const cli = readerFor(sdk, APP, { isolatedReader: isolatedReaderFor(org.origin, { httpClient: org.httpClient }) });
+  const formReads = [];
+  return {
+    formReads,
+    read: {
+      findTable: async () => ({ logicalName: 'contoso_item' }),
+      findColumns: async () => [{ logicalName: 'contoso_name' }, { logicalName: 'contoso_code' }],
+      queryRecords: (table, o) => sdk.queryRecords(table, o),
+      sitemapXml: async () => '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>',
+      declaredForm: async (id) => { formReads.push(id); return cli.declaredForm(id); },
+    },
+  };
+}
+const managedChecks = (r) => r.checks.filter((c) => c.kind === 'managed-form');
+const manifestOf = (org, dir) => readVerifyManifest({ workspaceDir: dir, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION });
+const reordered = () => { const s = makeSpec(); s.forms[0].tabs[0].sections[0].fields = ['contoso_code', 'contoso_name']; return s; };
+
+test('verify holds a bound declared form to its declaration by a fresh read of its id, and fails it on a declaration the form does not hold', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const id = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+    const { read, formReads } = await verifyReader(org);
+    const pass = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(managedChecks(pass).map((c) => [c.name, c.present]), [[`${KEY} (${id})`, true]]);
+    assert.deepEqual(formReads, [id], 'read by the bound id');
+    assert.deepEqual((pass.unverified || []).filter((u) => u.startsWith('managed:')), []);
+    const fail = await verifySpec(reordered(), read, { managedManifest: manifestOf(org, dir) });
+    const [check] = managedChecks(fail);
+    assert.equal(check.present, false);
+    assert.match(check.detail, /form-field-order: the fields of 'main' read contoso_name, contoso_code, not contoso_code, contoso_name/);
+    assert.ok(fail.missing.some((m) => m.kind === 'managed-form'), 'a failing bound form fails verify');
+    // A child the group proved, now gone from the form, fails it too, even where the declaration still matches.
+    const group = manifestOf(org, dir);
+    const [locator] = Object.keys(group.groups[0].consumerState.children);
+    group.groups[0].consumerState.children[locator].id = '00000000-0000-0000-0000-0000000000aa';
+    assert.match(managedChecks(await verifySpec(makeSpec(), read, { managedManifest: group }))[0].detail, /form-managed-child: .* is not on the form/);
+  });
+});
+
+test('verify lists a bound form whose publication is not confirmed as unverified, and a reader that cannot read by id never passes it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const restore = losePublish(org, { applied: false });
+    assert.ok((await build(org, dir, makeSpec())).err);
+    restore();
+    const { read } = await verifyReader(org);
+    const r = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(org, dir) });
+    assert.ok(r.unverified.some((u) => u.startsWith(`managed:form ${KEY} (its publication is not confirmed`)), JSON.stringify(r.unverified));
+    assert.equal(managedChecks(r)[0].present, true, 'the saved form is still checked');
+    const { declaredForm, ...plain } = read;
+    void declaredForm;
+    const blind = await verifySpec(makeSpec(), plain, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(managedChecks(blind), []);
+    assert.ok(blind.unverified.includes(`managed:form ${KEY} (this reader cannot read a form by id)`), JSON.stringify(blind.unverified));
+  });
+});
+
+// download-model-app.js main with its side effects replaced: the download's SDK is a real one over the fake org (it answers the app's
+// unique name itself), and runDownload answers the spec a download of this app would hydrate (forms[] empty, as every download).
+async function download(org, out, argv, extra = {}) {
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(newDir()), instanceUrl: org.origin, httpClient: org.httpClient });
+  await sdk.initWorkspace();
+  const dl = Object.create(sdk);
+  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
+  const downloaded = makeSpec({ declared: false });
+  downloaded.forms = [];
+  const emitted = [];
+  const said = [];
+  let exited = null;
+  const mark = org.calls.length;
+  await downloadMain({
+    argv: ['--env', org.origin, '--app', '00000000-0000-0000-0000-00000000a221', '--out', out, ...argv],
+    stderr: { write: (text) => { said.push(String(text)); return true; } },
+    exit: (code) => { exited = code; },
+    emitResult: (ok, payload) => emitted.push({ ok, payload }),
+    preflightAuth: async () => ({ ok: true }),
+    makeDownloadSdk: async () => ({ sdk: dl, cleanup() {} }),
+    makeGenpageSdk: () => ({}),
+    runDownload: async () => ({ ok: true, spec: downloaded, pages: [], entities: ['contoso_item'], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [] }),
+    ...extra,
+  });
+  const specFile = path.join(out, 'app-spec.json');
+  return { emitted, said: said.join(''), exited, calls: org.calls.slice(mark), written: fs.existsSync(specFile) ? JSON.parse(fs.readFileSync(specFile, 'utf8')) : null };
+}
+const storeFileOf = (org, dir) => path.join(dir, storeFileName(environmentFingerprint(org.origin), APP, SOLUTION));
+
+test('the explicit managed download restores a proved declared form from the named binding store, and names any it cannot restore', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const id = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(org, dir)];
+    const restored = await download(org, newDir(), flags);
+    assert.equal(restored.emitted.length, 1);
+    assert.equal(restored.emitted[0].ok, true, JSON.stringify(restored.emitted));
+    assert.deepEqual(restored.emitted[0].payload.managedForms, { restored: [KEY], stale: [] });
+    assert.deepEqual(restored.written.forms, makeSpec().forms, 'the declaration it was built from, as written');
+    // A form that cannot be read is named, left out, and the rest of the download is written.
+    const gone = org.intercept((c) => c.method === 'GET' && c.path.toLowerCase().startsWith(`/systemforms(${id})`), () => ({ status: 404, headers: {}, body: { error: { code: '0x80040217', message: 'systemform does not exist' } } }));
+    const unread = await download(org, newDir(), flags);
+    gone();
+    assert.equal(unread.emitted[0].ok, true);
+    assert.deepEqual(unread.emitted[0].payload.managedForms.restored, []);
+    assert.match(unread.emitted[0].payload.managedForms.stale[0].reason, new RegExp(`form ${id} could not be read`));
+    assert.match(unread.said, new RegExp(`WARNING: managed form ${KEY} was not restored: form ${id} could not be read`));
+    assert.deepEqual(unread.written.forms, []);
+    // One whose declaration the downloaded spec cannot hold is named and left out; the spec is still written.
+    const refusing = await download(org, newDir(), flags, {
+      validateAppSpec: (s, o) => ((s.forms || []).length ? { ok: false, errors: ['forms: not in this download'], warnings: [] } : validateAppSpec(s, o)),
+    });
+    assert.equal(refusing.emitted[0].ok, true);
+    assert.match(refusing.emitted[0].payload.managedForms.stale[0].reason, /does not validate in the downloaded spec \(forms: not in this download\)/);
+    assert.deepEqual(refusing.written.forms, []);
+  });
+});
+
+test('the explicit managed download refuses a store file that is not this app\'s, or one flag without the other; without them it reads no form', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const copy = path.join(newDir(), 'managed-manifest.json');
+    fs.copyFileSync(storeFileOf(org, dir), copy);
+    const out = newDir();
+    const wrong = await download(org, out, ['--include-managed', '--managed-manifest', copy]);
+    assert.equal(wrong.emitted[0].ok, false);
+    assert.equal(wrong.emitted[0].payload.code, 'managed-manifest-unusable');
+    assert.match(wrong.emitted[0].payload.error, /is not the managed binding store of app contoso_declaredforms .*Nothing was written/);
+    assert.equal(wrong.written, null, 'nothing is written');
+    for (const argv of [['--include-managed'], ['--managed-manifest', storeFileOf(org, dir)]]) {
+      const usage = await download(org, newDir(), argv);
+      assert.equal(usage.exited, 1, argv.join(' '));
+      assert.deepEqual(usage.emitted, []);
+    }
+    const plain = await download(org, newDir(), []);
+    assert.equal(plain.emitted[0].ok, true);
+    assert.equal('managedForms' in plain.emitted[0].payload, false);
+    assert.deepEqual(plain.calls.filter((c) => /^\/systemforms/i.test(c.path)), [], 'no form is read');
+    assert.deepEqual(plain.written.forms, []);
+  });
+});
+
+test('the enabled feature through the CLI: the printed typed approval binds the form, verify passes then fails a changed declaration, and the managed download restores it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    assert.equal((await build(org, newDir(), makeSpec())).err, undefined, 'another workspace made the form');
+    const appDir = newDir();
+    const dir = path.join(appDir, '.maker-workspace');
+    fs.mkdirSync(dir);
+    const changed = reordered();
+    const { read } = await verifyReader(org);
+    const cli = async (spec, extra = {}) => {
+      const barrier = createPublicationBarrier();
+      const sendObserver = createAttemptSendObserver();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, sendObserver) });
+      await sdk.initWorkspace();
+      let verified = null;
+      let err;
+      try {
+        await buildModelApp(spec, { apply: true, env: org.origin, workspaceDir: dir, appDir, retryDelayMs: 0, ...extra }, {
+          sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases: ['forms'] }), publicationBarrier: barrier, sendObserver, warn: () => {}, log: () => {},
+          verify: async (s, o) => { verified = await verifySpec(s, read, o); return verified; },
+        });
+      } catch (e) { err = e; }
+      return { err, verified };
+    };
+    const halted = await cli(changed);
+    assert.ok(halted.err, 'the unbound form is not taken over');
+    const printed = /--authorize "([^"]+)"/.exec(halted.err.message);
+    assert.ok(printed, halted.err.message);
+    assert.equal(printed[1], `adopt:form:${KEY}`);
+    const keys = authorizationKeys(['--authorize', printed[1]], changed);
+    assert.equal(keys.error, null);
+    const bound = await cli(changed, { authorizedAdoption: keys.adopt, verify: true });
+    assert.equal(bound.err, undefined, chainText(bound.err));
+    assert.equal(rootOrigin(storeOf(org, dir).readGroup('form', KEY).committed), 'adopted');
+    assert.deepEqual(managedChecks(bound.verified).map((c) => c.present), [true], 'the inline verify reads the bound form');
+    const standalone = await verifySpec(makeSpec(), read, { managedManifest: manifestOf(org, dir) });
+    assert.equal(managedChecks(standalone)[0].present, false, 'the form no longer holds the original declaration');
+    const downloaded = await download(org, newDir(), ['--include-managed', '--managed-manifest', storeFileOf(org, dir)]);
+    assert.deepEqual(downloaded.emitted[0].payload.managedForms, { restored: [KEY], stale: [] });
+    assert.deepEqual(downloaded.written.forms, changed.forms);
   });
 });

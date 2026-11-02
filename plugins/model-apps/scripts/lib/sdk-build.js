@@ -189,7 +189,6 @@ const isDeclaredFormOn = (f) => declaredFeatureOn('forms') && !!f && f.reconcile
 const formOrderForms = (spec) => (spec.forms || []).filter((f) => !isDeclaredFormOn(f));
 const formOrderSpecOf = (spec) => ((spec.forms || []).some(isDeclaredFormOn) ? { ...spec, forms: formOrderForms(spec) } : spec);
 const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent } = require('./form-layout-reconcile.js');
-const { createIntentCatalog } = require('./creates-catalog.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -6778,7 +6777,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const key = formLayoutKey(f);
       return runner.run('forms', `declared form "${key}"`, async () => {
         // One catalog for the run's declared forms: each new form takes its id from it, so the id is the same on every plan.
-        if (!formCatalog) formCatalog = createIntentCatalog(declaredDefs.map((x) => formCatalogIntent(x.f, { solution: sol && sol.uniqueName })));
+        // Required here, not at the top: the catalog pulls in the stable-identity modules, which a build with no declared
+        // form must not load (tests/creates-port.test.js walks the require graph of a default build).
+        if (!formCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          formCatalog = createIntentCatalog(declaredDefs.map((x) => formCatalogIntent(x.f, { solution: sol && sol.uniqueName })));
+        }
         const out = await reconcileDeclaredForm({
           form: f,
           spec,

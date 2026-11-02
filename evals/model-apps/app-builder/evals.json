@@ -500,6 +500,32 @@
         "author: a new app opts into stable create ids with the 2.21.0 floor, and a downloaded or existing spec never gains them",
         "author: the skill tells the maker that an unsent local edit stops a stable build and running again does not merge it"
       ]
+    },
+    {
+      "id": 21,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A Site Inspections app: sites with their inspections and open issues. Lay out the site form myself and keep it that way on every rebuild: the name across the full width, the site code read-only, the region shown, the address two rows tall, a grid of inspections and a grid of issues, and run Site.onLoad from cnt_site.js when it opens.",
+      "expect": {
+        "tables": [
+          "cnt_site",
+          "cnt_inspection",
+          "cnt_issue"
+        ],
+        "relationships": [
+          "cnt_site_cnt_inspection",
+          "cnt_site_cnt_issue"
+        ],
+        "views": [
+          "Sites by Region"
+        ],
+        "charts": [],
+        "pages": []
+      },
+      "expectations": [
+        "ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)",
+        "ui: an authored colspan and rowspan survive into the compiled cell"
+      ]
     }
   ]
 }

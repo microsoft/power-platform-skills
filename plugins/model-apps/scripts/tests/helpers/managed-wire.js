@@ -11,10 +11,13 @@
 //        copies the saved layer of every form of `account` to its published layer; a <dashboards><dashboard>id</dashboard>
 //        envelope does the same for one dashboard
 //   PATCH systemforms(<id>)            writes the saved layer
-// The saved layer carries a row version, as the platform's does: the GET answers it as `@odata.etag` (body and ETag
-// header) and every write of the row moves it. The vendored SDK refuses to push an artifact it holds no such token for,
-// so a test that edits a dashboard through the SDK (lib/dashboard-reconcile.js) needs it. The token is kept beside the
-// row, not in it, so `saved.get(id)` stays the row itself.
+// The saved layer carries a row version that every write of the row moves, and the GET answers it as `@odata.etag` (body and
+// ETag header). The SERVICE DOES NOT DO THIS: a live systemforms GET answers the PUBLISHED row's ETag, which a saved-layer
+// edit does not move, and the saved layer's own ETag is refused with 412. The version exists here only because the vendored
+// SDK refuses to push an artifact it holds no such token for; a concurrent saved-layer edit is caught by the SDK's
+// re-read of the saved content just before its PATCH, never by If-Match, and this wire never answers 412 to a PATCH. A test
+// through it proves that re-read and refusal path, not a service guard. The token is kept beside the row, not in it, so
+// `saved.get(id)` stays the row itself.
 // The same two layers for view (savedquery) and chart (savedqueryvisualization) rows, by id (`putQuery`); a table's PublishXml
 // publishes the ones whose `returnedtypecode`/`primaryentitytypecode` is the table, as it publishes its forms.
 // And workflow rows:
@@ -52,8 +55,8 @@ function createManagedWire() {
       return r ? json(200, { ...r, '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound();
     }
     m = /^systemforms\(([^)]+)\)$/i.exec(p);
-    // A row has one version whichever layer is read, so the published read carries it too (the SDK's pre-push
-    // concurrency read is this GET).
+    // The test keeps one version per row whichever layer is read (the SDK's pre-push read is this GET). The service
+    // answers the published row's ETag here instead; see the header.
     if (m && method === 'GET') { const id = m[1].toLowerCase(); const r = published.get(id); return r ? json(200, { ...r, '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound(); }
     if (m && method === 'PATCH') {
       const id = m[1].toLowerCase();
