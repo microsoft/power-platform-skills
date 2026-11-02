@@ -804,40 +804,72 @@ function validateRiskAcceptances(list, where) {
 }
 
 // The audit of groups retired because their root was proved gone (retireAbsentGroup): which group, at which
-// generation, bound to which root, with the publication state it was retired in, and when. It records that the root was
-// proved absent and the group retired: NOT that its content was published or its debt paid (`publication: 'owed'`
-// says the debt was dropped unpaid, with nothing left to publish). Newest last, at most RETIRED_GROUPS_KEPT; it grants
-// nothing by itself. A build that predates it reads the key as unexpected and refuses the whole file (fail closed).
+// generation (null for a group never committed), bound to which root, with the publication state it was retired in,
+// the pending workflow attempt retired with it (its token, phase and each effect's kind and state: a `state` effect still
+// `definitely-unsent` says the row was never activated by it), and when. It records that the root was proved absent
+// and the group retired: NOT that its content was published, its debt paid or its activation made
+// (`publication: 'owed'` says the debt was dropped unpaid, with nothing left to publish). Newest last, at most
+// RETIRED_GROUPS_KEPT; it grants nothing by itself. A build that predates it reads the key as unexpected and refuses the
+// whole file (fail closed).
 const RETIRED_GROUPS_KEPT = 32;
 const RETIRABLE_PUBLICATIONS = new Set(['owed', 'not-needed', 'confirmed']);
+// The families whose every write to their root is a journaled workflow effect (recordWorkflowEffect, marked dispatching
+// before it leaves): only their pending attempt can be shown, from its own record, to have nothing still on its way.
+// The other families push through the SDK, whose writes no record names one by one.
+const WORKFLOW_FAMILIES = new Set(['rule', 'bpf']);
+// The effect states of a retired attempt: nothing in them can still land (a dispatching or unconfirmed one can).
+const SETTLED_EFFECT_STATES = new Set(['definitely-unsent', 'confirmed', 'fulfilled']);
+const RETIRED_EFFECTS_KEPT = 16;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 function validateRetiredGroups(list, where) {
   if (!Array.isArray(list) || list.length > RETIRED_GROUPS_KEPT) throw invalid(where, `is not a list of at most ${RETIRED_GROUPS_KEPT} retired groups`);
   list.forEach((x, i) => {
     const w = `${where}[${i}]`;
-    closedKeys(x, ['family', 'key', 'generation', 'rootId', 'reason', 'publication', 'at'], w);
+    closedKeys(x, ['family', 'key', 'generation', 'rootId', 'reason', 'publication', 'attempt', 'at'], w);
     if (!FAMILIES.includes(x.family) || !nonempty(x.key)) throw invalid(w, 'has no family and key');
-    tokenField(x.generation, `${w}.generation`);
+    tokenField(x.generation, `${w}.generation`, true);
     guidField(x.rootId, `${w}.rootId`);
     if (x.reason !== 'root-absent') throw invalid(w, 'has an unknown reason');
     if (x.publication !== null && !RETIRABLE_PUBLICATIONS.has(x.publication)) throw invalid(w, 'names a publication no group is retired in');
+    if (x.attempt !== null) {
+      if (!WORKFLOW_FAMILIES.has(x.family)) throw invalid(`${w}.attempt`, 'is an attempt of a family whose attempts are never retired with their group');
+      closedKeys(x.attempt, ['token', 'phase', 'effects'], `${w}.attempt`);
+      tokenField(x.attempt.token, `${w}.attempt.token`);
+      if (!PHASES.has(x.attempt.phase)) throw invalid(`${w}.attempt.phase`, 'is not a phase');
+      if (!Array.isArray(x.attempt.effects) || x.attempt.effects.length > RETIRED_EFFECTS_KEPT) throw invalid(`${w}.attempt.effects`, 'is not a short list');
+      x.attempt.effects.forEach((e, j) => {
+        closedKeys(e, ['effect', 'state'], `${w}.attempt.effects[${j}]`);
+        if (!EFFECTS.has(e.effect) || !SETTLED_EFFECT_STATES.has(e.state)) throw invalid(`${w}.attempt.effects[${j}]`, 'is not an effect that could no longer land');
+      });
+    } else if (x.generation === null) {
+      throw invalid(w, 'retired neither a committed group nor an attempt');
+    }
     if (typeof x.at !== 'string' || !ISO_INSTANT.test(x.at) || Number.isNaN(Date.parse(x.at))) throw invalid(w, 'has no time');
   });
 }
 
 // The caller's proof that a group's root row is gone (retireAbsentGroup). The store cannot read the service, so the
-// caller must have proved it from a FRESH read of BOTH layers, each answering the missing-row 404 (Dataverse
-// 0x80040217) for exactly this id: for a systemform, readSystemFormRootPresence(client, id) === 'absent'. Shape:
-//   { kind: 'root-absent', rootId: '<guid>', saved: 'not-found', published: 'not-found' }
+// caller must have proved it from a FRESH read, by exactly this id, that answered the missing-row 404 (Dataverse
+// 0x80040217, "does not exist") in every layer the row has:
+//   a family that publishes (form, dashboard, view, chart) has a saved and a published layer, and both must say so:
+//     { kind: 'root-absent', rootId: '<guid>', saved: 'not-found', published: 'not-found' }
+//     (for a systemform: readSystemFormRootPresence(client, id) === 'absent');
+//   a workflow (rule, bpf) has one row, read by its id:
+//     { kind: 'root-absent', rootId: '<guid>', row: 'not-found' }
 // A missing published layer alone is NOT absence (a never-published row still has its saved layer), and neither is a
-// 403, a timeout or an unreadable answer: only both layers 'not-found' is accepted, typed, never inferred.
-function checkAbsenceEvidence(evidence, rootId) {
-  const refuse = (why) => storeError(CODES.notSettled, `retiring a managed group needs typed evidence that its root ${rootId} is gone from both layers ({ kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' }): ${why}`);
+// 403, a timeout, an unreadable or malformed answer or a query that found nothing: only the typed shape of the
+// family is accepted, never inferred.
+function checkAbsenceEvidence(family, evidence, rootId) {
+  const layered = PUBLISHING.has(family);
+  const shape = layered ? "{ kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' }" : "{ kind: 'root-absent', rootId, row: 'not-found' }";
+  const refuse = (why) => storeError(CODES.notSettled, `retiring a managed ${family} needs typed evidence that its root ${rootId} is gone (${shape}): ${why}`);
   if (!isObj(evidence)) throw refuse('none was given');
   const keys = Object.keys(evidence).sort().join(',');
-  if (keys !== 'kind,published,rootId,saved') throw refuse(`it has the fields ${keys || 'none'}`);
+  if (keys !== (layered ? 'kind,published,rootId,saved' : 'kind,rootId,row')) throw refuse(`it has the fields ${keys || 'none'}`);
   if (evidence.kind !== 'root-absent') throw refuse(`its kind is ${JSON.stringify(evidence.kind)}`);
-  if (evidence.saved !== 'not-found' || evidence.published !== 'not-found') throw refuse('both the saved and the published layer must have answered not-found');
+  if (layered ? (evidence.saved !== 'not-found' || evidence.published !== 'not-found') : evidence.row !== 'not-found') {
+    throw refuse(layered ? 'both the saved and the published layer must have answered not-found' : 'the row must have answered not-found');
+  }
   if (typeof evidence.rootId !== 'string' || !normalizeGuid(evidence.rootId) || normalizeGuid(evidence.rootId) !== normalizeGuid(rootId)) throw refuse(`it is about ${JSON.stringify(evidence.rootId)}`);
 }
 
@@ -1720,43 +1752,75 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       return { retired: true, effects: removed };
     },
     /**
-     * Retire the committed group (`family`, `key`) whose root row is gone from the service, so a group that can no
-     * longer be published, used or re-proved stops blocking every later build (for example a declared dashboard with an
-     * owed, never-sent publish whose declaration was removed and whose row the maker then deleted).
-     * `evidence` is REQUIRED and typed: { kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' }.
-     * The store cannot read the service: the CALLER must prove it from a fresh read of both layers that each answered
-     * the missing-row 404 for exactly `rootId` (for a systemform, readSystemFormRootPresence(client, rootId) === 'absent').
-     * A missing published layer alone is not absence, nor is a 403, a timeout or an unreadable answer.
-     * Under the record lease the file is reread, and in that one change the group must still be valid, at
-     * `generation`, bound to the root `rootId` (GUID spellings compare equal), with nothing that could still land:
-     * no pending attempt (so no workflow effect either: every effect belongs to a pending attempt), and a publication
-     * that is `owed` with no dispatch token, `not-needed` or `confirmed` (or none, for a family that never publishes).
-     * Otherwise it refuses with nothing written: `managed-not-settled` (bad arguments or evidence, or no such group),
-     * `managed-binding-group-invalid`, `managed-binding-generation-conflict` (another generation or root),
-     * `managed-settlement-pending` (a pending attempt or effect) or `managed-publication-unconfirmed` (a publish that
-     * may have been sent; it carries { dispatchToken, approval, remedy }). The normal write rules apply, including
-     * `managed-binding-store-full`.
-     * One write removes that group only and appends { family, key, generation, rootId, reason: 'root-absent',
-     * publication, at } to `retiredGroups` (newest last, at most RETIRED_GROUPS_KEPT). The entry says the root was
-     * proved gone and the group retired: NOT that its content was published or its debt paid. Every other group,
-     * attempt, effect, publication and risk acceptance stays as it was, and this run's barrier (holds, quarantine) is
-     * not touched. Answers { retired: { family, key, generation } }.
+     * Retire the group (`family`, `key`) whose root row is gone from the service, so a group that can no longer be
+     * published, used, verified or re-proved stops blocking every later build: for example a declared dashboard with an
+     * owed, never-sent publish whose declaration was removed and whose row the maker then deleted; a committed rule or
+     * process flow whose row was deleted (every verify fails on it); or a workflow create whose create effect was
+     * confirmed and whose activation never left (an answered, unapplied 412), whose row was then deleted (its attempt
+     * holds every run, and declaring it again can never prove it).
+     * `evidence` is REQUIRED and typed by family (checkAbsenceEvidence): two layers, `saved` and `published`, each
+     * 'not-found' for a family that publishes; one, `row: 'not-found'`, for a workflow. The store cannot read the
+     * service: the CALLER must prove it from a fresh read by exactly `rootId` that answered the missing-row 404 in every
+     * layer (for a systemform, readSystemFormRootPresence(client, rootId) === 'absent'). A missing published layer
+     * alone is not absence, nor is a 403, a timeout or an unreadable or malformed answer.
+     * `generation` is the committed group's generation, or null for a group never committed. `attemptToken` names the
+     * pending attempt to retire with it: required when one is pending, refused when none is, and accepted only for a
+     * workflow family (rule, bpf), whose every write is a journaled effect, so its own record shows nothing on its way:
+     * every effect it owns `confirmed`, `fulfilled` or `definitely-unsent` with no dispatch token. A pending attempt of
+     * another family is never retired here (its SDK push is not journaled write by write): it is recovered, or retired
+     * with retireUnsentAttempt first. A run that still holds the retired attempt's send claim is fenced by the same
+     * write: its next effect dispatch or counted send names an attempt that is gone and is refused unsent.
+     * Under the record lease the file is reread, and in that one change the group must still be valid, at `generation`
+     * (the attempt based on it), bound to the root `rootId` (GUID spellings compare equal; the attempt's root too), with
+     * a publication that is `owed` with no dispatch token, `not-needed` or `confirmed` (or none, for a workflow).
+     * Otherwise it refuses with nothing written: `managed-not-settled` (bad arguments or evidence, or nothing to
+     * retire), `managed-binding-group-invalid`, `managed-binding-generation-conflict` (another generation, root or
+     * attempt), `managed-settlement-pending` (an attempt or an effect that could still land) or
+     * `managed-publication-unconfirmed` (a publish that may have been sent; it carries { dispatchToken, approval,
+     * remedy }). The normal write rules apply, including `managed-binding-store-full`.
+     * One write removes that group, its attempt and the effects that attempt owns, and appends { family, key,
+     * generation, rootId, reason: 'root-absent', publication, attempt: null | { token, phase, effects: [{ effect,
+     * state }] }, at } to `retiredGroups` (newest last, at most RETIRED_GROUPS_KEPT). The entry says the root was proved
+     * gone and the group retired: NOT that its content was published, its debt paid or an activation made; the effect
+     * states say what each change was when it was dropped. Every other group, attempt, effect, publication and risk
+     * acceptance stays as it was. After the write the retired attempt's own hold ends (as retireUnsentAttempt); a
+     * quarantine this run installed is never cleared, so the invocation that met it stays stopped and the next one
+     * proceeds from the file. Answers { retired: { family, key, generation, attempt: <token or null> } }.
      */
-    retireAbsentGroup({ family, key, generation, rootId, evidence } = {}) {
+    retireAbsentGroup({ family, key, generation, rootId, evidence, attemptToken } = {}) {
       if (!FAMILIES.includes(family) || !nonempty(key)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the group\'s family and key');
-      if (typeof generation !== 'string' || !generation) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the generation the root was proved absent for');
+      if (generation !== null && (typeof generation !== 'string' || !generation)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the generation the root was proved absent for (null for a group never committed)');
+      if (attemptToken !== undefined && !nonempty(attemptToken)) throw storeError(CODES.notSettled, 'retireAbsentGroup takes attemptToken only as the pending attempt\'s token');
+      if (generation === null && attemptToken === undefined) throw storeError(CODES.notSettled, 'a group never committed is retired only with its pending attempt (attemptToken)');
       if (typeof rootId !== 'string' || !normalizeGuid(rootId)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the id of the root proved absent');
-      checkAbsenceEvidence(evidence, rootId);
+      checkAbsenceEvidence(family, evidence, rootId);
       const name = `the managed ${family} "${key}"`;
+      const sameRoot = (id) => normalizeGuid(id) === normalizeGuid(rootId);
       mutate((env, disk) => {
         usable(unitOf(disk, family, key));
-        const g = env.groups.find((x) => x.family === family && x.key === key);
-        if (!g) throw storeError(CODES.notSettled, `${name} has no committed group to retire`);
-        if (g.generation !== generation) throw storeError(CODES.conflict, `${name} is at another generation than the one its root was proved absent for`);
-        if (normalizeGuid(g.root.id) !== normalizeGuid(rootId)) throw storeError(CODES.conflict, `${name} is bound to the root ${g.root.id}, not ${rootId}`);
-        if (env.workflowEffects.some((e) => e.family === family && e.key === key)) throw storeError(CODES.pending, `${name} has a workflow effect that is not settled; it is never retired`);
-        if (env.attempts.some((a) => a.family === family && a.key === key)) throw storeError(CODES.pending, `${name} has a pending attempt that may still land; it is recovered, never retired`);
-        const p = g.publication;
+        const g = env.groups.find((x) => x.family === family && x.key === key) || null;
+        const a = env.attempts.find((x) => x.family === family && x.key === key) || null;
+        if (!g && !a) throw storeError(CODES.notSettled, `${name} has no group to retire`);
+        if ((g ? g.generation : null) !== generation) throw storeError(CODES.conflict, `${name} is at another generation than the one its root was proved absent for`);
+        if (g && !sameRoot(g.root.id)) throw storeError(CODES.conflict, `${name} is bound to the root ${g.root.id}, not ${rootId}`);
+        let owned = [];
+        if (a) {
+          if (attemptToken === undefined) throw storeError(CODES.pending, `${name} has a pending attempt; it is recovered, or retired with its group only when named (attemptToken)`);
+          if (a.token !== attemptToken) throw storeError(CODES.conflict, `${name} has another pending attempt than the one named`);
+          if (!WORKFLOW_FAMILIES.has(family)) throw storeError(CODES.pending, `${name} has a pending attempt whose push may still land; it is recovered, or retired as unsent (retireUnsentAttempt) first, never with its group`);
+          if (a.baseGeneration !== generation) throw storeError(CODES.conflict, `${name} attempt is based on another generation`);
+          if (!sameRoot(a.root.id)) throw storeError(CODES.conflict, `${name} attempt changes the root ${a.root.id}, not ${rootId}`);
+          owned = env.workflowEffects.filter((e) => e.attemptToken === a.token);
+          if (owned.some((e) => !SETTLED_EFFECT_STATES.has(e.state) || (e.state === 'definitely-unsent' && e.dispatchToken !== null))) {
+            throw storeError(CODES.pending, `${name} has a workflow effect that may have been sent and is not proved; it is never retired`);
+          }
+          if (owned.length > RETIRED_EFFECTS_KEPT) throw storeError(CODES.notSettled, `${name} attempt has more effects than a retirement records`);
+        } else if (attemptToken !== undefined) {
+          throw storeError(CODES.conflict, `${name} has no pending attempt to retire`);
+        }
+        // Every effect names a pending attempt of its group (parseEnvelope), so with none pending there is none left.
+        if (env.workflowEffects.some((e) => e.family === family && e.key === key && !owned.includes(e))) throw storeError(CODES.pending, `${name} has a workflow effect that is not settled; it is never retired`);
+        const p = g ? g.publication : null;
         if (p && UNCERTAIN.has(p.state)) {
           throw storeError(CODES.publicationUncertain, `${name} has a publish that may have been sent and is not proved live; it is never retired over it`, blockedPublication(p.scope, p.dispatchToken));
         }
@@ -1764,11 +1828,21 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           throw storeError(CODES.pending, `${name} has a publication in state ${p.state} that is not settled; it is never retired`);
         }
         env.groups = env.groups.filter((x) => x !== g);
+        if (a) {
+          env.attempts = env.attempts.filter((x) => x !== a);
+          env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== a.token);
+        }
         const list = Array.isArray(env.retiredGroups) ? env.retiredGroups : [];
-        list.push({ family, key, generation, rootId: g.root.id, reason: 'root-absent', publication: p ? p.state : null, at: new Date(now()).toISOString() });
+        list.push({
+          family, key, generation, rootId: normalizeGuid(g ? g.root.id : a.root.id), reason: 'root-absent', publication: p ? p.state : null,
+          attempt: a ? { token: a.token, phase: a.phase, effects: owned.map((e) => ({ effect: e.effect, state: e.state })) } : null,
+          at: new Date(now()).toISOString(),
+        });
         env.retiredGroups = list.slice(-RETIRED_GROUPS_KEPT);
       });
-      return { retired: { family, key, generation } };
+      // The write is durable and read back (mutate): only now may the retired attempt's own hold end.
+      if (attemptToken !== undefined && barrier) barrier.release(attemptToken);
+      return { retired: { family, key, generation, attempt: attemptToken === undefined ? null : attemptToken } };
     },
     /**
      * Persist one workflow effect as definitely-unsent; it must belong to the pending attempt `attemptToken`.

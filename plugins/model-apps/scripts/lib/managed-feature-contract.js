@@ -116,7 +116,14 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                                        completionBytes?: the bytes this attempt's completion may add to the store,
  *                                        when more than the store's default (prepareAttempt / markSending
  *                                        `completionBytes`; checked on every plan, a reused prepared attempt and a
- *                                        continued or resumed one included, and admitted before anything is sent);
+ *                                        continued or resumed one included, and admitted before anything is sent).
+ *                                        A change to the authored input ALONE (for example a flow's securityRoles,
+ *                                        granted by a later phase) is a plan, never { noop: true }: answer the root,
+ *                                        today's proved state as `expected` and the new declaration; `apply` sends
+ *                                        nothing (answers { sent: false }); `prove` answers as for any update
+ *                                        (acknowledgedRoot false). The commit then records the new declaration as
+ *                                        `originalDeclaration` under a new generation, through the same checks, with
+ *                                        no effect. A no-op plan keeps the committed declaration as it is;
  *   apply({ token, plan, resolution, resuming?, continuing? })  send the approved change once; answers what it sent.
  *                               With a sendObserver, every mutation it makes must go through the observed transport;
  *   prove({ token, expected, applied, recovering, declaration })  a fresh read against `expected`; answers { savedProof,

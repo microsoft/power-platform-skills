@@ -1989,6 +1989,52 @@ test('declaration: the original is kept apart from a workflow feature\'s own sta
   }
 });
 
+test('declaration: a change to the authored input alone commits the new original under a new generation with nothing sent and no effect; a no-op plan never does', async () => {
+  // A flow whose only change is its security roles: the workflow itself is unchanged (its applied hash covers the flow,
+  // not the roles a later phase grants), so nothing is sent; the managed download must still restore today's roles.
+  const flowOf = (d) => ({ name: d.name, stages: d.stages });
+  const OLD = Object.freeze({ name: 'Lead to sale', stages: [{ name: 'Qualify' }], securityRoles: ['Salesperson'] });
+  const NEW = Object.freeze({ ...OLD, securityRoles: ['Salesperson', 'Sales Manager'] });
+  const s = await setup();
+  s.backing = new Map();
+  const feature = (authored, { declarationOnlyIsNoop = false } = {}) => {
+    const f = workflowFeature(s, 'bpf', MAIN, authored);
+    f.plan = async ({ committed }) => {
+      const d = committed && committed.consumerState.declaration;
+      const flowApplied = d && d.applied === sha(flowOf(authored)) && s.backing.get(MAIN) === d.backing;
+      if (flowApplied && (declarationOnlyIsNoop || JSON.stringify(committed.originalDeclaration) === JSON.stringify(authored))) return { noop: true };
+      return { root: { kind: 'bpf', key: f.key, id: MAIN }, expected: { ...expected(MAIN), proofSchema: 'bpf-v1' }, declarationSha256: sha(authored), declaration: authored };
+    };
+    f.apply = async () => {
+      // The flow is created once; after that the plan differs only in authored input the workflow does not carry.
+      if (s.backing.has(MAIN)) return { sent: false };
+      f.applies += 1; s.backing.set(MAIN, `new_bpf_${f.applies}`); return { sent: true };
+    };
+    f.prove = async ({ declaration }) => ({ savedProof: null, acknowledgedRoot: f.applies > 0, records: [rec('bpf', f.key, MAIN)], proof: PROOF,
+      consumerState: { declaration: { flow: flowOf(declaration), applied: sha(flowOf(declaration)), backing: s.backing.get(MAIN) }, stages: {} }, publication: null, proofSchema: 'bpf-v1' });
+    return f;
+  };
+  assert.deepEqual((await runManagedFeature(feature(OLD))).result, { committed: true, recovered: false });
+  const read = () => context(s.dir, createPublicationBarrier()).store;
+  const first = read().readGroup('bpf', 'lead/sale').committed;
+
+  // A feature that answers no-op for a roles-only change leaves the stale original: the store never refreshes it alone.
+  const stale = feature(NEW, { declarationOnlyIsNoop: true });
+  assert.deepEqual((await runManagedFeature(stale)).result, { noop: true });
+  assert.deepEqual(read().readGroup('bpf', 'lead/sale').committed.originalDeclaration, OLD);
+
+  const requests = s.wire.log.length;
+  const roles = feature(NEW);
+  assert.deepEqual((await runManagedFeature(roles)).result, { committed: true, recovered: false });
+  const g = read().readGroup('bpf', 'lead/sale');
+  assert.deepEqual([roles.applies, s.wire.log.length - requests], [0, 0], 'nothing sent');
+  assert.deepEqual(g.committed.originalDeclaration, NEW, 'today\'s authored input, roles included');
+  assert.notEqual(g.committed.generation, first.generation);
+  assert.deepEqual(g.committed.consumerState, first.consumerState, 'the workflow\'s own state as it was');
+  assert.deepEqual([g.pending, g.effects], [null, []], 'no attempt and no effect left');
+  const again = feature(NEW);
+  assert.deepEqual((await runManagedFeature(again)).result, { noop: true }, 'the identical rerun');
+});
 test('declaration: a replacement declaration the store refuses keeps the prepared attempt, its bytes, its token and its hold', async () => {
   // The last four put credentials in the URL's userinfo behind whitespace, a no-break space or a custom scheme.
   for (const url of ['https://contoso.com/x?access_token=abc', 'https://contoso.com/x?%61ccess_token=abc',

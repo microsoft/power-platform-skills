@@ -1529,9 +1529,11 @@ test('capacity: a declaration whose calculated minimum exceeds the maximum reser
 });
 // A group whose root the service no longer has (the maker deleted it) can never be published, used or proved again;
 // without a way to retire it, an owed but never-sent publish blocks every later build. The CALLER proves the root gone
-// from a fresh read of both layers; the store rechecks, under the lease, that nothing of the group could still land.
+// from a fresh read of every layer (saved and published for a family that publishes; the one row for a workflow); the
+// store rechecks, under the lease, that nothing of the group could still land.
 const DASH_SCOPE = { type: 'dashboard', id: DASH };
 const absent = (rootId, over = {}) => ({ kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found', ...over });
+const absentRow = (rootId, over = {}) => ({ kind: 'root-absent', rootId, row: 'not-found', ...over });
 function settleDashboard(store, key, { publication = { scope: DASH_SCOPE, state: 'owed', desiredSha256: H('5'), dispatchToken: null } } = {}) {
   const token = store.prepareAttempt({ family: 'dashboard', key, baseGeneration: null, root: { kind: 'dashboard', key, id: DASH }, knownScopes: [DASH_SCOPE], declarationSha256: H('e'), publication: { scope: DASH_SCOPE, state: 'owed' } });
   store.markSending(token, expected(DASH, [], 'dashboard-v1'));
@@ -1552,11 +1554,11 @@ test('absent root: a committed group whose root both layers prove gone is retire
 
   // The root id may come in any GUID spelling; the evidence must be about that same row.
   const answer = store.retireAbsentGroup({ family: 'dashboard', key: 'sales', generation: dash.generation, rootId: `{${DASH.toUpperCase()}}`, evidence: absent(DASH) });
-  assert.deepEqual(answer, { retired: { family: 'dashboard', key: 'sales', generation: dash.generation } });
+  assert.deepEqual(answer, { retired: { family: 'dashboard', key: 'sales', generation: dash.generation, attempt: null } });
   const after = JSON.parse(fileText(store));
   assert.deepEqual(after.groups, before.groups.filter((g) => g.family !== 'dashboard'), 'every other group, its debt and proof stay exactly');
   assert.deepEqual([after.attempts, after.workflowEffects], [before.attempts, before.workflowEffects]);
-  assert.deepEqual(after.retiredGroups, [{ family: 'dashboard', key: 'sales', generation: dash.generation, rootId: DASH, reason: 'root-absent', publication: 'owed', at: '2025-01-02T03:04:05.678Z' }],
+  assert.deepEqual(after.retiredGroups, [{ family: 'dashboard', key: 'sales', generation: dash.generation, rootId: DASH, reason: 'root-absent', publication: 'owed', attempt: null, at: '2025-01-02T03:04:05.678Z' }],
     'the entry records an unpaid debt dropped with its root, never a publish');
   assert.equal(open(dir).readGroup('dashboard', 'sales').committed, null);
   assert.deepEqual(debtOf(dir), ['form:account/main:eligible'], 'the sibling form still owes its publish');
@@ -1575,8 +1577,72 @@ test('absent root: a committed group whose root both layers prove gone is retire
   assert.equal(JSON.parse(fileText(c)).retiredGroups[0].publication, 'confirmed');
   const ruleDir = makeTempDir('mb-absent-root-rule-');
   const r = settleRule(open(ruleDir), 'account/hide', RULE);
-  open(ruleDir).retireAbsentGroup({ family: 'rule', key: 'account/hide', generation: r.generation, rootId: RULE, evidence: absent(RULE) });
-  assert.equal(JSON.parse(fs.readFileSync(open(ruleDir).file, 'utf8')).retiredGroups[0].publication, null);
+  open(ruleDir).retireAbsentGroup({ family: 'rule', key: 'account/hide', generation: r.generation, rootId: RULE, evidence: absentRow(RULE) });
+  assert.deepEqual(JSON.parse(fs.readFileSync(open(ruleDir).file, 'utf8')).retiredGroups.map((x) => [x.publication, x.attempt]), [[null, null]]);
+});
+
+test('absent root: a workflow, one layer, is retired on its one row\'s 404: a committed rule or flow, or a create whose activation never left, with its attempt', () => {
+  // A committed flow (no attempt, no effect, no publication) whose row was deleted fails every verify: retired alone.
+  const dir = makeTempDir('mb-absent-root-bpf-');
+  const store = open(dir);
+  settleForm(store, []);
+  const key = 'account-flow';
+  const bt = store.prepareAttempt({ family: 'bpf', key, baseGeneration: null, root: { kind: 'bpf', key, id: BPF }, knownScopes: [], declarationSha256: H('e') });
+  store.markSending(bt, expected(BPF, [], 'bpf-v1'));
+  store.noteSaved(bt, { proof: null, acknowledgedRoot: true });
+  const bg = store.commitGroup({ token: bt, baseGeneration: null, records: [rec('bpf', key, BPF)], proof: PROOF, consumerState: { declaration: {}, stages: {} }, publication: null });
+  assert.equal(codeOf(() => store.retireAbsentGroup({ family: 'bpf', key, generation: bg.generation, rootId: BPF, evidence: absent(BPF) })), CODES.notSettled, 'two layers is not a workflow\'s proof');
+  assert.equal(codeOf(() => store.retireAbsentGroup({ family: 'form', key: FORM_KEY, generation: store.readGroup('form', FORM_KEY).committed.generation, rootId: FORM, evidence: absentRow(FORM) })), CODES.notSettled, 'one row is not a published family\'s proof');
+  assert.deepEqual(store.retireAbsentGroup({ family: 'bpf', key, generation: bg.generation, rootId: BPF, evidence: absentRow(BPF) }), { retired: { family: 'bpf', key, generation: bg.generation, attempt: null } });
+  assert.deepEqual(JSON.parse(fileText(store)).groups.map((g) => g.family), ['form'], 'the sibling form stays');
+
+  // A create whose own create a read confirmed and whose activation was answered unapplied (a 412: definitely unsent),
+  // then the row was deleted. Its attempt holds every run, and declaring it again can never prove it: the attempt and
+  // its group (never committed: generation null) are retired together, and the entry says the row was never activated.
+  const AT = Date.UTC(2025, 0, 2, 3, 4, 5, 678);
+  const cdir = makeTempDir('mb-absent-root-create-');
+  const released = [];
+  const cs = open(cdir, { deps: { now: () => AT }, barrier: { release: (t) => released.push(t) } });
+  settleForm(cs, [['name', CTRL_A]]);
+  const token = createdRule(cs);
+  const state = cs.recordWorkflowEffect(activation(token, 'W/"2"'));
+  cs.markEffectDispatching(state.token, 'dispatch-state');
+  cs.noteEffectOutcome(state.token, 'definite-no-start');
+  const before = JSON.parse(fileText(cs));
+  const args = { family: 'rule', key: 'account/hide', generation: null, rootId: RULE, evidence: absentRow(RULE), attemptToken: token };
+  for (const [label, over, code] of [
+    ['another root, proved absent', { rootId: BPF, evidence: absentRow(BPF) }, CODES.conflict],
+    ['a generation for a group never committed', { generation: 'gen-x' }, CODES.conflict],
+  ]) {
+    const text = fileText(cs);
+    assert.equal(codeOf(() => cs.retireAbsentGroup({ ...args, ...over })), code, label);
+    assert.equal(fileText(cs), text, `${label}: nothing written`);
+  }
+  // An attempt the file records on another base than its group is not one the store vouches for: refused, unchanged.
+  {
+    const odir = makeTempDir('mb-absent-root-base-');
+    const os = open(odir);
+    const t = createdRule(os);
+    writeRaw(os, (d) => { d.attempts[0].baseGeneration = 'gen-x'; });
+    const text = fileText(os);
+    assert.notEqual(codeOf(() => open(odir).retireAbsentGroup({ ...args, attemptToken: t })), null);
+    assert.notEqual(codeOf(() => open(odir).retireAbsentGroup({ ...args, generation: 'gen-x', attemptToken: t })), null);
+    assert.equal(fileText(os), text);
+  }  assert.equal(codeOf(() => open(cdir, { deps: { writeFileAtomic: () => { throw new Error('crash before the replace'); } }, barrier: { release: (t) => released.push(t) } }).retireAbsentGroup(args)), CODES.writeFailed);
+  assert.deepEqual([JSON.parse(fileText(cs)), released], [before, []], 'a failed write keeps the attempt, its effects and its hold');
+  assert.deepEqual(cs.retireAbsentGroup(args), { retired: { family: 'rule', key: 'account/hide', generation: null, attempt: token } });
+  assert.deepEqual(released, [token], 'only the retired attempt\'s own hold ends, after the write');
+  const after = JSON.parse(fileText(cs));
+  assert.deepEqual([after.groups, after.attempts, after.workflowEffects], [before.groups, [], []], 'the attempt and the effects it owned are gone; the form stays');
+  assert.deepEqual(after.retiredGroups, [{ family: 'rule', key: 'account/hide', generation: null, rootId: RULE, reason: 'root-absent', publication: null,
+    attempt: { token, phase: 'saved', effects: [{ effect: 'create', state: 'confirmed' }, { effect: 'state', state: 'definitely-unsent' }] }, at: '2025-01-02T03:04:05.678Z' }],
+  'the audit says the row was created and never activated, not that it is live');
+  // A run still holding the retired attempt can send nothing more under it: its effect and its attempt are gone.
+  const afterText = fileText(cs);
+  assert.equal(codeOf(() => cs.markEffectDispatching(state.token, 'dispatch-again')), CODES.notSettled);
+  assert.equal(codeOf(() => cs.recordWorkflowEffect(activation(token, 'W/"2"'))), CODES.conflict);
+  assert.equal(fileText(cs), afterText);
+  assert.deepEqual(open(cdir).readGroup('rule', 'account/hide'), { committed: null, pending: null, effects: [] });
 });
 
 test('absent root: retirement refuses with nothing written unless the evidence is typed proof of absence in both layers and the group is the one proved', () => {
@@ -1599,6 +1665,12 @@ test('absent root: retirement refuses with nothing written unless the evidence i
     ['evidence with no row', { evidence: absent(FORM, { rootId: 'not-a-guid' }) }, CODES.notSettled],
     ['no root id', { rootId: undefined }, CODES.notSettled],
     ['no generation', { generation: undefined }, CODES.notSettled],
+    ['a null generation with no attempt named', { generation: null }, CODES.notSettled],
+    ['an empty attempt token', { attemptToken: '' }, CODES.notSettled],
+    ['the evidence of a workflow\'s one row', { evidence: { kind, rootId, row: 'not-found' } }, CODES.notSettled],
+    ['both shapes at once', { evidence: absent(FORM, { row: 'not-found' }) }, CODES.notSettled],
+    ['an attempt named where none is pending', { attemptToken: 'attempt-x' }, CODES.conflict],
+    ['a null generation for a committed group', { generation: null, attemptToken: 'attempt-x' }, CODES.conflict],
     ['an unknown family', { family: 'widget' }, CODES.notSettled],
     ['a group that does not exist', { key: 'contact/main' }, CODES.notSettled],
     ['the other family on the key', { family: 'dashboard' }, CODES.notSettled],
@@ -1638,18 +1710,48 @@ test('absent root: retirement refuses with nothing written while an attempt, a w
     }
   }
 
-  // A workflow effect of a pending attempt on the group (an activation still unsent counts: it may yet be sent).
+  // Named with its token, a pending attempt of a family whose push is not journaled write by write is still refused.
+  {
+    const dir = makeTempDir('mb-absent-root-form-attempt-');
+    const store = open(dir);
+    const g = settleForm(store, []);
+    const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: g.generation, root: g.root, knownScopes: [TABLE], declarationSha256: H('f') });
+    store.markSending(token, expected(FORM));
+    const before = fileText(store);
+    assert.equal(codeOf(() => store.retireAbsentGroup({ family: 'form', key: FORM_KEY, generation: g.generation, rootId: FORM, evidence: absent(FORM), attemptToken: token })), CODES.pending);
+    assert.equal(fileText(store), before);
+  }
+
+  // A workflow attempt on the group: refused unless named, and while any effect it owns may have been sent (dispatching,
+  // then unconfirmed). Answered unapplied (definitely unsent, no dispatch token), the attempt retires with the group.
   const wf = makeTempDir('mb-absent-root-effect-');
   const ws = open(wf);
   const rule = settleRule(ws, 'account/hide', RULE);
   const wt = ws.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: rule.generation, root: rule.root, knownScopes: [], declarationSha256: H('f') });
   ws.markSending(wt, expected(RULE, [], 'rule-v1'));
-  ws.recordWorkflowEffect(activation(wt, 'W/"3"', { baseGeneration: rule.generation }));
-  const wfBefore = fileText(ws);
-  let refusal = null;
-  try { ws.retireAbsentGroup({ family: 'rule', key: 'account/hide', generation: rule.generation, rootId: RULE, evidence: absent(RULE) }); } catch (e) { refusal = e; }
-  assert.deepEqual([refusal && refusal.code, /workflow effect/.test(refusal && refusal.message)], [CODES.pending, true]);
-  assert.equal(fileText(ws), wfBefore);
+  const act = ws.recordWorkflowEffect(activation(wt, 'W/"3"', { baseGeneration: rule.generation }));
+  const wargs = (over = {}) => ({ family: 'rule', key: 'account/hide', generation: rule.generation, rootId: RULE, evidence: absentRow(RULE), attemptToken: wt, ...over });
+  const refused = (over, label) => {
+    const wfBefore = fileText(ws);
+    let refusal = null;
+    try { ws.retireAbsentGroup(wargs(over)); } catch (e) { refusal = e; }
+    assert.equal(fileText(ws), wfBefore, `${label}: nothing written`);
+    return [refusal && refusal.code, refusal && refusal.message];
+  };
+  assert.equal(refused({ attemptToken: undefined }, 'not named')[0], CODES.pending);
+  assert.equal(refused({ attemptToken: 'attempt-other' }, 'another attempt')[0], CODES.conflict);
+  assert.equal(refused({ generation: 'older' }, 'another generation')[0], CODES.conflict);
+  assert.equal(refused({ rootId: CTRL_A, evidence: absentRow(CTRL_A) }, 'another root')[0], CODES.conflict);
+  ws.markEffectDispatching(act.token, 'dispatch-act');
+  const [dispatching, message] = refused({}, 'dispatching');
+  assert.deepEqual([dispatching, /workflow effect/.test(message)], [CODES.pending, true]);
+  ws.noteEffectOutcome(act.token, 'unconfirmed');
+  assert.equal(refused({}, 'unconfirmed')[0], CODES.pending);
+  writeRaw(ws, (d) => { Object.assign(d.workflowEffects.find((e) => e.token === act.token), { state: 'definitely-unsent', dispatchToken: null }); });
+  ws.refresh();
+  ws.retireAbsentGroup(wargs());
+  const retired = JSON.parse(fileText(ws));
+  assert.deepEqual([retired.groups.length, retired.attempts.length, retired.workflowEffects.length, retired.retiredGroups[0].attempt.effects], [0, 0, 0, [{ effect: 'state', state: 'definitely-unsent' }]]);
 
   // A publish that may have been sent (dispatching, then unconfirmed): refused with the dispatch's decision as data.
   const pub = makeTempDir('mb-absent-root-publish-');
@@ -1695,7 +1797,8 @@ test('absent root: two handles race under the lease, a failed write leaves the b
   const bound = makeTempDir('mb-absent-root-bound-');
   const bs = open(bound);
   const bg = settleForm(bs, []);
-  const old = (i) => ({ family: 'form', key: `old/${i}`, generation: `gen-${i}`, rootId: FORM, reason: 'root-absent', publication: 'owed', at: '2025-01-01T00:00:00.000Z' });
+  const old = (i) => ({ family: 'form', key: `old/${i}`, generation: `gen-${i}`, rootId: FORM, reason: 'root-absent', publication: 'owed', attempt: null, at: '2025-01-01T00:00:00.000Z' });
+  const wfOld = { ...old(0), family: 'rule', generation: null, publication: null, attempt: { token: 'attempt-1', phase: 'saved', effects: [{ effect: 'create', state: 'confirmed' }] } };
   writeRaw(bs, (d) => { d.retiredGroups = Array.from({ length: RETIRED_GROUPS_KEPT }, (_, i) => old(i)); });
   bs.refresh();
   bs.retireAbsentGroup({ ...args, generation: bg.generation });
@@ -1707,12 +1810,21 @@ test('absent root: two handles race under the lease, a failed write leaves the b
     ['a publish that may have been sent', [{ ...old(0), publication: 'unconfirmed' }]],
     ['an untyped field', [{ ...old(0), paid: true }]],
     ['no time', [{ ...old(0), at: 'yesterday' }]],
+    ['no attempt key', [(({ attempt, ...rest }) => rest)(old(0))]],
+    ['no generation and no attempt', [{ ...old(0), generation: null }]],
+    ['an attempt on a family that publishes', [{ ...wfOld, family: 'form' }]],
+    ['an attempt with an effect that may have been sent', [{ ...wfOld, attempt: { ...wfOld.attempt, effects: [{ effect: 'state', state: 'unconfirmed' }] } }]],
+    ['an attempt in an unknown phase', [{ ...wfOld, attempt: { ...wfOld.attempt, phase: 'done' } }]],
+    ['an attempt with an untyped field', [{ ...wfOld, attempt: { ...wfOld.attempt, activated: true } }]],
   ]) {
     writeRaw(bs, (d) => { d.retiredGroups = list; });
     const text = fileText(bs);
     assert.equal(codeOf(() => open(bound)), CODES.unreadable, label);
     assert.equal(fileText(bs), text, `${label}: unchanged`);
   }
+
+  writeRaw(bs, (d) => { d.retiredGroups = [old(0), wfOld]; });
+  assert.deepEqual(open(bound).snapshot().envelope.retiredGroups, [old(0), wfOld], 'a retired workflow attempt reads back');
 
   // A build that predates the audit list reads it as an unexpected key: the whole file is refused, not read as empty.
   writeRaw(bs, (d) => { d.retiredGroups = [old(0)]; d.retiredGroupsV2 = []; });
