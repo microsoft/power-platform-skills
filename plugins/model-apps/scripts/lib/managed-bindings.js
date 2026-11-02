@@ -873,6 +873,18 @@ function checkAbsenceEvidence(family, evidence, rootId) {
   if (typeof evidence.rootId !== 'string' || !normalizeGuid(evidence.rootId) || normalizeGuid(evidence.rootId) !== normalizeGuid(rootId)) throw refuse(`it is about ${JSON.stringify(evidence.rootId)}`);
 }
 
+// What a retirement's absence proof was read against (observeRetirement, then retireAbsentGroup): the group, its pending
+// attempt (phase, acknowledgements, send window) and every workflow effect of the key, as one fingerprint. Any progress
+// a cooperating managed writer makes on them changes it: an attempt prepared or marked sending, an effect recorded,
+// dispatched or confirmed, a send counted, a root acknowledged, a publish marked, a commit. A sibling's write does not.
+const RETIREMENT_OBSERVATION = /^retirement-v1:[0-9a-f]{64}$/;
+function retirementObservation(env, family, key) {
+  const group = env.groups.find((x) => x.family === family && x.key === key) || null;
+  const attempt = env.attempts.find((x) => x.family === family && x.key === key) || null;
+  const effects = env.workflowEffects.filter((e) => e.family === family && e.key === key);
+  return `retirement-v1:${sha256(canonicalJson({ family, key, group, attempt, effects }))}`;
+}
+
 function parseEnvelope(text, expect) {
   let data;
   try {
@@ -1752,6 +1764,22 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       return { retired: true, effects: removed };
     },
     /**
+     * Step 1 of a retirement: observe the group (`family`, `key`) BEFORE the fresh service reads that prove its root
+     * absent. Rereads the file and answers { observation }: an opaque fingerprint of the group, its pending attempt and
+     * its workflow effects as they are now. Pass it to retireAbsentGroup, which refuses when they changed since. The
+     * order is the contract: observe, then read every layer by the root id, then retire. An observation taken AFTER
+     * the read proves nothing (a create may have landed between the read and it), so never refresh it to get past a
+     * refusal: observe again and read again. Refuses (`managed-not-settled`) when there is nothing to retire, and as
+     * readGroup for a group the file cannot vouch for. Writes nothing.
+     */
+    observeRetirement({ family, key } = {}) {
+      if (!FAMILIES.includes(family) || !nonempty(key)) throw storeError(CODES.notSettled, 'observeRetirement needs the group\'s family and key');
+      handle.refresh();
+      const unit = usable(unitOf(state, family, key));
+      if (!unit.group && !unit.attempt) throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no group to retire`);
+      return { observation: retirementObservation(state.envelope, family, key) };
+    },
+    /**
      * Retire the group (`family`, `key`) whose root row is gone from the service, so a group that can no longer be
      * published, used, verified or re-proved stops blocking every later build: for example a declared dashboard with an
      * owed, never-sent publish whose declaration was removed and whose row the maker then deleted; a committed rule or
@@ -1763,10 +1791,19 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * service: the CALLER must prove it from a fresh read by exactly `rootId` that answered the missing-row 404 in every
      * layer (for a systemform, readSystemFormRootPresence(client, rootId) === 'absent'). A missing published layer
      * alone is not absence, nor is a 403, a timeout or an unreadable or malformed answer.
+     * `observation` is REQUIRED: what observeRetirement answered BEFORE those reads. Under the lease the group, its
+     * attempt and its effects must be exactly as observed; any progress since (a send counted, an effect dispatched or
+     * confirmed, a root acknowledged) may have put the row back after the read, so the retirement is refused
+     * (`managed-binding-generation-conflict`, nothing written, no hold released): observe again, read again, retry.
      * `generation` is the committed group's generation, or null for a group never committed. `attemptToken` names the
      * pending attempt to retire with it: required when one is pending, refused when none is, and accepted only for a
      * workflow family (rule, bpf), whose every write is a journaled effect, so its own record shows nothing on its way:
-     * every effect it owns `confirmed`, `fulfilled` or `definitely-unsent` with no dispatch token. A pending attempt of
+     * every effect it owns `confirmed`, `fulfilled` or `definitely-unsent` with no dispatch token, AND an affirmative
+     * record that nothing it may have sent outside that journal can still land: it is still `prepared` (never marked
+     * sending), or its send window counted no possibly applied mutation (attemptProvenUnsent), or its own create of
+     * the root was confirmed by a read. An empty or all-unsent journal is no such record by itself: a `sending` attempt
+     * with no send window, or one that counted a possible send, may have a write on its way (a create whose answer
+     * was lost), so it stays on its recovery path (runManagedFeature). A pending attempt of
      * another family is never retired here (its SDK push is not journaled write by write): it is recovered, or retired
      * with retireUnsentAttempt first. A run that still holds the retired attempt's send claim is fenced by the same
      * write: its next effect dispatch or counted send names an attempt that is gone and is refused unsent.
@@ -1787,13 +1824,14 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * quarantine this run installed is never cleared, so the invocation that met it stays stopped and the next one
      * proceeds from the file. Answers { retired: { family, key, generation, attempt: <token or null> } }.
      */
-    retireAbsentGroup({ family, key, generation, rootId, evidence, attemptToken } = {}) {
+    retireAbsentGroup({ family, key, generation, rootId, evidence, attemptToken, observation } = {}) {
       if (!FAMILIES.includes(family) || !nonempty(key)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the group\'s family and key');
       if (generation !== null && (typeof generation !== 'string' || !generation)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the generation the root was proved absent for (null for a group never committed)');
       if (attemptToken !== undefined && !nonempty(attemptToken)) throw storeError(CODES.notSettled, 'retireAbsentGroup takes attemptToken only as the pending attempt\'s token');
       if (generation === null && attemptToken === undefined) throw storeError(CODES.notSettled, 'a group never committed is retired only with its pending attempt (attemptToken)');
       if (typeof rootId !== 'string' || !normalizeGuid(rootId)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the id of the root proved absent');
       checkAbsenceEvidence(family, evidence, rootId);
+      if (typeof observation !== 'string' || !RETIREMENT_OBSERVATION.test(observation)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the observation observeRetirement answered before the root was read');
       const name = `the managed ${family} "${key}"`;
       const sameRoot = (id) => normalizeGuid(id) === normalizeGuid(rootId);
       mutate((env, disk) => {
@@ -1801,6 +1839,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         const g = env.groups.find((x) => x.family === family && x.key === key) || null;
         const a = env.attempts.find((x) => x.family === family && x.key === key) || null;
         if (!g && !a) throw storeError(CODES.notSettled, `${name} has no group to retire`);
+        if (retirementObservation(env, family, key) !== observation) {
+          throw storeError(CODES.conflict, `${name} changed since it was observed for this retirement; its root may have been written after it was read: observe it again, read the root again, then retire`);
+        }
         if ((g ? g.generation : null) !== generation) throw storeError(CODES.conflict, `${name} is at another generation than the one its root was proved absent for`);
         if (g && !sameRoot(g.root.id)) throw storeError(CODES.conflict, `${name} is bound to the root ${g.root.id}, not ${rootId}`);
         let owned = [];
@@ -1815,6 +1856,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
             throw storeError(CODES.pending, `${name} has a workflow effect that may have been sent and is not proved; it is never retired`);
           }
           if (owned.length > RETIRED_EFFECTS_KEPT) throw storeError(CODES.notSettled, `${name} attempt has more effects than a retirement records`);
+          const neverSent = a.phase === 'prepared' && a.expected === null;
+          const ownCreateProved = owned.some((e) => e.effect === 'create' && e.state === 'confirmed');
+          if (!neverSent && !ownCreateProved && !attemptProvenUnsent(a, env.workflowEffects)) {
+            throw storeError(CODES.pending, `${name} attempt may have sent a write its record does not account for (no send window, or one that counted a possible send, and no confirmed create of its own); it is recovered, never retired`);
+          }
         } else if (attemptToken !== undefined) {
           throw storeError(CODES.conflict, `${name} has no pending attempt to retire`);
         }

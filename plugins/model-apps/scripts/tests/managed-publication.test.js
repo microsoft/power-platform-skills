@@ -16,7 +16,7 @@ const { runManagedFeature, publishManagedScope, confirmUncertainPublication, cre
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256, systemFormRootLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
-const { createWorkflowEffectGate } = require('../lib/workflow-effect-context.js');
+const { createWorkflowEffectGate, requestBodySha256 } = require('../lib/workflow-effect-context.js');
 const { postPublishXml } = require('../lib/publish-xml.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
@@ -2489,3 +2489,118 @@ test('child receipt: kept under the attempt token across runs; a recovery binds 
   assert.deepEqual(bound(later.store), { form: 'adopted', 'form-cell': 'created' });
   assert.equal(s.wire.log.filter(isPatch).length, 1, 'one edit, never sent again');
 });
+
+// Retiring a workflow group whose root a fresh read proved gone, through the real client and the effect gate. The order
+// is the contract's: observe the group, then read the root, then retire against that observation.
+const FLOW_ROW = '44444444-4444-4444-8444-444444444444';
+const FLOW_KEY = 'retirement-flow';
+const flowArgs = (token, observation, family = 'bpf') => ({ family, key: FLOW_KEY, generation: null, rootId: FLOW_ROW, evidence: { kind: 'root-absent', rootId: FLOW_ROW, row: 'not-found' }, attemptToken: token, observation });
+const flowCreate = (token, body, family = 'bpf') => ({ attemptToken: token, family, key: FLOW_KEY, baseGeneration: null, rowId: FLOW_ROW, effect: 'create', request: { method: 'POST', shape: family === 'rule' ? 'rule-create' : 'bpf-create' }, desiredSha256: requestBodySha256(body) });
+const answerBody = (answer) => { const b = answer.body ?? answer.data ?? answer; return typeof b === 'string' ? JSON.parse(b) : b; };
+async function prepareFlow(store, { family = 'bpf', observed = true } = {}) {
+  const token = store.prepareAttempt({ family, key: FLOW_KEY, baseGeneration: null, root: { kind: family === 'rule' ? 'business-rule' : family, key: FLOW_KEY, id: FLOW_ROW }, knownScopes: [], declarationSha256: H('e') });
+  const { epoch } = store.markSending(token, { ...expected(FLOW_ROW), proofSchema: `${family}-v1` }, { observed, claim: 'first' });
+  return { token, epoch };
+}
+async function rowMissing(sdk) {
+  const answer = await sdk.dataverse.get(`/workflows(${FLOW_ROW})`);
+  assert.deepEqual([answer.statusCode ?? answer.status, answerBody(answer).error.code], [404, '0x80040217']);
+}
+// A wire that loses the answer to a workflow create and keeps the request, to deliver it later: a create that landed
+// after the run gave up on it.
+const losingCreates = (s, queued) => ({ request: async (r) => {
+  if (r.method === 'POST' && /\/workflows$/.test(r.url)) { queued.push(() => s.wire.request(r)); return { error: new Error('the answer was lost'), code: 'ECONNRESET' }; }
+  return s.wire.request(r);
+} });
+
+test('absent root: a 404 read before another run sent, confirmed and acknowledged the create proves nothing; retirement refuses with nothing written', async () => {
+  const s = await setup();
+  const { token } = await prepareFlow(s.store);
+  const body = { workflowid: FLOW_ROW, name: 'Racing create' };
+  const effect = flowCreate(token, body);
+  s.store.recordWorkflowEffect(effect);
+  const retiree = openManagedBindings({ workspaceDir: s.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL });
+  const { observation } = retiree.observeRetirement({ family: 'bpf', key: FLOW_KEY });
+  await rowMissing(s.sdk);
+  const { sdk } = await sdkOver(s.wire, { barrier: s.barrier, workflowEffectGate: createWorkflowEffectGate({ store: s.store }) });
+  await withWorkflowEffect({ store: s.store, effect }, () => sdk.dataverse.post('/workflows', body));
+  s.store.confirmEffect(s.store.readGroup('bpf', FLOW_KEY).effects[0].token, { observedSha256: requestBodySha256(body) });
+  s.store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+  const before = fs.readFileSync(s.store.file, 'utf8');
+  const writes = s.wire.log.filter((r) => r.method !== 'GET').length;
+  let refusal = null;
+  try { retiree.retireAbsentGroup(flowArgs(token, observation)); } catch (e) { refusal = e; }
+  assert.deepEqual([refusal && refusal.code, s.wire.workflows.has(FLOW_ROW)], [CODES.conflict, true], 'the row now exists; the old 404 is not about it');
+  assert.equal(fs.readFileSync(s.store.file, 'utf8'), before, 'nothing written');
+  assert.equal(s.wire.log.filter((r) => r.method !== 'GET').length, writes);
+  assert.equal(retiree.readGroup('bpf', FLOW_KEY).pending.token, token, 'the attempt stays for its commit');
+});
+
+for (const observed of [false, true]) {
+  test(`absent root: a workflow attempt that may have sent a create it never journaled is not retired on a 404 (send window ${observed ? 'counted a send' : 'absent'})`, async () => {
+    const s = await setup();
+    const { token, epoch } = await prepareFlow(s.store, { observed });
+    const observer = observed ? createAttemptSendObserver() : null;
+    const queued = [];
+    const { sdk } = await sdkOver(losingCreates(s, queued), { barrier: s.barrier, observer, workflowEffectGate: createWorkflowEffectGate({ store: s.store }) });
+    const window = observer && observer.open(s.store, token, epoch);
+    try { await assert.rejects(sdk.dataverse.post('/workflows', { workflowid: FLOW_ROW, name: 'Unjournaled create' })); } finally { if (window) window.end(); }
+    assert.ok(queued.length > 0, 'the create reached the service (the client may resend it)');
+    const { observation } = s.store.observeRetirement({ family: 'bpf', key: FLOW_KEY });
+    await rowMissing(sdk);
+    const before = fs.readFileSync(s.store.file, 'utf8');
+    let refusal = null;
+    try { s.store.retireAbsentGroup(flowArgs(token, observation)); } catch (e) { refusal = e; }
+    assert.deepEqual([refusal && refusal.code, /does not account for/.test(refusal && refusal.message)], [CODES.pending, true]);
+    assert.equal(fs.readFileSync(s.store.file, 'utf8'), before, 'nothing written');
+    await queued[0]();
+    assert.equal(answerBody(await sdk.dataverse.get(`/workflows(${FLOW_ROW})`)).workflowid, FLOW_ROW, 'the create that was on its way lands');
+    assert.equal(s.store.readGroup('bpf', FLOW_KEY).pending.token, token, 'and the attempt that may own it is still there to recover it');
+  });
+}
+
+test('absent root: a workflow create whose answer was lost stays unconfirmed, and a 404 never retires it, before or after the late delivery', async () => {
+  const s = await setup();
+  const { token } = await prepareFlow(s.store);
+  const body = { workflowid: FLOW_ROW, name: 'Delayed' };
+  const queued = [];
+  const { sdk } = await sdkOver(losingCreates(s, queued), { barrier: s.barrier, workflowEffectGate: createWorkflowEffectGate({ store: s.store }) });
+  await assert.rejects(withWorkflowEffect({ store: s.store, effect: flowCreate(token, body) }, () => sdk.dataverse.post('/workflows', body)));
+  assert.equal(s.store.readGroup('bpf', FLOW_KEY).effects[0].state, 'unconfirmed');
+  const { observation } = s.store.observeRetirement({ family: 'bpf', key: FLOW_KEY });
+  await rowMissing(sdk);
+  const before = fs.readFileSync(s.store.file, 'utf8');
+  assert.equal(await codeOf((async () => s.store.retireAbsentGroup(flowArgs(token, observation)))()), CODES.pending);
+  await queued[0]();
+  assert.equal(await codeOf((async () => s.store.retireAbsentGroup(flowArgs(token, observation)))()), CODES.pending);
+  assert.equal(fs.readFileSync(s.store.file, 'utf8'), before);
+});
+
+for (const family of ['rule', 'bpf']) {
+  test(`absent root: a ${family} create confirmed by a read, its activation answered unapplied, then the row deleted, retires on a fresh 404 with no write`, async () => {
+    const s = await setup();
+    const { token } = await prepareFlow(s.store, { family, observed: false });
+    const { sdk } = await sdkOver(s.wire, { barrier: s.barrier, workflowEffectGate: createWorkflowEffectGate({ store: s.store }) });
+    const row = { workflowid: FLOW_ROW, name: 'Own created workflow' };
+    const body = family === 'rule' ? { Entity: row } : row;
+    const address = family === 'rule' ? '/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson' : '/workflows';
+    await withWorkflowEffect({ store: s.store, effect: flowCreate(token, body, family) }, () => sdk.dataverse.post(address, body));
+    assert.equal(answerBody(await sdk.dataverse.get(`/workflows(${FLOW_ROW})`)).name, row.name);
+    s.store.confirmEffect(s.store.readGroup(family, FLOW_KEY).effects[0].token, { observedSha256: requestBodySha256(body) });
+    s.store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+    const activation = { attemptToken: token, family, key: FLOW_KEY, baseGeneration: null, rowId: FLOW_ROW, effect: 'state', desiredState: 'Active', expectedVersion: 'W/"1"', request: { method: 'PATCH', shape: 'workflow-patch' } };
+    s.wire.script((e) => e.method === 'PATCH', { statusCode: 412, body: { error: { code: '0x80060882', message: 'Version mismatch' } }, unapplied: true });
+    const answered = await withWorkflowEffect({ store: s.store, effect: activation, workflowConditionalEdits: false, observedState: 'Draft' },
+      () => sdk.dataverse.patch(`/workflows(${FLOW_ROW})`, { statecode: 1, statuscode: 2 }, { headers: { 'If-Match': 'W/"1"' } })).catch((e) => e);
+    assert.equal(answered.statusCode ?? answered.status, 412);
+    assert.deepEqual(s.store.readGroup(family, FLOW_KEY).effects.map((e) => e.state), ['confirmed', 'definitely-unsent']);
+    s.wire.workflows.delete(FLOW_ROW);
+    const { observation } = s.store.observeRetirement({ family, key: FLOW_KEY });
+    await rowMissing(sdk);
+    const writes = s.wire.log.filter((r) => r.method !== 'GET').length;
+    assert.deepEqual(s.store.retireAbsentGroup(flowArgs(token, observation, family)), { retired: { family, key: FLOW_KEY, generation: null, attempt: token } });
+    assert.equal(s.wire.log.filter((r) => r.method !== 'GET').length, writes, 'retiring sends nothing');
+    const audit = s.store.snapshot().envelope.retiredGroups[0];
+    assert.deepEqual([audit.generation, audit.publication, audit.attempt.effects], [null, null, [{ effect: 'create', state: 'confirmed' }, { effect: 'state', state: 'definitely-unsent' }]], 'created, never activated');
+  });
+}
