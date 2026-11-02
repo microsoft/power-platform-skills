@@ -2042,7 +2042,40 @@ function usesDeclaredReconcile(spec) {
     || any(spec.webResources, (wr) => wr.reconcile !== undefined)
     || any(spec.commands, keyed)
     || any(spec.entities, (e) => e.quickFind !== undefined)
-    || (declaredFeatureOn('forms') && any(spec.forms, (f) => f.reconcile !== undefined));
+    || (declaredFeatureOn('forms') && any(spec.forms, (f) => f.reconcile !== undefined))
+    || (declaredFeatureOn('dashboards') && any(spec.dashboards, (d) => d.reconcile !== undefined));
+}
+
+// A declared dashboard (dashboards[].reconcile: "declared", lib/dashboard-reconcile.js) is one managed group: its root row, its seed
+// tab and section and its keyed tiles, proved and published as one dashboard. Refused here, before any build work:
+//   - the tile grammar the helper needs (validateDeclaredDashboard: a key on every tile, a supported type, a GUID componentId);
+//   - a dashboard `key` outside the tile key grammar, and a name with '/' and no `key`: the approval of one tile is
+//     `dashboard:<key>/<tile>`, so a '/' in the dashboard's own key could make one approval name another dashboard's tile;
+//   - two declared dashboards with one key (any case): one `dashboard:<key>` approval would approve both.
+// `findings` takes the same-key finding, as validateDeclaredForms does.
+const DECLARED_DASHBOARD_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+function validateDeclaredDashboards(spec, errors, findings) {
+  // Loaded here, not at the top: the helper pulls in the managed settlement, which a spec with no declared dashboard never needs.
+  const { isDeclaredDashboard, dashboardKey, validateDeclaredDashboard } = require('./dashboard-reconcile.js');
+  const first = new Map();
+  (Array.isArray(spec.dashboards) ? spec.dashboards : []).forEach((d, i) => {
+    if (!d || typeof d !== 'object' || d.reconcile === undefined) return;
+    const label = `dashboards[${i}] '${d.name || '(unnamed)'}'`;
+    if (!isDeclaredDashboard(d)) { errors.push(`${label}: reconcile must be "declared" (or left out)`); return; }
+    if (d.key !== undefined && (typeof d.key !== 'string' || !DECLARED_DASHBOARD_KEY_RE.test(d.key))) {
+      errors.push(`${label}: key must be letters, digits, '_', '.' or '-' (at most 64)`);
+      return;
+    }
+    if (d.key === undefined && typeof d.name === 'string' && d.name.includes('/')) {
+      errors.push(`${label}: a declared dashboard whose name holds '/' needs a key (letters, digits, '_', '.' or '-'), because its approvals are spelled dashboard:<key>/<tile>`);
+      return;
+    }
+    for (const message of validateDeclaredDashboard(d)) errors.push(`${label}: ${message}`);
+    const key = dashboardKey(d);
+    const folded = key.toLowerCase();
+    if (first.has(folded)) findings.push(`${first.get(folded)} and ${label} are declared dashboards with the same key (dashboard:${key}): one --authorize adopt:dashboard:${key} or overwrite:dashboard:${key} would approve both, so give each its own key`);
+    else first.set(folded, label);
+  });
 }
 
 // A declared form (forms[].reconcile: "declared", lib/form-layout-reconcile.js) is one managed group whose saved layer the build
@@ -3424,9 +3457,12 @@ function validateAppSpec(spec, opts = {}) {
     // switched on (lib/declared-features.js) takes `reconcile` and is checked below instead; while it is off, the refusal and
     // its words are exactly what they were.
     const formsDeclarable = declaredFeatureOn('forms');
-    const reconcilable = formsDeclarable ? 'views, charts, forms and web resources' : 'views, charts and web resources';
+    const dashboardsDeclarable = declaredFeatureOn('dashboards');
+    const declarable = ['views', 'charts', formsDeclarable && 'forms', dashboardsDeclarable && 'dashboards', 'web resources'].filter(Boolean);
+    const reconcilable = `${declarable.slice(0, -1).join(', ')} and ${declarable[declarable.length - 1]}`;
     for (const kind of ['dashboards', 'forms', 'businessRules']) {
       if (kind === 'forms' && formsDeclarable) continue;
+      if (kind === 'dashboards' && dashboardsDeclarable) continue;
       for (const x of spec[kind] || []) {
         if (x && typeof x === 'object' && x.reconcile !== undefined) {
           errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on ${reconcilable}; leave it out (this artifact keeps the existing build behaviour)`);
@@ -3434,6 +3470,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
     if (formsDeclarable) validateDeclaredForms(spec, errors, sameKeyFindings);
+    if (dashboardsDeclarable) validateDeclaredDashboards(spec, errors, sameKeyFindings);
     if (usesDeclaredReconcile(spec) && compareVersions(spec.minimumPluginVersion, DECLARED_RECONCILE_MIN_VERSION) < 0) {
       warnings.push(`set minimumPluginVersion to '${DECLARED_RECONCILE_MIN_VERSION}' or newer when using reconcile: "declared", a view's viewId or linkEntities, a chart title, command keys or rowId, or quickFind — older plugins ignore or reject these fields`);
     }
@@ -3740,7 +3777,8 @@ function validateAppSpec(spec, opts = {}) {
     } else {
       seenDashboardNames.set(dashKey, d.name);
     }
-    validateDescription(d.description, `dashboard '${d.name}'`, errors);
+    // A declared dashboard's "" is the explicit clear of its live description (approved with --allow-destructive, lib/dashboard-reconcile.js).
+    validateDescription(d.description, `dashboard '${d.name}'`, errors, { allowEmpty: declaredFeatureOn('dashboards') && d.reconcile === 'declared' });
     if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
     for (const t of d.tiles) {
       if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }

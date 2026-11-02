@@ -151,10 +151,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   that differs from the server's stops it the same way (`workspace-copy-unsent-edits`) and is kept: ask
   whether to put that change into the spec and refresh the local copy, or approve the `overwrite:` key
   it prints (`overwrite:quickfind:<table>` for search columns); pass a key exactly as printed. Never write
-  `reconcile` on dashboards, business rules or flows (they are not reconciled in this release; the build
-  keeps its existing behaviour for each), on a web resource only as the web-resource bullet above says, and
-  never write a command `key` (keyed command bars are refused in this version). Leave a downloaded or
-  older spec without these fields as it is — see the advanced reference.
+  `reconcile` on business rules or flows (they are not reconciled in this release; the build keeps its
+  existing behaviour for each), on a web resource only as the web-resource bullet above says, on a form or a
+  dashboard only as their bullets below say, and never write a command `key` (keyed command bars are refused
+  in this version). Leave a downloaded or older spec without these fields as it is — see the advanced reference.
 - **Declared form layouts** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a form
   only when the maker asked its layout to follow the spec (fields, spans, sections, field options, sub-grids,
   handlers); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
@@ -168,6 +168,15 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   declared form against the spec (a form whose publish is unconfirmed is unverified, not passed). A download
   brings declared forms back only with `--include-managed --managed-manifest <store file>`; its first rebuild
   needs `adopt:form:<key>` for each, because the downloaded folder has no store.
+- **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
+  dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
+  `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are
+  kept; a new tile is added after the last row; an unfinished dashboard of the same name is not taken over
+  and not deleted; a dashboard this build cannot finish is not published, including by the app publish; and
+  Dataverse does not version a dashboard's saved layer, so an edit made in Maker at the instant of the write
+  cannot be detected. An existing dashboard is bound only with `--authorize adopt:dashboard:<key>`
+  (`overwrite:dashboard:<key>` or `overwrite:dashboard:<key>/<tile>` for changes made elsewhere,
+  `--allow-destructive` to clear its description with `""`): explain it and let the maker choose.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run

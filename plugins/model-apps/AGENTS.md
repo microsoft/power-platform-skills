@@ -2853,7 +2853,7 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   existing row asks for it). Emptying the content of one that has content also needs `--allow-destructive`
   (`web-resource-clear-not-authorized`); the adoption approval is not consent to it. Unlike the kinds above, a declared web resource that does not settle stops the
   build at once (`managedStop`, never retried); its solution membership is added before its binding is
-  recorded. Declared process flows, dashboards and business rules are not reconciled in this release; the
+  recorded. Declared process flows and business rules are not reconciled in this release; the
   build keeps its existing behaviour for each.
 - **Form layout** (`forms[].reconcile: "declared"`, `lib/form-layout-reconcile.js`, enabled by
   `DECLARED_FEATURES.forms` in `lib/declared-features.js`): the order, section and spans of declared
@@ -2886,6 +2886,28 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
   pending, unreadable or invalid one is left out and named. A plain download reads no form. The download
   writes no store, so a rebuild from the downloaded folder needs `adopt:form:<key>` once.
+- **Dashboard** (`dashboards[].reconcile: "declared"`, `lib/dashboard-reconcile.js`, enabled by
+  `DECLARED_FEATURES.dashboards` in `lib/declared-features.js`): a global Standard dashboard follows the
+  spec tile by tile. Each tile has a `key`; a bound tile gets only what it authors written (target, `name`,
+  stated spans), a new tile is appended after the occupied rows, and every tile the spec omits, a maker's
+  tile and every setting the spec does not author are kept (an omitted tile is never deleted). The
+  dashboards phase settles each declared dashboard as one managed group (`settleDeclaredDashboard`, with
+  the run's store, barrier, creation catalog, halt factory, solution membership, typed approvals and
+  `sendObserver`; the name lookup, narrowed to the app's solution, only says where an unbound one is),
+  then publishes it on EVERY run, a no-op included, through `publishDeclaredDashboard` (one scope, the
+  dashboard's own `<dashboard>` PublishXml; a pending or uncertain earlier publish is confirmed or paid
+  there). A withheld publish leaves the run incomplete (`managed-publication-owed`, or
+  `managed-publication-unverified` when a layer read failed), and the app write is checked with the
+  dashboards the app would hold (`checkAppWrite` `addedDashboards`), so an app publish never puts an
+  unfinished dashboard live. A same-named dashboard an earlier build created and did not finish stops it
+  (`dashboard-creation-record-unsettled`) and is neither taken over nor deleted. Approvals are typed:
+  `adopt|overwrite:dashboard:<key>` and `overwrite:dashboard:<key>/<tile>` for one tile; the key is
+  `key`, else the lower-case name, and validation refuses a `key` outside `[A-Za-z0-9_.-]{1,64}`, a name
+  with `/` and no `key`, and two declared dashboards with one key. A `""` description is the explicit clear
+  (`--allow-destructive`). **Concurrent edits:** a dashboard is a `systemforms` row, so the form's limit
+  applies unchanged: a GET answers the PUBLISHED row's ETag and `If-Match` does not protect the saved
+  layer. The SDK re-reads the saved layer just before its PATCH; an edit landing between that read and
+  the write cannot be detected, and nothing here claims a stale saved-layer write is rejected.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.
@@ -3006,10 +3028,10 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 
 | Remedy | Codes |
 | --- | --- |
-| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `managed-adoption-required` (form) |
-| Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>`; a declared form's is `overwrite:form:<table>/<formtype>/<name>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift`, `form-layout-drift` |
+| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>`; a declared dashboard's is `adopt:dashboard:<key>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `dashboard-adoption-not-authorized`, `managed-adoption-required` (form, dashboard) |
+| Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>`; a declared form's is `overwrite:form:<table>/<formtype>/<name>`; a declared dashboard's is `overwrite:dashboard:<key>`, one tile's `overwrite:dashboard:<key>/<tile>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift`, `form-layout-drift`, `dashboard-drift`, `dashboard-tile-drift` |
 | Risk approval: `--authorize publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, only as printed; read from the refusal's data (`dispatchToken`, `approval`, `remedy`), recorded with `acceptUncertainPublication`; the run stays stopped | `managed-publication-unconfirmed` when no fresh read can settle a lost publish |
-| Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized` |
+| Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized`, `dashboard-description-clear-not-authorized` |
 | Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `workspace-copy-unsent-edits`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
 
 **Known limits.** Without the managed-binding store no binding is recorded, so every later change to a

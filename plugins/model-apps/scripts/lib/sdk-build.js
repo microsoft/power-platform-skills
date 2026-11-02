@@ -189,6 +189,10 @@ const isDeclaredFormOn = (f) => declaredFeatureOn('forms') && !!f && f.reconcile
 const formOrderForms = (spec) => (spec.forms || []).filter((f) => !isDeclaredFormOn(f));
 const formOrderSpecOf = (spec) => ((spec.forms || []).some(isDeclaredFormOn) ? { ...spec, forms: formOrderForms(spec) } : spec);
 const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent } = require('./form-layout-reconcile.js');
+// Declared dashboards (dashboards[].reconcile "declared", lib/dashboard-reconcile.js) the same way: only while their flag is on. With it
+// off, validation refuses `reconcile` on a dashboard, and every dashboard takes the build's own create-or-reuse path below.
+const isDeclaredDashboardOn = (d) => declaredFeatureOn('dashboards') && !!d && d.reconcile === 'declared';
+const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey: declaredDashboardKey } = require('./dashboard-reconcile.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -3522,12 +3526,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // A declared form's halt is labelled `declared form "<table>/<type>/<name>"` (form-layout-reconcile.js), and its approvals
     // are typed by family (form:<key>): a first binding of a form this run did not create needs the adoption one
     // (managed-adoption-required, form-layout-adoption-not-authorized), a saved layout that drifted the overwrite one.
+    // A declared dashboard's the same way: `declared dashboard "<key>"` for the dashboard (dashboard-adoption-not-authorized,
+    // dashboard-drift) and `declared dashboard "<key>/<tile>"` for one tile's drift (dashboard-tile-drift), whose overwrite
+    // approval is that tile's own (lib/dashboard-reconcile.js asks for dashboard:<key>/<tile>).
     const formAt = label.indexOf(`: ${code} — `);
-    const form = formAt > 0 ? /^declared form "(.+)"$/.exec(label.slice(0, formAt)) : null;
+    const form = formAt > 0 ? /^declared (form|dashboard) "(.+)"$/.exec(label.slice(0, formAt)) : null;
     if (form) {
       const formVerb = code === 'managed-adoption-required' || /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
       // A form name may hold spaces (`contoso_item/main/declared item`), so the printed key is quoted for the shell then.
-      const formKey = formVerb ? `${formVerb}:${approvalKey('form', form[1])}` : '';
+      const formKey = formVerb ? `${formVerb}:${approvalKey(form[1], form[2])}` : '';
       return formKey ? `--authorize ${/\s/.test(formKey) ? `"${formKey}"` : formKey}` : '';
     }
     const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
@@ -3738,10 +3745,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // retryPolicyFor reads through the runner's wrapping halt. The halt says each finding and, for one an approval
   // settles, the exact flag (cliApproval), so the maker reads what to do from the halt itself. A stop with no findings (one the managed
   // settlement raised itself, e.g. create-completion-required at a local draft or a pending attempt) says its cause's own message, which
-  // is where what to do is written. The halt points to an approval only when it named one: most such stops have none.
+  // is where what to do is written. The halt points to an approval only when it named one: most such stops have none. A finding may carry
+  // its own `label` (a declared dashboard's tile, `declared dashboard "<key>/<tile>"`), which names the approval it needs.
   const managedStop = (phase, label, stopCode, { cause, findings = [] } = {}) => {
     const said = findings.filter((x) => x && x.code).map((x) => {
-      const flag = cliApproval(`${label}: ${x.code} — `, x.code);
+      const flag = cliApproval(`${x.label || label}: ${x.code} — `, x.code);
       return `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`;
     });
     if (!said.length && cause && typeof cause.message === 'string' && cause.message) said.push(`${stopCode} — ${cause.message}`);
@@ -3955,9 +3963,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // An app write or publish puts live the saved forms the app holds, ahead of their table's publish — which, for a
       // table whose publish is withheld in this run (owed.barrier), would leave the forms' saved labels unpublished for
       // good. So while a table is withheld, an app that holds, or whose write adds, a form of it is not written.
+      // A declared dashboard that did not settle or publish in this run is withheld the same way (lib/dashboard-reconcile.js): a new
+      // app pins every dashboard the build resolved (and names the ones its navigation shows), and its publish would put that
+      // dashboard's saved layer live. Only a withheld id counts, so a build with no declared dashboard is checked as before; an
+      // existing app whose holdings are not read is held while any dashboard is withheld (checkAppWrite's unknown holdings).
       if (owed.barrier.active) {
         await readHoldings();
-        const verdict = owed.barrier.checkAppWrite({ added, held: appHolds.unread ? undefined : [...(appHolds.tables || []), ...appAdded], existingApp: !!existingAppId });
+        const verdict = owed.barrier.checkAppWrite({ added, held: appHolds.unread ? undefined : [...(appHolds.tables || []), ...appAdded], existingApp: !!existingAppId, addedDashboards: Object.values(result.created.dashboards || {}).filter(Boolean) });
         if (!verdict.ok) throw new BuildHalt(describeWithheldApp(verdict), { phase: 'app-shell', code: 'publication-withheld', recoverable: true, retry: RETRY.NEVER });
       }
       if (!publish || !client || typeof client.post !== 'function') {
@@ -7505,7 +7517,125 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // per run of the phases, so the build's own re-run of a halt reads what the attempt before it recorded. Bound to this app and solution as the spec
     // names them: a new app has no id yet, and its unique name is the spec's.
     const creations = openDashboardCreations({ workspaceDir: opts.workspaceDir, environment: opts.env, appUniqueName: spec.app ? appUniqueName(spec) : '', solutionUniqueName: sol && sol.uniqueName, warn: opts.warn });
+    // A declared dashboard (dashboards[].reconcile "declared", its flag on) is one managed group, settled and then published through
+    // its own scope (lib/dashboard-reconcile.js) on every run, a run that changes nothing included: the publish step is also where
+    // an earlier run's owed or uncertain publication of it is paid or confirmed. One create catalog for the run's declared
+    // dashboards, so a new one takes the same id on every plan; required at first use, not at the top: the catalog pulls in the
+    // stable-identity modules, which a build with no declared dashboard must not load (tests/creates-port.test.js).
+    let dashboardCatalog = null;
+    // The helper calls the halt factory with { cause } only. Its refusals name the dashboard (`<key>`) or one tile
+    // (`<key>/<tile>`), each with its own approval, so each is a finding labelled for cliApproval.
+    const declaredDashboardStop = (phase, label, code, { cause } = {}) => {
+      const refusals = cause && Array.isArray(cause.refusals) ? cause.refusals.filter((r) => r && r.code) : [];
+      return managedStop(phase, label, code, {
+        cause,
+        findings: refusals.length
+          ? refusals.map((r) => ({ key: r.key, label: `declared dashboard "${r.key}"`, code: r.code, message: String(r.message || r.code).replace(/\s+/g, ' ') }))
+          : [{ key: label, code, message: String((cause && cause.message) || code).replace(/\s+/g, ' ') }],
+      });
+    };
+    const settleDeclaredDashboardOf = (dash) => {
+      const key = declaredDashboardKey(dash);
+      const label = `declared dashboard "${key}"`;
+      return runner.run('dashboards', label, async () => {
+        if (!dashboardCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          dashboardCatalog = createIntentCatalog((spec.dashboards || []).filter(isDeclaredDashboardOn).map((d) => ({
+            catalogKind: 'dashboard',
+            key: declaredDashboardKey(d),
+            scope: { kind: 'solution', solution: sol && sol.uniqueName },
+            declaration: { scopeType: 'Standard', name: d.name, ...(d.key !== undefined ? { key: d.key } : {}) },
+          })));
+        }
+        // Where the dashboard is looked for when no group binds it yet: the one name match, narrowed to this app's solution when
+        // the name answers several (the same rule, and the same refusal, as the build's own dashboards below). A match is never
+        // consent to manage it: only `dashboard:<key>` adoption approval binds a dashboard this build did not create. A bound
+        // dashboard is found by its binding, so a namesake made since neither stops nor redirects it, and the lookup is not made.
+        const store = bindingGroups && bindingGroups.store;
+        let bound = null;
+        try { bound = store ? store.readGroup('dashboard', key) : null; } catch { bound = null; /* the helper reads it again, and refuses an unreadable group */ }
+        let resolvedId = null;
+        if (!(bound && bound.committed)) {
+          const existing = await findDashboardsByName(provision, dash.name);
+          if (existing.length === 1) resolvedId = existing[0].id;
+          if (existing.length > 1) {
+            let ours = null;
+            let unreadable = '';
+            try {
+              const members = await dashboardsInSolution(provision, sol.uniqueName, existing.map((e) => e.id));
+              ours = members ? existing.filter((e) => members.has(String(e.id).replace(/[{}]/g, '').toLowerCase())) : null;
+            } catch (err) {
+              unreadable = ` (${(err && err.message) || err})`;
+            }
+            if (ours && ours.length === 1) resolvedId = ours[0].id;
+            else {
+              // Stopped before the helper runs, so its own belt never sees these ids: every row this dashboard may be — each
+              // namesake and an earlier attempt's root — is withheld from any publish of this run, the app's included.
+              const pending = bound && bound.pending;
+              const ids = [...existing.map((e) => e.id), pending && pending.root && pending.root.id, pending && pending.expected && pending.expected.rootId]
+                .filter(Boolean).map((x) => String(x).replace(/[{}]/g, '').toLowerCase());
+              const unique = [...new Set(ids)];
+              try { owed.barrier.quarantine(unique.map((x) => ({ type: 'dashboard', id: x })), unique, `${label} (its name matches several dashboards)`); } catch { /* the halt below still stops the build */ }
+              const reason = ours === null
+                ? `and this app's solution cannot say which is its own${unreadable}`
+                : `and ${ours.length ? `${ours.length} of them are` : 'none of them is'} in this app's solution '${sol.uniqueName}'`;
+              throw refusal(`${existing.length} dashboards in this environment match the name '${dash.name}' (Dataverse compares names ignoring case, most accents and trailing spaces) ${reason}, so the build cannot tell which one to manage. Rename or delete the extra ones in Maker, or give this dashboard a different name.`);
+            }
+          }
+        }
+        const out = await settleDeclaredDashboard({
+          dashboard: dash,
+          catalog: dashboardCatalog,
+          sdk: provision,
+          store,
+          barrier: owed.barrier,
+          halt: declaredDashboardStop,
+          resolveTile: (tile) => dashboardTileOpts(spec, tile, result),
+          toComponent: dashboardComponent,
+          retainedCreationIds: creations.idsOf(dash.name) || [],
+          resolvedId,
+          // The run's typed approvals: only `dashboard:<key>` (and `dashboard:<key>/<tile>` for one tile's overwrite) approve
+          // this dashboard; --allow-destructive is what clears its description.
+          approvals: { adopt: featureCtx.authorizedAdoption, overwrite: featureCtx.authorizedOverwrite, destructive: featureCtx.authorizedDestructive },
+          // Solution membership of the bound dashboard, an adopted one included: read once per run (solutionMembers) and added unless proved.
+          ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.dashboard); },
+          sendObserver: opts.sendObserver || null,
+          // The records are written for the app and environment the store is bound to (as the forms helper writes them), so
+          // the identity the store checks each record against is the one it holds, never a caller's copy.
+          ctx: (() => {
+            const envelope = store && typeof store.snapshot === 'function' ? store.snapshot().envelope : null;
+            return envelope ? { appUniqueName: envelope.appUniqueName, environmentFingerprint: envelope.environmentFingerprint } : {};
+          })(),
+        });
+        // A read-only inspection (a match nobody approved adopting, already as declared) binds nothing and owes nothing; the
+        // publish below then has no group to pay. The app still names the row it found.
+        const id = out.id || resolvedId;
+        let pub;
+        try {
+          pub = await publishDeclaredDashboard({ store, barrier: owed.barrier, sdk: provision, key, id });
+        } catch (err) {
+          // The refusal keeps its cause: a blocked uncertain publication carries its dispatch as data there (build-model-app.js
+          // blockedPublicationOf reads err.cause), never in the message.
+          const code = (err && err.code) || 'managed-publication-failed';
+          throw managedStop('dashboards', label, code, { cause: err, findings: [{ key, code, message: String((err && err.message) || err).replace(/\s+/g, ' ') }] });
+        }
+        if (pub && pub.withheld) {
+          markIncomplete({
+            phase: 'dashboards',
+            code: pub.held ? 'managed-publication-unverified' : 'managed-publication-owed',
+            message: pub.held
+              ? `${label}: its saved and published layers could not be read, so it was not published in this run; the change is saved, re-run the build to publish it`
+              : `${label}: its publish is owed to the managed binding store and was not sent in this run; the change is saved, re-run the build to publish it`,
+          });
+        }
+        if (id) result.created.dashboards[dash.name] = id;
+      });
+    };
     for (const dash of spec.dashboards || []) {
+      if (isDeclaredDashboardOn(dash)) {
+        await settleDeclaredDashboardOf(dash);
+        continue;
+      }
       // AB#6726727: a DOWNLOADED dashboard is bound by the id it was read from before anything is tried
       // by name. Renamed in the designer since, its spec name finds nothing — and the name path below
       // would then create a second dashboard under the old name and point the nav entry at that.

@@ -226,7 +226,8 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // --- no regression: a default build cannot reach any of this ---------------------------------------------------------------------
 // Walks the build's relative require graph from its entry points. The port is wired in at exactly two edges: the engine requires
 // creates-stable-build.js inside the branch a spec with createIdentity takes, and creates-catalog.js inside the settlement of a
-// declared form (forms[].reconcile "declared"), the only place a build without createIdentity takes ids from a catalog. Apart
+// declared form (forms[].reconcile "declared") or a declared dashboard (dashboards[].reconcile "declared"), the only places a build
+// without createIdentity takes ids from a catalog. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
 const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js']];
 const SCRIPTS = path.join(__dirname, '..');
@@ -257,7 +258,8 @@ test('the default build loads none of the stable-identity modules and still wire
   assert.match(engine, /if \(spec\.createIdentity !== undefined\) \{\n {4}const \{ createStableCreates \} = require\('\.\/creates-stable-build\.js'\);/);
   assert.equal(engine.match(/require\('\.\/creates-stable-build\.js'\)/g).length, 1, 'the only edge into the stable modules is the gated one');
   assert.match(engine, /if \(!formCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
-  assert.equal(engine.match(/require\('\.\/creates-catalog\.js'\)/g).length, 1, 'the catalog is required only where a declared form settles');
+  assert.match(engine, /if \(!dashboardCatalog\) \{\n {10}const \{ createIntentCatalog \} = require\('\.\/creates-catalog\.js'\);/);
+  assert.equal(engine.match(/require\('\.\/creates-catalog\.js'\)/g).length, 2, 'the catalog is required only where a declared form or a declared dashboard settles');
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');

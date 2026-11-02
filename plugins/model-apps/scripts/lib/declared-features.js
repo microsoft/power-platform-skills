@@ -10,6 +10,8 @@ const DECLARED_FEATURES = {
   // forms[].reconcile: "declared" — the managed form layout (lib/form-layout-reconcile.js reconcileDeclaredForm). On: the build, verify
   // (verify-spec.js verifyManagedForm), the explicit managed download (lib/declared-form-io.js) and the typed approvals are wired.
   forms: true,
+  // dashboards[].reconcile: "declared" — a managed global Standard dashboard (lib/dashboard-reconcile.js settleDeclaredDashboard).
+  dashboards: false,
 };
 
 const declaredFeatureOn = (name) => DECLARED_FEATURES[name] === true;

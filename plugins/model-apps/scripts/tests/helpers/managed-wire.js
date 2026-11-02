@@ -47,7 +47,7 @@ function createManagedWire() {
   const json = (statusCode, body, headers = {}) => ({ statusCode, headers, body: body === undefined ? '' : JSON.stringify(body) });
   const notFound = () => json(404, { error: { code: '0x80040217', message: 'Does Not Exist' } });
 
-  function apply(method, p, body) {
+  function apply(method, p, body, query = new URLSearchParams()) {
     let m = /^systemforms\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\)$/i.exec(p);
     if (m && method === 'GET') {
       const id = m[1].toLowerCase();
@@ -109,6 +109,17 @@ function createManagedWire() {
       return json(204);
     }
     if (m && method === 'GET') { const r = workflows.get(m[1].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
+    // The build's dashboard name lookup (sdk-build.js findDashboardsByName, the SDK's resolveArtifact):
+    //   GET systemforms?$select=formid,name&$filter=name eq 'Ops' and type eq 0
+    // answers the PUBLISHED dashboards (type 0) of that name, compared as Dataverse compares names here: case and trailing
+    // spaces ignored. A quote in the name is doubled in the literal ('Bob''s'). Any other collection read stays empty.
+    const nameFilter = method === 'GET' && /^systemforms$/i.test(p) && /\btype eq 0\b/.test(query.get('$filter') || '')
+      ? /\bname eq '((?:[^']|'')*)'/.exec(query.get('$filter') || '') : null;
+    if (nameFilter) {
+      const fold = (s) => String(s == null ? '' : s).replace(/\s+$/, '').toLowerCase();
+      const want = fold(nameFilter[1].replace(/''/g, "'"));
+      return json(200, { value: [...published.values()].filter((r) => Number(r.type) === 0 && fold(r.name) === want).map((r) => ({ formid: r.formid, name: r.name })) });
+    }
     return method === 'GET' ? json(200, { value: [] }) : json(204);
   }
 
@@ -123,11 +134,11 @@ function createManagedWire() {
     const at = scripted.findIndex((s) => s.match(entry));
     if (at >= 0) {
       const [{ answer }] = scripted.splice(at, 1);
-      if (!answer.unapplied) apply(entry.method, p, body);
+      if (!answer.unapplied) apply(entry.method, p, body, url.searchParams);
       if (answer.error) return { error: answer.error, code: answer.code || 'ECONNRESET' };
       return json(answer.statusCode, answer.body);
     }
-    return apply(entry.method, p, body);
+    return apply(entry.method, p, body, url.searchParams);
   }
 
   return {

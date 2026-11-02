@@ -350,6 +350,8 @@ works through.
   alone too: it holds only a native chart tile to a chart and view of its table. A dashboard whose only
   tiles are such tiles is dropped with its navigation entry, which the download refuses without
   `--allow-lossy-download`.
+- **Following the spec on rebuilds.** Everything above is a dashboard without `reconcile`. To have a
+  rebuild apply the spec's tiles to an existing dashboard, declare it: see `dashboards[].reconcile` below.
 
 ## roleGrants[] (optional — extend a role you did NOT author)
 
@@ -660,11 +662,11 @@ the `overwrite:` key the refusal prints (`--authorize overwrite:view:<table>/<na
 `overwrite:chart:<table>/<name>`, or `overwrite:quickfind:<table>` for a table's Quick Find). **Publishing.** A table is published only when every declared change on it succeeded: when one
 fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
 
-Declared upkeep of web resources is described with `webResources[]` above, and of form layouts with
-`forms[].reconcile` below. Declared process flows, dashboards and business rules are not reconciled in
-this release: `reconcile` on a dashboard, business rule or flow is a validation error, and the build's
-existing behaviour for each is unchanged. A command bar with `commands[].key` is refused
-(`managed-binding-port-unavailable`) in this version.
+Declared upkeep of web resources is described with `webResources[]` above, of form layouts with
+`forms[].reconcile` below, and of dashboards with `dashboards[].reconcile` below. Declared process flows
+and business rules are not reconciled in this release: `reconcile` on a business rule or flow is a
+validation error, and the build's existing behaviour for each is unchanged. A command bar with
+`commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
 
 **An unconfirmed publish.** A table (or dashboard) publish whose answer was lost may still have run. The
 next build confirms it with a fresh read of the published layers, never by sending it again; that run
@@ -726,6 +728,53 @@ are only added.
   build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
   `reconcile: "declared"`; a form that is pending, gone or not valid is left out and named. The downloaded
   folder has no store, so its first rebuild needs `--authorize "adopt:form:<key>"` for each form.
+
+## dashboards[].reconcile (optional — declared dashboards)
+
+Requires `minimumPluginVersion: "2.21.0"`. A dashboard without `reconcile` builds exactly as before: an
+existing one is reused and its tiles are never edited.
+
+```jsonc
+{ "name": "Operations", "key": "operations", "reconcile": "declared",
+  "description": "Daily queue health for the support lead.",
+  "tiles": [
+    { "key": "open-orders", "type": "list", "view": "Active Orders", "name": "Open orders", "colspan": 2 },
+    { "key": "by-status", "type": "chart", "chart": "Orders by Status", "view": "Active Orders" },
+    { "key": "map", "type": "iframe", "url": "https://contoso.example/map", "name": "Map" }] }
+```
+
+- **Scope.** A global **Standard** dashboard only. An interactive dashboard, or one scoped to a table, is
+  refused (`dashboard-interactive-unsupported`, `dashboard-scope-unsupported`), and left as it is.
+- **Keys.** The dashboard's key is its `key` (letters, digits, `_`, `.`, `-`; at most 64), or its name in
+  lower case when it has none; a name holding `/` needs a `key`. Two declared dashboards with one key are
+  refused. Every tile needs a `key` of the same grammar, unique in its dashboard; the build follows the
+  tile by it. `componentId` (a GUID, optional) binds a tile to a control the dashboard already has.
+- **What follows the spec.** The description (`""` clears it, and needs `--allow-destructive`), and what
+  each declared tile authors: its target (chart and view, view, URL or web resource), `name`, and
+  `colspan` / `rowspan` when stated. A new tile is added after the dashboard's last row; a new dashboard
+  is created whole, with an id that stays the same for the spec.
+- **What is kept.** A tile the spec does not declare keeps its place and settings, and nothing is
+  deleted: a tile dropped from the spec stays on the dashboard. A tile's settings the spec does not
+  state are kept. The dashboard's name is not changed: the spec's `name` finds it the first time, and
+  later builds follow the bound dashboard by its id, so a rename in Maker is kept.
+- **What stops before a write.** A tile whose type changed, a tile that is missing from the dashboard, a
+  new tile that cannot be added without moving rows the dashboard already has, a part changed elsewhere
+  since the last build, and a dashboard of the same name that an earlier build created and did not
+  finish: that one is not taken over and not deleted. The dashboard is left as it is and the stop names
+  the cause.
+- **Approvals.** The key is `dashboard:<key>`. A dashboard that already exists and that this build did
+  not create is bound only with `--authorize adopt:dashboard:<key>`; the first binding needs it, later
+  builds do not. `--authorize overwrite:dashboard:<key>` approves replacing a description changed
+  elsewhere, and `overwrite:dashboard:<key>/<tile>` one tile changed elsewhere. A local copy that differs
+  from the server's stops the build (`workspace-copy-unsent-edits`).
+- **Publishing.** The dashboard is published by itself, once, after its write, and only when the write
+  is proved. A dashboard this build cannot finish is not published, not even by the app's publish: an
+  app that would hold it is not written in that run.
+- **Concurrent edits.** Dataverse does not version a dashboard's saved layer: a dashboard is a form row,
+  and a plain read answers the published row's version, so a conditional write cannot reject a stale
+  edit of it. The build re-reads the saved dashboard just before it writes and stops when it changed
+  since the build read it. An edit made in Maker in the instant between that check and the write cannot
+  be detected: do not edit a declared dashboard while a build runs.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 
