@@ -190,8 +190,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   that cannot host business rules skips them. Explain the approval and let the maker choose. `--verify` holds a
   declared rule to its last build (a rule changed in Maker since fails until it is re-adopted). A download
   brings it back declared only with `--include-managed --managed-manifest <store file>` (otherwise it is left
-  out, as every business rule is); its first rebuild needs `adopt:rule:<table>/<name>`, because the downloaded
-  folder has no store.
+  out, as every business rule is); the first build that binds a rule that already exists needs
+  `adopt:rule:<table>/<name>`, because the downloaded folder has no store.
 - **Declared business process flows** (`minimumPluginVersion: "2.21.0"`) — write
   `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow; give every
   stage and step a `key`. Tell the maker: a key keeps a stage's or step's id, so a rename keeps the records on it;

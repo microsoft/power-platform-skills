@@ -83,7 +83,8 @@ const storeOf = (dir) => openManagedBindings({ workspaceDir: dir, environment: O
 
 // One invocation, as build-model-app.js assembles it: a fresh barrier, send observer, workflow effect gate and SDK over the same
 // wire and the same build workspace `dir`, which holds the binding store. `gate: false` leaves the client without a gate.
-async function build(wire, dir, spec, { gate = true, ...opts } = {}) {
+// `configureSdk(sdk, gate)`, when given, adjusts that invocation's SDK before the build runs (e.g. a capability it lacks).
+async function build(wire, dir, spec, { gate = true, configureSdk, ...opts } = {}) {
   const barrier = createPublicationBarrier();
   const sendObserver = createAttemptSendObserver();
   const workflowEffectGate = gate ? createDeferredWorkflowGate() : null;
@@ -94,6 +95,7 @@ async function build(wire, dir, spec, { gate = true, ...opts } = {}) {
     workflowEffectGate.bind = (store) => { binds.push(store); return bind(store); };
   }
   const { sdk } = await sdkOver(wire, { barrier, observer: sendObserver, workflowEffectGate });
+  if (configureSdk) await configureSdk(sdk, workflowEffectGate);
   const mark = wire.log.length;
   const warnings = [];
   let out;
@@ -293,6 +295,107 @@ test('a stored rule change still waiting to be proved after its declaration left
     assert.deepEqual(removed.writes, []);
   });
 });
+
+test('a removed declared rule whose create answer was lost fences its table and name: the legacy path reads and creates nothing, even with the row not visible yet, and a late arrival leaves one rule', async () => {
+  await withRules(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    const isCreate = (e) => /CreateProcessWithWfomJson/.test(e.path);
+    wire.script(isCreate, { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+    const lost = await build(wire, dir, specWith([RULE]));
+    assert.ok(lost.err, 'the lost create stops the run');
+    assert.equal(wire.rows.size, 0, 'the create has not arrived');
+    const original = wire.log.find(isCreate);
+    const held = storeOf(dir).readGroup('rule', KEY);
+    assert.ok(held.pending && typeof held.pending.root.id === 'string');
+    // Undeclared under the same table and name, in the same case or another (the service compares names without case).
+    for (const rules of [[legacy(RULE)], [{ ...legacy(RULE), name: RULE.name.toUpperCase() }]]) {
+      const next = await build(wire, dir, specWith(rules));
+      assert.equal(next.err && next.err.code, 'managed-not-settled', chainText(next.err));
+      assert.match(chainText(next.err), /declared business rule "new_ticket\/Hide notes when closed": an earlier run's change of this rule is still waiting to be proved/);
+      assert.deepEqual(next.writes, [], 'no legacy create beside the unproved one');
+      assert.deepEqual(next.lines.filter((l) => /workflows/i.test(l) && !/EntityDefinitions/.test(l)), [], 'the table and name are not even read');
+      assert.equal(wire.rows.size, 0);
+    }
+    // The first request arrives late: still one rule, the held one.
+    await wire.request({ method: original.method, url: original.url, headers: original.headers, body: JSON.stringify(original.body) });
+    assert.deepEqual([...wire.rows.keys()].map((k) => k.toLowerCase()), [held.pending.root.id.toLowerCase()]);
+  });
+});
+
+// The SDK of an environment that cannot host business rules, refused before any request is sent.
+const capabilityMissing = (sdk) => {
+  sdk.executePrepared = async () => { throw Object.assign(new Error('business rule capability is unavailable before transport'), { code: 'BUSINESS_RULE_API_UNAVAILABLE' }); };
+};
+
+test('the capability-unavailable skip writes nothing, an adopted rule does not count as created, and the skip never hides a declared rule\'s outstanding write', async () => {
+  await withRules(true, async () => {
+    // Control: unavailable before transport, every declared rule is skipped and nothing is sent or bound.
+    const clean = createWorkflowWire();
+    const cdir = makeTempDir('declared-rule-');
+    const c = await build(clean, cdir, specWith([RULE, LOCK]), { configureSdk: capabilityMissing });
+    assert.equal(c.err, undefined, chainText(c.err));
+    assert.deepEqual(c.writes, []);
+    assert.equal(c.out.skipped.businessRules.length, 2);
+    assert.equal(storeOf(cdir).readGroup('rule', KEY).committed, null);
+
+    // A read-only adoption is not a create of this run, so the same answer for the next rule is the clean skip.
+    const wire = createWorkflowWire();
+    assert.equal((await build(wire, makeTempDir('declared-rule-'), specWith([legacy(RULE)]))).err, undefined);
+    const adir = makeTempDir('declared-rule-');
+    const adopted = await build(wire, adir, specWith([RULE, LOCK]), { authorizedAdoption: new Set([APPROVAL]), configureSdk: capabilityMissing });
+    assert.equal(adopted.err, undefined, chainText(adopted.err));
+    assert.deepEqual(adopted.out.skipped.businessRules, [`new_ticket|${LOCK.name}`]);
+    assert.deepEqual(adopted.writes.filter((w) => /^workflows/i.test(w.path)), []);
+    assert.equal(storeOf(adir).readGroup('rule', KEY).committed.records[0].origin, 'adopted');
+
+    // A declared rule whose activation answer was lost is not a capability gap: the run ends incomplete and nothing is sent.
+    const held = createWorkflowWire();
+    const hdir = makeTempDir('declared-rule-');
+    held.script((e) => e.method === 'PATCH', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+    assert.ok((await build(held, hdir, specWith([LOCK]))).err);
+    const next = await build(held, hdir, specWith([RULE, LOCK]), { configureSdk: capabilityMissing });
+    assert.equal(next.err && next.err.code, 'managed-not-settled', chainText(next.err));
+    assert.match(chainText(next.err), /declared business rule "Lock owner when closed" on new_ticket: an earlier run sent a change of this rule that is still waiting to be proved.*Nothing was sent for it/);
+    assert.deepEqual(next.writes, []);
+    const lock = storeOf(hdir).readGroup('rule', `new_ticket/${LOCK.name}`);
+    assert.ok(lock.pending, 'the attempt is kept');
+    assert.equal(held.row(lock.pending.root.id).statecode, 0, 'still Draft: not activated by a skipped run');
+  });
+});
+
+test('a declared rule an earlier run sent is not counted as created by the run that recovers it', async () => {
+  await withRules(true, async () => {
+    const off = { statusCode: 400, body: { error: { code: '0x80040216', message: 'An unexpected error occurred.' } }, unapplied: true };
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    // The create is applied but its answer is lost: the next run recovers the row an earlier run sent, and creates nothing.
+    wire.script((e) => /CreateProcess/.test(e.path), { error: 'socket hang up', code: 'ECONNRESET' });
+    assert.ok((await build(wire, dir, specWith([RULE]))).err);
+    wire.script((e) => /CreateProcess/.test(e.path), off);
+    // With no acknowledged create it is bound only by the adoption approval, and binding it is not a create of this run.
+    const next = await build(wire, dir, specWith([RULE, LOCK]), { authorizedAdoption: new Set([APPROVAL]) });
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.deepEqual(next.out.skipped.businessRules, [`new_ticket|${LOCK.name}`]);
+    assert.equal(storeOf(dir).readGroup('rule', KEY).committed.records[0].origin, 'adopted');
+    assert.equal(wire.rows.size, 1);
+
+    // Its create answered, but the read that proves it failed: the next run proves and activates the row an earlier run
+    // created, and that is not a create of this run either.
+    const own = createWorkflowWire();
+    const odir = makeTempDir('declared-rule-');
+    let sentCreate = false;
+    own.script((e) => { if (/CreateProcess/.test(e.path)) { sentCreate = true; return false; } return sentCreate && e.method === 'GET' && /workflows/i.test(e.path); }, { statusCode: 404, body: { error: { code: '0x80040217', message: 'Does Not Exist' } }, unapplied: true });
+    const unproved = await build(own, odir, specWith([RULE]));
+    assert.ok(unproved.err, 'the create is not proved in its own run');
+    own.script((e) => /CreateProcess/.test(e.path), off);
+    const recovered = await build(own, odir, specWith([RULE, LOCK]));
+    assert.equal(recovered.err, undefined, chainText(recovered.err));
+    assert.deepEqual(recovered.out.skipped.businessRules, [`new_ticket|${LOCK.name}`]);
+    assert.equal(storeOf(odir).readGroup('rule', KEY).committed.records[0].origin, 'created');
+    assert.equal(own.row(storeOf(odir).readGroup('rule', KEY).committed.root.id).statecode, 1);
+  });
+});
 // --- the deferred gate -------------------------------------------------------------------------------------------------------
 
 test('the deferred gate passes everything until bound, refuses a write inside an effect while unbound, and binds to one store only', async () => {
@@ -364,10 +467,11 @@ async function verifyReader(wire) {
     read: {
       findTable: async () => ({ logicalName: 'new_ticket' }),
       findColumns: async () => ['new_subject', 'new_status', 'new_notes', 'new_owner'],
-      // The bound-id read verify makes of a group it does not hold as declared: workflow by workflowid, answered from the wire.
+      // The bound-id read verify makes of a group it does not hold as declared, and of a declared rule's presence and state:
+      // workflow by workflowid, answered from the wire.
       queryRecords: async (table, o) => {
         const id = (/workflowid eq (\S+)/.exec((o && o.filter) || '') || [])[1];
-        if (table === 'workflow' && id) { idReads.push(id); return wire.row(id) ? [{ workflowid: id }] : []; }
+        if (table === 'workflow' && id) { idReads.push(id); return wire.row(id) ? [{ workflowid: id, statecode: wire.row(id).statecode }] : []; }
         return [];
       },
       sitemapXml: async () => '',
@@ -433,13 +537,49 @@ test('verify fails a keyed rule renamed in the spec, lists a reader that cannot 
     const blind = await verifySpec(specWith([keyed]), plain, { managedManifest: manifestOf(dir) });
     assert.deepEqual(ruleChecks(blind), []);
     assert.ok(blind.unverified.includes('managed:rule hide-notes (this reader cannot read a business rule by id)'), JSON.stringify(blind.unverified));
+    assert.deepEqual(blind.checks.filter((c) => c.kind === 'business-rule').map((c) => [c.name, c.present]), [['new_ticket.Hide notes when closed', true]], 'its presence and state are still read, by its bound id');
     await withRules(false, async () => {
       const before = ruleReads.length;
+      idReads.length = 0;
       const off = await verifySpec(specWith([keyed]), read, { managedManifest: manifestOf(dir) });
       assert.deepEqual(ruleChecks(off).map((c) => [c.name, c.present, c.detail]), [[`hide-notes (${id})`, true, '']]);
       assert.equal(ruleReads.length, before, 'not read as a declared rule');
-      assert.deepEqual(idReads, [id], 'held to its bound workflow id');
+      assert.deepEqual(idReads, [id, id], 'held to its bound workflow id, and its presence and state read by that id, never by name');
     });
+  });
+});
+
+test('verify reads a pending declared rule by its own id before any name lookup, so a namesake never passes for it', async () => {
+  await withRules(true, async () => {
+    const namesake = '77777777-7777-4777-8777-777777777777';
+    const legacyChecks = (r) => r.checks.filter((c) => c.kind === 'business-rule').map((c) => [c.present, c.detail]);
+    // The activation's answer was lost, so the Draft row is held; a maker renames it, and an Active rule takes its name.
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    wire.script((e) => e.method === 'PATCH', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+    assert.ok((await build(wire, dir, specWith([RULE]))).err);
+    const id = storeOf(dir).readGroup('rule', KEY).pending.root.id;
+    const manifest = manifestOf(dir);
+    assert.deepEqual(manifest.pending.map((p) => [p.family, p.key, p.root && p.root.id]), [['rule', KEY, id]], 'the pending entry carries the row its attempt holds');
+    wire.rows.set(namesake, { ...wire.row(id), workflowid: namesake, statecode: 1, statuscode: 2 });
+    wire.row(id).name = 'Renamed in Maker';
+    const { sdk } = await sdkOver(wire);
+    const { read } = await verifyReader(wire);
+    const queries = [];
+    read.queryRecords = async (table, o) => { queries.push(String((o && o.filter) || '')); return table === 'workflow' ? sdk.queryRecords(table, o) : []; };
+    const pending = await verifySpec(specWith([RULE]), read, { managedManifest: manifest });
+    assert.deepEqual(legacyChecks(pending), [[false, 'deployed but DRAFT — the rule does not run']], 'its own Draft row, not the Active namesake');
+    assert.ok(queries.includes(`workflowid eq ${id}`), JSON.stringify(queries));
+    assert.ok(!queries.some((q) => /\bname eq/.test(q)), 'never looked up by name');
+    assert.ok(!pending.ok);
+
+    // What cannot be read safely is unverified, never a pass and never a name read.
+    const failing = { ...read, queryRecords: async () => { throw new Error('connection reset'); } };
+    queries.length = 0;
+    const out = await verifySpec(specWith([RULE]), failing, { managedManifest: manifest });
+    assert.deepEqual(legacyChecks(out), []);
+    assert.ok(out.unverified.some((u) => u.startsWith('business-rule:new_ticket.Hide notes when closed (') && /could not be read: connection reset/.test(u)), JSON.stringify(out.unverified));
+    assert.ok(!out.ok);
   });
 });
 

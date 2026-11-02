@@ -7146,7 +7146,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // The two ways a rule is refused "for this environment", and what they allow. `created` counts the rules THIS build created: the
     // switched-off answer (isConfirmedBusinessRuleRefusal) is read as "this environment does not host rules" only while it is the
     // answer to the first create. After a rule was created the environment plainly hosts them, and the same answer is a failure to halt on.
-    // A rule that already existed is not a create — it proves nothing about what the member does now.
+    // A rule that already existed is not a create — it proves nothing about what the member does now. Nor is a declared rule this run
+    // adopted, or one an earlier run created that this run only proved: only a create this invocation sent and saw answered counts.
     let businessRulesCreated = 0;
     let businessRulesSwitchedOff = false;
     // A rule is skipped only for this ONE reason; anything else still halts. Matching is on the
@@ -7205,14 +7206,41 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // build). One create catalog for the run's declared rules, so a new one takes the same id on every plan; built at first use,
     // with the helper, so a build with no declared rule loads neither (tests/creates-port.test.js).
     let ruleCatalog = null;
+    // Whether a declared rule's stored attempt still has a write an earlier run may have sent and nobody has committed: any of the
+    // attempt's own effects past definitely-unsent (dispatching, unconfirmed, confirmed, or fulfilled by a read but not committed).
+    const outstandingRuleWrite = (store, key) => {
+      const { pending, effects } = store.readGroup('rule', key);
+      return !!pending && (effects || []).some((e) => e && e.attemptToken === pending.token && e.state !== 'definitely-unsent');
+    };
+    // Whether this invocation created the rule's row (see businessRulesCreated): the group was not committed before the call, its
+    // root record now says `created`, and the result is not only the proof of an earlier run's attempt.
+    const createdThisRun = (store, key, before, out) => {
+      if (before.committed || (out.recovered && !out.resumed && !out.continued)) return false;
+      const { committed } = store.readGroup('rule', key);
+      const root = committed && (committed.records || []).find((r) => r && r.kind === 'business-rule');
+      return !!root && root.origin === 'created';
+    };
     const settleDeclaredRuleOf = async (rule) => {
       const { settleDeclaredRule, ruleKey } = require('./rule-settlement.js');
       const entityLogical = String(rule.entity).toLowerCase();
       const approvalId = `${entityLogical}/${rule.name}`;
       const label = `declared business rule "${rule.name}" on ${entityLogical}`;
       const halt = declaredWorkflowStop('rule', approvalId);
+      const key = ruleKey(rule);
       if (businessRulesSwitchedOff) {
-        // The first create of this build showed that this environment does not host rules: nothing more is sent for one.
+        // The first create of this build showed that this environment does not host rules: nothing more is sent for one. That
+        // answer came from ANOTHER rule's create, so it says nothing about a write this rule's earlier run may have sent: a rule
+        // whose stored attempt still has such a write outstanding is never skipped as a capability gap. Proving it could send its
+        // own activation, so it is not settled here either: the run stops incomplete with nothing sent, and the attempt is kept.
+        const store = bindingGroups && bindingGroups.store;
+        if (store && outstandingRuleWrite(store, key)) {
+          await runner.run('business-rules', label, async () => {
+            throw halt('business-rules', label, 'managed-not-settled', {
+              cause: refusal(`${label}: an earlier run sent a change of this rule that is still waiting to be proved, and this run did not prove it: this build's first business-rule create was refused as if this environment could not host rules, and that answer, about another rule, does not settle this rule's earlier write. Nothing was sent for it. Run the build again where business-rule creation is available, or with the new declared rules left out until this one settles.`, { code: 'managed-not-settled' }),
+            });
+          });
+          return;
+        }
         result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
         runner.skip('business-rules', `${label} (unsupported in this environment)`);
         return;
@@ -7238,6 +7266,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           })));
         }
         let out;
+        // The rule's stored group before this run touches it: a create counts only when no committed group was there.
+        const before = store.readGroup('rule', key);
         try {
           out = await settleDeclaredRule({
             rule,
@@ -7275,7 +7305,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
           unavailable = out.cause || refusal('business rules are unavailable in this environment');
           throw unavailable;
         }
-        if (out && out.committed && !out.noop) businessRulesCreated += 1;
+        // Counted only when THIS invocation sent the rule's create and saw it answered: no committed group was there before, the
+        // group now holds the row as created (an adoption, or a create no answer acknowledged, holds it as adopted), and the result
+        // is not a proof of an earlier run's attempt (`recovered` without `resumed` or `continued`, which re-send under its token).
+        if (out && out.committed && !out.noop && createdThisRun(store, key, before, out)) businessRulesCreated += 1;
         if (out && out.id) result.created.businessRules[`${entityLogical}|${rule.name}`] = out.id;
       }, {
         skipIf: (err) => {
@@ -7291,39 +7324,28 @@ async function runSdkBuildPhases(spec, opts, owed) {
       });
     };
     // A declared rule's attempt that is still waiting to be proved when its declaration has left the spec (the entry was removed,
-    // or no longer says reconcile "declared"). Nothing in this run will finish it, so it is not dropped silently: the run ends
-    // incomplete with what to do, and the legacy path below does not write to the row that attempt holds (an uncertain write's
-    // row is refused by the client's gate as well). A committed group with no attempt needs nothing: the rule simply leaves
-    // management, as a removed declared form does.
-    const heldRuleRows = new Map();
-    if (declaredFeatureOn('rules') && bindingGroups && bindingGroups.store) {
-      const { ruleKey } = require('./rule-settlement.js');
-      const declared = new Set((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => ruleKey(r)));
-      const envelope = bindingGroups.store.snapshot().envelope;
-      for (const a of envelope.attempts || []) {
-        if (!a || a.family !== 'rule' || declared.has(a.key)) continue;
-        // Every write of a declared rule is recorded as an effect before it is sent. An attempt whose effects all still say
-        // definitely-unsent (a create refused before it started, as on an environment that cannot host rules) changed nothing,
-        // so it holds nothing: it is only noted, and it finishes if the declaration comes back.
-        const sent = (envelope.workflowEffects || []).some((e) => e && e.attemptToken === a.token && e.state !== 'definitely-unsent');
-        if (!sent) {
-          if (typeof opts.warn === 'function') opts.warn(`declared business rule "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
-          continue;
-        }
-        if (a.root && typeof a.root.id === 'string') heldRuleRows.set(a.root.id.toLowerCase(), a.key);
-        markIncomplete({
-          phase: 'business-rules',
-          code: 'managed-not-settled',
-          message: `declared business rule "${a.key}": an earlier run's change of this rule is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it. Put its businessRules[] entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
-        });
-      }
-    }
+    // or no longer says reconcile "declared"): holdRemovedWorkflowAttempts. Nothing in this run will finish it, so it is not
+    // dropped silently: the run ends incomplete with what to do, and the legacy path below neither reads nor creates a rule of
+    // the table and name it declared (its create may not be visible yet, or may still arrive), nor writes the row it holds (an
+    // uncertain write's row is refused by the client's gate as well). A committed group with no attempt needs nothing: the rule
+    // simply leaves management, as a removed declared form does. Loaded only when the feature is on, so a build with no declared
+    // rule does not load the rule helper (tests/creates-port.test.js).
+    const ruleHold = declaredFeatureOn('rules')
+      ? holdRemovedWorkflowAttempts('rule', new Set((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => require('./rule-settlement.js').ruleKey(r))), {
+        phase: 'business-rules', noun: 'business rule', short: 'rule', entries: 'businessRules[]',
+      })
+      : { heldName: () => undefined, heldRow: () => undefined };
     for (const rule of spec.businessRules || []) {
       if (isDeclaredRuleOn(rule)) {
         await settleDeclaredRuleOf(rule);
         continue;
       }
       const entityLogical = String(rule.entity).toLowerCase();
+      const fencedBy = ruleHold.heldName(entityLogical, rule.name);
+      if (fencedBy) {
+        runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (not read, created or changed: declared rule "${fencedBy}" still has a change waiting to be proved under this table and name, and its row may not be visible yet)`);
+        continue;
+      }
       const existing = await provision.queryRecords('workflow', {
         select: ['workflowid', 'statecode', 'createdon'],
         // Definition rows only — see businessRuleFilter. Scoped to the entity as well as the name so
@@ -7335,7 +7357,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         paginate: true,
       });
       const existingId = existing && existing[0] && existing[0].workflowid;
-      const heldBy = existingId ? (existing || []).map((w) => heldRuleRows.get(String(w.workflowid).toLowerCase())).find(Boolean) : undefined;
+      const heldBy = existingId ? ruleHold.heldRow((existing || []).map((w) => w.workflowid)) : undefined;
       if (heldBy) {
         runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (not changed: declared rule "${heldBy}" still has a change waiting to be proved on it)`);
         continue;

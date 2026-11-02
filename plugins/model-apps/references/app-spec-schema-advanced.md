@@ -849,22 +849,26 @@ Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exa
   approval for a rule.
 - **Environment.** An environment that cannot host business rules skips every declared rule with one
   warning and writes nothing for it, as above. The same answer after a declared rule was created in this
-  build stops it (`business-rule-unavailable-after-create`).
+  build stops it (`business-rule-unavailable-after-create`); an adopted rule does not count as created. A
+  declared rule whose earlier change is still waiting to be proved is never skipped this way: the build
+  ends incomplete (`managed-not-settled`) and sends nothing for it.
 - **Removing one.** A declared rule taken out of the spec leaves management and is kept. When a change an
   earlier build sent to it is still waiting to be proved, the build ends incomplete (`managed-not-settled`)
-  and does not touch that rule: put its entry back and build again.
+  and does not touch that rule: put its entry back and build again. Until then the build neither reads nor
+  creates a rule of the same table and name, because the earlier create may not be visible yet.
 - **Publishing.** A rule is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared rule again by its id and holds it to what its last
   build proved: its whole body (every condition and action, the spec's and any other) and its status. It
   also fails when the spec now declares the rule differently from what the rule holds, or names it with
   another table or name (a build never renames or moves a managed rule). A rule changed in Maker since that
-  build fails until it is re-adopted.
+  build fails until it is re-adopted. Its presence and status are read by its own id too, as is a rule whose
+  last change is still waiting to be proved; a rule of the same name never passes for it.
 - **Download.** A plain download writes no business rule. With both `--include-managed` and
   `--managed-manifest <store file>`, each declared rule the store proves (a fresh read still shows what its
   last build proved) comes back in `businessRules[]` as the declaration it was built from, with
   `reconcile: "declared"`; one that is pending, gone, changed since, or not valid is left out and named. The
-  downloaded folder has no store, so its first rebuild needs `--authorize "adopt:rule:<table>/<name>"` for
-  each.
+  downloaded folder has no store, so the first build that binds each rule that already exists there needs
+  `--authorize "adopt:rule:<table>/<name>"`; a rule that is absent is created with no approval.
 
 ## businessProcessFlows[].reconcile (optional — declared business process flows)
 

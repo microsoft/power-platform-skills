@@ -2938,7 +2938,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   `sendObserver`); an undeclared rule keeps the legacy create-or-reuse path byte for byte. A new rule is
   created **Draft** under the id the creation catalog keeps for it, proved by a fresh read, and then
   activated by ONE state write carrying the version of that read (`If-Match`); a 412 is re-read, and the
-  activation is either already met (Active with the proved body: nothing is sent) or refused with the
+  activation is either already met (Active with the proved body: after the answered 412 no further state
+  write is sent) or refused with the
   attempt kept. This guard is **service-backed**: Dataverse honours a client-supplied workflow id, answers a
   repeated create with the same id with 412 and no duplicate, and enforces `If-Match` on a workflow's state
   and body writes (a stale version gets 412). The default path never edits a rule that already exists: a body
@@ -2952,10 +2953,14 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   or the store already holds a workflow effect; a declared rule whose client gate is not bound to that store
   stops before any request (`workflow-state-path-unavailable`). An environment that cannot host rules skips
   every declared rule with zero writes and the same one warning as the legacy path, except after a declared
-  rule was created in the same run (`business-rule-unavailable-after-create`, a halt). A stored rule attempt
-  whose declaration left the spec keeps the run incomplete (`managed-not-settled`) while any of its effects
-  may have been sent, and the legacy path does not write its row; one whose effects are all unsent only
-  warns. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
+  rule was created in the same run (`business-rule-unavailable-after-create`, a halt). Only a create this run
+  sent and saw answered counts: an adopted rule, or one an earlier run created and this run only proved, does
+  not. The skip never covers a declared rule whose stored attempt has a write that may have been sent: that
+  rule keeps the run incomplete (`managed-not-settled`), nothing is sent for it and its attempt is kept. A
+  stored rule attempt whose declaration left the spec keeps the run incomplete (`managed-not-settled`) while
+  any of its effects may have been sent (`holdRemovedWorkflowAttempts`): the legacy path neither reads nor
+  creates a rule of the table and name that attempt declared (its create may not be visible yet), nor writes
+  the row it holds; one whose effects are all unsent only warns. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
   rules with one key. Nothing is published: a rule's activation is its state write.
   **Verify and download** (`lib/declared-rule-io.js`): verify reads each bound declared rule fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredRule`) and runs `verifyDeclaredRule`
@@ -2967,12 +2972,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   omitted node, description or condition logic is not a change for the build either. A group with no
   declaration state or proof, or a reader that cannot read a rule by id, is listed unverified, never passed;
   with the path off, the group is held to its bound workflow id as before. The legacy business-rule checks
-  (existence, duplicates, state) still run for a declared rule too.
+  (existence, duplicates, state) still run for a declared rule too, but a bound declared rule, or one whose
+  attempt is still pending, is read there by its own id (`verify-spec.js` `boundWorkflowOf`, with the pending
+  root from `readVerifyManifest`), never by name: a row the store does not name, a failed read or another row
+  answered is unverified, and a namesake never passes for it.
   `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
   `originalDeclaration` into `businessRules[]`, which a plain download leaves out (replacing an entry with the
   same table and name, appended otherwise), validating incrementally; a pending, unreadable, changed or
-  invalid one is left out and named (`managedRules.stale`). The download writes no store, so a rebuild from
-  the downloaded folder needs `adopt:rule:<table>/<name>` once.
+  invalid one is left out and named (`managedRules.stale`). The download writes no store, so the first
+  binding of each rule from the downloaded folder needs `adopt:rule:<table>/<name>` where the rule already
+  exists; where it is absent, it is created with no approval.
 - **Business process flow** (`businessProcessFlows[].reconcile: "declared"`, `lib/bpf-settlement.js`, enabled by
   `DECLARED_FEATURES.bpf` in `lib/declared-features.js`): a flow is ONE `workflows` row (category 4) managed whole
   as one group: the root (kind `bpf`), one `bpfStage` record per stage and one `bpfStep` record per step, under

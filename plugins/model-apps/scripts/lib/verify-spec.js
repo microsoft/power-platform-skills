@@ -1389,6 +1389,15 @@ async function verifySpec(spec, read, opts = {}) {
       phaseSkipped.push(`business-rule:${name}`);
       continue;
     }
+    // A declared rule bound in this workspace's store, or one whose attempt is still pending, is checked by its own row id first
+    // (boundWorkflowOf), never by name: a namesake must not pass for it. Its key is the helper's (lib/rule-settlement.js ruleKey).
+    const boundRule = boundWorkflowOf(opts.managedManifest, 'rule', rule.key ? String(rule.key) : `${entityLogical}/${rule.name}`, rule.reconcile === 'declared');
+    if (boundRule) {
+      await checkBoundWorkflow(read, 'business-rule', name, boundRule, (rule.status || 'Active') === 'Active', { add, unverified }, {
+        draft: 'deployed but DRAFT — the rule does not run', active: 'deployed ACTIVE but the spec asks for Draft — the rule is running',
+      });
+      continue;
+    }
     let rows;
     try {
       // `top: 50`, not 1 — the whole point is to SEE duplicates. Scoped to DEFINITION rows only

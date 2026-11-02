@@ -53,7 +53,8 @@ const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leav
 const sdkBuild = () => require('./sdk-build.js');
 
 // ---------------------------------------------------------------------------------------------------------------
-// The declaration: its shape, its compiler (sdk-build's businessRuleDef is compileRuleIntent) and the node projection.
+// The declaration: its shape, its compiler (compileRuleIntent; sdk-build's businessRuleDef, kept for undeclared rules, compiles a
+// legacy rule the same way) and the node projection.
 
 const KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const LOGICS = ['AND', 'OR'];
@@ -142,8 +143,9 @@ function compileClause(c, id) {
 }
 
 /**
- * The SDK business-rule definition of ONE App Spec rule. The only rule compiler: sdk-build's businessRuleDef is
- * this function. Takes the rule alone - never (spec, rule).
+ * The SDK business-rule definition of ONE App Spec rule, as a declared rule is created and proved. sdk-build keeps
+ * its own businessRuleDef for undeclared rules (it does not load this module, so a legacy build never loads the
+ * creation catalog); the two compile a legacy rule to the same definition. Takes the rule alone - never (spec, rule).
  */
 function compileRuleIntent(rule) {
   const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
