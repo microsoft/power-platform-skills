@@ -193,6 +193,10 @@ const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent
 // off, validation refuses `reconcile` on a dashboard, and every dashboard takes the build's own create-or-reuse path below.
 const isDeclaredDashboardOn = (d) => declaredFeatureOn('dashboards') && !!d && d.reconcile === 'declared';
 const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey: declaredDashboardKey } = require('./dashboard-reconcile.js');
+// The create identity each retired declared key takes when it is declared again (managed-bindings.js incarnations()), handed to
+// every declared family's create catalog: a key whose root was proved gone and retired is created again under a fresh id, never
+// under the retired one. No store (a dry run, no app) has none.
+const storeIncarnations = (store) => (store && typeof store.incarnations === 'function' ? store.incarnations() : []);
 // Declared business rules (businessRules[].reconcile "declared", lib/rule-settlement.js) the same way: only while their flag is on.
 // The helper is required at first use, not here: it pulls in the stable-identity modules (creates-catalog.js), which a build with
 // no declared rule must not load (tests/creates-port.test.js).
@@ -7121,7 +7125,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // form must not load (tests/creates-port.test.js walks the require graph of a default build).
         if (!formCatalog) {
           const { createIntentCatalog } = require('./creates-catalog.js');
-          formCatalog = createIntentCatalog(declaredDefs.map((x) => formCatalogIntent(x.f, { solution: sol && sol.uniqueName })));
+          formCatalog = createIntentCatalog(declaredDefs.map((x) => formCatalogIntent(x.f, { solution: sol && sol.uniqueName })), { incarnations: storeIncarnations(bindingGroups && bindingGroups.store) });
         }
         const out = await reconcileDeclaredForm({
           form: f,
@@ -7700,7 +7704,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             key: ruleKey(r),
             scope: { kind: 'table', solution: sol && sol.uniqueName, table: String(r.entity).toLowerCase() },
             declaration: r,
-          })));
+          })), { incarnations: storeIncarnations(store) });
         }
         let out;
         // The rule's stored group before this run touches it: a create counts only when no committed group was there.
@@ -8006,7 +8010,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             key: bpfKey(f),
             scope: { kind: 'table', solution: sol && sol.uniqueName, table: String(f.entity).toLowerCase() },
             declaration: f,
-          })));
+          })), { incarnations: storeIncarnations(store) });
         }
         let out;
         try {
@@ -8331,7 +8335,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             key: declaredDashboardKey(d),
             scope: { kind: 'solution', solution: sol && sol.uniqueName },
             declaration: { scopeType: 'Standard', name: d.name, ...(d.key !== undefined ? { key: d.key } : {}) },
-          })));
+          })), { incarnations: storeIncarnations(bindingGroups && bindingGroups.store) });
         }
         // Which row the dashboard is, in this order: the committed binding, then the pending attempt's root (a create or an
         // adoption an earlier run started and did not settle), then the spec's explicit `dashboardId`, and only then its name.

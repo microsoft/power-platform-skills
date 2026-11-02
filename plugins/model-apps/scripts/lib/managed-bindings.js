@@ -18,6 +18,11 @@
 // with an empty store. One invalid group makes only that group unusable (`managed-binding-group-invalid`); it is kept
 // on disk exactly as it was.
 //
+// RETIREMENT AND A NEW INCARNATION. A group whose root row was proved gone is retired (retireAbsentGroup). The same
+// write gives its key a fresh random root id (`incarnations`), so a key declared again later is created as a new row
+// under a new id, never under the deterministic id that was just retired; the catalog takes that id from the store, so
+// every retry and recovery of the new create keeps it.
+//
 // WRITES. Every change takes the record lease (record-lease.js), rereads the file from disk, applies one change, and
 // replaces the file atomically (apply-snapshot-store.js writeFileAtomic), then reads it back and compares the canonical
 // hash: the writer redacts token-shaped text, and a write that changed an authoritative field must fail, not report
@@ -848,6 +853,38 @@ function validateRetiredGroups(list, where) {
   });
 }
 
+// The create identity a key takes once its root was retired (retireAbsentGroup): { family, key, rootId, after }, at most one
+// per key. The create catalog derives a declared key's root id from its spec alone (creates-identity.js stableCreateIdV1), so
+// without this a key declared again after its root was proved gone would be created again under the very id that was just
+// retired: a row the service deleted, and one a retained SDK workspace still holds a synced baseline for (its push of that
+// id reads the missing row and stops the build). `rootId` is a fresh random id written in the same lease-held write that
+// retires the group, so every later run, retry and recovery of that incarnation reads the same one (lib/creates-catalog.js
+// createIntentCatalog `incarnations`), and every child is derived under it. `after` is the root that was retired:
+// prepareAttempt refuses it for that key, so a run that planned before the retirement cannot send under it. An entry is
+// replaced only by the next retirement of the same key (with `after` the incarnation's own root), never dropped, so it
+// is not bounded by the retirement audit above. A build that predates the key reads it as unexpected and refuses the
+// whole file (fail closed); a file without it opens as it always did.
+const INCARNATIONS_KEPT = 512;
+function validateIncarnations(list, where) {
+  if (!Array.isArray(list) || list.length > INCARNATIONS_KEPT) throw invalid(where, `is not a list of at most ${INCARNATIONS_KEPT} incarnations`);
+  const keys = new Set();
+  const roots = new Set();
+  list.forEach((x, i) => {
+    const w = `${where}[${i}]`;
+    closedKeys(x, ['family', 'key', 'rootId', 'after'], w);
+    if (!FAMILIES.includes(x.family) || !nonempty(x.key)) throw invalid(w, 'has no family and key');
+    guidField(x.rootId, `${w}.rootId`);
+    guidField(x.after, `${w}.after`);
+    if (x.rootId === x.after) throw invalid(w, 'takes the root it was retired from');
+    const id = groupId(x.family, x.key);
+    if (keys.has(id)) throw invalid(w, 'repeats a key');
+    keys.add(id);
+    const root = `${NAMESPACE[x.family]}\u0000${x.rootId}`;
+    if (roots.has(root)) throw invalid(w, `gives the ${NAMESPACE[x.family]} id ${x.rootId} to two keys`);
+    roots.add(root);
+  });
+}
+
 // The caller's proof that a group's root row is gone (retireAbsentGroup). The store cannot read the service, so the
 // caller must have proved it from a FRESH read, by exactly this id, that answered the missing-row 404 (Dataverse
 // 0x80040217, "does not exist") in every layer the row has:
@@ -893,7 +930,7 @@ function parseEnvelope(text, expect) {
   } catch (e) {
     throw storeError(CODES.unreadable, `the managed binding store is not valid JSON (${e.message})`);
   }
-  closedKeys(data, ['schemaVersion', 'environmentFingerprint', 'appUniqueName', 'solutionUniqueName', 'revision', 'groups', 'attempts', 'workflowEffects', 'publicationRiskAcceptances', 'retiredGroups'], 'the managed binding store');
+  closedKeys(data, ['schemaVersion', 'environmentFingerprint', 'appUniqueName', 'solutionUniqueName', 'revision', 'groups', 'attempts', 'workflowEffects', 'publicationRiskAcceptances', 'retiredGroups', 'incarnations'], 'the managed binding store');
   if (data.schemaVersion !== SCHEMA_VERSION) throw invalid('the managed binding store', `has schema version ${data.schemaVersion}, not ${SCHEMA_VERSION}`);
   if (data.environmentFingerprint !== expect.environmentFingerprint || data.appUniqueName !== expect.appUniqueName || data.solutionUniqueName !== expect.solutionUniqueName) {
     throw invalid('the managed binding store', 'belongs to another environment, app or solution');
@@ -902,6 +939,7 @@ function parseEnvelope(text, expect) {
   for (const list of ['groups', 'attempts', 'workflowEffects']) if (!Array.isArray(data[list])) throw invalid('the managed binding store', `has no ${list} list`);
   if (data.publicationRiskAcceptances !== undefined) validateRiskAcceptances(data.publicationRiskAcceptances, 'publicationRiskAcceptances');
   if (data.retiredGroups !== undefined) validateRetiredGroups(data.retiredGroups, 'retiredGroups');
+  if (data.incarnations !== undefined) validateIncarnations(data.incarnations, 'incarnations');
 
   const header = { appUniqueName: data.appUniqueName, environmentFingerprint: data.environmentFingerprint };
   const invalidGroups = new Map();
@@ -1229,6 +1267,16 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
   const handle = {
     get file() { return ctx.full; },
     snapshot() { return snapshotOf(state); },
+    /**
+     * The create identity each retired key takes when it is declared again (see validateIncarnations), as the file was
+     * last read or written by this handle: [{ family, key, rootId }]. Hand it to the create catalog
+     * (creates-catalog.js createIntentCatalog `incarnations`). A plan made from a stale copy cannot reuse a retired id:
+     * prepareAttempt rereads the file under the lease and refuses it.
+     */
+    incarnations() {
+      const list = Array.isArray(state.envelope.incarnations) ? state.envelope.incarnations : [];
+      return list.map(({ family, key, rootId }) => ({ family, key, rootId }));
+    },
     /** Re-read the file (another process may have changed it). */
     refresh() {
       state = readStoreFile(ctx) || { envelope: emptyEnvelope(ctx.expect), invalidGroups: new Map(), sha256: null };
@@ -1270,6 +1318,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * write is refused
      * (`managed-binding-store-full`, nothing written, nothing sent) unless it leaves PREPARE_RESERVE_BYTES free beyond
      * every pending attempt's unused reservation, this one's included.
+     * A `root` whose id is the one this key was retired from (its incarnation's `after`, see validateIncarnations) is
+     * `managed-binding-generation-conflict`, nothing written: a retired root is never prepared again under its key.
      */
     prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, declaration, publication = null, replaces, completionBytes }) {
       const kept = declaration !== undefined ? checkDeclaration(family, key, declaration) : undefined;
@@ -1288,6 +1338,12 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           retireInto(env, old, replaces.baseGeneration);
         } else if (unit.attempt) throw storeError(CODES.pending, `the managed ${family} "${key}" already has a pending attempt`);
         if ((unit.group ? unit.group.generation : null) !== baseGeneration) throw storeError(CODES.conflict, `the managed ${family} "${key}" changed since the plan was made`);
+        // A root this key retired (retireAbsentGroup) is never taken again by it, whatever the plan read before: its
+        // next create uses the key's incarnation, written in the same change that retired the old root.
+        const reborn = (env.incarnations || []).find((x) => x.family === family && x.key === key);
+        if (reborn && isObj(root) && normalizeGuid(root.id) === reborn.after) {
+          throw storeError(CODES.conflict, `the managed ${family} "${key}" was retired from the root ${reborn.after}; declared again it is created under ${reborn.rootId}, never under the retired root. Nothing was written or sent: run the build again`);
+        }
         // Under the lease, against the file as it is now: markPublishDispatch refuses a group with an attempt, and this
         // refuses an attempt over a dispatched publish, so the two never stand together.
         if (unit.group && unit.group.publication && UNCERTAIN.has(unit.group.publication.state)) {
@@ -1819,7 +1875,10 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * generation, rootId, reason: 'root-absent', publication, attempt: null | { token, phase, effects: [{ effect,
      * state }] }, at } to `retiredGroups` (newest last, at most RETIRED_GROUPS_KEPT). The entry says the root was proved
      * gone and the group retired: NOT that its content was published, its debt paid or an activation made; the effect
-     * states say what each change was when it was dropped. Every other group, attempt, effect, publication and risk
+     * states say what each change was when it was dropped. The same write sets the key's incarnation (see
+     * validateIncarnations): { family, key, rootId: <a fresh random id>, after: <the retired root> }, replacing any
+     * earlier one of the key, so a declaration of the key made later is created under that fresh root, and every child
+     * under it, by every run until it commits; prepareAttempt refuses the retired root for the key. Every other group, attempt, effect, publication and risk
      * acceptance stays as it was. After the write the retired attempt's own hold ends (as retireUnsentAttempt); a
      * quarantine this run installed is never cleared, so the invocation that met it stays stopped and the next one
      * proceeds from the file. Answers { retired: { family, key, generation, attempt: <token or null> } }.
@@ -1885,6 +1944,15 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           at: new Date(now()).toISOString(),
         });
         env.retiredGroups = list.slice(-RETIRED_GROUPS_KEPT);
+        // The key's next create identity, in this same write: declared again, it is created under a fresh root, never
+        // under the one just proved gone (validateIncarnations). An earlier incarnation of the key is replaced.
+        const retiredRoot = normalizeGuid(g ? g.root.id : a.root.id);
+        const born = (env.incarnations || []).filter((x) => !(x.family === family && x.key === key));
+        if (born.length >= INCARNATIONS_KEPT) throw storeError(CODES.storeFull, `${name} cannot be retired: the store already keeps the create identity of ${INCARNATIONS_KEPT} retired keys. Nothing was written`);
+        let rootId;
+        do { rootId = crypto.randomUUID().toLowerCase(); } while (rootId === retiredRoot);
+        born.push({ family, key, rootId, after: retiredRoot });
+        env.incarnations = born;
       });
       // The write is durable and read back (mutate): only now may the retired attempt's own hold end.
       if (attemptToken !== undefined && barrier) barrier.release(attemptToken);
@@ -2142,4 +2210,5 @@ module.exports = {
   publicationRemedy,
   blockedPublication,
   RETIRED_GROUPS_KEPT,
+  INCARNATIONS_KEPT,
 };

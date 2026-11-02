@@ -1213,3 +1213,91 @@ test('a settled removed declared form does not hold an unchanged plain form of i
     assert.deepEqual(shape(formWrites(r)), []);
   });
 });
+
+// --- a key declared again after its root was retired -------------------------------------------------------------------------
+
+// A form made by a build, then retired once both layers proved it gone (an org with no form row stands in for the deletion), so
+// the store's key has a new incarnation and the old id is the retired one. Answers the org that lost the row, the retired id,
+// the incarnation's id and the ids the old group recorded.
+async function retiredForm(dir) {
+  const original = createFakeBuildOrg({ entities: ENTITIES });
+  assert.equal((await build(original, dir, makeSpec())).err, undefined);
+  const old = storeOf(original, dir).readGroup('form', KEY).committed;
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const retired = await buildWarned(org, dir, removedForm());
+  assert.equal(retired.err, undefined, chainText(retired.err));
+  assert.equal(retiredNotices(retired.warns).length, 1);
+  // Read from the envelope, not incarnations(), so a build without incarnations fails on what it sends, not on an accessor.
+  const reborn = (storeOf(org, dir).snapshot().envelope.incarnations || []).find((x) => x.family === 'form' && x.key === KEY) || {};
+  return { org, original, old: old.root.id, reborn: reborn.rootId, oldIds: new Set(old.records.map((r) => String(r.id).toLowerCase())) };
+}
+
+for (const fresh of [false, true]) {
+  test(`a declared form declared again after its root was retired is created and bound under a fresh id, never the retired one, and the next build is write-free (${fresh ? 'a fresh' : 'the same'} workspace)`, async () => {
+    await withForms(true, async () => {
+      const dir = newDir();
+      const { org, old, reborn, oldIds } = await retiredForm(dir);
+      const ws = fresh ? newDir() : dir;
+      if (fresh) fs.copyFileSync(storeFileOf(org, dir), storeFileOf(org, ws));
+      const first = await build(org, ws, makeSpec());
+      assert.equal(first.err, undefined, chainText(first.err));
+      assert.ok(!formPosts(first).map((c) => String(c.body.formid).toLowerCase()).includes(old), 'the retired id is never created again');
+      assert.deepEqual(formPosts(first).map((c) => String(c.body.formid).toLowerCase()), [reborn], 'one create, under the incarnation');
+      assert.ok(!JSON.stringify(first.writes).toLowerCase().includes(old), 'no write names the retired id');
+      assert.deepEqual(first.tablePublishes, [['contoso_item']]);
+      const bound = storeOf(org, ws).readGroup('form', KEY).committed;
+      assert.deepEqual([bound.root.id, rootOrigin(bound)], [reborn, 'created']);
+      const reused = bound.records.map((r) => String(r.id).toLowerCase()).filter((id) => id !== 'notescontrol' && oldIds.has(id));
+      assert.deepEqual(reused, [], 'every child is derived under the new root');
+      const second = await build(org, ws, makeSpec());
+      assert.equal(second.err, undefined, chainText(second.err));
+      assert.deepEqual([formWrites(second), second.tablePublishes], [[], []]);
+      assert.equal(storeOf(org, ws).readGroup('form', KEY).committed.generation, bound.generation);
+    });
+  });
+}
+
+test('a declared form declared again after retirement keeps its incarnation through a lost create answer: resumed or adopted under that id, never a second one', async () => {
+  await withForms(true, async () => {
+    for (const applied of [false, true]) {
+      const dir = newDir();
+      const { org, old, reborn } = await retiredForm(dir);
+      let n = 0;
+      const restore = org.intercept((c) => c.method === 'POST' && /^\/systemforms(?:\?|$)/.test(c.path) && n++ === 0, async (c) => {
+        if (applied) await org.fake.httpClient.post(`${org.origin}/api/data/v9.2${c.path}`, c.body);
+        throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+      });
+      const lost = await build(org, dir, makeSpec());
+      restore();
+      assert.ok(lost.err, `applied=${applied}: the lost answer stops the build`);
+      assert.ok(!formPosts(lost).map((c) => String(c.body.formid).toLowerCase()).includes(old), 'the retired id is never created again');
+      assert.deepEqual(formPosts(lost).map((c) => String(c.body.formid).toLowerCase()), [reborn]);
+      assert.equal(storeOf(org, dir).readGroup('form', KEY).pending.root.id, reborn, 'the attempt holds the incarnation');
+      const next = await build(org, dir, makeSpec(), applied ? { authorizedAdoption: new Set([`form:${KEY}`]) } : {});
+      assert.equal(next.err, undefined, `applied=${applied}: ${chainText(next.err)}`);
+      assert.deepEqual(formPosts(next).map((c) => String(c.body.formid).toLowerCase()), applied ? [] : [reborn], applied ? 'the landed create is adopted, not sent again' : 'the unsent create is sent again under the same id');
+      assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.root.id, reborn);
+      assert.ok(!JSON.stringify([lost.writes, next.writes]).toLowerCase().includes(old));
+    }
+  });
+});
+
+test('a namesake made after a declared form was retired is not adopted without adopt:form, and with it is bound by its own id', async () => {
+  await withForms(true, async () => {
+    const dir = newDir();
+    const { org, original, old, reborn } = await retiredForm(dir);
+    const id = '33333333-3333-4333-8333-333333333333';
+    const row = original.fake.rows('systemforms').find((r) => r.data.formid === old).data;
+    await org.fake.httpClient.post(`${org.origin}/api/data/v9.2/systemforms`, { ...row, formid: id });
+    await org.fake.httpClient.post(`${org.origin}/api/data/v9.2/PublishXml`, { ParameterXml: '<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>' });
+    const refused = await build(org, dir, reordered());
+    assert.equal(refused.err && refused.err.code, 'form-layout-adoption-not-authorized', chainText(refused.err));
+    assert.deepEqual(refused.writes, []);
+    assert.deepEqual(storeOf(org, dir).readGroup('form', KEY), { committed: null, pending: null, effects: [] });
+    const approved = await build(org, dir, reordered(), { authorizedAdoption: new Set([`form:${KEY}`]) });
+    assert.equal(approved.err, undefined, chainText(approved.err));
+    assert.deepEqual(formPosts(approved), []);
+    assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.root.id, id);
+    assert.notEqual(id, reborn);
+  });
+});

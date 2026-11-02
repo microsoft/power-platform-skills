@@ -3156,6 +3156,25 @@ is unknown, the build resets that copy to the server's (it held only this run's 
 was proven clean or approved for replacement just before); a reset that fails leaves the next run to
 refuse the item.
 
+**A key declared again after its root was retired** (forms, dashboards, business rules, business process
+flows). The create id of these families is the deterministic catalog id (`stableCreateIdV1` over the
+spec's own key), so without more a re-declaration would create its row under the very id the store just
+retired, or meet a row restored under it. `retireAbsentGroup` therefore records, in the same write as the
+`retiredGroups` entry, a per-key **incarnation** in the store envelope (`incarnations: [{ family, key,
+rootId, after }]`): a fresh random root id (`crypto.randomUUID()`, never the retired one), replacing any
+earlier one for that key, at most `INCARNATIONS_KEPT` (512) entries, read strictly like every other field
+(a malformed list makes the file unreadable). `store.incarnations()` returns them and `sdk-build.js` passes
+them to `createIntentCatalog(intents, { incarnations })` at the four catalog sites, so that key's
+`derivedId` (and every child derived under it: tiles, form controls, stages and steps) is the incarnation;
+`stableId` stays the v1 id. The catalog refuses a malformed list, or an incarnation equal to another
+declaration's id, with `create-identity-invalid`. As a fence, `prepareAttempt` refuses
+(`managed-binding-generation-conflict`, nothing written) an attempt whose root is the retired id `after` of
+its key's incarnation. A bound root still wins over the catalog id, adoption by name or by the
+`adopt:` approval is unchanged, and a lost create keeps the incarnation in its pending attempt. Views and
+charts are never retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js`
+("incarnation"), `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after"
+in `tests/sdk-build-declared-{forms,dashboards,rules,bpf}.test.js`.
+
 **Stable create ids** (`createIdentity: "stable-v1"`, `minimumPluginVersion: "2.21.0"`; new apps only).
 The only place the engine reads the field is one gated `require` of `lib/creates-stable-build.js` in
 `lib/sdk-build.js` (pinned by `creates-port.test.js`: a spec without it loads none of the stable modules

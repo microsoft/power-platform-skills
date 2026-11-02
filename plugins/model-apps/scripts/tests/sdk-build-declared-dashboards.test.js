@@ -1440,4 +1440,65 @@ test('removed settled liveness: an observation that fails stops the invocation b
     assert.equal(committedGroup(dir), null);
     assert.ok(appWrites(next.calls).length > 0, 'the app is written and published');
   });
+
+});
+// --- a key declared again after its root was retired -------------------------------------------------------------------------
+
+// A dashboard made by a build, then deleted from both layers and retired by a build without its declaration, so the store's
+// key has a new incarnation and the old id is the retired one.
+async function retiredDashboard() {
+  const wire = wireWithIdReads();
+  const dir = makeTempDir('declared-dash-');
+  assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+  const old = clone(committedGroup(dir));
+  wire.saved.delete(old.root.id);
+  wire.published.delete(old.root.id);
+  const retired = await build(wire, dir, dropDashboard(makeSpec()));
+  assert.equal(retired.err, undefined, chainText(retired.err));
+  assert.equal(retiredOf(dir)[0].rootId, old.root.id);
+  // Read from the envelope, not incarnations(), so a build without incarnations fails on what it sends, not on an accessor.
+  const reborn = (storeOf(dir).snapshot().envelope.incarnations || []).find((x) => x.family === 'dashboard' && x.key === KEY) || {};
+  return { wire, dir, old, reborn: reborn.rootId };
+}
+const dashboardPosts = (r) => r.formWrites.filter((c) => c.method === 'POST').map((c) => String(c.body.formid).toLowerCase());
+
+for (const fresh of [false, true]) {
+  test(`a declared dashboard declared again after its root was retired is created and published under a fresh id, its tiles under it, and the next build is write-free (${fresh ? 'a fresh' : 'the same'} workspace)`, async () => {
+    await withDashboards(true, async () => {
+      const { wire, dir, old, reborn } = await retiredDashboard();
+      const ws = fresh ? makeTempDir('declared-dash-') : dir;
+      if (fresh) fs.copyFileSync(storeFileOf(dir), storeFileOf(ws));
+      const first = await build(wire, ws, makeSpec());
+      assert.equal(first.err, undefined, chainText(first.err));
+      assert.ok(!dashboardPosts(first).includes(old.root.id), 'the retired id is never created again');
+      assert.deepEqual(dashboardPosts(first), [reborn], 'one create, under the incarnation');
+      assert.ok(!JSON.stringify(first.writes).toLowerCase().includes(old.root.id), 'no write names the retired id');
+      assert.equal(first.publishes.length, 1);
+      assert.match(first.publishes[0].body.ParameterXml, new RegExp(`<dashboard>${reborn}</dashboard>`, 'i'));
+      const bound = committedGroup(ws);
+      assert.equal(bound.root.id, reborn);
+      const oldIds = new Set(old.records.map((r) => String(r.id).toLowerCase()));
+      assert.deepEqual(bound.records.map((r) => String(r.id).toLowerCase()).filter((id) => oldIds.has(id)), [], 'every tile is derived under the new root');
+      const second = await build(wire, ws, makeSpec());
+      assert.equal(second.err, undefined, chainText(second.err));
+      assert.deepEqual([second.formWrites, second.publishes], [[], []]);
+    });
+  });
+}
+
+test('a declared dashboard declared again after retirement keeps its incarnation through a create the org never applied, and is never sent under the retired id', async () => {
+  await withDashboards(true, async () => {
+    const { wire, dir, old, reborn } = await retiredDashboard();
+    wire.script((e) => e.method === 'POST' && e.path === 'systemforms', { statusCode: 400, body: { error: { code: '0x80040216', message: 'create rejected after dispatch' } }, unapplied: true });
+    const lost = await build(wire, dir, makeSpec());
+    assert.ok(lost.err);
+    assert.ok(!dashboardPosts(lost).includes(old.root.id), 'the retired id is never created again');
+    assert.deepEqual(dashboardPosts(lost), [reborn]);
+    const next = await build(wire, dir, makeSpec());
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.ok(!dashboardPosts(next).includes(old.root.id), 'the retired id is never created again');
+    assert.deepEqual(dashboardPosts(next), [reborn], 'sent again under the same id');
+    assert.equal(committedGroup(dir).root.id, reborn);
+    assert.ok(!JSON.stringify([lost.writes, next.writes]).toLowerCase().includes(old.root.id));
+  });
 });

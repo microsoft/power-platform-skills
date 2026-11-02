@@ -13,6 +13,9 @@
 //   - children are reserved under the ACTUAL root id (a committed, pending or imported id wins over the derived one), and the whole
 //     child graph is derived before any local SDK edit, by reserveChildren, which has no execute callback.
 // Ids come from creates-identity.js only (stableCreateIdV1 / stableChildIdV1): the same spec gives the same ids in every process.
+// The one exception is a key whose root the binding store retired: the store's incarnation for that key (a fresh random id,
+// createIntentCatalog's `incarnations` option) replaces its derived root id, so a re-declaration is a new row, never the retired
+// one; its children are still derived by stableChildIdV1, under that id.
 //
 // Pure: data and functions, no network, no disk, no state outside the frozen catalogs it returns.
 
@@ -115,7 +118,7 @@ const ENTRIES = new WeakSet();
 const CATALOGS = new WeakMap(); // catalog -> Map(slot -> entry)
 const slotOf = (kind, key) => `${kind}\u0000${key}`;
 
-function normalizeIntent(intent) {
+function normalizeIntent(intent, incarnation) {
   if (!intent || typeof intent !== 'object') throw createStop('create-identity-invalid', 'creates: a catalog intent must be an object');
   const cap = compositeCapability(intent.catalogKind);
   const { key } = intent;
@@ -123,17 +126,39 @@ function normalizeIntent(intent) {
   const scope = intent.scope;
   if (!scope || scope.kind !== cap.scope) throw createStop('create-identity-invalid', `creates: ${intent.catalogKind} '${key}' needs a ${cap.scope} scope`);
   const keyParts = DESCRIPTORS[intent.catalogKind].keyParts(intent.declaration || {});
-  const derivedId = stableCreateIdV1({ scope, kind: cap.rootKind, keyParts });
+  const stableId = stableCreateIdV1({ scope, kind: cap.rootKind, keyParts });
+  const reborn = incarnation(cap.family, key);
   const entry = Object.freeze({
     catalogKind: intent.catalogKind,
     key,
     bindingKind: cap.bindingKind,
     scope: Object.freeze({ ...scope }),
     keyParts: Object.freeze(keyParts.slice()),
-    derivedId,
+    // The id a create of this key uses: the key's incarnation once its root was retired, its stable id otherwise.
+    derivedId: reborn || stableId,
+    stableId,
   });
   ENTRIES.add(entry);
   return entry;
+}
+
+// The `incarnations` option of createIntentCatalog: [{ family, key, rootId }], as the managed binding store answers them
+// (managed-bindings.js incarnations()). Checked whole before any intent is read; one entry per (family, key).
+function incarnationIndex(incarnations) {
+  if (incarnations === undefined || incarnations === null) return () => null;
+  if (!Array.isArray(incarnations)) throw createStop('create-identity-invalid', 'creates: the incarnations must be an array');
+  const byKey = new Map();
+  for (const x of incarnations) {
+    if (!x || typeof x !== 'object' || typeof x.family !== 'string' || typeof x.key !== 'string' || !x.key) {
+      throw createStop('create-identity-invalid', 'creates: an incarnation needs a family and a key');
+    }
+    const rootId = lowerGuid(x.rootId);
+    if (!GUID_RE.test(rootId)) throw createStop('create-identity-invalid', `creates: the incarnation of ${x.family} '${x.key}' has no GUID root id`);
+    const slot = slotOf(x.family, x.key);
+    if (byKey.has(slot)) throw createStop('create-identity-invalid', `creates: ${x.family} '${x.key}' has two incarnations`);
+    byKey.set(slot, rootId);
+  }
+  return (family, key) => byKey.get(slotOf(family, key)) || null;
 }
 
 /**
@@ -142,18 +167,27 @@ function normalizeIntent(intent) {
  * where `key` is the locator the call site passes as creates.run({ kind, key }) and `declaration` feeds the kind's own key parts
  * (creates-capabilities.js DESCRIPTORS[kind].keyParts). The same (kind, key) twice, or two intents that derive one id (two names
  * Dataverse treats as one artifact), are refused here with create-identity-invalid, before any create is sent.
+ * `incarnations`: the managed binding store's [{ family, key, rootId }] (managed-bindings.js incarnations()). A key whose root
+ * was retired takes its incarnation's `rootId` as its `derivedId`, so it is created again as a new row under a new id, never
+ * under the stable id that was retired; its children are derived under that id too. Its `stableId` stays the spec's own.
  */
-function createIntentCatalog(intents = []) {
+function createIntentCatalog(intents = [], { incarnations } = {}) {
   if (!Array.isArray(intents)) throw createStop('create-identity-invalid', 'creates: the catalog intents must be an array');
+  const incarnation = incarnationIndex(incarnations);
   const bySlot = new Map();
   const byId = new Map();
   for (const intent of intents) {
-    const entry = normalizeIntent(intent);
+    const entry = normalizeIntent(intent, incarnation);
     const slot = slotOf(entry.catalogKind, entry.key);
     if (bySlot.has(slot)) throw createStop('create-identity-invalid', `creates: ${entry.catalogKind} '${entry.key}' is declared twice`);
-    const other = byId.get(entry.derivedId);
-    if (other) throw createStop('create-identity-invalid', `creates: ${entry.catalogKind} '${entry.key}' and ${other.catalogKind} '${other.key}' are one artifact (identity ${entry.derivedId}); give them distinct keys`);
+    // Two declarations are one artifact when their stable ids match, whichever of them was reborn; and no two may create
+    // under one id.
+    for (const id of new Set([entry.stableId, entry.derivedId])) {
+      const other = byId.get(id);
+      if (other) throw createStop('create-identity-invalid', `creates: ${entry.catalogKind} '${entry.key}' and ${other.catalogKind} '${other.key}' are one artifact (identity ${id}); give them distinct keys`);
+    }
     bySlot.set(slot, entry);
+    byId.set(entry.stableId, entry);
     byId.set(entry.derivedId, entry);
   }
   const catalog = {

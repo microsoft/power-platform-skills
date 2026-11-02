@@ -13,7 +13,7 @@ const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
   openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, managedManifestView, CODES, MAX_BYTES,
   PREPARE_RESERVE_BYTES, DECLARATION_MAX_BYTES, COMPLETION_BASE_BYTES, COMPLETION_MAX_BYTES, checkDeclaration, publicationRiskApproval, publicationRemedy,
-  RETIRED_GROUPS_KEPT,
+  RETIRED_GROUPS_KEPT, INCARNATIONS_KEPT,
 } = require('../lib/managed-bindings.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
 const { noteToken } = require('../lib/output-redaction.js');
@@ -1968,4 +1968,105 @@ test('absent root: two handles race under the lease, a failed write leaves the b
   // A build that predates the audit list reads it as an unexpected key: the whole file is refused, not read as empty.
   writeRaw(bs, (d) => { d.retiredGroups = [old(0)]; d.retiredGroupsV2 = []; });
   assert.equal(codeOf(() => open(bound)), CODES.unreadable);
+});
+// A key whose root was proved gone and retired is created again, if it is declared again, under a fresh id: the deterministic
+// create id it had is the row the service deleted. The new id is written in the retirement's own write, so every later run,
+// retry and recovery of that key reads the same one, and the retired root is never prepared again under the key.
+test('retirement gives the key a fresh, durable incarnation in the same write; the retired root is never prepared again under it; an older file without one opens as before', () => {
+  const dir = makeTempDir('mb-incarnation-');
+  const store = open(dir);
+  const g = settleForm(store, [['name', CTRL_A]]);
+  // A 2.21.0-candidate file has no incarnations: it opens, reads and writes as it always did.
+  assert.equal('incarnations' in JSON.parse(fileText(store)), false);
+  assert.deepEqual(open(dir).incarnations(), []);
+  assert.equal(open(dir).readGroup('form', FORM_KEY).committed.generation, g.generation);
+
+  const rev = store.snapshot().revision;
+  retireNow(store, { family: 'form', key: FORM_KEY, generation: g.generation, rootId: FORM, evidence: absent(FORM) });
+  const after = JSON.parse(fileText(store));
+  assert.equal(after.revision, rev + 1, 'one write retires the group and sets its incarnation');
+  assert.equal(after.incarnations.length, 1);
+  const [inc] = after.incarnations;
+  assert.deepEqual([inc.family, inc.key, inc.after], ['form', FORM_KEY, FORM]);
+  assert.match(inc.rootId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(inc.rootId, FORM);
+  assert.deepEqual(open(dir).incarnations(), [{ family: 'form', key: FORM_KEY, rootId: inc.rootId }], 'every later handle reads the same id');
+
+  // The retired root, in any spelling, is refused for the key under the lease: nothing is written.
+  const prepare = (id) => store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: null, root: { kind: 'form', key: FORM_KEY, id }, knownScopes: [TABLE], declarationSha256: H('e'), publication: { scope: TABLE, state: 'owed' } });
+  for (const id of [FORM, FORM.toUpperCase()]) {
+    const text = fileText(store);
+    assert.equal(codeOf(() => prepare(id)), CODES.conflict, id);
+    assert.equal(fileText(store), text, 'nothing written');
+  }
+  // A stale handle that read the file before the retirement is refused the same way: the fence reads the disk.
+  const stale = makeTempDir('mb-incarnation-stale-');
+  const sa = open(stale);
+  const sg = settleForm(sa, []);
+  const sb = open(stale);
+  retireNow(sa, { family: 'form', key: FORM_KEY, generation: sg.generation, rootId: FORM, evidence: absent(FORM) });
+  assert.deepEqual(sb.incarnations(), [], 'the stale handle has not read it');
+  assert.equal(codeOf(() => sb.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: null, root: { kind: 'form', key: FORM_KEY, id: FORM }, knownScopes: [TABLE], declarationSha256: H('e') })), CODES.conflict);
+
+  // The incarnation is created, committed, and retired in its turn: the key's entry is replaced, never duplicated.
+  const token = prepare(inc.rootId);
+  store.markSending(token, expected(inc.rootId));
+  store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  const reborn = store.commitGroup({ token, baseGeneration: null, records: [rec('form', FORM_KEY, inc.rootId)], proof: PROOF, consumerState: formState(), publication: owedTable() });
+  assert.deepEqual(store.incarnations(), [{ family: 'form', key: FORM_KEY, rootId: inc.rootId }], 'kept while it is bound');
+  const r = settleRule(store, 'account/hide', RULE);
+  retireNow(store, { family: 'rule', key: 'account/hide', generation: r.generation, rootId: RULE, evidence: absentRow(RULE) });
+  retireNow(store, { family: 'form', key: FORM_KEY, generation: reborn.generation, rootId: inc.rootId, evidence: absent(inc.rootId) });
+  const next = JSON.parse(fileText(store)).incarnations;
+  assert.deepEqual(next.map((x) => [x.family, x.key, x.after]), [['rule', 'account/hide', RULE], ['form', FORM_KEY, inc.rootId]]);
+  assert.ok(![FORM, inc.rootId].includes(next[1].rootId), 'a third id, never one retired');
+  assert.equal(codeOf(() => prepare(inc.rootId)), CODES.conflict, 'the latest retired root is fenced');
+
+  // A failed write sets no incarnation and retires nothing.
+  const crash = makeTempDir('mb-incarnation-crash-');
+  const cg = settleForm(open(crash), []);
+  const before = fileText(open(crash));
+  const failing = open(crash, { deps: { writeFileAtomic: () => { throw new Error('crash before the replace'); } } });
+  assert.equal(codeOf(() => retireNow(failing, { family: 'form', key: FORM_KEY, generation: cg.generation, rootId: FORM, evidence: absent(FORM) })), CODES.writeFailed);
+  assert.equal(fileText(open(crash)), before);
+  assert.deepEqual(open(crash).incarnations(), []);
+});
+
+test('incarnations are read strictly: a malformed list makes the whole file unreadable, unchanged; at the cap only a new key\'s retirement is refused', () => {
+  const dir = makeTempDir('mb-incarnation-strict-');
+  const store = open(dir);
+  const g = settleForm(store, []);
+  const one = (i, over = {}) => ({ family: 'form', key: `old/${i}`, rootId: `bbbbbbbb-0000-4000-8000-${String(i).padStart(12, '0')}`, after: `cccccccc-0000-4000-8000-${String(i).padStart(12, '0')}`, ...over });
+  for (const [label, list] of [
+    ['not a list', {}],
+    ['too many', Array.from({ length: INCARNATIONS_KEPT + 1 }, (_, i) => one(i))],
+    ['an untyped field', [one(0, { at: 'now' })]],
+    ['no after', [(({ after, ...rest }) => rest)(one(0))]],
+    ['an unknown family', [one(0, { family: 'page' })]],
+    ['an empty key', [one(0, { key: ' ' })]],
+    ['an uppercase root', [one(0, { rootId: one(0).rootId.toUpperCase() })]],
+    ['a root that is not a GUID', [one(0, { rootId: 'new' })]],
+    ['the retired root again', [one(0, { rootId: one(0).after })]],
+    ['one key twice', [one(0), one(1, { key: 'old/0' })]],
+    ['one row for two keys of one table', [one(0), one(1, { family: 'dashboard', rootId: one(0).rootId })]],
+  ]) {
+    writeRaw(store, (d) => { d.incarnations = list; });
+    const text = fileText(store);
+    assert.equal(codeOf(() => open(dir)), CODES.unreadable, label);
+    assert.equal(fileText(store), text, `${label}: unchanged`);
+  }
+  // One id in two tables is two rows.
+  writeRaw(store, (d) => { d.incarnations = [one(0), one(1, { family: 'rule', rootId: one(0).rootId })]; });
+  assert.equal(open(dir).incarnations().length, 2);
+
+  writeRaw(store, (d) => { d.incarnations = Array.from({ length: INCARNATIONS_KEPT }, (_, i) => one(i)); });
+  const full = open(dir);
+  const text = fileText(full);
+  assert.equal(codeOf(() => retireNow(full, { family: 'form', key: FORM_KEY, generation: g.generation, rootId: FORM, evidence: absent(FORM) })), CODES.storeFull);
+  assert.equal(fileText(full), text, 'refused whole: the group is kept');
+  writeRaw(store, (d) => { d.incarnations = [...Array.from({ length: INCARNATIONS_KEPT - 1 }, (_, i) => one(i)), one(9999, { key: FORM_KEY })]; });
+  const replace = open(dir);
+  retireNow(replace, { family: 'form', key: FORM_KEY, generation: g.generation, rootId: FORM, evidence: absent(FORM) });
+  const kept = JSON.parse(fileText(replace)).incarnations;
+  assert.deepEqual([kept.length, kept.at(-1).key, kept.at(-1).after], [INCARNATIONS_KEPT, FORM_KEY, FORM], 'the key\'s own entry is replaced at the cap');
 });

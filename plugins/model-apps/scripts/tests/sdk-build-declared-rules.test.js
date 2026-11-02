@@ -854,4 +854,70 @@ test('a removed rule whose retirement could not be confirmed keeps its table and
     assert.deepEqual(res.writes, [], 'no legacy create beside the other run\'s');
     assert.deepEqual(res.lines.filter((l) => /\bname eq\b/i.test(decodeURIComponent(l))), [], 'not even read by name');
   });
+
+});
+// --- a key declared again after its root was retired -------------------------------------------------------------------------
+
+// A business rule made by a build, then deleted and retired by a build without its declaration, so the store's key has a new
+// incarnation and the old id is the retired one.
+async function retiredRule() {
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('declared-rule-');
+  assert.equal((await build(wire, dir, specWith([RULE]))).err, undefined);
+  const old = JSON.parse(JSON.stringify(storeOf(dir).readGroup('rule', KEY).committed));
+  wire.rows.delete(old.root.id);
+  const retired = await build(wire, dir, specWith([]));
+  assert.equal(retired.err, undefined, chainText(retired.err));
+  assert.match(retired.warnings.join('\n'), RETIRED);
+  // Read from the envelope, not incarnations(), so a build without incarnations fails on what it sends, not on an accessor.
+  const reborn = (storeOf(dir).snapshot().envelope.incarnations || []).find((x) => x.family === 'rule' && x.key === KEY) || {};
+  return { wire, dir, old, reborn: reborn.rootId };
+}
+const createdIdsOf = (r) => r.writes.filter((c) => /CreateProcess/.test(c.path)).map((c) => String(c.body.Entity.workflowid).toLowerCase());
+
+for (const fresh of [false, true]) {
+  test(`a declared business rule declared again after its root was retired is created under a fresh id, never the retired one, and the next build is write-free (${fresh ? 'a fresh' : 'the same'} workspace)`, async () => {
+    await withRules(true, async () => {
+      const { wire, dir, old, reborn } = await retiredRule();
+      const ws = fresh ? makeTempDir('declared-rule-') : dir;
+      if (fresh) fs.copyFileSync(storeFileOf(dir), storeFileOf(ws));
+      const first = await build(wire, ws, specWith([RULE]));
+      assert.equal(first.err, undefined, chainText(first.err));
+      assert.ok(!createdIdsOf(first).includes(old.root.id), 'the retired id is never created again');
+      assert.deepEqual(createdIdsOf(first), [reborn], 'one create, under the incarnation');
+      assert.ok(!JSON.stringify(first.writes).toLowerCase().includes(old.root.id), 'no write names the retired id');
+      const bound = storeOf(ws).readGroup('rule', KEY).committed;
+      assert.equal(bound.root.id, reborn);
+      assert.equal(wire.row(reborn).statecode, 1);
+      const oldIds = new Set(old.records.map((r) => String(r.id).toLowerCase()));
+      assert.deepEqual(bound.records.map((r) => String(r.id).toLowerCase()).filter((id) => oldIds.has(id)), [], 'every id is derived under the new root');
+      const second = await build(wire, ws, specWith([RULE]));
+      assert.equal(second.err, undefined, chainText(second.err));
+      assert.deepEqual(second.writes.filter((c) => /^workflows/i.test(c.path)), []);
+    });
+  });
+}
+
+test('a declared business rule declared again after retirement keeps its incarnation through a lost create answer: the landed row is bound under it with the approval, the unlanded one is held, never sent under a second id', async () => {
+  await withRules(true, async () => {
+    for (const applied of [false, true]) {
+      const { wire, dir, old, reborn } = await retiredRule();
+      wire.script((e) => /CreateProcess/.test(e.path), { error: 'socket hang up', code: 'ECONNRESET', ...(applied ? {} : { unapplied: true }) });
+      const lost = await build(wire, dir, specWith([RULE]));
+      assert.ok(lost.err, `applied=${applied}: the lost answer stops the build`);
+      assert.ok(!createdIdsOf(lost).includes(old.root.id), 'the retired id is never created again');
+      assert.deepEqual(createdIdsOf(lost), [reborn]);
+      assert.equal(storeOf(dir).readGroup('rule', KEY).pending.root.id, reborn, 'the attempt holds the incarnation');
+      const next = await build(wire, dir, specWith([RULE]), applied ? { authorizedAdoption: new Set([APPROVAL]) } : {});
+      assert.deepEqual(createdIdsOf(next), [], `applied=${applied}: never sent again`);
+      if (applied) {
+        assert.equal(next.err, undefined, chainText(next.err));
+        assert.equal(storeOf(dir).readGroup('rule', KEY).committed.root.id, reborn);
+      } else {
+        assert.match(chainText(next.err), /managed-settlement-pending/);
+        assert.equal(storeOf(dir).readGroup('rule', KEY).pending.root.id, reborn, 'still the incarnation, not a new id');
+      }
+      assert.ok(!JSON.stringify([lost.writes, next.writes]).toLowerCase().includes(old.root.id));
+    }
+  });
 });

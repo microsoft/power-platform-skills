@@ -22,6 +22,10 @@
 // A predictable id is not a secret, a receipt or ownership: anyone who can read the spec can compute it. Finding a row at it proves only
 // that a row is there; whether this build may change or delete that row is decided by the consumer's own ownership rules.
 //
+// A root id derived here is not used again once the binding store retired the key's row (it was proved gone): the store gives that key
+// a random incarnation id, which creates-catalog.js uses as the root in its place (managed-bindings.js retireAbsentGroup). This module
+// is unchanged by that: the algorithm stays version 1, and children are still derived from whatever root id is actual.
+//
 // UUID version 5 (SHA-1 name-based) is the standard construction for this: https://www.rfc-editor.org/rfc/rfc9562.html#name-uuid-version-5
 // SHA-1 here is a naming hash, not authentication. Dataverse accepts a client-supplied primary key on create:
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-table-row#setting-the-primary-key-value

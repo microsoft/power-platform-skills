@@ -203,3 +203,30 @@ test('the catalog refuses a twice-declared slot and two names that are one artif
   assert.throws(() => createIntentCatalog([CHART, { ...CHART }]), (e) => e.code === 'create-identity-invalid' && /twice/.test(e.message));
   assert.throws(() => createIntentCatalog([CHART, { ...CHART, key: 'other key', declaration: { name: DEF.name.toUpperCase() } }]), (e) => e.code === 'create-identity-invalid' && /one artifact/.test(e.message));
 });
+
+test('incarnations: a key whose root was retired takes its stored incarnation as its derived id, and every child follows it; other keys keep their stable id', () => {
+  const plain = createIntentCatalog([FORM, BPF, VIEW]);
+  const REBORN = 'D0D0D0D0-0000-4000-8000-000000000001';
+  const catalog = createIntentCatalog([FORM, BPF, VIEW], { incarnations: [{ family: 'bpf', key: BPF.key, rootId: REBORN }, { family: 'form', key: 'account|other', rootId: '00000000-0000-4000-8000-0000000000aa' }] });
+  const stable = identityFor('bpf', BPF.key, { catalog: plain });
+  const reborn = identityFor('bpf', BPF.key, { catalog });
+  assert.deepStrictEqual([reborn.id, reborn.source, reborn.derivedId], [REBORN.toLowerCase(), 'derived', REBORN.toLowerCase()]);
+  assert.strictEqual(catalog.get('bpf', BPF.key).stableId, stable.id, 'the stable id is still the spec\'s own');
+  assert.deepStrictEqual(identityFor('form', FORM.key, { catalog }), identityFor('form', FORM.key, { catalog: plain }), 'a key with no incarnation is unchanged');
+  assert.strictEqual(identityFor('bpf', BPF.key, { catalog, actualRootId: stable.id }).id, stable.id, 'a bound root still wins');
+  const stage = [{ locator: 's', childKind: 'bpfStage', keyParts: ['qualify'] }];
+  assert.strictEqual(reserveChildren('bpf', BPF.key, { catalog, children: stage }).childIds.s, stableChildIdV1(REBORN.toLowerCase(), 'bpfStage', ['qualify']));
+  // The family is the store's (a rule is `rule`, not its catalog kind); a matching key of another family is not this one's.
+  const RULE = { catalogKind: 'businessRule', key: 'account/hide', scope: SCOPE, declaration: { name: 'Hide' } };
+  assert.strictEqual(createIntentCatalog([RULE], { incarnations: [{ family: 'rule', key: RULE.key, rootId: REBORN }] }).identityFor('businessRule', RULE.key).id, REBORN.toLowerCase());
+  assert.notStrictEqual(createIntentCatalog([RULE], { incarnations: [{ family: 'bpf', key: RULE.key, rootId: REBORN }] }).identityFor('businessRule', RULE.key).id, REBORN.toLowerCase());
+  for (const [label, incarnations] of [
+    ['not a list', {}],
+    ['no key', [{ family: 'bpf', rootId: REBORN }]],
+    ['no GUID', [{ family: 'bpf', key: BPF.key, rootId: 'next' }]],
+    ['one key twice', [{ family: 'bpf', key: BPF.key, rootId: REBORN }, { family: 'bpf', key: BPF.key, rootId: '00000000-0000-4000-8000-0000000000bb' }]],
+    ['an incarnation that is another declaration\'s id', [{ family: 'bpf', key: BPF.key, rootId: identityFor('view', VIEW.key, { catalog: plain }).id }]],
+  ]) {
+    assert.throws(() => createIntentCatalog([FORM, BPF, VIEW], { incarnations }), (e) => e.code === 'create-identity-invalid', label);
+  }
+});

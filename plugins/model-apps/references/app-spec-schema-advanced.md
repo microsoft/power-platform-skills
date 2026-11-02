@@ -753,7 +753,9 @@ are only added.
   whose last publish is unconfirmed is not released this way,
   because that publish may still complete: it stays blocked until a read confirms it or the maker accepts
   `publication-risk:table:<table>` (see "An unconfirmed publish" above). A form the spec still declares is
-  not released either: its missing form stops the build (`form-layout-bound-row-missing`).
+  not released either: its missing form stops the build (`form-layout-bound-row-missing`). A form you
+  declare under that key after it was released is a new one: the build creates it under a new id, never
+  the id of the deleted form, unless you approve adopting a form found by name (`adopt:form:<key>`).
 - **A plain form in place of a removed declared form that has not settled.** When the spec turns a declared
   form into a plain one (no `reconcile`), or names its id in a plain form's `formId`, while its managed record
   still has unfinished work (a change an earlier build started, such as a create whose answer was lost, or a
@@ -910,7 +912,8 @@ Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exa
   keep it as above. If the build cannot confirm the retirement (another build changed the record while this
   one read the row, or the record could not be written), it ends incomplete (`managed-not-settled`) and, for
   the rest of that build, neither reads nor creates a rule of that table and name; the next build reads the
-  record again. Once retired, `--verify` no longer checks it.
+  record again. Once retired, `--verify` no longer checks it. A rule you declare under that `<table>/<name>`
+  later is a new one: the build creates it under a new id, never the id of the retired row.
 - **Publishing.** A rule is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared rule again by its id and holds it to what its last
   build proved: its whole body (every condition and action, the spec's and any other) and its status. It
@@ -986,8 +989,8 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   rule (above): a flow whose last change was proved, one whose create was proved but whose activation
   was never sent, and one whose change of the security roles alone failed before it was recorded. Anything
   less than that answer keeps it as above, and a retirement the build cannot confirm ends it incomplete as
-  for a rule. Once retired, `--verify` no longer
-  checks it.
+  for a rule. Once retired, `--verify` no longer checks it. A flow you declare under that `<table>/<name>`
+  later is a new one, created under a new id.
 - **Publishing.** A flow is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared flow again by its id and holds it to what its last
   build proved: its whole body (every stage and step, with their ids) and its status. It also fails when
