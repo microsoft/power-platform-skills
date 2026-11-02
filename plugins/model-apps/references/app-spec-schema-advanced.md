@@ -642,7 +642,9 @@ spec's new columns.
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
 `--authorize adopt:view:<table>/<name>` or `--authorize adopt:chart:<table>/<name>` (the table in lower
-case, the name exactly as in the spec). `--authorize overwrite:view:<table>/<name>` (or `chart:`)
+case, the name exactly as in the spec). One that already holds exactly what the spec declares is left
+unchanged and unbound without a stop (with `createIdentity`, the build warns and names the key; see
+Adoption below). `--authorize overwrite:view:<table>/<name>` (or `chart:`)
 approves replacing changes made elsewhere, and `--allow-destructive` approves removing columns. Each key
 approves only the artifact of its family, so a view and a chart with the same name are approved
 separately. Within a family a key must name one artifact: two declared views on one table need different
@@ -753,7 +755,10 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
 - **Adoption.** A row found at its id that this workspace never bound — including one equal to the
   spec, and one left by a create whose answer was lost — is bound only with
   `--authorize adopt:view:<table>/<name>` (or `adopt:chart:<table>/<name>`). Without it nothing is
-  written and the row stays unbound.
+  written and the row stays unbound. A row that already holds exactly what the spec declares does not
+  stop the build: it ends successfully with a warning (`view-not-adopted` or `chart-not-adopted`) that
+  names the row's id and the `--authorize adopt:` key that binds it. Until it is bound, a changed
+  declaration for it stops for adoption.
 - **A change not yet proved** holds its table's publish. The next build proves it against the content
   it recorded before the send, never against the current declaration: a change proved unsent is sent
   again; a row that holds the recorded content is bound; a row that differs stays held until the

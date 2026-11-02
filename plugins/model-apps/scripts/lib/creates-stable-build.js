@@ -29,7 +29,8 @@
 // WHY AN OBSERVATION IS NOT A BINDING. Nothing about a row at the derived id proves that this build made it or that the maker
 // agreed to manage it: an earlier run whose answer was lost, another workspace, or anyone who created a row with that id. So it is
 // bound only on a create this store saw acknowledged, or with the typed adoption approval (`--authorize adopt:view:<key>`,
-// `adopt:chart:<key>`), or a pinned id. An equal row with neither is left unbound and nothing is written; a row that differs is
+// `adopt:chart:<key>`), or a pinned id. An equal row with neither is left unbound and nothing is written (the build warns with the
+// approval that binds it: sdk-build.js warnUnadopted); a row that differs is
 // refused as unbound (`view-adoption-not-authorized` / `chart-adoption-not-authorized`).
 //
 // SETTLEMENT (with a store). Each declared view or chart is one managed group, settled by runManagedFeature in this order:

@@ -3629,6 +3629,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
     plan.refused.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `${found}, so it was not planned over and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}. Or approve replacing the local copy with the server's (this also lets the spec replace any change made on the server): --authorize overwrite:${approval}`));
     return plan;
   };
+  // A stable view or chart (createIdentity, settled through the binding store: `stable.settle`) whose row already holds exactly what
+  // the spec declares, with no binding, no pin and no adoption approval (the planner's noChange without bindUnchanged,
+  // reconcile-common.js bindsUnchanged): nothing is written and the row is NOT bound, because a row found is never taken over
+  // silently. That is a clean result, so the build would end without a word — and the maker would read a success for a row this spec
+  // does not manage, whose next declared change stops for adoption. So it is said, as a warning that names the row and the one
+  // approval that binds it; the result itself is unchanged (no write, no binding, no stop). Only where a store can record the
+  // binding: a declared view without createIdentity has no binding store in the CLI, so the approval would bind nothing there.
+  // `id` is the row the plan read; plan.key is the family's key (reconcile-common.js approvalKey types it: view:<table>/<name>).
+  const warnUnadopted = (kind, id, plan, r) => {
+    if (typeof opts.warn !== 'function' || !plan || plan.action !== 'noChange' || plan.bindUnchanged || !id) return;
+    if ((r.refused || []).length || (r.unknown || []).length || (r.managedBindings || []).length) return;
+    opts.warn(`${kind} ${plan.key}: ${kind}-not-adopted — the ${kind} ${id} already holds what the spec declares, so nothing was written, but it is not managed by this spec: it was not bound, and a later change to its declaration stops until it is adopted. To manage it, run the build again with --authorize adopt:${approvalKey(kind, plan.key)}`);
+  };
   const settleFeatureResult = createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: managedArtifacts ? (b) => managedArtifacts.recordApplied(b) : undefined });
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
@@ -3723,13 +3736,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a
   // create that may have stored a row must be inspected first. RETRY.NEVER marks the halt `transient: false`, which
   // retryPolicyFor reads through the runner's wrapping halt. The halt says each finding and, for one an approval
-  // settles, the exact flag (cliApproval), so the maker reads what to do from the halt itself.
+  // settles, the exact flag (cliApproval), so the maker reads what to do from the halt itself. A stop with no findings (one the managed
+  // settlement raised itself, e.g. create-completion-required at a local draft or a pending attempt) says its cause's own message, which
+  // is where what to do is written. The halt points to an approval only when it named one: most such stops have none.
   const managedStop = (phase, label, stopCode, { cause, findings = [] } = {}) => {
     const said = findings.filter((x) => x && x.code).map((x) => {
       const flag = cliApproval(`${label}: ${x.code} — `, x.code);
       return `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`;
     });
-    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. Fix the cause (or give the approval named above) and run the build again; it is not retried automatically.`, { phase, code: stopCode, recoverable: false, retry: RETRY.NEVER, cause });
+    if (!said.length && cause && typeof cause.message === 'string' && cause.message) said.push(`${stopCode} — ${cause.message}`);
+    const approvalNamed = said.some((s) => /--authorize \S|--allow-destructive/.test(s));
+    const next = approvalNamed ? 'Fix the cause (or give the approval named above) and run the build again' : 'Do what the message above says, then run the build again';
+    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${next}; it is not retried automatically.`, { phase, code: stopCode, recoverable: false, retry: RETRY.NEVER, cause });
     Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
     return err;
   };
@@ -6420,6 +6438,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const { ok } = settleStableResult('views', `view ${out.plan.key}`, out.r);
           if (!out.managed) await resetUnsettledCopy('view', out.plan.viewId, out.plan, out.r);
           if (!ok) return null;
+          if (!out.managed) warnUnadopted('view', out.plan.viewId, out.plan, out.r);
           const made = out.r.saved.find((s) => s.created);
           if (made) noteSaved(def.entityLogicalName, `view ${def.name}`);
           await commitSettledPublishes();
@@ -6605,6 +6624,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             const { ok } = settleStableResult('charts', `chart ${out.plan.key}`, out.r);
             if (!out.managed) await resetUnsettledCopy('chart', out.plan.chartId, out.plan, out.r);
             if (!ok) return null;
+            if (!out.managed) warnUnadopted('chart', out.plan.chartId, out.plan, out.r);
             const made = out.r.saved.find((s) => s.created);
             if (made) noteSaved(def.entityLogicalName, `chart ${def.name}`);
             await commitSettledPublishes({ charts: chartsToPublish });

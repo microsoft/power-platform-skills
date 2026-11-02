@@ -2953,7 +2953,12 @@ copy known to hold the file's latest content may replace it, else the maker stay
 sending before the create, a pending attempt is recovered against that recorded expectation
 (`recoverManagedAttempt`) before any current-spec planning, a row found at its id that this workspace
 never bound is bound only with its typed `adopt:` approval (`adoptionApproved`), and nothing is
-committed until the row's solution membership is proved. An attempt whose declaration the spec no
+committed until the row's solution membership is proved. Such a row that already holds what the spec
+declares is left unbound with nothing written and no stop; the build warns (`view-not-adopted`,
+`chart-not-adopted`, `warnUnadopted` in `sdk-build.js`) with the row's id and the `--authorize adopt:`
+key, so a clean result is never silent about a row the spec does not manage. A managed stop with no
+findings (`managedStop`) says its cause's own message, and points to "the approval named above" only
+when it named one. An attempt whose declaration the spec no
 longer carries is recovered by `recoverUndeclared` (phase 3z of `sdk-build.js`) against its recorded
 expectation; one that does not prove stays pending with a warning, so omission never releases a hold.
 A table publish that covers a stored managed group goes through `lib/managed-scope-publisher.js`

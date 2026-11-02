@@ -161,12 +161,20 @@ test('a fresh workspace on the same environment finds the rows at the derived id
 
   // A row at the derived id is an observation, not a binding: nothing proves this workspace made it.
   const dir = newDir();
-  const fresh = await build(org, dir, spec);
+  const said = [];
+  const fresh = await build(org, dir, spec, { warn: (m) => said.push(String(m)) });
   assert.equal(fresh.err, undefined, fresh.err && fresh.err.message);
   assert.deepEqual(fresh.writes, [], 'an equal row with no approval is left as it is');
   let store = storeOf(org, dir);
   assert.equal(store.readGroup('view', VIEW_KEY).committed, null, 'no binding without the adoption approval');
   assert.equal(store.readGroup('chart', CHART_KEY).committed, null);
+  // The clean result is not silent: the maker is told each row is not managed, and the one approval that binds it.
+  for (const [kind, key, id] of [['view', VIEW_KEY, ids.view], ['chart', CHART_KEY, ids.chart]]) {
+    const lines = said.filter((m) => m.includes(`${kind}-not-adopted`));
+    assert.equal(lines.length, 1, `${kind}: one warning\n${said.join('\n')}`);
+    assert.ok(lines[0].includes(id), `${kind}: the warning names the row`);
+    assert.ok(lines[0].endsWith(`--authorize adopt:${kind}:${key}`), `${kind}: the warning names the approval: ${lines[0]}`);
+  }
   // Nor does it give authority to change the row: an edited declaration without the approval writes nothing.
   const edited = stableSpec();
   edited.views[0].description = 'Edited without the adoption approval';
@@ -177,8 +185,10 @@ test('a fresh workspace on the same environment finds the rows at the derived id
   store = storeOf(org, dir);
   assert.equal(store.readGroup('view', VIEW_KEY).committed, null);
 
-  const adopted = await build(org, dir, spec, { authorizedAdoption: new Set([`view:${VIEW_KEY}`, `chart:${CHART_KEY}`]) });
+  const adoptSaid = [];
+  const adopted = await build(org, dir, spec, { authorizedAdoption: new Set([`view:${VIEW_KEY}`, `chart:${CHART_KEY}`]), warn: (m) => adoptSaid.push(String(m)) });
   assert.equal(adopted.err, undefined, adopted.err && adopted.err.message);
+  assert.deepEqual(adoptSaid.filter((m) => /-not-adopted/.test(m)), [], 'a bound row is not reported as unmanaged');
   assert.equal(creates(adopted, 'savedqueries').length, 0, 'the view at the derived id is bound, not created again');
   assert.equal(creates(adopted, 'savedqueryvisualizations').length, 0);
   assert.equal(org.fake.rows('savedqueries').filter((r) => r.data.name === 'Declared Items').length, 1);
@@ -206,6 +216,18 @@ test('a spec without createIdentity is unchanged: a fresh id per workspace, no s
   assert.deepEqual(shape(s), shape(r));
 });
 
+test('without createIdentity, a declared view and chart found equal by name are left as before: nothing written, no adoption warning', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const first = await build(org, newDir(), makeSpec());
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  const said = [];
+  const fresh = await build(org, newDir(), makeSpec(), { warn: (m) => said.push(String(m)) });
+  assert.equal(fresh.err, undefined, fresh.err && fresh.err.message);
+  assert.deepEqual(fresh.writes, []);
+  // No binding store records a declared view's binding there, so no approval would bind it: none is advised.
+  assert.deepEqual(said.filter((m) => /-not-adopted/.test(m)), []);
+});
+
 test('a local copy with an edit the server has not seen stops the stable item before any write, keeps the bytes, and stops again', async () => {
   const org = createFakeBuildOrg({ entities: ENTITIES });
   const dir = newDir();
@@ -225,6 +247,10 @@ test('a local copy with an edit the server has not seen stops the stable item be
     const r = await build(org, dir, spec);
     assert.ok(r.err, `run ${run}: the build stops`);
     assert.match(r.err.message, /create-completion-required/);
+    // The stop says what was found and what to do, and points to no approval: none settles it.
+    assert.match(r.err.message, /create-completion-required — the local copy of the view [0-9a-f-]{36} in the workspace /);
+    assert.match(r.err.message, /Do what the message above says, then run the build again; it is not retried automatically\./);
+    assert.doesNotMatch(r.err.message, /approval named above/);
     assert.deepEqual(r.writes, [], `run ${run}: nothing is written`);
     assert.deepEqual(snapshot(), before, `run ${run}: the workspace bytes are unchanged`);
   }
