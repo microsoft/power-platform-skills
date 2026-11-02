@@ -873,10 +873,9 @@ test('a keyed command bar is refused without the managed-binding store, and noth
   assert.deepEqual(r.writes, []);
 });
 
-test('reconcile on a kind 2.21.0 does not reconcile is a validation error; a declared form layout, dashboard or business rule is not', () => {
-  const spec = makeSpec({ businessProcessFlows: [{ name: 'Item Flow', entity: 'contoso_item', reconcile: 'declared', stages: [{ name: 'Start', steps: [{ field: 'contoso_name' }] }] }] });
-  const v = validateAppSpec(spec);
-  assert.ok(v.errors.some((e) => /'reconcile'/.test(e) && /business process flow 'Item Flow'/.test(e)), JSON.stringify(v.errors));
+test('a declared form layout, dashboard, business rule or business process flow takes reconcile in 2.21.0', () => {
+  const declaredFlow = validateAppSpec(makeSpec({ businessProcessFlows: [{ name: 'Item Flow', entity: 'contoso_item', reconcile: 'declared', stages: [{ key: 'start', name: 'Start', steps: [{ key: 'name', name: 'Name', field: 'contoso_name' }] }] }] }));
+  assert.ok(!declaredFlow.errors.some((e) => /reconcile/.test(e)), JSON.stringify(declaredFlow.errors));
   const declaredRule = validateAppSpec(makeSpec({ businessRules: [{ name: 'Item Rule', entity: 'contoso_item', reconcile: 'declared' }] }));
   assert.ok(!declaredRule.errors.some((e) => /reconcile is supported only/.test(e)), JSON.stringify(declaredRule.errors));
   const declaredDashboard = validateAppSpec(makeSpec({ dashboards: [{ name: 'Item Board', reconcile: 'declared' }] }));

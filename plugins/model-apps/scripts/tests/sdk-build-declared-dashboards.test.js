@@ -105,7 +105,7 @@ test('with the build path off, a declared dashboard is refused with the words it
   await withDashboards(false, () => {
     const v = validateAppSpec(makeSpec(), { profile: 'deploy' });
     assert.equal(v.ok, false);
-    assert.ok(v.errors.includes("dashboards: 'Ops' — reconcile is supported only on views, charts, forms, business rules and web resources; leave it out (this artifact keeps the existing build behaviour)"), JSON.stringify(v.errors));
+    assert.ok(v.errors.includes("dashboards: 'Ops' — reconcile is supported only on views, charts, forms, business rules, business process flows and web resources; leave it out (this artifact keeps the existing build behaviour)"), JSON.stringify(v.errors));
   });
 });
 

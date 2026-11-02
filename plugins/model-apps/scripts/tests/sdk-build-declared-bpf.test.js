@@ -6,6 +6,9 @@
 // (lib/sdk-build.js runSdkBuild), the real vendored SDK and the plugin's real client over an in-memory workflow table
 // (helpers/workflow-wire.js) that enforces If-Match, with the CLI's transport shape: the publication barrier with the send
 // observer inside it, and the gate on the client.
+// The round trip is here too: the typed approval (build-model-app.js authorizationKeys), verify's check of a bound flow
+// (lib/verify-spec.js over verify-model-app.js readerFor) and the explicit managed download's restore (download-model-app.js main), each
+// over the same wire, and the whole CLI assembly (build-model-app.js buildModelApp) from the printed approval to the download.
 // The build path is behind lib/declared-features.js; each test sets it explicitly and restores it.
 
 const test = require('node:test');
@@ -19,8 +22,18 @@ const { createDeferredWorkflowGate } = require('../lib/deferred-workflow-gate.js
 const { DECLARED_FEATURES } = require('../lib/declared-features.js');
 const { RETRY } = require('../lib/retry-policy.js');
 const { createWorkflowWire, ORIGIN } = require('./helpers/workflow-wire.js');
-const { sdkOver } = require('./helpers/managed-wire.js');
+const { sdkOver, clientOver } = require('./helpers/managed-wire.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+const { buildModelApp, authorizationKeys } = require('../build-model-app.js');
+const { readerFor, isolatedReaderFor } = require('../verify-model-app.js');
+const { main: downloadMain } = require('../download-model-app.js');
+const { verifySpec } = require('../lib/verify-spec.js');
+const { readVerifyManifest } = require('../lib/declared-form-io.js');
+const { storeFileName } = require('../lib/managed-bindings.js');
+const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 
 const SOLUTION = 'BP';
 const APP = 'new_bpapp';
@@ -284,5 +297,287 @@ test('a settled flow whose stored backing table the settlement does not answer h
     } finally {
       settlement.settleDeclaredBpf = real;
     }
+  });
+});
+test('a bound flow is never edited by default, and a declaration that omits or reorders its stages is refused before any request for it', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    const first = await build(wire, dir, specWith([FLOW]));
+    assert.equal(first.err, undefined, chainText(first.err));
+    const id = first.out.created.businessProcessFlows[KEY];
+    const before = JSON.stringify(wire.row(id));
+    const renamed = await build(wire, dir, specWith([{ ...FLOW, stages: [FLOW.stages[0], { ...FLOW.stages[1], name: 'Close' }] }]));
+    assert.ok(renamed.err, 'a rename under the same key is an edit, which is off by default');
+    assert.match(chainText(renamed.err), /workflow-edit-refused|the declaration renames the stage "resolve"/);
+    assert.match(chainText(renamed.err), /renames the stage "resolve"/);
+    assert.deepEqual(renamed.writes, []);
+    const reordered = await build(wire, dir, specWith([{ ...FLOW, stages: [FLOW.stages[1], FLOW.stages[0]] }]));
+    assert.match(chainText(reordered.err), /puts its stages in another order; stages and steps are never removed or moved/);
+    assert.deepEqual(reordered.writes, []);
+    const omitted = await build(wire, dir, specWith([{ ...FLOW, stages: [FLOW.stages[0]] }]));
+    assert.match(chainText(omitted.err), /omits the stage "resolve"/);
+    assert.deepEqual(omitted.writes, []);
+    assert.equal(JSON.stringify(wire.row(id)), before, 'the row is untouched');
+    assert.equal(storeOf(dir).readGroup('bpf', GROUP).committed.root.id, id, 'still bound to the same id');
+  });
+});
+
+// --- the approval ------------------------------------------------------------------------------------------------------------
+
+test('--authorize adopt:bpf:<table>/<name> is read in any case, typed or not, as the helper\'s approval; an overwrite, an undeclared flow or an ambiguous key is refused', async () => {
+  await withBpf(true, () => {
+    const spec = specWith([FLOW]);
+    const keys = (...list) => authorizationKeys(list.flatMap((k) => ['--authorize', k]), spec);
+    for (const key of ['adopt:bpf:NEW_TICKET/ticket PROCESS', `adopt:${FLOW.entity}/${FLOW.name}`, 'adopt:New_Ticket/TICKET process']) {
+      const r = keys(key);
+      assert.equal(r.error, null, key);
+      assert.deepEqual([...r.adopt], [APPROVAL], key);
+      assert.equal(r.overwrite.size, 0, key);
+    }
+    for (const [key, words] of [
+      [`overwrite:bpf:${FLOW.entity}/${FLOW.name}`, /is not an approval a declared business process flow takes: it is adopted whole, never overwritten by an approval \(use adopt:bpf:new_ticket\/Ticket process/],
+      [`overwrite:${FLOW.entity}/${FLOW.name}`, /is not an approval a declared business process flow takes/],
+      ['adopt:bpf:new_ticket/Other process', /approves an artifact the spec does not declare \(it would need a business process flow with reconcile: "declared" named new_ticket\/Other process, as <table>\/<name>\)/],
+      ['adopt:new_ticket/Other process', /it would need a view or chart, or a business process flow, with reconcile: "declared" keyed new_ticket\/Other process/],
+    ]) {
+      const r = keys(key);
+      assert.match(String(r.error), words, key);
+      assert.equal(r.adopt.size + r.overwrite.size, 0, key);
+    }
+    // A declared business rule of the same table and name: the untyped key could mean either; each typed key means one.
+    const both = { ...specWith([FLOW]), businessRules: [{ entity: 'new_ticket', name: FLOW.name, reconcile: 'declared', conditions: [{ key: 'c', field: 'new_status', operator: 'Equals', value: '100000001', dataType: 'Picklist' }], actions: [{ key: 'a', type: 'SetVisibility', field: 'new_notes', visible: false }] }] };
+    const ambiguous = authorizationKeys(['--authorize', `adopt:${FLOW.entity}/${FLOW.name}`], both);
+    assert.match(String(ambiguous.error), /could approve more than one declared artifact; name the one you mean with its typed key: (adopt:rule:new_ticket\/Ticket process or adopt:bpf:new_ticket\/Ticket process|adopt:bpf:new_ticket\/Ticket process or adopt:rule:new_ticket\/Ticket process)/);
+    assert.equal(ambiguous.adopt.size, 0);
+    assert.deepEqual([...authorizationKeys(['--authorize', `adopt:bpf:${FLOW.entity}/${FLOW.name}`], both).adopt], [APPROVAL]);
+    // An undeclared flow of the same name takes no approval.
+    assert.match(String(authorizationKeys(['--authorize', `adopt:bpf:${FLOW.entity}/${FLOW.name}`], specWith([legacy(FLOW)])).error), /does not declare/);
+  });
+  await withBpf(false, () => {
+    const off = authorizationKeys(['--authorize', `adopt:bpf:${FLOW.entity}/${FLOW.name}`], specWith([FLOW]));
+    assert.match(String(off.error), /does not declare/);
+    assert.equal(off.adopt.size, 0);
+  });
+});
+
+// --- verify ------------------------------------------------------------------------------------------------------------------
+
+// verify's reader as the CLI builds it (verify-model-app.js readerFor): a declared flow is read by its bound id on a throwaway SDK
+// (isolatedReaderFor) over the same wire, never the build's.
+async function verifyReader(wire) {
+  const { sdk } = await sdkOver(wire);
+  const cli = readerFor(sdk, APP, { isolatedReader: isolatedReaderFor(ORIGIN, { httpClient: clientOver(wire) }) });
+  const bpfReads = [];
+  const idReads = [];
+  return {
+    bpfReads,
+    idReads,
+    read: {
+      findTable: async () => ({ logicalName: 'new_ticket' }),
+      findColumns: async () => ['new_subject', 'new_status', 'new_notes', 'new_owner'],
+      // The bound-id read verify makes of a group it does not hold as declared: workflow by workflowid, answered from the wire.
+      queryRecords: async (table, o) => {
+        const id = (/workflowid eq (\S+)/.exec((o && o.filter) || '') || [])[1];
+        if (table === 'workflow' && id) { idReads.push(id); return wire.row(id) ? [{ workflowid: id }] : []; }
+        return [];
+      },
+      sitemapXml: async () => '',
+      declaredBpf: async (id) => { bpfReads.push(id); return cli.declaredBpf(id); },
+    },
+  };
+}
+const bpfChecks = (r) => r.checks.filter((c) => c.kind === 'managed-bpf');
+const manifestOf = (dir) => readVerifyManifest({ workspaceDir: dir, environment: ORIGIN, appUniqueName: APP, solutionUniqueName: SOLUTION });
+
+test('verify holds a bound declared flow to its declaration and last proof by a fresh read of its id', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    const id = storeOf(dir).readGroup('bpf', GROUP).committed.root.id;
+    const { read, bpfReads } = await verifyReader(wire);
+    const verify = (spec) => verifySpec(spec, read, { managedManifest: manifestOf(dir) });
+    const pass = await verify(specWith([FLOW]));
+    assert.deepEqual(bpfChecks(pass).map((c) => [c.name, c.present, c.detail]), [[`${GROUP} (${id})`, true, '']]);
+    assert.deepEqual(bpfReads, [id], 'read by the bound id');
+    assert.deepEqual((pass.unverified || []).filter((u) => u.startsWith('managed:')), []);
+    // A declaration the flow does not hold yet fails it, with the way out.
+    const edited = await verify(specWith([{ ...FLOW, stages: [FLOW.stages[0], { ...FLOW.stages[1], steps: [{ ...FLOW.stages[1].steps[0], required: true }] }] }]));
+    assert.equal(bpfChecks(edited)[0].present, false);
+    assert.match(bpfChecks(edited)[0].detail, /^bpf-declaration-changed: the spec's declaration changes the step "resolve\/notes", which is not on the flow yet/);
+    assert.ok(edited.missing.some((m) => m.kind === 'managed-bpf'), 'a failing bound flow fails verify');
+    const added = await verify(specWith([{ ...FLOW, stages: [...FLOW.stages, { key: 'close', name: 'Close', steps: [{ key: 'status', name: 'Status', field: 'new_status' }] }] }]));
+    assert.match(bpfChecks(added)[0].detail, /adds the stage "close"/);
+    // What a build refuses outright is named as such: a stage left out, or the stages reordered.
+    assert.match(bpfChecks(await verify(specWith([{ ...FLOW, stages: [FLOW.stages[0]] }])))[0].detail, /^bpf-declaration-changed: the spec's declaration omits the stage "resolve"; stages and steps are never removed or moved/);
+    assert.match(bpfChecks(await verify(specWith([{ ...FLOW, stages: [FLOW.stages[1], FLOW.stages[0]] }])))[0].detail, /puts its stages in another order/);
+    // An omitted description, order or status keeps its live value, as it does for the build; a stated one that differs is a change.
+    assert.equal(bpfChecks(await verify(specWith([{ ...FLOW, status: 'Active', order: 100 }])))[0].present, true);
+    assert.match(bpfChecks(await verify(specWith([{ ...FLOW, status: 'Draft' }])))[0].detail, /sets the flow Draft/);
+    // The flow deactivated outside the spec fails it under the unchanged declaration; so does a renamed flow row.
+    Object.assign(wire.row(id), { statecode: 0, statuscode: 1 });
+    assert.match(bpfChecks(await verify(specWith([FLOW])))[0].detail, /^bpf-changed: the flow \(now Draft\) is not what its last build proved/);
+    Object.assign(wire.row(id), { statecode: 1, statuscode: 2 });
+    assert.equal(bpfChecks(await verify(specWith([FLOW])))[0].present, true, 'control: Active again');
+    const name = wire.row(id).name;
+    wire.row(id).name = 'Ticket process (copy)';
+    assert.match(bpfChecks(await verify(specWith([FLOW])))[0].detail, /^bpf-changed: /);
+    wire.row(id).name = name;
+    // And a flow no read can find is reported failed, never passed.
+    wire.rows.delete(id);
+    assert.deepEqual(bpfChecks(await verify(specWith([FLOW]))).map((c) => c.present), [false]);
+  });
+});
+
+test('verify lists a reader that cannot read a flow as unverified, and a flow the spec no longer declares, or any with the build path off, is held to its bound id', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    const id = storeOf(dir).readGroup('bpf', GROUP).committed.root.id;
+    const { read, bpfReads, idReads } = await verifyReader(wire);
+    const { declaredBpf, ...plain } = read;
+    void declaredBpf;
+    const blind = await verifySpec(specWith([FLOW]), plain, { managedManifest: manifestOf(dir) });
+    assert.deepEqual(bpfChecks(blind), []);
+    assert.ok(blind.unverified.includes(`managed:bpf ${GROUP} (this reader cannot read a business process flow by id)`), JSON.stringify(blind.unverified));
+    // A flow is keyed by its table and name, so a renamed flow is another flow: the bound one is held to its id.
+    const renamed = await verifySpec(specWith([{ ...FLOW, name: 'Ticket journey' }]), read, { managedManifest: manifestOf(dir) });
+    assert.deepEqual(bpfChecks(renamed).map((c) => [c.name, c.present, c.detail]), [[`${GROUP} (${id})`, true, '']]);
+    assert.deepEqual(bpfReads, [], 'not read as a declared flow');
+    assert.deepEqual(idReads, [id]);
+    await withBpf(false, async () => {
+      const off = await verifySpec(specWith([legacy(FLOW)]), read, { managedManifest: manifestOf(dir) });
+      assert.deepEqual(bpfChecks(off).map((c) => [c.name, c.present]), [[`${GROUP} (${id})`, true]]);
+      assert.deepEqual(bpfReads, []);
+      assert.deepEqual(idReads, [id, id], 'held to its bound workflow id');
+    });
+  });
+});
+
+// --- the explicit managed download -------------------------------------------------------------------------------------------
+
+// download-model-app.js main with its side effects replaced: the download's SDK is a real one over the wire, and runDownload answers
+// the spec a download of this app hydrates, which holds no process flow (a plain download reconstructs none), or `plain` if given.
+async function download(wire, out, argv, { plain, ...extra } = {}) {
+  const { sdk } = await sdkOver(wire);
+  const dl = Object.create(sdk);
+  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
+  const downloaded = specWith([]);
+  delete downloaded.businessProcessFlows;
+  if (plain) downloaded.businessProcessFlows = plain;
+  const emitted = [];
+  const said = [];
+  const mark = wire.log.length;
+  await downloadMain({
+    argv: ['--env', ORIGIN, '--app', '00000000-0000-0000-0000-00000000a333', '--out', out, ...argv],
+    stderr: { write: (text) => { said.push(String(text)); return true; } },
+    exit: () => {},
+    emitResult: (ok, payload) => emitted.push({ ok, payload }),
+    preflightAuth: async () => ({ ok: true }),
+    makeDownloadSdk: async () => ({ sdk: dl, cleanup() {} }),
+    makeGenpageSdk: () => ({}),
+    runDownload: async () => ({ ok: true, spec: downloaded, pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [] }),
+    ...extra,
+  });
+  const specFile = path.join(out, 'app-spec.json');
+  return { emitted, said: said.join(''), calls: wire.log.slice(mark), written: fs.existsSync(specFile) ? JSON.parse(fs.readFileSync(specFile, 'utf8')) : null };
+}
+const storeFileOf = (dir) => path.join(dir, storeFileName(environmentFingerprint(ORIGIN), APP, SOLUTION));
+
+test('the explicit managed download restores a proved declared flow, keys included, into businessProcessFlows, and names any it cannot restore', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    const described = { ...FLOW, description: 'Triage first', order: 3 };
+    assert.equal((await build(wire, dir, specWith([described]))).err, undefined);
+    const id = storeOf(dir).readGroup('bpf', GROUP).committed.root.id;
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    const restored = await download(wire, makeTempDir('declared-bpf-'), flags);
+    assert.equal(restored.emitted.length, 1);
+    assert.equal(restored.emitted[0].ok, true, JSON.stringify(restored.emitted) + restored.said);
+    assert.deepEqual(restored.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] });
+    assert.deepEqual(restored.written.businessProcessFlows, [described], 'the declaration it was built from, whole');
+    // An entry for the same table and name is replaced, never doubled.
+    const other = { ...legacy(FLOW), name: 'Escalation' };
+    const replaced = await download(wire, makeTempDir('declared-bpf-'), flags, { plain: [legacy(FLOW), other] });
+    assert.deepEqual(replaced.written.businessProcessFlows, [described, other]);
+    // A flow changed since its last proof is named and left out; the rest of the download is written.
+    Object.assign(wire.row(id), { statecode: 0, statuscode: 1 });
+    const changed = await download(wire, makeTempDir('declared-bpf-'), flags);
+    assert.equal(changed.emitted[0].ok, true);
+    assert.deepEqual(changed.emitted[0].payload.managedBpfs.restored, []);
+    assert.match(changed.emitted[0].payload.managedBpfs.stale[0].reason, new RegExp(`process flow ${id} is not what its last build proved \\(bpf-changed\\)`));
+    assert.match(changed.said, /WARNING: managed business process flow new_ticket\/Ticket process was not restored: /);
+    assert.equal(changed.written.businessProcessFlows, undefined);
+  });
+});
+
+test('the explicit managed download names a flow whose last attempt is not settled, and without the flags reads no flow by id', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    wire.script((e) => e.method === 'PATCH', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+    assert.ok((await build(wire, dir, specWith([FLOW]))).err);
+    const pending = await download(wire, makeTempDir('declared-bpf-'), ['--include-managed', '--managed-manifest', storeFileOf(dir)]);
+    assert.equal(pending.emitted[0].ok, true, JSON.stringify(pending.emitted));
+    assert.deepEqual(pending.emitted[0].payload.managedBpfs.restored, []);
+    assert.match(pending.emitted[0].payload.managedBpfs.stale[0].reason, /its last attempt is not settled/);
+    assert.deepEqual(pending.calls.filter((c) => /^workflows\(/i.test(c.path)), [], 'an unsettled flow is not read');
+    const plain = await download(wire, makeTempDir('declared-bpf-'), []);
+    assert.equal(plain.emitted[0].ok, true, JSON.stringify(plain.emitted) + plain.said);
+    assert.equal('managedBpfs' in plain.emitted[0].payload, false);
+    assert.deepEqual(plain.calls.filter((c) => /^workflows\(/i.test(c.path)), [], 'no flow is read');
+  });
+});
+
+// --- the CLI -----------------------------------------------------------------------------------------------------------------
+
+test('the enabled feature through the CLI: the printed typed approval binds the flow, verify passes then fails a changed declaration, and the managed download restores it', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    assert.equal((await build(wire, makeTempDir('declared-bpf-'), specWith([legacy(FLOW)]))).err, undefined, 'the maker\'s flow');
+    const appDir = makeTempDir('declared-bpf-');
+    const dir = path.join(appDir, '.maker-workspace');
+    fs.mkdirSync(dir);
+    const { read } = await verifyReader(wire);
+    const cli = async (spec, extra = {}) => {
+      const barrier = createPublicationBarrier();
+      const sendObserver = createAttemptSendObserver();
+      const workflowEffectGate = createDeferredWorkflowGate();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: ORIGIN, httpClient: clientOver(wire, { barrier, observer: sendObserver, workflowEffectGate }) });
+      await sdk.initWorkspace();
+      let verified = null;
+      let err;
+      const mark = wire.log.length;
+      try {
+        await buildModelApp(spec, { apply: true, env: ORIGIN, workspaceDir: dir, appDir, retryDelayMs: 0, ...extra }, {
+          sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases: ['business-process-flows'] }), publicationBarrier: barrier, sendObserver, workflowEffectGate, warn: () => {}, log: () => {},
+          verify: async (s, o) => { verified = await verifySpec(s, read, o); return verified; },
+        });
+      } catch (e) { err = e; }
+      return { err, verified, workflowWrites: wire.log.slice(mark).filter((c) => c.method !== 'GET' && /^workflows/i.test(c.path)) };
+    };
+    const halted = await cli(specWith([FLOW]));
+    assert.ok(halted.err, 'the unbound flow is not taken over');
+    assert.deepEqual(halted.workflowWrites, []);
+    const printed = /--authorize "(adopt:bpf:[^"]+)"/.exec(chainText(halted.err));
+    assert.ok(printed, chainText(halted.err));
+    assert.equal(printed[1], `adopt:bpf:${FLOW.entity}/${FLOW.name}`);
+    const keys = authorizationKeys(['--authorize', printed[1]], specWith([FLOW]));
+    assert.equal(keys.error, null);
+    const bound = await cli(specWith([FLOW]), { authorizedAdoption: keys.adopt, verify: true });
+    assert.equal(bound.err, undefined, chainText(bound.err));
+    assert.deepEqual(bound.workflowWrites, [], 'a read-only adoption');
+    const g = storeOf(dir).readGroup('bpf', GROUP).committed;
+    assert.equal(g.records[0].origin, 'adopted');
+    assert.deepEqual(bpfChecks(bound.verified).map((c) => c.present), [true], 'the inline verify reads the bound flow');
+    const edited = specWith([{ ...FLOW, stages: [FLOW.stages[0], { ...FLOW.stages[1], name: 'Close' }] }]);
+    const standalone = await verifySpec(edited, read, { managedManifest: manifestOf(dir) });
+    assert.equal(bpfChecks(standalone)[0].present, false, 'the flow does not hold a declaration it was never built from');
+    const downloaded = await download(wire, makeTempDir('declared-bpf-'), ['--include-managed', '--managed-manifest', storeFileOf(dir)]);
+    assert.deepEqual(downloaded.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] });
+    assert.deepEqual(downloaded.written.businessProcessFlows, [FLOW]);
   });
 });

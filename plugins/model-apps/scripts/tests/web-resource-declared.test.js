@@ -242,11 +242,13 @@ test('validation: a declared web resource needs a name no other web resource sha
   assert.deepEqual(sameRow(validate(gateSpec({ minimumPluginVersion: '2.21.0', webResources: [wr({ reconcile: 'declared' }), wr({ name: 'contoso_/scripts/Other.js', reconcile: 'declared' })] }))), []);
 });
 
-test('validation: a form, a dashboard and a business rule take reconcile', () => {
-  const v = validate(gateSpec({ minimumPluginVersion: '2.21.0', dashboards: [{ name: 'D', reconcile: 'declared' }], forms: [{ name: 'F', entity: 'account', reconcile: 'declared' }], businessRules: [{ name: 'R', entity: 'account', reconcile: 'declared' }] }));
-  for (const kind of ['forms', 'dashboards', 'businessRules']) {
+test('validation: a form, a dashboard, a business rule and a business process flow take reconcile', () => {
+  const v = validate(gateSpec({ minimumPluginVersion: '2.21.0', dashboards: [{ name: 'D', reconcile: 'declared' }], forms: [{ name: 'F', entity: 'account', reconcile: 'declared' }], businessRules: [{ name: 'R', entity: 'account', reconcile: 'declared' }], businessProcessFlows: [{ name: 'P', entity: 'account', reconcile: 'declared' }] }));
+  for (const kind of ['forms', 'dashboards', 'businessRules', 'businessProcessFlows']) {
     assert.ok(!v.errors.some((e) => e.startsWith(`${kind}:`) && /reconcile is supported only/.test(e)), `${kind}: ${JSON.stringify(v.errors)}`);
   }
+  // A process flow's own key list refuses a reconcile it does not take, under its own label.
+  assert.ok(!v.errors.some((e) => e.startsWith("business process flow 'P'") && /reconcile/.test(e)), JSON.stringify(v.errors));
 });
 
 test('verify: a declared web resource whose deployed content differs says to build again; an undeclared one keeps its message', async () => {

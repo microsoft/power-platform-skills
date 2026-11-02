@@ -128,7 +128,7 @@ test('with the build path off, a declared business rule is refused with the word
   await withRules(false, () => {
     const v = validateAppSpec(specWith([RULE]), { profile: 'deploy' });
     assert.equal(v.ok, false);
-    assert.ok(v.errors.includes("businessRules: 'Hide notes when closed' — reconcile is supported only on views, charts, forms, dashboards and web resources; leave it out (this artifact keeps the existing build behaviour)"), JSON.stringify(v.errors));
+    assert.ok(v.errors.includes("businessRules: 'Hide notes when closed' — reconcile is supported only on views, charts, forms, dashboards, business process flows and web resources; leave it out (this artifact keeps the existing build behaviour)"), JSON.stringify(v.errors));
   });
 });
 

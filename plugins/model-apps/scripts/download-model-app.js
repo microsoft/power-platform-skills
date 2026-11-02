@@ -22,9 +22,10 @@
 // dashboards (dashboards[].reconcile "declared") the store holds are restored the same way, each in place of the plain dashboards[]
 // entry the download reconstructs for its id, only when a fresh read of it still certifies its last proof; any other is named in
 // `managedDashboards.stale` and kept as that plain entry. The declared business rules (businessRules[].reconcile "declared"), which
-// a plain download leaves out, are restored the same way into businessRules[] (`managedRules`). The download writes
+// a plain download leaves out, are restored the same way into businessRules[] (`managedRules`), and the declared business process
+// flows (businessProcessFlows[].reconcile "declared"), which it leaves out too, into businessProcessFlows[] (`managedBpfs`). The download writes
 // no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>
-// (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>).
+// (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>; each flow: adopt:bpf:<table>/<name>).
 // Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
@@ -60,6 +61,7 @@ const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
+const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -3845,11 +3847,13 @@ async function main(deps = {}) {
     // as the declaration it was built from (lib/declared-form-io.js restoreManagedForms), and each declared dashboard likewise into
     // dashboards[], in place of the plain entry the download reconstructed for it (lib/declared-dashboard-io.js restoreManagedDashboards),
     // and each declared business rule into businessRules[] (lib/declared-rule-io.js restoreManagedRules), which the plain download leaves out;
+    // and each declared business process flow into businessProcessFlows[] (lib/declared-bpf-io.js restoreManagedBpfs), which it leaves out too;
     // every other is named, never silently dropped. A store file that is not this app's on this environment stops the download before
     // anything is written.
     let managedForms = null;
     let managedDashboards = null;
     let managedRules = null;
+    let managedBpfs = null;
     if (includeManaged) {
       const source = {
         sdk,
@@ -3864,6 +3868,7 @@ async function main(deps = {}) {
         managedForms = await restoreManagedForms(source);
         managedDashboards = await restoreManagedDashboards(source);
         managedRules = await restoreManagedRules(source);
+        managedBpfs = await restoreManagedBpfs(source);
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
         return;
@@ -3871,6 +3876,7 @@ async function main(deps = {}) {
       for (const s of managedForms.stale) io.stderr.write(`WARNING: managed form ${s.key} was not restored: ${s.reason}. It is left out of forms[], as every form is without --include-managed.\n`);
       for (const s of managedDashboards.stale) io.stderr.write(`WARNING: managed dashboard ${s.key} was not restored: ${s.reason}. Its dashboard is downloaded as every dashboard is without --include-managed.\n`);
       for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
+      for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
     }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
@@ -3906,7 +3912,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

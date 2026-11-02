@@ -35,6 +35,7 @@ const { isDeclaredForm, formLayoutKey, verifyDeclaredForm } = require('./form-la
 const { isDeclaredDashboard, dashboardKey, committedDeclaration } = require('./dashboard-reconcile.js');
 const { verifyDeclaredDashboard } = require('./declared-dashboard-io.js');
 const { verifyDeclaredRule, declaredRulesByKey } = require('./declared-rule-io.js');
+const { verifyDeclaredBpf, declaredBpfsByKey } = require('./declared-bpf-io.js');
 const { declaredFeatureOn } = require('./declared-features.js');
 const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
@@ -2297,16 +2298,23 @@ async function verifySpec(spec, read, opts = {}) {
   // declaration (lib/declared-rule-io.js verifyDeclaredRule): a fresh read of the rule by the bound id through a throwaway workspace
   // (`read.declaredRule`), its whole body and state against the proof's hash, and the spec's declaration against the one the group has
   // applied. One the spec no longer declares is held to its bound workflow id.
+  //
+  // A committed business PROCESS FLOW group the spec still declares (businessProcessFlows[].reconcile "declared") is held the same way
+  // (lib/declared-bpf-io.js verifyDeclaredBpf): a fresh read of the flow by the bound id (`read.declaredBpf`), its whole body, stages, steps
+  // and state against the proof's hash, and the spec's declaration against the stages and steps the group holds and the one it has
+  // applied. One the spec no longer declares is held to its bound workflow id.
   const managedManifest = opts.managedManifest;
   if (managedManifest && (managedManifest.groups.length || managedManifest.pending.length || managedManifest.invalid.length)) {
     plan.section(async ({ add, unverified }) => {
       for (const p of managedManifest.pending) unverified.push(`managed:${p.family} ${p.key} (${p.code})`);
       for (const p of managedManifest.invalid) unverified.push(`managed:${p.family} ${p.key} (${p.code || 'managed-binding-group-invalid'})`);
-      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'], form: ['systemform', 'formid'], dashboard: ['systemform', 'formid'], rule: ['workflow', 'workflowid'] };
+      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'], form: ['systemform', 'formid'], dashboard: ['systemform', 'formid'], rule: ['workflow', 'workflowid'], bpf: ['workflow', 'workflowid'] };
       const declaredForms = declaredFormsByKey(spec);
       const declaredDashboards = declaredDashboardsByKey(spec);
       // Read only when a committed rule group is there: the rule helper loads the creates catalog (lib/declared-rule-io.js).
       const declaredRules = declaredFeatureOn('rules') && managedManifest.groups.some((g) => g.family === 'rule') ? declaredRulesByKey(spec.businessRules) : new Map();
+      // Likewise a committed flow group: the flow helper loads the creates catalog too (lib/declared-bpf-io.js).
+      const declaredBpfs = declaredFeatureOn('bpf') && managedManifest.groups.some((g) => g.family === 'bpf') ? declaredBpfsByKey(spec.businessProcessFlows) : new Map();
       for (const g of managedManifest.groups) {
         const t = tables[g.family];
         if (!t) continue;
@@ -2320,6 +2328,10 @@ async function verifySpec(spec, read, opts = {}) {
         }
         if (g.family === 'rule' && declaredRules.has(g.key)) {
           await verifyManagedRule(declaredRules.get(g.key), g, read, { add, unverified });
+          continue;
+        }
+        if (g.family === 'bpf' && declaredBpfs.has(g.key)) {
+          await verifyManagedBpf(declaredBpfs.get(g.key), g, read, { add, unverified });
           continue;
         }
         if (!read || typeof read.queryRecords !== 'function') { unverified.push(`managed:${g.family} ${g.key} (this reader cannot read by id)`); continue; }
@@ -2917,6 +2929,24 @@ async function verifyManagedRule(rule, g, read, { add, unverified }) {
   }
   const issues = verifyDeclaredRule({ rule, group: g, art: live && live.artifact });
   add('managed-rule', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
+}
+
+// One committed process flow group the spec still declares, held to its last proof and its declaration (verifyDeclaredBpf) over a fresh
+// read of the bound flow. `read.declaredBpf(id)` answers { artifact }. A group that keeps no declaration state or no proof proves nothing
+// verify can check, so it is listed as unverified, never passed.
+async function verifyManagedBpf(flow, g, read, { add, unverified }) {
+  const name = `${g.key} (${g.root.id})`;
+  if (!read || typeof read.declaredBpf !== 'function') { unverified.push(`managed:bpf ${g.key} (this reader cannot read a business process flow by id)`); return; }
+  if (!g.declaration || !g.declaration.flow || !g.declaration.applied || !g.proof) { unverified.push(`managed:bpf ${g.key} (the managed group keeps no declaration or proof to check)`); return; }
+  let live;
+  try {
+    live = await read.declaredBpf(g.root.id);
+  } catch (error) {
+    add('managed-bpf', name, false, String((error && error.message) || error));
+    return;
+  }
+  const issues = verifyDeclaredBpf({ flow, group: g, art: live && live.artifact });
+  add('managed-bpf', name, issues.length === 0, issues.map((i) => `${i.code}: ${i.message}`).join('; '));
 }
 
 // Whether each sub-grid that declares where it goes (`tab` / `column` / `after` / `before`) is where the spec

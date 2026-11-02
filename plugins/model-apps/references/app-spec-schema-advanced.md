@@ -669,8 +669,8 @@ fails, the build reports the table as withheld, publishes the other tables, and 
 
 Declared upkeep of web resources is described with `webResources[]` above, of form layouts with
 `forms[].reconcile` below, of dashboards with `dashboards[].reconcile` below, and of business rules with
-`businessRules[].reconcile` below. Declared business process flows (`businessProcessFlows[].reconcile`,
-below) are not enabled in this build: `reconcile` on a flow is a validation error, and the build's existing behaviour for it is unchanged. A command bar with
+`businessRules[].reconcile` below, and of business process flows with `businessProcessFlows[].reconcile`
+below. A command bar with
 `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
 
 **An unconfirmed publish.** A table (or dashboard) publish whose answer was lost may still have run. The
@@ -916,6 +916,18 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   an earlier build sent to it is still waiting to be proved, the build ends incomplete
   (`managed-not-settled`) and does not touch that flow: put its entry back and build again.
 - **Publishing.** A flow is not published; its activation is the state change above.
+- **Verify.** `--verify` reads each bound declared flow again by its id and holds it to what its last
+  build proved: its whole body (every stage and step, with their ids) and its status. It also fails when
+  the spec now declares the flow differently from what the flow holds (a stage or step added, renamed or
+  changed, or one left out or moved, which a build refuses), or names it with another table or name (a
+  build never renames or moves a managed flow). A flow changed in Maker since that build fails until it is
+  re-adopted.
+- **Download.** A plain download writes no business process flow. With both `--include-managed` and
+  `--managed-manifest <store file>`, each declared flow the store proves (a fresh read still shows what its
+  last build proved) comes back in `businessProcessFlows[]` as the declaration it was built from, stage and
+  step keys included, with `reconcile: "declared"`; one that is pending, gone, changed since, or not valid
+  is left out and named. The downloaded folder has no store, so its first rebuild needs
+  `--authorize "adopt:bpf:<table>/<name>"` for each.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

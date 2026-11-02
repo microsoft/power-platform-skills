@@ -564,6 +564,24 @@
         "pages": []
       },
       "expectations": []
+    },
+    {
+      "id": 24,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A Claims Desk app for insurance claims. Keep its process flow the way the spec says on every rebuild: a claim moves through intake, assessment and a decision, and renaming a stage must not move the claims already on it.",
+      "expect": {
+        "tables": [
+          "cnt_claim"
+        ],
+        "relationships": [],
+        "views": [
+          "Open Claims"
+        ],
+        "charts": [],
+        "pages": []
+      },
+      "expectations": []
     }
   ]
 }

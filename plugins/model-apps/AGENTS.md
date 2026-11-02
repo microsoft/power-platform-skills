@@ -3001,6 +3001,24 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   bound gate stops before any request (`workflow-state-path-unavailable`). A stored flow attempt whose
   declaration left the spec holds the run (`managed-not-settled`) exactly as a rule's does, and the legacy
   path does not write its row. Nothing is published.
+  **Verify and download** (`lib/declared-bpf-io.js`): verify reads each bound declared flow fresh by its
+  recorded id through the isolated reader (`readerFor(...).declaredBpf`) and runs `verifyDeclaredBpf`
+  (`managed-bpf` check): the helper's one read-only `projectBpf`, certified only when it is a shape the
+  helper manages, answers the bound id and table, and the hash of that projection and the flow's status
+  equals the proof's `savedSha256` (body and state both covered); plus, for the spec's flow, the same table
+  and name (a build never renames or moves a managed flow), the helper's `structureErrors` over the stage and
+  step keys the group applied (a held stage or step omitted or moved is named as the refusal a build gives)
+  and its `editsOf` over the applied state finding nothing, all `bpf-declaration-changed`. An omitted
+  description, order or status is not a change, as it is not for the build. A group with no declaration
+  state or proof, or a reader that cannot read a flow by id, is listed unverified, never passed; a flow the
+  spec no longer declares, or any with the path off, is held to its bound workflow id as before. The legacy
+  business-process-flow checks still run for a declared flow too.
+  `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
+  `originalDeclaration` (stage and step keys included) into `businessProcessFlows[]`, which a plain download
+  leaves out (replacing an entry with the same table and name, appended otherwise), validating
+  incrementally; a pending, unreadable, changed or invalid one is left out and named (`managedBpfs.stale`).
+  The download writes no store, so a rebuild from the downloaded folder needs `adopt:bpf:<table>/<name>`
+  once.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.

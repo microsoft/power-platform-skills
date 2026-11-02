@@ -53,6 +53,7 @@ const { readBaseline } = require('./lib/deployed-baseline.js');
 const { readVerifyManifest, readLiveForm } = require('./lib/declared-form-io.js');
 const { readLiveDashboard } = require('./lib/declared-dashboard-io.js');
 const { readLiveRule } = require('./lib/declared-rule-io.js');
+const { readLiveBpf } = require('./lib/declared-bpf-io.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
@@ -535,6 +536,19 @@ function readerFor(sdk, appUnique, opts) {
         reader.dispose();
       }
     },
+    // declaredBpf (verify-spec verifyManagedBpf): the business process flow a committed managed flow group binds, read by its id on a
+    // throwaway workspace, like declaredRule. With no isolated reader it throws, so the group is reported failed-to-read rather than passed.
+    declaredBpf: async (flowId) => {
+      if (!opts.isolatedReader) throw new Error('the declared business process flow reader needs an isolated reader');
+      const reader = await opts.isolatedReader();
+      try {
+        const artifact = await readLiveBpf(reader.sdk, flowId);
+        if (!artifact) throw new Error(`business process flow ${flowId} was not found`);
+        return { artifact };
+      } finally {
+        reader.dispose();
+      }
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
@@ -837,7 +851,7 @@ async function main() {
     const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
     // The managed bindings recorded in the same workspace for this environment, app and solution (lib/managed-bindings.js), read only:
     // a bound view or chart is held to its bound id by a fresh read, a bound declared form to its declaration and last proof (with the
-    // group's consumer state, readVerifyManifest), a bound declared dashboard or business rule likewise, and a pending or unusable group is listed as unverified.
+    // group's consumer state, readVerifyManifest), a bound declared dashboard, business rule or business process flow likewise, and a pending or unusable group is listed as unverified.
     const managedManifest = spec.solution && spec.solution.uniqueName
       ? readVerifyManifest({ workspaceDir, environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
       : undefined;
