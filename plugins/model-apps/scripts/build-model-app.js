@@ -1266,13 +1266,17 @@ function authorizationKeys(argv, spec) {
   const lower = (s) => String(s || '').toLowerCase();
   // The configuration kinds' tokens, <kind>:<declared key>:<field> (e.g. connectionReference:contoso_sp:connectionId, environmentVariableValue:contoso_ApiKey:value),
   // are claimed first and checked against the spec by their own grammar (lib/configuration-artifacts.js); every other token is read below exactly as before.
-  const configuration = configurationAuthorizationKeys(raw, spec);
+  // No operating system can pass NUL in a process argument (Node's spawnSync throws ERR_INVALID_ARG_VALUE), so a key holding one can never be pasted
+  // back as the one argument a hint asks for; it is refused by name here rather than read as a view or chart name by the patterns below.
+  const hasNul = (k) => typeof k === 'string' && k.includes('\u0000');
+  const nulKeys = raw.filter(hasNul);
+  const configuration = configurationAuthorizationKeys(raw.filter((k) => !hasNul(k)), spec);
   const keys = new Set(configuration.keys);
   const adopt = new Set();
   const overwrite = new Set();
-  const problems = configuration.problems.map(({ token, code }) => (code === 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM'
+  const problems = nulKeys.map((key) => `'${key.replace(/\u0000/g, '\\u0000')}' holds a NUL character (U+0000), which a command-line argument cannot carry; give the item a name without it`).concat(configuration.problems.map(({ token, code }) => (code === 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM'
     ? `'${token}' names a configuration item the spec does not declare`
-    : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`));
+    : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
   // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
   // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick
   // Find view's (entities[].quickFind, lib/quick-find.js) is its table, in lower case.

@@ -113,18 +113,19 @@ function commandArgOrPlaceholder(value, placeholder) {
 //                                          its arguments into one command line and re-splits it, so a `"` followed by white space is cut in two whatever is written
 //                                          around it — and a spelling that is wrong in one of them hands the CLI a different, shortened key. The message gives the
 //                                          exact key as a JSON string and says to pass that key as ONE `--authorize` argument.
-//   a line break (`\n`, `\r`, U+2028, U+2029)
+//   a line break (`\n`, `\r`, U+2028, U+2029) or NUL (U+0000)
 //                                          cannot be given at all: the approval parser (build-model-app.js authorizationKeys) reads a name with `.`, which stops at a
-//                                          line break, so it refuses such a key whatever the shell does; the message says so.
+//                                          line break, and refuses NUL by name (no operating system passes NUL in a process argument), so it refuses such a key
+//                                          whatever the shell does; the message says so.
 // Double quotes rather than commandArg's single quotes keep the spelling already printed (and pinned) for forms, rules and process flows.
 const DOUBLE_QUOTE_UNSAFE = /["$`\\!\u201C\u201D\u201E\u201F\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
-const LINE_BREAK = /[\n\r\u2028\u2029]/;
+const LINE_BREAK = /[\n\r\u2028\u2029]|\u0000/;
 function authorizeFlag(approval) {
   const text = String(approval);
   if (BARE_ARG.test(text)) return `--authorize ${text}`;
   if (text !== '' && !DOUBLE_QUOTE_UNSAFE.test(text)) return `--authorize "${text}"`;
   if (LINE_BREAK.test(text)) {
-    return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it holds a line break, which the build's approval reader does not accept in a name, so this approval cannot be given: rename the item so its name has none`;
+    return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it holds ${text.includes('\u0000') ? 'a NUL character (U+0000), which no command-line argument can carry and' : 'a line break, which'} the build's approval reader does not accept in a name, so this approval cannot be given: rename the item so its name has none`;
   }
   // Windows PowerShell 5.1 wraps an argument that holds white space in double quotes itself, so a final `\` would escape that closing quote.
   const single = text.endsWith('\\') ? null : commandArg(text);

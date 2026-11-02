@@ -1274,7 +1274,7 @@ test('authorizeFlag prints a spelling only when every shell passes it on unchang
   for (const name of ['cost $5', 'a`b', 'C:\\x y', 'Wow!', '\u201Cq\u201D']) {
     assert.strictEqual(authorizeFlag(`adopt:view:t/${name}`), `--authorize 'adopt:view:t/${name}'`, name);
   }
-  for (const name of ['say "hi"', 'n" end', 'a" b"c', 'it\'s $5', 'it\'s `x`', 'it\'s\\x', 'Wow it\'s!', 'it\u2019s $5', 'say \\', 'a\u0001b', 'a\u000Bb']) {
+  for (const name of ['say "hi"', 'n" end', 'a" b"c', 'it\'s $5', 'it\'s `x`', 'it\'s\\x', 'Wow it\'s!', 'it\u2019s $5', 'say \\', 'a\u0001b', 'a\u000Bb', 'a\fb']) {
     const key = `adopt:view:t/${name}`;
     const hard = authorizeFlag(key);
     assert.ok(hard.startsWith('--authorize <approval> '), hard);
@@ -1283,12 +1283,27 @@ test('authorizeFlag prints a spelling only when every shell passes it on unchang
     assert.ok(!/no way of writing|no spelling|rename|cannot be given/.test(hard), `a key the parser accepts is neither refused nor renamed: ${hard}`);
     assert.strictEqual(authorizationKeys(['--authorize', key], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name, reconcile: 'declared', columns: ['x'] }] }).error, null, 'the parser accepts it');
   }
-  // A line break is the one thing the approval parser refuses in a name, so only that key is said to be impossible to give.
+  // A line break is the one thing the approval parser's patterns refuse in a name, and NUL, which no command-line argument can carry, it refuses by name:
+  // only those keys are said to be impossible to give.
   for (const name of ['a\nb', 'a\rb', 'a\u2028b']) {
     const hard = authorizeFlag(`adopt:view:t/${name}`);
     assert.ok(hard.startsWith('--authorize <approval> ') && /line break/.test(hard) && /cannot be given/.test(hard), hard);
     assert.ok(authorizationKeys(['--authorize', `adopt:view:t/${name}`], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name, reconcile: 'declared', columns: ['x'] }] }).error, 'the parser refuses it');
   }
+  for (const key of ['adopt:view:t/a\u0000b', 'adopt:chart:t/a\u0000b', 'overwrite:form:t/main/a\u0000b', 'adopt:dashboard:a\u0000b', 'dateTimeBehavior:t.a\u0000b', 'a\u0000b']) {
+    const hard = authorizeFlag(key);
+    assert.ok(hard.startsWith('--authorize <approval> ') && /NUL character \(U\+0000\)/.test(hard) && /cannot be given/.test(hard) && /rename/.test(hard), hard);
+    const refused = authorizationKeys(['--authorize', key], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name: 'a\u0000b', reconcile: 'declared', columns: ['x'] }] });
+    assert.match(refused.error, /NUL character \(U\+0000\)/, 'the parser names the unsupported character');
+    assert.ok(!refused.error.includes('\u0000'), 'the message shows it escaped');
+    assert.strictEqual(authorizationKeys(['--authorize=' + key], { entities: [] }).adopt.size, 0, 'nothing is approved');
+  }
+  // A tab is accepted and printed double-quoted (a tab inside double quotes reaches every shell unchanged).
+  assert.strictEqual(authorizationKeys(['--authorize', 'adopt:view:t/a\tb'], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name: 'a\tb', reconcile: 'declared', columns: ['x'] }] }).error, null);
+  // The NUL key does not hide the other approvals given beside it.
+  const beside = authorizationKeys(['--authorize', 'adopt:view:t/ok', '--authorize', 'adopt:view:t/a\u0000b'], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name: 'ok', reconcile: 'declared', columns: ['x'] }] });
+  assert.deepStrictEqual([...beside.adopt], ['view:t/ok']);
+  assert.match(beside.error, /NUL/);
 });
 
 // The printed text itself goes through each real shell this machine has, and the arguments it delivers go through the CLI's own parser: the approval a maker
