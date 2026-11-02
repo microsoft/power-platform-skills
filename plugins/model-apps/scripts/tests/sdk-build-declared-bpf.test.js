@@ -323,6 +323,65 @@ test('a bound flow is never edited by default, and a declaration that omits or r
   });
 });
 
+test('a bound flow kept Draft with its status left out is a no-op for the build and passes verify; a stated status is held to as written', async () => {
+  await withBpf(true, async () => {
+    const legacyChecks = (r) => r.checks.filter((c) => c.kind === 'business-process-flow').map((c) => [c.present, c.detail]);
+    const DRAFT = 'deployed but DRAFT — the process does not appear on the form';
+    const ACTIVE = 'deployed ACTIVE but the spec asks for Draft — the process is running';
+    // The flow's own checks only (the stub reader answers no sitemap, so the app shell's checks never pass here).
+    const flowMissing = (r) => r.missing.filter((m) => m.kind === 'business-process-flow' || m.kind === 'managed-bpf').map((m) => m.kind);
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    const first = await build(wire, dir, specWith([{ ...FLOW, status: 'Draft' }]));
+    assert.equal(first.err, undefined, chainText(first.err));
+    const id = storeOf(dir).readGroup('bpf', GROUP).committed.root.id;
+    assert.equal(wire.row(id).statecode, 0, 'created and kept Draft');
+    assert.equal(manifestOf(dir).groups.find((g) => g.family === 'bpf').declaration.applied.status, 'Draft');
+
+    // The status left out: the build changes nothing and verify expects the Draft it keeps, both checks passing.
+    const omitted = await build(wire, dir, specWith([FLOW]));
+    assert.equal(omitted.err, undefined, chainText(omitted.err));
+    assert.deepEqual(omitted.writes.filter((c) => /^workflows/i.test(c.path)), [], 'no workflow write');
+    assert.equal(wire.row(id).statecode, 0, 'never activated');
+    const { read } = await verifyReader(wire);
+    const verify = (spec) => verifySpec(spec, read, { managedManifest: manifestOf(dir) });
+    const kept = await verify(specWith([FLOW]));
+    assert.deepEqual(legacyChecks(kept), [[true, '']]);
+    assert.deepEqual(bpfChecks(kept).map((c) => c.present), [true]);
+    assert.deepEqual(flowMissing(kept), []);
+
+    // Controls: Draft stated passes; Active stated is an edit the build refuses with no write, and verify fails it.
+    assert.deepEqual(flowMissing(await verify(specWith([{ ...FLOW, status: 'Draft' }]))), []);
+    const activate = await build(wire, dir, specWith([{ ...FLOW, status: 'Active' }]));
+    assert.match(chainText(activate.err), /workflow-edit-refused/);
+    assert.deepEqual(activate.writes, []);
+    const wantActive = await verify(specWith([{ ...FLOW, status: 'Active' }]));
+    assert.deepEqual(legacyChecks(wantActive), [[false, DRAFT]]);
+    assert.deepEqual(flowMissing(wantActive), ['business-process-flow', 'managed-bpf']);
+    // The flow activated outside the spec: the omitted status still expects the Draft its last build proved.
+    Object.assign(wire.row(id), { statecode: 1, statuscode: 2 });
+    const drifted = await verify(specWith([FLOW]));
+    assert.deepEqual(legacyChecks(drifted), [[false, ACTIVE]]);
+    assert.ok(flowMissing(drifted).includes('business-process-flow'));
+    Object.assign(wire.row(id), { statecode: 0, statuscode: 1 });
+
+    // Re-adoption never unlocks a structural change: stages reordered under the typed approval are still refused, with no request.
+    const reordered = await build(wire, dir, specWith([{ ...FLOW, stages: [FLOW.stages[1], FLOW.stages[0]] }]), { authorizedAdoption: new Set([APPROVAL]) });
+    assert.match(chainText(reordered.err), /bpf-structure-refused|puts its stages in another order/);
+    assert.deepEqual(reordered.lines, []);
+
+    // A new flow with its status left out is created Active, and verify expects Active.
+    const fresh = createWorkflowWire();
+    const fdir = makeTempDir('declared-bpf-');
+    assert.equal((await build(fresh, fdir, specWith([FLOW]))).err, undefined);
+    const fid = storeOf(fdir).readGroup('bpf', GROUP).committed.root.id;
+    assert.equal(fresh.row(fid).statecode, 1);
+    const fv = await verifySpec(specWith([FLOW]), (await verifyReader(fresh)).read, { managedManifest: manifestOf(fdir) });
+    assert.deepEqual(legacyChecks(fv), [[true, '']]);
+    assert.deepEqual(flowMissing(fv), []);
+  });
+});
+
 // --- the approval ------------------------------------------------------------------------------------------------------------
 
 test('--authorize adopt:bpf:<table>/<name> is read in any case, typed or not, as the helper\'s approval; an overwrite, an undeclared flow or an ambiguous key is refused', async () => {

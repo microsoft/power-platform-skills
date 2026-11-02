@@ -3027,7 +3027,9 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   business-process-flow check of a declared flow bound in the store, or of any flow whose attempt is pending, reads
   that row by its id for presence and state before any name lookup (`boundWorkflowOf`; the manifest's pending
   entry carries the attempt's row), so a namesake never passes for it; with no id, a failed read or a read that
-  answers another row it is unverified.
+  answers another row it is unverified. Its expected state is the spec's `status`; when the spec omits it on a
+  committed flow, it is the status the group last applied (`declaration.applied.status`, as `boundWorkflowOf`
+  answers it), because the build keeps that state; Active is only the default of a flow not committed yet.
   `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
   `originalDeclaration` (stage and step keys included) into `businessProcessFlows[]`, which a plain download
   leaves out (replacing an entry with the same table and name, appended otherwise), validating

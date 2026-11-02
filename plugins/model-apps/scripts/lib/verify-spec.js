@@ -1454,7 +1454,12 @@ async function verifySpec(spec, read, opts = {}) {
     // (boundWorkflowOf), never by name: a namesake must not pass for it.
     const boundFlow = boundWorkflowOf(opts.managedManifest, 'bpf', `${entityLogical}/${flow.name}`, flow.reconcile === 'declared');
     if (boundFlow) {
-      await checkBoundWorkflow(read, 'business-process-flow', name, boundFlow, (flow.status || 'Active') === 'Active', { add, unverified }, {
+      // An omitted status on a flow the store already holds means "keep the state its last build proved" (the build changes
+      // nothing for it), so that state is the one expected here; Active is only the creation default, for a flow not yet
+      // committed. An explicit status is always held to as written. (A business rule's omitted status means Active, as its
+      // build does, so the rule check above keeps the default.)
+      const wantStatus = flow.status || (!boundFlow.pending && boundFlow.appliedStatus) || 'Active';
+      await checkBoundWorkflow(read, 'business-process-flow', name, boundFlow, wantStatus === 'Active', { add, unverified }, {
         draft: 'deployed but DRAFT — the process does not appear on the form', active: 'deployed ACTIVE but the spec asks for Draft — the process is running',
       });
       continue;
@@ -2454,6 +2459,10 @@ function incompleteDuplicateRead(n) {
 //                          the name check stands, as it always did;
 //   { id, pending }        the committed group's root, or the pending attempt's root (lib/declared-form-io.js readVerifyManifest
 //                          carries it on the pending entry);
+//   { id, pending, appliedStatus }
+//                          a committed group whose declaration names the status its last build proved ('Active'|'Draft';
+//                          a process flow's `declaration.applied.status`). For a flow, an omitted `status` keeps that state
+//                          (lib/bpf-settlement.js editsOf), so it is the state verify expects; see the flow check;
 //   { id: null, pending }  a pending attempt whose row the view does not name: nothing can be checked safely, so it is unverified.
 // A committed group whose entry is no longer declared is left to the name check here: the build's legacy path reuses the oldest
 // namesake for it, and the managed section still holds the group to its bound id.
@@ -2463,7 +2472,10 @@ function boundWorkflowOf(manifest, family, key, declared) {
   if (p) return { id: p.root && typeof p.root.id === 'string' && p.root.id ? p.root.id : null, pending: true };
   if (!declared) return null;
   const g = (manifest.groups || []).find((x) => x && x.family === family && x.key === key);
-  if (g && g.root && typeof g.root.id === 'string' && g.root.id) return { id: g.root.id, pending: false };
+  if (g && g.root && typeof g.root.id === 'string' && g.root.id) {
+    const applied = g.declaration && g.declaration.applied && g.declaration.applied.status;
+    return { id: g.root.id, pending: false, ...(applied === 'Active' || applied === 'Draft' ? { appliedStatus: applied } : {}) };
+  }
   return null;
 }
 

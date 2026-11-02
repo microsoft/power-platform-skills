@@ -196,8 +196,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow; give every
   stage and step a `key`. Tell the maker: a key keeps a stage's or step's id, so a rename keeps the records on it;
   a new flow is created Draft and activated only if nobody changed it in between; a flow that already exists is
-  never edited by the build, and removing or reordering a stage or step is always refused (change it in Maker,
-  then re-adopt it); a flow changed outside the spec stops the build until it is re-adopted whole with
+  never edited by the build (to change its body or status, change it in Maker, then re-adopt it, keeping every
+  stage and step in place); removing or reordering a stage or step is always refused, and no change in Maker or
+  re-adoption unlocks that; a flow changed outside the spec stops the build until it is re-adopted whole with
   `--authorize adopt:bpf:<table>/<name>` and a declaration naming its whole body. Explain the approval and let
   the maker choose. `--verify` holds a declared flow to its last build (a flow changed in Maker since fails until
   it is re-adopted). A download brings it back declared, keys included, only with `--include-managed

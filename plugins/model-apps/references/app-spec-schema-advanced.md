@@ -899,16 +899,19 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   least one step per stage, a step bound to a column, the name rules).
 - **Settings only.** A declared flow that the build already manages may leave out `stages` to keep
   only its description, order and status in the spec. Creating or adopting a flow needs its stages.
+- **Status left out.** On a new flow, `status` defaults to Active. On a flow the build already manages,
+  leaving it out keeps the state its last build proved: the build changes nothing, and `--verify` expects
+  that state (a flow kept Draft stays Draft and passes). A `status` that is written is always held to.
 - **Creating.** A new flow is created **Draft** with every id, read back, and only then activated
   (when its `status` is `Active`). The activation carries the version of that read, and Dataverse
   enforces it: if the flow was changed in Maker after the build read it, the build does not activate it
   and stops. A repeated create of the same flow is answered by Dataverse without a duplicate, so a
   create whose answer was lost is proved by reading it, never sent twice.
 - **Editing.** A flow that already exists is never edited: a change of its body or its status is
-  refused before any write (`workflow-edit-refused`). Removing or reordering a stage or a step is
-  refused in every case (`bpf-structure-refused`). Branching, stage actions, a stage on another table
-  and anything else the build does not write are refused (`bpf-shape-unsupported`). Change the flow in
-  Maker, then re-adopt it.
+  refused before any write (`workflow-edit-refused`); change it in Maker, then re-adopt it. Removing or
+  reordering a stage or a step is refused in every case (`bpf-structure-refused`), before anything is
+  read, so no change in Maker and no approval unlocks it. Branching, stage actions, a stage on another
+  table and anything else the build does not write are refused (`bpf-shape-unsupported`).
 - **Approvals.** The key is `bpf:<table>/<name>` (lower-case table). A flow that already exists and
   that this build did not create is bound only with `--authorize adopt:bpf:<table>/<name>`, and only when
   the declaration names its whole current body in order (`bpf-whole-body-required`); nothing is written.
