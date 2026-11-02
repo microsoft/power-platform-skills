@@ -200,6 +200,7 @@ const isDeclaredRuleOn = (r) => declaredFeatureOn('rules') && !!r && r.reconcile
 // Declared business process flows (businessProcessFlows[].reconcile "declared", lib/bpf-settlement.js) likewise, and for the same
 // reason the helper is required at first use.
 const isDeclaredBpfOn = (f) => declaredFeatureOn('bpf') && !!f && f.reconcile === 'declared';
+const { readSystemFormRootPresence } = require('./systemform-published.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -3723,14 +3724,59 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // blocks its scope for the whole run: checkAppWrite refuses an app that adds or holds it, a publish naming it is not sent,
   // and the run ends incomplete naming it. Nothing is paid, discarded or marked: the store keeps the debt exactly as it was,
   // and the run that declares the dashboard again and runs its phase pays it through its proof, as it always did.
+  // The one way out other than paying: a REMOVED declaration (the spec does not declare it with the build path on) whose
+  // dashboard the maker deleted. Declaring it again cannot help there (its bound row is gone: dashboard-bound-row-missing),
+  // so without this the fence would hold every later run for good. Before the fence, such a group with an owed,
+  // definitely-unsent publish (or no publish to settle) has its root read fresh in BOTH layers by its id
+  // (readSystemFormRootPresence). Only 'absent', the missing-row 404 (0x80040217) in both layers, is evidence: a row in
+  // either layer, a 403, a timeout, a malformed answer or any read that fails keeps the fence (and keeps the group). On
+  // that evidence the store retires the group in one generation-checked change (retireAbsentGroup: the same generation
+  // and root, no attempt, no publish that may have been sent; it refuses with nothing written otherwise, and the fence
+  // stays), which records that the root was proved gone and the group retired, NOT that its content was published or
+  // its debt paid. A retired group installs no fence; a block this invocation already holds on the scope (a caller's
+  // barrier) is never cleared, so that invocation stays stopped and the next proceeds from the file. A group with a
+  // pending attempt, or a publish that may have been sent, is not read here: the store holds those (openManagedContext).
   if (bindingGroups && bindingGroups.store) {
-    const settledHere = has('dashboards') ? new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey)) : new Set();
-    for (const unit of bindingGroups.store.snapshot().units()) {
+    const store = bindingGroups.store;
+    const declaredOn = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
+    const settledHere = has('dashboards') ? declaredOn : new Set();
+    const client = provision && provision.dataverse;
+    // The order is the proof's: (1) the store observation, (2) the fresh reads of both layers, (3) the retirement bound to
+    // that observation, so a managed write that lands between them makes the store refuse the retirement instead of
+    // retiring on a proof about an older state. The observation is the group's generation and root as read from the store
+    // before the reads; keep all three steps here so a store-issued observation token replaces it in one place.
+    const retireIfAbsent = async (unit) => {
+      if (unit.attempt || !client) return false; // an attempt (journal empty or not) is never retired here
+      const group = unit.group;
+      const observed = group && group.root && group.root.id ? { generation: group.generation, rootId: group.root.id } : null;
+      if (!observed) return false;
+      const { rootId } = observed;
+      let presence;
+      try {
+        presence = await readSystemFormRootPresence(client, rootId);
+      } catch {
+        return false; // not proved absent: the group and its fence stay
+      }
+      if (presence !== 'absent') return false;
+      try {
+        store.retireAbsentGroup({ family: 'dashboard', key: unit.key, generation: observed.generation, rootId: observed.rootId, evidence: { kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' } });
+      } catch {
+        return false; // the store refused (another generation or root, a publish that may have been sent, a failed write): the fence stays
+      }
+      if (typeof opts.warn === 'function') {
+        opts.warn(`declared dashboard "${unit.key}": managed-dashboard-retired — its dashboard ${rootId} is gone from both the saved and the published layer, and the spec no longer declares it, so its managed record was retired${group.publication && group.publication.state === 'owed' ? ' with its unpublished change, which was never published' : ''}. Nothing was sent for it; a dashboard declared under this key again is a new one.`);
+      }
+      return true;
+    };
+    for (const unit of store.snapshot().units()) {
       const pub = unit.group && unit.group.publication;
       if (unit.invalid || unit.attempt || unit.family !== 'dashboard' || settledHere.has(unit.key)) continue;
+      const owedDebt = !!pub && pub.state === 'owed' && pub.dispatchToken === null && !!pub.scope && pub.scope.type === 'dashboard';
+      const noDebt = !pub || pub.state === 'not-needed' || pub.state === 'confirmed';
+      if (!declaredOn.has(unit.key) && (owedDebt || noDebt) && await retireIfAbsent(unit)) continue;
       if (!pub || pub.state !== 'owed' || !pub.scope || pub.scope.type !== 'dashboard') continue;
       const why = has('dashboards') ? 'this spec does not declare it' : 'this run does not run the dashboards phase';
-      owed.barrier.quarantine([pub.scope], [pub.scope.id], `managed dashboard "${unit.key}" (its last change is saved and its publish is owed, and ${why}; declare it with reconcile: "declared" and run the dashboards phase to publish it through its proof)`);
+      owed.barrier.quarantine([pub.scope], [pub.scope.id], `managed dashboard "${unit.key}" (its last change is saved and its publish is owed, and ${why}; declare it with reconcile: "declared" and run the dashboards phase to publish it through its proof, or, if it was deleted, remove its declaration: a build that reads it gone from both layers retires it)`);
     }
   }
   // Stable create identities (createIdentity: "stable-v1"; lib/creates-stable-build.js), for declared views and charts only: their

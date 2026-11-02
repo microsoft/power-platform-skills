@@ -815,6 +815,11 @@ existing one is reused and its tiles are never edited.
   - A publish that is still owed (saved, never sent) is not paid by a build that does not declare the
     dashboard. That build keeps the dashboard out of every app write and publish, and it ends incomplete.
     Declare the dashboard again with `reconcile: "declared"` to publish it.
+  - If the dashboard was deleted in Maker, keep its declaration removed. The build reads the dashboard by
+    its id in both the saved and the published layer. When both answer that the row does not exist, the
+    build retires its record and reports `managed-dashboard-retired`; nothing is sent, and its unpublished
+    change is dropped with it. A row in either layer, or a read that fails (no access, a timeout), keeps the
+    block. A dashboard you declare under that key later is a new one.
   - A plain `dashboards[]` entry with that dashboard's id or name stops the build before it sends anything,
     so it never makes a second dashboard in its place.
 

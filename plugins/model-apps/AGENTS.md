@@ -2920,7 +2920,13 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   dashboards phase) is never paid, discarded or marked: the run blocks its scope from the start
   (`runSdkBuildPhases`, after the store opens), so `checkAppWrite` refuses an app that adds or holds it, no
   publish names it, and the run ends incomplete until it is declared again and its phase pays it through its
-  proof. The store's classification of owed debt (`classifyPersisted`) is unchanged; the fence is the build's. A withheld publish leaves the run
+  proof. The one other way out is for a REMOVED declaration whose dashboard was deleted: before the fence, a
+  group with no attempt and an owed, definitely-unsent publish (or none to settle) has its root read fresh in
+  both layers (`readSystemFormRootPresence`); only `absent` (the missing-row 404 in both) lets the store retire
+  it (`retireAbsentGroup`, generation- and root-checked) with the notice `managed-dashboard-retired`. A row in
+  either layer, a 403, a timeout or any other failed read keeps the group and its fence; a block this
+  invocation already holds is never cleared, so that invocation stays stopped and the next one is clean.
+  The store's classification of owed debt (`classifyPersisted`) is unchanged; the fence is the build's. A withheld publish leaves the run
   incomplete (`managed-publication-owed`, or
   `managed-publication-unverified` when a layer read failed), and the app write is checked with the
   dashboards the app would hold (`checkAppWrite` `addedDashboards`), so an app publish never puts an

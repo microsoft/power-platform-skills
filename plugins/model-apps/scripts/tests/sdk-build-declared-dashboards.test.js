@@ -1036,3 +1036,135 @@ test('verify: a declared dashboard held to a deleted dashboardId fails, and a na
     assert.ok(plain.checks.filter((c) => c.kind === 'dashboard').some((c) => c.present), JSON.stringify(plain.checks));
   });
 });
+// A removed declaration whose dashboard the maker deleted: an owed publish (or none) is retired once both layers read as gone.
+const savedReadOf = (id) => (e) => e.method === 'GET' && e.url.includes(id) && /RetrieveUnpublished/.test(e.url);
+const publishedReadOf = (id) => (e) => e.method === 'GET' && e.url.includes(id) && !/RetrieveUnpublished/.test(e.url) && /^systemforms\(/i.test(e.path);
+const retiredOf = (dir) => JSON.parse(fs.readFileSync(storeFileOf(dir), 'utf8')).retiredGroups || [];
+
+test('removed owed: a deleted dashboard proved gone from both layers is retired with a coded notice; the run and the next are clean, and nothing is sent', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    w.wire.saved.delete(w.id);
+    w.wire.published.delete(w.id);
+    const removed = dropDashboard(w.changed);
+    const warnings = [];
+    const first = await buildWith(w.wire, w.dir, removed, { warn: (m) => warnings.push(String(m)) });
+    assert.equal(first.err, undefined, chainText(first.err));
+    assert.equal(serviceWrites(first.calls).length, 0);
+    assert.equal(first.calls.filter(savedReadOf(w.id)).length, 1, 'the saved layer is read by its id');
+    assert.equal(first.calls.filter(publishedReadOf(w.id)).length, 1, 'the published layer is read by its id');
+    assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}": managed-dashboard-retired`) && m.includes(w.id)), warnings.join('\n'));
+    assert.equal(committedGroup(w.dir), null);
+    const [entry] = retiredOf(w.dir);
+    assert.deepEqual({ family: entry.family, key: entry.key, generation: entry.generation, rootId: entry.rootId, reason: entry.reason, publication: entry.publication }, { family: 'dashboard', key: KEY, generation: w.group.generation, rootId: w.id, reason: 'root-absent', publication: 'owed' });
+    assert.equal(first.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, true, 'a retired group installs no fence');
+    const second = await buildWith(w.wire, w.dir, removed);
+    assert.equal(second.err, undefined, chainText(second.err));
+    assert.equal(second.calls.length, 0, 'the next run has nothing to read or send for it');
+    assert.equal(retiredOf(w.dir).length, 1);
+  });
+});
+
+test('removed owed: when this invocation already blocks the scope, the group is retired but that invocation stays stopped; a fresh one is clean', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    w.wire.saved.delete(w.id);
+    w.wire.published.delete(w.id);
+    const removed = dropDashboard(w.changed);
+    const barrier = createPublicationBarrier();
+    barrier.quarantine({ type: 'dashboard', id: w.id }, [w.id], 'already quarantined in this invocation');
+    const held = await buildWith(w.wire, w.dir, removed, { barrier });
+    assert.match(chainText(held.err), /already quarantined in this invocation/);
+    assert.equal(serviceWrites(held.calls).length, 0);
+    assert.equal(committedGroup(w.dir), null, 'the durable result is the retirement');
+    assert.equal(held.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false, 'its quarantine is never cleared');
+    const fresh = await buildWith(w.wire, w.dir, removed);
+    assert.equal(fresh.err, undefined, chainText(fresh.err));
+  });
+});
+
+for (const control of ['saved layer still there', 'published layer still there', 'a 403 read', 'a read that times out']) {
+  test(`removed owed control: ${control} keeps the fence and the store unchanged`, async () => {
+    await withDashboards(true, async () => {
+      const w = await owedDashboard();
+      const spec = dropDashboard(w.changed);
+      if (control !== 'saved layer still there') w.wire.saved.delete(w.id);
+      if (control !== 'published layer still there') w.wire.published.delete(w.id);
+      if (control === 'a 403 read') w.wire.script(savedReadOf(w.id), { statusCode: 403, body: { error: { code: '0x80040220', message: 'no read privilege' } } });
+      if (control === 'a read that times out') for (let i = 0; i < 8; i += 1) w.wire.script(savedReadOf(w.id), { error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), code: 'ETIMEDOUT' });
+      const before = fs.readFileSync(storeFileOf(w.dir));
+      const r = await buildWith(w.wire, w.dir, spec);
+      assert.match(chainText(r.err), /its publish is owed/);
+      assert.equal(serviceWrites(r.calls).length, 0);
+      assert.equal(r.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false);
+      assert.ok(fs.readFileSync(storeFileOf(w.dir)).equals(before), 'nothing is retired on unproved absence');
+    });
+  });
+}
+
+test('removed owed control: a deleted dashboard that is still declared, in a run without the dashboards phase, is not retired and stays fenced', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    w.wire.saved.delete(w.id);
+    w.wire.published.delete(w.id);
+    const spec = clone(w.changed);
+    spec.app.icon = 'existing-icon';
+    scriptIcon(w.wire);
+    const before = fs.readFileSync(storeFileOf(w.dir));
+    const r = await buildWith(w.wire, w.dir, spec, { phases: ['app-shell'] });
+    assert.equal(r.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false);
+    assert.equal(r.calls.filter((c) => c.url.includes(w.id)).length, 0, 'a declared dashboard is not probed for retirement');
+    assert.equal(appWrites(r.calls).filter((c) => /^PublishXml/i.test(c.path)).length, 0);
+    assert.ok(fs.readFileSync(storeFileOf(w.dir)).equals(before));
+  });
+});
+test('removed owed control: a never-published root that is still saved keeps its fence', async () => {
+  await withDashboards(true, async () => {
+    const w = await retainedRoot('owed');
+    const before = fs.readFileSync(storeFileOf(w.dir));
+    const r = await buildWith(w.wire, w.dir, dropDashboard(makeSpec()));
+    assert.match(chainText(r.err), /its publish is owed/);
+    assert.equal(r.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false);
+    assert.equal(serviceWrites(r.calls).length, 0);
+    assert.ok(fs.readFileSync(storeFileOf(w.dir)).equals(before));
+  });
+});
+
+test('removed owed: an existing app is refused before any site map or app write in a run without the dashboards phase', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    const spec = dropDashboard(w.changed);
+    spec.app.icon = 'existing-icon';
+    scriptIcon(w.wire);
+    w.wire.script((e) => e.method === 'GET' && e.path === 'appmodules', { statusCode: 200, body: { value: [{ appmoduleid: '77777777-7777-4777-8777-777777777777', name: 'Dash', uniquename: APP }] } });
+    const r = await buildWith(w.wire, w.dir, spec, { phases: ['app-shell'] });
+    assert.match(chainText(r.err), /app was not written or published/);
+    assert.equal(appWrites(r.calls).length, 0);
+    assert.equal(committedGroup(w.dir).publication.state, 'owed');
+  });
+});
+test('removed settled: a deleted dashboard with no debt is retired once both layers read as gone; one that still exists keeps its record and no fence', async () => {
+  await withDashboards(true, async () => {
+    const wire = wireWithIdReads();
+    const dir = makeTempDir('declared-dash-');
+    assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+    const group = committedGroup(dir);
+    const id = group.root.id;
+    const removed = dropDashboard(makeSpec());
+    const before = fs.readFileSync(storeFileOf(dir));
+    const kept = await buildWith(wire, dir, removed);
+    assert.equal(kept.err, undefined, chainText(kept.err));
+    assert.equal(serviceWrites(kept.calls).length, 0);
+    assert.ok(fs.readFileSync(storeFileOf(dir)).equals(before), 'a dashboard that still exists keeps its record');
+    wire.saved.delete(id);
+    wire.published.delete(id);
+    const warnings = [];
+    const gone = await buildWith(wire, dir, removed, { warn: (m) => warnings.push(String(m)) });
+    assert.equal(gone.err, undefined, chainText(gone.err));
+    assert.equal(serviceWrites(gone.calls).length, 0);
+    assert.ok(warnings.some((m) => m.includes('managed-dashboard-retired') && !m.includes('unpublished change')), warnings.join('\n'));
+    assert.equal(committedGroup(dir), null);
+    assert.equal(retiredOf(dir)[0].rootId, id);
+    assert.notEqual(retiredOf(dir)[0].publication, 'owed');
+  });
+});
