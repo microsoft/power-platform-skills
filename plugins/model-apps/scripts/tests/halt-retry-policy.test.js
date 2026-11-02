@@ -129,6 +129,7 @@ const DYNAMIC = [
   { file: 'lib/entity-provision.js', expr: 'sdkCode', kind: 'by-failure', what: 'a push the SDK refused by value, with the code the SDK gave' },
   { file: 'lib/sdk-build.js', expr: 'verdict.code', kind: 'never', what: 'the navigation verdict (app-navigation-empty): a re-run reads the same spec' },
   { file: 'lib/sdk-build.js', expr: 'incomplete[0].code', kind: 'never', what: 'the end of a build that ran every phase and saved its changes, but left a publication owed or an exact Main-form list unproven (error.incomplete): running the phases again would push the saved change again and cannot settle what is withheld or unknown; the maker re-runs once the cause is cleared' },
+  { file: 'build-model-app.js', expr: 'err.code', kind: 'never', what: 'a halt that stops service writes (the retirement the build could not confirm, managed-not-settled), said again on a later attempt of the run (stoppedAfterEarlierAttempts): the code of the halt it says again; never retried, as that halt is not' },
   { file: 'lib/configuration-build.js', expr: 'haltCode', kind: 'never', what: 'the configuration step left work undone (configuration-incomplete, a refusal or an unknown outcome): an unknown write is inspected, never replayed' },
 ];
 // Object literals that carry `phase`, `code` and `recoverable` and are not halts.

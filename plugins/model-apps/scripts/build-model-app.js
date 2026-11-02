@@ -24,7 +24,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { resolveAuthoringLanguage, BuildHalt } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
 const { createPublicationBarrier, describeWithheld } = require('./lib/publication-barrier.js');
-const { judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
+const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
 const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
@@ -515,8 +515,9 @@ function offerPublicationRisk(err, { accepted, store, say } = {}) {
 //    `tried` already had its own warning): a later build leaves the column of a table it finds as it is, so the maker sets it.
 // The halt's own words ("the build stopped before writing anything") are true of the attempt that raised it. A run past its
 // first attempt had an earlier one end on a transient failure, and what that attempt sent stays sent, so from the second
-// attempt on the halt is said again with that told apart. Its code, phase, retry policy, findings and signal are the halt's
-// own, so nothing that reads them changes; on the first attempt the halt is returned as it is.
+// attempt on the halt is said again with that told apart. Its code, phase, findings and signal are the halt's own, so nothing
+// that reads them changes, and it is never retried, like the halt it says again (only the retirement halt,
+// managed-not-settled with RETRY.NEVER, carries the signal); on the first attempt the halt is returned as it is.
 function stoppedAfterEarlierAttempts(err, attempt, owedPublishes, owedLengths, warn) {
   const say = (message) => { if (typeof warn === 'function') warn(message); };
   const nameOf = (t) => (Array.isArray(t[2]) && t[2].length ? t[2].join(', ') : `${t[0]} ${t[1]}`);
@@ -529,7 +530,7 @@ function stoppedAfterEarlierAttempts(err, attempt, owedPublishes, owedLengths, w
   }
   if (!(attempt > 1)) return err;
   const halt = new BuildHalt(`${err.message} That is attempt ${attempt} of this run: an earlier attempt ended on a transient failure and was retried, and what it had already sent stays as it is; nothing more is sent in this run.`, {
-    phase: err.phase, code: err.code, recoverable: !!err.recoverable, retry: err.retry, cause: err,
+    phase: err.phase, code: err.code, recoverable: !!err.recoverable, retry: RETRY.NEVER, cause: err,
   });
   Object.defineProperty(halt, 'findings', { value: err.findings, enumerable: false, configurable: true });
   Object.defineProperty(halt, 'stopsServiceWrites', { value: true, enumerable: false, configurable: true });
