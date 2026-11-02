@@ -94,6 +94,10 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                               same code and the same stop. A confirmation never lifts a quarantine this run already
  *                               set (it lasts for the invocation), and debt the confirmation leaves owed may need the
  *                               next invocation to publish;
+ *   incarnation?                the create catalog entry's `incarnation` token ({ identity, epoch, rootId }) of this
+ *                               key, handed to store.prepareAttempt (`incarnation`) on every prepare: a plan made
+ *                               for an incarnation the store has since moved past (its root retired after the plan
+ *                               read the store) is `managed-binding-generation-conflict`, nothing written or sent;
  *   adoptionApproved?           boolean, `true` only when the feature's own typed adoption approval
  *                               (`<family>:<key>`) covers this artifact; never inferred here. A group not yet committed
  *                               whose root create this attempt never had acknowledged is bound only with it; otherwise
@@ -281,6 +285,7 @@ async function runManagedFeature(args) {
         ...(intent.declaration !== undefined ? { declaration: intent.declaration } : {}),
         publication: intent.publication || null,
         ...(intent.completionBytes !== undefined ? { completionBytes: intent.completionBytes } : {}),
+        ...(args.incarnation !== undefined ? { incarnation: args.incarnation } : {}),
         ...(pending ? { replaces: { token: pending.token, baseGeneration: pending.baseGeneration } } : {}),
       });
       // The store ended the old hold after its write when it has the barrier; a barrier passed apart is released here.

@@ -2043,6 +2043,9 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     // only under the form family's own typed adoption approval, `form:<key>` (ctx.authorizedAdoption: true, or a Set
     // or array of typed keys); a fresh read that proves it is no approval, and neither is an approval of another family.
     adoptionApproved: isApproved(ctx.authorizedAdoption, FAMILY, key) === true,
+    // The catalog's incarnation token of this key: a plan made before its root was retired again is refused by the store
+    // under the lease (prepareAttempt `incarnation`), never prepared under a retired root.
+    incarnation: catalog && typeof catalog.incarnationOf === 'function' ? catalog.incarnationOf(FAMILY, key) : undefined,
   });
   const formId = state.formId || (committedGroup && committedGroup.root.id) || null;
   const action = result.recovered ? 'recovered' : (state.action || (result.noop ? 'noop' : null));

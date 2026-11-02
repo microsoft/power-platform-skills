@@ -1145,6 +1145,9 @@ async function settleDeclaredBpf(input) {
       phase, family: FAMILY, key, label, knownScopes: [], knownIds: [], store, barrier, halt,
       preflight, resolve, plan, apply, prove, ensureMembership, resumeCreate, adoptionApproved: approved,
       ...(sendObserver ? { sendObserver } : {}),
+      // The catalog's incarnation token of this key: a plan made before its root was retired again is refused by the store
+      // under the lease (prepareAttempt `incarnation`), never prepared under a retired root.
+      incarnation: catalog && typeof catalog.incarnationOf === 'function' ? catalog.incarnationOf('bpf', key) : undefined,
     });
   } finally {
     await guard.restoreStaged();

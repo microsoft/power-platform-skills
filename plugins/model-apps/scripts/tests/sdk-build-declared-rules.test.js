@@ -84,7 +84,7 @@ const storeOf = (dir) => openManagedBindings({ workspaceDir: dir, environment: O
 // One invocation, as build-model-app.js assembles it: a fresh barrier, send observer, workflow effect gate and SDK over the same
 // wire and the same build workspace `dir`, which holds the binding store. `gate: false` leaves the client without a gate.
 // `configureSdk(sdk, gate)`, when given, adjusts that invocation's SDK before the build runs (e.g. a capability it lacks).
-async function build(wire, dir, spec, { gate = true, configureSdk, ...opts } = {}) {
+async function build(wire, dir, spec, { gate = true, configureSdk, sdkDir, ...opts } = {}) {
   const barrier = createPublicationBarrier();
   const sendObserver = createAttemptSendObserver();
   const workflowEffectGate = gate ? createDeferredWorkflowGate() : null;
@@ -94,7 +94,7 @@ async function build(wire, dir, spec, { gate = true, configureSdk, ...opts } = {
     const bind = workflowEffectGate.bind;
     workflowEffectGate.bind = (store) => { binds.push(store); return bind(store); };
   }
-  const { sdk } = await sdkOver(wire, { barrier, observer: sendObserver, workflowEffectGate });
+  const { sdk } = await sdkOver(wire, { barrier, observer: sendObserver, workflowEffectGate, ...(sdkDir ? { workspaceDir: sdkDir } : {}) });
   if (configureSdk) await configureSdk(sdk, workflowEffectGate);
   const mark = wire.log.length;
   const warnings = [];
@@ -859,29 +859,36 @@ test('a removed rule whose retirement could not be confirmed keeps its table and
 // --- a key declared again after its root was retired -------------------------------------------------------------------------
 
 // A business rule made by a build, then deleted and retired by a build without its declaration, so the store's key has a new
-// incarnation and the old id is the retired one.
-async function retiredRule() {
+// incarnation and the old id is the retired one. `retainSdk`: every build keeps the SDK's workspace in `dir` (answered as `sdk`,
+// the options that keep it for later builds), so it still holds its synced copy of the retired row.
+async function retiredRule({ retainSdk = false } = {}) {
   const wire = createWorkflowWire();
   const dir = makeTempDir('declared-rule-');
-  assert.equal((await build(wire, dir, specWith([RULE]))).err, undefined);
+  const sdk = retainSdk ? { sdkDir: dir } : {};
+  assert.equal((await build(wire, dir, specWith([RULE]), sdk)).err, undefined);
   const old = JSON.parse(JSON.stringify(storeOf(dir).readGroup('rule', KEY).committed));
   wire.rows.delete(old.root.id);
-  const retired = await build(wire, dir, specWith([]));
+  const retired = await build(wire, dir, specWith([]), sdk);
   assert.equal(retired.err, undefined, chainText(retired.err));
   assert.match(retired.warnings.join('\n'), RETIRED);
   // Read from the envelope, not incarnations(), so a build without incarnations fails on what it sends, not on an accessor.
   const reborn = (storeOf(dir).snapshot().envelope.incarnations || []).find((x) => x.family === 'rule' && x.key === KEY) || {};
-  return { wire, dir, old, reborn: reborn.rootId };
+  return { wire, dir, old, reborn: reborn.rootId, sdk };
 }
+// Whether the SDK workspace kept in `dir` (sdkOver `workspaceDir`) still lists the artifact `id` in its manifest.
+const sdkHolds = (dir, id) => fs.existsSync(path.join(dir, 'manifest.json')) && fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8').toLowerCase().includes(id);
 const createdIdsOf = (r) => r.writes.filter((c) => /CreateProcess/.test(c.path)).map((c) => String(c.body.Entity.workflowid).toLowerCase());
 
 for (const fresh of [false, true]) {
   test(`a declared business rule declared again after its root was retired is created under a fresh id, never the retired one, and the next build is write-free (${fresh ? 'a fresh' : 'the same'} workspace)`, async () => {
     await withRules(true, async () => {
-      const { wire, dir, old, reborn } = await retiredRule();
+      // The SDK's workspace is the build workspace throughout: the same one keeps it (and its synced copy of the retired
+      // row) through the create, the retirement and the new declaration; a fresh one is a new directory with only the store.
+      const { wire, dir, old, reborn } = await retiredRule({ retainSdk: true });
       const ws = fresh ? makeTempDir('declared-rule-') : dir;
       if (fresh) fs.copyFileSync(storeFileOf(dir), storeFileOf(ws));
-      const first = await build(wire, ws, specWith([RULE]));
+      assert.equal(sdkHolds(ws, old.root.id), !fresh, 'the same workspace still holds the SDK\'s copy of the retired row; a fresh one holds none');
+      const first = await build(wire, ws, specWith([RULE]), { sdkDir: ws });
       assert.equal(first.err, undefined, chainText(first.err));
       assert.ok(!createdIdsOf(first).includes(old.root.id), 'the retired id is never created again');
       assert.deepEqual(createdIdsOf(first), [reborn], 'one create, under the incarnation');
@@ -891,7 +898,7 @@ for (const fresh of [false, true]) {
       assert.equal(wire.row(reborn).statecode, 1);
       const oldIds = new Set(old.records.map((r) => String(r.id).toLowerCase()));
       assert.deepEqual(bound.records.map((r) => String(r.id).toLowerCase()).filter((id) => oldIds.has(id)), [], 'every id is derived under the new root');
-      const second = await build(wire, ws, specWith([RULE]));
+      const second = await build(wire, ws, specWith([RULE]), { sdkDir: ws });
       assert.equal(second.err, undefined, chainText(second.err));
       assert.deepEqual(second.writes.filter((c) => /^workflows/i.test(c.path)), []);
     });
@@ -900,15 +907,16 @@ for (const fresh of [false, true]) {
 
 test('a declared business rule declared again after retirement keeps its incarnation through a lost create answer: the landed row is bound under it with the approval, the unlanded one is held, never sent under a second id', async () => {
   await withRules(true, async () => {
-    for (const applied of [false, true]) {
-      const { wire, dir, old, reborn } = await retiredRule();
+    // Both SDK workspace lifetimes: a new one per build, and the build workspace kept throughout.
+    for (const [applied, retainSdk] of [[false, false], [true, false], [false, true], [true, true]]) {
+      const { wire, dir, old, reborn, sdk } = await retiredRule({ retainSdk });
       wire.script((e) => /CreateProcess/.test(e.path), { error: 'socket hang up', code: 'ECONNRESET', ...(applied ? {} : { unapplied: true }) });
-      const lost = await build(wire, dir, specWith([RULE]));
+      const lost = await build(wire, dir, specWith([RULE]), sdk);
       assert.ok(lost.err, `applied=${applied}: the lost answer stops the build`);
       assert.ok(!createdIdsOf(lost).includes(old.root.id), 'the retired id is never created again');
       assert.deepEqual(createdIdsOf(lost), [reborn]);
       assert.equal(storeOf(dir).readGroup('rule', KEY).pending.root.id, reborn, 'the attempt holds the incarnation');
-      const next = await build(wire, dir, specWith([RULE]), applied ? { authorizedAdoption: new Set([APPROVAL]) } : {});
+      const next = await build(wire, dir, specWith([RULE]), { ...sdk, ...(applied ? { authorizedAdoption: new Set([APPROVAL]) } : {}) });
       assert.deepEqual(createdIdsOf(next), [], `applied=${applied}: never sent again`);
       if (applied) {
         assert.equal(next.err, undefined, chainText(next.err));
@@ -919,5 +927,21 @@ test('a declared business rule declared again after retirement keeps its incarna
       }
       assert.ok(!JSON.stringify([lost.writes, next.writes]).toLowerCase().includes(old.root.id));
     }
+  });
+});
+// The catalog selects an incarnation by its canonical identity too: a declaration whose name differs from the retired one
+// only by case is the same artifact to the identity algorithm (and to Dataverse), so it takes the retired key's
+// incarnation, never the retired stable id, in a retained SDK workspace that still holds the retired row's copy.
+test('a declared business rule declared again after retirement under a case-only change of its name is created under the incarnation, never the retired id', async () => {
+  await withRules(true, async () => {
+    const { wire, dir, old, reborn, sdk } = await retiredRule({ retainSdk: true });
+    const changed = { ...JSON.parse(JSON.stringify(RULE)), name: RULE.name.toUpperCase() };
+    const first = await build(wire, dir, specWith([changed]), sdk);
+    assert.equal(first.err, undefined, chainText(first.err));
+    assert.deepEqual(createdIdsOf(first), [reborn], 'one create, under the incarnation of the same identity');
+    assert.ok(!JSON.stringify(first.writes).toLowerCase().includes(old.root.id), 'no write names the retired id');
+    const second = await build(wire, dir, specWith([changed]), sdk);
+    assert.equal(second.err, undefined, chainText(second.err));
+    assert.deepEqual(second.writes.filter((c) => /^workflows/i.test(c.path)), []);
   });
 });

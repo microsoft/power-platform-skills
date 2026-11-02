@@ -3161,19 +3161,32 @@ flows). The create id of these families is the deterministic catalog id (`stable
 spec's own key), so without more a re-declaration would create its row under the very id the store just
 retired, or meet a row restored under it. `retireAbsentGroup` therefore records, in the same write as the
 `retiredGroups` entry, a per-key **incarnation** in the store envelope (`incarnations: [{ family, key,
-rootId, after }]`): a fresh random root id (`crypto.randomUUID()`, never the retired one), replacing any
-earlier one for that key, at most `INCARNATIONS_KEPT` (512) entries, read strictly like every other field
-(a malformed list makes the file unreadable). `store.incarnations()` returns them and `sdk-build.js` passes
-them to `createIntentCatalog(intents, { incarnations })` at the four catalog sites, so that key's
-`derivedId` (and every child derived under it: tiles, form controls, stages and steps) is the incarnation;
-`stableId` stays the v1 id. The catalog refuses a malformed list, or an incarnation equal to another
-declaration's id, with `create-identity-invalid`. As a fence, `prepareAttempt` refuses
-(`managed-binding-generation-conflict`, nothing written) an attempt whose root is the retired id `after` of
-its key's incarnation. A bound root still wins over the catalog id, adoption by name or by the
-`adopt:` approval is unchanged, and a lost create keeps the incarnation in its pending attempt. Views and
-charts are never retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js`
-("incarnation"), `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after"
-in `tests/sdk-build-declared-{forms,dashboards,rules,bpf}.test.js`.
+identity, rootId, after, epoch }]`): a fresh random root id (`crypto.randomUUID()`, never any retired or
+known id), at most `INCARNATIONS_KEPT` (512) entries, read strictly like every other field (a malformed
+list makes the file unreadable). `identity` is the lineage's canonical identity: the first retired root,
+which is the catalog's `stableId` when the build created it. `epoch` starts at 1 and grows by one on every
+later retirement of the same lineage, which updates its entry in place (same key and identity, a fresh
+root, `after` = the root just retired). `store.incarnations()` returns them and `sdk-build.js` passes them
+to `createIntentCatalog(intents, { incarnations })` at the four catalog sites. The catalog selects an
+entry by the authored key **or** by the canonical identity (`stableId`), so a name-equivalent spelling (a
+case-only change of a rule or flow name, a form name the identity algorithm folds) never falls back to
+the retired id; explicit stable keys are not lowercased. That declaration's `derivedId` (and every child
+derived under it: tiles, form controls, stages and steps) is the incarnation; `stableId` stays the v1 id.
+The catalog refuses a malformed list, a key or identity listed twice, or an incarnation equal to another
+declaration's id, with `create-identity-invalid`. As fences, `prepareAttempt` refuses
+(`managed-binding-generation-conflict`, nothing written or sent) an attempt whose root is the retired id
+`after` of its incarnation, and, under the record lease, a plan whose incarnation token
+(`catalog.incarnationOf(kind, key)` → `{ identity, epoch, rootId }`, passed by the four features through
+`runManagedFeature`) or whose store handle's last read differs in epoch or root from the file, so a plan
+made before any number of retirements is refused. Adoption of a different id is unchanged. A bound root
+still wins over the catalog id, adoption by name or by the `adopt:` approval is unchanged, and a lost
+create keeps the incarnation in its pending attempt; in a retained SDK workspace the dirty-copy fence
+stops with `create-completion-required` and sends nothing until the owned local copy is discarded, after
+which the create resumes (or, when it landed, is adopted with approval) under the same id. A direct store
+caller that passes no token is fenced by its handle's read and by key only. Views and charts are never
+retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js` ("incarnation"),
+`tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after" / "after
+retirement" / "two retirements" in `tests/sdk-build-declared-{forms,dashboards,rules,bpf}.test.js`.
 
 **Stable create ids** (`createIdentity: "stable-v1"`, `minimumPluginVersion: "2.21.0"`; new apps only).
 The only place the engine reads the field is one gated `require` of `lib/creates-stable-build.js` in

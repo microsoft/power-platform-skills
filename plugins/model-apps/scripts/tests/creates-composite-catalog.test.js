@@ -207,7 +207,10 @@ test('the catalog refuses a twice-declared slot and two names that are one artif
 test('incarnations: a key whose root was retired takes its stored incarnation as its derived id, and every child follows it; other keys keep their stable id', () => {
   const plain = createIntentCatalog([FORM, BPF, VIEW]);
   const REBORN = 'D0D0D0D0-0000-4000-8000-000000000001';
-  const catalog = createIntentCatalog([FORM, BPF, VIEW], { incarnations: [{ family: 'bpf', key: BPF.key, rootId: REBORN }, { family: 'form', key: 'account|other', rootId: '00000000-0000-4000-8000-0000000000aa' }] });
+  let n = 0;
+  // One stored entry (managed-bindings.js incarnations()): each gets an identity of its own unless the test names one.
+  const inc = (family, key, rootId, over = {}) => ({ family, key, identity: `eeeeeeee-0000-4000-8000-${String(n += 1).padStart(12, '0')}`, rootId, epoch: 1, ...over });
+  const catalog = createIntentCatalog([FORM, BPF, VIEW], { incarnations: [inc('bpf', BPF.key, REBORN), inc('form', 'account|other', '00000000-0000-4000-8000-0000000000aa')] });
   const stable = identityFor('bpf', BPF.key, { catalog: plain });
   const reborn = identityFor('bpf', BPF.key, { catalog });
   assert.deepStrictEqual([reborn.id, reborn.source, reborn.derivedId], [REBORN.toLowerCase(), 'derived', REBORN.toLowerCase()]);
@@ -218,14 +221,29 @@ test('incarnations: a key whose root was retired takes its stored incarnation as
   assert.strictEqual(reserveChildren('bpf', BPF.key, { catalog, children: stage }).childIds.s, stableChildIdV1(REBORN.toLowerCase(), 'bpfStage', ['qualify']));
   // The family is the store's (a rule is `rule`, not its catalog kind); a matching key of another family is not this one's.
   const RULE = { catalogKind: 'businessRule', key: 'account/hide', scope: SCOPE, declaration: { name: 'Hide' } };
-  assert.strictEqual(createIntentCatalog([RULE], { incarnations: [{ family: 'rule', key: RULE.key, rootId: REBORN }] }).identityFor('businessRule', RULE.key).id, REBORN.toLowerCase());
-  assert.notStrictEqual(createIntentCatalog([RULE], { incarnations: [{ family: 'bpf', key: RULE.key, rootId: REBORN }] }).identityFor('businessRule', RULE.key).id, REBORN.toLowerCase());
+  assert.strictEqual(createIntentCatalog([RULE], { incarnations: [inc('rule', RULE.key, REBORN)] }).identityFor('businessRule', RULE.key).id, REBORN.toLowerCase());
+  assert.notStrictEqual(createIntentCatalog([RULE], { incarnations: [inc('bpf', RULE.key, REBORN)] }).identityFor('businessRule', RULE.key).id, REBORN.toLowerCase());
+  // The plan's token for the store's fence: the stable id it selects by, and the epoch and root it selected.
+  assert.deepStrictEqual({ ...catalog.get('bpf', BPF.key).incarnation }, { identity: stable.id, epoch: 1, rootId: REBORN.toLowerCase() });
+  assert.deepStrictEqual({ ...catalog.incarnationOf('form', FORM.key) }, { identity: catalog.get('form', FORM.key).stableId, epoch: 0, rootId: null });
+  assert.strictEqual(catalog.incarnationOf('form', 'not declared'), undefined);
+  // Selected by the catalog's canonical identity too: an entry stored under another key (an earlier spelling of the same
+  // artifact) whose identity is this declaration's stable id is its incarnation, never the retired stable id. Its own
+  // key's entry wins over one of the same identity.
+  const aliased = createIntentCatalog([BPF], { incarnations: [inc('bpf', 'account/Earlier spelling', REBORN, { identity: stable.id, epoch: 3 })] });
+  assert.deepStrictEqual([aliased.identityFor('bpf', BPF.key).id, aliased.get('bpf', BPF.key).incarnation.epoch], [REBORN.toLowerCase(), 3]);
+  const both = createIntentCatalog([BPF], { incarnations: [inc('bpf', 'account/Earlier spelling', REBORN, { identity: stable.id }), inc('bpf', BPF.key, '00000000-0000-4000-8000-0000000000cc')] });
+  assert.strictEqual(both.identityFor('bpf', BPF.key).id, '00000000-0000-4000-8000-0000000000cc');
+  assert.strictEqual(createIntentCatalog([BPF], { incarnations: [inc('rule', 'x', REBORN, { identity: stable.id })] }).identityFor('bpf', BPF.key).id, stable.id, 'an identity of another family is not this one\'s');
   for (const [label, incarnations] of [
     ['not a list', {}],
-    ['no key', [{ family: 'bpf', rootId: REBORN }]],
-    ['no GUID', [{ family: 'bpf', key: BPF.key, rootId: 'next' }]],
-    ['one key twice', [{ family: 'bpf', key: BPF.key, rootId: REBORN }, { family: 'bpf', key: BPF.key, rootId: '00000000-0000-4000-8000-0000000000bb' }]],
-    ['an incarnation that is another declaration\'s id', [{ family: 'bpf', key: BPF.key, rootId: identityFor('view', VIEW.key, { catalog: plain }).id }]],
+    ['no key', [inc('bpf', undefined, REBORN)]],
+    ['no GUID', [inc('bpf', BPF.key, 'next')]],
+    ['no identity', [inc('bpf', BPF.key, REBORN, { identity: undefined })]],
+    ['no epoch', [inc('bpf', BPF.key, REBORN, { epoch: 0 })]],
+    ['one key twice', [inc('bpf', BPF.key, REBORN), inc('bpf', BPF.key, '00000000-0000-4000-8000-0000000000bb')]],
+    ['one identity twice', [inc('bpf', 'a', REBORN, { identity: stable.id }), inc('bpf', 'b', '00000000-0000-4000-8000-0000000000bb', { identity: stable.id })]],
+    ['an incarnation that is another declaration\'s id', [inc('bpf', BPF.key, identityFor('view', VIEW.key, { catalog: plain }).id)]],
   ]) {
     assert.throws(() => createIntentCatalog([FORM, BPF, VIEW], { incarnations }), (e) => e.code === 'create-identity-invalid', label);
   }

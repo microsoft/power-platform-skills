@@ -1117,6 +1117,9 @@ async function settleDeclaredRule(input) {
       phase, family: FAMILY, key, label, knownScopes: [], knownIds: [], store, barrier, halt: haltOrSkip,
       preflight, resolve, plan, apply, prove, ensureMembership, resumeCreate, adoptionApproved: approved,
       ...(sendObserver ? { sendObserver } : {}),
+      // The catalog's incarnation token of this key: a plan made before its root was retired again is refused by the store
+      // under the lease (prepareAttempt `incarnation`), never prepared under a retired root.
+      incarnation: catalog && typeof catalog.incarnationOf === 'function' ? catalog.incarnationOf('businessRule', key) : undefined,
     });
     const id = out.committedGroup && out.committedGroup.root ? out.committedGroup.root.id : null;
     return { ...out.result, id };

@@ -127,38 +127,53 @@ function normalizeIntent(intent, incarnation) {
   if (!scope || scope.kind !== cap.scope) throw createStop('create-identity-invalid', `creates: ${intent.catalogKind} '${key}' needs a ${cap.scope} scope`);
   const keyParts = DESCRIPTORS[intent.catalogKind].keyParts(intent.declaration || {});
   const stableId = stableCreateIdV1({ scope, kind: cap.rootKind, keyParts });
-  const reborn = incarnation(cap.family, key);
+  const reborn = incarnation(cap.family, key, stableId);
   const entry = Object.freeze({
     catalogKind: intent.catalogKind,
     key,
     bindingKind: cap.bindingKind,
     scope: Object.freeze({ ...scope }),
     keyParts: Object.freeze(keyParts.slice()),
-    // The id a create of this key uses: the key's incarnation once its root was retired, its stable id otherwise.
-    derivedId: reborn || stableId,
+    // The id a create of this key uses: its incarnation once its root was retired, its stable id otherwise.
+    derivedId: reborn ? reborn.rootId : stableId,
     stableId,
+    // The plan's incarnation token, handed to the managed binding store's prepareAttempt (`incarnation`): the store
+    // selects again under the lease by the same rule and refuses a plan whose epoch or root is not the current one.
+    incarnation: Object.freeze({ identity: stableId, epoch: reborn ? reborn.epoch : 0, rootId: reborn ? reborn.rootId : null }),
   });
   ENTRIES.add(entry);
   return entry;
 }
 
-// The `incarnations` option of createIntentCatalog: [{ family, key, rootId }], as the managed binding store answers them
-// (managed-bindings.js incarnations()). Checked whole before any intent is read; one entry per (family, key).
+// The `incarnations` option of createIntentCatalog: [{ family, key, identity, rootId, epoch }], as the managed binding
+// store answers them (managed-bindings.js incarnations()). Checked whole before any intent is read; one entry per
+// (family, key) and one per (family, identity). A declaration selects its own key's entry first, else the entry whose
+// identity is its stable id: the stable id is the catalog's canonical identity (descriptor key parts, a name folded as
+// Dataverse compares it, an explicit stable key byte for byte), so a spelling the identity algorithm treats as the same
+// artifact (a case-only rename of a rule or flow, an accent in a form name) takes the incarnation of the root it
+// retired, never that retired stable id. managed-bindings.js incarnationOf selects by the same rule under the lease.
 function incarnationIndex(incarnations) {
   if (incarnations === undefined || incarnations === null) return () => null;
   if (!Array.isArray(incarnations)) throw createStop('create-identity-invalid', 'creates: the incarnations must be an array');
   const byKey = new Map();
+  const byIdentity = new Map();
   for (const x of incarnations) {
     if (!x || typeof x !== 'object' || typeof x.family !== 'string' || typeof x.key !== 'string' || !x.key) {
       throw createStop('create-identity-invalid', 'creates: an incarnation needs a family and a key');
     }
     const rootId = lowerGuid(x.rootId);
-    if (!GUID_RE.test(rootId)) throw createStop('create-identity-invalid', `creates: the incarnation of ${x.family} '${x.key}' has no GUID root id`);
+    const identity = lowerGuid(x.identity);
+    if (!GUID_RE.test(rootId) || !GUID_RE.test(identity)) throw createStop('create-identity-invalid', `creates: the incarnation of ${x.family} '${x.key}' has no GUID root id and identity`);
+    if (!Number.isSafeInteger(x.epoch) || x.epoch < 1) throw createStop('create-identity-invalid', `creates: the incarnation of ${x.family} '${x.key}' has no epoch`);
     const slot = slotOf(x.family, x.key);
+    const ident = slotOf(x.family, identity);
     if (byKey.has(slot)) throw createStop('create-identity-invalid', `creates: ${x.family} '${x.key}' has two incarnations`);
-    byKey.set(slot, rootId);
+    if (byIdentity.has(ident)) throw createStop('create-identity-invalid', `creates: two incarnations of ${x.family} share the identity ${identity}`);
+    const entry = Object.freeze({ rootId, epoch: x.epoch });
+    byKey.set(slot, entry);
+    byIdentity.set(ident, entry);
   }
-  return (family, key) => byKey.get(slotOf(family, key)) || null;
+  return (family, key, stableId) => byKey.get(slotOf(family, key)) || byIdentity.get(slotOf(family, stableId)) || null;
 }
 
 /**
@@ -167,9 +182,11 @@ function incarnationIndex(incarnations) {
  * where `key` is the locator the call site passes as creates.run({ kind, key }) and `declaration` feeds the kind's own key parts
  * (creates-capabilities.js DESCRIPTORS[kind].keyParts). The same (kind, key) twice, or two intents that derive one id (two names
  * Dataverse treats as one artifact), are refused here with create-identity-invalid, before any create is sent.
- * `incarnations`: the managed binding store's [{ family, key, rootId }] (managed-bindings.js incarnations()). A key whose root
- * was retired takes its incarnation's `rootId` as its `derivedId`, so it is created again as a new row under a new id, never
- * under the stable id that was retired; its children are derived under that id too. Its `stableId` stays the spec's own.
+ * `incarnations`: the managed binding store's [{ family, key, identity, rootId, epoch }] (managed-bindings.js
+ * incarnations()). A declaration whose key, or whose stable id (as `identity`), has an incarnation takes its `rootId` as
+ * its `derivedId`, so it is created again as a new row under a new id, never under the stable id that was retired; its
+ * children are derived under that id too. Its `stableId` stays the spec's own. Every entry carries `incarnation:
+ * { identity, epoch, rootId }` (epoch 0 and rootId null with none), the token prepareAttempt checks under the lease.
  */
 function createIntentCatalog(intents = [], { incarnations } = {}) {
   if (!Array.isArray(intents)) throw createStop('create-identity-invalid', 'creates: the catalog intents must be an array');
@@ -196,6 +213,12 @@ function createIntentCatalog(intents = [], { incarnations } = {}) {
     get: (kind, key) => bySlot.get(slotOf(kind, key)) || null,
     entries: () => [...bySlot.values()],
     identityFor: (kind, key, opts = {}) => identityFor(kind, key, { ...opts, catalog }),
+    // The plan's incarnation token of a declared key (the entry's `incarnation`), for runManagedFeature `incarnation`;
+    // undefined for a key the plan does not declare, which the feature's own resolve stops.
+    incarnationOf: (kind, key) => {
+      const entry = bySlot.get(slotOf(kind, key));
+      return entry ? entry.incarnation : undefined;
+    },
     reserveChildren: (kind, key, opts = {}) => reserveChildren(kind, key, { ...opts, catalog }),
     routeIntent: (intent) => routeIntent(intent, { catalog }),
   };

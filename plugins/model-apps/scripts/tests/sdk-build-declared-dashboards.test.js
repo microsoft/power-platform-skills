@@ -56,11 +56,12 @@ async function withDashboards(on, fn) {
 const storeOf = (dir) => openManagedBindings({ workspaceDir: dir, environment: ORIGIN, appUniqueName: APP, solutionUniqueName: SOLUTION });
 
 // One invocation: a fresh barrier, observer and SDK (a stopped invocation's SDK and observer are retired), over the same wire and
-// the same build workspace `dir`, which holds the binding store.
-async function build(wire, dir, spec, opts = {}) {
+// the same build workspace `dir`, which holds the binding store. The SDK's workspace is a new one each time unless `sdkDir`
+// names it (sdkOver `workspaceDir`); it is the test's, never passed to the build.
+async function build(wire, dir, spec, { sdkDir, ...opts } = {}) {
   const barrier = createPublicationBarrier();
   const sendObserver = createAttemptSendObserver();
-  const { sdk } = await sdkOver(wire, { barrier, observer: sendObserver });
+  const { sdk } = await sdkOver(wire, { barrier, observer: sendObserver, ...(sdkDir ? { workspaceDir: sdkDir } : {}) });
   const mark = wire.log.length;
   const warnings = [];
   let out;
@@ -1445,30 +1446,37 @@ test('removed settled liveness: an observation that fails stops the invocation b
 // --- a key declared again after its root was retired -------------------------------------------------------------------------
 
 // A dashboard made by a build, then deleted from both layers and retired by a build without its declaration, so the store's
-// key has a new incarnation and the old id is the retired one.
-async function retiredDashboard() {
+// key has a new incarnation and the old id is the retired one. `retainSdk`: every build keeps the SDK's workspace in `dir`
+// (answered as `sdk`, the options that keep it for later builds), so it still holds its synced copy of the retired row.
+async function retiredDashboard({ retainSdk = false } = {}) {
   const wire = wireWithIdReads();
   const dir = makeTempDir('declared-dash-');
-  assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+  const sdk = retainSdk ? { sdkDir: dir } : {};
+  assert.equal((await build(wire, dir, makeSpec(), sdk)).err, undefined);
   const old = clone(committedGroup(dir));
   wire.saved.delete(old.root.id);
   wire.published.delete(old.root.id);
-  const retired = await build(wire, dir, dropDashboard(makeSpec()));
+  const retired = await build(wire, dir, dropDashboard(makeSpec()), sdk);
   assert.equal(retired.err, undefined, chainText(retired.err));
   assert.equal(retiredOf(dir)[0].rootId, old.root.id);
   // Read from the envelope, not incarnations(), so a build without incarnations fails on what it sends, not on an accessor.
   const reborn = (storeOf(dir).snapshot().envelope.incarnations || []).find((x) => x.family === 'dashboard' && x.key === KEY) || {};
-  return { wire, dir, old, reborn: reborn.rootId };
+  return { wire, dir, old, reborn: reborn.rootId, sdk };
 }
+// Whether the SDK workspace kept in `dir` (sdkOver `workspaceDir`) still lists the artifact `id` in its manifest.
+const sdkHolds = (dir, id) => fs.existsSync(path.join(dir, 'manifest.json')) && fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8').toLowerCase().includes(id);
 const dashboardPosts = (r) => r.formWrites.filter((c) => c.method === 'POST').map((c) => String(c.body.formid).toLowerCase());
 
 for (const fresh of [false, true]) {
   test(`a declared dashboard declared again after its root was retired is created and published under a fresh id, its tiles under it, and the next build is write-free (${fresh ? 'a fresh' : 'the same'} workspace)`, async () => {
     await withDashboards(true, async () => {
-      const { wire, dir, old, reborn } = await retiredDashboard();
+      // The SDK's workspace is the build workspace throughout: the same one keeps it (and its synced copy of the retired
+      // row) through the create, the retirement and the new declaration; a fresh one is a new directory with only the store.
+      const { wire, dir, old, reborn } = await retiredDashboard({ retainSdk: true });
       const ws = fresh ? makeTempDir('declared-dash-') : dir;
       if (fresh) fs.copyFileSync(storeFileOf(dir), storeFileOf(ws));
-      const first = await build(wire, ws, makeSpec());
+      assert.equal(sdkHolds(ws, old.root.id), !fresh, 'the same workspace still holds the SDK\'s copy of the retired row; a fresh one holds none');
+      const first = await build(wire, ws, makeSpec(), { sdkDir: ws });
       assert.equal(first.err, undefined, chainText(first.err));
       assert.ok(!dashboardPosts(first).includes(old.root.id), 'the retired id is never created again');
       assert.deepEqual(dashboardPosts(first), [reborn], 'one create, under the incarnation');
@@ -1479,7 +1487,7 @@ for (const fresh of [false, true]) {
       assert.equal(bound.root.id, reborn);
       const oldIds = new Set(old.records.map((r) => String(r.id).toLowerCase()));
       assert.deepEqual(bound.records.map((r) => String(r.id).toLowerCase()).filter((id) => oldIds.has(id)), [], 'every tile is derived under the new root');
-      const second = await build(wire, ws, makeSpec());
+      const second = await build(wire, ws, makeSpec(), { sdkDir: ws });
       assert.equal(second.err, undefined, chainText(second.err));
       assert.deepEqual([second.formWrites, second.publishes], [[], []]);
     });
@@ -1502,3 +1510,41 @@ test('a declared dashboard declared again after retirement keeps its incarnation
     assert.ok(!JSON.stringify([lost.writes, next.writes]).toLowerCase().includes(old.root.id));
   });
 });
+// A retained SDK workspace (the maker's own, kept between builds): a re-declared dashboard whose create answer keeps being
+// lost leaves the SDK's local copy of the new row unsynced, and the documented dirty-copy fence holds it. Every retry stops
+// with create-completion-required, sends nothing and keeps the attempt on the incarnation. Discarding only the owned local
+// copy (no service request) is the documented recovery: the next build completes under the same id, with the adoption
+// approval when the create landed, and nothing is ever sent under the retired id.
+for (const applied of [false, true]) {
+  test(`a re-declared dashboard in a retained SDK workspace whose create answer was lost stays behind the dirty-copy fence under its incarnation until only its own local copy is discarded (${applied ? 'the create landed' : 'it did not land'})`, async () => {
+    await withDashboards(true, async () => {
+      const { wire, dir, old, reborn, sdk: kept } = await retiredDashboard({ retainSdk: true });
+      assert.ok(sdkHolds(dir, old.root.id), 'the SDK workspace is the retained one');
+      let fault = true;
+      for (let n = 0; n < 12; n += 1) {
+        wire.script((e) => fault && e.method === 'POST' && e.path === 'systemforms', { error: 'socket hang up', code: 'ECONNRESET', ...(applied && n === 0 ? {} : { unapplied: true }) });
+      }
+      const lost = await build(wire, dir, makeSpec(), kept);
+      fault = false;
+      assert.ok(lost.err, 'the lost answer stops the build');
+      assert.deepEqual([...new Set(dashboardPosts(lost))], [reborn]);
+      assert.equal(storeOf(dir).readGroup('dashboard', KEY).pending.root.id, reborn);
+      const approval = applied ? { authorizedAdoption: new Set([`dashboard:${KEY}`]) } : {};
+      for (let n = 0; n < 2; n += 1) {
+        const blocked = await build(wire, dir, makeSpec(), { ...kept, ...approval });
+        assert.equal(blocked.err && blocked.err.code, 'create-completion-required', chainText(blocked.err));
+        assert.deepEqual(blocked.writes, [], 'the fence sends nothing');
+        assert.equal(storeOf(dir).readGroup('dashboard', KEY).pending.root.id, reborn, 'the attempt keeps the incarnation');
+      }
+      const { sdk } = await sdkOver(wire, { workspaceDir: dir });
+      const mark = wire.log.length;
+      await sdk.deleteArtifact('dashboard', reborn);
+      assert.equal(wire.log.length, mark, 'discarding the owned local copy makes no service request');
+      const next = await build(wire, dir, makeSpec(), { ...kept, ...approval });
+      assert.equal(next.err, undefined, chainText(next.err));
+      assert.deepEqual(dashboardPosts(next), applied ? [] : [reborn], 'completed under the same id');
+      assert.equal(committedGroup(dir).root.id, reborn);
+      assert.ok(!JSON.stringify([lost.writes, next.writes]).toLowerCase().includes(old.root.id), 'nothing is sent under the retired id');
+    });
+  });
+}

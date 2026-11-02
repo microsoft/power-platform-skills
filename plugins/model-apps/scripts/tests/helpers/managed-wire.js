@@ -187,10 +187,14 @@ function clientOver(wire, { barrier = null, workflowEffectGate = null, observer 
   });
 }
 
-/** A real SDK over the real client: a fresh build process, as far as the SDK knows. */
-async function sdkOver(wire, opts = {}) {
+/**
+ * A real SDK over the real client: a fresh build process, as far as the SDK knows. Its workspace is a new directory
+ * unless `workspaceDir` names one: a test that passes the same directory to every build keeps the SDK's workspace (its
+ * synced copies and baselines) across them, as a maker's workspace is kept between builds.
+ */
+async function sdkOver(wire, { workspaceDir, ...opts } = {}) {
   const httpClient = clientOver(wire, opts);
-  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('managed-wire-')), instanceUrl: ORIGIN, httpClient });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir || makeTempDir('managed-wire-')), instanceUrl: ORIGIN, httpClient });
   await sdk.initWorkspace();
   return { sdk, httpClient };
 }

@@ -1301,3 +1301,48 @@ test('a namesake made after a declared form was retired is not adopted without a
     assert.notEqual(id, reborn);
   });
 });
+// The catalog selects an incarnation by its canonical identity too: a form name the identity algorithm folds to the retired
+// one (here an accent) is another plan key but the same artifact, so it takes the retired key's incarnation, never the
+// retired stable id, and the retained SDK workspace's copy of the retired row is never pushed.
+test('a declared form declared again after retirement under a name the identity algorithm folds to the same artifact is created under the incarnation, never the retired id', async () => {
+  await withForms(true, async () => {
+    const dir = newDir();
+    const { org, old, reborn } = await retiredForm(dir);
+    const changed = makeSpec({ form: { name: 'Déclared Item' } });
+    const first = await build(org, dir, changed);
+    assert.equal(first.err, undefined, chainText(first.err));
+    assert.deepEqual(formPosts(first).map((c) => String(c.body.formid).toLowerCase()), [reborn], 'one create, under the incarnation of the same identity');
+    const next = await build(org, dir, changed);
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.deepEqual(formWrites(next), []);
+    assert.ok(!JSON.stringify([first.writes, next.writes]).toLowerCase().includes(old), 'no write names the retired id');
+  });
+});
+
+// A plan made from a store read before the key's root was retired twice is refused under the lease by its incarnation
+// epoch: the store's fence never compares the plan only with the last retired root.
+test('a build handed a binding store read before two retirements of a declared form never prepares or creates an earlier retired root', async () => {
+  await withForms(true, async () => {
+    const dir = newDir();
+    const original = createFakeBuildOrg({ entities: ENTITIES });
+    const stale = storeOf(original, dir);
+    assert.equal((await build(original, dir, makeSpec())).err, undefined);
+    const old = storeOf(original, dir).readGroup('form', KEY).committed.root.id;
+    const second = createFakeBuildOrg({ entities: ENTITIES });
+    assert.equal((await buildWarned(second, dir, removedForm())).err, undefined);
+    assert.equal((await build(second, dir, makeSpec())).err, undefined);
+    const current = createFakeBuildOrg({ entities: ENTITIES });
+    assert.equal((await buildWarned(current, dir, removedForm())).err, undefined);
+    const [inc] = storeOf(current, dir).incarnations();
+    assert.equal(inc.epoch, 2);
+    const before = fs.readFileSync(storeFileOf(current, dir), 'utf8');
+    const got = await build(current, dir, makeSpec(), { bindingGroups: { store: stale } });
+    assert.match(chainText(got.err), /managed-binding-generation-conflict/);
+    assert.deepEqual(formPosts(got), [], 'nothing is sent');
+    assert.equal(fs.readFileSync(storeFileOf(current, dir), 'utf8'), before, 'nothing is written');
+    const next = await build(current, dir, makeSpec());
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.deepEqual(formPosts(next).map((c) => String(c.body.formid).toLowerCase()), [inc.rootId], 'created under the current incarnation');
+    assert.ok(!JSON.stringify(next.writes).toLowerCase().includes(old));
+  });
+});

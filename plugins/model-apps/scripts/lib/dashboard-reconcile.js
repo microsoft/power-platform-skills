@@ -1254,6 +1254,9 @@ async function settleDeclaredDashboard(args) {
       phase: 'dashboards', family: KIND, key, label, knownScopes: [], knownIds, store, barrier, halt,
       ...(args.sendObserver ? { sendObserver: args.sendObserver } : {}),
       adoptionApproved: s.adoptApproved,
+      // The catalog's incarnation token of this key: a plan made before its root was retired again is refused by the store
+      // under the lease (prepareAttempt `incarnation`), never prepared under a retired root.
+      incarnation: catalog && typeof catalog.incarnationOf === 'function' ? catalog.incarnationOf(KIND, key) : undefined,
       // A publish of this dashboard that an earlier run may have sent and not confirmed is confirmed read-only (the
       // registered layer readers over the SDK's client) before a requested change; without the client every such run
       // stops, and the documented settle-then-publish sequence never reaches its publisher.
