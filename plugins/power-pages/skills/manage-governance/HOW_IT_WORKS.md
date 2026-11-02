@@ -131,7 +131,6 @@ inside a form can display the source text instead of a rendered grid.
 | `selection.md` | Intent, environment, and site-selection procedures. |
 | `apply.md` | Apply eligibility, remediation, impact, and submission procedures. |
 | `status.md` | Read, verification, and canonical output procedures. |
-| `Document/external-auth-governance-details.md` | Behavior and test guide for External Auth as the parent auth-governance setting, including Admin Center testing, child protocol / IdP effects, and expected skill UI flow. |
 
 ### `SKILL.disabled.md`
 
