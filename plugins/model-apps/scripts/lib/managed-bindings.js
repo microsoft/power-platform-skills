@@ -1949,9 +1949,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         const retiredRoot = normalizeGuid(g ? g.root.id : a.root.id);
         const born = (env.incarnations || []).filter((x) => !(x.family === family && x.key === key));
         if (born.length >= INCARNATIONS_KEPT) throw storeError(CODES.storeFull, `${name} cannot be retired: the store already keeps the create identity of ${INCARNATIONS_KEPT} retired keys. Nothing was written`);
-        let rootId;
-        do { rootId = crypto.randomUUID().toLowerCase(); } while (rootId === retiredRoot);
-        born.push({ family, key, rootId, after: retiredRoot });
+        // Not named `rootId`: a `let` of that name here would shadow the parameter for this whole callback, so every refusal
+        // above that quotes it would throw a ReferenceError (temporal dead zone) instead of its coded store error.
+        let freshRoot;
+        do { freshRoot = crypto.randomUUID().toLowerCase(); } while (freshRoot === retiredRoot);
+        born.push({ family, key, rootId: freshRoot, after: retiredRoot });
         env.incarnations = born;
       });
       // The write is durable and read back (mutate): only now may the retired attempt's own hold end.
