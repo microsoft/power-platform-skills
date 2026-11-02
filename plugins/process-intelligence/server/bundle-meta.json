@@ -3123,7 +3123,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-      "bytes": 51762,
+      "bytes": 53923,
       "imports": [
         {
           "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js",
@@ -4588,7 +4588,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-      "bytes": 1478,
+      "bytes": 5247,
       "imports": [],
       "format": "esm"
     },
@@ -4625,7 +4625,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-      "bytes": 46763,
+      "bytes": 47017,
       "imports": [
         {
           "path": "node_modules/pkce-challenge/dist/index.node.js",
@@ -4656,6 +4656,11 @@
           "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js",
           "kind": "import-statement",
           "original": "../server/auth/errors.js"
+        },
+        {
+          "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js",
+          "kind": "import-statement",
+          "original": "../shared/transport.js"
         }
       ],
       "format": "esm"
@@ -4682,7 +4687,7 @@
       "format": "esm"
     },
     "node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-      "bytes": 22564,
+      "bytes": 23781,
       "imports": [
         {
           "path": "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js",
@@ -5729,7 +5734,7 @@
           "bytesInOutput": 528
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-          "bytesInOutput": 36025
+          "bytesInOutput": 37487
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js": {
           "bytesInOutput": 2044
@@ -5747,7 +5752,7 @@
           "bytesInOutput": 416
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-          "bytesInOutput": 705
+          "bytesInOutput": 3398
         },
         "node_modules/pkce-challenge/dist/index.node.js": {
           "bytesInOutput": 1464
@@ -5762,7 +5767,7 @@
           "bytesInOutput": 3474
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-          "bytesInOutput": 24025
+          "bytesInOutput": 24158
         },
         "node_modules/eventsource-parser/dist/index.js": {
           "bytesInOutput": 7757
@@ -5771,7 +5776,7 @@
           "bytesInOutput": 669
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-          "bytesInOutput": 14602
+          "bytesInOutput": 15569
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js": {
           "bytesInOutput": 7900
@@ -5810,7 +5815,7 @@
           "bytesInOutput": 8946
         }
       },
-      "bytes": 1277498
+      "bytes": 1282753
     }
   }
 }
