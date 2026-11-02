@@ -3715,6 +3715,26 @@ async function runSdkBuildPhases(spec, opts, owed) {
       || (workflowStore.snapshot().envelope.workflowEffects || []).length > 0)) {
     opts.workflowEffectGate.bind(workflowStore);
   }
+  // A declared artifact that did not settle stops the build. Its result's own findings decide — never the SDK error
+  // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a
+  // create that may have stored a row must be inspected first. RETRY.NEVER marks the halt `transient: false`, which
+  // retryPolicyFor reads through the runner's wrapping halt. The halt says each finding and, for one an approval
+  // settles, the exact flag (cliApproval), so the maker reads what to do from the halt itself. A stop with no findings (one the managed
+  // settlement raised itself, e.g. create-completion-required at a local draft or a pending attempt) says its cause's own message, which
+  // is where what to do is written. The halt points to an approval only when it named one: most such stops have none. A finding may carry
+  // its own `label` (a declared dashboard's tile, `declared dashboard "<key>/<tile>"`), which names the approval it needs.
+  const managedStop = (phase, label, stopCode, { cause, findings = [] } = {}) => {
+    const said = findings.filter((x) => x && x.code).map((x) => {
+      const flag = cliApproval(`${x.label || label}: ${x.code} — `, x.code);
+      return `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`;
+    });
+    if (!said.length && cause && typeof cause.message === 'string' && cause.message) said.push(`${stopCode} — ${cause.message}`);
+    const approvalNamed = said.some((s) => /--authorize \S|--allow-destructive/.test(s));
+    const next = approvalNamed ? 'Fix the cause (or give the approval named above) and run the build again' : 'Do what the message above says, then run the build again';
+    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${next}; it is not retried automatically.`, { phase, code: stopCode, recoverable: false, retry: RETRY.NEVER, cause });
+    Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
+    return err;
+  };
   // A stored dashboard group whose last change is saved and whose publish is owed (state 'owed', no dispatch token: definitely
   // not sent) is ordinary debt to the store (managed-bindings.js classifyPersisted: eligible), and holds nothing, because the
   // run that settles that dashboard pays it, through its managed coverage and proof (publishDeclaredDashboard). A run that
@@ -3734,12 +3754,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // (retireAbsentGroup: the same observation, generation and root, no attempt, no publish that may have been sent; it
   // refuses with nothing written otherwise), which records that the root was proved gone and the group retired, NOT that
   // its content was published or its debt paid. A retirement that cannot be confirmed (a refusal, a failed store write, a
-  // group that moved after this run read the store) fences the dashboard for the rest of this invocation and leaves the
-  // run incomplete; the next invocation rereads the file. A retired group installs no fence; a block this
+  // group that moved after this run read the store) stops this invocation before its first service write, incomplete and
+  // naming the dashboard; the next invocation rereads the file. A retired group installs no fence; a block this
   // invocation already holds on the scope (a caller's barrier) is never cleared, so that invocation stays stopped and the
   // next proceeds from the file. A group with a pending attempt, or a publish that may have been sent, is not read here:
   // the store holds those (openManagedContext).
-  const heldDashboards = new Map();
+  // The keys of the dashboard and form retirements this invocation could not confirm (haltOnUnconfirmedRetirements).
+  const unconfirmedRetirements = [];
   if (bindingGroups && bindingGroups.store) {
     const store = bindingGroups.store;
     const declaredOn = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
@@ -3763,47 +3784,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // back between the read and it), so a refusal is never retried here with a new one: the next build observes and
     // reads again. The generation and root retired are the ones the observation saw, taken from the reread store.
     //
-    // A retirement this invocation cannot confirm fences the dashboard for the rest of the invocation, whatever state the
-    // group had before: the store could not be observed, the observed group is no longer one this sweep may retire, or
-    // the store refused or failed the retirement. Each of those can mean another invocation moved the group after this one
-    // read the store (a new owed generation, a pending attempt, a carried publish marked dispatching), and a store error
-    // after the file was replaced leaves the durable result unknown. None of that is in this run's cached store (a refusal
-    // updates nothing, and snapshot() is a copy of the cache), so the fence loop below and every later gate would admit an
-    // app write or a scoped publish of a saved layer nothing proved. The quarantine holds the dashboard instead, the run
-    // ends incomplete naming it (publication-withheld), and the next invocation rereads the store file as it is.
-    //
-    // Fencing only the root this run had read is not enough: the other invocation may have moved the key to ANOTHER root
-    // (it retired the group and started a fresh create under a new id) or left it owed, pending or dispatching, and the
-    // plain dashboard path later in this run looks those up in the store to refuse a plain dashboard of the same name. So
-    // the store is reread here, once, without retrying the retirement against it: every root the reread group or its
-    // attempt names joins the quarantine (checkAppWrite then refuses an app that adds or holds a replacement root too), the
-    // cache the later gates read is the file as it is now, and the key with every name it is known by is held for the
-    // rest of this invocation (heldDashboards), so a plain dashboard of that name or id is refused before any request
-    // whatever the reread shows. A reread that fails holds the same key and names on what this run already knew (fail
-    // closed). Nothing here clears a quarantine, retires, pays or publishes anything the reread shows.
-    const unconfirmed = (key, ids, why, selected) => {
-      const found = [...ids];
-      const names = new Set();
-      const nameOf = (decl) => { if (decl && typeof decl.name === 'string' && decl.name) names.add(dashboardNameKey(decl.name)); };
-      nameOf(selected && selected.group && selected.group.originalDeclaration);
-      nameOf(selected && selected.attempt && selected.attempt.declaration);
-      let reread = '';
-      try {
-        const now = store.refresh().units().find((u) => u.family === 'dashboard' && u.key === key);
-        if (now && !now.invalid) {
-          const { group, attempt } = now;
-          found.push(group && group.root && group.root.id, attempt && attempt.root && attempt.root.id, attempt && attempt.expected && attempt.expected.rootId);
-          nameOf(group && group.originalDeclaration);
-          nameOf(attempt && attempt.declaration);
-        }
-      } catch (err) {
-        reread = `; the binding store could not be reread either (${failure(err)}), so it stays held as this run last read it`;
-      }
-      const roots = [...new Set(found.filter(Boolean).map((id) => String(id).replace(/[{}]/g, '').toLowerCase()))];
-      owed.barrier.quarantine(roots.map((id) => ({ type: 'dashboard', id })), roots, `managed dashboard "${key}" (its retirement could not be confirmed: ${why}${reread}; this invocation keeps it fenced, and the next invocation rereads the durable result)`);
-      heldDashboards.set(key, { ids: new Set(roots), names, why: `${why}${reread}` });
+    // A retirement this invocation cannot confirm ends the invocation, whatever state the group had before: the store
+    // could not be observed, the observed group is no longer one this sweep may retire, or the store refused or failed the
+    // retirement. Each of those can mean another invocation moved the key after this one read the store (a new owed
+    // generation, a pending attempt, a carried publish marked dispatching, a fresh create under another root), and a store
+    // error after the file was replaced leaves the durable result unknown. This invocation cannot know which, and every
+    // later step reads the store as it cached it, so no later step can be trusted to hold that key: a plain dashboard of
+    // its name could create or reuse one beside the other invocation's, and an app write or publish could admit it. So
+    // the dashboard is quarantined (a block this invocation already holds is never cleared), the key is noted in
+    // `unconfirmedRetirements`, and once the form sweep below has run the build stops before its first service write
+    // (haltOnUnconfirmedRetirements). Nothing is retried with a new observation: the next invocation observes, reads and
+    // retires (or proceeds) from the store file as it is then.
+    const unconfirmed = (key, ids, why) => {
+      const roots = [...new Set(ids.filter(Boolean).map((id) => String(id).toLowerCase()))];
+      owed.barrier.quarantine(roots.map((id) => ({ type: 'dashboard', id })), roots, `managed dashboard "${key}" (its retirement could not be confirmed: ${why}; this invocation stops before any write, and the next invocation rereads the durable result)`);
+      unconfirmedRetirements.push({ family: 'dashboard', key, why });
       if (typeof opts.warn === 'function') {
-        opts.warn(`declared dashboard "${key}": its retirement could not be confirmed (${why}${reread}); this invocation keeps dashboard ${roots.join(', ')} fenced, and the next invocation rereads the durable result.`);
+        opts.warn(`declared dashboard "${key}": its retirement could not be confirmed (${why}); this build stops before writing anything, and the next build reads it again.`);
       }
       return false;
     };
@@ -3815,11 +3812,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       try {
         ({ observation } = store.observeRetirement({ family: 'dashboard', key }));
       } catch (err) {
-        return unconfirmed(key, [selectedRoot], `the binding store could not be observed (${failure(err)})`, selected);
+        return unconfirmed(key, [selectedRoot], `the binding store could not be observed (${failure(err)})`);
       }
       const unit = store.snapshot().units().find((u) => u.family === 'dashboard' && u.key === key);
       if (!retirable(unit)) {
-        return unconfirmed(key, [selectedRoot, unit && unit.group && unit.group.root && unit.group.root.id], 'the binding store changed before its dashboard was read', selected);
+        return unconfirmed(key, [selectedRoot, unit && unit.group && unit.group.root && unit.group.root.id], 'the binding store changed before its dashboard was read');
       }
       const { generation, publication } = unit.group;
       const rootId = unit.group.root.id;
@@ -3836,7 +3833,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // The store refused (it changed since the observation, another generation or root, a publish that may have been
         // sent) or its write failed: whether the group is retired is not confirmed here, and the store as cached is not
         // what the file holds now.
-        return unconfirmed(key, [selectedRoot, rootId], `its dashboard ${rootId} read as gone from both layers, but the binding store did not confirm the retirement (${failure(err)})`, selected);
+        return unconfirmed(key, [selectedRoot, rootId], `its dashboard ${rootId} read as gone from both layers, but the binding store did not confirm the retirement (${failure(err)})`);
       }
       if (typeof opts.warn === 'function') {
         opts.warn(`declared dashboard "${key}": managed-dashboard-retired — its dashboard ${rootId} is gone from both the saved and the published layer, and the spec no longer declares it, so its managed record was retired${publication && publication.state === 'owed' ? ' with its unpublished change, which was never published' : ''}. Nothing was sent for it; a dashboard declared under this key again is a new one.`);
@@ -3897,12 +3894,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // the filter leaves out every group that has one.
   //
   // A retirement this run cannot confirm (the store could not be observed, the observed group is no longer one this
-  // sweep may retire, or the store refused or failed the retirement) fences the form's table for the rest of this
-  // invocation, whatever the group owed before: another run may have moved the group after this one read the store (a
-  // new owed generation, a pending attempt, a carried publish marked dispatching), and a store error after the file was
-  // replaced leaves the durable result unknown. This run's cached store shows none of that (a refusal updates nothing),
-  // so the routed table publisher and the app writer would otherwise go ahead on the table. The run ends incomplete
-  // naming the form (publication-withheld), and the next invocation rereads the store file.
+  // sweep may retire, or the store refused or failed the retirement) ends this invocation before its first service
+  // write, whatever the group owed before: another run may have moved the group after this one read the store (a new
+  // owed generation, a pending attempt, a carried publish marked dispatching, a create under another form), and a store
+  // error after the file was replaced leaves the durable result unknown. This run's cached store shows none of that (a
+  // refusal updates nothing), so no later step (the plain-form path, the routed table publisher, the app writer) can be
+  // trusted to hold the form. Its table is quarantined, the key is noted in `unconfirmedRetirements`, and the build
+  // stops right after this sweep (haltOnUnconfirmedRetirements); the next invocation rereads the store file.
   const retirableForm = (u, declared) => {
     if (u.family !== 'form' || u.invalid || u.attempt || !u.group || declared.has(u.key)) return false;
     const p = u.group.publication;
@@ -3917,8 +3915,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const unconfirmedForm = (u, why) => {
     const scope = formScopeOf(u);
     const rootId = u.group && u.group.root && u.group.root.id;
-    owed.barrier.quarantine([scope], rootId ? [rootId] : [], `managed form "${u.key}" (its retirement could not be confirmed: ${why}; this invocation keeps table ${scope.table} fenced, and the next invocation rereads the durable result)`);
-    if (typeof opts.warn === 'function') opts.warn(`declared form "${u.key}": its retirement could not be confirmed (${why}); this invocation keeps table ${scope.table} fenced, and the next invocation rereads the durable result.`);
+    owed.barrier.quarantine([scope], rootId ? [rootId] : [], `managed form "${u.key}" (its retirement could not be confirmed: ${why}; this invocation stops before any write, and the next invocation rereads the durable result)`);
+    unconfirmedRetirements.push({ family: 'form', key: u.key, why });
+    if (typeof opts.warn === 'function') opts.warn(`declared form "${u.key}": its retirement could not be confirmed (${why}); this build stops before writing anything, and the next build reads it again.`);
   };
   // Step 1, taken just before the group's fresh read: the store's observation, and the generation and root it saw (from
   // the store as reread by observeRetirement). `{ unconfirmed }` when there is no longer a retirable group to observe.
@@ -3976,11 +3975,28 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // The publishes of every table a committed managed group publishes in (lib/managed-scope-publisher.js): the store's tables
   // are routed now, a declared view's or chart's when it commits, and each is paid through the managed coverage protocol at
   // the points below where the build would have published it. With no store file nothing is routed, and every request is the
-  // one the build always sent. The halt factory is reached through a closure: managedStop is defined further down.
+  // one the build always sent.
   const managedTables = bindingGroups && bindingGroups.store && provision.dataverse
-    ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: (...args) => managedStop(...args) })
+    ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: managedStop })
     : null;
   if (managedTables) await retireAbsentRemovedForms();
+  // haltOnUnconfirmedRetirements: a dashboard or form retirement the sweeps above could not confirm ends this invocation
+  // here. Both sweeps run before the first service write of the invocation (everything above only reads), so nothing has
+  // been sent: no plain dashboard or form, no app shell, no publish, no page. One finding per key, incomplete
+  // (managed-not-settled, never retried automatically); the next invocation observes the store file afresh and retires
+  // the group or proceeds as it then shows.
+  if (unconfirmedRetirements.length) {
+    const keys = unconfirmedRetirements.map(({ family, key }) => `${family} "${key}"`).join(', ');
+    throw managedStop('preflight', `retirement of ${keys}`, 'managed-not-settled', {
+      cause: refusal(`the retirement of ${keys} could not be confirmed; the build stopped before writing anything, and the next build reads it again`, { code: 'managed-not-settled' }),
+      findings: unconfirmedRetirements.map(({ family, key, why }) => ({
+        key,
+        label: `declared ${family} "${key}"`,
+        code: 'managed-not-settled',
+        message: `managed ${family} "${key}" (its retirement could not be confirmed: ${why}); the build stopped before writing anything, and the next build reads it again`,
+      })),
+    });
+  }
   if (managedTables) managedTables.routeStored();
   const isRouted = (logical) => !!managedTables && managedTables.routed(logical);
   const settleStableResult = stable
@@ -4038,26 +4054,6 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const resolveTableId = async (logical) => (await tableRefs(provision.dataverse, [logical])).get(String(logical).toLowerCase()).metadataId;
   const solutionMembers = createSolutionMembership({ read: provision, solutionUniqueName: sol && sol.uniqueName, componentTypes: Object.values(COMPONENT_TYPE), resolveTableId });
   const ensureInSolution = (componentId, componentType, table) => ensureSolutionComponent(provision, solutionMembers, { componentId, componentType, solutionUniqueName: sol.uniqueName }, { table });
-  // A declared artifact that did not settle stops the build. Its result's own findings decide — never the SDK error
-  // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a
-  // create that may have stored a row must be inspected first. RETRY.NEVER marks the halt `transient: false`, which
-  // retryPolicyFor reads through the runner's wrapping halt. The halt says each finding and, for one an approval
-  // settles, the exact flag (cliApproval), so the maker reads what to do from the halt itself. A stop with no findings (one the managed
-  // settlement raised itself, e.g. create-completion-required at a local draft or a pending attempt) says its cause's own message, which
-  // is where what to do is written. The halt points to an approval only when it named one: most such stops have none. A finding may carry
-  // its own `label` (a declared dashboard's tile, `declared dashboard "<key>/<tile>"`), which names the approval it needs.
-  const managedStop = (phase, label, stopCode, { cause, findings = [] } = {}) => {
-    const said = findings.filter((x) => x && x.code).map((x) => {
-      const flag = cliApproval(`${x.label || label}: ${x.code} — `, x.code);
-      return `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`;
-    });
-    if (!said.length && cause && typeof cause.message === 'string' && cause.message) said.push(`${stopCode} — ${cause.message}`);
-    const approvalNamed = said.some((s) => /--authorize \S|--allow-destructive/.test(s));
-    const next = approvalNamed ? 'Fix the cause (or give the approval named above) and run the build again' : 'Do what the message above says, then run the build again';
-    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${next}; it is not retried automatically.`, { phase, code: stopCode, recoverable: false, retry: RETRY.NEVER, cause });
-    Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
-    return err;
-  };
   // The halt factory handed to the declared business-rule and process-flow helpers (lib/rule-settlement.js, lib/bpf-settlement.js),
   // which call it with { cause } only. Such a workflow is managed whole, so its stop is one finding labelled with its family and the
   // approval id the helper names (`<table>/<name>`): cliApproval reads that label to print the adoption flag.
@@ -7157,8 +7153,48 @@ async function runSdkBuildPhases(spec, opts, owed) {
         return out.formId;
       });
     };
+    // Stored form groups the spec no longer declares (with the build path on) whose managed state is not settled: an attempt
+    // an earlier build started (a create whose answer was lost included), or a publish still owed, or one that may have been
+    // sent and is not confirmed ('dispatching', 'unconfirmed'). The plain path knows nothing of them: it finds a form by its
+    // formId or its name, so it would PATCH the saved layer that change owes or is still changing, or, where the bound form
+    // is gone or never answered, create a second form of that name beside the one that may still land. So a plain form that
+    // is one of them, by its key (`<table>/<type>/<name>`, formLayoutKey), or by its formId naming a root the group or its
+    // attempt holds, is refused before any request for it, coded managed-form-unsettled; every other plain form builds as
+    // before. A settled group (no attempt, its publish confirmed or not needed) is not held: switching a settled declared
+    // form back to the plain path stays allowed. Nothing is read when the store holds no such group.
+    const unsettledForms = [];
+    const formStore = bindingGroups && bindingGroups.store;
+    if (formStore && defs.length) {
+      const declaredKeys = new Set(declaredDefs.map((d) => formLayoutKey(d.f)));
+      const bareFormId = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
+      for (const unit of formStore.snapshot().units()) {
+        if (unit.invalid || unit.family !== 'form' || declaredKeys.has(unit.key)) continue;
+        const { group, attempt } = unit;
+        const pub = group && group.publication;
+        const why = attempt ? 'a change an earlier build started on it is not finished'
+          : pub && pub.state === 'owed' ? 'its last change is saved and its publish is still owed'
+            : pub && (pub.state === 'dispatching' || pub.state === 'unconfirmed') ? 'a publish of it may have been sent and is not confirmed'
+              : null;
+        if (!why) continue;
+        const ids = new Set([group && group.root && group.root.id, attempt && attempt.root && attempt.root.id, attempt && attempt.expected && attempt.expected.rootId].filter(Boolean).map(bareFormId));
+        unsettledForms.push({ key: unit.key, ids, why });
+      }
+    }
+    const unsettledFormOf = (f) => {
+      const key = formLayoutKey(f);
+      const pinned = f.formId ? String(f.formId).replace(/[{}]/g, '').toLowerCase() : null;
+      return unsettledForms.find((u) => u.key === key || (pinned && u.ids.has(pinned))) || null;
+    };
     for (const d of declaredDefs) if ((d.f.formType || 'Main') === 'QuickView') await settleDeclaredForm(d);
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
+      const held = unsettledForms.length ? unsettledFormOf(d.f) : null;
+      if (held) {
+        const label = `declared form "${held.key}"`;
+        await runner.run('forms', `form ${d.f.name || d.f.entity}`, async () => {
+          const message = `form "${d.f.name || d.f.entity}" of ${String(d.f.entity).toLowerCase()} is the form the removed managed declaration "${held.key}" holds, and ${held.why}; it is not built as a plain form, which could change a saved layer that change owes or make a second form in its place. Declare it again with reconcile: "declared" and its key so the build settles it, or run the build again once that change has settled; nothing was sent for it`;
+          throw managedStop('forms', label, 'managed-form-unsettled', { cause: refusal(message, { code: 'managed-form-unsettled' }), findings: [{ key: held.key, code: 'managed-form-unsettled', message }] });
+        });
+      }
       const id = await buildArtifact('form', d.def, { specForm: d.f });
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
@@ -8400,23 +8436,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     //    app write and publish of this run.
     //  - Each stays the identity it was: a plain dashboard naming its id (dashboardId) or its declared name is refused before
     //    any request (retainedDashboards), so a mode change or a missing published row never loses it or replaces it.
-    //  - A removed dashboard whose retirement this invocation could not confirm (heldDashboards, above) is held first, by
-    //    every root and name the reread store knew it by, whatever that reread shows now: another invocation may have left it
-    //    owed, pending, dispatching or under a new root, and a plain dashboard of its name must not create or reuse one
-    //    beside that.
     const removedDashboardStops = [];
     const retainedDashboards = [];
-    for (const [key, held] of heldDashboards) {
-      const label = `declared dashboard "${key}"`;
-      retainedDashboards.push({
-        ids: held.ids,
-        names: held.names,
-        stop: (dash) => {
-          const message = `dashboard "${dash.name}" is the dashboard the removed managed declaration "${key}" held, and its retirement could not be confirmed (${held.why}); it is not built as a plain dashboard, which could make a second one beside a change another build left on it. The next build rereads the durable result; nothing was sent`;
-          return managedStop('dashboards', label, 'managed-dashboard-unsettled', { cause: refusal(message, { code: 'managed-dashboard-unsettled' }), findings: [{ key, code: 'managed-dashboard-unsettled', message }] });
-        },
-      });
-    }
     const dashboardStore = bindingGroups && bindingGroups.store;
     if (dashboardStore) {
       const declaredKeys = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
@@ -8424,9 +8445,6 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const bareId = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
       for (const unit of dashboardStore.snapshot().units()) {
         if (unit.invalid || unit.family !== 'dashboard' || declaredKeys.has(unit.key)) continue;
-        // Held above: its stop, its fence and its reread roots already cover it. Its reread state is not offered as a
-        // publish this run could approve (a dispatch another invocation may still be sending).
-        if (heldDashboards.has(unit.key)) continue;
         const group = unit.group;
         const attempt = unit.attempt;
         const publication = group && group.publication;

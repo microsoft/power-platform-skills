@@ -1043,7 +1043,7 @@ for (const state of ['owed', 'pending', 'dispatching']) {
       restore();
       assert.equal(raced, 1, 'the concurrent change landed during the published read');
       assert.deepEqual(retiredOf(org, dir), []);
-      assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('managed-binding-generation-conflict') && w.includes('its retirement could not be confirmed') && w.includes('the next invocation rereads')), r.warns.join('\n'));
+      assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('managed-binding-generation-conflict') && w.includes('its retirement could not be confirmed') && w.includes('the next build reads it again')), r.warns.join('\n'));
       assert.match(chainText(r.err), new RegExp(`managed form "${KEY}" \\(its retirement could not be confirmed`));
       assert.deepEqual([r.writes, r.tablePublishes], [[], []]);
       assert.equal(r.barrier.checkAppWrite({ added: ['contoso_item'] }).ok, false, 'no app write admits its table');
@@ -1054,10 +1054,10 @@ for (const state of ['owed', 'pending', 'dispatching']) {
   });
 }
 
-// The same race, with the spec now holding a plain form of the removed one's name and the app written and published. This
-// invocation's cached store is from before the race, so nothing in it says the form is held: the plain path must still not
-// write the form (a push over a saved layer another invocation owes or is changing), create a second one, or let the app or
-// a publish of its table go ahead.
+// The same race, with the spec now holding a plain form of the removed one's name, its tab and section labels changed (a
+// real edit the plain path would push), and the app written and published. This invocation's cached store is from before
+// the race, so nothing in it says the form is held: the unconfirmed retirement ends the invocation before any write, so the
+// plain path writes no form and creates no second one (the replacement included), and no app write or publish goes ahead.
 for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
   test(`after a retirement refused because another invocation left the removed form ${state}, a plain form of its name writes and publishes nothing`, async () => {
     await withForms(true, async () => {
@@ -1092,13 +1092,12 @@ for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
         return missingRow(rowId);
       };
       ({ restore } = deleteForm(org, g.root.id, { published }));
-      const r = await buildWarned(org, dir, makeSpec({ declared: false, form: { tabs: [{ name: 'general', label: 'General', sections: [{ name: 'main', label: 'Main', fields: ['contoso_code', 'contoso_name'] }] }] } }), { phases: ['forms', 'app-shell', 'publish'], publish: true });
+      const r = await buildWarned(org, dir, makeSpec({ declared: false, form: { tabs: [{ name: 'general', label: 'Changed plain label', sections: [{ name: 'main', label: 'Changed plain section', fields: ['contoso_name', 'contoso_code'] }] }] } }), { phases: ['forms', 'app-shell', 'publish'], publish: true });
       restore();
       assert.equal(raced, 1, 'the concurrent change landed during the published read');
       assert.ok(r.warns.some((w) => w.includes(`declared form "${KEY}"`) && w.includes('its retirement could not be confirmed')), r.warns.join('\n'));
-      // The plain path keeps its name lookup (a removed declaration has no plain-form identity hold): with the old form gone it
-      // may create one of its own name, but the table stays fenced, so nothing it makes or holds reaches the app or goes live.
-      if (state !== 'replacement') assert.deepEqual(shape(formWrites(r)), [], 'the plain path writes no form');
+      assert.equal(r.err && r.err.code, 'managed-not-settled', chainText(r.err));
+      assert.deepEqual(shape(formWrites(r)), [], 'the plain path writes no form and creates none');
       assert.deepEqual(shape(r.writes.filter((c) => /^\/(appmodules|sitemaps|PublishXml|PublishAllXml|AddAppComponents)/i.test(c.path))), [], 'no app write or publish goes ahead');
       assert.deepEqual(r.tablePublishes, []);
       assert.notEqual(r.err, undefined);
@@ -1110,3 +1109,107 @@ for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
     });
   });
 }
+
+// A plain form that IS a removed declaration whose managed state is not settled, read before the build (no race): an attempt
+// another build started on it (the replacement, a fresh create under a new id after the old form was retired, included), a
+// publish still owed, or one that may have been sent. The plain path finds a form by its name or formId only, so it would
+// PATCH the saved layer that change owes, or create a second form beside one that may still land. It refuses that form,
+// coded, before any request for it.
+const prepareOn = (org, dir, g, { replacement = false } = {}) => {
+  const store = storeOf(org, dir);
+  if (replacement) {
+    const { observation } = store.observeRetirement({ family: 'form', key: KEY });
+    store.retireAbsentGroup({ family: 'form', key: KEY, generation: g.generation, rootId: g.root.id, observation, evidence: { kind: 'root-absent', rootId: g.root.id, saved: 'not-found', published: 'not-found' } });
+  }
+  return store.prepareAttempt({ family: 'form', key: KEY, baseGeneration: replacement ? null : g.generation, root: replacement ? { ...g.root, id: '99999999-9999-4999-8999-999999999999' } : g.root, knownScopes: [g.publication.scope], declarationSha256: 'a'.repeat(64), declaration: g.originalDeclaration });
+};
+const changedPlain = (form = {}) => makeSpec({ declared: false, form: { tabs: [{ name: 'general', label: 'Changed plain label', sections: [{ name: 'main', label: 'Changed plain section', fields: ['contoso_name', 'contoso_code'] }] }], ...form } });
+const appOrPublish = (r) => shape(r.writes.filter((c) => /^\/(appmodules|sitemaps|PublishXml|PublishAllXml|AddAppComponents)/i.test(c.path)));
+for (const state of ['pending', 'replacement', 'owed', 'dispatching', 'pending, pinned by formId']) {
+  test(`a plain form that is a removed declared form left ${state} is refused before any write; other plain forms are not held`, async () => {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      assert.equal((await build(org, dir, makeSpec())).err, undefined);
+      const g = storeOf(org, dir).readGroup('form', KEY).committed;
+      let restore = () => {};
+      if (state === 'replacement') {
+        ({ restore } = deleteForm(org, g.root.id));
+        prepareOn(org, dir, g, { replacement: true });
+      } else if (state === 'dispatching') {
+        storeOf(org, dir).markPublishDispatch({ groups: [], carried: [{ family: 'form', key: KEY, generation: g.generation, savedSha256: 'a'.repeat(64), publishedSha256: 'a'.repeat(64) }], scope: g.publication.scope, token: 'concurrent-publish' });
+      } else {
+        const token = prepareOn(org, dir, g);
+        if (state === 'owed') {
+          const other = storeOf(org, dir);
+          other.markSending(token, { proofVersion: 1, proofSchema: g.proofSchema, rootId: g.root.id, baseProofSha256: null, sentProjectionSha256: 'b'.repeat(64), preservationSha256: 'c'.repeat(64), baseObservation: null, children: [] });
+          other.noteSaved(token, { proof: g.proof, acknowledgedRoot: false });
+          other.commitGroup({ token, baseGeneration: g.generation, records: g.records, proof: g.proof, consumerState: g.consumerState, publication: { scope: g.publication.scope, state: 'owed', desiredSha256: 'd'.repeat(64), dispatchToken: null } });
+        }
+      }
+      const before = storeOf(org, dir).readGroup('form', KEY);
+      const spec = state === 'pending, pinned by formId' ? changedPlain({ name: 'Renamed Item', formId: g.root.id }) : changedPlain();
+      const r = await buildWarned(org, dir, spec, { phases: ['forms', 'app-shell', 'publish'], publish: true });
+      restore();
+      assert.equal(r.err && r.err.code, 'managed-form-unsettled', chainText(r.err));
+      assert.match(chainText(r.err), new RegExp(`managed-form-unsettled: form "[^"]+" of contoso_item is the form the removed managed declaration "${KEY}" holds`));
+      assert.deepEqual(shape(formWrites(r)), [], 'no form is created or changed');
+      assert.deepEqual(appOrPublish(r), [], 'no app write or publish goes ahead');
+      assert.deepEqual(storeOf(org, dir).readGroup('form', KEY), before, 'the managed state is kept as it was');
+    });
+  });
+}
+
+// The same identity, reached one build after another: a declared create whose answer was lost (the form landed, the attempt
+// stays pending), then the declaration removed. With the tab label changed the plain path would PATCH the form the attempt
+// may still own; with it unchanged it would write nothing, and is refused all the same.
+for (const changed of [true, false]) {
+  test(`a declared create whose answer was lost, then removed: the plain form of its name is refused (label changed: ${changed})`, async () => {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      let intercepted = 0;
+      const restore = org.intercept((c) => c.method === 'POST' && /^\/systemforms(?:\?|$)/.test(c.path) && intercepted++ === 0, async (c) => {
+        await org.fake.httpClient.post(`${org.origin}/api/data/v9.2${c.path}`, c.body);
+        throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+      });
+      const first = await build(org, dir, makeSpec());
+      restore();
+      assert.notEqual(first.err, undefined);
+      assert.notEqual(storeOf(org, dir).readGroup('form', KEY).pending, null);
+      const r = await buildWarned(org, dir, changed ? changedPlain() : makeSpec({ declared: false }), { phases: ['forms', 'app-shell', 'publish'], publish: true });
+      assert.equal(r.err && r.err.code, 'managed-form-unsettled', chainText(r.err));
+      assert.deepEqual(shape(formWrites(r)), [], 'the form the lost create made is not changed, and no second one is made');
+      assert.deepEqual(appOrPublish(r), []);
+      assert.equal(org.fake.rows('systemforms').filter((row) => /Changed plain/.test(row.data.formxml || '')).length, 0);
+      assert.notEqual(storeOf(org, dir).readGroup('form', KEY).pending, null, 'the attempt is kept for the build that settles it');
+    });
+  });
+}
+
+// What must not change: the refusal is the one form's, not its table's. A removed declared form left pending holds a plain form
+// of its own name; another plain form of the same table is built as it always was. And a removed declared form whose group is
+// settled (committed, its publish not needed, no attempt) holds nothing: an unchanged plain form of its name builds clean.
+test('a removed declared form left pending holds only its own name: another plain form of its table is still created', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    prepareOn(org, dir, storeOf(org, dir).readGroup('form', KEY).committed);
+    const spec = makeSpec({ declared: false, form: { name: 'Another Item' } });
+    const r = await buildWarned(org, dir, spec);
+    assert.notEqual(r.err && r.err.code, 'managed-form-unsettled', chainText(r.err));
+    assert.equal(formPosts(r).length, 1, 'the other form is created');
+    assert.ok(org.fake.rows('systemforms').some((row) => row.data.name === 'Another Item'));
+  });
+});
+test('a settled removed declared form does not hold an unchanged plain form of its name: the build is clean', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    assert.equal((await build(org, dir, makeSpec())).err, undefined);
+    const r = await buildWarned(org, dir, makeSpec({ declared: false }));
+    assert.equal(r.err, undefined, chainText(r.err));
+    assert.deepEqual(shape(formWrites(r)), []);
+  });
+});

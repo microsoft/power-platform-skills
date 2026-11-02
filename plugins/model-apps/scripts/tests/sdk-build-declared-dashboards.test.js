@@ -1235,8 +1235,8 @@ test('removed owed: a store change between the observation and the retirement re
 
 // A refused retirement leaves this invocation's cached store from before the race. Another invocation that, while this one
 // reads the published layer, commits a new owed generation, prepares an attempt, or marks a carried publish dispatching, and
-// a saved row that is there again, must still find the dashboard fenced for the rest of this invocation: no app write admits
-// it, a scoped publish naming it is not sent, and the run ends incomplete naming it.
+// a saved row that is there again: this invocation stops before any write, incomplete and naming the dashboard, and keeps it
+// fenced (no app write admits it, a scoped publish naming it is not sent).
 for (const state of ['owed', 'pending', 'dispatching']) {
   test(`removed settled: a retirement refused because another invocation left the dashboard ${state} fences it for the rest of this invocation`, async () => {
     await withDashboards(true, async () => {
@@ -1274,7 +1274,7 @@ for (const state of ['owed', 'pending', 'dispatching']) {
       wire.request = request;
       assert.equal(raced, 1, 'the concurrent change landed during the published read');
       assert.deepEqual(retiredOf(dir), []);
-      assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('managed-binding-generation-conflict') && m.includes('its retirement could not be confirmed') && m.includes('the next invocation rereads')), warnings.join('\n'));
+      assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('managed-binding-generation-conflict') && m.includes('its retirement could not be confirmed') && m.includes('the next build reads it again')), warnings.join('\n'));
       assert.match(chainText(r.err), new RegExp(`managed dashboard "${KEY}" \\(its retirement could not be confirmed`));
       assert.equal(serviceWrites(r.calls).length, 0);
       assert.equal(r.barrier.checkAppWrite({ addedDashboards: [id] }).ok, false, 'no app write admits it');
@@ -1291,7 +1291,8 @@ for (const state of ['owed', 'pending', 'dispatching']) {
 // name in the PUBLISHED layer only, so a saved-only row is found by nothing there; reading this invocation's cached store from
 // before the race, it would see no unsettled group and create a second dashboard, then write and publish the app. In the
 // fourth case the other invocation retires the group and starts a fresh create of the same key under another root, which is
-// visible in the service: that replacement must not be reused or admitted either.
+// visible in the service: that replacement must not be reused or admitted either. The unconfirmed retirement ends the
+// invocation before the plain path or the app shell runs, so nothing but reads is sent.
 for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
   test(`removed settled: after a retirement refused because another invocation left the dashboard ${state}, a plain dashboard of its name creates, reuses and publishes nothing`, async () => {
     await withDashboards(true, async () => {
@@ -1340,9 +1341,9 @@ for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
       assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('its retirement could not be confirmed')), warnings.join('\n'));
       assert.equal(r.calls.filter((c) => c.method === 'POST' && c.path === 'systemforms').length, 0, 'no second plain dashboard is created');
       assert.deepEqual(appWrites(r.calls).map((c) => `${c.method} ${c.path}`), [], 'no app write or publish goes ahead');
-      assert.match(chainText(r.err), /managed-dashboard-unsettled/);
+      assert.equal(r.err && r.err.code, 'managed-not-settled', chainText(r.err));
+      assert.deepEqual(r.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`), [], 'nothing but reads is sent');
       assert.equal(r.barrier.checkAppWrite({ addedDashboards: [id] }).ok, false);
-      if (state === 'replacement') assert.equal(r.barrier.checkAppWrite({ addedDashboards: [newId] }).ok, false, 'the replacement with a pending attempt is not admitted');
       const now = storeOf(dir).readGroup('dashboard', KEY);
       if (state === 'owed') assert.equal(now.committed.publication.state, 'owed', 'the concurrent debt is kept, not paid');
       if (state === 'dispatching') assert.equal(now.committed.publication.state, 'dispatching', 'the concurrent dispatch is kept');
@@ -1350,3 +1351,93 @@ for (const state of ['owed', 'pending', 'dispatching', 'replacement']) {
     });
   });
 }
+
+// The race lands inside the observation itself: another invocation retires the group and starts a fresh create of the same key
+// under another root, named anew. This invocation's one observation already sees the replacement, so its retirement is not
+// confirmed, and it does not read the store again: it stops there, before the plain dashboard (by the replacement's name, or
+// pinned to the replacement's id), the app shell or a publish runs. A reread that would fail changes nothing, as none is made.
+const REPLACEMENT = '99999999-9999-4999-8999-999999999999';
+async function raceAtObservation() {
+  const wire = wireWithIdReads();
+  const dir = makeTempDir('declared-dash-');
+  assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+  const g = committedGroup(dir);
+  const id = g.root.id;
+  const row = { ...wire.saved.get(id) };
+  wire.saved.delete(id);
+  wire.published.delete(id);
+  const store = storeOf(dir);
+  const counts = { observations: 0, retirements: 0, refreshes: 0 };
+  const observe = store.observeRetirement;
+  const retire = store.retireAbsentGroup;
+  const refresh = store.refresh;
+  store.observeRetirement = (arg) => {
+    counts.observations += 1;
+    const other = storeOf(dir);
+    const { observation } = other.observeRetirement({ family: 'dashboard', key: KEY });
+    other.retireAbsentGroup({ family: 'dashboard', key: KEY, generation: g.generation, rootId: id, observation, evidence: { kind: 'root-absent', rootId: id, saved: 'not-found', published: 'not-found' } });
+    const declaration = { ...g.originalDeclaration, name: 'New Name' };
+    other.prepareAttempt({ family: 'dashboard', key: KEY, baseGeneration: null, root: { ...g.root, id: REPLACEMENT }, knownScopes: [{ type: 'dashboard', id: REPLACEMENT }], declarationSha256: 'a'.repeat(64), declaration });
+    wire.putForm({ ...row, formid: REPLACEMENT, name: 'New Name' }, { publishedToo: true });
+    return observe(arg);
+  };
+  store.retireAbsentGroup = (arg) => { counts.retirements += 1; return retire(arg); };
+  store.refresh = (...args) => {
+    counts.refreshes += 1;
+    if (counts.refreshes > 1) throw new Error('the store file cannot be reread');
+    return refresh(...args);
+  };
+  return { wire, dir, id, store, counts };
+}
+for (const by of ['name', 'id']) {
+  test(`removed settled: a replacement learned by the observation (by its ${by}) stops the invocation before any write; a reread is never needed`, async () => {
+    await withDashboards(true, async () => {
+      const w = await raceAtObservation();
+      const spec = makeSpec({ declared: false, dashboard: by === 'name' ? { name: 'New Name' } : { name: 'Unrelated', dashboardId: REPLACEMENT } });
+      spec.appShell.areas[0].groups[0].subAreas[0].dashboard = spec.dashboards[0].name;
+      spec.app.icon = 'existing-icon';
+      scriptIcon(w.wire);
+      const warnings = [];
+      const r = await buildWith(w.wire, w.dir, spec, { bindingGroups: { store: w.store }, phases: ['dashboards', 'app-shell', 'publish'], publish: true, warn: (m) => warnings.push(String(m)) });
+      assert.deepEqual([w.counts.observations, w.counts.retirements, w.counts.refreshes], [1, 0, 1], 'one observation, no retirement, nothing reread after it');
+      assert.equal(r.err && r.err.code, 'managed-not-settled', chainText(r.err));
+      assert.match(chainText(r.err), new RegExp(`managed dashboard "${KEY}" \\(its retirement could not be confirmed: the binding store changed before its dashboard was read\\); the build stopped before writing anything, and the next build reads it again`));
+      assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('this build stops before writing anything')), warnings.join('\n'));
+      assert.deepEqual(r.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`), [], 'nothing but reads is sent');
+      assert.deepEqual(r.calls.filter((c) => /^(appmodules|sitemaps|webresources)/i.test(c.path) || decodeURIComponent(c.url).includes('New Name') || c.url.includes(REPLACEMENT)).map((c) => c.url), [], 'neither the plain dashboard path nor the app shell ran');
+      assert.equal(r.barrier.checkAppWrite({ addedDashboards: [w.id] }).ok, false, 'the old quarantine is kept');
+      const now = storeOf(w.dir).readGroup('dashboard', KEY);
+      assert.equal(now.pending && now.pending.root.id, REPLACEMENT, 'the other invocation\'s attempt is kept as it was');
+    });
+  });
+}
+
+// Liveness: a store that cannot be observed once stops that invocation before anything is written; the next invocation reads
+// the store afresh, retires the deleted dashboard, and writes and publishes the app as it always did.
+test('removed settled liveness: an observation that fails stops the invocation before any write; the next one retires and builds the app', async () => {
+  await withDashboards(true, async () => {
+    const wire = wireWithIdReads();
+    const dir = makeTempDir('declared-dash-');
+    assert.equal((await build(wire, dir, makeSpec())).err, undefined);
+    const id = committedGroup(dir).root.id;
+    wire.saved.delete(id);
+    wire.published.delete(id);
+    const spec = dropDashboard(makeSpec({ declared: false }));
+    spec.app.icon = 'existing-icon';
+    scriptIcon(wire);
+    const store = storeOf(dir);
+    store.observeRetirement = () => { throw Object.assign(new Error('the store file is locked'), { code: 'managed-binding-store-busy' }); };
+    const opts = { phases: ['dashboards', 'app-shell', 'publish'], publish: true };
+    const first = await buildWith(wire, dir, spec, { ...opts, bindingGroups: { store } });
+    assert.equal(first.err && first.err.code, 'managed-not-settled', chainText(first.err));
+    assert.match(chainText(first.err), /the binding store could not be observed \(managed-binding-store-busy: the store file is locked\)/);
+    assert.deepEqual(first.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`), []);
+    assert.notEqual(committedGroup(dir), null, 'nothing is retired');
+    const warnings = [];
+    const next = await buildWith(wire, dir, spec, { ...opts, warn: (m) => warnings.push(String(m)) });
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.ok(warnings.some((m) => m.includes('managed-dashboard-retired')), warnings.join('\n'));
+    assert.equal(committedGroup(dir), null);
+    assert.ok(appWrites(next.calls).length > 0, 'the app is written and published');
+  });
+});

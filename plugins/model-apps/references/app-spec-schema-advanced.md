@@ -748,11 +748,19 @@ are only added.
   Until that build runs, `--verify` fails the form. A form found in either layer, or a read that fails (no
   access, a timeout), is kept as it is. If the build cannot confirm the retirement (another build settled or
   changed the record while this one read it, or the record could not be written), it warns that the retirement
-  could not be confirmed, keeps the form's table blocked for the rest of that build, and ends incomplete; the
-  next build reads the record again. A form whose last publish is unconfirmed is not released this way,
+  could not be confirmed and stops before it writes anything (incomplete, `managed-not-settled`): no form,
+  dashboard, app or publish is sent in that run. Running the build again reads the record afresh. A form
+  whose last publish is unconfirmed is not released this way,
   because that publish may still complete: it stays blocked until a read confirms it or the maker accepts
   `publication-risk:table:<table>` (see "An unconfirmed publish" above). A form the spec still declares is
   not released either: its missing form stops the build (`form-layout-bound-row-missing`).
+- **A plain form in place of a removed declared form that has not settled.** When the spec turns a declared
+  form into a plain one (no `reconcile`), or names its id in a plain form's `formId`, while its managed record
+  still has unfinished work (a change an earlier build started, such as a create whose answer was lost, or a
+  publish that is owed or not confirmed), the build refuses that form before it sends anything for it
+  (`managed-form-unsettled`), so it never changes what that work owes or makes a second form. Other forms of the
+  table build as usual. Restore the declaration (`reconcile: "declared"` with its key) and let it settle, or run
+  the build again once that work has settled.
 
 ## dashboards[].reconcile (optional — declared dashboards)
 
@@ -832,10 +840,10 @@ existing one is reused and its tiles are never edited.
     build retires its record and reports `managed-dashboard-retired`; nothing is sent, and its unpublished
     change is dropped with it. A row in either layer, or a read that fails (no access, a timeout), keeps the
     block. If the build cannot confirm the retirement (another build settled or changed the record while this
-    one read it, or the record could not be written), it warns that the retirement could not be confirmed,
-    keeps the dashboard blocked for the rest of that build, and ends incomplete; the next build reads the
-    record again. In that build a plain dashboard of its name or id is refused too, as is any dashboard another
-    build has started under that key. A dashboard you declare under that key later is a new one.
+    one read it, or the record could not be written), it warns that the retirement could not be confirmed
+    and stops before it writes anything (incomplete, `managed-not-settled`): no dashboard, app or publish is
+    sent in that run. Running the build again reads the record afresh. A dashboard you declare under that key
+    later is a new one.
   - A plain `dashboards[]` entry with that dashboard's id or name stops the build before it sends anything,
     so it never makes a second dashboard in its place.
 

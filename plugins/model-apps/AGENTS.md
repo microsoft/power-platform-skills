@@ -2903,13 +2903,24 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   notice naming the key. Present in either layer, a 403, a timeout or any other answer keeps the group untouched.
   A retirement this build cannot confirm (the store could not be observed, the group changed while the build read
   it, or the store refused or failed the write) is never retried in that build: it warns that the retirement
-  could not be confirmed, quarantines the form's table for the rest of the invocation (no app write admits it, no
-  publish names it), and the run ends incomplete naming the form; the next invocation rereads the durable result.
+  could not be confirmed, quarantines the form's table, and the build stops right after the dashboard and form
+  retirement passes, before its first service write (`haltOnUnconfirmedRetirements`: incomplete,
+  `managed-not-settled`, naming every such key). Nothing later runs in that invocation (no plain form or
+  dashboard, no app shell, no publish, no pages); running the build again observes and reads it afresh.
   A `dispatching`/`unconfirmed` publication is never read or retired
   (the publish could still land: it is confirmed read-only or accepted as `publication-risk:<scopeKey>`), nor is
   a group the spec still declares (`form-layout-bound-row-missing`, repaired explicitly). A store with no such
   group adds no request. Tests: `tests/sdk-build-declared-forms.test.js` ("removed declared form", "deleted form
   is never retired").
+  **A plain form that is a removed declared form not yet settled** (the plain-form loop of the forms phase): a
+  stored form group the spec no longer declares (with the path on) that has a pending attempt (a declared create
+  whose answer was lost included), or a publish `owed`, `dispatching` or `unconfirmed`, holds its identity. A plain
+  form whose key (`<table>/<type>/<name>`) is that group's, or whose `formId` names the root the group or its
+  attempt holds, is refused before any request for it (`managed-form-unsettled`), because the plain path finds a
+  form by name or id only and would PATCH the saved layer that change owes or create a second form beside one that
+  may still land. Only that form is refused: other plain forms of the table build as before, and a settled group
+  (no attempt, publish `confirmed` or `not-needed`) holds nothing. Remedy: declare it again with `reconcile:
+  "declared"` and its key so the build settles it, or run the build again once that change has settled.
 - **Dashboard** (`dashboards[].reconcile: "declared"`, `lib/dashboard-reconcile.js`, enabled by
   `DECLARED_FEATURES.dashboards` in `lib/declared-features.js`): a global Standard dashboard follows the
   spec tile by tile. Each tile has a `key`; a bound tile gets only what it authors written (target, `name`,
@@ -2944,11 +2955,12 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   before the reads) with the notice `managed-dashboard-retired`. A retirement this build cannot confirm (the
   store could not be observed, the group changed while the build read it, or the store refused or failed the
   write) is never retried in that build: it warns that the retirement could not be confirmed, quarantines the
-  dashboard for the rest of the invocation whatever it owed before, and the run ends incomplete naming it; the
-  next invocation rereads the durable result. It rereads the store once (never to retry): every root the key now
-  has (a new owed generation, a pending attempt, a fresh create under another id) joins that quarantine, and the
-  key with its names is held (heldDashboards), so a plain dashboard of that name or id is refused before any
-  request; a reread that fails holds what the run already knew. A row in
+  dashboard whatever it owed before, and the build stops once both retirement passes have run, before its first
+  service write (`haltOnUnconfirmedRetirements`: incomplete, `managed-not-settled`, naming every such key).
+  Another invocation may have moved the key (a new owed generation, a pending attempt, a fresh create under
+  another id), and nothing this invocation cached can say which, so nothing later runs in it: no plain dashboard,
+  no app shell, no publish, no pages. The store is not reread and the retirement not retried with a new
+  observation; running the build again observes and reads it afresh, and retires it or proceeds. A row in
   either layer, a 403, a timeout or any other failed read keeps the group and its fence; a block this
   invocation already holds is never cleared, so that invocation stays stopped and the next one is clean.
   The store's classification of owed debt (`classifyPersisted`) is unchanged; the fence is the build's. A withheld publish leaves the run
