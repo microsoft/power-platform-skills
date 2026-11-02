@@ -2576,6 +2576,46 @@ test('absent root: a workflow create whose answer was lost stays unconfirmed, an
   assert.equal(fs.readFileSync(s.store.file, 'utf8'), before);
 });
 
+test('absent root: a dashboard both layers read fresh prove gone retires alone, owing its publish, a sibling\'s carried journal and the quarantine untouched', async () => {
+  const s = await setup();
+  committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form/>', savedXml: '<form/>', state: 'not-needed' });
+  const form = s.store.readGroup('form', 'account/main').committed;
+  s.store.markPublishDispatch({ groups: [], scope: ACCOUNT, token: 'sibling-carry',
+    carried: [{ family: 'form', key: 'account/main', generation: form.generation, savedSha256: H('5'), publishedSha256: H('5') }] });
+  s.store.notePublishOutcome({ token: 'sibling-carry', outcome: 'unconfirmed' });
+  const t = s.store.prepareAttempt({ family: 'dashboard', key: 'sales', baseGeneration: null, root: { kind: 'dashboard', key: 'sales', id: DASH }, knownScopes: [dashScope(DASH)], declarationSha256: H('e'), publication: { scope: dashScope(DASH), state: 'owed' } });
+  s.store.markSending(t, { ...expected(DASH), proofSchema: 'dashboard-v1' });
+  s.store.noteSaved(t, { proof: null, acknowledgedRoot: true });
+  const dash = s.store.commitGroup({ token: t, baseGeneration: null, records: [rec('dashboard', 'sales', DASH)], proof: PROOF, consumerState: consumer('dashboard'), publication: { scope: dashScope(DASH), state: 'owed', desiredSha256: H('6'), dispatchToken: null } });
+  const args = (observation, evidence = { kind: 'root-absent', rootId: DASH, saved: 'not-found', published: 'not-found' }) => ({ family: 'dashboard', key: 'sales', generation: dash.generation, rootId: DASH, evidence, observation });
+  // Saved but never published: a missing published layer alone is no absence, and cannot even be put as evidence.
+  s.wire.putForm({ formid: DASH, name: 'Sales', objecttypecode: 'none', type: 0, formxml: '<form/>' });
+  const early = s.store.observeRetirement({ family: 'dashboard', key: 'sales' }).observation;
+  assert.equal(await readSystemFormRootPresence(s.sdk.dataverse, DASH), 'present');
+  const unchanged = fs.readFileSync(s.store.file, 'utf8');
+  assert.equal(await codeOf((async () => s.store.retireAbsentGroup(args(early, { kind: 'root-absent', rootId: DASH, published: 'not-found' })))()), CODES.notSettled);
+  assert.equal(fs.readFileSync(s.store.file, 'utf8'), unchanged);
+  // Deleted: observe, then read both layers by the id, then retire.
+  s.wire.saved.delete(DASH);
+  s.barrier.quarantine([dashScope(DASH)], [DASH], 'dashboard sales (already stopped)');
+  const before = s.store.snapshot().envelope;
+  const { observation } = s.store.observeRetirement({ family: 'dashboard', key: 'sales' });
+  const reads = s.wire.log.length;
+  assert.equal(await readSystemFormRootPresence(s.sdk.dataverse, DASH), 'absent');
+  assert.equal(s.wire.log.length - reads, 2, 'one read per layer');
+  const writes = s.wire.log.filter((r) => r.method !== 'GET').length;
+  assert.deepEqual(s.store.retireAbsentGroup(args(observation)), { retired: { family: 'dashboard', key: 'sales', generation: dash.generation, attempt: null } });
+  const after = s.store.snapshot().envelope;
+  assert.deepEqual([after.groups, after.attempts, after.workflowEffects, after.publicationRiskAcceptances],
+    [before.groups.filter((g) => g.family !== 'dashboard'), before.attempts, before.workflowEffects, before.publicationRiskAcceptances]);
+  assert.deepEqual([after.retiredGroups[0].publication, after.retiredGroups[0].attempt], ['owed', null], 'the debt is recorded owed, never paid');
+  assert.equal(s.wire.log.filter((r) => r.method !== 'GET').length, writes, 'retiring sends nothing');
+  assert.equal(s.barrier.allowScope(dashScope(DASH), 'still stopped'), false, 'the quarantine stays');
+  const next = openManagedBindings({ workspaceDir: s.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL });
+  assert.equal(next.readGroup('dashboard', 'sales').committed, null);
+  assert.equal(next.readGroup('form', 'account/main').committed.publication.state, 'unconfirmed', 'the sibling\'s carried journal stays');
+});
+
 for (const family of ['rule', 'bpf']) {
   test(`absent root: a ${family} create confirmed by a read, its activation answered unapplied, then the row deleted, retires on a fresh 404 with no write`, async () => {
     const s = await setup();
