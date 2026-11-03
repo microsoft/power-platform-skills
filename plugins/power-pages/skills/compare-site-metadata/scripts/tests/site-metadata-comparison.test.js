@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const vm = require('node:vm');
 const { pathToFileURL } = require('node:url');
 const { main, compareMetadata, writeReport, verifyReport, resolveMetadataRoot, tools } = require('../compare-site-metadata');
 
@@ -163,6 +164,58 @@ test('writes the original HTML, with English component tabs, inline diffs and an
   assert.ok(!fs.readFileSync(local, 'utf8').includes('Environment:'));
   assert.ok(fs.existsSync(`${output}.json`));
   assert.equal(verifyReport(source, target, output).added, 1);
+});
+
+test('file diffs toggle through keyboard-operable buttons that keep aria-expanded in sync', async t => {
+  const { root, source, target } = fixture(t);
+  write(source, 'web-pages/home.html', 'local\n');
+  write(target, 'web-pages/home.html', 'remote\n');
+  write(source, 'content-snippets/local.yml', 'added\n');
+  const html = fs.readFileSync(await writeReport(compareMetadata(source, target), path.join(root, 'report.html')), 'utf8');
+  assert.ok(!html.includes('<div class="file-header"'));
+  const headers = [...html.matchAll(/<button type="button" class="file-header" aria-expanded="false" aria-controls="(diff-[\w-]+)" onclick="toggleDiff\('\1'\)">/g)]
+    .map(match => match[1]);
+  // Two changed files, each listed in the All tab and in its component tab.
+  assert.equal(headers.length, 4);
+  for (const diffId of headers) {
+    assert.ok(html.includes(`<div class="diff-container" id="${diffId}" style="display: none;">`));
+    assert.ok(html.includes(`<span class="toggle-icon" id="${diffId.replace('diff-', 'icon-')}" aria-hidden="true">`));
+  }
+  assert.match(html, /\.file-header:focus-visible\s*\{\s*outline: 2px solid var\(--primary-color\);/);
+
+  // Run the report's own script against a minimal DOM stub so the handlers,
+  // not just the initial markup, are checked.
+  const element = () => {
+    const attrs = new Map();
+    const classes = new Set();
+    return {
+      style: { display: 'none' },
+      classList: { add: c => classes.add(c), remove: c => classes.delete(c), has: c => classes.has(c) },
+      setAttribute: (k, v) => attrs.set(k, v),
+      getAttribute: k => attrs.get(k),
+    };
+  };
+  const nodes = headers.map(diffId => ({ diffId, header: element(), diff: element(), icon: element() }));
+  const document = {
+    getElementById: id => nodes.find(n => n.diffId === id)?.diff || nodes.find(n => n.diffId.replace('diff-', 'icon-') === id)?.icon,
+    querySelector: selector => nodes.find(n => selector === `[aria-controls="${n.diffId}"]`)?.header,
+    querySelectorAll: selector => nodes.map(n => ({ '.file-header': n.header, '.diff-container': n.diff, '.toggle-icon': n.icon })[selector]),
+  };
+  const script = html.match(/<script>([^]*?)<\/script>/)[1];
+  const context = vm.createContext({ document });
+  vm.runInContext(script, context);
+  const [first, second] = nodes;
+  context.toggleDiff(first.diffId);
+  assert.equal(first.header.getAttribute('aria-expanded'), 'true');
+  assert.equal(first.diff.style.display, 'block');
+  assert.ok(first.icon.classList.has('expanded'));
+  assert.equal(second.header.getAttribute('aria-expanded'), undefined);
+  context.toggleDiff(first.diffId);
+  assert.equal(first.header.getAttribute('aria-expanded'), 'false');
+  context.expandAll();
+  assert.ok(nodes.every(n => n.header.getAttribute('aria-expanded') === 'true' && n.diff.style.display === 'block'));
+  context.collapseAll();
+  assert.ok(nodes.every(n => n.header.getAttribute('aria-expanded') === 'false' && n.diff.style.display === 'none'));
 });
 
 test('upstream report applies its exact 5 MiB and 20,000-line display limits', async t => {
