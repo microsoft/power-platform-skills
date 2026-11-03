@@ -2866,7 +2866,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   then ONE managed publish per table through the shared table publisher (also for a table that holds an
   unconfirmed earlier publish, which it confirms read-only first, and for the table of every STORED form
   group, so omitting a declaration, or every form, never skips an owed or uncertain publish). Default-form
-  promotion and Main Form Set order skip declared forms (`formOrderSpecOf`), and validation refuses
+  promotion and Main Form Set order skip declared forms (`formOrderSpecOf` in `lib/form-order.js`, which
+  `verify-spec.js` shares, so `--verify` holds no default or order expectation for a declared form either), and validation refuses
   `isDefault`, `deactivateOtherMainForms`, `securityRoles`, `mainFormOrder`, `prune` and `genPages`
   on them, because each would rewrite the proved saved layer. For the same reason the CLI's destructive-operation gate
   (`discoverOpDiffState`) skips a declared form while the path is on: its build keeps every control it does not declare
@@ -2892,7 +2893,9 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   one leaves the host out as unverified, and the oracle has no wildcard. A quick view's target is looked up by
   name (ambiguous → unverified). `download-model-app.js --include-managed --managed-manifest <store file>`
   (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
-  pending, unreadable or invalid one is left out and named. The restored form is the group's
+  pending, unreadable or invalid one is left out and named. A form with `events` is always invalid there:
+  the download writes only icon and logo web resources, so its handler library is undeclared and the form
+  is named in `managedForms.stale`; forms without a handler are restored. The restored form is the group's
   `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
   downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.
@@ -3269,6 +3272,14 @@ COMPARED; a caption of a language both carry, and anything else, still is; one l
 aside, so a single-language organization's hashes are unchanged. A form with a second language on every
 label, or a published read in more than one language, keeps failing closed. That comparison is the
 PUBLICATION VIEW only: it decides whether a publish is live, and no certification, binding or proof uses it.
+Live, an adopted form's saved read also gave a base-language sub-grid caption that its published read, under the
+SAME `@odata.etag`, did not, so no publish of its table confirmed. When every unconfirmed read's saved hash still
+equals what was shipped, the unconfirmed stop and the next run's block label say so (`LAYERS_READ_APART` in
+`lib/managed-feature-contract.js`) and point to the Maker check and `publication-risk`. No rule sets that caption
+aside: a base-language caption is exactly what a maker edits, and an equal saved hash cannot prove what is live.
+The acceptance makes the publish owed again, so each later publish of that table can stop the same way. The
+drift stop (a saved layer its group did not prove: the scope is blocked and its publish not sent) says whether
+that layer is also unpublished and gives the matching remedy; its code is unchanged.
 A declared dashboard's proof holds the saved row AS READ to what the write sent, every caption in every
 language; the only caption it sets aside is the empty `<labels><label description="" languagecode="…" /></labels>`
 the platform adds to a tab or section sent without one (`isPlatformEmptyCaption` in `lib/dashboard-reconcile.js`:

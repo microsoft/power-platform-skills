@@ -696,6 +696,19 @@ publish the table again), or a declared dashboard. A dashboard the spec no longe
 build stops `publication-withheld` ("publish is owed") until you declare the dashboard again with
 `reconcile: "declared"`, and that build publishes it.
 
+**A saved change the build did not make.** When a declared form's saved layer holds a change made
+elsewhere since the build last proved it, the build does not publish that form's table, because the publish
+would put that change live; it stops incomplete. If the change is not published, the stop says so: publish it
+in Maker if it should be kept, or undo it there and save, then run the build again. If it is already
+published, run the build again: it reads the saved layer afresh and names any change it would overwrite.
+
+**Saved and published layers that read apart.** On some forms the platform reads a caption one way in the
+saved layer and another way in the published layer (seen on an adopted form whose sub-grid caption in the
+base language did). No read can then confirm a publish of that form's table: the stop says that the saved
+layer is still the one the publish shipped, yet the published layer reads differently. Compare what is
+published with the spec in Maker; if it matches, pass the `publication-risk` key the build prints. A later
+publish of that table can stop the same way, and each needs its own key.
+
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by
 itself, and these do not count as a difference:
@@ -776,11 +789,17 @@ are only added.
   declares on that table, else the table's default view): a different view fails, a view the spec
   declares that is not in the environment fails, and one whose name matches more than one view, or that
   cannot be read, is unverified. A quick view whose form name matches more than one form is unverified.
+  Verify expects no default-form flag and no form-order place for a declared form, since the build sets
+  neither on it; the default and order checks of the table's plain forms are unchanged.
 - **Download.** A plain download leaves declared forms out. To bring them back, pass both
   `--include-managed` and `--managed-manifest <store file>`, the `managed-bindings.<hash>.json` file in the
   build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
   `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
-  that is pending, gone or not valid is left out and named. The download transfers no binding: the
+  that is pending, gone or not valid is left out and named. A declared form with an event handler
+  (`events`) is not valid in the downloaded spec, because a download brings back only icon and logo web
+  resources, not the handler's library: it is left out and named in `managedForms.stale` ("onload handler
+  references undeclared web resource"), while the forms without a handler are restored. To keep it, add
+  the library to `webResources[]` and the form's declaration to `forms[]` by hand. The download transfers no binding: the
   downloaded folder has no store, so the first build that binds a form there needs
   `--authorize "adopt:form:<key>"`. A rebuild that finds the form already as declared writes nothing and
   may leave it unbound.

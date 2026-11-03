@@ -167,7 +167,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
   declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
   not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
-  file>`; it carries no binding, so the first build that binds each form from the downloaded folder needs
+  file>` (one with an event handler is left out and named in `managedForms.stale`, as its handler's web
+  resource is not downloaded: add both back by hand); it carries no binding, so the first build that binds each form from the downloaded folder needs
   `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
   `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below). A
@@ -234,7 +235,12 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   usual checks. A dashboard the spec no longer declares stays owed (`publication-withheld`) until its
   declaration is restored. A run that cannot tell whether it recorded the key stops before any write
   (`publication-risk-record-unconfirmed`): run the build again without the key. `--allow-destructive` never
-  gives it.
+  gives it. When the stop says the saved layer is still the one the publish shipped yet the published layer
+  reads differently, the platform may read that form's two layers apart: have the maker compare what is
+  published with the spec; each later publish of that table can stop the same way.
+- **A saved change the build did not make** — a declared form's table is not published while its saved
+  layer holds a change made elsewhere. If the stop says that change is not published, tell the maker to
+  publish it in Maker if it should stay, or undo it and save, then run the build again.
 - **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
   **new** app; never add it to an existing or downloaded spec. Tell the maker: declared views and charts
   get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;
