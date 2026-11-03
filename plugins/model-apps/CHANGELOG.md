@@ -36,7 +36,7 @@ Bundled SDK: commit 0eef55f8c2d0.
 - Form/dashboard saved layers miss mid-write Maker edits; existing workflows reject edits.
 - Charts verify existence only; views/charts/security profiles do not download.
 - Some local-copy stops accept printed `overwrite:` keys; managed drafts need manual recovery ([schema](references/app-spec-schema-advanced.md)).
-- Exact Main-form removals, empty web resources/Quick Find and removed view columns need `--allow-destructive`.
+- Existing-app exact Main forms, empty web resources/Quick Find and removed view columns need `--allow-destructive`.
 - Keyed commands/`forms[].genPages` refused; caption-only inspection fails.
 - Unpublished duplicate rules need publishing; unprovisioned languages fail after solution creation.
 - Lost configuration creates can duplicate; recovered-table Date/Time repairs may need rerunning.
