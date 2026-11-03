@@ -1451,3 +1451,17 @@ test('standalone discovery finds the store of a build whose spec omits app.uniqu
     assert.equal(found.absent, false, JSON.stringify(Object.keys(where)));
   }
 });
+
+// A workspace path that names a file, or lies under one, cannot be a folder, so it holds no store. Windows answers ENOENT for a
+// path under a file and POSIX answers ENOTDIR; a path that IS a file answers ENOTDIR on both. Each means "no workspace there", as a
+// missing folder does, so discovery finds no debt and the caller's own folder check (lib/safe-fs.js) is what refuses the write.
+test('standalone discovery reads a workspace path that is a file, or lies under one, as holding no store on every platform', () => {
+  const { openStandaloneManagedFence } = require('../lib/managed-standalone-fence.js');
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const file = path.join(newDir(), 'app-folder.txt');
+  fs.writeFileSync(file, 'a file, not a folder\n');
+  for (const workspaceDir of [file, path.join(file, '.maker-workspace')]) {
+    const found = openStandaloneManagedFence({ environment: org.origin, workspaceDir });
+    assert.deepEqual([found.absent, found.debt], [true, []], workspaceDir);
+  }
+});

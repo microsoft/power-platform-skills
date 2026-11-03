@@ -34,7 +34,11 @@ function storeFilesIn(workspaceDir) {
   try {
     names = fs.readdirSync(workspaceDir);
   } catch (e) {
-    if (e && e.code === 'ENOENT') return [];
+    // No folder at that path: ENOENT when it is missing, ENOTDIR when it names a file or lies under one. Windows answers ENOENT
+    // for a path under a file where POSIX answers ENOTDIR, and a path that IS a file answers ENOTDIR on both. A store can be
+    // in neither, so both read as "no store", the same on every platform; the caller's own folder check (lib/safe-fs.js
+    // assertSafeOutputDir) refuses a write there. Any other error stays unreadable: debt this run cannot see is not none.
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return [];
     throw fenceError(CODES.unreadable, `the workspace ${workspaceDir} could not be listed for a managed binding store (${(e && e.code) || e})`);
   }
   return names.filter((n) => STORE_FILE.test(n));
