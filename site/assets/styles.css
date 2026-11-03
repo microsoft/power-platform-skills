@@ -1152,6 +1152,18 @@ code {
   position: relative;
 }
 
+/* On a phone the picker spans the column; long names wrap onto two lines inside each option. */
+@media (max-width: 30rem) {
+  .picker-options {
+    display: grid;
+    width: 100%;
+  }
+
+  .picker-option > span {
+    padding-inline: var(--space-2);
+  }
+}
+
 .picker-option input {
   position: absolute;
   opacity: 0;
@@ -1160,14 +1172,22 @@ code {
   cursor: pointer;
 }
 
+.picker-option {
+  display: flex;
+}
+
 .picker-option > span {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
   padding: 0.55rem 0.9rem;
   border-radius: 9px;
   font-size: var(--text-sm);
   font-weight: 600;
+  line-height: 1.25;
   text-align: center;
-  white-space: nowrap;
+  text-wrap: balance;
   color: var(--color-text-muted);
   transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }

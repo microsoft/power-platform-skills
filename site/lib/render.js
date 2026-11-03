@@ -27,12 +27,11 @@ const CLAUDE_CODE_URL = 'https://code.claude.com/docs/en/setup';
 const COPILOT_CLI_URL = 'https://docs.github.com/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli';
 const COPILOT_APP_URL = 'https://github.com/features/ai/github-app';
 
-// `short` is the visible label in tight pickers; the accessible name still starts with the
-// full name, so the visible text stays part of it (WCAG 2.5.3).
+// Always the products' full names: "GitHub Copilot app", never just "Copilot app".
 const ASSISTANTS = [
-  { id: 'copilot-app', label: 'GitHub Copilot app', prefix: 'GitHub ', short: 'Copilot app' },
-  { id: 'copilot-cli', label: 'GitHub Copilot CLI', prefix: 'GitHub ', short: 'Copilot CLI' },
-  { id: 'claude-code', label: 'Claude Code', prefix: '', short: 'Claude Code' },
+  { id: 'copilot-app', label: 'GitHub Copilot app' },
+  { id: 'copilot-cli', label: 'GitHub Copilot CLI' },
+  { id: 'claude-code', label: 'Claude Code' },
 ];
 
 const AUDIENCE_LABELS = {
@@ -232,7 +231,7 @@ function assistantPicker(scopeId, legend) {
   const options = ASSISTANTS.map((assistant, index) => `
         <label class="picker-option">
           <input type="radio" name="assistant-${escapeAttr(scopeId)}" value="${assistant.id}"${index === 0 ? ' checked' : ''}>
-          <span>${assistant.prefix ? `<span class="sr-only">${escapeHtml(assistant.prefix)}</span>` : ''}${escapeHtml(assistant.short)}</span>
+          <span>${escapeHtml(assistant.label)}</span>
         </label>`).join('');
   return `<fieldset class="assistant-picker" data-assistant-picker>
       <legend>${escapeHtml(legend)}</legend>
@@ -260,7 +259,7 @@ function pluginRow(plugin, root) {
           <p class="plugin-meta"><span>For ${escapeHtml(audienceLabel(plugin).toLowerCase())}</span>${statusBadge(plugin)}</p>
         </div>
         <div class="plugin-actions">
-          <a class="button button-primary" data-for="copilot-app" href="${escapeAttr(links.copilotAppInstallUrl(plugin.name))}">Install in Copilot app${forPlugin}</a>
+          <a class="button button-primary" data-for="copilot-app" href="${escapeAttr(links.copilotAppInstallUrl(plugin.name))}">Install in GitHub Copilot app${forPlugin}</a>
           <a class="button button-primary" data-for="copilot-cli" href="${escapeAttr(page)}#install" data-copy="${escapeAttr(links.copilotCliCommand(plugin.name))}" data-label="Copy install command"><span data-button-label>Copy install command</span>${forPlugin}</a>
           <a class="button button-primary" data-for="claude-code" href="${escapeAttr(links.launcherUrl(root, 'claude-code', plugin.name))}">Install in Claude Code${forPlugin}</a>
           <a class="text-link" href="${escapeAttr(page)}">Details<span class="sr-only"> about ${escapeHtml(plugin.title)}</span></a>
@@ -400,11 +399,11 @@ function pluginsSection(catalog, root) {
       </nav>
     </div>
     <div class="callout" data-for="copilot-app">
-      <p><strong>First time in the Copilot app?</strong> Add the Power Platform marketplace before you install a plugin. You only do this once.</p>
+      <p><strong>First time in the GitHub Copilot app?</strong> Add the Power Platform marketplace before you install a plugin. You only do this once.</p>
       <a class="button button-secondary button-small" href="${escapeAttr(links.copilotAppMarketplaceUrl())}">Add the marketplace</a>
     </div>
     <div class="callout" data-for="copilot-cli">
-      <p>Copilot CLI can't be opened from a link. Each button copies one line that adds the marketplace and installs the plugin. Paste it into a terminal and press Enter. In the Windows Command Prompt, change <code>;</code> to <code>&amp;</code> first.</p>
+      <p>GitHub Copilot CLI can't be opened from a link. Each button copies one line that adds the marketplace and installs the plugin. Paste it into a terminal and press Enter. In the Windows Command Prompt, change <code>;</code> to <code>&amp;</code> first.</p>
     </div>
     <div class="callout" data-for="claude-code">
       <p>Each button opens a terminal with the install command already typed. Press Enter to install. Clicking does nothing yet? Open Claude Code once and send any message, then try again.</p>
@@ -567,14 +566,14 @@ function installPanel(plugin, root) {
       <div class="install-option" data-for="copilot-app">
         <ol class="install-steps">
           <li><p>Add the Power Platform marketplace. You only do this once.</p><a class="button button-secondary button-block" href="${escapeAttr(links.copilotAppMarketplaceUrl())}">Add the marketplace</a></li>
-          <li><p>Install the plugin.</p><a class="button button-primary button-block" href="${escapeAttr(links.copilotAppInstallUrl(plugin.name))}">Install in Copilot app</a></li>
+          <li><p>Install the plugin.</p><a class="button button-primary button-block" href="${escapeAttr(links.copilotAppInstallUrl(plugin.name))}">Install in GitHub Copilot app</a></li>
         </ol>
         <p class="fine-print">The app asks you to confirm each step.</p>
       </div>
       <div class="install-option" data-for="copilot-cli">
         <p>Paste this into a terminal and press Enter. It adds the marketplace, then installs the plugin.</p>
         ${codeBlock(links.copilotCliCommand(plugin.name), 'Copy command')}
-        <p class="fine-print">In the Windows Command Prompt, change <code>;</code> to <code>&amp;</code> first. VS Code also picks up plugins you install with Copilot CLI.</p>
+        <p class="fine-print">In the Windows Command Prompt, change <code>;</code> to <code>&amp;</code> first. VS Code also picks up plugins you install with GitHub Copilot CLI.</p>
       </div>
       <div class="install-option" data-for="claude-code">
         <p>Opens a terminal with the install command already typed. Press Enter to install.</p>
