@@ -28,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { parseArgs, assertOutsideSite } = require('../../../scripts/lib/non-spa-site-style-context');
+const { parseArgs, assertOutsideSite, within } = require('../../../scripts/lib/non-spa-site-style-context');
 const { openInDefaultBrowser } = require('../../../scripts/lib/default-browser');
 const { readWebsiteIdentity } = require('../../create-site/scripts/validate-site');
 const { readPluginManifest } = require('../../../scripts/check-version');
@@ -1699,8 +1699,12 @@ function escapeHtml(unsafe) {
         .replace(/'/g, "&#039;");
 }
 
-return { compareFiles, compareFileMaps, getAllFiles, getFilteredSourceFiles, getPowerPagesSiteFiles, readPowerPagesConfig, hasSourceCode, readFileContents, generateHtmlContent, getComponentTypeFromPath, getComponentTypeDisplayName };
+return { compareFiles, compareFileMaps, getAllFiles, getFilteredSourceFiles, getPowerPagesSiteFiles, readPowerPagesConfig, hasSourceCode, readFileContents, generateHtmlContent, getComponentTypeFromPath, getComponentTypeDisplayName, escapeHtml };
 })();
+
+function projectRootOf(metadataRoot) {
+  return path.basename(metadataRoot) === '.powerpages-site' ? path.dirname(metadataRoot) : metadataRoot;
+}
 
 function resolveSite(input, codeSite) {
   if (!input) throw new Error('Both --source and --target site directories are required.');
@@ -1717,7 +1721,7 @@ function resolveSite(input, codeSite) {
     throw new Error(`Expected a regular, nonempty website.yml in an actual metadata directory: ${root}`);
   }
   const metadataRoot = fs.realpathSync(root);
-  const projectRoot = path.basename(metadataRoot) === '.powerpages-site' ? path.dirname(metadataRoot) : metadataRoot;
+  const projectRoot = projectRootOf(metadataRoot);
   const isCodeSite = codeSite ?? fs.existsSync(path.join(projectRoot, 'powerpages.config.json'));
   if (isCodeSite && path.basename(metadataRoot) !== '.powerpages-site') {
     throw new Error('A code site must contain its metadata in .powerpages-site.');
@@ -1848,6 +1852,21 @@ function verifyReport(source, target, output) {
   }
   const changed = receipt.counts.added + receipt.counts.modified + receipt.counts.deleted;
   if (receipt.files.length !== changed) throw new Error('Report has unexpected file entries.');
+  // The HTML hash does not cover the sidecar's file list, yet the explanation
+  // step reads the files it names. Require each entry to be a path the verified
+  // report renders (escaped, as the renderer writes it) and to point inside the
+  // selected sites, so the explanation reads exactly the files in the report.
+  const htmlText = html.toString('utf8');
+  const sourceProject = projectRootOf(receipt.sourceRoot);
+  const targetProject = projectRootOf(receipt.targetRoot);
+  for (const file of receipt.files) {
+    if (typeof file?.relativePath !== 'string' || !file.relativePath ||
+        !htmlText.includes(tools.escapeHtml(file.relativePath)) ||
+        typeof file.localPath !== 'string' || !within(sourceProject, path.resolve(file.localPath)) ||
+        typeof file.remotePath !== 'string' || !within(targetProject, path.resolve(file.remotePath))) {
+      throw new Error(`Report has a file entry outside the verified report or selected sites: ${file?.relativePath}`);
+    }
+  }
   return { output: path.resolve(output), receipt: receiptPath(path.resolve(output)), ...receipt.counts };
 }
 

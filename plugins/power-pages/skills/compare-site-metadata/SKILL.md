@@ -138,6 +138,7 @@ node "${PLUGIN_ROOT}/skills/compare-site-metadata/scripts/compare-site-metadata.
 ```
 
 This reopens the HTML and its separate JSON receipt, checking the HTML hash, selected roots, counts and file-entry totals without repeating the comparison.
+It also requires every receipt entry to name a file the verified HTML lists, inside the selected sites, so phase 5 reads only the files in the report.
 Require the returned counts to match the creation command.
 Zero differences is a valid result.
 
@@ -159,16 +160,21 @@ Users run this comparison to find out whether the two sites behave differently, 
 Read the verification receipt at `<REPORT_PATH>.json`; its `files` array lists every changed file with `relativePath`, `status`, `localPath` and `remotePath`.
 `added` exists only in the first site, `deleted` only in the second, and `modified` in both with different contents.
 
-Rank the changes by how directly they alter site behavior, using the component folder or file name (SPA paths start with `.powerpages-site/`):
+Rank the changes by how directly they alter site behavior, using each file's component folder, file type and record names (SPA paths start with `.powerpages-site/`):
 
 1. **Access and security:** table permissions, web roles, page access control rules, and site settings named `Authentication/*`, `Webapi/*` or `HTTP/*`.
 2. **Behavior:** other site settings, basic and advanced forms, lists, web templates, page templates, and JavaScript or CSS web files.
 3. **Content and navigation:** web pages, content snippets, web link sets, site markers and images.
 
+Promote a web page or content snippet file to behavior when it holds custom JavaScript, CSS or Liquid, or when it changes a page's publishing state, page template or access setting.
+Group each record inside an aggregate file such as `sitesetting.yml` or `webrole.yml` by its own name, so an `Authentication/*` record ranks as access and security.
+
 Open both versions of every changed file in the first two groups and compare the actual values; base each finding on what the files contain, not on their names.
-Aggregate files such as `sitesetting.yml` or `webrole.yml` hold many records, so name the records that changed.
+Aggregate files hold many records, so name the records that changed.
 When a group has more than 25 changed files, read the most specific ones and report how many remain unread.
-Separate noise from real changes: when the two website IDs differ, record IDs and lookups differ almost everywhere, and whitespace-only or ordering changes do not alter behavior.
+Separate noise from real changes.
+When the two website IDs differ, record IDs differ almost everywhere; count an ID or lookup change as noise only after confirming that the lookup names the same record, such as the same web role or page template, on both sides.
+Whitespace changes and reordered YAML records are noise; reordered JavaScript, CSS or Liquid is a real change, because order controls execution and the CSS cascade.
 
 Reply in chat with:
 
@@ -176,7 +182,10 @@ Reply in chat with:
 - each access, security or behavior difference, with its file, the first site's value, the second site's value and the effect a site visitor would notice;
 - a short summary of content-only differences.
 
-With zero differences, say the site metadata is identical, so a behavior difference would come from outside it, such as Dataverse records, environment settings, authentication provider configuration or browser cache.
+When a changed value is a credential, such as a client secret, app secret, password, key or connection string, report only that it changed and keep both values out of chat.
+
+With zero differences, say that the compared metadata matches, and name what the comparison skips: dot-prefixed files and folders such as `.portalconfig`, and SPA application source.
+A behavior difference would then come from those exclusions or from outside site metadata, such as Dataverse records, environment settings, authentication provider configuration or browser cache.
 
 <!-- not-a-gate: This question gathers a symptom to investigate, not approval for a change. -->
 Then ask with `AskUserQuestion`, offering at least these choices:

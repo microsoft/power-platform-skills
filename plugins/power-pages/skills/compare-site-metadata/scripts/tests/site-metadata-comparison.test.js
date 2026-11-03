@@ -65,7 +65,7 @@ test('uses upstream case-insensitive path matching and preserves whitespace and 
   assert.equal(compareMetadata(source, target).counts.modified, 2);
 });
 
-test('two SPA sites compare only .powerpages-site metadata, never application source', t => {
+test('two SPA sites compare only .powerpages-site metadata, never application source', async t => {
   const { root, source } = fixture(t);
   const local = path.join(root, 'local code');
   const remote = path.join(root, 'remote code');
@@ -90,6 +90,9 @@ test('two SPA sites compare only .powerpages-site metadata, never application so
     ['.powerpages-site/site-settings/remote.yml', 'deleted'],
     ['.powerpages-site/web-pages/home.html', 'modified'],
   ]);
+  const output = path.join(root, 'spa-report.html');
+  await writeReport(result, output);
+  assert.equal(verifyReport(local, remote, output).modified, 1);
 });
 
 test('metadata-only remote code sites omit local source exactly as the extension does', t => {
@@ -248,6 +251,19 @@ test('verification detects HTML changes, wrong roots, and inconsistent sidecar c
   const sidecar = fs.readFileSync(`${output}.json`, 'utf8');
   fs.writeFileSync(`${output}.json`, sidecar.replace('"added": 1', '"added": 2'));
   assert.throws(() => verifyReport(source, target, output), /inconsistent added/);
+  // Phase 5 reads the files the sidecar names, so a renamed entry or a path
+  // outside the selected sites must fail even when statuses and counts agree.
+  const receipt = JSON.parse(sidecar);
+  for (const tamper of [
+    entry => { entry.relativePath = 'other.txt'; },
+    entry => { entry.localPath = path.join(root, 'outside.txt'); },
+    entry => { entry.remotePath = path.join(source, 'added.txt'); },
+  ]) {
+    const changed = structuredClone(receipt);
+    tamper(changed.files[0]);
+    fs.writeFileSync(`${output}.json`, JSON.stringify(changed));
+    assert.throws(() => verifyReport(source, target, output), /outside the verified report or selected sites/);
+  }
   fs.writeFileSync(`${output}.json`, sidecar);
   assert.equal((await main(['--source', source, '--target', target, '--output', output, '--verify', 'true'])).added, 1);
   assert.deepEqual(fs.readFileSync(output), original);
