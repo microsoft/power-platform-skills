@@ -3321,6 +3321,9 @@ test('#587 a non-GUID role id still resolves — the GUID test is an injection g
 // the form's exact id shows it gone.
 const MAIN_FORM_ID = 'f33a200d-0a76-4c52-b1d2-4d0a7c230991';
 const LAST_MAIN_FORM_MESSAGE = 'This operation can’t be completed. You must have at least one active Main form.';
+// FallbackFormDeactivation, https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes — the code alone names the refusal.
+const LAST_MAIN_FORM_CODE = '0x8004F661';
+const lastMainFormAnswer = (over = {}) => serviceAnswer(400, { code: LAST_MAIN_FORM_CODE, message: LAST_MAIN_FORM_MESSAGE, ...over });
 const mainFormSpec = (entityOver = {}) => ({
   solution: { uniqueName: 'S', publisherPrefix: 'new' },
   entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, ...entityOver }],
@@ -3328,7 +3331,7 @@ const mainFormSpec = (entityOver = {}) => ({
 });
 // `refuse` is what the form delete answers; `read` is how the form's exact id answers after the run's table delete: 'gone' (404 with the missing-row
 // code, in both layers), 'present' (the row), 'unreadable' (HTTP 500), or 'throws'. `tableDelete: 'fails'` makes the table's delete answer HTTP 500.
-function mainFormWorld({ refuse = serviceAnswer(400, { message: LAST_MAIN_FORM_MESSAGE }), read = 'gone', tableDelete = 'works', extraForms = {} } = {}) {
+function mainFormWorld({ refuse = lastMainFormAnswer(), read = 'gone', tableDelete = 'works', extraForms = {} } = {}) {
   const sdk = mockSdk({
     solutions: { S: { solutionid: 'sol-1', uniquename: 'S' } },
     tables: ['new_ticket'],
@@ -3437,16 +3440,35 @@ test('a form is read as gone only when BOTH layers answer the missing-row 404: a
   assert.deepStrictEqual(solutionLeft(sdk), ['S']);
 });
 
+test('the refusal is recognised by its code alone: a localized message, or the code in another case, settles with the table', async () => {
+  for (const refuse of [
+    lastMainFormAnswer({ message: 'Diese Operation kann nicht abgeschlossen werden. Es muss mindestens ein aktives Hauptformular vorhanden sein.' }),
+    lastMainFormAnswer({ code: LAST_MAIN_FORM_CODE.toLowerCase(), message: 'Something else entirely' }),
+  ]) {
+    const sdk = mainFormWorld({ refuse });
+    const { res, counts } = await runMainFormTeardown(sdk);
+    assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+    assert.deepStrictEqual(res.deleted.form, [MAIN_FORM_ID]);
+    assert.deepStrictEqual(solutionLeft(sdk), []);
+    assert.deepStrictEqual(counts, { ok: 3, skip: 0, error: 0 });
+  }
+});
+
 for (const [name, answer] of [
   ['another HTTP 400 of a form delete', () => serviceAnswer(400, { message: 'The form is referenced by 1 other component.' })],
-  ['the same words under another status', () => serviceAnswer(403, { message: LAST_MAIN_FORM_MESSAGE })],
+  ['the same code and words under another status', () => serviceAnswer(403, { code: LAST_MAIN_FORM_CODE, message: LAST_MAIN_FORM_MESSAGE })],
   ['an error that is no answer of the platform', () => new Error(`You must have at least one active Main form`)],
+  ['an unrelated coded HTTP 400 that quotes the words', () => serviceAnswer(400, { code: '0x80040265', message: 'Delete blocked by validation rule "You must have at least one active Main form": approval is required.' })],
+  ['the right message with no code', () => serviceAnswer(400, { message: LAST_MAIN_FORM_MESSAGE })],
+  ['the right message with an empty code', () => serviceAnswer(400, { code: '', message: LAST_MAIN_FORM_MESSAGE })],
+  ['the related FallbackFormDeletion code (0x8004F654)', () => serviceAnswer(400, { code: '0x8004F654', message: LAST_MAIN_FORM_MESSAGE })],
 ]) {
   test(`${name} stays a failure exactly as before: reported at once, never read back, solution kept`, async () => {
     const sdk = mainFormWorld({ refuse: answer() });
     const { res, events } = await runMainFormTeardown(sdk);
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.errors.length, 1);
+    assert.strictEqual(res.errors[0].message, answer().message, 'the original error is kept');
     assert.deepStrictEqual(sdk.formReads, []);
     assert.deepStrictEqual(solutionLeft(sdk), ['S']);
     const formEvents = events.filter((e) => e.label === 'form "Information" (new_ticket)');

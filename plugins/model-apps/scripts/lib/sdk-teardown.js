@@ -168,18 +168,18 @@ async function deleteFlowResendingLostTransaction(sdk, item) {
   }
 }
 
-// The refusal of a form delete that would leave its table with no active Main form: HTTP 400, e.g.
-//   HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/systemforms(<formid>): This operation can’t be completed. You must have at least one active Main form.
-// (the apostrophe is U+2019). A table the build created holds only its default Main form, which the build owns, so the explicit delete of that form is refused; the table's
-// own delete, a few steps later, removes the form with it. The live capture kept the message and not the OData error code, so the answer is matched by its status and its
-// platform words — which name no form, table or maker's text — and by no code; the code of a body that carries one is not read. Only this refusal is a candidate for the
-// deferral in runTeardownSteps; any other 400 stays the failure it is. The answer's own message is read when the body has one, else the error's text (`HTTP 400 from <url>: <message>`).
-const LAST_MAIN_FORM_WORDS = /\bYou must have at least one active Main form\b/i;
+// The refusal of a form delete that would leave its table with no active Main form: HTTP 400, whose body is
+//   {"error":{"code":"0x8004F661","message":"This operation can’t be completed. You must have at least one active Main form."}}
+// (the apostrophe is U+2019; the SDK words the error `HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/systemforms(<formid>): <message>` and keeps the body in `cause`).
+// The code is the platform's FallbackFormDeactivation:
+//   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+// A table the build created holds only its default Main form, which the build owns, so the explicit delete of that form is refused; the table's own delete, a few steps later,
+// removes the form with it. The refusal is recognised by its status and its CODE only, never by its words: the message is localized, and a validation rule or plug-in can quote
+// the same words under another code, which is another failure. A body with no code, or another code — including the related FallbackFormDeletion (0x8004F654), which is out of scope —
+// stays the failure it is. serviceCodeOf returns the code lower-cased.
+const LAST_MAIN_FORM_CODE = '0x8004f661';
 function isLastMainFormRefusal(err) {
-  if (httpStatus(err) !== 400) return false;
-  const answered = answeredErrorOf(err);
-  const text = answered && typeof answered.message === 'string' ? answered.message : errMsg(err);
-  return LAST_MAIN_FORM_WORDS.test(text);
+  return httpStatus(err) === 400 && serviceCodeOf(err) === LAST_MAIN_FORM_CODE;
 }
 
 // Marks an error FAIL-CLOSED: what the step could not prove is itself the failure, so deleteStep passes it on before any of its shortcuts. Those read
