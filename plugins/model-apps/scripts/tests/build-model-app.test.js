@@ -528,7 +528,7 @@ test('transient auto-retry: a declared column that never appears exhausts the re
 
 // The lag of a TABLE the build has only just created (lib/retry-policy.js, markFreshTable). Live-captured: the update of a default view, which names its table, is refused 400 `0x80040203` while the server that
 // validates it does not have the new table, and a read of the table's forms is refused 400 `0x80041102` in the same window. Neither is a refusal of the request; a run again succeeds. The same answers are final for
-// a table the build did not create in this attempt, and for any other answer.
+// a table no attempt of this invocation created, and for any other answer.
 const NO_TABLE_WORDS = 'Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml';
 const notInCache = (table) => `The entity with a name = '${table}' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075`;
 // A build against a stateful organization: a create acknowledges a table once and `findTables` finds it from then on (as the real one does), so the build's second attempt REUSES the table — it is not "created"
