@@ -20,6 +20,9 @@ const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 // Symbol.for, so a module that reads it need not load this client, and the copy of this file in another plugin agrees with it.
 const HTTP_SEND_HISTORY = Symbol.for('power-platform-skills.http-send-history');
 
+// The most distinct ambiguous writes one client remembers (see `ambiguousSends`). A build sends a few hundred writes at most, so this is far above any real use; it
+// exists only so the ledger's memory has a hard bound, not to be reached.
+const MAX_AMBIGUOUS_SENDS = 1000;
 // How Dataverse reports that SQL Server chose a request's transaction as a deadlock VICTIM and rolled
 // it back. Two live captures, both HTTP 500 (a process-flow delete during a teardown, and PublishXml):
 //   HTTP 500 from …/api/data/v9.0/workflows(<id>):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205
@@ -617,6 +620,10 @@ function scrubBearer(text, headers) {
  *   `sendOnce(method, url)` -> true for a request that must be sent exactly once, whatever answers it (see `once` in `call`); and
  *   `throttle`, the budget a run allows itself for waiting out a throttled service (lib/throttle-budget.js: `fits`, `spend`, `announce`, `decline`, `note`), which every wait this client takes for a throttled answer (HTTP 429) is
  *   then drawn from — see `waitOutThrottle`. A client given none waits exactly as it always did, and the pcf plugin, which has none, never passes one.
+ *   `workflowEffectGate`, an object whose `screen({ method, url, body, headers })` is asked before each request (model-apps' lib/workflow-effect-context.js):
+ *   it throws to refuse the request unsent, answers null to let it pass as any other, or answers a send handle — the request is then sent once (as `sendOnce`),
+ *   `dispatching()` is called (synchronously, and a throw leaves it unsent) right before the send and `answered(res)` with the answer. A client given none,
+ *   which is every client but a declared business rule's or process flow's, sends exactly as it always did.
  * @returns {{get,post,patch,delete,put,postRaw,patchRaw}}
  */
 function createAzHttpClient(orgUrl, deps = {}) {
@@ -640,6 +647,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
   const getToken = deps.getToken || ((u, options) => getAuthToken(u, options));
   const request = deps.request || makeRequest;
   const sendOnce = typeof deps.sendOnce === 'function' ? deps.sendOnce : () => false;
+  const workflowEffectGate = deps.workflowEffectGate && typeof deps.workflowEffectGate.screen === 'function' ? deps.workflowEffectGate : null;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const random = deps.random || Math.random;
   const now = deps.now || Date.now;
@@ -719,7 +727,21 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // same request — a re-send of this client's loop, or the SDK's own re-call — says nothing about it. A failure delivered afterwards says so (HTTP_SEND_HISTORY),
   // so a caller that reads the later answer as a definitive refusal (the business-rule gate in lib/sdk-build.js) can tell it is not. Kept for the client's life and
   // never cleared: it only ever turns a caller's skip into the halt it always was.
+  // Bounded at MAX_AMBIGUOUS_SENDS keys, and never by forgetting one: forgetting an ambiguous send would let a later refusal of that request read as definitive, which
+  // is the false skip this ledger exists to prevent. Past the bound the client keeps no more keys and answers "an earlier send was ambiguous" for EVERY request from
+  // then on (`ambiguityOverflowed`, sticky) — the only consumer, the business-rule gate, then halts instead of skipping, which is the safe side.
   const ambiguousSends = new Set();
+  let ambiguityOverflowed = false;
+  const earlierSendAmbiguous = (sendKey) => ambiguityOverflowed || ambiguousSends.has(sendKey);
+  const rememberAmbiguousSend = (sendKey) => {
+    if (ambiguityOverflowed || ambiguousSends.has(sendKey)) return;
+    if (ambiguousSends.size >= MAX_AMBIGUOUS_SENDS) {
+      ambiguityOverflowed = true;
+      ambiguousSends.clear();
+      return;
+    }
+    ambiguousSends.add(sendKey);
+  };
   const isAmbiguousAnswer = (res) => Boolean(res.error) || res.statusCode >= 500 || (res.statusCode === 429 && !isServiceProtectionRefusal(res));
   const scrubText = (text) => [...tokensSent].reduce((out, sent) => scrub(out, sent), String(text));
   const scrubValue = (value) => [...tokensSent].reduce((out, sent) => scrubAnswer(out, sent), value);
@@ -791,7 +813,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
     // answers on which a record DELETE or a `$batch` is re-sent in spite of its own rule (a 429 and a SQL deadlock victim, below), each of which the server may
     // answer AFTER it accepted the request. The first answer is handed to the SDK as it came, so its status and its code survive, and what happened to the work is
     // the caller's to look up. The exceptions of a record DELETE and a `$batch` stay what they were for every request the caller does not name.
-    const once = sendOnce(method_, url) === true;
+    // A business rule's or process flow's workflow write, under a persisted effect (`workflowEffectGate`, see createAzHttpClient): refused unsent when it
+    // does not match that effect, and otherwise sent exactly once, because a repeat of a write that may have run is what the effect record exists to stop.
+    // A gate answers null for every other request, so the request is sent below exactly as it would be without one.
+    const effectSend = workflowEffectGate ? workflowEffectGate.screen({ method: method_, url, body: bodyOut, headers: (options && options.headers) || {} }) : null;
+    const once = sendOnce(method_, url) === true || !!effectSend;
     const noRetry = recordDelete || isBatch || once;
     // A PUBLISH (`POST …/PublishXml`, `…/PublishAllXml`) is sent ONCE on a 5xx, on a transport failure and on a 429 — but for the two answers that prove
     // the platform never started it: a 401 (refused before it ran: the token is refreshed and the publish sent again, as any request is) and a 429 of the
@@ -870,11 +896,20 @@ function createAzHttpClient(orgUrl, deps = {}) {
         headers['Content-Type'] = 'application/json; charset=utf-8';
       }
 
-      const res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
+      // The effect is durably marked as possibly sent before the request leaves; a failed mark leaves it unsent.
+      if (effectSend) effectSend.dispatching();
+      let res;
+      try {
+        res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
+      } catch (e) {
+        if (effectSend) effectSend.answered({ error: String((e && e.message) || e) });
+        throw e;
+      }
+      if (effectSend) effectSend.answered(res);
       // Read before this answer is recorded: what matters to a caller is whether an EARLIER send was ambiguous.
       const sendKey = `${method_} ${url}`;
-      const history = { sends: attempt + 1, earlierAmbiguous: ambiguousSends.has(sendKey) };
-      if (isWrite && isAmbiguousAnswer(res)) ambiguousSends.add(sendKey);
+      const history = { sends: attempt + 1, earlierAmbiguous: earlierSendAmbiguous(sendKey) };
+      if (isWrite && isAmbiguousAnswer(res)) rememberAmbiguousSend(sendKey);
       if (res.error) {
         if (conditional) {
           throw transportError(res, `Request failed: ${scrubText(res.error)} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
@@ -986,4 +1021,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, HTTP_SEND_HISTORY, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };
+module.exports = { createAzHttpClient, HTTP_SEND_HISTORY, MAX_AMBIGUOUS_SENDS, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };

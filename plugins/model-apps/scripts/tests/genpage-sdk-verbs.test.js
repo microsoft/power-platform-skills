@@ -449,6 +449,8 @@ function appsWorld(apps, { lookup = true, listFails = false } = {}) {
         });
         return { status: 200, body: { value } };
       }
+      // Every form, in both layers: a delete reads them for a form that embeds the page (lib/page-reference-guard.js, tests/page-reference-guard.test.js); none here does.
+      if (url.startsWith('/systemforms')) return { status: 200, body: { value: [] } };
       return { status: 404, body: null };
     },
   };

@@ -2,8 +2,8 @@
 
 // agents/genpage-entity-builder.md Step 4 tells the /genpage entity-builder how to write the input of provision-entities.js. That
 // input is validated by validateProvisionInput (lib/provision-input.js) and built by the same code as an App Spec, so what Step 4 shows
-// has to be what that gate accepts and what the build reads — or the documented path fails before anything is written (a Choice option
-// written as a {"label", "value"} object: "'label' is not an LCID"), or builds a column without what the plan asked (a DateTime
+// has to be what that gate accepts and what the build reads — or the documented path fails before anything is written (a label keyed
+// by a language tag: "'es-ES' is not an LCID"), or builds a column without what the plan asked (a DateTime
 // `format` where the build reads `dateFormat`). These tests read Step 4 itself, fill its placeholders, and run what it shows through
 // the gate and the provisioning core, so the page and the code cannot drift apart again.
 

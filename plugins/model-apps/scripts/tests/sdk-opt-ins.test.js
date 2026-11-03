@@ -6,7 +6,8 @@
 //   readConcurrency  overlaps the file downloads of a generative page that the SDK reads, and the per-component
 //                    reads of fetchSolution. The page backend (lib/genpage-sdk.js) reads pages through the SDK, so it
 //                    creates its SDK with the option (4: a page is a handful of file reads, and verify and download read
-//                    many pages); no script fetches a solution. The option is passed exactly when a script makes one of
+//                    many pages); `solutions.js inspect --include-artifacts` fetches a solution with the same window (4, the constant
+//                    lib/solution-inventory.js exports). The option is passed exactly when a script makes one of
 //                    those reads, so it can neither go missing from the page backend nor outlive the last read it is for.
 //   published:false  creates an app as a never-published draft that a later publish covers, saving a publish
 //                    round trip per create. A draft is not in the PUBLISHED projection that every app-existence
@@ -171,9 +172,11 @@ test('the build creates every app published: its app definition leaves `publishe
 // The bundled SDK's upsertRecord() reports `created` as `undefined` unless it is asked to classify the write (`reportCreated: true`):
 // a plain upsert answers 204 to an insert and to an update alike, so the `false` it used to report for every insert was wrong. And its
 // fetchSolution() now returns kinds it used to drop (environment variables, connection references, field security profiles, Custom
-// APIs, duplicate-detection rules). No script calls either, so neither change reaches a maker; a script that starts to must read
-// `created === true` / `=== false` (never `!created`) and ignore the kinds it does not model — this fails until it is looked at.
-test('no script reads upsertRecord() or fetchSolution(), whose results the bundled SDK changed', () => {
+// APIs, duplicate-detection rules). No script calls upsertRecord, so that change reaches no maker; a script that starts to must read
+// `created === true` / `=== false` (never `!created`) — this fails until it is looked at. fetchSolution has one reader,
+// lib/solution-inventory.js (`solutions.js inspect --include-artifacts`), which reports every kind by name, including one it does
+// not know, and lists what it skipped (tests/solution-inventory.test.js); any other reader fails here until it is looked at.
+test('no script reads upsertRecord(), and only the solution inventory reads fetchSolution(), whose results the bundled SDK changed', () => {
   assert.deepStrictEqual(scriptsMatching(/\bupsertRecord\b/), [], 'upsertRecord: `created` is undefined unless reportCreated is asked; UPSERT_OUTCOME_UNKNOWN is never re-sent (lib/retry-policy.js)');
-  assert.deepStrictEqual(scriptsMatching(/\bfetchSolution\b/), [], 'fetchSolution: it now returns kinds the plugin does not model');
+  assert.deepStrictEqual(scriptsMatching(/\bfetchSolution\b/), ['lib/solution-inventory.js'], 'fetchSolution: it returns kinds the plugin does not model');
 });

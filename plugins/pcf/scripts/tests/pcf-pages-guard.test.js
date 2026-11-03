@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const Module = require('node:module');
 const { performance } = require('node:perf_hooks');
 const { scanSource, featureCoherence, gateSources } = require('../lib/pcf-code-gate.js');
 
@@ -889,24 +890,6 @@ function scanBoth(text, feature, hosts) {
   return [...scanSource(FILE, text), ...findingsFor(text, feature, hosts)];
 }
 
-// Wall-clock timing, kept only by the line-location test (see its comment): a bound on elapsed
-// time is sensitive to machine load, unlike the work counts and growth ratios used elsewhere.
-// A wall-clock limit on ONE cold run is noise-bound, not a test of the scanner: the first run pays the JIT's warm-up, and a
-// shared CI runner adds GC and scheduler pauses on top (observed: 501 ms against the 500 ms limit on a Windows runner, while
-// local single runs vary 125–253 ms for the same input). So the scan runs once untimed to warm up, then three times, and the
-// FASTEST run is compared: noise only ever adds time, while the regression these limits exist for — a quadratic rescan —
-// slows every run alike, by seconds, and still fails.
-function timedScan(text) {
-  let findings = [...scanSource(FILE, text), ...findingsFor(text)];
-  let elapsed = Infinity;
-  for (let i = 0; i < 3; i += 1) {
-    const started = performance.now();
-    findings = [...scanSource(FILE, text), ...findingsFor(text)];
-    elapsed = Math.min(elapsed, performance.now() - started);
-  }
-  return { elapsed, findings };
-}
-
 // A second copy of the gate whose lexer calls are counted. The gate reads its lexer through a
 // destructured import, so the counting wrapper must be in place when the module loads; the shared
 // exports and the first copy (the one every other test uses) are restored straight after.
@@ -1415,18 +1398,119 @@ test('Fixed-id detection keeps later JSX after unmatched braces and inside templ
   }
 });
 
-// Pathological but finite input should stay bounded; CI runners can be much slower
-// than the local median target, so this catches rescans without enforcing machine speed.
-const PATHOLOGICAL_SCAN_LIMIT_MS = 1500;
+// The line-location tests place their verdict on the real scan path (scanSource and featureCoherence over a file
+// of 4000 calls), so quadratic work anywhere on it fails them - in the helper that finds a line or in its callers -
+// and the shipped gate carries no test hook or counter. Two checks, with different limits:
+//  1. A count, which does not depend on the machine: the characters read through slice, substring, split and
+//     matchAll while the scan runs. Re-splitting text.slice(0, offset), or rebuilding the line-start table, for
+//     every finding reads the text again each time, so it passes the limit by orders of magnitude. The count
+//     cannot see a loop that reads text[at] or a linear table search.
+//  2. A growth ratio (assertLinearGrowth) of the real scan, which catches the first of those. It reads the clock, so it is not
+//     load-independent: it compares the fastest of several runs at a quarter of the size with the same at full size,
+//     measures again before it fails, and keeps the 15 s catastrophe ceiling. A pause that hits one phase can
+//     still move the ratio, which is why the count above carries the cases it can see.
+// A linear search of the line-start table is quadratic too, but its few million probes cost far less than the
+// scan's own work per finding, so the ratio of the whole scan cannot see it. A third check measures lineOf alone,
+// on a test-only copy of the gate; the end-to-end check above is what proves the scan reaches the real lookup.
+// The old fixed 1500 ms bound is gone.
+function stringReadsDuring(scan) {
+  const read = { chars: 0 };
+  const proto = String.prototype;
+  const originals = { slice: proto.slice, substring: proto.substring, split: proto.split, matchAll: proto.matchAll };
+  // Slices count by the length they return (the scanner's own slices are a few characters long); split and
+  // matchAll count by the text they read. The methods are replaced only while the scan runs, and restored whatever happens.
+  proto.slice = function slice(...args) {
+    const piece = originals.slice.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.substring = function substring(...args) {
+    const piece = originals.substring.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.split = function split(...args) {
+    read.chars += this.length;
+    return originals.split.apply(this, args);
+  };
+  proto.matchAll = function matchAll(...args) {
+    read.chars += this.length;
+    return originals.matchAll.apply(this, args);
+  };
+  let result;
+  try {
+    result = scan();
+  } finally {
+    Object.assign(proto, originals);
+  }
+  return { chars: read.chars, result };
+}
 
-test('Pages diagnostics index line locations instead of rescanning per call', (t) => {
-  const count = 4000;
-  const text = `${CALL};\n`.repeat(count);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`line-location timing: ${elapsed.toFixed(3)} ms; ${count} calls`);
-  assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+// Measured on a 4000-line file: about 7 characters read per source character (the lexer's split and the
+// scanner's few-character slices). A split of the prefix reads about 2000 characters per source character and a
+// table rebuilt per finding about 4000. 20 leaves room for another pass without letting either through.
+const MAX_TEXT_READS = 20;
+const LINE_LOCATION_CALLS = 4000;
+const lineLocationSource = (scale) => `${CALL};\n`.repeat(Math.round(LINE_LOCATION_CALLS * scale));
+const scanLineLocations = (text) => [...scanSource(FILE, text), ...findingsFor(text)];
+const assertLineLocations = (findings, count) => {
   assert.equal(findings.length, count);
   assert.ok(findings.every((finding, i) => finding.code === 'PCF_PAGES_API' && finding.line === i + 1));
+};
+
+test('Pages diagnostics index line locations instead of rescanning per call', () => {
+  const text = lineLocationSource(1);
+  const { chars, result: findings } = stringReadsDuring(() => scanLineLocations(text));
+  assertLineLocations(findings, LINE_LOCATION_CALLS);
+  assert.ok(chars <= MAX_TEXT_READS * text.length, `the scan read ${chars} characters through slice, substring, split and matchAll for a ${text.length}-character file (limit ${MAX_TEXT_READS}x)`);
+});
+
+test('Pages diagnostics take time in proportion to the number of calls', (t) => {
+  assertLineLocations(assertLinearGrowth(t, 'line locations', lineLocationSource, scanLineLocations), LINE_LOCATION_CALLS);
+});
+
+// A test-only copy of the gate that also exports its private lineOf: the production source plus one appended line,
+// compiled outside require.cache, so the shipped module and every other test are untouched.
+function loadGateWithLineOf() {
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const copy = new Module(gatePath, module);
+  copy.filename = gatePath;
+  copy.paths = Module._nodeModulePaths(path.dirname(gatePath));
+  copy._compile(`${fs.readFileSync(gatePath, 'utf8')}\nmodule.exports.lineOf = lineOf;\n`, gatePath);
+  return copy.exports;
+}
+
+test('Line lookups grow linearly with the number of lines', (t) => {
+  const { lineOf } = loadGateWithLineOf();
+  const lineLength = `${CALL};\n`.length;
+  const build = (scale) => `${CALL};\n`.repeat(Math.round(8000 * scale));
+  // The line of the first character of every line. lineOf keeps the table of the last text it saw, so reset it
+  // first: each run then builds the table and does every lookup, as a scan of a new file does.
+  const run = (text) => {
+    lineOf('', 0);
+    const lines = [];
+    for (let offset = 0; offset < text.length; offset += lineLength) lines.push(lineOf(text, offset));
+    return lines;
+  };
+  const lines = assertLinearGrowth(t, 'line lookups', build, run);
+  assert.equal(lines.length, 8000);
+  assert.ok(lines.every((line, i) => line === i + 1));
+});
+
+test('The test copy of the gate locates lines the way the shipped gate does', () => {
+  const { lineOf } = loadGateWithLineOf();
+  // LF, CR LF, a lone CR and the two Unicode separators each end a line; CR LF is one terminator.
+  const text = 'a\nb\r\nc\rd\u2028e\u2029f';
+  const lineAtEachCharacter = [...text].map((_, index) => text.slice(0, index).split(/\r\n|[\n\r\u2028\u2029]/).length);
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n' && text[index - 1] === '\r') continue;
+    assert.equal(lineOf(text, index), lineAtEachCharacter[index], `offset ${index}`);
+  }
+  assert.equal(loadGateWithLineOf().scanSource(FILE, `${CALL};`).length, scanSource(FILE, `${CALL};`).length);
+});
+
+test('The shipped gate exports only its three entry points', () => {
+  assert.deepEqual(Object.keys(require('../lib/pcf-code-gate.js')).sort(), ['featureCoherence', 'gateSources', 'scanSource']);
 });
 
 // The tests below scale their fixture and bound the growth (see assertLinearGrowth), so a slow

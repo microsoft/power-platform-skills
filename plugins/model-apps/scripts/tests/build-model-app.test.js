@@ -526,6 +526,110 @@ test('transient auto-retry: a declared column that never appears exhausts the re
   assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
 });
 
+// The lag of a TABLE the build has only just created (lib/retry-policy.js, markFreshTable). Live-captured: the update of a default view, which names its table, is refused 400 `0x80040203` while the server that
+// validates it does not have the new table, and a read of the table's forms is refused 400 `0x80041102` in the same window. Neither is a refusal of the request; a run again succeeds. The same answers are final for
+// a table no attempt of this invocation created, and for any other answer.
+const NO_TABLE_WORDS = 'Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml';
+const notInCache = (table) => `The entity with a name = '${table}' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075`;
+// A build against a stateful organization: a create acknowledges a table once and `findTables` finds it from then on (as the real one does), so the build's second attempt REUSES the table — it is not "created"
+// again. `existing` names tables that were there before the build started. The default-view enrichment fails as `answers(table, n)` says, n counting that table's tries across all attempts.
+const freshTableBuild = async ({ answers, existing = [], publish = false, retryDelayMs = 0 }) => {
+  const { sdk, calls } = mockSdk();
+  const tables = new Map(existing.map((logical) => [logical, { logicalName: logical, entitySetName: `${logical}s` }]));
+  const create = sdk.createTable;
+  sdk.createTable = async (o) => {
+    const made = { ...(await create(o)), metadataId: `id-${o.schemaName.toLowerCase()}` };
+    tables.set(made.logicalName, { logicalName: made.logicalName, entitySetName: made.entitySetName });
+    return made;
+  };
+  sdk.findTables = async (schemaName) => [...tables.values()].filter((t) => t.logicalName === String(schemaName).toLowerCase());
+  // The raw reads a build makes of a table that exists: its probe (`/EntityDefinitions(LogicalName='x')?$select=LogicalName,EntitySetName`) and its Date and Time behaviours, which a table with none answers with an empty list.
+  sdk.dataverse = {
+    get: async (url) => {
+      const probed = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=LogicalName,EntitySetName/.exec(url);
+      if (probed) {
+        const found = tables.get(probed[1]);
+        return found ? { status: 200, body: { LogicalName: found.logicalName, EntitySetName: found.entitySetName } } : { status: 404 };
+      }
+      return { status: 200, body: { value: [] } };
+    },
+  };
+  const tries = {};
+  const enrich = sdk.enrichDefaultViews;
+  sdk.enrichDefaultViews = async (logical, ...rest) => {
+    tries[logical] = (tries[logical] || 0) + 1;
+    const failure = answers(logical, tries[logical]);
+    if (failure) throw failure;
+    return enrich(logical, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  let result = null;
+  let halt = null;
+  try {
+    result = await buildModelApp(desk, { apply: true, env: 'https://x', ...(publish ? { publish: true } : {}), retryDelayMs }, { sdk, journal });
+  } catch (err) { halt = err; }
+  const creates = (logical) => calls.filter((c) => c[0] === 'createTable' && String(c[1].schemaName).toLowerCase() === logical).length;
+  return { result, halt, events, tries, calls, creates };
+};
+const noTable = (code = '0x80040203') => lagAnswer(NO_TABLE_WORDS, code);
+
+test('transient auto-retry: the default views of a table the build just created are saved again in the next attempts, which find the table and reuse it, then the build completes', async () => {
+  for (const publish of [false, true]) {
+    const first = desk.entities[0].schemaName.toLowerCase();
+    const { result, halt, events, tries, creates } = await freshTableBuild({ publish, answers: (logical, n) => (logical === first && n <= 2 ? (n === 1 ? noTable() : lagAnswer(notInCache(first), '0x80041102')) : null) });
+    assert.strictEqual(halt, null, `publish=${publish}: no halt (${halt && halt.message})`);
+    assert.strictEqual(result.ok, true, `publish=${publish}`);
+    assert.strictEqual(creates(first), 1, `publish=${publish}: the table was created once; the later attempts reused it`);
+    assert.strictEqual(events.filter((e) => e.status === 'retry').length, 2, `publish=${publish}: two retries were journaled`);
+    assert.strictEqual(tries[first], 3, `publish=${publish}: the third try saved the views`);
+  }
+});
+
+test('transient auto-retry: a table that never resolves exhausts the whole build\'s three retries, sends no more than four saves, and surfaces the platform\'s answer', async () => {
+  const first = desk.entities[0].schemaName.toLowerCase();
+  for (const answer of [() => noTable(), () => lagAnswer(notInCache(first), '0x80041102')]) {
+    const { halt, events, tries, creates } = await freshTableBuild({ answers: (logical) => (logical === first ? answer() : null) });
+    assert.ok(halt, 'the build halted');
+    assert.match(String(halt.message) + String(halt.cause && halt.cause.message), /returnedTypeCode of 0|not found in the MetadataCache/);
+    assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
+    // The retries are the build's own (build-model-app.js): the saves of the table's default views are one per attempt, never one per attempt per inner wait.
+    assert.strictEqual(tries[first], 4, 'four saves of the first default view in all: the first run and the three retries');
+    assert.strictEqual(creates(first), 1, 'one create across all four attempts');
+  }
+});
+
+test('transient auto-retry: the same answers for a table the build did not create, or for any other table or answer, halt at once', async () => {
+  const first = desk.entities[0].schemaName.toLowerCase();
+  const final = async (label, options) => {
+    const { halt, events, tries } = await freshTableBuild(options);
+    assert.ok(halt, `${label}: the build halted`);
+    assert.strictEqual(events.filter((e) => e.status === 'retry').length, 0, `${label}: no retry`);
+    assert.strictEqual(tries[first], 1, `${label}: one save only`);
+  };
+  await final('a table that was there before the build', { existing: [first], answers: (logical) => (logical === first ? noTable() : null) });
+  await final('the cache answer for a table that was there before the build', { existing: [first], answers: (logical) => (logical === first ? lagAnswer(notInCache(first), '0x80041102') : null) });
+  await final('the cache answer names another table', { answers: (logical) => (logical === first ? lagAnswer(notInCache('new_elsewhere'), '0x80041102') : null) });
+  await final('the words under no code', { answers: (logical) => (logical === first ? noTable(null) : null) });
+  await final('the words under another code', { answers: (logical) => (logical === first ? noTable('0x80040220') : null) });
+  await final('another saved-query refusal', { answers: (logical) => (logical === first ? lagAnswer('Saved Query has an invalid layoutxml', '0x80040203') : null) });
+  await final('an unrelated 400', { answers: (logical) => (logical === first ? lagAnswer('The value of the attribute is not valid', '0x80040265') : null) });
+});
+
+test('isTransientHalt: the lag of a created table is read only where the build marked the table, and the answer names no other', () => {
+  const { markFreshTable } = require('../lib/retry-policy.js');
+  const answers = [noTable(), lagAnswer(notInCache('new_ticket'), '0x80041102')];
+  for (const answer of answers) {
+    assert.strictEqual(isTransientHalt(answer, { spec: desk }), false, 'no mark: the answer alone decides nothing');
+    assert.strictEqual(isTransientHalt(markFreshTable({ message: 'views failed', cause: answer }, 'new_ticket'), { spec: desk }), true, 'marked, behind the halt the runner raises');
+    assert.strictEqual(isTransientHalt(markFreshTable(answer, 'NEW_TICKET')), true, 'marked, whatever the case of the name, and with no spec');
+  }
+  assert.strictEqual(isTransientHalt(markFreshTable(lagAnswer(notInCache('new_comment'), '0x80041102'), 'new_ticket')), false, 'the cache answer is for another table');
+  assert.strictEqual(isTransientHalt(markFreshTable(Object.assign(noTable(), { transient: false }), 'new_ticket')), false, 'an explicit non-transient still wins');
+  assert.strictEqual(isTransientHalt(markFreshTable(lagAnswer(LAG_WORDS), 'new_ticket'), { spec: desk }), true, 'the 2.20.6 words stay the lag they were, marked or not');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS), { spec: desk }), true);
+});
+
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
   const { sdk, calls } = mockSdk();
   let firstTable = true;
@@ -1001,6 +1105,69 @@ test('a build that succeeds after a retry settles nothing: what the retry owed i
   assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []]);
 });
 
+// A halt that ends the invocation before any service write (`stopsServiceWrites`: a dashboard or form retirement the build could not
+// confirm, sdk-build.js haltOnUnconfirmedRetirements) settles nothing an earlier attempt of the same run left: no table publish and no
+// name column length, because nothing may be sent after it. It says what is left instead, and the halt says which attempt stopped.
+// Every other halt settles as before (the control).
+const { BuildHalt: StopHalt } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { RETRY: STOP_RETRY } = require(path.join(__dirname, '..', 'lib', 'retry-policy.js'));
+const STOP_FINDINGS = [{ key: 'contoso_item/main/declared item', code: 'managed-not-settled', message: 'managed form "contoso_item/main/declared item" (its retirement could not be confirmed: busy); the build stopped before writing anything, and the next build reads it again' }];
+function retirementStop({ signal = true } = {}) {
+  const halt = new StopHalt('retirement of form "contoso_item/main/declared item": managed-not-settled — the build stopped before writing anything, and the next build reads it again', { phase: 'preflight', code: 'managed-not-settled', recoverable: false, retry: STOP_RETRY.NEVER });
+  Object.defineProperty(halt, 'findings', { value: STOP_FINDINGS, enumerable: false, configurable: true });
+  if (signal) Object.defineProperty(halt, 'stopsServiceWrites', { value: true, enumerable: false, configurable: true });
+  return halt;
+}
+const owingBoth = () => Object.defineProperties(new Error(TRANSIENT), { owedPublishes: { value: [['view', 'v1', ['view Open Tickets']]] }, owedLengths: { value: [lengthDebt()] } });
+const publishSpy = (sdk) => {
+  const published = [];
+  sdk.publishArtifacts = async (targets) => { published.push(targets); return targets.map(({ type, id }) => ({ type, id, shipped: true })); };
+  sdk.publishArtifact = async (type, id) => { published.push([{ type, id }]); return { shipped: true }; };
+  return published;
+};
+
+test('a halt that stops service writes settles neither the publish nor the length an earlier attempt owed, and says what is left', async () => {
+  let spy;
+  let published;
+  const stop = retirementStop();
+  const out = await attemptsOf([owingBoth(), stop], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); published = publishSpy(sdk); } });
+  assert.strictEqual(out.attempts, 2);
+  assert.deepStrictEqual(published, [], 'no publish is sent after the halt');
+  assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []], 'no name column length is read or set after the halt');
+  assert.strictEqual(out.error.code, 'managed-not-settled');
+  assert.strictEqual(out.error.phase, 'preflight');
+  assert.strictEqual(out.error.transient, false);
+  assert.strictEqual(out.error.stopsServiceWrites, true);
+  assert.deepStrictEqual(out.error.findings, STOP_FINDINGS);
+  assert.strictEqual(out.error.cause, stop);
+  assert.match(out.error.message, /the build stopped before writing anything, and the next build reads it again/);
+  assert.match(out.error.message, /That is attempt 2 of this run: an earlier attempt ended on a transient failure and was retried, and what it had already sent stays as it is; nothing more is sent in this run\.$/);
+  assert.strictEqual(out.warnings.length, 2, out.warnings.join('\n'));
+  assert.match(out.warnings[0], /^the build stopped before its publish phase and sends nothing more in this run; an earlier attempt of this run saved and did not publish view Open Tickets — the change is SAVED but the runtime still serves the previously published copy until the next build publishes it$/);
+  assert.match(out.warnings[1], /^table new_ticket, which an earlier attempt of this run created, may not have its name column new_name at 120 characters: .*this run did not check .* check new_name in Maker and set it to 120 characters if it differs$/);
+});
+
+test('a halt that stops service writes on the first attempt is reported as it is, with nothing to settle or say', async () => {
+  let spy;
+  let published;
+  const stop = retirementStop();
+  const out = await attemptsOf([stop], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); published = publishSpy(sdk); } });
+  assert.strictEqual(out.error, stop, 'the first attempt sent nothing, so its own words are true of the run');
+  assert.deepStrictEqual(published, []);
+  assert.deepStrictEqual(spy.writes, []);
+  assert.deepStrictEqual(out.warnings, []);
+});
+
+test('the same halt without the signal still settles what an earlier attempt owed (cleanup for every other halt is unchanged)', async () => {
+  let spy;
+  let published;
+  const out = await attemptsOf([owingBoth(), retirementStop({ signal: false })], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); published = publishSpy(sdk); } });
+  assert.strictEqual(out.error.code, 'managed-not-settled');
+  assert.doesNotMatch(out.error.message, /That is attempt/);
+  assert.deepStrictEqual(published.map((targets) => targets.map((t) => t.id)), [['v1']], 'the owed publish is settled');
+  assert.strictEqual(spy.writes.length, 1, 'and the owed length is set');
+});
+
 test('a settle that cannot set the length warns, names the table and the length, and the halt is still what is reported', async () => {
   let spy;
   const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], {
@@ -1091,6 +1258,400 @@ test('destructive gate: build halts on a form-field removal without --allow-dest
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /allow-destructive/.test(e) && /new_priority/.test(e)), 'names the field it would remove');
   assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+});
+
+// --authorize: consent to one destructive schema change the spec declares, by its key, and to nothing else.
+const consentSpec = {
+  entities: [{ schemaName: 'new_Ticket', duplicateDetectionEnabled: false, columns: [
+    { schemaName: 'new_Salary', type: 'Money', isSecured: false },
+    { schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' },
+    { schemaName: 'new_open', type: 'DateTime' },
+  ] }],
+};
+
+test('--authorize: each repeated key is read, matched case-insensitively, and kept only for a change the spec declares', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const ok = authorizationKeys(['--env', 'https://x', '--authorize', 'isSecured:new_ticket.new_salary', '--apply', '--authorize=dateTimeBehavior:NEW_TICKET.new_due', '--authorize', 'tableFlags:new_ticket'], consentSpec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.keys].sort(), ['dateTimeBehavior:new_ticket.new_due', 'isSecured:new_ticket.new_salary', 'tableFlags:new_ticket']);
+  assert.deepStrictEqual([...authorizationKeys(['--env', 'https://x', '--allow-destructive'], consentSpec).keys], [], '--allow-destructive alone consents to none of them');
+  for (const [key, why] of [
+    ['isSecured:new_ticket', /is not dateTimeBehavior:<table>\.<column>, isSecured:<table>\.<column> or tableFlags:<table>/],
+    ['isSecured:new_other.new_salary', /does not declare \(it would need isSecured: false on column new_other\.new_salary\)/],
+    ['dateTimeBehavior:new_ticket.new_open', /a dateTimeBehavior on the DateTime column new_ticket\.new_open/],
+    ['tableFlags:account', /duplicateDetectionEnabled: false on table account/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], consentSpec);
+    assert.match(r.error, why, key);
+    assert.strictEqual(r.keys.size, 0, key);
+  }
+});
+
+test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets, under its family', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Kind', type: 'Choice', options: ['A', 'B'] }] }],
+    views: [{ entity: 'new_Ticket', name: 'Open / Mine', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'Legacy', columns: ['new_name'] }],
+    charts: [{ entity: 'new_ticket', name: 'By Kind', chartType: 'Pie', groupBy: 'new_kind', reconcile: 'declared' }],
+  };
+  // The untyped form still names a single declared view or chart.
+  const ok = authorizationKeys(['--authorize', 'adopt:NEW_TICKET/Open / Mine', '--authorize=overwrite:new_ticket/By Kind'], spec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.adopt], ['view:new_ticket/Open / Mine']);
+  assert.deepStrictEqual([...ok.overwrite], ['chart:new_ticket/By Kind']);
+  assert.deepStrictEqual([...ok.keys], [], 'an artifact approval is not a schema consent');
+  const typed = authorizationKeys(['--authorize', 'overwrite:view:NEW_TICKET/Open / Mine', '--authorize', 'adopt:chart:new_ticket/By Kind'], spec);
+  assert.strictEqual(typed.error, null);
+  assert.deepStrictEqual([...typed.overwrite], ['view:new_ticket/Open / Mine']);
+  assert.deepStrictEqual([...typed.adopt], ['chart:new_ticket/By Kind']);
+  for (const key of ['adopt:new_ticket/Legacy', 'overwrite:new_ticket/by kind', 'adopt:new_ticket/Missing', 'adopt:chart:new_ticket/Open / Mine', 'overwrite:view:new_ticket/By Kind', 'adopt:view:new_ticket/open / mine']) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, /approves an artifact the spec does not declare/, key);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+  }
+});
+
+test('--authorize: an untyped key that could name a view and a chart, or two names differing in case, is refused with the typed keys', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Kind', type: 'Choice', options: ['A', 'B'] }] }],
+    views: [{ entity: 'new_ticket', name: 'By Kind', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'Mine', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'MINE', reconcile: 'declared', columns: ['new_name'] }],
+    charts: [{ entity: 'new_ticket', name: 'By Kind', chartType: 'Pie', groupBy: 'new_kind', reconcile: 'declared' }],
+  };
+  for (const [key, typedKeys] of [
+    ['adopt:new_ticket/By Kind', ['adopt:view:new_ticket/By Kind', 'adopt:chart:new_ticket/By Kind']],
+    ['overwrite:new_ticket/By Kind', ['overwrite:view:new_ticket/By Kind', 'overwrite:chart:new_ticket/By Kind']],
+    ['overwrite:new_ticket/Mine', ['overwrite:view:new_ticket/Mine', 'overwrite:view:new_ticket/MINE']],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, /could approve more than one declared artifact/, key);
+    for (const t of typedKeys) assert.ok(r.error.includes(t), `${key} names ${t}: ${r.error}`);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+  }
+  const view = authorizationKeys(['--authorize', 'adopt:view:new_ticket/By Kind', '--authorize', 'overwrite:view:new_ticket/Mine'], spec);
+  assert.strictEqual(view.error, null);
+  assert.deepStrictEqual([...view.adopt], ['view:new_ticket/By Kind']);
+  assert.deepStrictEqual([...view.overwrite], ['view:new_ticket/Mine']);
+  const chart = authorizationKeys(['--authorize', 'overwrite:chart:new_ticket/By Kind'], spec);
+  assert.strictEqual(chart.error, null);
+  assert.deepStrictEqual([...chart.overwrite], ['chart:new_ticket/By Kind']);
+});
+
+test('a printed --authorize approval reaches the CLI parser as ONE argument and names exactly the key it was printed for', () => {
+  const { shellTokens } = require('./helpers/shell-tokens.js');
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Kind', type: 'Choice', options: ['A', 'B'] }] }],
+    views: [{ entity: 'new_ticket', name: 'Declared Items', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'Plain', reconcile: 'declared', columns: ['new_name'] }],
+    charts: [{ entity: 'new_ticket', name: 'By Kind', chartType: 'Pie', groupBy: 'new_kind', reconcile: 'declared' }],
+  };
+  for (const [key, set, member] of [
+    ['adopt:view:new_ticket/Declared Items', 'adopt', 'view:new_ticket/Declared Items'],
+    ['overwrite:chart:new_ticket/By Kind', 'overwrite', 'chart:new_ticket/By Kind'],
+    ['adopt:view:new_ticket/Plain', 'adopt', 'view:new_ticket/Plain'],
+  ]) {
+    const printed = `run the build again with ${authorizeFlag(key)}`;
+    const tokens = shellTokens(printed.slice(printed.indexOf('--authorize')));
+    assert.deepStrictEqual(tokens, ['--authorize', key], `${printed}: one argument after the flag`);
+    const r = authorizationKeys(tokens, spec);
+    assert.strictEqual(r.error, null, `${printed}: ${r.error}`);
+    assert.deepStrictEqual([...r[set]], [member], printed);
+  }
+  // What the old, unquoted text became after the shell split it: the parser refused it.
+  assert.ok(authorizationKeys(shellTokens('--authorize adopt:view:new_ticket/Declared Items'), spec).error);
+  // A plain key is printed exactly as before.
+  assert.strictEqual(authorizeFlag('adopt:dashboard:ops'), '--authorize adopt:dashboard:ops');
+  assert.strictEqual(authorizeFlag('adopt:view:contoso_item/Items'), '--authorize adopt:view:contoso_item/Items');
+});
+
+// Which spelling a printed approval gets: bare when plain, double-quoted when only white space or ordinary punctuation needs quoting, and the single-quoted spelling
+// every shell reads literally for `$`, a backtick, `\` and `!`. A key no spelling is proven for (a `"`, an apostrophe together with one of those, a control character)
+// gets none: the exact key as a JSON string, to pass as ONE argument, and never a claim that no spelling exists.
+test('authorizeFlag prints a spelling only when every shell passes it on unchanged, and otherwise gives the exact key', () => {
+  const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  assert.strictEqual(authorizeFlag('adopt:view:t/Items'), '--authorize adopt:view:t/Items');
+  for (const name of ['Declared Items', 'Item (open) & more', 'a|b #c', 'caf\u00E9 page', 'It\'s; mine', 'a\tb', 'it\u2019s']) {
+    assert.strictEqual(authorizeFlag(`adopt:view:t/${name}`), `--authorize "adopt:view:t/${name}"`, name);
+  }
+  for (const name of ['cost $5', 'a`b', 'C:\\x y', 'Wow!', '\u201Cq\u201D']) {
+    assert.strictEqual(authorizeFlag(`adopt:view:t/${name}`), `--authorize 'adopt:view:t/${name}'`, name);
+  }
+  for (const name of ['say "hi"', 'n" end', 'a" b"c', 'it\'s $5', 'it\'s `x`', 'it\'s\\x', 'Wow it\'s!', 'it\u2019s $5', 'say \\', 'a\u0001b', 'a\u000Bb', 'a\fb']) {
+    const key = `adopt:view:t/${name}`;
+    const hard = authorizeFlag(key);
+    assert.ok(hard.startsWith('--authorize <approval> '), hard);
+    assert.ok(hard.includes(JSON.stringify(key)), `the exact key is printed as a JSON string: ${hard}`);
+    assert.ok(/ONE --authorize argument/.test(hard), hard);
+    assert.ok(!/no way of writing|no spelling|rename|cannot be given/.test(hard), `a key the parser accepts is neither refused nor renamed: ${hard}`);
+    assert.strictEqual(authorizationKeys(['--authorize', key], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name, reconcile: 'declared', columns: ['x'] }] }).error, null, 'the parser accepts it');
+  }
+  // A line break is the one thing the approval parser's patterns refuse in a name, and NUL, which no command-line argument can carry, it refuses by name:
+  // only those keys are said to be impossible to give.
+  for (const name of ['a\nb', 'a\rb', 'a\u2028b']) {
+    const hard = authorizeFlag(`adopt:view:t/${name}`);
+    assert.ok(hard.startsWith('--authorize <approval> ') && /line break/.test(hard) && /cannot be given/.test(hard), hard);
+    assert.ok(authorizationKeys(['--authorize', `adopt:view:t/${name}`], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name, reconcile: 'declared', columns: ['x'] }] }).error, 'the parser refuses it');
+  }
+  for (const key of ['adopt:view:t/a\u0000b', 'adopt:chart:t/a\u0000b', 'overwrite:form:t/main/a\u0000b', 'adopt:dashboard:a\u0000b', 'dateTimeBehavior:t.a\u0000b', 'a\u0000b']) {
+    const hard = authorizeFlag(key);
+    assert.ok(hard.startsWith('--authorize <approval> ') && /NUL character \(U\+0000\)/.test(hard) && /cannot be given/.test(hard) && /rename/.test(hard), hard);
+    const refused = authorizationKeys(['--authorize', key], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name: 'a\u0000b', reconcile: 'declared', columns: ['x'] }] });
+    assert.match(refused.error, /NUL character \(U\+0000\)/, 'the parser names the unsupported character');
+    assert.ok(!refused.error.includes('\u0000'), 'the message shows it escaped');
+    assert.strictEqual(authorizationKeys(['--authorize=' + key], { entities: [] }).adopt.size, 0, 'nothing is approved');
+  }
+  // A tab is accepted and printed double-quoted (a tab inside double quotes reaches every shell unchanged).
+  assert.strictEqual(authorizationKeys(['--authorize', 'adopt:view:t/a\tb'], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name: 'a\tb', reconcile: 'declared', columns: ['x'] }] }).error, null);
+  // The NUL key does not hide the other approvals given beside it.
+  const beside = authorizationKeys(['--authorize', 'adopt:view:t/ok', '--authorize', 'adopt:view:t/a\u0000b'], { entities: [{ schemaName: 't' }], views: [{ entity: 't', name: 'ok', reconcile: 'declared', columns: ['x'] }] });
+  assert.deepStrictEqual([...beside.adopt], ['view:t/ok']);
+  assert.match(beside.error, /NUL/);
+});
+
+// The printed text itself goes through each real shell this machine has, and the arguments it delivers go through the CLI's own parser: the approval a maker
+// pastes is exactly the one the build named, for a plain key, white space, an apostrophe with a semicolon, an ampersand, `$`, a backtick, `\` and `!`.
+test('the printed --authorize hint, pasted into each real shell, reaches the CLI parser as exactly the key it names', (t) => {
+  const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const { runPrintedFlags, skipWithoutShells } = require('./helpers/printed-flag-shells.js');
+  const names = ['Plain', 'Declared Items', 'It\'s; mine', 'a & b', 'cost $5', 'a`b', 'C:\\x y', 'C:\\x y\\z', 'Wow!', 'it\u2019s', 'q\u201Cr\u201D'];
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [] }],
+    views: names.map((name) => ({ entity: 'new_ticket', name, reconcile: 'declared', columns: ['new_name'] })),
+  };
+  const keys = names.map((name) => `adopt:view:new_ticket/${name}`);
+  const printed = keys.map((key) => `view new_ticket/x: view-not-adopted — to manage it, run the build again with ${authorizeFlag(key)}`);
+  const ran = runPrintedFlags(printed);
+  if (skipWithoutShells(t, ran)) return;
+  for (const { shell, argv } of ran) {
+    for (const [i, key] of keys.entries()) {
+      assert.deepStrictEqual(argv[i], ['--authorize', key], `${shell}: ${printed[i]}`);
+      const r = authorizationKeys(argv[i], spec);
+      assert.strictEqual(r.error, null, `${shell}: ${printed[i]}: ${r.error}`);
+      assert.deepStrictEqual([...r.adopt], [`view:new_ticket/${names[i]}`], shell);
+    }
+  }
+});
+
+test('the shell test helper runs the shells that are installed, skips the ones that are not, and reports a skip, not a failure, when none can run', (t) => {
+  const { installedShells, runPrintedFlags, skipWithoutShells } = require('./helpers/printed-flag-shells.js');
+  const platformShell = process.platform === 'win32' ? 'powershell.exe' : 'sh';
+  // The platform's default shell is missing but another one is installed: the others still run, and nothing fails.
+  const withoutDefault = installedShells((shell) => shell === 'pwsh');
+  assert.ok(!withoutDefault.some((s) => s.shell === platformShell), 'the absent default shell is skipped');
+  assert.deepStrictEqual(withoutDefault.map((s) => s.shell), ['pwsh']);
+  assert.strictEqual(skipWithoutShells({ skip() { throw new Error('skipped though a shell ran'); } }, withoutDefault), false);
+  // No shell at all: nothing is run, and the test is reported as skipped.
+  assert.deepStrictEqual(installedShells(() => false), []);
+  assert.deepStrictEqual(runPrintedFlags(['--authorize x'], []), []);
+  const skipped = [];
+  assert.strictEqual(skipWithoutShells({ skip: (why) => skipped.push(why) }, []), true);
+  assert.strictEqual(skipped.length, 1);
+  assert.match(skipped[0], /no shell/);
+});
+
+
+test('--authorize overwrite:quickfind:<table> approves replacing the local copy of a declared Quick Find view, and nothing else', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', quickFind: { findColumns: ['new_name'] } }, { schemaName: 'new_Other' }, { schemaName: 'new_Third', quickFind: { findColumns: ['new_name'] } }],
+    views: [{ entity: 'new_ticket', name: 'quickFind', reconcile: 'declared', columns: ['new_name'] }],
+  };
+  const ok = authorizationKeys(['--authorize', 'overwrite:quickfind:NEW_TICKET'], spec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.overwrite], ['quickfind:new_ticket'], 'never the view named quickFind');
+  assert.strictEqual(ok.adopt.size, 0);
+  // A view named "quickFind" on a table that declares quickFind: the untyped key could mean either.
+  const ambiguous = authorizationKeys(['--authorize', 'overwrite:new_ticket/quickFind'], spec);
+  assert.match(ambiguous.error, /could approve more than one declared artifact.*overwrite:view:new_ticket\/quickFind or overwrite:quickfind:new_ticket/);
+  assert.strictEqual(ambiguous.overwrite.size, 0);
+  // Adoption never applies to a Quick Find view, so it names only the declared view.
+  const adopt = authorizationKeys(['--authorize', 'adopt:new_ticket/quickFind'], spec);
+  assert.strictEqual(adopt.error, null);
+  assert.deepStrictEqual([...adopt.adopt], ['view:new_ticket/quickFind']);
+  // Where nothing else could be meant, the untyped overwrite:<table>/quickFind still names the Quick Find view, under its family.
+  const untypedQuickFind = authorizationKeys(['--authorize', 'overwrite:NEW_THIRD/quickFind'], spec);
+  assert.strictEqual(untypedQuickFind.error, null);
+  assert.deepStrictEqual([...untypedQuickFind.overwrite], ['quickfind:new_third']);
+  assert.match(authorizationKeys(['--authorize', 'overwrite:new_third/quickfind'], spec).error, /use overwrite:quickfind:new_third/);
+  for (const [key, why] of [['adopt:quickfind:new_ticket', /takes only overwrite:quickfind:<id>/], ['overwrite:quickfind:new_other', /does not declare/], ['overwrite:quickfind:new_ticket/quickFind', /does not declare/], ['overwrite:new_other/quickFind', /does not declare/]]) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, why, key);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+  }
+});
+
+test('--authorize adopt:webresource:/overwrite:webresource: approve exactly the declared web resource they name, apart from views and charts', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const wrs = (r) => [[...(r.webResourceAdopt || [])], [...(r.webResourceOverwrite || [])]];
+  // A view keyed contoso_case/Script and a web resource named contoso_case/script: the same text, two different artifacts.
+  const spec = {
+    entities: [{ schemaName: 'contoso_case', columns: [] }],
+    views: [{ entity: 'contoso_case', name: 'Script', reconcile: 'declared', columns: ['contoso_name'] }],
+    webResources: [
+      { name: 'contoso_case/script', type: 'js', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_/scripts/Form.js', type: 'js', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_banner', type: 'html', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_/Legacy.js', type: 'js', content: 'x' },
+      { name: 'contoso_/dup.js', type: 'js', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_/DUP.js', type: 'js', content: 'x', reconcile: 'declared' },
+    ],
+  };
+  const ok = authorizationKeys(['--authorize', 'adopt:webresource:CONTOSO_/scripts/form.js', '--authorize=overwrite:webresource:contoso_banner', '--authorize', 'adopt:contoso_case/Script'], spec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual(wrs(ok), [['contoso_/scripts/form.js'], ['contoso_banner']], 'a web resource is named in any case and kept lower-cased');
+  assert.deepStrictEqual([...ok.adopt], ['view:contoso_case/Script'], 'the view key stays the view\'s, even though a web resource has that name in another case');
+  assert.strictEqual(ok.overwrite.size, 0);
+  const view = authorizationKeys(['--authorize', 'adopt:contoso_case/script'], spec);
+  assert.match(view.error, /approves an artifact the spec does not declare.*use adopt:webresource:contoso_case\/script for the declared web resource of that name/, 'an untyped key never approves a web resource');
+  assert.deepStrictEqual(wrs(view), [[], []]);
+  for (const [key, why] of [
+    ['overwrite:contoso_/scripts/Form.js', /use overwrite:webresource:contoso_\/scripts\/Form\.js for the declared web resource of that name/],
+    ['adopt:contoso_banner', /use adopt:webresource:contoso_banner for the declared web resource of that name/],
+    ['adopt:webresource:contoso_/Legacy.js', /approves a web resource the spec does not declare with reconcile: "declared" \(contoso_\/legacy\.js\)/],
+    ['adopt:webresource:contoso_/missing.js', /approves a web resource the spec does not declare/],
+    ['overwrite:webresource:contoso_/Dup.js', /names 2 declared web resources that differ only in case/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, why, key);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+    assert.deepStrictEqual(wrs(r), [[], []], key);
+  }
+});
+
+test('--authorize: the web resource approvals reach the engine in their own sets, and a build without them hands it none', async () => {
+  const { sdk } = mockSdk();
+  const runOpts = [];
+  const adopt = new Set(['contoso_/scripts/form.js']);
+  const overwrite = new Set(['contoso_banner']);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, authorizedWebResourceAdoption: adopt, authorizedWebResourceOverwrite: overwrite }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(runOpts[0].authorizedWebResourceAdoption, adopt);
+  assert.strictEqual(runOpts[0].authorizedWebResourceOverwrite, overwrite);
+  assert.strictEqual(runOpts[0].authorizedAdoption, undefined);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.ok(!('authorizedWebResourceAdoption' in runOpts[1]) && !('authorizedWebResourceOverwrite' in runOpts[1]));
+});
+
+// A spec that declares configuration items (environment variables, connection references) next to a table with a consent field.
+const configurationConsentSpec = {
+  ...consentSpec,
+  environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+  connectionReferences: [{ logicalName: 'contoso_sp', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }],
+};
+
+test('--authorize: configuration tokens <kind>:<declared key>:<field> are claimed first; other tokens are read as before in a mixed list', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const ok = authorizationKeys(['--authorize', 'connectionReference:contoso_sp:connectionId', '--authorize=environmentVariableValue:contoso_ApiBase:value', '--authorize', 'isSecured:new_ticket.new_salary'], configurationConsentSpec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.keys].sort(), ['connectionReference:contoso_sp:connectionId', 'environmentVariableValue:contoso_apibase:value', 'isSecured:new_ticket.new_salary']);
+  assert.strictEqual(ok.adopt.size + ok.overwrite.size, 0);
+  for (const [key, why] of [
+    ['connectionReference:contoso_nope:connectionId', /'connectionReference:contoso_nope:connectionId' names a configuration item the spec does not declare/],
+    ['environmentVariableValue:contoso_ApiBase:bogus', /'environmentVariableValue:contoso_ApiBase:bogus' is not <kind>:<declared key>:<field> for a field a configuration change can consent to/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key, '--authorize', 'tableFlags:new_ticket'], configurationConsentSpec);
+    assert.match(r.error, why, key);
+    assert.deepStrictEqual([...r.keys], ['tableFlags:new_ticket'], `${key}: the other token is still read`);
+  }
+  // A spec that declares no configuration item: an old token reads exactly as before, and a configuration token names nothing.
+  assert.deepStrictEqual([...authorizationKeys(['--authorize', 'tableFlags:new_ticket'], consentSpec).keys], ['tableFlags:new_ticket']);
+  assert.match(authorizationKeys(['--authorize', 'connectionReference:contoso_sp:connectionId'], consentSpec).error, /names a configuration item the spec does not declare/);
+});
+
+test('--deployment-settings: an unreadable file, bad JSON or a bad entry stops the build before anything runs, and nothing from the file is printed', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'deployment-settings-'));
+  const SECRET = 'S3cr3t-Planted-In-The-File-77';
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify({
+      ...desk,
+      environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+      connectionReferences: [{ logicalName: 'contoso_sp', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }],
+    }), 'utf8');
+    fs.writeFileSync(path.join(dir, 'badjson.json'), `{ "EnvironmentVariables": [ { "SchemaName": "contoso_ApiBase", "Value": "${SECRET}" ,, ] }`, 'utf8');
+    fs.writeFileSync(path.join(dir, 'badentry.json'), JSON.stringify({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: SECRET, ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' }] }), 'utf8');
+    for (const [file, why] of [
+      ['nope.json', /✗ --deployment-settings: cannot read .*nope\.json \(ENOENT\)/],
+      ['badjson.json', /✗ --deployment-settings: .*badjson\.json is not valid JSON/],
+      ['badentry.json', /✗ --deployment-settings: .*\(contoso_sp\) ConnectorId does not match/],
+    ]) {
+      const reached = [];
+      const cli = loadCli(path.join(__dirname, '..', 'build-model-app.js'), {
+        argv: ['--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`, '--apply', '--deployment-settings', path.join(dir, file)],
+        env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+        requires: { './lib/maker-sdk.js': { createMakerSdk: () => { reached.push('sdk'); return {}; }, createNodeWorkspaceStorage: () => { reached.push('workspace'); return {}; } } },
+      });
+      await assert.rejects(cli.main(), (e) => e.exitCode === 1, file);
+      assert.match(cli.stderrText(), why, file);
+      assert.ok(!`${cli.stdoutText()}${cli.stderrText()}`.includes(SECRET), `${file}: nothing from the file is printed`);
+      assert.deepStrictEqual(reached, [], file);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('--deployment-settings without a value is refused by the flag contract before anything runs', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'deployment-settings-'));
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(desk), 'utf8');
+    const reached = [];
+    const cli = loadCli(path.join(__dirname, '..', 'build-model-app.js'), {
+      argv: ['--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`, '--apply', '--deployment-settings'],
+      env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      requires: { './lib/maker-sdk.js': { createMakerSdk: () => { reached.push('sdk'); return {}; }, createNodeWorkspaceStorage: () => { reached.push('workspace'); return {}; } } },
+    });
+    await assert.rejects(cli.main(), (e) => e.exitCode === 1);
+    assert.match(cli.stderrText(), /deployment-settings/);
+    assert.deepStrictEqual(reached, []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('--authorize: a key the spec does not declare is refused before anything runs', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'authorize-'));
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(desk), 'utf8');
+    const reached = [];
+    const cli = loadCli(path.join(__dirname, '..', 'build-model-app.js'), {
+      argv: ['--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`, '--apply', '--authorize', 'isSecured:new_ticket.new_priority'],
+      env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      requires: { './lib/maker-sdk.js': { createMakerSdk: () => { reached.push('sdk'); return {}; }, createNodeWorkspaceStorage: () => { reached.push('workspace'); return {}; } } },
+    });
+    await assert.rejects(cli.main(), (e) => e.exitCode === 1);
+    assert.match(cli.stderrText(), /--authorize: 'isSecured:new_ticket\.new_priority' consents to a change the spec does not declare/);
+    assert.deepStrictEqual(reached, []);
+    assert.strictEqual(fs.existsSync(path.join(dir, '.maker-workspace')), false, 'refused before the workspace is made');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('--authorize: the consented keys reach the engine, and a build without them hands it none', async () => {
+  const { sdk } = mockSdk();
+  const runOpts = [];
+  const keys = new Set(['isSecured:new_ticket.new_salary']);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, authorizedDestructive: keys }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(runOpts[0].authorizedDestructive, keys);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(runOpts[1].authorizedDestructive, undefined, '--allow-destructive is not consent to a schema change');
+});
+
+test('create port: the engine gets the pass-through create port, or the one the caller hands in', async () => {
+  const { sdk } = mockSdk();
+  const runOpts = [];
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  const port = runOpts[0].creates;
+  assert.strictEqual(typeof (port && port.run), 'function', 'a field security profile has a port to be created through');
+  const calls = [];
+  const answer = await port.run({ kind: 'fieldSecurityProfile', key: 'hr', identity: { name: 'HR' }, childKeys: ['new_ticket.new_salary'] }, async (ids) => { calls.push(ids); return 'sent'; });
+  assert.deepStrictEqual(calls, [{ id: answer.id, childIds: answer.childIds }], 'the create runs once, with the ids the port minted');
+  assert.deepStrictEqual([answer.outcome, answer.result, Object.keys(answer.childIds)], ['created', 'sent', ['new_ticket.new_salary']]);
+  const own = { run: async () => ({ outcome: 'unknown' }) };
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts), creates: own });
+  assert.strictEqual(runOpts[1].creates, own);
 });
 
 test('destructive gate: prune:false form removal is not refused and reaches runBuild', async () => {
@@ -1620,6 +2181,41 @@ test('destructive gate: build halts on a dropped sitemap target without --allow-
   assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
 });
 
+test('destructive gate: "exact" Main forms on an existing app halts without --allow-destructive and runs with it', async () => {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.minimumPluginVersion = '2.21.0';
+  spec.app.mainForms = { new_ticket: ['Ticket'] };
+  spec.app.mainFormsOnUpdate = 'exact';
+  const state = { collision: { appExists: true, appUnique: 'new_supportdesk' }, forms: [] };
+  const { sdk, calls } = mockSdk();
+  const refused = await buildModelApp(spec, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: false }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state });
+  assert.strictEqual(refused.ok, false);
+  assert.ok(refused.errors.some((e) => /allow-destructive/.test(e) && /app Main forms of new_ticket — removes other Main forms of new_ticket from the app's membership; no form is deleted/.test(e)), refused.errors.join('\n'));
+  assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+  let engineOpts;
+  const allowed = await buildModelApp(spec, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true }, {
+    sdk, provisionSdk: sdk, discoverOpDiffState: async () => state,
+    runBuild: async (_spec, options) => { engineOpts = options; return { ok: true }; },
+  });
+  assert.notStrictEqual(allowed.ok, false, (allowed.errors || []).join('\n'));
+  assert.strictEqual(engineOpts && engineOpts.allowDestructive, true, 'the engine is told the removal is authorized');
+});
+
+test('dry run summary: an exact Main-form removal is counted as one, never as a step that was not probed', async () => {
+  const removal = { phase: 'app-shell', label: "app Main forms of new_ticket (exact): removes other Main forms of new_ticket from the app's membership; no form is deleted — needs --allow-destructive",
+    op: 'app-main-forms-removal', destructive: true, description: "removes other Main forms of new_ticket from the app's membership; no form is deleted", publication: { kind: 'app', app: 'new_supportdesk' } };
+  const summaryOf = async (livePlan, planItems) => {
+    const logs = [];
+    await buildModelApp(desk, { apply: false, env: 'https://x', profile: 'structural' }, { log: (m) => logs.push(m), runBuild: async () => ({ ok: true, dryRun: true, livePlan, plan: [], planItems }) });
+    return logs.find((l) => /dry run —/.test(l));
+  };
+  const app = { phase: 'app-shell', label: 'app module "Support Desk" + sitemap', state: 'reuse' };
+  assert.match(await summaryOf(true, [app, removal]), /0 to create, 1 already present, 1 would take Main forms out of the app \(--allow-destructive\) \(2 steps\)/);
+  assert.match(await summaryOf(false, [{ ...app, state: undefined }, removal]), /2 steps, spec-only \(no live probe; --no-live-plan\), 1 would take Main forms out of the app \(--allow-destructive\)\./);
+  // A new app loses nothing: listed, but not counted as a removal.
+  assert.match(await summaryOf(true, [{ ...app, state: 'create' }, { ...removal, destructive: false }]), /1 to create, 0 already present \(2 steps\)/);
+});
+
 test('safety gate is FAIL-CLOSED: a discovery error halts the build (no unauthorized write)', async () => {
   // The core fail-closed invariant (design §11): if preflight discovery throws (transient 429/timeout/
   // auth), we cannot verify the apply is non-destructive, so the build must REFUSE to write rather than
@@ -1907,7 +2503,7 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: isTranslationExport \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export once');
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(sendObserver \? sendObserver\.wrap\(\) : undefined\) \} : \{\}\), \.\.\.\(workflowEffectGate \? \{ workflowEffectGate \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate, with the managed attempts\u2019 send observer inside the gate, and screens a declared workflow write with the build\u2019s workflow effect gate only when it has one');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
   assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
@@ -2513,7 +3109,7 @@ test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)?(, appDir: opts\.appDir)? \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)?(, appDir: opts\.appDir)?(, configurationBindings: opts\.configurationBindings)?(, managedManifest)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 
@@ -2582,8 +3178,8 @@ test('the build hands verify the language it wrote its labels in', async () => {
   assert.strictEqual(received.languageCode, undefined);
   assert.strictEqual(received.preResolvedLanguageCode, 1031);
   // The rest of the options are exactly what they were, and the app folder, from which verify reads a web resource's contentPath to
-  // compare its deployed content.
-  assert.deepStrictEqual(Object.keys(received).sort(), ['appDir', 'baselineSpec', 'environmentSkipped', 'languageCode', 'phases', 'preResolvedLanguageCode']);
+  // compare its deployed content, and the workspace's managed manifest (read afresh after the build, as the standalone verify reads it).
+  assert.deepStrictEqual(Object.keys(received).sort(), ['appDir', 'baselineSpec', 'configurationBindings', 'environmentSkipped', 'languageCode', 'managedManifest', 'phases', 'preResolvedLanguageCode']);
   await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, appDir: path.join(__dirname, '..', '..', 'samples') }, { sdk, verify });
   assert.strictEqual(received.appDir, path.join(__dirname, '..', '..', 'samples'), 'the folder the build read the spec\'s sources from');
 });
@@ -3010,4 +3606,70 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     fs.rmSync(appDir, { recursive: true, force: true });
   }
   assert.strictEqual(fs.existsSync(appDir), false, 'the test removes its durable temporary state too');
+});
+
+// --- --preview-push: what the dry run prints of the push preview (lib/push-preview.js), and what the engine is handed ---
+const previewDryRun = async (pushPreview, { opts = {}, deps = {} } = {}) => {
+  const logs = [];
+  const handed = [];
+  const r = await buildModelApp(desk, { apply: false, env: 'https://x', previewPush: true, ...opts }, {
+    log: (m) => logs.push(String(m)), warn: (m) => logs.push(String(m)),
+    runBuild: async (s, o) => { handed.push(o); return { ok: true, dryRun: true, livePlan: true, planItems: [{ phase: 'forms', label: 'form', state: 'reuse' }], plan: ['form [reuse]'], ...(pushPreview ? { pushPreview } : {}) }; },
+    ...deps,
+  });
+  return { r, out: logs.join('\n'), handed };
+};
+
+test('--preview-push: an item the build has no typed change for, and one a batch did not answer, are printed by their reasons — never as ready', async () => {
+  const { out } = await previewDryRun({
+    ok: true, previews: [], notPrepared: [], requiresSchema: [],
+    notEvaluated: [{ key: 'item:0', reason: 'noTypedTarget' }, { key: 'form:new_ticket:Ticket', reason: 'notInBatch' }, { key: 'view:new_ticket:Open', reason: 'somethingNew' }],
+    allEvaluated: false, summary: { ready: 0, refused: 0, unknown: 0, requiresSchema: 0, notPrepared: 0, notEvaluated: 3 }, writeAttempts: 0,
+    disclaimer: 'A preview reads only.',
+  });
+  assert.match(out, /push preview — 0 ready, 0 refused, 0 unknown, 0 schema step\(s\), 0 not prepared, 3 not evaluated/);
+  assert.match(out, /item:0 — not evaluated: noTypedTarget \(the build has no typed change for it to preview\)/);
+  assert.match(out, /form:new_ticket:Ticket — not evaluated: notInBatch \(the batch preview did not answer it \(no local edit\), so it was not previewed\)/);
+  assert.match(out, /view:new_ticket:Open — not evaluated: somethingNew/, 'a reason it does not know is printed by its code');
+  assert.match(out, /the preview did not evaluate every planned change; see the items above/);
+  assert.match(out, /A preview reads only\./, 'the disclaimer is always printed');
+  assert.doesNotMatch(out, /item:0 — (ready|noChange)/);
+});
+
+test('--preview-push: refusals, warnings, an item not prepared and a write that was refused are printed by their codes', async () => {
+  const { out } = await previewDryRun({
+    ok: false,
+    previews: [
+      { key: 'form:new_ticket:Ticket', type: 'form', outcome: 'ready', action: 'update', refusals: [], warnings: [] },
+      { key: 'view:new_ticket:Open', type: 'view', outcome: 'refused', action: 'update', refusals: [{ code: 'MANAGED_LAYER' }], warnings: [{ code: 'STALE' }] },
+    ],
+    notPrepared: [{ key: 'app::0', type: 'app', code: 'NOT_FOUND', statusCode: 404, message: 'the artifact could not be read' }],
+    requiresSchema: [], notEvaluated: [], allEvaluated: false,
+    summary: { ready: 1, refused: 1, unknown: 0, requiresSchema: 0, notPrepared: 1, notEvaluated: 0 }, writeAttempts: 1, disclaimer: 'd',
+  });
+  assert.match(out, /view:new_ticket:Open — refused \(refused: MANAGED_LAYER; warnings: STALE\)/);
+  assert.doesNotMatch(out, /form:new_ticket:Ticket/, 'a ready preview is counted, not listed');
+  assert.match(out, /app::0 — not prepared: NOT_FOUND \(HTTP 404\) — the artifact could not be read/);
+  assert.match(out, /1 write request\(s\) were attempted and refused before sending: this preview is not trustworthy/);
+});
+
+test('--preview-push: a preview that failed with a 403 prints its code and HTTP status, and none of the service\'s words', async () => {
+  const { findingOf } = require('../lib/readonly-operations.js');
+  const SENTINEL = 'SENTINEL-record-value-41c9';
+  const error = findingOf(Object.assign(new Error(`HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.2/systemforms: ${SENTINEL}`), { statusCode: 403 }), 'PREVIEW_FAILED');
+  const { out } = await previewDryRun({ ok: false, allEvaluated: false, error });
+  assert.match(out, /push preview failed: \S+ \(HTTP 403\)/);
+  assert.match(out, /the preview did not evaluate every planned change/);
+  assert.ok(!out.includes(SENTINEL), out);
+});
+
+test('--preview-push: the engine is handed the flag and the read-only client only on a dry run that asked; otherwise its options are what they were', async () => {
+  const client = { get: async () => ({}) };
+  const asked = await previewDryRun(null, { deps: { previewHttpClient: client } });
+  assert.strictEqual(asked.handed[0].previewPush, true);
+  assert.strictEqual(asked.handed[0].httpClient, client);
+  assert.doesNotMatch(asked.out, /push preview/, 'no preview in the result, nothing printed');
+  const plain = await previewDryRun(null, { opts: { previewPush: undefined }, deps: { previewHttpClient: client } });
+  assert.ok(!('previewPush' in plain.handed[0]) && !('httpClient' in plain.handed[0]), Object.keys(plain.handed[0]).join(','));
+  assert.deepStrictEqual(Object.keys(plain.handed[0]), Object.keys(asked.handed[0]).filter((k) => k !== 'previewPush' && k !== 'httpClient'));
 });

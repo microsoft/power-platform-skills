@@ -43,9 +43,17 @@ const { guardWorkspaceStorage } = require('./output-redaction.js');
 // (a seam for the test: the bundle's own exports are read-only). The `connectivity` request itself is the factory's, never the SDK's.
 function withVendoredCompiler(create) {
   return (options) => {
-    const { connectivity, ...forSdk } = options || {};
+    const { connectivity, themeReads, ...forSdk } = options || {};
     // The compiler goes to the SDK through guardPageNesting (lib/page-nesting.js): a page nested too deeply for it to compile is refused with a code (PAGE_NESTING_TOO_DEEP), not a bare RangeError.
     const made = { typescript: () => guardPageNesting(loadVendoredTypeScript(), (code, message) => new bundle.SdkError(code, message)), ...forSdk };
+    // `themeReads` (app.theme, Preview): only a caller that declared a theme asks for it, so every other SDK neither loads
+    // lib/app-theme-reads.js nor sends its reads through it. Innermost of the client guards, so the theme policy judges the
+    // answer exactly as the service sent it. The SDK made over it is marked, and lib/app-theme.js runs only on a marked SDK.
+    let themeGuard = null;
+    if (themeReads && made.httpClient) {
+      const { guardAppThemeReads } = require('./app-theme-reads.js');
+      made.httpClient = themeGuard = guardAppThemeReads(made.httpClient, (code, message) => new bundle.SdkError(code, message));
+    }
     if (made.httpClient) made.httpClient = guardTableLists(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.httpClient) made.httpClient = guardAppHeaderWrites(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.workspaceStorage) made.workspaceStorage = guardWorkspaceStorage(made.workspaceStorage);
@@ -54,7 +62,9 @@ function withVendoredCompiler(create) {
       const { createPowerAppsServiceClient } = require('./power-apps-service-client.js');
       made.powerAppsServiceClient = createPowerAppsServiceClient();
     }
-    return create(made);
+    const sdk = create(made);
+    if (themeGuard) require('./app-theme-reads.js').markThemeReadGuarded(sdk, themeGuard);
+    return sdk;
   };
 }
 

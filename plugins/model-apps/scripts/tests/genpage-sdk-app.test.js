@@ -139,6 +139,9 @@ test('placeInApp: a page becomes a sub-area of the shape the build writes — in
   const sdk = placing(appArtifact());
   const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }] });
   assert.deepStrictEqual(out, { added: [P1], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: true });
+  // What the app's publish answered rides the answer for a caller that accounts for app publications, without changing what is printed or compared.
+  assert.strictEqual(out.appPublish.kind, 'verified');
+  assert.ok(!Object.keys(out).includes('appPublish'));
   assert.deepStrictEqual(sdk.of('updateElement').map((c) => c.args), [['app', APP, '/siteMap/areas/0/groups/0/subAreas', [
     { id: 'sub_1', type: 'Entity', entity: 'account', title: 'Accounts' },
     { id: `genpage_${P1.replace(/-/g, '')}`, title: 'Overview', type: 'GenPage', genPageId: P1 },
@@ -148,6 +151,24 @@ test('placeInApp: a page becomes a sub-area of the shape the build writes — in
   assert.deepStrictEqual(sdk.of('publishArtifact').map((c) => c.args), [['app', APP, undefined]]);
 });
 
+test('placeInApp: a caller that owns the app publication makes the publish (publishApp) — the backend SDK sends none, and a refusal fails the placement', async () => {
+  const accepted = placing(appArtifact());
+  const asked = [];
+  const out = await backend(accepted).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }], publishApp: async () => { asked.push('publish'); return { publish: { kind: 'submitted' } }; } });
+  assert.deepStrictEqual(asked, ['publish']);
+  assert.strictEqual(accepted.count('publishArtifact'), 0, "the backend's own SDK does not publish the app");
+  assert.strictEqual(accepted.count('pushArtifact'), 1, 'the placement is still pushed by the backend');
+  assert.strictEqual(out.appPublish.kind, 'submitted');
+
+  const held = placing(appArtifact());
+  const withheld = sdkError('APP_MAIN_FORM_PUBLISH_WITHHELD', 'the exact Main-form list is not proven');
+  await assert.rejects(backend(held).placeInApp(APP, { pages: [{ pageId: P1 }], publishApp: async () => ({ shipped: false, publish: { kind: 'failed', error: withheld } }) }), (e) => {
+    assert.strictEqual(e.code, 'GENPAGE_APP_PUBLISH_FAILED');
+    assert.deepStrictEqual([e.appPublish.kind, e.appPublish.cause], ['failed', withheld]);
+    return true;
+  });
+  assert.strictEqual(held.count('publishArtifact'), 0);
+});
 test('placeInApp: the page goes in the first group that ALREADY holds a page', async () => {
   const app = appArtifact();
   app.siteMap.areas[0].groups.push({ id: 'group_2', title: 'Pages', subAreas: [{ id: 'sub_p0', type: 'GenPage', genPageId: P3, title: 'Existing' }] });
@@ -182,6 +203,7 @@ test('placeInApp: a page the navigation already names (any case) is left alone �
   const sdk = placing(app);
   const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1.toUpperCase(), title: 'Overview' }] });
   assert.deepStrictEqual(out, { added: [], alreadyPlaced: [P1.toUpperCase()], pinnedViews: [], warnings: [], appEdited: false });
+  assert.strictEqual(out.appPublish, undefined, 'nothing was published, so there is no publish answer to report');
   assert.strictEqual(sdk.count('updateElement') + sdk.count('addElement') + sdk.count('pushArtifact') + sdk.count('publishArtifact'), 0);
 });
 
@@ -209,6 +231,7 @@ test('placeInApp: an app that cannot be read, a push that is not saved, and a pu
     assert.strictEqual(e.saved, true);
     assert.deepStrictEqual([e.appId, e.pageId, e.pageIds], [APP, P1, undefined], 'the failure says which app and which page — a caller that prints it can go on from it');
     assert.match(e.message, /saved, but publishing the app failed \(PublishXml refused\)/);
+    assert.deepStrictEqual([e.appPublish.kind, e.appPublish.cause.message], ['failed', 'PublishXml refused'], 'the failure carries what the publish answered');
     return true;
   });
   const several = placing(appArtifact()).script('publish', { publish: { kind: 'failed', error: new Error('PublishXml refused') } });

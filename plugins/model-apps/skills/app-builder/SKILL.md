@@ -67,6 +67,12 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   script means deleting it first (the build warns, and verify fails, when a web resource's deployed
   content differs from the spec's). This does not apply to recovery of the build's own
   `WEB_RESOURCE_UNVERIFIED` row: keep that row and the same build workspace, then follow its halt.
+  When the maker wants a rebuild to keep a web resource's content in step with the spec, mark that
+  resource `reconcile: "declared"` instead (`minimumPluginVersion: "2.21.0"`) — only when asked, one
+  resource at a time, never a shared (`external`) one, and never every resource of a downloaded or
+  older spec. A rebuild that would change one that exists stops before writing and names its approval
+  (`--authorize adopt:webresource:<web resource name>`) with the components that depend on it: show them to the
+  maker and let them choose. Emptying its content also needs `--allow-destructive`; the halt says so.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
   the requirement is field-level and declarative — it is visible in the maker, survives solution
@@ -87,8 +93,179 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   tenant without the setting still gets a working app. `app.headerNavigationRefresh` controls the
   **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
   **ON**, so set it to `false` only when the user explicitly wants the classic header.
+- **App theme and header logo (Preview, 2.21.0)** — `app.theme`. Add it **only when the maker explicitly asks
+  for branding** (brand colours, a header colour, a logo); an ordinary app gets **no** `app.theme`, and you never
+  invent a palette, a font or a logo. Offer the choices: a `basePaletteColor` (or explicit `palette` slots), the
+  `appHeader` colours, a `font` only if they name one, and a `logo` that is an **existing image web resource**
+  (or one you also declare in `webResources[]`), never a URL. Say before the build that the theme is published
+  with the **app**, and that an app publication publishes **every** pending change of the app, not only the theme.
+  The theme does not change the `newLook` / header choices above — do not switch them to fit a theme. Omit the key
+  to leave the app's theme alone; `null` removes the app's override (the environment theme applies again). Theme
+  versions are never deleted, and a logo the theme only references is never touched by teardown. `--verify` reports the theme's **API state** (saved,
+  pending publish, live) — tell the maker to check the header in the app itself.
+- **App membership** — which forms, views and charts the app offers (`app.mainForms`, `app.tables`).
+  **Only these forms on an existing app.** `app.mainForms` adds the forms you list. To also take the table's other Main
+  forms **out of the app** on an update, set `"mainFormsOnUpdate": "exact"` — ask the maker first, it is a removal from the
+  app's membership (no form is deleted). It needs an unmanaged, published app; the build publishes only once Dataverse reads
+  back exactly your list, and otherwise stops with the change saved and the app's publication owed.
+
+  **Pin the artifacts the spec declares.** `"pinDeclaredArtifacts": true` adds the spec's own forms, views, charts and
+  dashboards to the app explicitly — use it for a chart or view of a table that is not in the navigation. It only adds.
+  When to use them: `"exact"` only on an explicit "only these forms" / "remove the other forms" ask, after
+  showing the maker which tables it covers (the build refuses it on an existing app without
+  `--allow-destructive`); never for "add the Summary form", which `app.mainForms` alone does. Suggest
+  `pinDeclaredArtifacts: true` for a **new** app whose spec declares a chart, view or dashboard of a table
+  that is not in its navigation. Never turn either on by yourself for an existing app. Both need
+  `minimumPluginVersion: "2.21.0"`.
 - **Security & access** — one **security role per persona**, sized from that persona's jobs-to-be-done
   (the entity access each job needs, unioned into the role), so the app **opens for non-admins**.
+- **Confidential columns** — `isSecured` + `fieldSecurityProfiles[]`. Reach for them when the design
+  names a value only some people may see or change (salary, medical notes, an identifier, private
+  comments): a security role cannot hide one column, a profile can. Name who gets each profile
+  (`assignTo` users or teams, by id) — never infer them from a persona — and say in the preview who
+  gains access, or that no assignment was requested. Tell the maker that System Administrators see
+  every secured column (test as a non-admin), that an open app may need a reload, to grant `read`
+  unless `update` is needed, that unsecuring a column deletes its permissions
+  (`--authorize isSecured:<table>.<column>`), and that a teardown keeps each declared profile and names it.
+- **Portable schema** — `{ "value", "label" }` options when an integration or another environment
+  depends on the option numbers; `dateTimeBehavior: "DateOnly"` for birthdays, due and renewal
+  dates, `"TimeZoneIndependent"` for a time that means the same clock everywhere (omit it for
+  timestamps); table `searchEnabled` / `duplicateDetectionEnabled` only when the maker asks. Never
+  change an existing column's date behaviour or turn duplicate detection off unasked: both need
+  `--authorize`. All need `minimumPluginVersion: "2.21.0"` — see
+  [`references/app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md).
+- **Declared views, charts and search columns** (`minimumPluginVersion: "2.21.0"`) — write
+  `reconcile: "declared"` on each view or chart you author for a **new** app, and, when editing, on the
+  one existing view or chart the maker asks to change: a rebuild then applies its columns, filters, sort
+  and joins (`linkEntities`) instead of only adding columns. Never set `title` on a new declared chart,
+  and give a declared view its own name — not the stock `Active <plural>` or `Inactive <plural>`, which
+  every table already has, so changing one is an adoption. Two declared views on one table need different
+  names, and so do two declared charts: a `viewId` pin does not tell them apart, and the build refuses the
+  pair (see Approvals in the advanced reference).
+  For a new table you create, propose `entities[].quickFind.findColumns` (the primary name plus what a
+  user types in the search box: a number, an email, a code) and confirm it with the maker; on an
+  existing table, only when the maker names what search should match. A change to a view or chart that
+  already exists stops the build with nothing written and names its approval
+  (`--authorize adopt:view:<table>/<name>` or `adopt:chart:`, `overwrite:` for changes made elsewhere, `--allow-destructive`
+  to remove columns): explain it and let the maker choose; never edit the spec to avoid it. A local copy
+  that differs from the server's stops it the same way (`workspace-copy-unsent-edits`) and is kept: ask
+  whether to put that change into the spec and refresh the local copy, or approve the `overwrite:` key
+  it prints (`overwrite:quickfind:<table>` for search columns); pass a key exactly as printed. Never write
+  `reconcile` on a web resource except as the web-resource bullet above says, on a form, a dashboard, a business
+  rule or a business process flow except as their bullets below say, and never write a command `key` (keyed command bars are refused
+  in this version). Leave a downloaded or older spec without these fields as it is — see the advanced reference.
+- **Declared form layouts** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a form
+  only when the maker asked its layout to follow the spec (fields, spans, sections, field options, sub-grids,
+  handlers); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
+  declare stay where they are and nothing is deleted (so no `--allow-destructive` is needed for them); a layout the build cannot place safely stops before any
+  write; a table publish puts live every saved change on that table, not only this form, with or without
+  `--publish` (a declared dashboard is published after its write either way); and Dataverse does
+  not provide a working conditional-write guard for a form's saved layer, so the build re-checks it just
+  before writing, but an edit made in Maker at that instant cannot be detected. Never write `genPages`, `prune`, `isDefault`,
+  `deactivateOtherMainForms`, `securityRoles` or a `mainFormOrder` place on a declared form (refused).
+  An existing form is bound only with `--authorize "adopt:form:<table>/<formtype>/<name>"` (lower case;
+  `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
+  declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
+  not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
+  file>` (one with an event handler is left out and named in `managedForms.stale`, as its handler's web
+  resource is not downloaded: add both back by hand); it carries no binding, so the first build that binds each form from the downloaded folder needs
+  `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
+  then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
+  `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below). A
+  build that warns a form's or dashboard's retirement could not be confirmed stops before it writes anything
+  (`managed-not-settled`) and sends nothing more in that run, not even an earlier attempt's deferred publish;
+  running it again reads it afresh and publishes that. A plain form (by its name, `<table> form` when it has
+  none, or its `formId`) that replaces a removed declared form with unfinished work (a lost create, an owed or
+  unconfirmed publish) is refused (`managed-form-unsettled`):
+  restore the declaration and let it settle, or run the build again later.
+- **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
+  dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
+  `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are
+  kept; a new tile is added after the last row; in an environment with more than one language a new tile gets
+  its caption, with the same text, in every language the environment has (if the build cannot read those
+  languages, it stops before it writes the dashboard: `dashboard-languages-unreadable`, so run it again; the
+  platform keeps some of those captions and drops others, an iframe tile's for one, and a dropped one other
+  than the base-language caption is no change); an
+  unfinished dashboard of the same name is not taken over
+  and not deleted; a dashboard this build cannot finish is not published, including by the app publish; a
+  dashboard the build created and could not prove is named by id in the stop: when the build knows it created it,
+  delete it and run the build again, which creates it anew; when the stop says the build cannot tell who created
+  it, have the maker inspect it and do not delete it; `dashboard-languages-unreadable` after a lost answer means
+  run the build again; and
+  Dataverse does not version a dashboard's saved layer, so an edit made in Maker at the instant of the write
+  cannot be detected. An existing dashboard is bound only with `--authorize adopt:dashboard:<key>`
+  (`overwrite:dashboard:<key>` or `overwrite:dashboard:<key>/<tile>` for changes made elsewhere,
+  `--allow-destructive` to clear its description with `""`): explain it and let the maker choose. `--verify`
+  holds a declared dashboard to its last build (a dashboard changed in Maker since fails until a build
+  settles it; one whose publish is unconfirmed is unverified, not passed). A download brings it back declared
+  only with `--include-managed --managed-manifest <store file>` (otherwise it is an undeclared entry), with the
+  dashboard and tile ids it was proved on; its first binding needs `adopt:dashboard:<key>`, because the
+  downloaded folder has no store.
+- **Declared business rules** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a rule only
+  when the maker accepts that the build manages the WHOLE rule; give every condition, action and apply-action a
+  `key`. Tell the maker: conditions and actions are never matched by their text; a new rule is created Draft and
+  activated only if nobody changed it in between; a rule that already exists is never edited by the build
+  (change it in Maker, then re-adopt it); a rule changed outside the spec stops the build until it is re-adopted
+  whole with `--authorize adopt:rule:<table>/<name>` and a declaration naming its whole body; and an environment
+  that cannot host business rules skips them. Explain the approval and let the maker choose. `--verify` holds a
+  declared rule to its last build (a rule changed in Maker since fails until it is re-adopted). A download
+  brings it back declared only with `--include-managed --managed-manifest <store file>` (otherwise it is left
+  out, as every business rule is); the first build that binds a rule that already exists needs
+  `adopt:rule:<table>/<name>`, because the downloaded folder has no store.
+- **Declared business process flows** (`minimumPluginVersion: "2.21.0"`) — write
+  `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow; give every
+  stage and step a `key`. Tell the maker: a key keeps a stage's or step's id, so a rename keeps the records on it;
+  a new flow is created Draft and activated only if nobody changed it in between; a flow that already exists is
+  never edited by the build (to change its body or status, change it in Maker, then re-adopt it, keeping every
+  stage and step in place); removing or reordering a stage or step is always refused, and no change in Maker or
+  re-adoption unlocks that; a flow changed outside the spec stops the build until it is re-adopted whole with
+  `--authorize adopt:bpf:<table>/<name>` and a declaration naming its whole body. Explain the approval and let
+  the maker choose. `--verify` holds a declared flow to its last build (a flow changed in Maker since fails until
+  it is re-adopted). A download brings it back declared, keys included, only with `--include-managed
+  --managed-manifest <store file>` (otherwise it is left out); the first build that binds it from the downloaded folder
+  needs `adopt:bpf:<table>/<name>`, because that folder has no store. Changing only who may run a managed flow
+  (`securityRoles`) writes nothing to the flow; the build records it. A managed download does NOT restore a flow
+  that has `securityRoles`: a download writes no `personas[]`, so it leaves that flow out with a warning naming the
+  personas (nothing is lost; the store and the maker's own spec keep it). Tell the maker to copy that flow and the
+  personas it names from the spec it was built from. A
+  declared rule or flow removed from the spec whose row was deleted is no longer managed once the build reads it gone
+  by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
+  change is still waiting to be proved keeps the build incomplete. A retirement a build reports it could not
+  confirm also ends that build incomplete; tell the maker to run the build again, which reads the record afresh.
+- **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>/<dispatch>`
+  (or `publication-risk:dashboard:<id>/<dispatch>`) lost the answer to a publish that may still complete.
+  Tell the maker to check what is live on that table; pass the key exactly as printed, from the latest stop,
+  only when they accept the risk, whichever step printed it. The key names that one lost publish: an older
+  key does not accept a later one, and a key that matches nothing is reported as not used. That run records
+  it before it writes anything and stops (`publication-risk-accepted`); the next build publishes after the
+  usual checks. A dashboard the spec no longer declares stays owed (`publication-withheld`) until its
+  declaration is restored. A run that cannot tell whether it recorded the key stops before any write
+  (`publication-risk-record-unconfirmed`): run the build again without the key. `--allow-destructive` never
+  gives it. When the stop says the saved layer is still the one the publish shipped yet the published layer
+  reads differently, the platform may read that form's two layers apart: have the maker compare what is
+  published with the spec; each later publish of that table can stop the same way.
+- **A saved change the build did not make** — a declared form's table is not published while its saved
+  layer holds a change made elsewhere. If the stop says that change is not published, tell the maker to
+  publish it in Maker if it should stay, or undo it and save, then run the build again.
+- **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
+  **new** app; never add it to an existing or downloaded spec. Tell the maker: declared views and charts
+  get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;
+  configuration items, custom APIs, environment variables, field security, duplicate rules and pages keep
+  today's ids; and a local copy with an unsent edit stops the build (`create-completion-required`) —
+  running again does not merge it: put the change into the spec, then refresh the local copy.
+- **Configuration items** (`minimumPluginVersion: "2.21.0"`) — `environmentVariables[]`,
+  `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]` and `solution.version`. Declare one
+  only when the maker asks for it or a page of this app needs it (a page calling a connector needs its
+  connection reference; an action a page calls needs its Custom API). Never write a value that differs per
+  environment into the spec — a current value, a connection id, a secret: those go in a `--deployment-settings`
+  file (the solution deployment-settings shape), which the maker supplies, and a `secret` variable takes no
+  `defaultValue`. Tell the maker: a page that calls a declared reference or Custom API is not written until the
+  reference is bound to a connection and the Custom API has an implementation (a plug-in type) — a declared
+  Custom API alone is a scaffold; clearing a value, unbinding a reference or removing a parameter or condition
+  needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
+  a download does not bring them back into the spec yet; and a whole-build retry after a lost answer can create
+  a second row, so check the environment before running a failed build again. See
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → *Configuration items*.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
   / AI data visualization, M365 Copilot (opt-in); per-table Copilot row summaries (Insight Cards)
   with tailored prompts, auto-selected for good-candidate tables
@@ -240,8 +417,10 @@ unless destructive authority was supplied independently.
      **opens for that persona, not just sysadmins**. **Render the roles + per-entity access as a table
      in your chat reply** (the user can't approve an access model they can't see — see the CRITICAL
      note above). If they want no roles, tell them jobs live in `personas[]` so dropping the roles
-     drops the recorded jobs too; offer read-only privileges to keep the record. (Column-level
-     security and access teams are not yet supported — see *Notes & limits*.)
+     drops the recorded jobs too; offer read-only privileges to keep the record. If a column is
+     confidential, add `isSecured` + a field security profile and name who gets it — see the
+     *Confidential columns* bullet in the toolbox. (Access teams are not yet supported — see
+     *Notes & limits*.)
    - **Whole-app preview** (design gate for Level (b)): `node "${PLUGIN_ROOT}/scripts/preview-app.js" --spec @<working-dir>/app-spec.json`
      renders data-model + sitemap + form wireframes + page-intents + design contract. **Reproduce the
      ENTIRE rendered output verbatim in your chat reply, inside a fenced ` ``` ` code block — do NOT
@@ -434,6 +613,18 @@ re-run — do a **dry-run first** (drop `--apply`), **paste the phase-grouped pl
 chat reply** (tool output is collapsed — see the CRITICAL note above), and get a go-ahead
 before applying.)
 
+**Push preview (`--preview-push`, dry run only).** For a complex change to an existing app (managed or
+destructive features, many views), run the dry run with `--preview-push` to see, per artifact, whether a
+push would create, update or change nothing, and what would stop it (refused, stale, unknown), with its
+solution layers and publication scope. It reads only. "ready" is not approval or a lock, and while a
+direct SDK push can still write a "noChange" artifact, this build skips the push of an existing view it
+would not change. It previews an existing view with the column and
+description changes the build would make, and a chart the build would create. Everything else (an
+existing form, chart or the app, a view or form the build would create, a command bar) is listed as not
+evaluated, because the build works those changes out only while it runs: say so, never report the
+preview as complete. A preview that fails prints its code and the dry run stands. Do not use it on every
+apply; it is refused with `--apply` and with `--no-live-plan`.
+
 **Stage selector (`--stage <data|ui|app|publish>`)** maps to its phase range. On `--apply`, ONLY
 `--stage data` is accepted (solution + data-model, no rows in run 1; run 2 is a full build). All
 other stages and the legacy `--from/--to/--only/--skip` selectors are dry-run inspection only —
@@ -575,6 +766,18 @@ or relationship and the fix for the next build), or a page workspace the run cou
 delete by hand). It changes neither `ok` nor the exit status, so a run that passes can still carry one: pass each on to
 the user. A run that stops on an unexpected error prints that error and no JSON.
 
+**Command buttons (`--inspect-components`).** When a command button misbehaves, or after changing
+commands, run verify with `--inspect-components`. It checks each declared control by its recorded row on
+the surface you declared (a `MainTab` button on the form, `HomeTab` on the main grid, `ContextualTab` on
+a subgrid). Caption-only matches, hidden or disabled controls, and controls on another surface or app do
+not pass. It checks the stored definition, not what a browser renders. Today the build records no row
+id for a control, so every control it finds is reported `UNVERIFIED … found by caption only` and the
+run fails: tell the user which lines say `FAIL` (missing, on another surface, several matches) — those
+are real problems — and that a caption-only line means the button could not be proved to be the app's
+own, and may also hide a problem with it: a hidden control (or one under a hidden parent) found by
+caption is reported caption-only, not `FAIL`, while a disabled one still fails (`stored disabled`). No
+`FAIL` line does not prove a button is visible.
+
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
@@ -601,11 +804,11 @@ columns bind, which the platform refuses to delete while the table exists, and i
 business rule on it could not be deleted (the rule's activated copy can never be deleted once its table is gone), so
 a re-run deletes the rule first, then the table and what was kept with it. It never deletes the solution's
 **publisher** (the build reuses one by prefix, and other solutions may share it); its closing summary says so in one line,
-so tell the user the publisher stays and can be removed in Maker once nothing uses it. **Known limit — generative pages on
-forms:** teardown deletes the app's generative pages even when a form still embeds one (the `MscrmControls.UxAgentControl`
-control); the platform records no dependency for that and teardown reads no form, so the form is left pointing at a deleted
-page. When the app has pages, tell the user before `--apply` and have them take each page off any form that shows it (or delete
-that form) first. **Dry-run by default**; add `--apply
+so tell the user the publisher stays and can be removed in Maker once nothing uses it. It also keeps every declared
+**field security profile** and names each one (users and teams may hold it beyond this app). **Generative pages on forms:** teardown keeps a page a
+form still embeds (the `MscrmControls.UxAgentControl` control) and stops with an error that names the form, before it deletes
+anything; the dry run names the same form and reports itself as failed. Tell the user, have them take the page off that form
+(or delete the form, if it is theirs), then run teardown again. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.
@@ -655,6 +858,21 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     again as it is, with a warning (it renders without the key today). Deleting a key keeps the page looking as it does;
     writing the longhands makes the style start to render. The same halt reports a `makeStyles` call the check cannot read
     for certain as that — not as CSS Griffel drops — and says what to change in the code.
+  - `pages-locked` — another build of this app, or a `genpage.js add-to-app` / `remove-from-app` / `genpage-upload.js --app-id`
+    edit run from this folder, holds the app's pages lease. No page was written. A build takes that lease only when it
+    reaches its pages phase, so its earlier phases (solution, tables, forms, app shell) may already have saved their
+    changes: tell the user so, never that nothing changed. Wait for the other build or edit to finish and run the build
+    again; that run reconciles what was already saved. (A standalone `genpage.js` / `genpage-upload.js` edit that gets this
+    refusal takes the lease first, so it did write nothing. Such an edit holds the app's build lease too, so a build started
+    while it runs is refused at once with `build-locked`, having written nothing: run the build again once the edit ends.)
+    It is a single-machine lock in this folder's
+    `.maker-workspace`, not a guard against an edit from another machine.
+  - `form-page-embeds-incomplete` — a page the spec embeds in a form (`forms[].genPages`) was not embedded. The message names
+    each key and why (`halt.notApplied`); tell the user both and never report the build as done. **In this release the CLI
+    build cannot embed a page in a form** (it has no record of the embeds it made, so it fails closed with
+    `managed-bindings-unavailable` after building everything else): when a user asks for a page on a form, say so and offer
+    the page in the app's navigation instead (`placement` left as `sitemap`). The same code at preflight means the run had the
+    forms phase but not the pages phase — run both.
 - **`--non-interactive`** — suppress interactive prompts (for automation / CI). A non-interactive
   build that encounters an existing app **fails** instead of warning-and-proceeding, unless
   `--allow-destructive` is also set. Does **not** grant destructive authority on its own — only
@@ -726,7 +944,9 @@ not everything:**
   `connectorBindings` / `actionBindings`) into `pages[]` + their `.tsx`, the referenced
   entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
   carrying the deployed view/chart ids), the icon web resources, and the solution.
-- **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty.
+- **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty
+  (a declared form comes back only with `--include-managed --managed-manifest <store file>`; see
+  **Declared form layouts**).
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.
   The download names every one it leaves out — the command-bar buttons of the app's tables included —
@@ -821,6 +1041,63 @@ Then:
 > do round-trip (id-passthrough tiles), but the views and charts their tiles point at do not, so they
 > can only be edited in Maker.
 
+## Fixing rows, listing a solution, moving an app
+
+Three explicit tools for asks that are not a build. None runs from the App Spec; use each only when the
+maker asks for what it does.
+
+**Fix values in existing rows** ("fix the status on these 30 rows", "set the missing region on old
+records"). Plan the change:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/data-fix.js" plan --env <envUrl> --app-dir <dir> --table <name> --filter <odata> --set <json> --max-rows <n>
+```
+
+The plan prints only counts, a plan id and a digest: OPEN the review file it names and show the maker
+the before/after values it lists, and the row count. Apply only after the maker approves those values:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/data-fix.js" apply --env <envUrl> --app-dir <dir> --plan-id <id> --approve <planDigest> --app <appUniqueName>
+```
+
+Add `--workspace <dir>` if the app's build uses one, and pass the same `--app`/`--workspace` to `resume`
+and `revert`.
+- It waits for no build: if the app's build is running, it refuses (`DATA_FIX_BUSY`); try again after it.
+- A non-zero exit means not every change was made. Rows another maker changed after the plan are
+  reported as conflicts, never overwritten.
+- A partial run continues with `resume`, which retries only rows not attempted. Rows whose outcome is
+  unknown are never resent automatically and keep the run non-zero.
+- `revert` writes its own review file and asks for fresh approval of it. If it stops before writing, run
+  `revert` again for a fresh review of what is left.
+- A row whose outcome was unknown, or one written without what a revert needs, cannot be undone: the
+  revert review lists it, the revert leaves it as it is and exits non-zero. Check those rows by hand.
+  When NO applied row can be undone, the revert writes no review file and exits non-zero with only the
+  counts: the plan's journal (`<app-dir>/.data-fix/<planId>/`) records which rows were written.
+- It is not atomic.
+
+**See what is in a solution** ("what is in solution X"):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/solutions.js" inspect --env <envUrl> --solution <name>
+```
+
+It lists supported artifacts by kind, tables whose subcomponents it did not expand, and components it
+skipped or could not read, with its request count. It is not everything the solution owns, and it is
+not a portable set of components. A component it could not read carries a code and HTTP status, not
+the service's message: there is none to pass on.
+
+**Check whether an app can move to another environment** ("can I move this app to prod"):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/plan-app-promotion.js" --source-env <envUrl> --target-env <envUrl> --package <solution.zip> --app <name>
+```
+
+It only reads. It lists the components it cannot promote (most schema, forms, views, flows and similar
+components today) and what the target needs.
+- There is no apply step. It never falls back to an import.
+- Pass `--acknowledge-non-atomic-import` only when the maker accepts that an import can partly succeed.
+- The existing solution export/import remains a separate path with its own limits.
+
 ## What the builder does (in order)
 
 solution (idempotent) → data model — **discover** existing tables/columns/relationships via the SDK
@@ -878,7 +1155,9 @@ child view id. Each step emits `[n/total]`.
   app's sitemap and finalizing the sitemap after generative pages publish the app, and repairing a
   lookup column still labelled with an old default publishes its table (an unpublished edit
   to a live artifact is invisible). A fresh build without `--publish` still leaves new
-  tables/columns/relationships staged-but-unpublished in the solution.
+  tables/columns/relationships staged-but-unpublished in the solution, except on a table a declared form
+  (`reconcile: "declared"`) is published on: that table publish puts live every saved change on the table,
+  its new columns included (a declared dashboard is likewise published after its write).
 - **Idempotent — but not full desired-state convergence.** Existing
   solution/tables/columns/relationships/views/charts/forms/commands/dashboards are detected and
   **reused**, so re-runs and existing-table envs work without collisions. **The caveat for EDITS:** a
@@ -905,9 +1184,9 @@ child view id. Each step emits `[n/total]`.
   by hand does. Individual command controls are not verified.
 - Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
-  multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
-  (both tracked SDK follow-ups). The security surface today is role-per-persona plus per-form role
-  assignment, and both of those ship. Also out of scope: the BPF knobs the spec gate rejects
+  multi-area sitemaps, and **access teams / hierarchy security** (a tracked SDK follow-up). The
+  security surface today is role-per-persona, per-form role assignment and, from 2.21.0, column-level
+  security (`isSecured` + `fieldSecurityProfiles[]`). Also out of scope: the BPF knobs the spec gate rejects
   (cross-entity stages, branching, stage actions).
 - **Environment-gated (may not work where you are running):**
   - **Business rules** (`businessRules[]`). The SDK writes a rule through the bound

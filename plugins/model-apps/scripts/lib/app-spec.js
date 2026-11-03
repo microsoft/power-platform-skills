@@ -52,6 +52,13 @@ const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
 const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE, AI_SETTING_CODEC } = require('./ai-app-settings.js');
+const { normalizeChoiceOptions, isChoiceOptionObject, validateSchemaFeatures } = require('./schema-feature-contract.js');
+const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
+const { isDeclaredChart, compileChartIntent } = require('./chart-reconcile.js');
+const { approvalKey } = require('./reconcile-common.js');
+const { validateManagedCommands } = require('./command-reconcile.js');
+const { validateQuickFindSpec } = require('./quick-find.js');
+const { declaredFeatureOn } = require('./declared-features.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -175,11 +182,12 @@ function choiceValueMap(entity, spec) {
   // validated clean and produced `{"new_state": {}}`.
   const indexOptions = (options) => {
     const byLabel = Object.create(null);
-    (options || []).forEach((label, i) => {
+    // The value an option is written with: its explicit `value`, else 100000000 + its place (normalizeChoiceOptions).
+    for (const { value, label } of normalizeChoiceOptions(Array.isArray(options) ? options : [])) {
       for (const alias of labelAliases(label)) {
-        if (!Object.prototype.hasOwnProperty.call(byLabel, alias)) byLabel[alias] = 100000000 + i;
+        if (!Object.prototype.hasOwnProperty.call(byLabel, alias)) byLabel[alias] = value;
       }
-    });
+    }
     return byLabel;
   };
   const globalByName = Object.create(null);
@@ -685,6 +693,9 @@ const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotConta
 // does the wrong thing. Expose them from an environment where they can be live-verified.
 const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };
 const BUSINESS_RULE_ACTION_TYPES = Object.keys(BUSINESS_RULE_ACTIONS);
+// The three shapes above that a DECLARED business rule takes (lib/rule-settlement.js compiles, proves and live-verifies them as
+// one managed workflow). An undeclared rule still refuses them, for the reason above.
+const DECLARED_RULE_ONLY_ACTION_TYPES = ['SetDefaultValue', 'ShowErrorMessage', 'Recommendation'];
 // Boolean-payload actions, so a string "false" (truthy in JS) is rejected rather than silently
 // inverting the author's intent — the same trap `app.newLook` validation exists to close.
 const BUSINESS_RULE_BOOLEAN_ACTIONS = new Set(['SetVisibility', 'LockUnlock', 'SetBusinessRequired']);
@@ -846,6 +857,8 @@ const ENTITY_KEYS = new Set([
   'hasNotes', 'quickCreate', 'existing', 'enrichDefaultViews',
   'vectorIcon', 'iconDescription', 'icon',
   'statusReasons', 'alternateKeys', 'mainFormOrder',
+  'searchEnabled', 'changeTrackingEnabled', 'duplicateDetectionEnabled',
+  'quickFind',
 ]);
 
 // What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
@@ -1380,14 +1393,17 @@ function rejectLocalizedGlobalChoice(gc, label, errors) {
     errors.push(`${label}: displayName cannot be localized. ${WHY}`);
   }
   (Array.isArray(gc.options) ? gc.options : []).forEach((o, i) => {
-    if (isLocalizedLabelMap(o)) errors.push(`${label}: options[${i}] cannot be localized. ${WHY}`);
+    if (isLocalizedLabelMap(isChoiceOptionObject(o) ? o.label : o)) errors.push(`${label}: options[${i}] cannot be localized. ${WHY}`);
   });
 }
 
 function validateChoiceOptionLabels(options, label, errors, opts = {}) {
   if (!Array.isArray(options)) return;
-  options.forEach((o, i) => validateLabel(o, `${label}: options[${i}]`, errors, opts));
-  for (const c of ambiguousChoiceAliases(options)) {
+  // An explicit `{ value, label }` option's label is checked as a plain one is; its shape and value are schema-feature-contract's
+  // (choiceOptionErrors). The aliases are judged on the labels, in the author's order.
+  const labels = options.map((o) => (isChoiceOptionObject(o) ? o.label : o));
+  labels.forEach((o, i) => validateLabel(o, `${label}: options[${i}]`, errors, opts));
+  for (const c of ambiguousChoiceAliases(labels)) {
     const msg = `${label}: the label '${c.alias}' names BOTH options[${c.first}] and options[${c.second}] — one string cannot select two values, so a sample record or view filter using it resolves to options[${c.first}].`;
     if (c.hidden) {
       // At least one side is localized, so the collision is INVISIBLE on the page: the author reads
@@ -2008,7 +2024,100 @@ function compareVersions(a, b) {
 }
 
 const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
+// app.mainFormsOnUpdate and app.pinDeclaredArtifacts: a plugin older than this ignores both, so an "exact" list would
+// only ADD forms there and a declared chart off the navigation would stay out of the app.
+const APP_MEMBERSHIP_UPDATE_MIN_VERSION = '2.21.0';
+// app.theme (Preview) ships in 2.21.0: an older plugin ignores the field, so a spec that uses it asks for 2.21.0 or newer.
+const APP_THEME_MIN_VERSION = '2.21.0';
+// createIdentity: "stable-v1" (stable create ids for declared views and charts) first shipped in 2.21.0.
+const CREATE_IDENTITY_MIN_VERSION = '2.21.0';
+const CREATE_IDENTITY_STABLE = 'stable-v1';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
+// Declared reconciliation (views, charts and web resources with reconcile: "declared", a view's viewId pin and joins, a chart title, command
+// keys and row pins, a table's quickFind): an older plugin ignores these fields (or, for quickFind, refuses the table), so a
+// spec that uses one names the release that reads it.
+const DECLARED_RECONCILE_MIN_VERSION = '2.21.0';
+function usesDeclaredReconcile(spec) {
+  const any = (list, f) => (Array.isArray(list) ? list : []).some((x) => !!x && typeof x === 'object' && f(x));
+  const keyed = (c) => c.key !== undefined || c.rowId !== undefined || any(c.children, keyed);
+  return any(spec.views, (v) => v.reconcile !== undefined || v.viewId !== undefined || v.linkEntities !== undefined)
+    || any(spec.charts, (ch) => ch.reconcile !== undefined || ch.title !== undefined)
+    || any(spec.webResources, (wr) => wr.reconcile !== undefined)
+    || any(spec.commands, keyed)
+    || any(spec.entities, (e) => e.quickFind !== undefined)
+    || (declaredFeatureOn('forms') && any(spec.forms, (f) => f.reconcile !== undefined))
+    || (declaredFeatureOn('dashboards') && any(spec.dashboards, (d) => d.reconcile !== undefined))
+    || (declaredFeatureOn('rules') && any(spec.businessRules, (r) => r.reconcile !== undefined))
+    || (declaredFeatureOn('bpf') && any(spec.businessProcessFlows, (p) => p.reconcile !== undefined));
+}
+
+// A declared dashboard (dashboards[].reconcile: "declared", lib/dashboard-reconcile.js) is one managed group: its root row, its seed
+// tab and section and its keyed tiles, proved and published as one dashboard. Refused here, before any build work:
+//   - the tile grammar the helper needs (validateDeclaredDashboard: a key on every tile, a supported type, a GUID componentId);
+//   - a dashboard `key` outside the tile key grammar, and a name with '/' and no `key`: the approval of one tile is
+//     `dashboard:<key>/<tile>`, so a '/' in the dashboard's own key could make one approval name another dashboard's tile;
+//   - two declared dashboards with one key (any case): one `dashboard:<key>` approval would approve both.
+// `findings` takes the same-key finding, as validateDeclaredForms does.
+const DECLARED_DASHBOARD_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+function validateDeclaredDashboards(spec, errors, findings) {
+  // Loaded here, not at the top: the helper pulls in the managed settlement, which a spec with no declared dashboard never needs.
+  const { isDeclaredDashboard, dashboardKey, validateDeclaredDashboard } = require('./dashboard-reconcile.js');
+  const first = new Map();
+  (Array.isArray(spec.dashboards) ? spec.dashboards : []).forEach((d, i) => {
+    if (!d || typeof d !== 'object' || d.reconcile === undefined) return;
+    const label = `dashboards[${i}] '${d.name || '(unnamed)'}'`;
+    if (!isDeclaredDashboard(d)) { errors.push(`${label}: reconcile must be "declared" (or left out)`); return; }
+    if (d.key !== undefined && (typeof d.key !== 'string' || !DECLARED_DASHBOARD_KEY_RE.test(d.key))) {
+      errors.push(`${label}: key must be letters, digits, '_', '.' or '-' (at most 64)`);
+      return;
+    }
+    if (d.key === undefined && typeof d.name === 'string' && d.name.includes('/')) {
+      errors.push(`${label}: a declared dashboard whose name holds '/' needs a key (letters, digits, '_', '.' or '-'), because its approvals are spelled dashboard:<key>/<tile>`);
+      return;
+    }
+    for (const message of validateDeclaredDashboard(d)) errors.push(`${label}: ${message}`);
+    const key = dashboardKey(d);
+    const folded = key.toLowerCase();
+    if (first.has(folded)) findings.push(`${first.get(folded)} and ${label} are declared dashboards with the same key (dashboard:${key}): one --authorize adopt:dashboard:${key} or overwrite:dashboard:${key} would approve both, so give each its own key`);
+    else first.set(folded, label);
+  });
+}
+
+// A declared form (forms[].reconcile: "declared", lib/form-layout-reconcile.js) is one managed group whose saved layer the build
+// proves and publishes per table. Refused here, before any build work, is what the declared build cannot do without breaking that:
+//   - `prune` (a declared form never deletes what the spec omits) and `genPages` (embedding a generative page edits the form after
+//     its proof) — the helper refuses both too, but only once the build has started;
+//   - `isDefault`, `deactivateOtherMainForms`, a place in `entities[].mainFormOrder` and `securityRoles`: the build writes the
+//     table's default flag, deactivations, form order and role list onto the form's own row and formxml (DisplayConditions) after
+//     the forms phase, so each would change the saved layer the declared form just proved, and the next build would find it
+//     drifted. Set them in Maker, or keep the form undeclared;
+//   - two declared forms with one key (`<table>/<formType>/<name>`, any case): one `form:<key>` approval would approve both.
+// `findings` takes the same-key finding: an error for every profile that builds, a warning for teardown and verification (as for
+// views and charts, sameKeyFindings).
+function validateDeclaredForms(spec, errors, findings) {
+  // Loaded here, not at the top: lib/form-layout-reconcile.js requires this module (formColumnsOf).
+  const { isDeclaredForm, formLayoutKey } = require('./form-layout-reconcile.js');
+  const forms = Array.isArray(spec.forms) ? spec.forms : [];
+  const lc = (v) => String(v == null ? '' : v).toLowerCase();
+  const first = new Map();
+  forms.forEach((f, i) => {
+    if (!f || typeof f !== 'object' || f.reconcile === undefined) return;
+    const label = `forms[${i}] '${f.name || f.entity || '(unnamed)'}'`;
+    if (!isDeclaredForm(f)) { errors.push(`${label}: reconcile must be "declared" (or left out)`); return; }
+    if (f.prune !== undefined) errors.push(`${label}: a declared form never deletes what the spec omits; remove "prune"`);
+    if (Array.isArray(f.genPages) && f.genPages.length) errors.push(`${label}: generative pages cannot be embedded in a declared form yet; remove "genPages" or leave out reconcile`);
+    for (const field of ['isDefault', 'deactivateOtherMainForms', 'securityRoles']) {
+      if (f[field] !== undefined) errors.push(`${label}: ${field} is not supported on a declared form — the build would write it onto the form after proving its layout; set it in Maker, or leave out reconcile`);
+    }
+    const entity = (spec.entities || []).find((e) => e && lc(e.schemaName) === lc(f.entity));
+    if (entity && Array.isArray(entity.mainFormOrder) && entity.mainFormOrder.some((n) => typeof n === 'string' && f.name && n === f.name) && lc(f.formType || 'Main') === 'main') {
+      errors.push(`${label}: a declared form cannot be listed in entities[].mainFormOrder — the build would write the order onto the form after proving its layout; set the order in Maker, or leave out reconcile`);
+    }
+    const key = formLayoutKey(f);
+    if (first.has(key)) findings.push(`${first.get(key)} and ${label} are declared forms with the same key (form:${key}): one --authorize adopt:form:${key} or overwrite:form:${key} would approve both, so give each its own name, type or table`);
+    else first.set(key, label);
+  });
+}
 
 function sitemapEntityTables(spec) {
   const tables = new Set();
@@ -2024,8 +2133,28 @@ function sitemapEntityTables(spec) {
   return [...tables];
 }
 
+// Closed values. "exact" with no Main form listed would mean "every form" (an app with no Main form offers them all), so
+// it needs at least one table with a non-empty list; the build refuses the same before any read
+// (APP_MAIN_FORMS_EXACT_INVALID, lib/app-components.js). pinDeclaredArtifacts only adds, so true is its one value.
+function validateAppMembershipUpdate(app, errors) {
+  if (app.mainFormsOnUpdate !== undefined) {
+    if (app.mainFormsOnUpdate !== 'addOnly' && app.mainFormsOnUpdate !== 'exact') {
+      errors.push('app.mainFormsOnUpdate must be "addOnly" or "exact"');
+    } else if (app.mainFormsOnUpdate === 'exact') {
+      const lists = app.mainForms && typeof app.mainForms === 'object' && !Array.isArray(app.mainForms) ? Object.values(app.mainForms) : [];
+      if (!lists.some((names) => Array.isArray(names) && names.length > 0)) {
+        errors.push('app.mainFormsOnUpdate "exact" needs app.mainForms with at least one table and form');
+      }
+    }
+  }
+  if (app.pinDeclaredArtifacts !== undefined && app.pinDeclaredArtifacts !== true) {
+    errors.push('app.pinDeclaredArtifacts must be true or omitted');
+  }
+}
+
 function validateAppMembership(spec, errors) {
   const app = spec.app || {};
+  validateAppMembershipUpdate(app, errors);
   if (app.tables !== undefined) {
     if (!Array.isArray(app.tables) || app.tables.some((name) => typeof name !== 'string' || !name.trim())) {
       errors.push('app.tables must be an array of non-empty table logical names');
@@ -2075,8 +2204,19 @@ function validateAppMembership(spec, errors) {
 function appMembershipWarnings(spec) {
   const warnings = [];
   const app = spec.app || {};
-  if (app.tables === undefined && app.mainForms === undefined) return warnings;
   const floor = spec.minimumPluginVersion;
+  if ((app.mainFormsOnUpdate !== undefined || app.pinDeclaredArtifacts !== undefined)
+    && (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_UPDATE_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_UPDATE_MIN_VERSION}' or newer when using app.mainFormsOnUpdate or app.pinDeclaredArtifacts — older plugins ignore these fields`);
+  }
+  if (app.theme !== undefined && (!isPluginVersion(floor) || compareVersions(floor, APP_THEME_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${APP_THEME_MIN_VERSION}' or newer when using app.theme — older plugins ignore it`);
+  }
+  if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity')
+    && (!isPluginVersion(floor) || compareVersions(floor, CREATE_IDENTITY_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${CREATE_IDENTITY_MIN_VERSION}' or newer when using createIdentity — older plugins ignore it and create with fresh ids`);
+  }
+  if (app.tables === undefined && app.mainForms === undefined) return warnings;
   if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
     warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_MIN_VERSION}' or newer when using app.tables or app.mainForms — older plugins ignore these fields`);
   }
@@ -2396,6 +2536,10 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings, unknownKey
     }
   }
 
+  // A declared form (forms[].reconcile "declared", while its build path is enabled) owns the flags the spec states, an explicit
+  // false included: lib/form-layout-reconcile.js clears the flag and records false apart from absent. The additive path only ever
+  // writes the enabled state, so everywhere else false stays refused.
+  const declaredFalseApplies = declaredFeatureOn('forms') && !!f && f.reconcile === 'declared';
   for (const { name, opt, where, inline } of seen) {
     // A form-level span reaches the compiler exactly as an inline one does (mergeFieldOptions), so it
     // gets the same whole-number check. Inline entries are already checked by the layout validator;
@@ -2420,7 +2564,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings, unknownKey
       if (opt[flag] === undefined) continue;
       if (typeof opt[flag] !== 'boolean') {
         errors.push(`${label}: ${where} ${flag} must be a boolean`);
-      } else if (opt[flag] === false) {
+      } else if (opt[flag] === false && !declaredFalseApplies) {
         errors.push(`${label}: ${where} sets ${flag}: false, which the build cannot apply — it only ever writes the ENABLED state, so a maker's existing setting is never silently cleared. Omit the flag, or clear it in the form designer.`);
       }
     }
@@ -2584,6 +2728,14 @@ function validateAppSpec(spec, opts = {}) {
   // What DOES protect the reported harm today is the destructive preflight: the failure mode in
   // #584 (an old compiler reducing a columns-only form to an empty field set) surfaces as a plan to
   // remove every non-primary field, which requires authorization before it can be written.
+  // createIdentity (lib/creates-identity.js readCreateIdentityMode): absent, or exactly "stable-v1" (stable create ids for the
+  // declared views and charts). Any other value is refused here and never read as absent: a typo must not fall back to fresh ids
+  // on the build that was meant to keep them.
+  if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity') && spec.createIdentity !== CREATE_IDENTITY_STABLE) {
+    // Checked here rather than through creates-identity.js readCreateIdentityMode, which says the same: a default build must not load
+    // the stable-identity modules, and creates-identity.js requires this module. A test pins the two to one value.
+    errors.push(`create-identity-invalid: createIdentity must be "${CREATE_IDENTITY_STABLE}" or absent; got ${JSON.stringify(spec.createIdentity)}`);
+  }
   if (spec.minimumPluginVersion !== undefined) {
     const want = spec.minimumPluginVersion;
     // ANCHORED at BOTH ends on purpose. A prefix-only pattern accepted `2..9` on its leading `2`,
@@ -2628,6 +2780,20 @@ function validateAppSpec(spec, opts = {}) {
     validateChoiceOptionLabels(gc && gc.options, gcLabel, errors, { warnings, baseLanguageCode: spec.languageCode });
     rejectLocalizedGlobalChoice(gc, gcLabel, errors);
   }
+  // 2.21.0 schema fields: explicit option values, dateTimeBehavior, isSecured, the table flags and fieldSecurityProfiles.
+  {
+    const features = validateSchemaFeatures(spec);
+    errors.push(...features.errors);
+    warnings.push(...features.warnings);
+  }
+  // 2.21.0 configuration kinds: environmentVariables, connectionReferences, customApis, duplicateDetectionRules and solution.version
+  // (lib/configuration-artifacts.js). The App Spec is the portable file, so a secret default is refused outright. The structural profile
+  // (teardown, preview) reads a spec only for what it names, so there its findings are warnings, as for the column rules above.
+  {
+    const configuration = require('./configuration-artifacts.js').validateConfiguration(spec, { profile: 'portable' });
+    (profile === 'structural' ? warnings : errors).push(...configuration.errors);
+    warnings.push(...configuration.warnings);
+  }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
   // "false" is truthy in JS and would silently turn the new look ON for an author who meant to
@@ -2641,6 +2807,9 @@ function validateAppSpec(spec, opts = {}) {
   if (spec.app && spec.app.headerNavigationRefresh !== undefined && typeof spec.app.headerNavigationRefresh !== 'boolean') {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
+  // app.theme (Preview): validated by lib/app-theme.js, which is loaded only for a spec that declares one, so a spec without
+  // a theme loads none of it. The build's own plan refuses an invalid theme too, before it reads or writes anything.
+  if (spec.app && spec.app.theme !== undefined) errors.push(...require('./app-theme.js').validateAppTheme(spec.app.theme).errors);
   validateAiDescription(spec.app && spec.app.aiDescription, errors);
   if (profile !== 'structural') validateAppMembership(spec, errors);
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
@@ -2867,6 +3036,8 @@ function validateAppSpec(spec, opts = {}) {
   for (const wr of spec.webResources || []) {
     if (!wr || !wr.name) { errors.push('a webResource is missing a name'); continue; }
     validateDescription(wr.description, `webResource '${wr.name}'`, errors);
+    if (wr.reconcile !== undefined && wr.reconcile !== 'declared') errors.push(`webResource ${wr.name}: reconcile must be "declared" when it is given`);
+    if (wr.reconcile === 'declared' && wr.external === true) errors.push(`webResource ${wr.name}: an external web resource is shared and never written by a build, so it cannot also be declared for reconciliation`);
     webResourceNames.add(wr.name.toLowerCase());
     const wrType = String(wr.type || '').toLowerCase();
     if (IMAGE_WR_TYPES.has(wrType)) imageWebResourceNames.add(wr.name.toLowerCase());
@@ -2886,6 +3057,22 @@ function validateAppSpec(spec, opts = {}) {
     if (readsContentPath && profile !== 'structural' && !isAppSourcePath(wr.contentPath)) {
       errors.push(`webResource ${wr.name}: contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
     }
+  }
+  // Dataverse matches web resource names without regard to letter case, so entries whose names differ only in case are one
+  // row. A declared web resource (reconcile: "declared") must own its row: on a shared row a rebuild would ask to adopt one
+  // entry's content over the other's, and no approval could name either alone (authorizationKeys in build-model-app.js refuses
+  // that key as ambiguous). Refuse it here, before anything is created. Undeclared duplicates keep the acceptance earlier
+  // releases gave them.
+  const webResourcesByFoldedName = new Map();
+  for (const wr of spec.webResources || []) {
+    if (!wr || typeof wr.name !== 'string' || !wr.name) continue;
+    const folded = wr.name.toLowerCase();
+    if (!webResourcesByFoldedName.has(folded)) webResourcesByFoldedName.set(folded, []);
+    webResourcesByFoldedName.get(folded).push(wr);
+  }
+  for (const group of webResourcesByFoldedName.values()) {
+    if (group.length < 2 || !group.some((wr) => wr.reconcile === 'declared')) continue;
+    errors.push(`webResources: ${group.map((wr) => `'${wr.name}'`).join(' and ')} name one web resource (Dataverse matches web resource names without regard to letter case), so a declared web resource (reconcile: "declared") needs a name no other entry shares`);
   }
   // AB#6686426: `isDefault` picks which Main form a table opens with. Explicit beats the fallback
   // (first Main form in spec order), and both are order-independent — which is the property the old
@@ -3123,6 +3310,14 @@ function validateAppSpec(spec, opts = {}) {
   }
   for (const ch of spec.charts || []) {
     validateDescription(ch && ch.description, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`, errors);
+    if (ch && ch.reconcile !== undefined && ch.reconcile !== 'declared') errors.push(`chart '${ch.name || ch.entity}': reconcile must be "declared" (or left out)`);
+    if (ch && ch.title !== undefined) {
+      if (typeof ch.title !== 'string') errors.push(`chart '${ch.name || ch.entity}': title must be a string`);
+      else if (!isDeclaredChart(ch)) warnings.push(`chart '${ch.name || ch.entity}': title is written only on a chart with reconcile: "declared"; this chart ignores it`);
+    }
+    // The checks below are the legacy chart's; a declared chart also owns its measure, which must be one the reconcile
+    // can compare (lib/chart-reconcile.js). Its other intent errors repeat the checks below, so only that one is added.
+    if (isDeclaredChart(ch)) for (const m of compileChartIntent(ch).errors) if (/^measure /.test(m)) errors.push(`chart '${ch.name || ch.entity}': ${m}`);
     if (!ch || badEntityRef(ch.entity, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`)) continue;
     if (!ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
       errors.push(`chart references unknown entity '${ch && ch.entity}'`);
@@ -3171,7 +3366,8 @@ function validateAppSpec(spec, opts = {}) {
     };
     if (v && v.columns !== undefined) {
       if (!Array.isArray(v.columns)) errors.push(`${vlabel}: columns must be an array of column names`);
-      else v.columns.forEach((c, i) => attrRef(c, `columns[${i}]`));
+      // A declared view's column may also be an object ({ name, relatedEntity, width }); compileViewIntent checks it below.
+      else v.columns.forEach((c, i) => { if (!(isDeclaredView(v) && c && typeof c === 'object' && !Array.isArray(c))) attrRef(c, `columns[${i}]`); });
     }
     if (v && v.sort !== undefined) {
       if (!Array.isArray(v.sort)) errors.push(`${vlabel}: sort must be an array`);
@@ -3181,7 +3377,41 @@ function validateAppSpec(spec, opts = {}) {
       if (!Array.isArray(v.filters)) errors.push(`${vlabel}: filters must be an array`);
       else v.filters.forEach((f, i) => attrRef(f && f.attr, `filters[${i}].attr`));
     }
+    if (v && v.reconcile !== undefined && v.reconcile !== 'declared') errors.push(`${vlabel}: reconcile must be "declared" (or left out)`);
+    if (isDeclaredView(v)) {
+      // compileViewIntent walks columns, sort, filters and joins as lists; a non-list one is already reported above (or by
+      // the shape normalization), so it is not walked again into a TypeError.
+      if (['columns', 'sort', 'filters', 'linkEntities'].every((k) => v[k] === undefined || Array.isArray(v[k]))) {
+        for (const f of compileViewIntent(v).errors) errors.push(`${vlabel}: ${f.path}: ${f.message}`);
+      }
+    } else if (v && (v.viewId !== undefined || v.linkEntities !== undefined)) {
+      warnings.push(`${vlabel}: viewId and linkEntities are read only on a view with reconcile: "declared"; this view ignores them`);
+    }
   }
+  // Two declared views (or two declared charts) on one table whose reconcile keys are equal would share one approval. The key is
+  // `<table>/<name>` (lib/view-reconcile.js, lib/chart-reconcile.js), and `--authorize adopt:view:<key>` / `overwrite:view:<key>`
+  // (build-model-app.js authorizationKeys) names that key, not a row: one approval would adopt or replace the workspace copies of
+  // both, discarding each one's unsent edits. A view's viewId pin picks the row it reconciles but is not part of the key, so it
+  // cannot tell the two approvals apart. Refused here, before any build work: each declared artifact of a family needs its own name.
+  // Only a build reconciles views and charts and takes those approvals, so every profile that builds or plans a build refuses the pair. Teardown's
+  // structural profile and read-only verification (`declaredKeyCollisions: 'warn'`, as it passes `relationshipCollisions: 'warn'`) take it as a
+  // warning in the same words: neither uses an adopt/overwrite approval, and an app built from such a spec before this check must still be planned
+  // for teardown and verified.
+  const sameKeyFindings = profile === 'structural' || opts.declaredKeyCollisions === 'warn' ? warnings : errors;
+  const sameKey = (family, list, isDeclared, compile, compilable) => {
+    const first = new Map();
+    (Array.isArray(list) ? list : []).forEach((item, i) => {
+      if (!isDeclared(item) || !compilable(item)) return;
+      const { intent } = compile(item);
+      if (!intent) return;
+      const label = `${family}s[${i}] '${item.name}'`;
+      const key = approvalKey(family, intent.key);
+      if (first.has(intent.key)) sameKeyFindings.push(`${first.get(intent.key)} and ${label} are declared ${family}s with the same key (${key}): one --authorize adopt:${key} or overwrite:${key} would approve both, so give each its own name on the table`);
+      else first.set(intent.key, label);
+    });
+  };
+  sameKey('view', spec.views, isDeclaredView, compileViewIntent, (v) => ['columns', 'sort', 'filters', 'linkEntities'].every((k) => v[k] === undefined || Array.isArray(v[k])));
+  sameKey('chart', spec.charts, isDeclaredChart, compileChartIntent, () => true);
   // Commands (modern command-bar buttons). A functional button needs a JS library + function;
   // the library must be a declared web resource (the on-click binds to it).
   const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
@@ -3216,16 +3446,66 @@ function validateAppSpec(spec, opts = {}) {
       checkCmdAction(`command '${c.label}' on ${c.entity}`, c.library, c.function);
     }
   }
+  // Declared reconciliation (2.21.0). Command keys and row pins, a table's Quick Find columns, and the kinds that do NOT take
+  // `reconcile` in this release. Every field is optional; a spec that uses none of them gets no finding from this block.
+  {
+    const managed = validateManagedCommands(spec);
+    errors.push(...managed.errors);
+    warnings.push(...managed.warnings);
+    (spec.entities || []).forEach((e, i) => {
+      // Only quickFind is checked here: the search and tracking flags validateQuickFindSpec also reads are the schema
+      // features' (validateSchemaFeatures), and checking them twice would report every mistake twice.
+      if (!e || typeof e !== 'object' || e.quickFind === undefined) return;
+      for (const f of validateQuickFindSpec({ quickFind: e.quickFind }, `entities[${i}] (${e.schemaName})`)) errors.push(`${f.path}: ${f.message}`);
+    });
+    // Business process flows are left out: while their declared build is off, their key allow-list refuses `reconcile` (below), and
+    // once it is on they take it there. A kind whose declared build is switched on (lib/declared-features.js) takes `reconcile` and
+    // is checked below instead; while it is off, the refusal and its words are exactly what they were.
+    const formsDeclarable = declaredFeatureOn('forms');
+    const dashboardsDeclarable = declaredFeatureOn('dashboards');
+    const rulesDeclarable = declaredFeatureOn('rules');
+    const bpfDeclarable = declaredFeatureOn('bpf');
+    const declarable = ['views', 'charts', formsDeclarable && 'forms', dashboardsDeclarable && 'dashboards', rulesDeclarable && 'business rules', bpfDeclarable && 'business process flows', 'web resources'].filter(Boolean);
+    const reconcilable = `${declarable.slice(0, -1).join(', ')} and ${declarable[declarable.length - 1]}`;
+    for (const kind of ['dashboards', 'forms', 'businessRules']) {
+      if (kind === 'forms' && formsDeclarable) continue;
+      if (kind === 'dashboards' && dashboardsDeclarable) continue;
+      if (kind === 'businessRules' && rulesDeclarable) continue;
+      for (const x of spec[kind] || []) {
+        if (x && typeof x === 'object' && x.reconcile !== undefined) {
+          errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on ${reconcilable}; leave it out (this artifact keeps the existing build behaviour)`);
+        }
+      }
+    }
+    if (formsDeclarable) validateDeclaredForms(spec, errors, sameKeyFindings);
+    if (dashboardsDeclarable) validateDeclaredDashboards(spec, errors, sameKeyFindings);
+    if (usesDeclaredReconcile(spec) && compareVersions(spec.minimumPluginVersion, DECLARED_RECONCILE_MIN_VERSION) < 0) {
+      warnings.push(`set minimumPluginVersion to '${DECLARED_RECONCILE_MIN_VERSION}' or newer when using reconcile: "declared", a view's viewId or linkEntities, a chart title, command keys or rowId, or quickFind — older plugins ignore or reject these fields`);
+    }
+  }
   // Business rules. Every reference is checked against the spec's own columns, because a rule that
   // names a column the app does not create is authored against nothing — and the platform accepts it
   // silently (the rule just never fires), so nothing downstream would catch it.
+  //
+  // A declared rule (reconcile: "declared", while its build is switched on in lib/declared-features.js) is managed whole by
+  // lib/rule-settlement.js, which compiles and proves every action shape the SDK models. So it also takes the three shapes the
+  // rules below keep closed (SetDefaultValue, ShowErrorMessage, Recommendation), the AllForms scope and conditionLogic, and must
+  // carry the helper's grammar (validateDeclaredRule: a key on every condition, action and apply-action, closed key sets, literal
+  // values). Its approval is typed by the table and name (rule:<table>/<name>, whatever its key), so two rules on one table with
+  // one name (any case) cannot both be declared: one approval would approve both, and the undeclared one's state convergence
+  // would write to the declared one's row.
+  const rulesDeclared = declaredFeatureOn('rules');
+  const declaredRuleKeys = new Map();
+  const ruleApprovalIds = new Map();
   for (const r of spec.businessRules || []) {
     const label = `business rule '${(r && r.name) || '(unnamed)'}'`;
     if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push('businessRules[] entries must be objects'); continue; }
     validateDescription(r.description, label, errors);
     if (!r.name) errors.push(`${label}: name is required`);
     if (!r.entity || !entityNames.has(r.entity)) { errors.push(`${label}: references unknown entity '${r.entity}'`); continue; }
-    if (r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
+    const declaredRule = rulesDeclared && r.reconcile === 'declared';
+    if (rulesDeclared && r.reconcile !== undefined && !declaredRule) errors.push(`${label}: reconcile must be "declared" (or left out)`);
+    if (!declaredRule && r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
       errors.push(`${label}: scope must be ${BUSINESS_RULE_SCOPES.join('|')} (a form-scoped rule needs a form id that does not exist until the forms phase runs)`);
     }
     if (r.status !== undefined && !['Active', 'Draft'].includes(r.status)) {
@@ -3284,8 +3564,13 @@ function validateAppSpec(spec, opts = {}) {
     }
     for (const a of r.actions || []) {
       if (!a || typeof a !== 'object') { errors.push(`${label}: each action must be an object`); continue; }
+      if (declaredRule && DECLARED_RULE_ONLY_ACTION_TYPES.includes(a.type)) {
+        // Its payload is checked by validateDeclaredRule, below.
+        checkField(a.field, `action '${a.type}'`);
+        continue;
+      }
       if (!BUSINESS_RULE_ACTION_TYPES.includes(a.type)) {
-        errors.push(`${label}: action type must be one of ${BUSINESS_RULE_ACTION_TYPES.join('|')} (got '${a.type}')`);
+        errors.push(`${label}: action type must be one of ${(declaredRule ? [...BUSINESS_RULE_ACTION_TYPES, ...DECLARED_RULE_ONLY_ACTION_TYPES] : BUSINESS_RULE_ACTION_TYPES).join('|')} (got '${a.type}')`);
         continue;
       }
       checkField(a.field, `action '${a.type}'`);
@@ -3300,15 +3585,42 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`${label}: action dataType must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
       }
     }
+    if (rulesDeclared) {
+      const approvalId = `${String(r.entity).toLowerCase()}/${String(r.name || '').toLowerCase()}`;
+      const seen = ruleApprovalIds.get(approvalId);
+      if (seen && (seen.declared || declaredRule)) {
+        sameKeyFindings.push(`${seen.label} and ${label} are business rules on ${r.entity} with the same name: a declared rule is approved and found by its table and name (rule:${String(r.entity).toLowerCase()}/${r.name}), so give each its own name`);
+      } else if (!seen) ruleApprovalIds.set(approvalId, { label, declared: declaredRule });
+      else if (declaredRule) seen.declared = true;
+    }
+    if (declaredRule) {
+      // Loaded here, not at the top: the helper pulls in the stable-identity modules, which a spec with no declared rule never needs.
+      const { validateDeclaredRule, ruleKey } = require('./rule-settlement.js');
+      errors.push(...validateDeclaredRule(r, { checkField: (field, what) => checkField(field, what) }));
+      const key = ruleKey(r);
+      const folded = key.toLowerCase();
+      if (declaredRuleKeys.has(folded)) sameKeyFindings.push(`${declaredRuleKeys.get(folded)} and ${label} are declared business rules with the same key (${key}): give each its own key`);
+      else declaredRuleKeys.set(folded, label);
+    }
   }
   // Business process flows. Same discipline as business rules and for the same reason: the platform
   // accepts a BPF whose step names a column that does not exist, materializes its stages, and then
   // simply renders a step bound to nothing — no error at deploy time, and nothing downstream to
   // catch it. So every field is checked against the flow's own entity here.
+  //
+  // A declared flow (reconcile: "declared", while its build is switched on in lib/declared-features.js) is managed whole by
+  // lib/bpf-settlement.js: it must also carry the helper's grammar (validateDeclaredBpf: a key on every stage and step, unique in
+  // its level, closed key sets), because the keys are what keep a stage's and a step's id across a rename or a retry. It may omit
+  // `stages` to manage only the flow's own settings (name, description, order, status) of a flow already bound; the helper refuses
+  // to create or adopt one without them. Its approval is `bpf:<table>/<name>`; two flows cannot share a name (the derived unique
+  // name check below), so one approval never names two flows.
+  const bpfDeclared = declaredFeatureOn('bpf');
   const bpfUniques = new Map();
   for (const p of spec.businessProcessFlows || []) {
     const label = `business process flow '${(p && p.name) || '(unnamed)'}'`;
     if (!p || typeof p !== 'object' || Array.isArray(p)) { errors.push('businessProcessFlows[] entries must be objects'); continue; }
+    const declaredFlow = bpfDeclared && p.reconcile === 'declared';
+    if (bpfDeclared && p.reconcile !== undefined && !declaredFlow) errors.push(`${label}: reconcile must be "declared" (or left out)`);
     if (!p.name) errors.push(`${label}: name is required`);
     else if (typeof p.name !== 'string' || !p.name.trim()) {
       // The SDK derives the server unique name by lower-casing this value, so a non-string reaches
@@ -3354,7 +3666,7 @@ function validateAppSpec(spec, opts = {}) {
     // Allow-list the flow's own keys for the same reason as the stage/step ones below: naming only the
     // three knobs we knew about left others (the SDK also models `globalActions`) neither mapped nor
     // rejected — silently dropped, which is the failure this guard exists to prevent.
-    const BPF_FLOW_KEYS = new Set(['name', 'entity', 'description', 'status', 'order', 'stages', 'securityRoles']);
+    const BPF_FLOW_KEYS = new Set(['name', 'entity', ...(bpfDeclared ? ['reconcile'] : []), 'description', 'status', 'order', 'stages', 'securityRoles']);
     for (const k of Object.keys(p)) {
       if (!BPF_FLOW_KEYS.has(k)) {
         errors.push(`${label}: unsupported key '${k}' (allowed: ${[...BPF_FLOW_KEYS].join(', ')}). Branching and process actions are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker after the flow deploys.`);
@@ -3363,6 +3675,15 @@ function validateAppSpec(spec, opts = {}) {
     validateBpfSecurityRoles(p, spec, label, errors);
     const cols = declaredColumnLogicals(spec, p.entity);
     validateDescription(p.description, label, errors);
+    if (declaredFlow) {
+      // Loaded here, not at the top: the helper pulls in the stable-identity modules, which a spec with no declared flow never needs.
+      const { validateDeclaredBpf } = require('./bpf-settlement.js');
+      for (const e of validateDeclaredBpf(p)) errors.push(`${label}: ${e}`);
+      if (p.stages === undefined) continue;
+    }
+    // A declared flow's stages and steps also take their `key`; checked by validateDeclaredBpf above.
+    const stageKeys = declaredFlow ? new Set([...BPF_STAGE_KEYS, 'key']) : BPF_STAGE_KEYS;
+    const stepKeys = declaredFlow ? new Set([...BPF_STEP_KEYS, 'key']) : BPF_STEP_KEYS;
     if (!Array.isArray(p.stages) || !p.stages.length) {
       errors.push(`${label}: stages[] is required (a flow with no stage is not a process)`);
       continue;
@@ -3385,8 +3706,8 @@ function validateAppSpec(spec, opts = {}) {
       // an author would write them — and bpfDef maps only name/entity/steps, so without this they
       // would vanish silently.
       for (const k of Object.keys(st)) {
-        if (!BPF_STAGE_KEYS.has(k)) {
-          errors.push(`${label}: stage '${st.name}' has unsupported key '${k}' (allowed: ${[...BPF_STAGE_KEYS].join(', ')}). Branching, stage actions and cross-entity flow are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker.`);
+        if (!stageKeys.has(k)) {
+          errors.push(`${label}: stage '${st.name}' has unsupported key '${k}' (allowed: ${[...stageKeys].join(', ')}). Branching, stage actions and cross-entity flow are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker.`);
         }
       }
       // v1 is single-entity: a stage on another table is a cross-entity flow, which changes what the
@@ -3418,8 +3739,8 @@ function validateAppSpec(spec, opts = {}) {
         // `fieldLogicalName` (the name used elsewhere in the SDK's own artifact shapes) is dropped by
         // the step normalizer and deploys bound to nothing.
         for (const k of Object.keys(step)) {
-          if (!BPF_STEP_KEYS.has(k)) {
-            errors.push(`${label}: stage '${st.name}' step '${step.name}' has unsupported key '${k}' (allowed: ${[...BPF_STEP_KEYS].join(', ')}${k === 'fieldLogicalName' ? " — the column key is 'field'" : ''})`);
+          if (!stepKeys.has(k)) {
+            errors.push(`${label}: stage '${st.name}' step '${step.name}' has unsupported key '${k}' (allowed: ${[...stepKeys].join(', ')}${k === 'fieldLogicalName' ? " — the column key is 'field'" : ''})`);
           }
         }
         // `field` is REQUIRED on every step. This was originally modelled as optional — a step with
@@ -3518,7 +3839,8 @@ function validateAppSpec(spec, opts = {}) {
     } else {
       seenDashboardNames.set(dashKey, d.name);
     }
-    validateDescription(d.description, `dashboard '${d.name}'`, errors);
+    // A declared dashboard's "" is the explicit clear of its live description (approved with --allow-destructive, lib/dashboard-reconcile.js).
+    validateDescription(d.description, `dashboard '${d.name}'`, errors, { allowEmpty: declaredFeatureOn('dashboards') && d.reconcile === 'declared' });
     if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
     for (const t of d.tiles) {
       if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }
@@ -3883,11 +4205,22 @@ function validateAppSpec(spec, opts = {}) {
       for (const g of a.groups || [])
         for (const sa of g.subAreas || []) if (sa && sa.page) sitemappedPageKeys.add(sa.page);
     for (const p of spec.pages || []) {
+      // A page declared `placement: "form"` is shown inside a form (forms[].genPages), not in the navigation: its membership is the
+      // form that embeds it, which validateFormPageEmbeds below requires — a form-only page that no form embeds is still an error, there.
+      if (p && p.placement === 'form') continue;
       const key = p.key || p.name;
       if (!sitemappedPageKeys.has(key)) {
         errors.push(`page '${key}' is not placed in the sitemap — every page must be an appShell subarea (a page reached only by navigation is not owned by the app; add a subarea for it)`);
       }
     }
+  }
+  // Generative pages on forms (pages[].placement, forms[].genPages): the rules are lib/form-page-embeds.js's, the one place the build's step
+  // reads them from too. Required lazily: that module reads this one's form-layout helper. Shape-only (`structural`) validation reports them
+  // as warnings, as it does the membership rule above, so a spec mid-edit can still be torn down or evaluated.
+  if (spec.pages !== undefined || spec.forms !== undefined) {
+    const embeds = require('./form-page-embeds.js').validateFormPageEmbeds(spec);
+    if (profile === 'structural') warnings.push(...embeds.errors, ...embeds.warnings);
+    else { errors.push(...embeds.errors); warnings.push(...embeds.warnings); }
   }
   // Table (entity) icons — these set the table's OWN icon (what the modern app designer and app
   // nav render for the table). Unlike a sitemap subarea's `vectorIcon` (a free-form Fluent token),
@@ -4596,6 +4929,10 @@ module.exports = {
   dashboardNameKey,
   compareVersions,
   APP_MEMBERSHIP_MIN_VERSION,
+  APP_MEMBERSHIP_UPDATE_MIN_VERSION,
+  APP_THEME_MIN_VERSION,
+  CREATE_IDENTITY_MIN_VERSION,
+  CREATE_IDENTITY_STABLE,
   isPluginVersion,
   sitemapEntityTables,
   appMembershipWarnings,

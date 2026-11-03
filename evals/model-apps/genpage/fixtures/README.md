@@ -162,3 +162,16 @@ permanently red: both full runners must exit 0. Refusal fixtures prove a failed
 gate and zero generation/mutations; recovery fixtures retain rejected snapshots
 only as nested evidence. Green replay does not mean an agent, TypeScript build,
 React UI, live connector/API, hosted upload or solution import was exercised.
+
+## Selected by name: `stable-turn-retry/`
+
+`stable-turn-retry/` is not one of the fixtures counted above, and neither default
+runner reads it: its name has no eval id, so the loader passes over it. It holds
+constructed evidence (every id, digest and answer a placeholder) of a host that
+retries one page upload under `genpage-upload.js --turn-id`: the id kept before the
+first send, the same command sent again from another process after a lost answer,
+one page and one history turn, a reuse for another binding list refused with
+nothing written and the connection kept, and an ordinary edit with no
+`--turn-id`. Run it with `node ../run-stable-turn-retry.js`
+(`tests/stable-turn-retry.test.js` does, in CI). Its own `.gitattributes` checks
+every file out verbatim, since each upload records the SHA-256 of the bytes it sent.

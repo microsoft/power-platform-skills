@@ -7,7 +7,26 @@
 // pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities] [--include-managed --managed-manifest <file>]
+//
+// `--include-capabilities` also reads, per downloaded table, the Date and Time behaviours of its columns and its search, change tracking
+// and duplicate detection flags (one read each, and the date read only for a table with a Date and Time column), and writes the
+// non-default ones into the spec (downloadedColumnFeatures, downloadedTableFlags). Off by default, so a download makes the reads it
+// always made.
+//
+// `--include-managed --managed-manifest <file>` (both, or neither) restores the declared forms (forms[].reconcile "declared") a build
+// settled: <file> is that build's managed binding store, `<app folder>/.maker-workspace/managed-bindings.<hash>.json`, read only and
+// refused unless it is the store of this app and solution on this environment. Each committed form group is restored as the
+// declaration it was built from only when a fresh read of its form still shows exactly what its last proof saw; any other is named
+// on stderr and in the result's `managedForms.stale`, and left out of forms[] as every form is without the flags. The declared
+// dashboards (dashboards[].reconcile "declared") the store holds are restored the same way, each in place of the plain dashboards[]
+// entry the download reconstructs for its id, only when a fresh read of it still certifies its last proof; any other is named in
+// `managedDashboards.stale` and kept as that plain entry. The declared business rules (businessRules[].reconcile "declared"), which
+// a plain download leaves out, are restored the same way into businessRules[] (`managedRules`), and the declared business process
+// flows (businessProcessFlows[].reconcile "declared"), which it leaves out too, into businessProcessFlows[] (`managedBpfs`). The download writes
+// no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>
+// (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>; each flow: adopt:bpf:<table>/<name>).
+// Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
 // earlier download of the SAME app gave it (the app-spec.json already in --out, when its app.uniqueName is this app's). If that earlier spec gives a page keys that
@@ -39,6 +58,10 @@ const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./li
 const { makeGenpageSdk, unescapePacName, pageFolderFiles } = require('./lib/genpage-sdk.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR } = require('./lib/page-manifest.js');
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
+const { restoreManagedForms } = require('./lib/declared-form-io.js');
+const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
+const { restoreManagedRules } = require('./lib/declared-rule-io.js');
+const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -46,8 +69,10 @@ const { PAGE_BINDINGS, pageBindingsProblem, statableBindings, bindingProblemText
 const { getReviewedDataverseOperation } = require('./lib/dataverse-operations.js');
 const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
-const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
+const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
+const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor } = require('./lib/schema-feature-contract.js');
+const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
 const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
 const { readColumnOptions, columnOptionFields, primaryColumnOptionFields } = require('./lib/download-column-options.js');
@@ -55,6 +80,7 @@ const { readStatusOptions, statusReasonsFromOptions, alternateKeysFromMetadata }
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { exactOne, distinctRows } = require('./lib/query-completeness.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -634,6 +660,8 @@ async function makeDownloadSdk(env, deps = {}) {
       httpClient,
       // The App, Form and Dashboard adapters bake the language in at construction, as the build gives its own SDK (build-model-app.js).
       ...(language.languageCode ? { languageCode: language.languageCode } : {}),
+      // --include-capabilities reads the app's theme (Preview), which needs the strict theme read policy (lib/app-theme-reads.js).
+      ...(deps.themeReads ? { themeReads: true } : {}),
     });
     await sdk.initWorkspace();
     return {
@@ -668,11 +696,16 @@ async function resolveAppId(sdk, appArg) {
   if (byUnique && byUnique[0] && byUnique[0].appmoduleid) return { appId: byUnique[0].appmoduleid, matchedBy: 'uniqueName' };
 
   const byName = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'uniquename', 'name'], filter: `name eq '${esc}'`, top: 50 });
-  const matches = (byName || []).filter((r) => r && r.appmoduleid);
-  if (matches.length === 1) return { appId: matches[0].appmoduleid, matchedBy: 'displayName', uniqueName: matches[0].uniquename };
-  if (matches.length > 1) {
+  // Count DISTINCT apps (a paginating server can repeat a row), and refuse an answer the server said is
+  // incomplete exactly like an ambiguous one: one row of a cut-short answer does not prove the name is unique.
+  // `byName` is judged before any copy — the SDK's `hasMore` is non-enumerable (lib/query-completeness.js).
+  const judged = exactOne(byName || [], 'appmoduleid');
+  if (judged.outcome === 'one') return { appId: judged.row.appmoduleid, matchedBy: 'displayName', uniqueName: judged.row.uniquename };
+  if (judged.outcome === 'ambiguous' || judged.outcome === 'incomplete') {
+    const matches = distinctRows(byName, 'appmoduleid').rows;
     const names = matches.map((m) => m.uniquename).filter(Boolean).join(', ');
-    return { error: `'${appArg}' is a DISPLAY name shared by ${matches.length} apps — display names are not unique, so re-run --app with one of these unique names: ${names}` };
+    const shared = judged.outcome === 'ambiguous' ? `shared by ${matches.length} apps` : `the lookup could not prove unique (the answer said more apps carry it than it returned)`;
+    return { error: `'${appArg}' is a DISPLAY name ${shared} — display names are not unique, so re-run --app with ${names ? `one of these unique names: ${names}` : `the app's unique name`}` };
   }
   return { error: `app '${appArg}' not found — --app takes the app's id (GUID), its unique name (e.g. new_myapp), or an unambiguous display name` };
 }
@@ -1660,7 +1693,9 @@ function optionSetFromRow(row) {
   // falls through to the untyped warning that already exists for exactly this case.
   if (labels.some((l) => descriptionFromDataverse(l) === undefined)) return null;
   const displayName = descriptionFromDataverse(os.DisplayName);
-  return { ...(name ? { name } : {}), ...(displayName !== undefined ? { displayName } : {}), isGlobal: os.IsGlobal === true, options: labels };
+  // `values` keeps each option's number beside its label (downloadedChoiceOptions): a set numbered other than 100000000 + index
+  // is written as explicit `{ value, label }` options, so a rebuild keeps the numbers its data and filters use.
+  return { ...(name ? { name } : {}), ...(displayName !== undefined ? { displayName } : {}), isGlobal: os.IsGlobal === true, options: labels, values: os.Options.map((o) => o && o.Value) };
 }
 
 // Inline Choice options and alternate-key display names can preserve LCID maps, unlike a
@@ -1728,7 +1763,8 @@ function collectGlobalChoices(meta, into) {
     into.set(key, {
       name: os.name,
       ...(os.displayName !== undefined ? { displayName: os.displayName } : {}),
-      options: os.options.map((l) => descriptionFromDataverse(l)), existing: true,
+      // A set whose numbers cannot be read (downloadedChoiceOptions null) keeps the plain labels it was always written with.
+      options: downloadedChoiceOptions(os.options.map((l) => descriptionFromDataverse(l)), os.values) || os.options.map((l) => descriptionFromDataverse(l)), existing: true,
     });
   }
   return into;
@@ -1977,6 +2013,38 @@ function untypedColumnWarnings(untyped, clashes = new Map()) {
 // (`{ table, column, option, label, languageCode }`, see the option screen below), so the caller can name them.
 // `labelClashes`, when given, is filled with the Choice columns left untyped because one text names two of their options in a way
 // the App Spec refuses (`{ table, column, clashes: [{ alias, first, second }] }`, the same screen), so the caller names the clash.
+// --include-capabilities, for one downloaded table: the behaviour of each Date and Time column (one typed read, only when the table has
+// one) and the table's flags (one read), written into `entity` where they differ from what a build creates by default. Returns the
+// reasons a read gave no answer; each such fact is left out of the spec, so a rebuild uses the default rather than a guess.
+async function downloadCapabilities(sdk, logical, entity) {
+  const failed = [];
+  const dateColumns = (entity.columns || []).filter((c) => c && c.type === 'DateTime');
+  if (dateColumns.length) {
+    const evidence = await readExistingDateBehaviors(sdk, logical);
+    if (!evidence.complete) failed.push(`Date and Time behaviours: ${evidence.reason}`);
+    else {
+      // A complete answer can still leave a known column unstated: the typed list can omit it, or list it with
+      // `DateTimeBehavior: null`. Either is unknown, not the UserLocal default, so it is named rather than silently omitted.
+      const unstated = [];
+      for (const c of dateColumns) {
+        const row = evidence.columns.get(String(c.schemaName).toLowerCase());
+        if (!row || !row.behavior) unstated.push(c.schemaName);
+        Object.assign(c, downloadedColumnFeatures({}, row));
+      }
+      if (unstated.length) failed.push(`Date and Time behaviours: the answer does not state ${unstated.join(', ')}`);
+    }
+  }
+  const flags = await readTableFlags(sdk, logical);
+  if (!flags) failed.push('table flags: the read gave no answer');
+  else {
+    // readTableFlags answers `undefined` for a flag the 200 body does not state as a boolean (e.g. `{}`); that is unknown, not off.
+    const unstated = ['duplicateDetectionEnabled', 'changeTrackingEnabled', 'searchEnabled'].filter((k) => typeof flags[k] !== 'boolean');
+    if (unstated.length) failed.push(`table flags: the answer does not state ${unstated.join(', ')}`);
+    Object.assign(entity, downloadedTableFlags(flags));
+  }
+  return failed;
+}
+
 function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOmissions = [], languageCode, languageLost, labelClashes } = {}) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
   const attrs = Array.isArray(meta && meta.attributes) ? meta.attributes : (Array.isArray(meta && meta.Attributes) ? meta.Attributes : []);
@@ -2181,12 +2249,17 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOm
       }
     }
     const inlineIsAmbiguous = inlineOptions ? hiddenCollision(inlineOptions) : false;
-    const usableOptionSet = inlineIsAmbiguous ? null : optionSet;
+    // The options as the spec writes them: plain labels when every number is its place's default, else `{ value, label }`. A set whose
+    // numbers were read but cannot be written (null) is left untyped, as an ambiguous one is, rather than renumbered by a rebuild. A set\r
+    // given with no numbers (an option set attached by a caller) keeps its plain labels, as before.
+    const valuedOptions = inlineOptions && !inlineIsAmbiguous
+      ? (Array.isArray(optionSet.values) ? downloadedChoiceOptions(inlineOptions, optionSet.values) : inlineOptions) : null;
+    const usableOptionSet = inlineIsAmbiguous || (inlineOptions && !valuedOptions) ? null : optionSet;
     const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) && !usableOptionSet ? undefined : mapped;
     const choice = !usableOptionSet ? {}
       : (usableOptionSet.isGlobal && usableOptionSet.name
         ? { globalChoice: usableOptionSet.name }
-        : { options: inlineOptions });
+        : { options: valuedOptions });
     if (schemaName && Array.isArray(languageLost)) for (const l of lostLanguages) languageLost.push({ table: logical, column: schemaName, ...l });
     if (inlineIsAmbiguous && schemaName && Array.isArray(labelClashes)) {
       labelClashes.push({ table: logical, column: schemaName, clashes: ambiguousChoiceAliases(inlineOptions).filter((c) => c.hidden).map(({ alias, first, second }) => ({ alias, first, second })) });
@@ -2215,6 +2288,9 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOm
       ...(specType ? { type: specType } : {}),
       ...choice,
       ...columnOptionFields(a, specType),
+      // isSecured: true where the column is secured (the attribute row's IsSecured); a Customer column cannot declare it. The date
+      // behaviour needs the typed per-table read, so it is not written here (dateEvidence null).
+      ...(specType && specType !== 'Customer' ? downloadedColumnFeatures(a, null) : {}),
       // The size (and, for an image, the primary-image flag) the column was made with, where a rebuild needs it (mediaColumnFields).
       ...(specType === 'File' || specType === 'Image' ? mediaColumnFields(a, specType) : {}),
     }, a && (a.description !== undefined ? a.description : a.Description));
@@ -2645,7 +2721,11 @@ const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
 //   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
 //   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
 //   ref is a system icon present in every env, so it stays silent (no false alarm).
-async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved, navRefs, tableRefs) {
+//
+// `onRead(name, row, failed)` — optional; told what each PASS-1 read returned (`row` undefined when no row came back,
+//   `failed` true when the read threw), so a caller that needs a stricter answer than `unresolved` (the theme logo's
+//   classifyThemeLogo) can have it without reading the resource twice. It changes nothing this helper returns.
+async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved, navRefs, tableRefs, onRead) {
   const out = [];
   const seen = new Set();                 // lowercased names actually re-declared into `out`
   const prefixLc = ownPrefix ? String(ownPrefix).toLowerCase() + '_' : null;
@@ -2675,8 +2755,11 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
     // TRUSTED prefix: only an OWN-prefix ref is a candidate; a foreign/OOB ref is left as a bare reference
     // (never queried). UNTRUSTED prefix: fall through and probe EVERY ref to classify it (see below).
     if (prefixResolved && !ownScoped) continue;
+    let read = false;
     try {
       const wr = await queryWr(name);
+      read = true;
+      if (onRead) onRead(name, wr, false);
       if (!prefixResolved) {
         // Unverified prefix — classify only, NEVER re-declare (an unknown non-'new' prefix would BuildHalt).
         // Flag a genuine custom icon as a candidate so a transient recovery failure degrades to a warning,
@@ -2692,7 +2775,7 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
       if (wr.ismanaged === true || (allowed && !allowed.has(wr.webresourcetype))) continue;   // managed / wrong type → leave as a bare reference
       seen.add(key);
       out.push({ name, ...(wr.displayname ? { displayName: wr.displayname } : {}), type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content, external: true });
-    } catch { candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
+    } catch { if (onRead && !read) onRead(name, undefined, true); candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
   }
 
   // PASS 2 — author-declared BARE names. A bare name MUST be re-declared (validation requires a bare icon
@@ -2718,6 +2801,30 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
   // overlapping name — that resolves it, so it must not also warn). Dedup preserved by the Map key.
   const unresolved = [...candidateUnresolved].filter(([key]) => !seen.has(key)).map(([, name]) => name);
   return { webResources: out, unresolved };
+}
+
+// The theme's header logo, as a strict download must classify it — three ways, each one established, never inferred:
+//   exported     — this publisher's own unmanaged image with content: iconWebResources re-declared it `external: true`;
+//   reference    — POSITIVELY another publisher's (the app's publisher prefix is known and the name is outside it) or
+//                  managed (read, with content, `ismanaged: true`): left as a bare reference, as such a navigation icon is;
+//   unexportable — anything else: unread, gone, empty, or a resource not known to be another publisher's or managed.
+// Absence from iconWebResources' `unresolved` list is NOT evidence of "reference": with an unverified publisher prefix
+// that helper deliberately stays silent about a missing row, an empty image or an unstated management flag (for a
+// navigation icon that state is most likely a system icon, and a warning would be a false alarm). A theme logo the spec
+// names but does not carry has no such benign reading: a rebuild into a fresh environment refuses the theme for it.
+// `read` is what the helper's single read returned ({ row, failed }), or undefined when it made none.
+function classifyThemeLogo(themeLogo, trustedPrefix, logoExport, read) {
+  const key = String(themeLogo).toLowerCase();
+  if (logoExport.webResources.some((wr) => wr.name.toLowerCase() === key)) return { kind: 'exported' };
+  if (trustedPrefix && !key.startsWith(`${String(trustedPrefix).toLowerCase()}_`)) return { kind: 'reference', what: "another publisher's" };
+  if (!read || read.failed) return { kind: 'unexportable', why: 'it could not be read' };
+  const row = read.row;
+  if (!row) return { kind: 'unexportable', why: 'it was not found' };
+  if (!row.content) return { kind: 'unexportable', why: 'it has no content' };
+  if (row.ismanaged === true) return { kind: 'reference', what: 'managed' };
+  return { kind: 'unexportable', why: trustedPrefix
+    ? 'it is not an image this publisher can export'
+    : "the app's publisher could not be verified, so it is neither known to be this publisher's (to export) nor another publisher's or managed (to reference)" };
 }
 
 // Count sitemap subareas hydrateSpec could not round-trip (present in the deployed sitemap but not in
@@ -2808,6 +2915,25 @@ async function recoverAppSolution(sdk, appId) {
   return out;
 }
 
+// The publisher prefix a download may trust, from recoverAppSolution's answer and the app's real uniquename. Pure: the
+// warnings that name each case stay in runDownload, which explains the precedence. Shared by runDownload's solution
+// block and the app theme's logo preflight, which must judge "this publisher's own logo" exactly as the export does.
+//   solutionPrefix   the recovered solution's owning publisher (authoritative)
+//   appDerivedPrefix the leading segment of a '<prefix>_<name>' uniquename (fallback only)
+//   prefixUnknown    several solutions, an unread membership or an unread publisher, and no solution prefix
+//   trustedPrefix    solutionPrefix, else appDerivedPrefix unless the prefix is unknown, else null
+function downloadPublisherPrefix(recovered, appUnique) {
+  const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
+  const appDerivedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+  const solutionCandidates = recovered && Array.isArray(recovered.ambiguous) ? recovered.ambiguous : null;
+  const solutionUnreadable = recovered && recovered.unreadable ? recovered.unreadable : null;
+  const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
+  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
+  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
+  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
+  return { appDerivedPrefix, solutionCandidates, solutionUnreadable, solutionPrefix, publisherUnreadable, prefixUnknown, trustedPrefix };
+}
+
 // Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
 // `sdk`        — the MakerSDK (fetchArtifact, queryRecords, fetchEntityMetadata)
 // `genpage`    — the page backend (lib/genpage-sdk.js: enumerateEnv, read)
@@ -2879,7 +3005,7 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode }) {
+async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -2921,6 +3047,45 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // snapshot instead of turning a missed draft subarea into a hidden table or lost restriction.
   if (!appNavigationMatchesSitemap(app, smResult.xml)) {
     return { ok: false, error: "the app's sitemap has an unpublished change the SDK could not read consistently — publish the app, then download again" };
+  }
+  // app.theme (Preview), read with the other capabilities (--include-capabilities; `captureTheme` defaults to it). Read here,
+  // before the pages or anything else is written, so a strict download that cannot state the theme exactly — the "no theme"
+  // sentinel, attributes outside the schema, an unreadable row, a missing or non-image logo — refuses with nothing written
+  // (lib/app-theme.js appThemeDownloadOutcome). --allow-lossy-download leaves the field out instead, and says so.
+  let appTheme = null;
+  if (captureTheme) {
+    const { downloadAppTheme, appThemeDownloadOutcome } = require('./lib/app-theme.js');
+    appTheme = appThemeDownloadOutcome(await downloadAppTheme({ sdk, appId }), { allowLossy });
+    if (appTheme.error) return { ok: false, code: appTheme.code, error: appTheme.error };
+    if (appTheme.warning) process.stderr.write(`WARNING: ${appTheme.warning}\n`);
+  }
+  let themeLogo = appTheme && appTheme.write && appTheme.logo ? appTheme.logo.webResourceName : null;
+  // The theme's header logo is preflighted here as well, before anything is written: whether it can be exported decides
+  // whether a strict download refuses (APP_THEME_LOGO_UNEXPORTABLE), and that refusal must leave the output folder as it
+  // was. It is exported as an icon referenced by path is — re-declared `external: true` (a build creates it when missing,
+  // and teardown never deletes it) only when it is this publisher's own unmanaged image with content — so it needs the
+  // publisher prefix: the app's solution is read here, once, and both answers are reused below (no second read). Only a
+  // captured theme that names a logo does this; every other download keeps its order of reads.
+  let themePreflight = null;
+  if (themeLogo) {
+    const recovered = await recoverAppSolution(sdk, appId);
+    const { trustedPrefix } = downloadPublisherPrefix(recovered, appUnique);
+    let logoRead;
+    const logoExport = await iconWebResources(sdk, [], [themeLogo], trustedPrefix || 'new', !!trustedPrefix, [], [], (name, row, failed) => { logoRead = { row, failed }; });
+    themePreflight = { recovered, logoExport };
+    const logoClass = classifyThemeLogo(themeLogo, trustedPrefix, logoExport, logoRead);
+    if (logoClass.kind === 'unexportable') {
+      // A rebuild into a fresh environment would refuse the theme for its missing logo, so the theme is not portable as written.
+      const why = `app.theme: its header logo '${themeLogo}' could not be exported (${logoClass.why})`;
+      if (!allowLossy) return { ok: false, code: 'APP_THEME_LOGO_UNEXPORTABLE', error: `${why} — refusing to write a spec whose theme names an image it does not carry. Pass --allow-lossy-download to write the spec without app.theme.` };
+      process.stderr.write(`WARNING: app.theme was LEFT OUT (APP_THEME_LOGO_UNEXPORTABLE): ${why.replace(/^app\.theme: /, '')}. A build from this spec leaves the app's theme as it is.\n`);
+      appTheme = { write: false };
+      themeLogo = null;
+    } else if (logoClass.kind === 'reference') {
+      // Another publisher's, or managed: left as a bare reference, as such a navigation icon is (re-declaring it would make a
+      // build create a resource under a prefix it does not own). The image must exist where the spec is built.
+      process.stderr.write(`NOTE: app.theme's header logo '${themeLogo}' is ${logoClass.what}, so it is referenced, not exported — it must exist in the environment you build into.\n`);
+    }
   }
   const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);
   // [{ pageId, title? }] — deduped by id; membership-only (title is the XML-decoded subarea label,
@@ -3154,6 +3319,8 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   const globalChoiceDecls = new Map();
   const tableVectorIcons = new Map();
   const schemaReadFailures = new Map();
+  // --include-capabilities: the tables whose date behaviours or flags could not be read, with the reason.
+  const capabilityReadFailures = new Map();
   for (const logical of allLogicals) {
     let e;
     const leftOut = [];
@@ -3197,6 +3364,10 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       continue;
     }
     entities.push(e);
+    if (includeCapabilities) {
+      const failed = await downloadCapabilities(sdk, logical, e);
+      if (failed.length) capabilityReadFailures.set(logical, failed.join('; '));
+    }
     for (const c of leftOut) unexpressibleColumns.push(`${e.schemaName}.${c.column} (${c.typeName})`);
     for (const c of shortOf) incompleteMediaColumns.push({ name: `${e.schemaName}.${c.column}`, missing: c.missing });
     for (const l of lostLabels) optionLanguageLosses.push(`${e.schemaName}.${l.column} options[${l.option}] '${l.label}' (${l.languageCode})`);
@@ -3227,6 +3398,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   const failureDetail = (failures) => [...failures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
   if (schemaReadFailures.size) {
     process.stderr.write(`WARNING: some portable schema detail could not be captured (${failureDetail(schemaReadFailures)}). The table and its typed columns are kept, but rebuilding into a FRESH environment uses the build defaults for missing column options and cannot recreate missing status reasons, alternate keys or table icons. Re-run the download to recover unreadable detail, and resolve the stated build limits before a cross-environment rebuild.\n`);
+  }
+  if (capabilityReadFailures.size) {
+    process.stderr.write(`WARNING: --include-capabilities could not read every Date and Time behaviour or table flag (${failureDetail(capabilityReadFailures)}). Those are left out of the spec, so a rebuild into a FRESH environment uses the defaults for them (User local dates; search, change tracking and duplicate detection off). Re-run the download to recover them.\n`);
   }
   if (tableLabelReadFailures.size) {
     // The table's plural is carried by this read alone (download keeps one a rebuild would not derive), so it goes with it.
@@ -3299,20 +3473,18 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   //
   // This app-derived value is only a fallback: the app's name does not reliably encode the publisher of
   // the solution that owns it (ADO 6603390). The authoritative prefix is the recovered solution's owning
-  // publisher, read below.
-  const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
-  const appDerivedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+  // publisher, read below (downloadPublisherPrefix parses both).
 
   // Solution container (best-effort): the real unmanaged solution the appmodule belongs to, for a clean
   // teardown, plus its owning publisher's customization prefix. Falls back to the restricted 'Default'
   // when recovery finds nothing — that fallback cannot be torn down, but teardown skips it safely (see
   // system-solutions.js) rather than erroring.
-  const recovered = await recoverAppSolution(sdk, appId);
+  // The theme's logo preflight (above) already read it, before anything was written: that answer is reused.
+  const recovered = themePreflight ? themePreflight.recovered : await recoverAppSolution(sdk, appId);
+  const { solutionCandidates, solutionUnreadable, publisherUnreadable, prefixUnknown, trustedPrefix } = downloadPublisherPrefix(recovered, appUnique);
   // Several real solutions (#587 item 9), or a membership that could not be read: the spec keeps
   // 'Default' rather than a guess — the one solution a teardown never deletes — and says so. The
   // candidates are returned as well as printed, so the JSON result carries them.
-  const solutionCandidates = recovered && Array.isArray(recovered.ambiguous) ? recovered.ambiguous : null;
-  const solutionUnreadable = recovered && recovered.unreadable ? recovered.unreadable : null;
   if (solutionCandidates) {
     process.stderr.write(`WARNING: this app belongs to ${solutionCandidates.length} unmanaged solutions (${solutionCandidates.join(', ')}) and a download cannot tell which one you manage it in, so the spec's solution is left as 'Default', which a teardown never deletes. Set solution.uniqueName in app-spec.json to that solution before a rebuild or teardown.\n`);
   }
@@ -3324,15 +3496,12 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // `prefixResolved` means "this prefix is trustworthy", which gates the icon own-vs-foreign
   // classification below; it must be true for BOTH trusted sources, or a genuine own-publisher custom
   // nav icon stops round-tripping. It stays false only for the unverified 'new' default.
-  const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
-  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
   // Several candidate solutions whose publishers do not share one prefix, none that could be read, or a
   // publisher whose read FAILED — the one solution's included: the prefix is UNKNOWN. The app-name guess is
   // exactly the heuristic that ambiguity refuses to use (see recoverAppSolution), and a wrong prefix renames
   // every relationship not carrying it, so a same-environment rebuild creates each a second time. So it is
   // not used: the prefix stays the unverified default, and relationships keep their deployed names. (A failed
   // read of the one solution's publisher used to read as "no prefix", which fell back to the guess.)
-  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
   if (prefixUnknown) {
     let why = solutionCandidates ? 'the publishers of those solutions do not share one customization prefix' : 'with the solutions unread, the publisher is unknown';
     if (publisherUnreadable) {
@@ -3342,7 +3511,6 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     }
     process.stderr.write(`WARNING: ${why}, so solution.publisherPrefix is left as the unverified 'new' and every relationship keeps its deployed name. Set solution.publisherPrefix in app-spec.json to your solution publisher's prefix before a rebuild.\n`);
   }
-  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
   if (recovered && recovered.displayName) solution.displayName = recovered.displayName;
@@ -3363,6 +3531,12 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // own-prefix/unmanaged gates of path-referenced navigation icons and their teardown protection.
   const tableIconNames = entities.map((e) => tableVectorIcons.get(e.schemaName.toLowerCase())).filter(Boolean);
   const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs, tableIconNames);
+  // The theme's header logo, as its preflight exported it (unless the navigation already carries the same resource).
+  if (themeLogo && themePreflight) {
+    for (const wr of themePreflight.logoExport.webResources) {
+      if (!webResources.some((own) => own.name.toLowerCase() === wr.name.toLowerCase())) webResources.push(wr);
+    }
+  }
   const svgByName = new Map(webResources.filter((wr) => wr.type === 'svg').map((wr) => [wr.name.toLowerCase(), wr.name]));
   for (const entity of entities) {
     const name = tableVectorIcons.get(entity.schemaName.toLowerCase());
@@ -3468,7 +3642,15 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     : { mainForms: {}, notes: [] };
   if (Object.keys(mainFormMembership.mainForms).length) spec.app.mainForms = mainFormMembership.mainForms;
   setAppMembershipFloor(spec);
-  if (spec.app.tables !== undefined || spec.app.mainForms !== undefined) {
+  if (appTheme && appTheme.write) {
+    spec.app.theme = appTheme.theme;
+    setAppThemeFloor(spec);
+    if (appTheme.pendingPublish) process.stderr.write(`NOTE: app.theme was read from the app's SAVED theme, which is not published yet: ${appTheme.theme === null ? 'the removal of its own theme' : 'a theme'} the app does not show until it is published.\n`);
+  }
+  // A spec that carries a 2.21.0 schema field (a valued option, a secured column, a date behaviour, a table flag) asks for 2.21.0:
+  // an older build would renumber the options or leave the column open.
+  setSchemaFeaturesFloor(spec);
+  if (spec.app.tables !== undefined || spec.app.mainForms !== undefined || spec.app.theme !== undefined) {
     preserveAuthoredLanguageCode(spec, path.join(outDir, 'app-spec.json'));
   }
 
@@ -3519,12 +3701,12 @@ async function main(deps = {}) {
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]';
-  // `--allow-lossy-download` and `--reset-page-keys` are real boolean switches, so they stay out of needValue; everything else
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities] [--include-managed --managed-manifest <managed binding store file>]';
+  // `--allow-lossy-download`, `--reset-page-keys`, `--include-capabilities` and `--include-managed` are real boolean switches, so they stay out of needValue; everything else
   // feeds a URL, an app id, a path or an LCID and must not receive `true`.
   const flagError = validateFlags(argv, {
-    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode'],
-    needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode'],
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode', 'include-capabilities', 'include-managed', 'managed-manifest'],
+    needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode', 'managed-manifest'],
   });
   if (flagError) {
     makeWritesBlocking(io.stderr);
@@ -3538,6 +3720,18 @@ async function main(deps = {}) {
   const allowLossyDownload = flags['allow-lossy-download'] === true;
   // Off unless it is given: it is a decision about every environment that holds a copy of the earlier spec (see the header), never a default.
   const resetPageKeys = flags['reset-page-keys'] === true;
+  const includeCapabilities = flags['include-capabilities'] === true;
+  // The explicit managed download (declared forms and dashboards, reconcile "declared"): both flags or neither. `--include-managed` alone would
+  // have to guess which binding store to trust, and `--managed-manifest` alone would be a store read for nothing, so either alone is a
+  // usage error, before anything is opened. Without them the download is exactly what it always was.
+  const includeManaged = flags['include-managed'] === true;
+  const managedManifestFile = typeof flags['managed-manifest'] === 'string' ? flags['managed-manifest'] : '';
+  if (includeManaged !== !!managedManifestFile) {
+    makeWritesBlocking(io.stderr);
+    io.stderr.write(`✗ --include-managed and --managed-manifest <file> are given together: --include-managed names what to restore, --managed-manifest the binding store it is restored from\n${USAGE}\n`);
+    io.exit(1);
+    return;
+  }
   if (!env || !appArg) {
     io.stderr.write(USAGE + '\n');
     io.exit(1);
@@ -3596,7 +3790,7 @@ async function main(deps = {}) {
   let outcome = null;
   const finish = (ok, payload) => { outcome = [ok, payload]; };
   try {
-    session = await io.makeDownloadSdk(env, { ...deps, languageCode: languageFlag, authoredLanguageCode: pinnedLanguage });
+    session = await io.makeDownloadSdk(env, { ...deps, languageCode: languageFlag, authoredLanguageCode: pinnedLanguage, themeReads: includeCapabilities });
     // No language known — the flag, the spec on disk and the environment all gave none — means nothing has been read with a guess yet, and nothing is: the refusal is the result, before the app is
     // resolved, and the spec and baseline on disk are as they were (navigationLanguageRefusal says how to go on).
     if (typeof session.languageUnresolved === 'string') {
@@ -3619,7 +3813,7 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode });
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
@@ -3649,6 +3843,41 @@ async function main(deps = {}) {
     const specPath = path.join(outDir, 'app-spec.json');
     // Preserve the author's higher capability floor BEFORE validation, never after the version gate.
     preserveAuthoredLanguageCode(spec, specPath);
+    // The explicit managed download: each declared form a committed group of the named binding store proves is restored into forms[]
+    // as the declaration it was built from (lib/declared-form-io.js restoreManagedForms), and each declared dashboard likewise into
+    // dashboards[], in place of the plain entry the download reconstructed for it (lib/declared-dashboard-io.js restoreManagedDashboards),
+    // and each declared business rule into businessRules[] (lib/declared-rule-io.js restoreManagedRules), which the plain download leaves out;
+    // and each declared business process flow into businessProcessFlows[] (lib/declared-bpf-io.js restoreManagedBpfs), which it leaves out too;
+    // every other is named, never silently dropped. A store file that is not this app's on this environment stops the download before
+    // anything is written.
+    let managedForms = null;
+    let managedDashboards = null;
+    let managedRules = null;
+    let managedBpfs = null;
+    if (includeManaged) {
+      const source = {
+        sdk,
+        spec,
+        file: managedManifestFile,
+        environment: dataverseOrigin(env),
+        appUniqueName: appUnique,
+        solutionUniqueName: spec.solution && spec.solution.uniqueName,
+        validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
+      };
+      try {
+        managedForms = await restoreManagedForms(source);
+        managedDashboards = await restoreManagedDashboards(source);
+        managedRules = await restoreManagedRules(source);
+        managedBpfs = await restoreManagedBpfs(source);
+      } catch (e) {
+        finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
+        return;
+      }
+      for (const s of managedForms.stale) io.stderr.write(`WARNING: managed form ${s.key} was not restored: ${s.reason}. It is left out of forms[], as every form is without --include-managed.\n`);
+      for (const s of managedDashboards.stale) io.stderr.write(`WARNING: managed dashboard ${s.key} was not restored: ${s.reason}. Its dashboard is downloaded as every dashboard is without --include-managed.\n`);
+      for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
+      for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
+    }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
       finish(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
@@ -3683,7 +3912,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
@@ -3724,7 +3953,7 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
   const readFileSync = deps.readFileSync || fs.readFileSync;
   const existsSync = deps.existsSync || fs.existsSync;
   if (!spec) return spec;
-  const membership = spec.app && (spec.app.tables !== undefined || spec.app.mainForms !== undefined);
+  const membership = spec.app && (spec.app.tables !== undefined || spec.app.mainForms !== undefined || spec.app.theme !== undefined);
   if (spec.languageCode !== undefined && !membership) return spec;
   try {
     if (!existsSync(specPath)) return spec;
@@ -3737,7 +3966,10 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
     if (spec.languageCode === undefined && lcid !== null) spec.languageCode = lcid;
     // Retain the established API name, but read both authored options once. A lower generated floor
     // must not weaken a newer capability requirement the author already wrote.
-    if (membership) setAppMembershipFloor(spec, prior && prior.minimumPluginVersion);
+    if (membership) {
+      setAppMembershipFloor(spec, prior && prior.minimumPluginVersion);
+      setAppThemeFloor(spec, prior && prior.minimumPluginVersion);
+    }
   } catch (error) {
     if (membership && error.code !== 'ENOENT') {
       const warn = deps.warn || ((message) => process.stderr.write(`WARNING: ${message}\n`));

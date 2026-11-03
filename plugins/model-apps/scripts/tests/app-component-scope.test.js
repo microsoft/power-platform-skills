@@ -404,6 +404,26 @@ test('the SDK\'s guarded pin for an app with an edit open is NOT sent — the SD
   assert.strictEqual(calls.length, 1, 'with no edit open it is nobody\'s to read');
 });
 
+// The bundle's note for a guard refused other than by 412 (cds-maker-sdk `pinNotice`), as it renders it.
+const guardNote = (app) => `APP_PIN_TOKEN_UNCONFIRMED (guardRefused): App '${app}': the change set binding the pin was refused at its guard (HTTP 400) and rolled back; the plain component action was acknowledged, and the app token held was kept without adopting any read. The next header or exact-membership edit may answer VERSION_CONFLICT; …`;
+
+test('the bundle\'s note that a guard was refused is taken out of the push\'s answer only when the limit refused that app\'s guard itself — any other note, and the same note for a guard it did not answer, stays', async () => {
+  const scope = makeAppComponentScope();
+  const { client } = rawTransport();
+  const wrapped = scope.wrap(client);
+  const moved = `APP_PIN_REBASE_REQUIRED (tokenMoved): App '${APP}': before its components were pinned, the app row's token read differed …`;
+  const other = guardNote(OTHER_APP);
+  // The guard this limit answered: its note goes, whatever case the bundle spells the app id in; every other note of the same push stays.
+  const answered = await scope.limit(APP, { views: [VIEW] }, async () => {
+    await wrapped.postRaw(`${ROOT}/$batch`, guardedPin().text, {});
+    return { saved: true, warnings: ['a note of the push', guardNote(APP.toUpperCase()), moved, other] };
+  });
+  assert.deepStrictEqual(answered, { saved: true, warnings: ['a note of the push', moved, other] });
+  // No guard answered in this push (the service refused it, or the gate never sent one): the note is the service's, and stays — the next push is not told of the last one's.
+  const kept = { saved: true, warnings: [guardNote(APP)] };
+  assert.strictEqual(await scope.limit(APP, { views: [VIEW] }, async () => kept), kept);
+});
+
 test('a change set that is not exactly the SDK\'s guarded pin is REFUSED as any batch that names the action is — another part, another app in one part, a header, a body or a method it does not have — and nothing is sent', async () => {
   const scope = makeAppComponentScope();
   const { client, calls } = rawTransport();

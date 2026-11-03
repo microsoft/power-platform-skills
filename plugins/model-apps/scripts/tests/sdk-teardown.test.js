@@ -10,6 +10,7 @@ const { planTeardown, runTeardown: engineTeardown, deleteStep, odataStr, KIND_HA
 const runTeardown = (spec, opts, deps) => engineTeardown(spec, { env: 'https://contoso.crm.dynamics.com', ...opts }, deps);
 const { appUniqueName } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
 const { SDK_ROLE_MARKER } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 const pageWorkspaces = [];
 function pageWorkspace() {
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contoso-page-teardown-'));
@@ -1753,6 +1754,130 @@ test('a failed business PROCESS FLOW keeps no table — the keep is scoped to bu
   assert.deepStrictEqual([...sdk.db.tables], []);
 });
 
+// A flow's delete is answered HTTP 500 "There is no active transaction" by the platform now and then (seen live: the teardown then stopped at the flow, kept the table, the global
+// choices and the solution, and a second run deleted everything). That one answer — by its code, or by its words when the body has no code — is sent again for the flow only, a few times.
+const NO_TRANSACTION_WORDS = 'There is no active transaction. This error is usually caused by custom plug-ins that ignore errors from service calls and continue processing.';
+const serviceAnswer = (status, error) => {
+  const url = 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(flow-def)';
+  const text = error && error.message ? error.message : 'An unexpected error occurred.';
+  return Object.assign(new Error(`HTTP ${status} from ${url}: ${text}`), { code: 'CONNECTION_ERROR', statusCode: status, url, cause: { error } });
+};
+const noTransaction = (error = { code: '0x80040251', message: NO_TRANSACTION_WORDS }) => serviceAnswer(500, error);
+const flowWorld = (answers) => {
+  const sdk = ruleEnvironment({
+    tables: ['new_ticket'],
+    rules: [{ workflowid: 'flow-def', name: 'Flow', primaryentity: 'new_ticket', category: 4, type: 1, statecode: 0 }],
+  });
+  const delivered = sdk.deleteRecord;
+  const queue = [...answers];
+  sdk.deleteRecord = async (entitySet, id) => {
+    if (id !== 'flow-def' || !queue.length) return delivered(entitySet, id);
+    sdk.calls.push({ method: 'deleteRecord', entitySet, id });
+    throw queue.shift();
+  };
+  sdk.flowDeletes = () => sdk.calls.filter((c) => c.method === 'deleteRecord' && c.id === 'flow-def').length;
+  return sdk;
+};
+const flowSpec = () => ruleSpec({
+  entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+  views: [],
+  webResources: [],
+  businessRules: [],
+  businessProcessFlows: [{ entity: 'new_ticket', name: 'Flow' }],
+});
+// The waits between sends are real timers; none of these tests may sit through them.
+async function runFlowTeardown(sdk) {
+  const realDelay = global.setTimeout;
+  const waits = [];
+  global.setTimeout = (fn, ms) => { waits.push(ms); return realDelay(fn, 0); };
+  try {
+    return { res: await runTeardown(flowSpec(), { apply: true }, { sdk, emit: () => {} }), waits };
+  } finally {
+    global.setTimeout = realDelay;
+  }
+}
+
+test('a flow delete answered "There is no active transaction" once is sent again, and the table and the solution are then deleted in the same run', async () => {
+  const sdk = flowWorld([noTransaction()]);
+  const { res, waits } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 2);
+  assert.deepStrictEqual(waits.filter((ms) => ms >= 1000), [1000], 'a short wait before the one re-send');
+  assert.deepStrictEqual(res.deleted.table, ['new_ticket']);
+  assert.deepStrictEqual(sdk.workflowIds(), []);
+  assert.deepStrictEqual([...sdk.db.tables], []);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), [], 'the solution is not kept: no step failed');
+});
+
+test('a flow delete answered that twice is sent a third time, on a growing wait', async () => {
+  const sdk = flowWorld([noTransaction(), noTransaction()]);
+  const { res, waits } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 3);
+  assert.deepStrictEqual(waits.filter((ms) => ms >= 1000), [1000, 2000]);
+});
+
+test('a body with no code is matched by its words', async () => {
+  const sdk = flowWorld([noTransaction({ message: NO_TRANSACTION_WORDS })]);
+  const { res } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 2);
+});
+
+test('the answer past the bound is the error it always was: the step fails, and the table and the solution are kept as before', async () => {
+  const sdk = flowWorld([noTransaction(), noTransaction(), noTransaction(), noTransaction(), noTransaction()]);
+  const { res } = await runFlowTeardown(sdk);
+  assert.strictEqual(sdk.flowDeletes(), 4, 'one send and three re-sends');
+  assert.deepStrictEqual(res.errors.map((e) => e.step), ['business process flow "Flow" (new_ticket)']);
+  assert.match(res.errors[0].message, /HTTP 500 .*There is no active transaction/);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), ['S']);
+  assert.ok(res.skipped.some((s) => /^solution S \(kept — 1 earlier step\(s\) failed/.test(s)), JSON.stringify(res.skipped));
+});
+
+test('every other answer to the flow delete is sent once: another 500, the same words under another code, a 503, the code on another status', async () => {
+  for (const [what, answer] of [
+    ['another 500', serviceAnswer(500, { code: '0x80040216', message: 'An unexpected error occurred.' })],
+    ['the words under another code', noTransaction({ code: '0x80044150', message: NO_TRANSACTION_WORDS })],
+    ['a body with no OData error', serviceAnswer(500, undefined)],
+    ['a 503', serviceAnswer(503, { code: '0x80040251', message: NO_TRANSACTION_WORDS })],
+    ['an error that is no answer', Object.assign(new Error(`HTTP 500: ${NO_TRANSACTION_WORDS}`), { statusCode: 500 })],
+  ]) {
+    const sdk = flowWorld([answer]);
+    const { res } = await runFlowTeardown(sdk);
+    assert.strictEqual(sdk.flowDeletes(), 1, what);
+    assert.deepStrictEqual(res.errors.map((e) => e.step), ['business process flow "Flow" (new_ticket)'], what);
+  }
+});
+
+test('the same answer on any other step is not sent again', async () => {
+  const sdk = ruleWorld();
+  const deleted = sdk.deleteRecord;
+  let sends = 0;
+  sdk.deleteRecord = async (entitySet, id) => {
+    if (id !== 'gate-def') return deleted(entitySet, id);
+    sends++;
+    throw noTransaction();
+  };
+  const realDelay = global.setTimeout;
+  global.setTimeout = (fn) => realDelay(fn, 0);
+  try {
+    const res = await runTeardown(ruleSpec(), { apply: true }, { sdk, emit: () => {} });
+    assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
+  } finally {
+    global.setTimeout = realDelay;
+  }
+  assert.strictEqual(sends, 1, 'a business rule delete is sent once');
+});
+
+test('a re-send answered 404 means the first delete had committed: the flow is gone and the run goes on', async () => {
+  const gone = Object.assign(new Error('HTTP 404 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(flow-def): Does Not Exist'), { code: 'CONNECTION_ERROR', statusCode: 404, cause: { error: { code: '0x80040217', message: 'Does Not Exist' } } });
+  const sdk = flowWorld([noTransaction(), gone]);
+  const { res } = await runFlowTeardown(sdk);
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.strictEqual(sdk.flowDeletes(), 2);
+  assert.deepStrictEqual(Object.keys(sdk.db.solutions), []);
+});
+
 test('a dry run is unchanged: the same plan, nothing read or written, nothing kept', async () => {
   const sdk = ruleWorld({ failNextDelete: ['gate-def'] });
   const res = await runTeardown(ruleSpec(), { apply: false }, { sdk, emit: () => {} });
@@ -2419,6 +2544,7 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
     // The saved layer of the page table: { value: [{ uxagentprojectid, name, componentstate }] }. Any other read is refused, as it is when no Dataverse client is there.
     dataverse: {
       async get(url) {
+        if (isFormScan(url)) return noFormRows();
         if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
         queried.push('uxagentproject (saved layer)');
         const asked = (url.match(/uxagentprojectid eq [0-9a-f-]{36}/gi) || []).map((clause) => clause.slice('uxagentprojectid eq '.length).toLowerCase());
@@ -2640,6 +2766,7 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
     // The pages in their saved layer, which is where teardown looks for them.
     dataverse: {
       get: async (url) => {
+        if (isFormScan(url)) return noFormRows();
         if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
         if (liveQuery) liveQuery();
         return { status: 200, body: { value: [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview', componentstate: 0 })) } };

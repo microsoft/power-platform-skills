@@ -147,3 +147,14 @@ test('a correct invocation still succeeds after the guard', () => {
   assert.strictEqual(JSON.parse(r.stdout).dryRun, true);
   assert.strictEqual(fs.existsSync(SAMPLES_WORKSPACE), existed, 'the run left no workspace in the committed samples folder');
 });
+
+// --preview-push builds on the live plan of a dry run: with --apply or --no-live-plan it is refused before anything is read.
+test('build-model-app refuses --preview-push with --apply or --no-live-plan, with its usage', () => {
+  for (const extra of [['--apply'], ['--no-live-plan']]) {
+    const r = run([script('build-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC, '--preview-push', ...extra, '--workspace', tempWorkspace()]);
+    assert.strictEqual(r.code, 1, `${extra}: ${r.stderr}`);
+    assert.match(r.stderr, /--preview-push runs on a dry run with the live plan; drop --apply \/ --no-live-plan/);
+    assert.match(r.stderr, /Usage: node scripts\/build-model-app\.js .*\[--preview-push\]/);
+    assert.strictEqual(r.stdout, '', 'no result: nothing ran');
+  }
+});

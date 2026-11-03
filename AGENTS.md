@@ -30,8 +30,9 @@ Write for a reader outside Microsoft who cannot see any internal system.
 - **Pointers to files that are not in the repo** — a citation nobody can resolve is noise at best.
 
 **Fine to commit:** ADO / `AB#` work-item ids (opaque, and `AB#` is the standard Azure Boards ↔
-GitHub link syntax), and the location of a first-party source repo a maintainer needs in order to
-rebuild a vendored bundle. Both carry real "why" context and disclose no content.
+GitHub link syntax): they carry real "why" context and disclose no content. A vendored bundle built
+from an internal repository is cited by its source commit (`SDK commit <sha>`), with a placeholder
+such as `<sdk-repo>` for the repository — never by the internal repository's name or a path in it.
 
 **When you must record internal context**, put it in the PR conversation or an internal doc — not in
 a committed file. When editing an existing doc, keep this rule in mind for the lines around your

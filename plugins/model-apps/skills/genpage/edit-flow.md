@@ -676,6 +676,8 @@ the sitemap; the wrapper refuses the combination anyway).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Omit `--actions` when the page's `actionBindings` are unchanged (Custom API and built-in rows alike).
+Do not pass `--turn-id` for an edit: it is only for a host that retries one complete edit after losing its answer, with an id
+kept before the first send (SKILL.md, "Drafts, the pages lease, and a compiler refresh").
 
 An update without `--name`/`--name-file` keeps the page's current name: the SDK writes only what differs from the
 page it has just read, so an edit that does not rename the page omits it. To rename a page, pass `--name-file` on this

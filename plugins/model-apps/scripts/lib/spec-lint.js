@@ -7,9 +7,11 @@ const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = requ
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
+const { declaredFeatureOn } = require('./declared-features.js');
 const { isAppSourcePath } = require('./app-source-path.js');
-const { labelLintWarnings } = require('./view-filter-labels.js');
+const { labelLintWarnings, viewsForLabels } = require('./view-filter-labels.js');
 const { navigationVerdict } = require('./app-navigation.js');
+const { authorizeFlag } = require('./cli-failure.js');
 const { noPersonasWarning, uncoveredTables, uncoveredTablesWarning } = require('./app-access.js');
 
 const CHOICE_OPTION_WARN = 12;
@@ -249,6 +251,8 @@ function lintAppSpec(spec) {
     if (!isExplicit && f.fieldOptions && typeof f.fieldOptions === 'object' && !Array.isArray(f.fieldOptions)) {
       let placed = null;
       try { placed = new Set(formFieldLogicals(compileFormIntent(spec, f))); } catch { /* a malformed form is the validator's to report */ }
+      // A declared form keeps what its spec omits and refuses `prune` (app-spec.js validateDeclaredForms), so it is not advised there.
+      const keepsRest = declaredFeatureOn('forms') && f.reconcile === 'declared' ? '' : ' (prune: false keeps the rest of the form)';
       for (const [key, opt] of Object.entries(placed ? f.fieldOptions : {})) {
         const flags = [opt && opt.readOnly === true && 'readOnly', opt && opt.hidden === true && 'hidden'].filter(Boolean);
         if (!flags.length || placed.has(lc(key))) continue;
@@ -261,9 +265,9 @@ function lintAppSpec(spec) {
         if (col && NON_FORM_RENDERABLE_TYPES.has(col.type)) {
           W(`${what} on a ${col.type} column, which has no form control, so the auto layout leaves it off the form and the build never applies it.`);
         } else if (col) {
-          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it (prune: false keeps the rest of the form).`);
+          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it${keepsRest}.`);
         } else {
-          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).`);
+          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout${keepsRest}.`);
         }
       }
     }
@@ -473,12 +477,17 @@ function lintAppSpec(spec) {
     if (ve && v.name) {
       const plural = labelText(ve.pluralName, spec && spec.languageCode) || derivedPluralName(ve, spec && spec.languageCode);
       if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
-        W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
+        // A declared view (reconcile: "declared") is not merged: it replaces the stock view's columns, filters and sort. But the
+        // stock view exists on every table, new ones included, and this spec did not create it, so every edit is an adoption
+        // the build refuses until the maker names it (lib/view-reconcile.js, view-adoption-not-authorized).
+        if (v.reconcile === 'declared') W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view, which exists on every table, new ones included — as a declared view, a build changes it only with ${authorizeFlag(`adopt:view:${lc(v.entity)}/${v.name}`)}. Use a distinct name to author a separate view.`);
+        else W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
     }
     // ADO 6691114: offline, a label can only be checked against what the spec declares. Say when one will
     // be checked against the environment at build time instead, so the author is not surprised by the halt.
-    for (const w of labelLintWarnings(spec, v)) W(w);
+    // A declared view's joined filters are options of the JOINED table, so they are checked there, as the build reads them.
+    for (const lv of viewsForLabels({ views: [v] })) for (const w of labelLintWarnings(spec, lv)) W(w);
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';

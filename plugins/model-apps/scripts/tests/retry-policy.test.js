@@ -79,6 +79,19 @@ test('judgeFailure: an SDK write whose outcome is unknown is never run again, ev
   }
 });
 
+// The bundled SDK's business-process-flow steps whose effect it could not confirm (a rollback of a half-made flow, a
+// deactivate, a reactivate). Each keeps the failure it met as its cause; a whole build run again would replay the step.
+test('a process step whose outcome is unknown is never re-run, over a 503 or a reset', () => {
+  const lost = (status) => new ConnectionError('https://contoso.crm.dynamics.com/api/data/v9.2/workflows', status, status ? 'Service Unavailable' : 'Request failed: read ECONNRESET');
+  for (const code of ['BPF_CREATE_ROLLBACK_OUTCOME_UNKNOWN', 'BPF_DEACTIVATE_OUTCOME_UNKNOWN', 'BPF_REACTIVATE_OUTCOME_UNKNOWN']) {
+    for (const status of [503, 0]) {
+      const e = new SdkError(code, 'could not be confirmed'); e.cause = lost(status);
+      assert.strictEqual(judgeFailure(e).never, true, `${code} over ${status}`);
+      assert.strictEqual(retryPolicyFor(e), RETRY.NEVER);
+    }
+  }
+});
+
 test('judgeFailure: the HTTP status decides first — 429, 502, 503 and 504 are transient wherever in the chain the service\'s answer sits', () => {
   for (const status of [429, 502, 503, 504]) {
     assert.strictEqual(isTransientHalt(connectionError(status, 'nothing to read here')), true, `${status} on the error`);

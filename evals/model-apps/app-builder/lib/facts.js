@@ -19,7 +19,7 @@ const { TIMELINE_CLASS_ID, wantsTimeline } = pluginLib('form-timeline.js');
 const { decodeXmlEntities } = pluginLib('sitemap-pages.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
-const { isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
+const { formOrderSpecOf, isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
 // Round-trip (edit/download) + teardown oracles: both plugin primitives are PURE — planTeardown does
 // no I/O, and hydrateSpec takes an injected `read`, so we can grade the compared hydration subset
 // and the reverse-of-build teardown plan offline. This does not execute a rebuild. See EVAL_GUIDE.md.
@@ -615,12 +615,25 @@ function makeAllPresentReader(spec, formEvidence = null) {
     servedMainForms: async (entityLogical) => formEvidence
       ? ((formEvidence.servedMainForms || {})[lc(entityLogical)] || [])
       : (plannedMainFormSequence(spec, entityLogical) || []).map((f) => ({ id: `form:${mainFormName(f)}`, name: mainFormName(f) })),
+    // The app holds exactly the listed Main forms. An "exact" list (app.mainFormsOnUpdate) has to be asked for
+    // strictly: a lenient read can drop a row it cannot place, so it would prove "only these forms" from part of the list.
+    appMainForms: async (_appUnique, mainForms, opts) => (spec.app && spec.app.mainFormsOnUpdate === 'exact' && !(opts && opts.strict)
+      ? { kind: 'inconclusive', reason: 'an exact Main-form list was read without strict' }
+      : { kind: 'read', tables: Object.keys(mainForms || {}).map((table) => ({ table: lc(table), extras: [], missing: [] })), formNames: {} }),
+    // app.theme (Preview): verify asks for the theme only when the spec declares one, and the real reader answers with
+    // lib/app-theme.js verifyAppTheme's shape, [{ key, ok, state: 'live'|'pendingPublish'|'mismatch'|'unknown' }]. The
+    // environment matches the spec by this reader's premise, so the declared theme is live. Without it a themed spec failed
+    // verify offline on a gap in this fixture ("the app theme reader is unavailable"), not on a finding about the spec.
+    appTheme: async () => [{ key: 'app.theme', ok: true, state: 'live' }],
   };
 }
 
 function requiredVerifyChecks(spec, reader) {
-  const mains = [...new Set((spec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
-  const ordered = mains.filter((entity) => plannedMainFormSequence(spec, entity));
+  // Verify expects a form order only of the Main forms the build orders, which leaves out a declared form (the shared rule,
+  // formOrderSpecOf in lib/form-order.js), so a table whose only Main form is declared owes no form-order check.
+  const orderSpec = formOrderSpecOf(spec);
+  const mains = [...new Set((orderSpec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
+  const ordered = mains.filter((entity) => plannedMainFormSequence(orderSpec, entity));
   const pages = (spec.pages || []).filter((p) => {
     const source = normalizePageSource(p);
     return source && source.kind === 'tsx' && source.codeFile;
@@ -639,6 +652,7 @@ function requiredVerifyChecks(spec, reader) {
     'form-subgrid': (spec.forms || []).reduce((n, f) => n + splitSubgrids(formLayoutNames(f), f.subgrids).placed
       .filter((p) => subgridRelationshipName(spec, f.entity, p.sg.childEntity)).length, 0),
     'form-order-served': typeof reader.servedMainForms === 'function' ? ordered.length : 0,
+    'app-main-forms': Object.keys((spec.app && spec.app.mainForms) || {}).length,
     'business-rule': (spec.businessRules || []).length,
     'business-process-flow': (spec.businessProcessFlows || []).length,
     role: (spec.personas || []).length,

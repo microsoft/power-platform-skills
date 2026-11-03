@@ -31,7 +31,7 @@
   1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged) -> 200
-  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf,IsSecured) -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.BooleanAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=TrueOption,FalseOption) -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsBaseCurrency,MinValue,MaxValue,Precision,PrecisionSource -> 200
@@ -50,7 +50,7 @@
   1x GET /EntityDefinitions(LogicalName='contoso_tag')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged) -> 200
-  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf,IsSecured) -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.BooleanAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=TrueOption,FalseOption) -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.DateTimeAttributeMetadata?$select=LogicalName,Format -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.IntegerAttributeMetadata?$select=LogicalName,MinValue,MaxValue,Format -> 200
@@ -72,7 +72,7 @@
   1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged) -> 200
-  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf,IsSecured) -> 200
   1x GET /EntityDefinitions(LogicalName='savedquery')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='savedqueryvisualization')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='settingdefinition')?$select=EntitySetName -> 200

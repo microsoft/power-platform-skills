@@ -20,8 +20,8 @@
   1x GET /EntityDefinitions(LogicalName='webresource')?$select=EntitySetName -> 200
   1x GET /GlobalOptionSetDefinitions(Name='contoso_stage')?$select=MetadataId -> 404
   1x GET /appmodules?$select=appmoduleid&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
-  1x GET /contoso_projects?$select=contoso_name,contoso_projectid&$filter=contoso_name eq 'Apollo'&$top=5000 -> 200
-  1x GET /contoso_tasks?$select=contoso_title,contoso_taskid&$filter=contoso_title eq 'Kickoff'&$top=5000 -> 200
+  1x GET /contoso_projects?$select=contoso_name,contoso_projectid&$filter=contoso_name eq 'Apollo' -> 200
+  1x GET /contoso_tasks?$select=contoso_title,contoso_taskid&$filter=contoso_title eq 'Kickoff' -> 200
   1x GET /publishers?$select=publisherid&$filter=customizationprefix eq 'contoso'&$top=1 -> 200
   2x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_project.js'&$top=1 -> 200
@@ -102,7 +102,7 @@
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project' and type eq 2&$top=2 -> 200
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task Quick Create' and type eq 7&$top=2 -> 200
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task' and type eq 2&$top=2 -> 200
-  1x GET /systemforms?$select=formid,name&$filter=name eq 'Kitchen Overview' and type eq 0&$top=10 -> 200
+  1x GET /systemforms?$select=formid,name&$filter=name eq 'Kitchen Overview' and type eq 0 -> 200
   1x GET /systemforms?$select=formid,name&$filter=objecttypecode eq 'contoso_task' and type eq 2 and formactivationstate eq 1&$top=250 -> 200
   1x GET /webresourceset?$select=webresourceid&$filter=name eq 'contoso_kitchensink_icon'&$top=1 -> 200
   4x PATCH /savedqueries(<id>)?$select=savedqueryid #97e1522c -> 200
@@ -172,7 +172,7 @@
   1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencedAttribute -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
-  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf,IsSecured) -> 200
   1x GET /EntityDefinitions(LogicalName='uxagentproject')?$select=ObjectTypeCode -> 200
   1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62&$top=1 -> 200
   1x GET /appmodules?$select=appmoduleid,appmoduleidunique&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200

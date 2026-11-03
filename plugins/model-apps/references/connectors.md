@@ -70,7 +70,9 @@ credential or a connection id into `connectors.json`; a spec that states one is 
 `/genpage` itself never reads or writes the spec. The spec carries the list and not what it names: the connection
 reference — and the connection behind it — must already exist in the environment you rebuild into
 (`create-connection-reference.js`, or a solution: `add-page-to-solution.js --connection-refs`, then
-`solution-settings.js`). A rebuild reads the environment's references before it writes: one of that name for
+`solution-settings.js`) — unless the spec declares it in `connectionReferences[]`: the build then makes it, binds
+it to the connection `--deployment-settings` names, and writes no page that calls it until it is bound
+(`references/app-spec-schema.md` → *Configuration items*). A rebuild reads the environment's references before it writes: one of that name for
 **another connector** than the binding's `connectorId` stops it, before anything is written; one that is not there,
 one that has no connection, and an operation in `operations` that a custom connector there does not define are
 said by name; what the environment's answer did not prove (its row's connector or connection, or which custom

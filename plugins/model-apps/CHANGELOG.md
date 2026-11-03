@@ -5,6 +5,21 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.21.0]
+
+- **`reconcile: "declared"`**: views/charts/web resources/forms/Global Standard dashboards; rules/flows create/adopt-only; adoption: `adopt:<family>:<key>`. Forms/dashboards/rules/flows `--verify`/download (`--include-managed --managed-manifest <store>`); removed, Maker-deleted roots can retire; re-declarations get fresh ids. New-app `createIdentity: "stable-v1"`: retry-stable view/chart ids. `quickFind.findColumns`, `app.mainFormsOnUpdate: "exact"`, `app.pinDeclaredArtifacts` (lost pin-add recovery).
+- Choice values, `dateTimeBehavior`/`isSecured`/`fieldSecurityProfiles`, table flags (`--authorize <key>` for destructive changes). Environment variables, connection references, Custom APIs, duplicate rules, `solution.version` (`--deployment-settings`). `app.theme` (Preview); `--include-capabilities` downloads theme/behaviours/flags. **Pages:** upload `--draft`/`--turn-id`, navigation drafts/leases, `prepare-compiler-refresh`. **Read-only:** `--dry-run --preview-push`/`--inspect-components`/`solutions.js inspect`/`plan-app-promotion.js`. `data-fix.js` writes.
+- Security/name/DateTime/page-form reads; teardown retains embedded pages/configuration/profiles. Unusable declared connections/APIs or unsettled publication halt page edits. **Default views:** never edit/send tableless copies; refresh otherwise-identical copies. Bounded retries: invocation-created tables only. Preserve/halt other unsent edits (`workspace-copy-unsent-edits`); follow keep/discard guidance.
+- **New declared dashboard tiles:** repeat captions across provisioned languages; only missing sent non-base captions are tolerated. Unreadable languages halt writes/request retries. Create-content mismatches: inspect id; delete only as advised.
+- Declared form tables/dashboards publish without `--publish`; lagging reads retry ~45s/scope plus request time. Process-flow deletes retry; unknown-outcome steps never replay; refused access-unlinks fail.
+
+### Limits
+
+- Saved form/dashboard layers miss mid-write edits. Publish checks skip captions whose language is absent from published reads and some saved labels. Publish duplicate rules; unprovisioned languages fail after solution creation. Lost-create retries can duplicate configuration; recovered-table Date/Time repairs may need rerunning.
+- `--authorize publication-risk:<scope>/<dispatch>`: start-only; accepted/uncertain recording stops without service writes. Rerun to publish; re-declare removed dashboards. Adopted-form saved/published base-language caption differences may need repeated approvals after checking published forms in Maker.
+- Managed downloads omit `securityRoles` flows and forms lacking required downloaded handler libraries (`managedForms.stale`); copy flow/personas or form/libraries from source spec. No view/chart/profile/configuration downloads; charts verify presence only.
+- Local-copy recovery: printed `overwrite:` keys; otherwise manual ([schema](references/app-spec-schema-advanced.md)). `--allow-destructive`: existing-app exact Main forms, empty web resources/Quick Find, removed view columns. Keyed commands/`forms[].genPages` refused; caption-only inspection fails.
+
 ## [2.20.6]
 
 The bundled SDK is updated (commit 59ae2d72e2a8).
