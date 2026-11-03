@@ -757,13 +757,13 @@ are only added.
   this build did not create is bound only with `--authorize "adopt:form:<key>"`; the first binding
   needs it, later builds do not. `--authorize "overwrite:form:<key>"` approves replacing changes made
   elsewhere. A local copy that differs from the server's stops the build (`workspace-copy-unsent-edits`).
-- **Publishing.** The forms step publishes a table once, after all its form work, and only when every
+- **Publishing.** A declared form's table is published after all its form work, and only when every
   declared change on it succeeded. A table publish puts live every saved change on that table, not only this
   form's (new columns included, so a build without `--publish` does not leave that table's changes
   unpublished), so the build withholds it while another managed change on the table is not proved. A saved
-  form that is definitely unpublished is published without a rewrite. `--publish` does not turn this off:
-  without it the table is published in the forms step, as the reconcile of any existing form is; with it,
-  the publish phase can publish the table again later in the same build.
+  form that is definitely unpublished is published without a rewrite. `--publish` does not turn this off; it
+  decides only when: without it the forms step publishes the table, as the reconcile of any existing form
+  does; with it, the table is published later in the same build, with the build's other publishes.
 - **Concurrent edits.** Dataverse does not provide a working conditional-write guard for a form's saved
   layer, so a conditional write cannot reject a stale edit of it. The build re-reads the saved form just
   before it writes and stops when it changed since the build read it. An edit made in Maker in the
