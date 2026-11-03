@@ -116,7 +116,13 @@ function planFacts(spec) {
 // of wire-facts.js (viewFacts/chartFacts/formFacts), deterministic with no live env or bundle round-trip.
 function wireFacts(spec) {
   return {
-    views: (spec.views || []).map((v) => { const d = viewDef(spec, v); return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name) }; }),
+    views: (spec.views || []).map((v) => {
+      const d = viewDef(spec, v);
+      // viewDef puts the active-records condition (statecode eq 0) first, when activeOnly is not false. What remains is what the
+      // author's filters[] compiled to, so a filter the build ignored (a misspelled key) leaves nothing here.
+      const authored = v.activeOnly !== false ? d.filters.conditions.slice(1) : d.filters.conditions;
+      return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name), conditions: authored.map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value })) };
+    }),
     charts: (spec.charts || []).map((c) => { const d = chartDef(spec, c); return { entity: d.entityLogicalName, name: d.name, measure: d.series[0].aggregate, groupBy: d.categories[0].attribute }; }),
     forms: (spec.forms || []).map((f) => {
       const authoredShape = authoredFormShape(f);

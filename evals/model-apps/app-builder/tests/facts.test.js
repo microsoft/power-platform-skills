@@ -871,6 +871,58 @@ test('fixture 11 filters its High Priority view on Priority 5 in the shape the v
   assert.strictEqual(mutated((v) => { delete v.filters; }), false, 'no filter');
 });
 
+// The runner grades the same thing on a generated spec: fixture 11's expectation names the filter the prompt asks for, and the check reads
+// the conditions the view builder compiled, so a spelling it ignores grades as a missing filter.
+const FILTER_ASSERTION = 'ui: a view filter the prompt names is built from filters[] attr/op/value';
+async function gradeViewFilter(mutate, mutateEval) {
+  const fixture = fixtureFor(11);
+  const spec = structuredClone(fixture.spec);
+  if (mutate) mutate(spec.views.find((v) => v.name === 'High Priority'), spec);
+  const ev = structuredClone(evalsManifest.evals.find((e) => e.id === 11));
+  if (mutateEval) mutateEval(ev);
+  const facts = await stageFacts(spec, { fixture });
+  return ASSERTIONS.get(FILTER_ASSERTION)({ facts, spec, eval: ev });
+}
+
+test('the view-filter expectation of fixture 11 is written from the prompt and graded in its own assertion', () => {
+  const ev = evalsManifest.evals.find((e) => e.id === 11);
+  assert.deepStrictEqual(ev.expect.viewFilters, [{ entity: 'cnt_shipment', view: 'High Priority', attr: 'cnt_priority', op: 'eq', value: 5 }]);
+  assert.ok(ev.expectations.includes(FILTER_ASSERTION), 'the assertion is listed in the eval expectations');
+  assert.ok(/Priority 5/.test(ev.prompt), 'the prompt names the filter the expectation checks');
+});
+
+test('view-filter grading: the right filter passes; a missing filter, the old spelling, a wrong value, op or column fail', async () => {
+  assert.strictEqual((await gradeViewFilter()).status, 'pass');
+  const missing = await gradeViewFilter((v) => { delete v.filters; });
+  assert.strictEqual(missing.status, 'fail', 'no filter');
+  assert.match(missing.reason, /no condition cnt_priority eq 5/);
+  assert.strictEqual((await gradeViewFilter((v) => { v.filter = [{ column: 'cnt_priority', operator: 'eq', value: 5 }]; delete v.filters; })).status, 'fail', 'old filter[].column/operator spelling');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters = [{ column: 'cnt_priority', operator: 'eq', value: 5 }]; })).status, 'fail', 'old column/operator inside filters[]');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters[0].value = 1; })).status, 'fail', 'wrong value');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters[0].op = 'ne'; })).status, 'fail', 'wrong operator');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters[0].attr = 'cnt_stage'; })).status, 'fail', 'wrong column');
+  assert.strictEqual((await gradeViewFilter((v) => { v.name = 'Urgent'; })).status, 'fail', 'the filter on a view with another name');
+});
+
+test('view-filter grading: the active-records condition is neither the filter nor in the way of it', async () => {
+  assert.strictEqual((await gradeViewFilter((v) => { v.activeOnly = false; })).status, 'pass', 'activeOnly false leaves the filter');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters = []; v.activeOnly = true; })).status, 'fail', 'statecode alone is not a Priority filter');
+  assert.strictEqual((await gradeViewFilter(null, (ev) => { ev.expect.viewFilters = [{ entity: 'cnt_shipment', view: 'High Priority', attr: 'statecode', op: 'eq', value: 0 }]; })).status, 'fail', 'the auto condition is not matchable as a filter');
+  assert.strictEqual((await gradeViewFilter(null, (ev) => { delete ev.expect.viewFilters; })).status, 'fail', 'no independent expectation grades nothing');
+});
+
+test('view grading by name and the other stage assertions are unchanged by the view-filter facts', async () => {
+  const fixture = fixtureFor(11);
+  const facts = await stageFacts(fixture.spec, { fixture });
+  const ev = evalsManifest.evals.find((e) => e.id === 11);
+  const named = 'ui: wire-facts build exactly the expected views and charts';
+  assert.strictEqual(score(named, facts, fixture).status, 'pass');
+  const other = structuredClone(fixture.spec);
+  other.views[0].name = 'Urgent';
+  assert.strictEqual(ASSERTIONS.get(named)({ facts: await stageFacts(other, { fixture }), spec: other, eval: ev }).status, 'fail', 'a renamed view still fails the name check');
+  assert.deepStrictEqual(Object.keys(facts.ui.views[0]).sort(), ['columns', 'conditions', 'entity', 'name']);
+});
+
 const grade2210 = (id, mutate) => {
   const ev = evalsManifest.evals.find((e) => e.id === id);
   const spec = structuredClone(loadFixtures(path.join(__dirname, '..', 'fixtures')).find((f) => f.id === id).spec);

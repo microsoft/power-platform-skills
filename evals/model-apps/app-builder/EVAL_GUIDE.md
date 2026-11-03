@@ -14,7 +14,7 @@
 | **author** | `validateAppSpec(plan profile)` passes · no lint errors · artifact names are table/type-scoped · ASCII page-quote warnings stay visible without changing approved names. Other advisories remain non-fatal. | `app-spec.js`, `spec-lint.js` |
 | **plan** | Every planned item targets a known engine phase | `sdk-build.js` `planFor` + `PHASES` |
 | **data** | Normalized data-model facts match the `expect.tables/relationships` block | `schema-facts.js` `schemaFacts` |
-| **ui** | View/chart names match `expect.views/charts` · explicit tab/section names, topology, percentage widths, display flags, field state and spans match authored input · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
+| **ui** | View/chart names match `expect.views/charts` · a filter the prompt names (`expect.viewFilters`, `{ entity, view, attr, op, value }`, written from the prompt) is among the view's compiled conditions, so a spelling the build ignores (`filter`, `column`, `operator`) fails · explicit tab/section names, topology, percentage widths, display flags, field state and spans match authored input · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
 | **app** | Every sitemap subarea resolves to a concrete target · no dangling `navigatesTo` keys | `sdk-build.js` `appDef` |
 | **security** | Each declared persona maps to exactly one role · the role **injects** `appmodule` read for app-access personas (and only those) · every persona privilege on an **app-owned** table (the app's own publisher prefix) resolves to a provisioned entity (JTBD coverage) · the role grants **exactly** its jobs' declared privileges — no extra entity, access token, or inflated scope beyond the declared union + the documented `appmodule` injection (least privilege) | `sdk-build.js` `personaRoleSpecFor` |
 | **verify** | Required verification succeeds, reports no missing artifacts, and actually runs each applicable check kind. Fixture 7 supplies independent deployed XML and served Main form order instead of compiler-rendered XML. | `verify-spec.js` `verifySpec` |
@@ -78,7 +78,7 @@ confined to the fixture directory, including when the fixtures root is a junctio
 - `skill_name` — identifies this suite.
 - `eval_instructions` — description used by eval runners.
 - `common_stage_assertions` — run for every fixture; registered in `lib/assertions.js`.
-- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, date-behaviour, field-security, app-membership and stable-identity contracts.
+- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, view-filter, date-behaviour, field-security, app-membership and stable-identity contracts.
 - `evals[].expectations` — additional per-eval assertion texts (can be empty).
 - `evals[].tier` — `smoke` (fast subset) or `full`.
 
