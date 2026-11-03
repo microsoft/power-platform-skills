@@ -29,7 +29,7 @@ Comprehensive rules for generating generative page code. Read this file during c
 21. **End final type-argument statements with `;`**: If the file's last statement ends in a type argument list (`Page<string>`, `Array<Row>`), terminate it with a semicolon.
 22. **Consistent errors**: Route failed data operations through the page's single top-level `reportPageError`, retain bounded code and message diagnostics, and put its returned view in the operation's error state. Render errors as escaped Fluent MessageBar text with localized application fallbacks. Offer manual retry only for proven-safe reads or the documented pre-dispatch Custom API network result; never retry an indeterminate result automatically. Wrap PageBody in the page's one top-level React PageErrorBoundary. Instrument only explicitly authorized failure sites, only through the helper. Expected null/empty states are not failures. See “Missing Error Handling” for the canonical patterns and the static check's declared limits.
 23. **Lookup identities**: A lookup reference is a validated table-and-bare-id pair, not its label or the first metadata target. Normalize bare GUID and `/<table>(<guid>)` read values using the logical-name annotation and/or qualified prefix, checking both against metadata and rejecting conflicts. Use the bare id for filters, retrieval and navigation; rebuild the qualified value only for writes. Record every lookup used by a join/filter and its complete target set in Per-Page Specifications. Ask about unresolved relationship/filter meaning; never broaden a failed typed query. Unresolved references cannot trigger target-dependent actions. See **DataAPI Rules > Lookup references** for the canonical `normalizeLookupReference` and the five WRONG/CORRECT pairs.
-24. **Convert iterables to arrays**: The page compiler targets ES5 without iterator downleveling or full type checking. Spreading, looping over, or array-destructuring a Map, Set or iterator reads length and indices instead: values can disappear, defaults can replace them, or rest destructuring can throw. Never write `[...new Set(xs)]`, `[...m.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` or `[...text.matchAll(re)]` directly; convert with `Array.from` or copy a Set natively. See **Common Errors > 5. Iteration that compiles to nothing**.
+24. **Convert iterables to arrays**: Pages this plugin uploads compile with iterator support, but a page compiled again by an older maker portal or `pac` reads a Map, Set or iterator by length and indices: values can disappear, defaults can replace them, or rest destructuring can throw. Write `[...new Set(xs)]`, `[...m.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and `[...text.matchAll(re)]` through `Array.from`, or copy a Set natively, so the page is correct under every compiler. See **Common Errors > 5. Iteration that another page compiler can lose**.
 
 ---
 
@@ -1331,16 +1331,16 @@ const useStyles = makeStyles({
 });
 ```
 
-### 5. Iteration that compiles to nothing
+### 5. Iteration that another page compiler can lose
 
-The page compiler targets ES5 without iterator downleveling or full type checking. Spreading, looping over, or array-destructuring a Map, Set or iterator reads length and indices instead of the iterator: values can disappear, defaults can replace them, or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays. Spreads of `arguments` and ordinary indexed array-likes work; rest destructuring of an array-like without `slice` does not. String spread throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing** in `references/rules.md` for the pairs.
+Pages this plugin uploads are compiled with iterator support (ES5 with `downlevelIteration`), so a spread, a `for...of` loop or an array destructure of a Map, Set, iterator, generator or string reads it as modern JavaScript does. A tool that compiles the page again without that support — an older maker portal, or `pac` — reads length and indices instead: values disappear, defaults replace them, and rest destructuring or a string spread throws, all with a clean compile. Keep the page correct under every compiler: convert with `Array.from(...)` before spreading, looping or destructuring, for example `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and `[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays. Rest destructuring of a non-iterable array-like without `slice` throws under every compiler. A destructuring default must not write to the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old value here, unlike modern JavaScript. See **Common Errors > 5. Iteration that another page compiler can lose** in `references/rules.md` for the pairs.
 
-A Dropdown built from `[...seen.values()]` can open with no options despite a clean compile. The same problem affects native collection iterators, generators, native `matchAll` results, `URLSearchParams`, `FormData` and `Headers`. JSX expressions use the same emit.
+Under such a compiler a Dropdown built from `[...seen.values()]` opens with no options despite a clean compile — what pages uploaded before model-apps 2.20.6 did. The same problem affects native collection iterators, generators, native `matchAll` results, `URLSearchParams`, `FormData` and `Headers`. JSX expressions use the same emit. Each WRONG example below except the last works in a page this plugin uploads and fails as its comment says under a compiler without iterator support; each CORRECT example works under both.
 
 **Map values**
 
 ```typescript
-// WRONG — the spread contributes no values
+// WRONG — without iterator support the spread contributes no values
 const seen = new Map([["a", 1], ["b", 2]]);
 const choices = [...seen.values()];
 ```
@@ -1354,7 +1354,7 @@ const choices = Array.from(seen.values());
 **Unique values**
 
 ```typescript
-// WRONG — unique becomes []
+// WRONG — without iterator support unique becomes []
 const xs = [1, 1, 2];
 const unique = [...new Set(xs)];
 ```
@@ -1368,7 +1368,7 @@ const unique = Array.from(new Set(xs));
 **Map pairs**
 
 ```typescript
-// WRONG — the loop runs zero times
+// WRONG — without iterator support the loop runs zero times
 const m = new Map([["a", 1], ["b", 2]]);
 const rows: Array<[string, number]> = [];
 for (const [k, v] of m) rows.push([k, v]);
@@ -1386,7 +1386,7 @@ A native Map's `m.forEach((v, k) => { rows.push([k, v]); })` is an alternative, 
 **Selection state — component-body examples; state values are not statically inferred**
 
 ```typescript
-// WRONG — the updater loses prior ids; chosen loses every selected value
+// WRONG — without iterator support the updater loses prior ids; chosen loses every selected value
 const [selected, setSelected] = React.useState(new Set<string>());
 function addSelected(id: string) {
   setSelected(prev => new Set([...prev, id]));
@@ -1412,7 +1412,7 @@ The Map and Set constructors consume iterables natively: `new Set(prev)` and `ne
 **Native matchAll result**
 
 ```typescript
-// WRONG — the match iterator has no array length
+// WRONG — without iterator support the match iterator has no array length
 const text = "a1 b2";
 const re = /\d/g;
 const hits = [...text.matchAll(re)].map(match => match[0]);
@@ -1428,7 +1428,7 @@ const hits = Array.from(text.matchAll(re)).map(match => match[0]);
 **Destructuring**
 
 ```typescript
-// WRONG — first is undefined
+// WRONG — without iterator support first is undefined
 const [first] = new Set([1, 2]);
 ```
 
@@ -1438,7 +1438,7 @@ const [first] = Array.from(new Set([1, 2]));
 ```
 
 ```typescript
-// WRONG — fallback replaces the actual value
+// WRONG — without iterator support fallback replaces the actual value
 const [first = "fallback"] = new Set(["actual"]);
 ```
 
@@ -1448,7 +1448,7 @@ const [first = "fallback"] = Array.from(new Set(["actual"]));
 ```
 
 ```typescript
-// WRONG — throws because the emitted rest operation calls slice
+// WRONG — without iterator support this throws: the emitted rest operation calls slice
 const [...rest] = new Set([1, 2]);
 ```
 
@@ -1460,7 +1460,7 @@ const [...rest] = Array.from(new Set([1, 2]));
 **String spread — a separate throw, not an empty iterable result**
 
 ```typescript
-// WRONG
+// WRONG — without iterator support this throws
 const name = "A😀";
 const chars = [...name];
 ```
@@ -1473,6 +1473,24 @@ const chars = Array.from(name);
 
 Call and constructor arguments need the same conversion: write `f(...Array.from(iterator))` and `new C(...Array.from(iterator))`, not direct iterator spreads.
 
-These operations remain ordinary valid patterns: `[...rows]`, `[...Object.keys(row)]`, `for (const row of rows)`, `const [first] = rows`, `{ ...tokens }`, `<div {...props} />`, rest parameters, `selected.has(id)`, `seen.set(key, value)`, `new Set(prev)` and `new Map(entries)`. A first-element binding of a string reads its indexed UTF-16 element, not a whole Unicode code point.
+These operations remain ordinary valid patterns: `[...rows]`, `[...Object.keys(row)]`, `for (const row of rows)`, `const [first] = rows`, `{ ...tokens }`, `<div {...props} />`, rest parameters, `selected.has(id)`, `seen.set(key, value)`, `new Set(prev)` and `new Map(entries)`. Without iterator support a first-element binding of a string reads its indexed UTF-16 element, not a whole Unicode code point.
+
+**A default that writes the array it destructures — the one difference from modern JavaScript under iterator support**
+
+The elements are copied before a default runs, so a default that writes a later element of the same array is not seen by that element.
+
+```typescript
+// WRONG — b is 2 here; modern JavaScript and a compiler without iterator support give 3
+const values: Array<number | undefined> = [undefined, 2];
+const [a = (values[1] = 3), b] = values;
+```
+
+```typescript
+// CORRECT — compute the values first, then read them
+const values: Array<number | undefined> = [undefined, 2];
+if (values[0] === undefined) values[1] = 3;
+const a = values[0] === undefined ? values[1] : values[0];
+const b = values[1];
+```
 
 The authoring rule also applies when an iterable comes from props, parameters, React state, a ref, a cache or another function. Static checks cannot prove all of those origins. Do not mistake a lack of findings for proof that arbitrary iteration is safe.

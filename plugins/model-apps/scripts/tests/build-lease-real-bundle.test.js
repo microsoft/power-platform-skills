@@ -211,10 +211,13 @@ const ALONE = {
     'POST /webresourceset': 2,
   },
   rebuild: {
-    'GET /appmodulecomponents': 19,
+    // The rebuild's app update re-adds the app's components unpublished; before that action the bundled SDK reads the app row's token
+    // (+1 GET /appmodules()) and, as it matches the one it holds, the app's current layer (+1 RetrieveUnpublishedMultiple) and that
+    // layer's components (+1 GET /appmodulecomponents). Every component is there, so the action is sent as before: no write changes.
+    'GET /appmodulecomponents': 20,
     'GET /appmodules': 6,
-    'GET /appmodules()': 6,
-    'GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()': 22,
+    'GET /appmodules()': 7,
+    'GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()': 23,
     'GET /EntityDefinitions': 1,
     'GET /EntityDefinitions()': 10,
     'GET /EntityDefinitions()/Attributes': 2,

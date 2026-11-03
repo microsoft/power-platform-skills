@@ -20,7 +20,7 @@
 //   {
 //     "ok": true|false,
 //     "blocker": null | "az_missing" | "az_not_logged_in" | "az_timeout" | "pac_not_logged_in" | "pac_timeout"
-//                     | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
+//                     | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error" | "no_customization_role",
 //     "message": "human-readable next step",
 //     "warnings": ["..."],
 //     "azUser": "...",
@@ -36,6 +36,10 @@
 // below is the authoritative test. PAC is only used by the steps that run it and, when --env is omitted, to
 // read the environment; a missing/for-different-identity pac login is surfaced as a WARNING, not a hard
 // blocker.
+//
+// After a passing WhoAmI one more GET (`solutions?$select=solutionid&$top=1`, the first read a build makes)
+// checks the identity can read customizations: an HTTP 403 `0x80042f09` ("has not been assigned any roles")
+// is `ok: false` with blocker `no_customization_role`. Any other outcome of that read is a warning only.
 //
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
@@ -53,6 +57,9 @@ const PAC_PROBE_TIMEOUT_MS = 60000;
 // that ships this file can stand behind (see the header); naming one plugin's pac steps here is what made pcf
 // print model-apps' flows.
 const PAC_OPTIONAL_NOTE = 'That does not block a step that signs in with the az token alone: only a step that runs `pac` needs the login, and so does reading the environment when --env is omitted.';
+
+// The Dataverse error code of a read refused to a user who holds no security role (see the capability probe in main()).
+const NO_ROLE_CODE = '0x80042f09';
 
 // Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
 // the first positional arg, so a caller can copy the `--env` form here without silently passing
@@ -369,6 +376,46 @@ async function main() {
         message: `WhoAmI returned unexpected status ${whoRes.status}.`,
       })
     );
+  }
+
+  // 4) Capability probe. WhoAmI answers for ANY user the environment knows, role or not, so it said "ready" for an identity
+  //    that holds no security role: every customization read then fails, and the first build step is where the maker found out.
+  //    One read the build itself starts with (its solution) tells. Measured on an identity with no role:
+  //      GET solutions?$select=solutionid&$top=1  ->  HTTP 403
+  //      {"error":{"code":"0x80042f09","message":"The user with id <id> has not been assigned any roles. They need a role with the prvReadCustomization privilege."}}
+  //    (`sitemaps`, `roles` and `publishers` answered the same.) A COUNT of the user's roles would be wrong: privileges also come
+  //    through teams, so a user with no role of their own can read customizations. The code decides, never the words — the platform
+  //    answers in the caller's language. Any other outcome of the probe (another 403 code, a 5xx, a transport failure) proves nothing
+  //    about roles, so it is a warning and never a verdict: a false "no role" would send a working maker to an administrator.
+  //    https://learn.microsoft.com/power-platform/admin/security-roles-privileges
+  let probe = null;
+  try {
+    probe = await dataverseRequest(envUrl, 'GET', 'solutions?$select=solutionid&$top=1', null, { timeout: 30000 });
+  } catch (e) {
+    warnings.push(`Could not confirm the identity can read customizations (${e.message}). WhoAmI passed, so this is not taken as a missing role.`);
+  }
+  if (probe) {
+    const probeCode = probe.data && probe.data.error && probe.data.error.code;
+    if (probe.status === 403 && String(probeCode || '').toLowerCase() === NO_ROLE_CODE) {
+      const otherIdentity = pacUser && !identitiesMatch
+        ? ` Or sign in as the PAC user if that identity holds a role: \`az login --username ${pacUser}\`.`
+        : '';
+      return emit(
+        buildResult({
+          azUser,
+          pacUser,
+          envUrl,
+          identitiesMatch,
+          warnings,
+          whoAmI: { ok: true, userId: whoRes.data?.UserId, organizationId: whoRes.data?.OrganizationId },
+          blocker: 'no_customization_role',
+          message: `WhoAmI passed, but "${azUser}" has no security role in ${envUrl}, so it cannot read customizations (HTTP 403 ${NO_ROLE_CODE}: the prvReadCustomization privilege is missing). Ask an environment administrator to assign a role such as System Customizer.${otherIdentity}`,
+        })
+      );
+    }
+    if (probe.status < 200 || probe.status >= 300) {
+      warnings.push(`Could not confirm the identity can read customizations (HTTP ${probe.status}${probeCode ? ` ${probeCode}` : ''}). WhoAmI passed, so this is not taken as a missing role.`);
+    }
   }
 
   // A pac probe that ran out of time says THAT here too — its warning already does, and "not logged in" beside

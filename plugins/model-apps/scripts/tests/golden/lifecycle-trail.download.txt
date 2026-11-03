@@ -1,0 +1,127 @@
+# 136 requests, 0 publishes
+## after the last publish
+  4x GET /EntityDefinitions(<id>)?$select=LogicalName,IsCustomEntity -> 200
+  1x GET /EntityDefinitions(LogicalName='appaction')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='appmodule')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='appsetting')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.BooleanAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=TrueOption,FalseOption) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.DateTimeAttributeMetadata?$select=LogicalName,Format -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.DecimalAttributeMetadata?$select=LogicalName,MinValue,MaxValue,Precision -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.DoubleAttributeMetadata?$select=LogicalName,MinValue,MaxValue,Precision -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.FileAttributeMetadata?$select=LogicalName,MaxSizeInKB -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.ImageAttributeMetadata?$select=LogicalName,MaxSizeInKB,IsPrimaryImage -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.IntegerAttributeMetadata?$select=LogicalName,MinValue,MaxValue,Format -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,SchemaName,DisplayName,Targets -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MemoAttributeMetadata?$select=LogicalName,MaxLength -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsBaseCurrency,MinValue,MaxValue,Precision,PrecisionSource -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StateAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  2x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=LogicalName,MaxLength -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=LogicalName,MaxLength,FormatName,AutoNumberFormat -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IsCustomRelationship -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencedAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.BooleanAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=TrueOption,FalseOption) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsBaseCurrency,MinValue,MaxValue,Precision,PrecisionSource -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.StateAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  2x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=LogicalName,MaxLength -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=LogicalName,MaxLength,FormatName,AutoNumberFormat -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IsCustomRelationship -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencedAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.BooleanAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=TrueOption,FalseOption) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.DateTimeAttributeMetadata?$select=LogicalName,Format -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.IntegerAttributeMetadata?$select=LogicalName,MinValue,MaxValue,Format -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,SchemaName,DisplayName,Targets -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsBaseCurrency,MinValue,MaxValue,Precision,PrecisionSource -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.StateAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  2x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=LogicalName,MaxLength -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=LogicalName,MaxLength,FormatName,AutoNumberFormat -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IsCustomRelationship -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencedAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='savedquery')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='savedqueryvisualization')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='settingdefinition')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='solution')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='solutioncomponent')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='systemform')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='webresource')?$select=EntitySetName -> 200
+  1x GET /GlobalOptionSetDefinitions?$select=Name,Description,IsManaged,MetadataId -> 200
+  1x GET /agentconversationmessages?$select=agentconversationmessageid,message,messagesender,createdon&$filter=_regardingobjectid_value eq <id>&$orderby=createdon asc,versionnumber asc -> 200
+  1x GET /appactions?$select=appactionid,name,buttonlabeltext,contextvalue,type,statecode,_appmoduleid_value&$filter=ismanaged eq false and (contextvalue eq 'contact' or contextvalue eq 'contoso_project' or contextvalue eq 'contoso_tag' or contextvalue eq 'contoso_task') -> 200
+  2x GET /appmodulecomponents?$select=objectid&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 1 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 26 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 59 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 60 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62&$top=1 -> 200
+  1x GET /appmodules(<id>)?$select=appmoduleid -> 200
+  3x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
+  1x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,uniquename,description,aiappdescription&$filter=appmoduleid eq <id>&$top=1 -> 200
+  1x GET /appmodules?$select=appmoduleid&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  1x GET /appmodules?$select=uniquename&$filter=appmoduleid eq <id>&$top=1 -> 200
+  1x GET /appsettings?$select=value,_settingdefinitionid_value&$filter=_parentappmoduleid_value eq <id> and (_settingdefinitionid_value eq <id> or _settingdefinitionid_value eq <id>)&$top=10 -> 200
+  1x GET /organizations?$select=languagecode&$top=1 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name,returnedtypecode,description&$filter=savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> -> 200
+  1x GET /savedqueries?$select=savedqueryid,returnedtypecode&$filter=savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> or savedqueryid eq <id> -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid,name,primaryentitytypecode,description&$filter=savedqueryvisualizationid eq <id> -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid,primaryentitytypecode&$filter=savedqueryvisualizationid eq <id> -> 200
+  1x GET /settingdefinitions?$select=settingdefinitionid,uniquename&$filter=uniquename eq 'NewLookAlwaysOn' or uniquename eq 'HeaderAndNavigationRefresh'&$top=10 -> 200
+  1x GET /sitemaps(<id>)?$select=sitemapid -> 200
+  1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapname,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapxml,componentstate&$filter=sitemapid eq <id> -> 200
+  1x GET /solutioncomponents?$select=_solutionid_value&$filter=objectid eq <id> -> 200
+  1x GET /solutioncomponents?$select=objectid&$filter=_solutionid_value eq <id> and componenttype eq 9 -> 200
+  1x GET /solutioncomponents?$select=objectid,componenttype&$filter=_solutionid_value eq <id> and componenttype eq 29 -> 200
+  1x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
+  1x GET /solutions?$select=solutionid,uniquename,friendlyname,ismanaged,description&$filter=solutionid eq <id> -> 200
+  1x GET /solutions?$select=solutionid,uniquename,friendlyname,version,ismanaged&$expand=publisherid($select=publisherid,uniquename,customizationprefix,customizationoptionvalueprefix)&$filter=uniquename eq 'ContosoKitchen' -> 200
+  1x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,name,description,formxml,type,objecttypecode,istabletenabled,iscustomizable,componentstate,versionnumber -> 200
+  1x GET /systemforms?$select=formid,name,formactivationstate&$filter=objecttypecode eq 'contoso_project' and type eq 2 -> 200
+  1x GET /systemforms?$select=formid,name,formactivationstate&$filter=objecttypecode eq 'contoso_tag' and type eq 2 -> 200
+  1x GET /systemforms?$select=formid,name,formactivationstate&$filter=objecttypecode eq 'contoso_task' and type eq 2 -> 200
+  1x GET /systemforms?$select=formid,name,objecttypecode,description,formxml&$filter=formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> -> 200
+  1x GET /systemforms?$select=formid,name,type,objecttypecode&$filter=formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> -> 200
+  1x GET /systemforms?$select=formid,objecttypecode&$filter=formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> -> 200
+  1x GET /systemforms?$select=name,description&$filter=formid eq <id>&$top=1 -> 200
+  4x GET /uxagentprojectfiles(<id>)/filecontent/$value -> 200
+  1x GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id> -> 200
+  1x GET /uxagentprojects(<id>)?$select=uxagentprojectid,name -> 200
+  1x GET /uxagentprojects?$select=uxagentprojectid,name -> 200
+  1x GET /webresourceset?$select=content&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
+  1x GET /webresourceset?$select=name,displayname,webresourcetype,content,ismanaged&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
+# shapes

@@ -761,6 +761,47 @@ const xamlStages = (row) => [...row.xaml.matchAll(/DisplayName="StageStep\d+: ([
 const xamlStageIds = (row) => [...row.xaml.matchAll(/x:Key="StageId">([^<]+)</g)].map((m) => m[1]);
 const xamlSteps = (row) => [...row.xaml.matchAll(/DisplayName="StepStep\d+: ([^"]*)"/g)].map((m) => m[1]);
 
+// REAL BUNDLES: a flow the PREVIOUS release's SDK created, whose copy (stamped with its older projection) is still in the workspace —
+// the build's own app folder workspace — edited by this release's SDK on that SAME workspace, the first thing it does there. The stage
+// plan fetches the flow with `overwrite: true`, so the old copy is replaced by a current one and pushed: the edit goes over the wire and
+// lands exactly as it does for a flow this release created.
+const { skipWithoutPrevious, requirePrevious } = require('./helpers/previous-bundle.js');
+test('REAL BUNDLES: a flow the previous release created, its old copy still in the workspace, is edited by this release as one it created', { skip: skipWithoutPrevious() }, async () => {
+  const d = DEPLOYED();
+  const want = flowOf([{ ...d.stages[0], name: 'Intake' }, stage('Resolve', 'Notes:new_notes', 'Confirmed with customer:new_owner', 'Region:new_region'), d.stages[2], stage('Archive', 'Notes:new_notes')]);
+  const run = async (creatorBundle) => {
+    const fake = fakeWorkflows();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bpf-upgrade-'));
+    tempDirs.push(dir);
+    const open = async (bundle) => {
+      const sdk = bundle.createMakerSdk({ workspaceStorage: bundle.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: fake.client });
+      await sdk.initWorkspace();
+      return sdk;
+    };
+    const creator = await open(creatorBundle);
+    const art = await creator.createArtifact('bpf', bpfDef({ ...d, status: 'Active' }));
+    await creator.pushArtifact('bpf', art.id);
+    const metaFile = fs.readdirSync(path.join(dir, '.metadata'), { recursive: true }).find((f) => path.basename(String(f)) === `${art.id}.meta.json`);
+    assert.ok(metaFile, 'the SDK keeps the flow\'s metadata in the workspace');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, '.metadata', String(metaFile)), 'utf8'));
+    fake.log.length = 0;
+    const sdk = await open(require(BUNDLE));
+    const inspected = await inspectBpfStages(sdk, want, art.id);
+    assert.strictEqual(inspected.kind, 'edit', JSON.stringify(inspected));
+    const pushed = await applyBpfStages(sdk, want, art.id, inspected.plan, {});
+    const row = fake.rows.get(art.id);
+    return { projection: meta.projectionVersion, pushed, wire: fake.log.map((l) => `${l.verb} ${l.keys.join(',')} ${l.ifMatch ? 'If-Match' : ''}`), stages: xamlStages(row), steps: xamlSteps(row), statecode: row.statecode };
+  };
+  const upgrade = await run(requirePrevious());
+  const control = await run(require(BUNDLE));
+  assert.ok(upgrade.projection < control.projection, `the previous release's copy is an old one (${upgrade.projection} < ${control.projection})`);
+  assert.strictEqual(upgrade.pushed.saved, true);
+  assert.deepStrictEqual(upgrade.stages, ['Intake', 'Resolve', 'Close', 'Archive']);
+  assert.strictEqual(upgrade.statecode, 1, 'the flow is still Active');
+  const comparable = ({ wire, stages, steps, statecode }) => ({ wire, stages, steps, statecode });
+  assert.deepStrictEqual(comparable(upgrade), comparable(control), 'the same requests and the same flow as for a flow this release created');
+});
+
 test('REAL BUNDLE: an Active flow\'s edits go over the wire as ONE conditional change set, and the flow stays Active', async () => {
   const { sdk, fake, id, row } = await realBpf();
   const idsBefore = xamlStageIds(row());

@@ -1130,10 +1130,19 @@ const KIND_HANDLERS = {
     //    table owned elsewhere; and
     //  · any non-custom/system table (account, contact, …) — never created by a build, and
     //    Dataverse refuses to delete it, so a delete attempt would only surface a noisy error.
-    // A table that can't be discovered is treated as already-gone: fall through to the delete
+    // A table the read answered and did not list is treated as already-gone: fall through to the delete
     // call, which tolerates the cosmetic/absent 404 (see tolerateNotFound).
     //
-    // One failure of that read is not "can't be discovered": an answer that is no list of tables — a
+    // A read that FAILED is not "not listed", and neither is a list the read could not finish. The bundled SDK reads
+    // the table list to its end and refuses an answer that says more rows exist without a link to them
+    // (`@Microsoft.Dynamics.CRM.morerecords`), or whose next page fails, e.g.
+    //   HTTP 200 from …/EntityDefinitions?$select=…: findTables: paginated read returned a page that says more rows exist (…)
+    //   HTTP 503 from …/EntityDefinitions?$skiptoken=…: Service Unavailable
+    // — a refusal of the read (403) is the same. After any of them nothing says the table is there, gone, or a
+    // system table, so the step fails CLOSED with the reason (a DELETE from half an answer could be the one sent
+    // to a system table the unread rest would have shown), and a re-run once the read answers finishes it.
+    //
+    // One failure of that read says more: an answer that is no list of tables — a
     // sign-in or proxy page, `{}`, `null`, which lib/maker-sdk.js turns into TABLES_UNREADABLE — says the
     // environment is not answering as Dataverse. The SDK reads it as "no tables", so the system-table check
     // below would go unmade; and where every answer is such a page, the DELETE that follows is answered
@@ -1147,20 +1156,24 @@ const KIND_HANDLERS = {
       }
       let table = null;
       // Whether the read said if the table was there before its delete: `true` it listed it, `false` it answered and listed no such
-      // table, `undefined` it could not tell — it failed, or its matches were cut at `top` (findTables reads every table and keeps the
+      // table, `undefined` it could not tell — its matches were cut at `top` (findTables reads every table and keeps the
       // first 50 whose names contain the query, so a list of 50 may have left the table out).
       let seen;
-      try {
-        const hits = await sdk.findTables(target.logical, { top: 50 });
-        table = (hits || []).find((t) => String(t.logicalName).toLowerCase() === target.logical) || null;
-        if (table) seen = true;
-        else if ((hits || []).length < 50) seen = false;
-      } catch (err) {
-        const unreadable = unreadableAnswer(err);
-        if (unreadable) {
-          throw Object.assign(new Error(`table '${target.logical}' was not deleted: ${unreadable.message}`), { code: unreadable.code, cause: unreadable, failClosed: true });
+      // Every SDK a script makes has findTables (tests/sdk-surface-contract.test.js); a stand-in without it makes no read, as before.
+      if (typeof (sdk && sdk.findTables) === 'function') {
+        try {
+          const hits = await sdk.findTables(target.logical, { top: 50 });
+          table = (hits || []).find((t) => String(t.logicalName).toLowerCase() === target.logical) || null;
+          if (table) seen = true;
+          else if ((hits || []).length < 50) seen = false;
+        } catch (err) {
+          const unreadable = unreadableAnswer(err);
+          if (unreadable) {
+            throw Object.assign(new Error(`table '${target.logical}' was not deleted: ${unreadable.message}`), { code: unreadable.code, cause: unreadable, failClosed: true });
+          }
+          const why = String((err && err.message) || err).trim();
+          throw Object.assign(new Error(`table '${target.logical}' was not deleted: the environment's tables could not be read, so whether it is there, and whether it is a system table, is unknown (${why}). Run the teardown again once the environment answers.`), { code: (err && err.code) || 'TABLE_LIST_UNREADABLE', cause: err, failClosed: true });
         }
-        table = null;
       }
       if (table && table.isCustom === false) {
         return { items: [], skipReason: 'system table — not created by this build' };

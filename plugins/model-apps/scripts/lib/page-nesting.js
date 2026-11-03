@@ -4,10 +4,10 @@
 // TypeScript parses and transforms a page with recursive functions, one level of recursion per nested JSX element (and one more per nested
 // expression). Around a thousand nested elements exhaust V8's default stack, and the compiler then throws
 //   RangeError: Maximum call stack size exceeded
-// out of `transpileModule`. The SDK compiles a page on every push that changes its source and does not catch that, so without this module the
-// maker was shown a bare RangeError — or, through the page backend's own settling of a push that "got no usable answer", a message about a
+// out of `transpileModule`. The SDK compiles a page on every push that changes its source, and the bundles before model-apps 2.20.6 did not catch that, so
+// without this module the maker was shown a bare RangeError — or, through the page backend's own settling of a push that "got no usable answer", a message about a
 // create that "was sent twice", although the SDK compiles BEFORE it writes anything: the page was not written to the service (its metadata reads
-// may already have been made).
+// may already have been made). The bundle now refuses such a page itself (SDK_COMPILE_DEPTH_EXCEEDED below); this module keeps the plugin's code for both.
 //
 // The depth that overflows is not a fixed number: the first compile in a process runs in the interpreter, whose frames are larger, so it
 // overflows at roughly two thirds of the depth that a later, optimised, compile reaches (measured: a page nested 600 deep overflowed a cold
@@ -27,6 +27,22 @@ const PAGE_NESTING_MESSAGE = 'the elements of the page nest too deeply to compil
 function isStackOverflow(error) {
   return Boolean(error) && typeof error === 'object' && error.name === 'RangeError'
     && typeof error.message === 'string' && error.message.startsWith('Maximum call stack size exceeded');
+}
+
+// The bundled SDK refuses the same page itself: every stage of its compile — TypeScript's parse, emit and checker, and its own walks over the tree — sits behind one
+// boundary that turns a stack overflow into an SdkError with this code, before any write. The guard below fires first wherever the overflow is in one of the compiler's
+// entry points (measured: deep elements, and chains of operators, calls, brackets and parentheses all overflow in the parse), so the SDK's code reaches a caller only
+// from a stage the guard does not wrap. It is the same refusal, so the page backend reports it as this module's (lib/genpage-sdk.js): one code and one instruction for the
+// maker, whichever layer fired.
+const SDK_COMPILE_DEPTH_EXCEEDED = 'GENPAGE_COMPILE_DEPTH_EXCEEDED';
+
+// `error` as the maker is told it: the SDK's compile-depth refusal becomes `makeError(PAGE_NESTING_TOO_DEEP, PAGE_NESTING_MESSAGE)`, keeping the SDK's own error as its
+// `cause`; every other error is returned as it is. The caller decides that `error` is the SDK's (an SdkError): the code alone is not the proof.
+function asPageNestingRefusal(error, makeError) {
+  if (!error || typeof error !== 'object' || error.code !== SDK_COMPILE_DEPTH_EXCEEDED) return error;
+  const refusal = makeError(PAGE_NESTING_TOO_DEEP, PAGE_NESTING_MESSAGE);
+  Object.defineProperty(refusal, 'cause', { value: error, configurable: true, writable: true, enumerable: false });
+  return refusal;
 }
 
 // The compiler's entry points that recurse over a page's syntax: the transpile (which also runs the SDK's own walk over the tree, as a transformer),
@@ -59,4 +75,4 @@ function guardPageNesting(ts, makeError) {
   return guarded;
 }
 
-module.exports = { PAGE_NESTING_TOO_DEEP, PAGE_NESTING_MESSAGE, isStackOverflow, guardPageNesting };
+module.exports = { PAGE_NESTING_TOO_DEEP, PAGE_NESTING_MESSAGE, SDK_COMPILE_DEPTH_EXCEEDED, isStackOverflow, guardPageNesting, asPageNestingRefusal };

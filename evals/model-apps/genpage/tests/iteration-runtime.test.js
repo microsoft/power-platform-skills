@@ -1,8 +1,10 @@
 'use strict';
 // Eval 26's customer choices, run the way the page is compiled. The bundled SDK compiles every page with TypeScript's
-// `transpileModule` and `{ target: ES5, module: ES2020, jsx: React }` — no `downlevelIteration` and no type check — and under
-// those options a spread copies by `length` and index. A Map's iterator has neither, so `return [...seen.values()];`
-// contributed nothing: the page's "Change customer" Dropdown opened with no options, and the compile reported nothing.
+// `transpileModule` and `{ target: ES5, module: ES2020, jsx: React, downlevelIteration: true }` — no type check. The bundles before
+// model-apps 2.20.6 compiled without `downlevelIteration`, as an older maker portal and `pac` still do, and under those options a spread
+// copies by `length` and index. A Map's iterator has neither, so `return [...seen.values()];` contributed nothing: the page's "Change
+// customer" Dropdown opened with no options, and the compile reported nothing. The committed page converts with `Array.from`, which
+// is right under both.
 //
 // The page's own `choices` callback and the trusted top-level helpers it calls are lifted out of the committed source with the
 // vendored parser (never by line number), compiled alone with the SDK's options and run on the fixture's synthetic rows
@@ -25,9 +27,10 @@ const HELPERS = ['LOOKUP_GUID', 'LOOKUP_QUALIFIED', 'normalizeLookupReference', 
 
 let typescript;
 const ts = () => (typescript ||= loadVendoredTypeScript());
-// The vendored SDK's own compile options, exactly: a test is never made to pass by changing the target or adding downlevelIteration.
-const sdkCompile = (source) => ts().transpileModule(source, {
-  compilerOptions: { target: ts().ScriptTarget.ES5, module: ts().ModuleKind.ES2020, jsx: ts().JsxEmit.React },
+// The vendored SDK's own compile options, exactly (plugins/model-apps/scripts/tests/iteration-emit.test.js holds them to what the bundle
+// stores), and those of a compiler without iterator support: a test is never made to pass by changing either.
+const sdkCompile = (source, { iteratorSupport = true } = {}) => ts().transpileModule(source, {
+  compilerOptions: { target: ts().ScriptTarget.ES5, module: ts().ModuleKind.ES2020, jsx: ts().JsxEmit.React, ...(iteratorSupport ? { downlevelIteration: true } : {}) },
   reportDiagnostics: true,
 });
 
@@ -61,7 +64,7 @@ function pieces(source) {
 
 // The callback compiled with the SDK's options and called with `rows` — optionally with its final return expression replaced,
 // which is how the control below puts the iterator spread back without touching the committed file.
-function choicesOf(rows, { returnExpression } = {}) {
+function choicesOf(rows, { returnExpression, iteratorSupport = true } = {}) {
   const { file, helpers, callback, returned } = pieces(PAGE);
   let text = callback.getText(file);
   if (returnExpression !== undefined) {
@@ -70,7 +73,7 @@ function choicesOf(rows, { returnExpression } = {}) {
     text = `${text.slice(0, start)}${returnExpression}${text.slice(end)}`;
   }
   const source = `${helpers.join('\n\n')}\n\nconst choicesOf = (opportunities: any[]) => (${text})();\n`;
-  const { outputText, diagnostics } = sdkCompile(source);
+  const { outputText, diagnostics } = sdkCompile(source, { iteratorSupport });
   assert.deepEqual((diagnostics || []).map((d) => `TS${d.code}`), [], 'the helpers and the callback compile without a diagnostic');
   const run = vm.runInNewContext(`${outputText}\n;choicesOf;`, {}, { filename: 'customer-lookup-choices.js' });
   return { choices: JSON.parse(JSON.stringify(run(rows))), outputText };
@@ -97,14 +100,18 @@ test('eval 26: the customer choices, compiled as the SDK compiles the page, are 
   assert.deepEqual(expected.map((choice) => choice.label), ['Fabrikam', 'Rene Valdes', 'Contoso', 'Contoso']);
   assert.deepEqual(expected.slice(2).map((choice) => choice.table), ['account', 'contact']);
   assert.equal(expected[2].id, expected[3].id, 'one GUID in two tables stays two choices');
-  const { choices } = choicesOf(ROWS.rows.map((entry) => entry.row));
-  assert.deepEqual(choices, expected);
+  assert.deepEqual(choicesOf(ROWS.rows.map((entry) => entry.row)).choices, expected);
+  assert.deepEqual(choicesOf(ROWS.rows.map((entry) => entry.row), { iteratorSupport: false }).choices, expected, 'and as a compiler without iterator support compiles it');
 });
 
-test('eval 26: the same callback with the Map iterator spread back in offers no choice under the SDK options', () => {
-  const { choices, outputText } = choicesOf(ROWS.rows.map((entry) => entry.row), { returnExpression: '[...seen.values()]' });
-  assert.deepEqual(choices, [], 'the spread copies by length and index, which an iterator does not have');
-  assert.match(outputText, /__spreadArray\(\[\], seen\.values\(\), true\)/, 'ES5 emit copies the iterator as an array-like');
+test('eval 26: the same callback with the Map iterator spread back in offers every choice under the SDK options and none without iterator support', () => {
+  const rows = ROWS.rows.map((entry) => entry.row);
+  const sdk = choicesOf(rows, { returnExpression: '[...seen.values()]' });
+  assert.deepEqual(sdk.choices, recordedChoices(), 'the SDK reads the iterator through Symbol.iterator');
+  assert.match(sdk.outputText, /__spreadArray\(\[\], __read\(seen\.values\(\)\), false\)/);
+  const legacy = choicesOf(rows, { returnExpression: '[...seen.values()]', iteratorSupport: false });
+  assert.deepEqual(legacy.choices, [], 'without iterator support the spread copies by length and index, which an iterator does not have');
+  assert.match(legacy.outputText, /__spreadArray\(\[\], seen\.values\(\), true\)/, 'ES5 emit without iterator support copies the iterator as an array-like');
 });
 
 test('eval 26: the committed callback converts the iterator before returning it, and keeps its dedupe loop', () => {

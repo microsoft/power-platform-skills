@@ -1,0 +1,371 @@
+'use strict';
+// THE REQUEST TRAIL OF THE WHOLE LIFECYCLE, pinned request by request, over the REAL vendored SDK.
+//
+// lifecycle-matrix-real-bundle.test.js pins what each phase WRITES (a count per `METHOD resource`) and what it PUBLISHES, and holds its
+// reads under a ceiling. That leaves three kinds of change invisible: a read added or removed under the ceiling (a new SDK that reads an
+// app's token once more after each update), a body that gains or loses a member (a view update that now sends `returnedtypecode`, a date
+// column that now states its behaviour), and requests that reorder. Each is a change a maker can observe — in the requests the
+// environment sees, its audit and its throttling budget — and at an SDK uptake each must be explained by a release-note line. This file
+// makes every such change fail a named test with a precise diff instead of being found by luck or on a live environment.
+//
+// The lifecycle is the kitchen-sink App Spec (helpers/lifecycle-harness.js) over the stateful fake Dataverse
+// (helpers/fake-lifecycle-org.js), with another maker's work in the environment first, run as a maker runs it:
+//   build     first build (--apply --publish --sample-data --verify)
+//   rebuild   the same spec, unchanged
+//   edit      a rebuild of an EDITED spec: a column added to two tables (one a Date and Time column), a view's columns and another
+//             view's description changed, the app's description changed and the page's source changed
+//   download  the app downloaded to a spec
+//   verify    the edited spec verified
+//   teardown  the edited spec torn down
+//
+// Each phase's golden (scripts/tests/golden/lifecycle-trail.<phase>.txt) lists every HTTP request: method, path with query (GUIDs and
+// timestamps masked), the SHAPE of its body — member names, value types and how many elements of each shape a list holds, never values: `{name:string,type:number}` — by a short hash
+// into the legend at the end, and the status the fake answered; a `$batch` lists its operations, in their order, below it. The requests
+// are cut into SEGMENTS by the phase's publishes (each PublishXml, with EVERYTHING its ParameterXml names, is a segment's last line), and the segments are
+// in order: a write that moves to the other side of a publish — so that the publish no longer makes it live, or makes it live early —
+// is a difference. WITHIN a segment the requests are listed sorted and counted (`3x GET …`), not in the order they were sent: the build
+// creates and enriches the views of different tables concurrently, and measured over eight runs under load the interleaving of those
+// requests varied (one run in two) while the multiset of every segment never did. So what is pinned is: the exact multiset of requests
+// (with query, body shape and status), the order and content of the publishes, and which publish each request precedes. What is NOT
+// pinned is the order of two requests between the same two publishes — the fake refuses a request out of dependency order (a column of
+// a table not yet created), and the lifecycle tests prove what each phase leaves behind.
+//
+// WHEN THIS FAILS: the message prints, per phase, the requests added and removed (counted by `METHOD resource`) and the first lines where
+// the golden differs. Every difference must be explained — at an SDK uptake, by a release-note line (`Changed` for a behaviour, `Fixed`
+// for a bug the new SDK fixes); in a skill change, by the change. Then regenerate the goldens ON A DEVELOPER MACHINE and review their diff:
+//   UPDATE_GOLDENS=1 node --test scripts/tests/lifecycle-trail-golden-real-bundle.test.js
+// (PowerShell: `$env:UPDATE_GOLDENS='1'; node --test …; Remove-Item Env:UPDATE_GOLDENS`.) A run that rewrites a golden FAILS, so it is
+// never what turns a run green: run again without UPDATE_GOLDENS. Under CI (CI, GITHUB_ACTIONS or TF_BUILD set) UPDATE_GOLDENS=1 is
+// refused before anything runs or is written.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
+const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, appUniqueName } = require('./helpers/lifecycle-harness.js');
+const { GOLDEN_DIR } = require('./helpers/golden.js');
+
+const PHASES = ['build', 'rebuild', 'edit', 'download', 'verify', 'teardown'];
+const goldenFile = (phase) => path.join(GOLDEN_DIR, `lifecycle-trail.${phase}.txt`);
+
+// The fake mints GUIDs for every row it creates, and the SDK mints some of its own (a page's conversation messages): masked, so the
+// golden pins what is asked for and not which id it was given. A timestamp in a query (a modifiedon filter) likewise.
+const GUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+const TIMESTAMP = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z?/g;
+const mask = (text) => String(text).replace(GUID, '<id>').replace(TIMESTAMP, '<time>');
+
+// A body's shape: member names and value types, recursively — `{AttributeType:string,MaxLength:number,DateTimeBehavior:{Value:string}}`.
+// An array is its elements' shapes COUNTED, in sorted order — `Attributes:[1x{…DateTimeBehavior…}|11x{…}]` — so one element more of the
+// same shape (a column more in one table create) changes it, while the order the elements were listed in does not. A raw body (a page
+// file's content) is `string`/`bytes`.
+function shape(value) {
+  if (value === null) return 'null';
+  if (Buffer.isBuffer(value)) return 'bytes';
+  if (Array.isArray(value)) {
+    const counts = new Map();
+    for (const element of value.map(shape)) counts.set(element, (counts.get(element) || 0) + 1);
+    return `[${[...counts.keys()].sort().map((element) => `${counts.get(element)}x${element}`).join('|')}]`;
+  }
+  if (typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${mask(key)}:${shape(value[key])}`).join(',')}}`;
+  return typeof value;
+}
+
+// What a publish names, WHOLE: the PublishXml's ParameterXml as a tree, every element kept, children in sorted order (the order a build
+// lists tables in is not what it publishes), GUIDs masked —
+//   <importexportxml><entities><entity>contoso_task</entity><entity>contoso_project</entity></entities><appmodules><appmodule>{id}</appmodule></appmodules></importexportxml>
+//   -> importexportxml(appmodules(appmodule=#id) entities(entity=contoso_project entity=contoso_task))
+// so a publish that names one more table, one more kind of component (an option set, a site map) or one fewer is a difference. A
+// ParameterXml this reader cannot take apart (an attribute, a self-closing element, text outside the one document element or beside child
+// elements, a second root) is kept as it was sent, masked: never dropped, never mistaken for a valid envelope.
+// See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/publishxml
+function publishTargetsOf(parameterXml) {
+  // A GUID (braced or not) is written #id here, not <id>, which would read as an element.
+  const xml = String(parameterXml).replace(/\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?/g, '#id').replace(TIMESTAMP, '#time');
+  const token = /<(\/?)([A-Za-z_][\w.-]*)>|([^<]+)/g;
+  const root = { children: [] };
+  const stack = [root];
+  for (const m of xml.matchAll(token)) {
+    const top = stack[stack.length - 1];
+    if (m[3] !== undefined) { if (m[3].trim()) top.text = (top.text || '') + m[3].trim(); continue; }
+    if (m[1]) {
+      if (stack.length < 2 || top.tag !== m[2]) return `raw:${xml}`;
+      stack.pop();
+    } else {
+      const node = { tag: m[2], children: [] };
+      top.children.push(node);
+      stack.push(node);
+    }
+  }
+  if (stack.length !== 1 || xml.replace(token, '') !== '') return `raw:${xml}`;
+  // Only ONE element-only document is taken apart: exactly one root, no text outside it, and no element that holds both text and
+  // elements. Anything else — `undefined<importexportxml>…`, a trailing word, `<appmodules>unexpected<appmodule>…`, two roots — is
+  // kept raw, so it can never read as the valid envelope it resembles.
+  const mixed = (node) => (node.children.length > 0 && node.text !== undefined) || node.children.some(mixed);
+  if (root.text !== undefined || root.children.length !== 1 || mixed(root.children[0])) return `raw:${xml}`;
+  const render = (node) => (node.children.length ? `${node.tag}(${node.children.map(render).sort().join(' ')})` : `${node.tag}=${node.text || ''}`);
+  return render(root.children[0]);
+}
+// One phase's golden text, and the shapes its lines refer to by hash (a hash, not a running number, so one new shape does not renumber
+// every later line of the diff).
+function trailOf(org, step) {
+  const legend = new Map();
+  const ref = (body) => {
+    if (body === undefined) return '';
+    const s = shape(body);
+    const hash = crypto.createHash('sha256').update(s).digest('hex').slice(0, 8);
+    legend.set(hash, s);
+    return ` #${hash}`;
+  };
+  const publishes = org.requests.slice(step.mark, step.end).filter((r) => r.path === '/PublishXml').map((r) => publishTargetsOf(r.body && r.body.ParameterXml));
+  const segments = [[]];
+  for (const r of org.requests.slice(step.mark, step.end)) {
+    const unit = [`${r.method} ${mask(r.path)}${r.operations ? '' : ref(r.body)} -> ${r.status}`];
+    for (const op of r.operations || []) unit.push(`      > ${op.method} ${mask(op.path)}${ref(op.body)}`);
+    segments[segments.length - 1].push(unit.join('\n'));
+    if (r.path === '/PublishXml') segments.push([]);
+  }
+  const lines = [`# ${step.end - step.mark} requests, ${publishes.length} publishes`];
+  segments.forEach((units, i) => {
+    if (i === segments.length - 1 && !units.length) return;
+    lines.push(i < publishes.length ? `## up to publish ${i + 1}: ${publishes[i]}` : '## after the last publish');
+    const counts = new Map();
+    for (const unit of units) counts.set(unit, (counts.get(unit) || 0) + 1);
+    for (const unit of [...counts.keys()].sort()) lines.push(`${String(counts.get(unit)).padStart(3)}x ${unit}`);
+  });
+  const legendLines = [...legend].sort(([a], [b]) => a.localeCompare(b)).map(([hash, s]) => `#${hash} ${s}`);
+  return [...lines, '# shapes', ...legendLines].join('\n') + '\n';
+}
+
+// The edits of the `edit` phase: one of each kind a maker makes most, each an existing artifact the build changes in place.
+function editedSpec() {
+  const spec = kitchenSinkSpec();
+  spec.app.description = 'One app that uses every feature, edited.';
+  spec.entities.find((e) => e.schemaName === 'contoso_tag').columns.push({ schemaName: 'contoso_color', displayName: 'Color', type: 'Text', maxLength: 50 });
+  spec.entities.find((e) => e.schemaName === 'contoso_task').columns.push({ schemaName: 'contoso_start', displayName: 'Start', type: 'DateTime' });
+  spec.views.find((v) => v.name === 'Open Tasks').columns.push('contoso_done');
+  spec.views.find((v) => v.name === 'Open Projects').description = 'Projects still running, edited.';
+  return spec;
+}
+const EDITED_PAGE_SOURCE = "import * as React from 'react';\nexport default function KitchenPage() { return <div>Kitchen, edited</div>; }\n";
+
+let lifecycleP;
+const lifecycle = () => lifecycleP || (lifecycleP = runLifecycle());
+async function runLifecycle() {
+  const org = createLifecycleOrg();
+  const harness = createLifecycleHarness(org, makeTempDir('lifecycle-trail-'));
+  await seedForeignWork(org);
+  const spec = kitchenSinkSpec();
+  const edited = editedSpec();
+  const out = { org, steps: {} };
+  const stage = async (phase, fn) => { out.steps[phase] = await harness.measure(fn); };
+  await stage('build', () => harness.build(spec));
+  await stage('rebuild', () => harness.build(spec));
+  fs.writeFileSync(path.join(harness.appDir, 'KitchenPage.tsx'), EDITED_PAGE_SOURCE);
+  await stage('edit', () => harness.build(edited));
+  await stage('download', () => harness.download(appUniqueName(edited), path.join(harness.appDir, '..', 'download')));
+  await stage('verify', () => harness.verify(edited));
+  await stage('teardown', () => harness.teardown(edited));
+  return out;
+}
+
+// `METHOD resource` counts of a golden's requests (a `$batch`'s operations counted too, marked), for the summary of a difference: the
+// resource as lifecycle-matrix-real-bundle.test.js names it, keys and query left out ("GET appmodules", "PATCH savedqueries").
+//   " 17x POST /AddSolutionComponent #3c0a1b2d -> 200"    a request, sent 17 times in its segment
+//   "      > PATCH /uxagentprojectfiles(<id>)/filecontent #…"   an operation of the `$batch` above it, once per time that batch was sent
+function countsOf(text) {
+  const counts = new Map();
+  let times = 0;
+  const add = (key, n) => counts.set(key, (counts.get(key) || 0) + n);
+  const resourceOf = (where) => where.replace(/\?.*$/, '').replace(/^\//, '').replace(/\((?:[^()']|'[^']*')*\)/g, '');
+  for (const line of text.split('\n')) {
+    const request = /^\s*(\d+)x (GET|POST|PATCH|PUT|DELETE) (\S+)/.exec(line);
+    if (request) { times = Number(request[1]); add(`${request[2]} ${resourceOf(request[3])}`, times); continue; }
+    const operation = /^\s+> (GET|POST|PATCH|PUT|DELETE) (\S+)/.exec(line);
+    if (operation) add(`(in a $batch) ${operation[1]} ${resourceOf(operation[2])}`, times);
+  }
+  return counts;
+}
+
+// A golden's requests as `segment heading -> request (its body shapes written out, its batch operations under it) -> count`, and its
+// publishes, so two goldens can be compared request by request whatever the hashes and line numbers.
+function unitsOf(text) {
+  const lines = text.split('\n');
+  const legend = new Map(lines.filter((l) => /^#[0-9a-f]{8} /.test(l)).map((l) => [l.slice(0, 9), l.slice(10)]));
+  const spell = (line) => line.replace(/#[0-9a-f]{8}\b/g, (hash) => legend.get(hash) || hash);
+  const units = new Map();
+  const publishes = [];
+  let heading = '';
+  let current = null;
+  for (const line of lines) {
+    if (line === '# shapes') break;
+    if (line.startsWith('## ')) { heading = line.slice(3); const m = /^up to publish \d+: (.*)$/.exec(heading); if (m) publishes.push(m[1]); continue; }
+    const request = /^\s*(\d+)x (.*)$/.exec(line);
+    if (request) { current = { key: `${heading}\n    ${spell(request[2])}`, count: Number(request[1]) }; units.set(current.key, (units.get(current.key) || 0) + current.count); continue; }
+    if (current && /^\s+> /.test(line)) {
+      // An operation belongs to the batch above it: re-key that unit with the operation appended.
+      const count = units.get(current.key) - current.count;
+      if (count) units.set(current.key, count); else units.delete(current.key);
+      current.key = `${current.key}\n      ${spell(line.trim())}`;
+      units.set(current.key, (units.get(current.key) || 0) + current.count);
+    }
+  }
+  return { units, publishes };
+}
+
+// What a reader needs to explain a difference: the requests added and removed by `METHOD resource`, the publishes if they changed, and
+// each request that is in one golden and not (as often) in the other, in its segment, with its body shapes written out.
+function describeDifference(phase, expected, actual) {
+  const before = countsOf(expected);
+  const after = countsOf(actual);
+  const moved = [...new Set([...before.keys(), ...after.keys()])].sort()
+    .map((key) => [key, (after.get(key) || 0) - (before.get(key) || 0)]).filter(([, delta]) => delta !== 0)
+    .map(([key, delta]) => `    ${delta > 0 ? '+' : ''}${delta} ${key}`);
+  const was = unitsOf(expected);
+  const now = unitsOf(actual);
+  const clip = (text) => text.split('\n').map((l) => (l.length > 400 ? `${l.slice(0, 400)}…` : l)).join('\n');
+  const changed = [...new Set([...was.units.keys(), ...now.units.keys()])].sort()
+    .filter((key) => (was.units.get(key) || 0) !== (now.units.get(key) || 0))
+    .map((key) => `  [${was.units.get(key) || 0}x before, ${now.units.get(key) || 0}x now] in "${clip(key)}`.replace('\n', '":\n'));
+  const LIMIT = 30;
+  return [
+    `The ${phase} phase's request trail differs from scripts/tests/golden/lifecycle-trail.${phase}.txt.`,
+    moved.length ? `  Requests added (+) and removed (-), by METHOD resource:\n${moved.join('\n')}` : '  The same requests by METHOD resource: a query, a body shape, a status, or the publish a request precedes differs.',
+    JSON.stringify(was.publishes) === JSON.stringify(now.publishes) ? '' : `  The publishes were:\n    ${was.publishes.join('\n    ')}\n  and are now:\n    ${now.publishes.join('\n    ')}`,
+    `  Each request that differs (${changed.length}${changed.length > LIMIT ? `, the first ${LIMIT}` : ''}):`,
+    ...changed.slice(0, LIMIT),
+    '  Explain EVERY difference — at an SDK uptake by a release-note line (Changed / Fixed), otherwise by the change that made it —',
+    '  then regenerate with UPDATE_GOLDENS=1 and review the golden\'s diff.',
+  ].filter(Boolean).join('\n');
+}
+// The CI systems this repository's checks run on say so in the environment: GitHub Actions sets CI and GITHUB_ACTIONS, Azure Pipelines
+// TF_BUILD. See https://docs.github.com/actions/learn-github-actions/variables#default-environment-variables
+const inCi = (env) => ['CI', 'GITHUB_ACTIONS', 'TF_BUILD'].some((name) => env[name] && !/^(?:false|0)$/i.test(env[name]));
+function regenerationRefusal(env) {
+  if (env.UPDATE_GOLDENS !== '1' || !inCi(env)) return null;
+  return 'UPDATE_GOLDENS=1 is refused under CI: a CI run compares the request trail with the committed goldens and never rewrites them. Regenerate on a developer machine, review the diff, and commit it.';
+}
+
+// Compare a phase's trail with its golden. With UPDATE_GOLDENS=1 (never under CI) a golden that differs is rewritten AND the run fails,
+// so a regenerated golden is never what turns a run green: review `git diff`, then run again without it. A golden that already holds the
+// trail is left alone and passes.
+function settleGolden(phase, file, actual, env = process.env) {
+  const refused = regenerationRefusal(env);
+  if (refused) assert.fail(refused);
+  // A Windows checkout may turn the committed LF into CRLF (helpers/golden.js): compare content, not line endings.
+  const expected = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n') : null;
+  if (actual === expected) return;
+  if (env.UPDATE_GOLDENS === '1') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, actual);
+    assert.fail(`regenerated ${path.basename(file)}: review its diff and explain every change, then run again without UPDATE_GOLDENS (a run that regenerates never passes).`);
+  }
+  assert.fail(expected === null ? `${path.basename(file)} is missing: regenerate it with UPDATE_GOLDENS=1 on a developer machine.` : describeDifference(phase, expected, actual));
+}
+
+for (const phase of PHASES) {
+  test(`lifecycle trail: the ${phase} phase sends exactly the requests, bodies and publishes it sent before`, async (t) => {
+    // Refused before the lifecycle runs: a CI run that asks to regenerate does no work and fails.
+    const refused = regenerationRefusal(process.env);
+    if (refused) assert.fail(refused);
+    const run = await lifecycle();
+    const step = run.steps[phase];
+    if (step.error) throw step.error;
+    // A phase that failed would pin a failure's trail: the lifecycle tests prove each phase succeeds; here it is a precondition.
+    const value = step.value || {};
+    if (value.result && value.result.ok === false) assert.fail(`the ${phase} phase failed: ${JSON.stringify(value.result.errors || value.result.error)}`);
+    if (phase === 'verify') assert.deepEqual({ ok: value.ok, missing: value.missing, unverified: value.unverified || [] }, { ok: true, missing: [], unverified: [] }, 'verify passes');
+    if (phase === 'download') assert.equal(value.emitted && value.emitted.ok, true, `the download succeeds: ${value.stderr}`);
+    assert.deepEqual(step.unexpected, [], `every request the ${phase} phase sent is one the fake models`);
+    t.diagnostic(`${phase}: ${step.end - step.mark} requests in ${step.ms} ms`);
+    settleGolden(phase, goldenFile(phase), trailOf(run.org, step));
+  });
+}
+
+// The wire regression a normalizer could hide, on this run's own recorded build: every publish's ParameterXml with text before its
+// envelope (`undefined<importexportxml>…`, what a string concatenated onto an unset value sends). The fake accepts such a body, so only the
+// trail can notice it: the build's trail must then differ from the golden, and the difference must name the publishes.
+test('lifecycle trail: a build whose publishes carry text outside their envelope does not match the golden', async () => {
+  const run = await lifecycle();
+  const step = run.steps.build;
+  if (step.error) throw step.error;
+  const prefixed = run.org.requests.map((r) => (r.path === '/PublishXml' ? { ...r, body: { ...r.body, ParameterXml: `undefined${r.body.ParameterXml}` } } : r));
+  const expected = fs.readFileSync(goldenFile('build'), 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(trailOf(run.org, step), expected, 'the recorded build matches its golden');
+  const seen = trailOf({ requests: prefixed }, step);
+  assert.notEqual(seen, expected, 'publishes with text outside their envelope change the trail');
+  assert.match(describeDifference('build', expected, seen), /The publishes were:[\s\S]*and are now:[\s\S]*raw:undefined<importexportxml>/);
+});
+// The guard of the guard, over the real trail builder: one more read, one more member in one body, and a write moved to the other side
+// of a publish each change the golden and are named in the description — and the one thing that is tolerated, two requests of one
+// segment sent in the other order, does not — so the golden can never rot into a check that passes whatever is sent.
+test('lifecycle trail (meta): one more read, one more body member and a write moved past a publish each fail; a reorder between publishes does not', () => {
+  const publish = (what) => ({ method: 'POST', path: '/PublishXml', body: { ParameterXml: `<importexportxml><appmodules><appmodule>${what}</appmodule></appmodules></importexportxml>` }, status: 204 });
+  const read = { method: 'GET', path: "/appmodules?$select=appmoduleid&$filter=uniquename eq 'contoso_x'", status: 200 };
+  const view = { method: 'PATCH', path: '/savedqueries(0a1b2c3d-0000-4000-8000-00000000abcd)', body: { fetchxml: '<fetch/>' }, status: 204 };
+  const form = { method: 'PATCH', path: '/systemforms(0a1b2c3d-0000-4000-8000-00000000abce)', body: { formxml: '<form/>' }, status: 204 };
+  const trail = (requests) => trailOf({ requests }, { mark: 0, end: requests.length });
+  const golden = trail([read, view, form, publish('a'), read]);
+  assert.equal(trail([read, form, view, publish('a'), read]), golden, 'two requests between the same publishes may be sent in either order');
+  const moreReads = describeDifference('build', golden, trail([read, read, view, form, publish('a'), read]));
+  assert.match(moreReads, /\+1 GET appmodules/);
+  const newMember = describeDifference('edit', golden, trail([read, { ...view, body: { fetchxml: '<fetch/>', returnedtypecode: 'contoso_x' } }, form, publish('a'), read]));
+  assert.match(newMember, /The same requests by METHOD resource[\s\S]*\[0x before, 1x now\] in "up to publish 1: importexportxml\(appmodules\(appmodule=a\)\)":\n\s+PATCH \/savedqueries\(<id>\) \{fetchxml:string,returnedtypecode:string\}/);
+  const late = trail([read, view, publish('a'), form, read]);
+  assert.notEqual(late, golden, 'a write moved past the publish that should make it live');
+  assert.match(describeDifference('rebuild', golden, late), /The same requests by METHOD resource[\s\S]*\[1x before, 0x now\] in "up to publish 1: importexportxml\(appmodules\(appmodule=a\)\)":\n\s+PATCH \/systemforms\(<id>\) \{formxml:string\}/);
+  assert.equal(shape({ b: [1, 'x', { c: null }], a: true }), '{a:boolean,b:[1xnumber|1xstring|1x{c:null}]}');
+  assert.equal(mask('/x(0a1b2c3d-0000-4000-8000-00000000abcd)?$filter=modifiedon gt 2026-01-02T03:04:05Z'), '/x(<id>)?$filter=modifiedon gt <time>');
+  // Nothing a request carries is collapsed away: one more element of the same shape in a body's list (a column more in a table's
+  // create), and one more kind of component in a publish (an option set beside the app), each change the trail.
+  const table = { method: 'POST', path: '/EntityDefinitions', body: { Attributes: [{ SchemaName: 'contoso_name', MaxLength: 100 }] }, status: 204 };
+  const twoColumns = { ...table, body: { Attributes: [...table.body.Attributes, { SchemaName: 'contoso_extra', MaxLength: 100 }] } };
+  assert.notEqual(trail([twoColumns]), trail([table]), 'a column more in the same request changes the trail');
+  assert.match(describeDifference('build', trail([table]), trail([twoColumns])), /\[0x before, 1x now\][\s\S]*Attributes:\[2x\{/);
+  const appOnly = publish('11111111-0000-4000-8000-000000000001');
+  const broader = { ...appOnly, body: { ParameterXml: appOnly.body.ParameterXml.replace('</importexportxml>', '<optionsets><optionset>contoso_stage</optionset></optionsets></importexportxml>') } };
+  assert.notEqual(trail([broader]), trail([appOnly]), 'a publish that names one more kind of component changes the trail');
+  assert.match(describeDifference('build', trail([appOnly]), trail([broader])), /The publishes were:[\s\S]*and are now:[\s\S]*optionset=contoso_stage/);
+  // A publish whose ParameterXml is not ONE element-only document is kept raw, never normalized into a valid envelope's notation: text
+  // before or after the document element (`undefined<importexportxml>…`), text beside child elements, or a second root.
+  const valid = appOnly.body.ParameterXml;
+  const targets = publishTargetsOf(valid);
+  for (const bad of [`undefined${valid}`, `${valid}x`, valid.replace('<appmodules>', '<appmodules>unexpected'), `${valid}${valid}`]) {
+    const seen = publishTargetsOf(bad);
+    assert.notEqual(seen, targets, `kept apart from the valid envelope: ${bad}`);
+    assert.match(seen, /^raw:/, `kept raw: ${bad}`);
+  }
+  assert.equal(publishTargetsOf(` \n${valid}\n `), targets, 'whitespace around the document element is not content');
+});
+
+// UPDATE_GOLDENS must never be the way a CI run turns green: a run that regenerates in CI compares nothing and would pass whatever was
+// sent. So the regeneration is refused under CI, before the lifecycle runs and before anything is written — proven by running this file
+// in a child process with CI's variables set (the child's own copy of this test returns at once).
+test('lifecycle trail: UPDATE_GOLDENS=1 under CI is refused before anything is written, and the run fails', () => {
+  if (process.env.LIFECYCLE_TRAIL_CHILD === '1') return;
+  const before = PHASES.map((phase) => fs.readFileSync(goldenFile(phase)));
+  const env = { ...process.env, CI: 'true', GITHUB_ACTIONS: 'true', UPDATE_GOLDENS: '1', LIFECYCLE_TRAIL_CHILD: '1' };
+  // A child of `node --test` that inherits NODE_TEST_CONTEXT reports to its parent's runner instead of running as a run of its own.
+  delete env.NODE_TEST_CONTEXT;
+  const child = spawnSync(process.execPath, ['--test', '--test-name-pattern', 'phase sends exactly', __filename], { env, encoding: 'utf8', timeout: 180000 });
+  const output = `${child.stdout}${child.stderr}`;
+  assert.notEqual(child.status, 0, `the regenerating run under CI must fail:\n${output.slice(-2000)}`);
+  assert.match(output, /UPDATE_GOLDENS=1 is refused under CI/);
+  assert.deepEqual(PHASES.map((phase) => fs.readFileSync(goldenFile(phase))), before, 'and no golden was written');
+});
+
+// The regeneration rules themselves, on a golden of the test's own: refused under CI with nothing written; locally, a golden that differs
+// is rewritten and the run fails; one that already holds the trail is not touched and passes.
+test('lifecycle trail (meta): regeneration is refused under CI, and a local run that regenerates fails', () => {
+  const file = path.join(makeTempDir('lifecycle-trail-golden-'), 'lifecycle-trail.meta.txt');
+  fs.writeFileSync(file, 'stale\n');
+  assert.throws(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1', CI: 'true' }), /refused under CI/);
+  assert.throws(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1', TF_BUILD: 'True' }), /refused under CI/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'stale\n', 'nothing was written under CI');
+  assert.throws(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1', CI: 'false' }), /regenerated lifecycle-trail\.meta\.txt/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'fresh\n', 'a local run rewrites the golden');
+  assert.doesNotThrow(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1' }), 'a golden that already holds the trail passes');
+  assert.throws(() => settleGolden('meta', file, 'other\n', {}), /trail differs/);
+});

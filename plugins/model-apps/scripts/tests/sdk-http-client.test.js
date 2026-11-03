@@ -1907,3 +1907,68 @@ test('publish once: the service protection codes are the three the api-limits pa
     ['nothing', null],
   ]) assert.strictEqual(isServiceProtectionRefusal(res), false, what);
 });
+
+// A failure's body carries the history of the sends that led to it, so a caller that would read a later answer as a definitive refusal (the business-rule gate in
+// lib/sdk-build.js) can tell it is not one when an earlier send of the same request may have run. The marker is not enumerable: nothing that compares or prints a body sees it.
+const { HTTP_SEND_HISTORY } = require('../lib/sdk-http-client.js');
+const MEMBER_POST = 'https://org.crm.dynamics.com/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
+const REFUSED = { statusCode: 400, headers: {}, body: '{"error":{"code":"0x80040216","message":"An unexpected error occurred."}}' };
+const clientOver = (scripted) => {
+  const { request, calls } = fakeTransport(scripted);
+  return { calls, http: createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} }) };
+};
+
+test('a failure answered on the first send carries { sends: 1, earlierAmbiguous: false }, and the marker is invisible to a comparison', async () => {
+  const { http } = clientOver(REFUSED);
+  const res = await http.post(MEMBER_POST, {});
+  assert.deepStrictEqual(res.body[HTTP_SEND_HISTORY], { sends: 1, earlierAmbiguous: false });
+  assert.deepStrictEqual(res.body, { error: { code: '0x80040216', message: 'An unexpected error occurred.' } });
+});
+
+test('a 503 re-sent by the client and then answered 400 says an earlier send was ambiguous', async () => {
+  const { http, calls } = clientOver((opts, n) => (n === 1 ? { statusCode: 503, headers: {}, body: '{"error":{"code":"x","message":"gateway"}}' } : REFUSED));
+  const res = await http.post(MEMBER_POST, {});
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(res.status, 400);
+  assert.deepStrictEqual(res.body[HTTP_SEND_HISTORY], { sends: 2, earlierAmbiguous: true });
+});
+
+test('a send that got no answer, re-sent and then refused, says so as well', async () => {
+  const { http } = clientOver((opts, n) => (n === 1 ? { error: 'socket hang up', code: 'ECONNRESET' } : REFUSED));
+  const res = await http.post(MEMBER_POST, {});
+  assert.deepStrictEqual(res.body[HTTP_SEND_HISTORY], { sends: 2, earlierAmbiguous: true });
+});
+
+test('the same request called again by the caller after a 5xx it gave up on is refused as one whose earlier send was ambiguous', async () => {
+  // The SDK re-calls a request itself: the second call is a first send of this client's loop, and only the ledger knows of the first.
+  const { http } = clientOver((opts, n) => (n <= 6 ? { statusCode: 503, headers: {}, body: '' } : REFUSED));
+  assert.strictEqual((await http.post(MEMBER_POST, {})).status, 503);
+  const second = await http.post(MEMBER_POST, {});
+  assert.strictEqual(second.status, 400);
+  assert.deepStrictEqual(second.body[HTTP_SEND_HISTORY], { sends: 1, earlierAmbiguous: true });
+});
+
+test('what proves a send did not run is not ambiguity: a 401 refresh and a service protection 429 leave earlierAmbiguous false', async () => {
+  const protection = { statusCode: 429, headers: {}, body: '{"error":{"code":"0x80072322","message":"Number of requests exceeded the limit"}}' };
+  for (const first of [{ statusCode: 401, headers: {}, body: '' }, protection]) {
+    const { http } = clientOver((opts, n) => (n === 1 ? first : REFUSED));
+    const res = await http.post(MEMBER_POST, {});
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body[HTTP_SEND_HISTORY].earlierAmbiguous, false, String(first.statusCode));
+    assert.strictEqual(res.body[HTTP_SEND_HISTORY].sends, 2);
+  }
+});
+
+test('the ledger is per request: another URL, and a read of the same URL, are not poisoned by an ambiguous write', async () => {
+  const { http } = clientOver((opts) => (opts.url.endsWith('/poisoned') ? { statusCode: 503, headers: {}, body: '' } : REFUSED));
+  await http.post('https://org.crm.dynamics.com/api/data/v9.0/poisoned', {});
+  assert.strictEqual((await http.post(MEMBER_POST, {})).body[HTTP_SEND_HISTORY].earlierAmbiguous, false);
+  assert.strictEqual((await http.get('https://org.crm.dynamics.com/api/data/v9.0/poisoned')).status, 503);
+  assert.strictEqual((await http.get(MEMBER_POST)).body[HTTP_SEND_HISTORY].earlierAmbiguous, false);
+});
+
+test('a success carries no history', async () => {
+  const { http } = clientOver({ statusCode: 200, headers: {}, body: '{"ok":true}' });
+  const res = await http.post(MEMBER_POST, {});
+  assert.deepStrictEqual(Object.getOwnPropertySymbols(res.body), []);
+});

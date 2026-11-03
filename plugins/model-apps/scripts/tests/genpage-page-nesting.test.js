@@ -185,6 +185,50 @@ test('the gates keep today\'s answers for every page that is not one the parser 
   assert.deepStrictEqual(pageStructure(`${GENERIC_SIGNATURE}${DEEP_BUT_FINE}`), { problems: [], code: null });
 });
 
+// The bundled SDK now refuses a source too deep for the compiler itself (GENPAGE_COMPILE_DEPTH_EXCEEDED), over every stage of its compile — the parse, the emit, the
+// checker and its own walks — while the factory's guard covers only the compiler's entry points. Whichever layer fires, the maker sees ONE refusal: the plugin's code and words,
+// `outcome: 'nothing'`, never run again. This drives the real bundle with the vendored compiler UNguarded, so it is the SDK's own refusal that reaches the backend.
+test('the SDK\'s own compile-depth refusal reaches the maker as PAGE_NESTING_TOO_DEEP, wrote nothing, and is never sent again — on create and on update', async () => {
+  const { loadVendoredTypeScript } = require('../lib/typescript-compiler.js');
+  const { retryPolicyFor, RETRY } = require('../lib/retry-policy.js');
+  const server = makeServer();
+  const folder = makeTempDir('nest-sdk-');
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(folder), instanceUrl: INSTANCE, httpClient: server.http(), typescript: () => loadVendoredTypeScript() });
+  await sdk.initWorkspace();
+  const raw = await sdk.createArtifact('genPage', { name: 'Raw', source: TOO_DEEP, dataSources: ['account'], newTurn: { prompt: 'p' } });
+  await assert.rejects(sdk.pushArtifact('genPage', raw.id), (e) => e instanceof SdkError && e.code === 'GENPAGE_COMPILE_DEPTH_EXCEEDED', 'the bundle raises its own code when no guard is over its compiler');
+  assert.strictEqual(writeOutcome(new SdkError('GENPAGE_COMPILE_DEPTH_EXCEEDED', 'x')), 'nothing', 'the SDK compiles before any write');
+  assert.ok(PRE_WRITE_REFUSALS.has('GENPAGE_COMPILE_DEPTH_EXCEEDED'));
+
+  const genpage = makeGenpageSdk(INSTANCE, { sdk });
+  try {
+    await assert.rejects(
+      genpage.create({ name: 'Overview', source: TOO_DEEP, dataSources: 'account', prompt: 'p', agentMessage: 'a' }),
+      (e) => {
+        assert.strictEqual(e.code, PAGE_NESTING_TOO_DEEP, 'the code makers and the docs know');
+        assert.strictEqual(e.outcome, 'nothing', 'not an unknown outcome settled by reads');
+        assert.strictEqual(e.transient, false);
+        assert.strictEqual(retryPolicyFor(e), RETRY.NEVER, 'the build never runs it again');
+        assert.strictEqual(retryPolicyFor(new SdkError('GENPAGE_COMPILE_DEPTH_EXCEEDED', 'x')), RETRY.NEVER, 'nor the SDK\'s code on its own');
+        assert.match(e.message, /^generative page "Overview" was not created \(nothing was written\): the elements of the page nest too deeply to compile .* split the page into components/);
+        assert.ok(!/sent twice|Maximum call stack/.test(e.message), e.message);
+        return true;
+      },
+    );
+    assert.deepStrictEqual(changeWrites(server), [], 'not one request was written');
+    const { pageId } = await genpage.create({ name: 'Overview', source: DEEP_BUT_FINE, dataSources: 'account', prompt: 'p', agentMessage: 'ok' });
+    const before = server.writes().length;
+    await assert.rejects(
+      genpage.update(pageId, { source: TOO_DEEP, prompt: 'p2', agentMessage: 'a2' }),
+      (e) => e.code === PAGE_NESTING_TOO_DEEP && e.outcome === 'nothing' && e.pageId === pageId && !/Maximum call stack|could not be compiled because/.test(e.message)
+        && /^the update of generative page "Overview" \(.+\) failed and wrote nothing: the elements of the page nest too deeply to compile/.test(e.message),
+    );
+    assert.strictEqual(server.writes().length, before, 'the refused update wrote nothing');
+  } finally {
+    await genpage.dispose();
+  }
+});
+
 test('a push through the factory\'s own SDK, with no page backend over it, is refused with the same code and nothing is written; the page\'s name is the backend\'s to add', async () => {
   const server = makeServer();
   const folder = makeTempDir('nest-direct-');

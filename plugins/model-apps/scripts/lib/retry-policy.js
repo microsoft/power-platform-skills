@@ -8,7 +8,7 @@
 //
 // THE RULE, in the order it is applied (`judgeFailure`). The failure is the halt and the chain of `cause`s behind it, outermost first:
 //   1. NEVER. Any error in the chain that says `transient: false`, however deep: a refusal a run again cannot change, an outcome that must not be sent again, a prerequisite.
-//      It wins over everything below, a 503 included.
+//      It wins over everything below, a 503 included. So does an SDK error whose code says a write's outcome is unknown (OUTCOME_UNKNOWN_CODES).
 //   2. STATUS. The HTTP status the service answered — 429 (throttled) and 502, 503, 504 (the gateway or the service is down or behind) — on any error of the chain. The SDK's own
 //      ConnectionError carries it as `statusCode`, and 0 for a failure of the transport. See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/api-limits
 //      and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors
@@ -99,6 +99,13 @@ const CAUSE_WRAPPER_CODES = Object.freeze(new Set(['WEB_RESOURCE_UNVERIFIED']));
 
 // How far down the chain of causes the decision looks. Deeper than any failure the build raises (a halt, a step's wrapper, the SDK's error, the system error under it).
 const MAX_CHAIN = 8;
+
+// The SDK's errors for a write it SENT and whose answer it lost: the write may have committed, and the SDK never sends it again. Each keeps the
+// failure the write met — a 503, a 429, a reset — as its `cause` (and a status of its own), which rule 2 or 4 would read as "run the build again":
+// that is the re-send the SDK refuses to make, so these are NEVER, as an explicit `transient: false` is (rule 1). Typed by the bundled SDK:
+//   UPSERT_OUTCOME_UNKNOWN       upsertRecord: "the row MAY have been written; never re-read or re-sent"
+//   APP_UPDATE_OUTCOME_UNKNOWN   an app update whose change set's answer proves nothing
+const OUTCOME_UNKNOWN_CODES = Object.freeze(new Set(['UPSERT_OUTCOME_UNKNOWN', 'APP_UPDATE_OUTCOME_UNKNOWN']));
 
 // An error that says a run again cannot change it. `refusal` makes one; `neverRetry` marks one that exists. The message is the maker's to read and nobody's to judge.
 function refusal(message, props = {}) {
@@ -306,7 +313,7 @@ const statusesOf = (error) => [error.statusCode, embeddedStatus(error)].filter((
 // `declares(table, column)` is the caller's (it knows the spec): whether the build creates that column, for the lag of a column that is not visible yet.
 function judgeFailure(error, { declares } = {}) {
   const chain = causeChain(error);
-  const explicit = chain.some((e) => e.transient === false);
+  const explicit = chain.some((e) => e.transient === false || OUTCOME_UNKNOWN_CODES.has(typedCode(e)));
   const statuses = chain.flatMap(statusesOf);
   const transientStatus = statuses.some(isTransientStatus);
   const transport = chain.some(isTransportBlip);

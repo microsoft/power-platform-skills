@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
 const { createAzHttpClient } = require('../../lib/sdk-http-client.js');
-const { createMakerSdk, createNodeWorkspaceStorage } = require('../../lib/maker-sdk.js');
+const { createMakerSdk: createVendoredMakerSdk, createNodeWorkspaceStorage } = require('../../lib/maker-sdk.js');
 const { buildModelApp } = require('../../build-model-app.js');
 const { verifySpec } = require('../../lib/verify-spec.js');
 const { readerFor } = require('../../verify-model-app.js');
@@ -135,7 +135,9 @@ function kitchenSinkSpec() {
 
 // The commands of the lifecycle against one fake environment. `root` is a temporary folder the caller removes; the app folder in it
 // holds the page's source, and its `.maker-workspace` is the build's, as the CLI makes it next to app-spec.json.
-function createLifecycleHarness(org, root) {
+// `createMakerSdk` is the factory every command makes its SDK with: the vendored bundle's (lib/maker-sdk.js) unless a test hands in
+// another — workspace-upgrade-real-bundle.test.js makes the workspace with the PREVIOUS release's bundle and reads it with this one.
+function createLifecycleHarness(org, root, { createMakerSdk = createVendoredMakerSdk } = {}) {
   const appDir = path.join(root, 'app');
   const workspaceDir = path.join(appDir, '.maker-workspace');
   fs.mkdirSync(workspaceDir, { recursive: true });

@@ -50,8 +50,8 @@ const FLAGS = {
       "exceptions to the customer's Application Insights resource via an optional props.appInsights " +
       'surface, emitted only when the maker explicitly asks to measure or track something.',
     dependencies:
-      'the page telemetry facade in the UCI host runtime, the GenUX authoring control ' +
-      '(power-platform-ux), the AIBuilder CoderAgent telemetry prompt, and the ' +
+      'the page telemetry facade in the UCI host runtime, the GenUX authoring control, ' +
+      'the AIBuilder CoderAgent telemetry prompt, and the ' +
       'GenUxEnableCustomTelemetry ECS setting — all live in PROD.',
     enableEnv: 'GENPAGE_ENABLE_CUSTOM_TELEMETRY=1',
   },

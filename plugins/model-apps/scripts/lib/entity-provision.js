@@ -1847,6 +1847,17 @@ const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-works
 // PRIMARY_COLUMN_REQUIRED_NOT_APPLIED: the table WAS created, but the required level asked of its name column could not be confirmed, and the
 // message ends with "Do NOT re-run the create" and the SDK call that sets the level. Running this build again is the fix: it finds the table (it
 // is not created twice) and sets the level the way it does for any existing column with an explicit `required`.
+//
+// DATETIME_BEHAVIOR_MISSING: the bundled SDK's diagnosis of a column, lookup or relationship refused with 400 0x80048550 on a table whose Date
+// and Time columns have no behaviour — what Dataverse stores for such a column created INSIDE a table's create (this build never makes one
+// that way: it adds columns by their own request or in a change set, which the platform gives UserLocal). The SDK names the columns and its
+// own repair call (`updateColumn(..., { dateTimeBehavior: 'UserLocal' })`), which an operator of this plugin cannot make, so the halt names the
+// maker's step. A run again meets the same refusal (the error is typed: never retried).
+//
+// COMMAND_IMMUTABLE_COLUMN_CHANGED: the bundled SDK refuses, before any request, to push a command row whose location or type changed (the
+// platform ignored such an update while reporting it saved). The build never pushes an existing command bar — a bar that exists is reused,
+// and button edits are not reapplied (sdk-build.js, commands) — so only a push of a bar this build is creating could meet it, which has no
+// existing row; the remedy is said all the same, in case a later path pushes one.
 function operatorRemedy(err) {
   // A create refused with the lag of a table this attempt just created, still refused when the bounded check ran out (createInLagWindow,
   // recoverRefusedBatch, drainLagStatuses). Recognised by the error object itself, never by its words: the event the step reported while the
@@ -1860,6 +1871,12 @@ function operatorRemedy(err) {
   }
   if (err && err.code === 'LOCAL_EDITS_WOULD_BE_LOST') {
     return ` — the environment's copy changed after this workspace copy was fetched, and the workspace copy holds edits no build pushed (an interrupted build, or one halted by a concurrent edit). A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then ${RESET_WORKSPACE}, and re-run.`;
+  }
+  if (err && err.code === 'DATETIME_BEHAVIOR_MISSING') {
+    return ' — nothing was created by the refused request. Those Date and Time columns were created without a behaviour (by a tool that put them in the table\'s own create), and Dataverse then refuses every new column or lookup on the table. Set the behaviour of each to User local — the one their values are already stored with — in the column\'s advanced options in Power Apps, then run the build again.';
+  }
+  if (err && err.code === 'COMMAND_IMMUTABLE_COLUMN_CHANGED') {
+    return ' — nothing was written. A command\'s location and type cannot be changed on a row that exists (the platform ignores the change). Remove the command in Power Apps, then run the build again to create it as the spec says.';
   }
   return '';
 }

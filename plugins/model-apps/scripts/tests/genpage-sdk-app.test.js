@@ -336,12 +336,16 @@ test('placeInApp: the sitemap title language is the SDK\'s construction-time opt
 
 // ── placeInApp: pinning the default views ───────────────────────────────────────────────────────────────────────
 
-const viewRecords = ({ held = [], views = { account: V_ACCOUNT, contact: V_CONTACT } } = {}) => ({
+// The app's views: those it `held` before, and — as the service would answer once the push landed — those its pushed copy names (`lands: false`: a push whose pin did not land).
+const viewRecords = ({ held = [], views = { account: V_ACCOUNT, contact: V_CONTACT }, lands = true } = {}) => ({
   savedquery: (o) => {
     const table = /returnedtypecode eq '([^']+)'/.exec(o.filter)[1];
     return views[table] ? [{ savedqueryid: views[table].toUpperCase() }] : [];
   },
-  appmodulecomponent: () => held.map((objectid) => ({ objectid: `{${objectid}}`, componenttype: 26 })),
+  appmodulecomponent: (o, sdk) => {
+    const pushed = lands && sdk && sdk.count('pushArtifact') > 0 ? (((sdk.apps.get(APP) || {}).components || {}).views || []) : [];
+    return [...new Set([...held, ...pushed])].map((objectid) => ({ objectid: `{${objectid}}`, componenttype: 26 }));
+  },
 });
 
 test('pinning: the default public view of each data source joins the app\'s components, and the app is pushed and published', async () => {
@@ -395,10 +399,22 @@ test('pinning: an app that already carries components.views is extended in place
   assert.deepStrictEqual(noViews.of('addElement').map((c) => c.args), [['app', APP, '/components', { views: [V_ACCOUNT] }]]);
 });
 
-test('pinning: a layer that cannot be read leaves every view to pin — AddAppComponents is additive, so the worst case is a push that changes nothing', async () => {
+test('pinning: a layer that cannot be read leaves every view to pin — AddAppComponents is additive, so the worst case is a push that changes nothing — and none of them is reported pinned, since none is seen to be', async () => {
   const sdk = new FakeSdk({ records: viewRecords({ held: [V_ACCOUNT] }), onGet: async () => ({ status: 500, body: null }) }).seedApp(appArtifact());
   const out = await backend(sdk).placeInApp(APP, { pages: [], dataSources: ['account'] });
-  assert.deepStrictEqual(out.pinnedViews, [V_ACCOUNT]);
+  assert.deepStrictEqual(sdk.of('addElement').map((c) => c.args), [['app', APP, '', { components: { views: [V_ACCOUNT] } }]], 'the view is asked for');
+  assert.deepStrictEqual(out.pinnedViews, []);
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], new RegExp(`^the default view ${V_ACCOUNT} of the tables the pages read could not be confirmed in app ${APP}: its components could not be read back`));
+});
+
+test('pinning: a view the push did not add is not reported pinned — the app is read back after the push, and what is not there is said in a warning', async () => {
+  const sdk = placing(appArtifact(), viewRecords({ lands: false }));
+  const out = await backend(sdk).placeInApp(APP, { pages: [], dataSources: ['account', 'contact'] });
+  assert.strictEqual(sdk.count('pushArtifact'), 1);
+  assert.strictEqual(sdk.count('publishArtifact'), 1, 'the app is published all the same: the pin is the push\'s own partial result');
+  assert.deepStrictEqual(out.pinnedViews, []);
+  assert.deepStrictEqual(out.warnings, [`the default views ${V_ACCOUNT}, ${V_CONTACT} of the tables the pages read were not added to app ${APP} — the maker's "/" picker may not list their tables; run the same command again to add them`]);
 });
 
 test('pinning: a table name is escaped into the OData filter as a literal', async () => {

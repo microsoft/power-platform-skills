@@ -49,6 +49,7 @@ const { makeThrottleBudget, waitDoesNotFit, spentNote } = require('./throttle-bu
 const { mergeBindings } = require('./page-bindings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { readTargetSolution, readPageComponentType, pageComponent } = require('./page-solution.js');
+const { asPageNestingRefusal } = require('./page-nesting.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -123,6 +124,8 @@ const codeOf = (error) => (error && typeof error.code === 'string' && error.code
 //   PAGE_NESTING_TOO_DEEP             the page's elements nest so deeply that the compiler ran out of stack space (lib/page-nesting.js raises it from the
 //                                     compiler the SDK is given; the SDK compiles ahead of every write, so a push that raises it wrote nothing to the
 //                                     service, though its metadata reads may already have been made)
+//   GENPAGE_COMPILE_DEPTH_EXCEEDED    the SDK's own refusal of the same page, from a stage of its compile the guard above does not wrap; pushOnce reports it
+//                                     as PAGE_NESTING_TOO_DEEP (lib/page-nesting.js, asPageNestingRefusal), and it is listed here so the proof never depends on that
 //   GENPAGE_CONTENT_WRITE_UNSUPPORTED, GENPAGE_TURN_NOT_ATOMIC
 //                                     the transport cannot write this page as one change set (assertContentWritable / assertTurnWritable)
 //   GENPAGE_TURN_CONFLICT             the pending turn's id is already recorded as a different message (`unrecordedTurn`, a read)
@@ -135,7 +138,7 @@ const codeOf = (error) => (error && typeof error.code === 'string' && error.code
 // be one of these, on an SdkError.
 const PRE_WRITE_REFUSALS = new Set([
   'VALIDATION_ERROR',
-  'GENPAGE_COMPILER_UNAVAILABLE', 'GENPAGE_COMPILER_VERSION', 'GENPAGE_COMPILER_INVALID', 'GENPAGE_RUNTIME_TYPES_INVALID', 'PAGE_NESTING_TOO_DEEP',
+  'GENPAGE_COMPILER_UNAVAILABLE', 'GENPAGE_COMPILER_VERSION', 'GENPAGE_COMPILER_INVALID', 'GENPAGE_RUNTIME_TYPES_INVALID', 'PAGE_NESTING_TOO_DEEP', 'GENPAGE_COMPILE_DEPTH_EXCEEDED',
   'GENPAGE_CONTENT_WRITE_UNSUPPORTED', 'GENPAGE_TURN_NOT_ATOMIC', 'GENPAGE_TURN_CONFLICT',
   'GENPAGE_RETAIN_ON_CREATE', 'GENPAGE_RETAINED_ROW_MISSING', 'GENPAGE_CONTENT_NOT_TEXT', 'GENPAGE_WRITE_UNKNOWN',
   'ARTIFACT_NOT_FOUND', 'ARTIFACT_LANGUAGE_MISMATCH', 'ARTIFACT_PROJECTION_STALE',
@@ -165,6 +168,14 @@ function writeOutcome(error) {
     return Number.isInteger(status) && status >= 400 && status < 500 ? 'nothing' : 'unknown';
   }
   return PRE_WRITE_REFUSALS.has(error.code) ? 'nothing' : 'unknown';
+}
+
+// A push's failure as the maker is told it: the SDK's own refusal of a page too deep to compile is the plugin's PAGE_NESTING_TOO_DEEP, with the plugin's instruction
+// ("split the page into components"), so the maker sees one refusal whichever layer caught the overflow (lib/page-nesting.js). Only the SDK's typed error is translated.
+function nestingRefusalOf(error) {
+  if (!isSdkError(error)) return error;
+  const { SdkError } = require('./maker-sdk.js');
+  return asPageNestingRefusal(error, (code, message) => new SdkError(code, message));
 }
 
 // A send the service refused with a throttle: the SDK's typed `ConnectionError` with status 429, read from its structure and never from its words. Dataverse's service protection limits answer a request they will not
@@ -807,11 +818,12 @@ function makeGenpageSdk(env, deps = {}) {
     let result;
     try {
       result = await sdk.pushArtifact('genPage', id);
-    } catch (error) {
+    } catch (thrown) {
+      const error = nestingRefusalOf(thrown);
       return unsaved(writeOutcome(error), error);
     }
     if (result && result.saved === true) return { saved: true, result };
-    const error = result && result.error;
+    const error = nestingRefusalOf(result && result.error);
     if (error && error.code === 'ARTIFACT_ALREADY_EXISTS') return unsaved('exists', error);
     if (error && error.code === 'VERSION_CONFLICT') return unsaved('conflict', error);
     return unsaved(error ? writeOutcome(error) : 'unknown', error || new Error('the SDK did not report the page as saved'));
@@ -1326,7 +1338,7 @@ function makeGenpageSdk(env, deps = {}) {
     // navigation it pushes — the one the server holds: this call fetches the app, adds the page entries and the views it was asked for, and pushes that — into their active Main forms, public views and
     // charts; but on the transport of an SDK this backend made, the push's AddAppComponents is cut down to the views this edit pins (`appScope`, `pushApp`), so it adds no Main form and
     // `entityTables` is empty. Only through a lent SDK, whose transport is its owner's, does the push add them all: then `entityTables` is the tables of those Entity entries (`entityTablesOfSiteMap`).
-    // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? }. It throws, with
+    // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? } — `pinnedViews` the views it asked for that the app is read back holding. It throws, with
     // the page unplaced, when the app cannot be read, the edit is refused, `beforeAppWrite` throws, or the app's publish fails — and with `finish`, when the published
     // navigation does not show the page after the app was published.
     async placeInApp(appId, options = {}) {
@@ -1395,6 +1407,25 @@ function makeGenpageSdk(env, deps = {}) {
         await options.beforeAppWrite({ pushes: edited, entityTables: limited ? [] : entityTablesOfSiteMap(app.siteMap), mainFormsByTable: app.components && app.components.mainFormsByTable });
       }
       if (edited) await pushApp(sdk, appId, warnings, appScope, { views: pin });
+      // `pinnedViews` is what the app's current layer holds after the push, read back — not what was asked: the SDK reports a pin it could not make (a refusal, an answer it could not read) as a warning of the
+      // push and saves the navigation all the same, so a view asked for is not a view added. One that is not there, or not seen to be, is said in a warning of its own.
+      let pinnedViews = pin;
+      if (edited && pin.length) {
+        let held = null;
+        try {
+          held = await viewsHeldBy(sdk, appId);
+        } catch {
+          // Unread: nothing is confirmed, and the warning below says so.
+        }
+        pinnedViews = held ? pin.filter((id) => held.has(id)) : [];
+        const absent = pin.filter((id) => !pinnedViews.includes(id));
+        if (absent.length) {
+          const views = `the default view${absent.length === 1 ? '' : 's'} ${absent.join(', ')} of the tables the pages read`;
+          warnings.push(held
+            ? `${views} ${absent.length === 1 ? 'was' : 'were'} not added to app ${appId} — the maker's "/" picker may not list ${absent.length === 1 ? 'its table' : 'their tables'}; run the same command again to add ${absent.length === 1 ? 'it' : 'them'}`
+            : `${views} could not be confirmed in app ${appId}: its components could not be read back — treat ${absent.length === 1 ? 'it' : 'them'} as added only once seen to be`);
+        }
+      }
       const published = await publish(sdk, 'app', appId, undefined);
       // The failures below name the app and the page(s) the caller asked for, as `removeFromApp`'s do, so a caller that prints one can go on from it.
       const asked = wantedPages.map((p) => String(p.pageId));
@@ -1408,7 +1439,7 @@ function makeGenpageSdk(env, deps = {}) {
             : `the default views of the tables the pages read were saved in app ${appId}`;
         throw genpageError(`${saved}, but publishing the app failed (${published.detail}) — ${navigation ? "the pages are in the app's saved navigation and show once it is published" : 'they take effect once the app is published'}`, { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true, ...who });
       }
-      const result = { added: added.map((p) => String(p.pageId)), alreadyPlaced, pinnedViews: pin, warnings, appEdited: edited };
+      const result = { added: added.map((p) => String(p.pageId)), alreadyPlaced, pinnedViews, warnings, appEdited: edited };
       if (!finishing) return result;
 
       // The publish was accepted (a refused one threw above); what runs is the app's published navigation, so that is what confirms it. PublishXml is asynchronous
@@ -1891,12 +1922,17 @@ async function defaultViewsOf(sdk, tables, warnings) {
 async function viewsToPin(sdk, appId, tables, warnings) {
   const ids = (await defaultViewsOf(sdk, tables, warnings)).map((view) => view.viewId);
   if (!ids.length) return [];
+  const held = await viewsHeldBy(sdk, appId);
+  return held ? ids.filter((id) => !held.has(id)) : ids;
+}
+
+// The ids of the views the app's CURRENT layer holds, or null when that layer cannot be read. The layer is the one an edit now would change, and the one an edit just made wrote.
+//   appmodulecomponent rows of type 26 (savedquery): [{ objectid: '<view id>', componenttype: 26 }]
+async function viewsHeldBy(sdk, appId) {
   const { currentAppLayer, appComponentRows } = require('./app-components.js');
   const layer = sdk.dataverse ? await currentAppLayer(sdk.dataverse, appId) : { ok: false };
-  if (!layer.ok) return ids;
-  // appmodulecomponent rows of type 26 (savedquery): [{ objectid: '<view id>', componenttype: 26 }]
-  const held = new Set((await appComponentRows(sdk, layer.appModuleIdUnique, 26)).map((row) => String(row.objectid).replace(/[{}]/g, '').toLowerCase()));
-  return ids.filter((id) => !held.has(id));
+  if (!layer.ok) return null;
+  return new Set((await appComponentRows(sdk, layer.appModuleIdUnique, 26)).map((row) => String(row.objectid).replace(/[{}]/g, '').toLowerCase()));
 }
 
 // The apps whose navigation names a page, in either layer: [{ uniqueName, savedOnly, appId?, name? }]. It is the scan the build makes for a page shared across apps (sitemap-pages.js `fetchAppsForPages`: every app's

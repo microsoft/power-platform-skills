@@ -52,6 +52,17 @@
 // (percent-escapes decoded; one that cannot be read refuses the batch); a JSON batch, as text, bytes or an object, after its JSON is (`\u0041` is `A`); and the name is looked for in the rest of the text as it is and with its
 // escapes decoded.
 //
+// THE SDK'S GUARDED PIN (bundles from model-apps 2.20.6 on). On an unpublished default-mode push that holds the app row's token, the bundle reads the app's current layer after the sitemap write, and when a component its
+// derived list names is missing from it (every app whose maker took a form, view or chart out) it sends the AddAppComponents in ONE change set of its own instead of alone (`pinDefaultComponents`):
+//   PATCH <api>/appmodules(<app>)                      If-Match: <held token>, body {}               the guard: the change set runs only on the version the push holds
+//   POST  <api>/AddAppComponents                       { "AppId": "<app>", "Components": [ …the whole derived list… ] }
+//   PATCH <api>/appmodules(<app>)?$select=appmoduleid  Prefer: return=representation, body {}       the echo: the app row's token after the change set, which the SDK keeps
+// Its action carries the whole derived list, so it is not forwarded; and its parts are not cut either — the change set would then be a write this tool composed (two app-row writes no earlier release made), sent as the SDK's.
+// For an app with an edit open, that change set (`guardedPinOf`: exactly those three parts, for that one app, and nothing else) is NOT sent, and the SDK is answered as the service answers a change set whose FIRST part
+// was refused: the service rolls such a change set back whole, and the bundle then sends the plain action once (its documented fallback for a refused guard), which this limits as it limits every other — exactly what
+// a page edit sent before 2.20.6. Nothing was sent, so the plain action is not the resend of a write whose outcome is unknown; the app's row is not written; and the SDK keeps the app token it held, as every bundle before
+// did (a page edit reads the app again before each push, so it never depends on that token). Any other change set that names the action is refused, as above. Another app's guarded pin is not this edit's and goes on as it was read.
+//
 // The SDK reads the app's tables back after the post and reports a table its sitemap opens that is not a component (`APP_COMPONENTS_NOT_PERSISTED`) as a warning of the push — which is
 // what a page edit of an app whose navigation opens a table the app does not hold still says: the edit does not add it.
 // An SDK lent to a backend (`deps.sdk`) keeps the lender's transport, so a page edit through it is NOT limited. The bundle's request is pinned by genpage-app-edit-real-bundle.test.js:
@@ -249,6 +260,111 @@ function optionsFor(body, options) {
   return { ...options, headers: { ...Object.fromEntries(Object.entries(headers).filter(([key]) => !names.includes(key))), [names[0]]: length } };
 }
 
+// The SDK's guarded pin (THE SDK'S GUARDED PIN, above), read from the text of a `$batch` exactly as the bundle renders one (renderChangeSet) — or null for anything else. Parts are separated by CRLF, the CRLF before a
+// delimiter belongs to the delimiter, and each part is its MIME headers, a blank line, the embedded request line and headers, a blank line and the body:
+//   --batch_<id>
+//   Content-Type: multipart/mixed;boundary=changeset_<id>
+//
+//   --changeset_<id>
+//   Content-Type: application/http
+//   Content-Transfer-Encoding: binary
+//   Content-ID: 1
+//
+//   PATCH https://contoso.crm.dynamics.com/api/data/v9.0/appmodules(<app>) HTTP/1.1
+//   Content-Type: application/json;type=entry
+//   MSCRM.SolutionUniqueName: contoso_solution                      (only when the SDK names a solution)
+//   If-Match: W/"1234"
+//
+//   {}
+//   --changeset_<id>
+//   …Content-ID: 2…  POST …/AddAppComponents HTTP/1.1 … {"AppId":"<app>","Components":[…]}
+//   --changeset_<id>
+//   …Content-ID: 3…  PATCH …/appmodules(<app>)?$select=appmoduleid HTTP/1.1 … Prefer: return=representation … {}
+//   --changeset_<id>--
+//   --batch_<id>--
+// Answers `{ appId, guardId }` (the app, lower case, and the Content-ID of the guard) only when the batch is exactly that: one change set of three parts in that order, every app id the same, the guard and the echo
+// with empty bodies, the guard conditional, the echo asking for the row back, no header beyond the ones above, and the action's own body naming the same app with a list. A change set that differs in anything is not
+// recognised, and is refused as any other batch that names the action is.
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PART_HEADERS = new Set(['content-type', 'mscrm.solutionuniquename', 'if-match', 'prefer']);
+function changeSetPartOf(segment) {
+  // `\r\n<mime headers>\r\n\r\n<request line and headers>\r\n\r\n<body>\r\n`
+  if (!segment.startsWith('\r\n') || !segment.endsWith('\r\n')) return null;
+  const blocks = segment.slice(2, -2).split('\r\n\r\n');
+  if (blocks.length !== 3 || /[\r\n]/.test(blocks[2])) return null;
+  const mime = blocks[0].split('\r\n');
+  const id = /^Content-ID: (\d+)$/.exec(mime[2] || '');
+  if (mime.length !== 3 || mime[0] !== 'Content-Type: application/http' || mime[1] !== 'Content-Transfer-Encoding: binary' || !id) return null;
+  const [line, ...headerLines] = blocks[1].split('\r\n');
+  const request = /^(PATCH|POST) (\S+) HTTP\/1\.1$/.exec(line);
+  if (!request) return null;
+  const headers = {};
+  for (const header of headerLines) {
+    const named = /^([A-Za-z0-9.-]+): (.*)$/.exec(header);
+    const name = named && named[1].toLowerCase();
+    if (!named || !PART_HEADERS.has(name) || name in headers) return null;
+    headers[name] = named[2];
+  }
+  return { contentId: id[1], method: request[1], address: request[2], headers, body: blocks[2] };
+}
+function guardedPinOf(read) {
+  const text = read.kind === 'text' ? read.text : read.kind === 'bytes' && isUtf8(read.bytes) ? read.bytes.toString('utf8') : null;
+  if (text === null) return null;
+  const head = /^--(batch_[A-Za-z0-9-]+)\r\nContent-Type: multipart\/mixed;boundary=(changeset_[A-Za-z0-9-]+)\r\n\r\n/.exec(text);
+  if (!head) return null;
+  const segments = text.slice(head[0].length).split(`--${head[2]}`);
+  if (segments.length !== 5 || segments[0] !== '' || segments[4] !== `--\r\n--${head[1]}--\r\n`) return null;
+  const parts = segments.slice(1, 4).map(changeSetPartOf);
+  if (parts.some((part) => part === null)) return null;
+  const [guard, action, echo] = parts;
+  // `<api>/appmodules(<guid>)`, with no query (the guard) or with exactly `?$select=appmoduleid` (the echo).
+  const appOf = (part, query) => {
+    const at = /^(.*\/api\/data\/v\d+(?:\.\d+)?)\/appmodules\(([^)]+)\)(\?.*)?$/.exec(part.address);
+    return at && GUID.test(at[2]) && (at[3] || '') === query ? at[2].toLowerCase() : null;
+  };
+  const appId = appOf(guard, '');
+  if (!appId || guard.method !== 'PATCH' || guard.body !== '{}' || !guard.headers['if-match'] || 'prefer' in guard.headers) return null;
+  if (appOf(echo, '?$select=appmoduleid') !== appId || echo.method !== 'PATCH' || echo.body !== '{}' || echo.headers.prefer !== 'return=representation' || 'if-match' in echo.headers) return null;
+  if (action.method !== 'POST' || kindOf(action.address) !== 'action' || 'if-match' in action.headers || 'prefer' in action.headers) return null;
+  let body;
+  try {
+    body = JSON.parse(action.body);
+  } catch {
+    return null;
+  }
+  if (!body || typeof body.AppId !== 'string' || guidKey(body.AppId) !== appId || !Array.isArray(body.Components)) return null;
+  return { appId, guardId: guard.contentId };
+}
+
+// The answer to a guarded pin that was NOT sent: a change-set answer, in the form the service gives one (its own boundaries, and the Content-ID it answers), whose one part refuses the guard. The bundle reads a refused
+// first part as a change set the service rolled back whole, and sends the plain action once (`pinDefaultComponents`); the status and the error say what happened, though the bundle reports neither. A raw request is
+// answered with its body as text.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api#change-sets
+function guardNotSent(guardId) {
+  const { randomUUID } = require('node:crypto');
+  const batch = `batchresponse_${randomUUID()}`;
+  const changeSet = `changesetresponse_${randomUUID()}`;
+  const error = JSON.stringify({ error: { code: 'APP_COMPONENTS_GUARD_NOT_SENT', message: 'this change set was not sent: a page edit adds only the views it pins, so the plain AddAppComponents is limited and sent instead' } });
+  const body = [
+    `--${batch}`,
+    `Content-Type: multipart/mixed; boundary=${changeSet}`,
+    '',
+    `--${changeSet}`,
+    'Content-Type: application/http',
+    'Content-Transfer-Encoding: binary',
+    `Content-ID: ${guardId}`,
+    '',
+    'HTTP/1.1 400 Bad Request',
+    'Content-Type: application/json; odata.metadata=minimal',
+    '',
+    error,
+    `--${changeSet}--`,
+    `--${batch}--`,
+    '',
+  ].join('\r\n');
+  return { status: 200, headers: { 'content-type': `multipart/mixed; boundary=${batch}` }, body };
+}
+
 function makeAppComponentScope() {
   // app id (lower case) -> the ids of the views the edit under way owns
   const open = new Map();
@@ -293,6 +409,9 @@ function makeAppComponentScope() {
         if (kind === 'lookalike') throw refusal(`its address (${pathOf(address)}) is not the SDK's /api/data/v<version>/AddAppComponents, though it names that action`);
         const read = readBody(body);
         if (kind === 'other') {
+          // The SDK's guarded pin, to the `$batch` address (THE SDK'S GUARDED PIN, above): not sent for an app with an edit open — the bundle then sends the plain action, limited below — and sent as it was read for another app.
+          const pin = raw && /\/\$batch$/.test(pathOf(address) || '') ? guardedPinOf(read) : null;
+          if (pin) return open.has(pin.appId) ? guardNotSent(pin.guardId) : client[method](address, read.send, options);
           // Not the action's address, so not the action's — but the body may be a `$batch` that NAMES the action, which cannot be limited, whichever method carries it. Anything else goes on as it was read.
           const problem = batchProblem(read);
           if (problem) throw refusal(problem);

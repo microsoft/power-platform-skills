@@ -113,7 +113,7 @@ delete it to keep the page looking as it does, or write the longhands to make th
 render (a visible change, so only when it is wanted).
 A fix is held to the iteration rule too: convert a Map, Set or iterator with `Array.from` before
 spreading, looping over or destructuring it (`references/rules.md`, **Common Errors > 5. Iteration
-that compiles to nothing**).
+that another page compiler can lose**).
 Per the "Prompt semantics" rule, the prompt for this
 re-deploy describes the fix delta only — e.g.
 `"Fix sort handler on Name column; correct accidental DataGrid type prop"` —

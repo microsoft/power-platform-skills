@@ -16,6 +16,10 @@
 const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = require('./dataverse-auth.js');
 const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 
+// The key under which a failure's body carries the history of the sends that led to it (`{ sends, earlierAmbiguous }`, see `ambiguousSends` in createAzHttpClient).
+// Symbol.for, so a module that reads it need not load this client, and the copy of this file in another plugin agrees with it.
+const HTTP_SEND_HISTORY = Symbol.for('power-platform-skills.http-send-history');
+
 // How Dataverse reports that SQL Server chose a request's transaction as a deadlock VICTIM and rolled
 // it back. Two live captures, both HTTP 500 (a process-flow delete during a teardown, and PublishXml):
 //   HTTP 500 from …/api/data/v9.0/workflows(<id>):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205
@@ -709,6 +713,14 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // Every access token this client has sent — the one a 401 refresh replaced as well as the one that replaced it, because a service may repeat either — for taking it out of an answer that is not a success
   // and out of a transport failure's text (the scrubber above). A success is never given to these.
   const tokensSent = new Set();
+
+  // The sends of a write that may have run, whatever answered them: `POST <url>` -> true once a send of it got no answer, was cut off, or was answered by the
+  // service being down or throttling (5xx; a 429 that is not the service protection limits). Such a send can have been applied; an answer to a LATER send of the
+  // same request — a re-send of this client's loop, or the SDK's own re-call — says nothing about it. A failure delivered afterwards says so (HTTP_SEND_HISTORY),
+  // so a caller that reads the later answer as a definitive refusal (the business-rule gate in lib/sdk-build.js) can tell it is not. Kept for the client's life and
+  // never cleared: it only ever turns a caller's skip into the halt it always was.
+  const ambiguousSends = new Set();
+  const isAmbiguousAnswer = (res) => Boolean(res.error) || res.statusCode >= 500 || (res.statusCode === 429 && !isServiceProtectionRefusal(res));
   const scrubText = (text) => [...tokensSent].reduce((out, sent) => scrub(out, sent), String(text));
   const scrubValue = (value) => [...tokensSent].reduce((out, sent) => scrubAnswer(out, sent), value);
   // A Buffer is returned as it is unless it holds the token as text: bytes that are not text, or hold no token, are never decoded into something else.
@@ -808,14 +820,20 @@ function createAzHttpClient(orgUrl, deps = {}) {
 
     // What the caller is given for an answer that is not sent again — the last the loop got, or a throttled one a budgeted client did not wait for. An answer that is not a success is what an SDK makes an error message of (it quotes the body, and the
     // scripts print that message), so the token is taken out of it first — the body in whatever mode it is read in, and the headers. A success is the caller's data and is returned exactly as it came.
-    const deliver = (res) => {
+    const deliver = (res, history) => {
       if (!(res.statusCode >= 200 && res.statusCode < 300)) {
         const text = (value) => (typeof value === 'string' ? scrubText(value) : value);
-        return {
+        const answer = {
           status: res.statusCode,
           headers: scrubValue(res.headers || {}),
           body: ctl.bytes ? scrubBytes(res.body) : ctl.rawBody ? text(res.body) : scrubValue(parseBody(text(res.body))),
         };
+        // The SDK keeps a failure's body as the `cause` of the error it raises, the same object, so this reaches the caller of the SDK. A body that is not an
+        // object (text, bytes) carries nothing, and a caller that needs the history then has none to read.
+        if (history && answer.body && typeof answer.body === 'object' && !Buffer.isBuffer(answer.body)) {
+          Object.defineProperty(answer.body, HTTP_SEND_HISTORY, { value: history, enumerable: false });
+        }
+        return answer;
       }
       return {
         status: res.statusCode,
@@ -853,6 +871,10 @@ function createAzHttpClient(orgUrl, deps = {}) {
       }
 
       const res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
+      // Read before this answer is recorded: what matters to a caller is whether an EARLIER send was ambiguous.
+      const sendKey = `${method_} ${url}`;
+      const history = { sends: attempt + 1, earlierAmbiguous: ambiguousSends.has(sendKey) };
+      if (isWrite && isAmbiguousAnswer(res)) ambiguousSends.add(sendKey);
       if (res.error) {
         if (conditional) {
           throw transportError(res, `Request failed: ${scrubText(res.error)} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
@@ -883,7 +905,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         // victim (500), a gateway (502, 503, 504) — is not throttling, and keeps its own schedule.
         if (throttle && res.statusCode === 429) {
           if (await waitOutThrottle({ res, attempt, method: method_, url })) continue;
-          return deliver(res);
+          return deliver(res, history);
         }
         await sleep(retryWaitMs(res, attempt));
         continue;
@@ -915,7 +937,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
       if (throttled && !last) {
         if (throttle) {
           if (await waitOutThrottle({ res, attempt, method: method_, url, batch: isBatch })) continue;
-          return deliver(res);
+          return deliver(res, history);
         }
         // A batch refused operation by operation may carry the wait in that operation's own headers.
         await sleep(Math.max(retryWaitMs(res, attempt), isBatch ? batchRetryAfterMs(res, now()) : 0));
@@ -927,7 +949,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         await sleep(1000 * 2 ** attempt);
         continue;
       }
-      return deliver(res);
+      return deliver(res, history);
     }
     /* istanbul ignore next */
     throw new Error('Unreachable retry loop');
@@ -964,4 +986,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };
+module.exports = { createAzHttpClient, HTTP_SEND_HISTORY, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };

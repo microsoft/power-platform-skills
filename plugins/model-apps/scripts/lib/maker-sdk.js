@@ -18,9 +18,10 @@
 // client the factory gives: the SDK's reads through the Power Platform API (a Test org's, and a connector's tables) need a `powerPlatformApiClient`, and the
 // tables a `connectorRuntimeClient` too, which an Azure CLI token cannot back (lib/sdk-first.js, "No Power Platform API client").
 //
-// The `httpClient` the caller names is handed to the SDK with two additions, each of which looks at one kind of request and leaves every other request as it is. The first (lib/collection-answers.js): the read of the environment's table list must answer a list. The SDK's findTables() reads a 2xx with no `value` list
+// The `httpClient` the caller names is handed to the SDK with two additions, each of which looks at one kind of request and leaves every other request as it is. The first (lib/collection-answers.js): the read of the environment's table list must answer a list. The SDK's findTables() used to read a 2xx with no `value` list
 // as "no tables" (`body.value ?? []`) — and a sign-in or proxy page, `{}` and `null` are such answers — and every script that asks it turns "no tables" into a conclusion: a table is missing, create it, nothing clashes, it is not a
-// system table, so delete it. Guarded here, once, no script that makes an SDK can forget it, and no request is added or changed: only that answer is looked at. It then fails as an SdkError (TABLES_UNREADABLE), which the
+// system table, so delete it. The bundled SDK now refuses such an answer itself, but as a ConnectionError of the 200 it read, with no word of what to do; the guard answers first, so
+// every script still meets TABLES_UNREADABLE (which the callers recognise, lib/collection-answers.js unreadableAnswer) and the remedy it names. Guarded here, once, no script that makes an SDK can forget it, and no request is added or changed: only that answer is looked at. It then fails as an SdkError (TABLES_UNREADABLE), which the
 // bundle rethrows as it is.
 // The second (lib/app-header-text.js): a PATCH of an app module row whose name or description is not a string — through `patch`, through
 // `patchRaw`, or in a change set a caller sends raw (`dataverse.postBatch`) — is refused before it is sent. The SDK's push of an app writes every text its workspace copy holds whenever its own comparison

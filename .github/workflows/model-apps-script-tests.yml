@@ -96,6 +96,17 @@ jobs:
               with:
                   node-version: ${{ matrix.node }}
 
+            # The previous release's SDK bundle (model-apps 2.20.4; 2.20.5 ships the same bytes), for the upgrade tests: a workspace it wrote must be read by
+            # this release's (scripts/tests/workspace-upgrade-*-real-bundle.test.js, helpers/previous-bundle.js, which checks its
+            # SHA-256). The checkout is shallow, so the release commit is fetched by its hash and only the bundle is extracted. In CI
+            # the tests FAIL without it rather than skip.
+            - name: fetch-previous-sdk-bundle
+              shell: bash
+              run: |
+                  git fetch --no-tags --depth=1 origin c159268b994b218729ff69ccdd74be3c83c56f86
+                  git cat-file blob FETCH_HEAD:plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"
+                  echo "MODEL_APPS_PREVIOUS_BUNDLE=$RUNNER_TEMP/previous-cds-maker-sdk.cjs" >> "$GITHUB_ENV"
+
             # run-tests.js is the plugin's own regression gate: it runs every
             # scripts/tests/*.test.js and exits non-zero on any failure. Invoking it
             # (rather than a bare `node --test`) keeps CI and the documented local
@@ -219,6 +230,17 @@ jobs:
                   git archive FETCH_HEAD plugins/model-apps/scripts | tar -x -C "$RUNNER_TEMP/model-apps-2.13.0"
                   echo "BASE_LIB_PATH=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts/lib" >> "$GITHUB_ENV"
                   echo "MODEL_APPS_RELEASED_SCRIPTS=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts" >> "$GITHUB_ENV"
+
+            # The previous release's SDK bundle (model-apps 2.20.4; 2.20.5 ships the same bytes), for the upgrade tests: a workspace it wrote must be read by
+            # this release's (scripts/tests/workspace-upgrade-*-real-bundle.test.js, helpers/previous-bundle.js, which checks its
+            # SHA-256). The checkout is shallow, so the release commit is fetched by its hash and only the bundle is extracted. In CI
+            # the tests FAIL without it rather than skip.
+            - name: fetch-previous-sdk-bundle
+              shell: bash
+              run: |
+                  git fetch --no-tags --depth=1 origin c159268b994b218729ff69ccdd74be3c83c56f86
+                  git cat-file blob FETCH_HEAD:plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"
+                  echo "MODEL_APPS_PREVIOUS_BUNDLE=$RUNNER_TEMP/previous-cds-maker-sdk.cjs" >> "$GITHUB_ENV"
 
             # The same command as the matrix job, with those paths set: the oracle and A/B tests run instead of skipping.
             - name: run-model-apps-script-tests-with-parsers

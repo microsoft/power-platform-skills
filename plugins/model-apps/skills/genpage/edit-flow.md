@@ -560,25 +560,33 @@ the same, go ahead with a
 `warnings` entry, but the page then goes on rendering without it — do not rely on that to
 skip this step.)
 
-Review the edited page for iteration that compiles to nothing as well:
+Review the edited page for iteration that another page compiler can lose as well:
 
-The page compiler targets ES5 without iterator downleveling or full type checking.
-Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
-and indices instead of the iterator: values can disappear, defaults can replace them,
-or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
-`[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
-`[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
-spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
-Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
-`Object.entries` return arrays. Spreads of `arguments` and ordinary indexed array-likes
-work; rest destructuring of an array-like without `slice` does not. String spread
-throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code
-points. See **Common Errors > 5. Iteration that compiles to nothing** in
-`references/rules.md` for the pairs.
+Pages this plugin uploads are compiled with iterator support (ES5 with
+`downlevelIteration`), so a spread, a `for...of` loop or an array destructure of a Map,
+Set, iterator, generator or string reads it as modern JavaScript does. A tool that
+compiles the page again without that support — an older maker portal, or `pac` — reads
+length and indices instead: values disappear, defaults replace them, and rest
+destructuring or a string spread throws, all with a clean compile. Keep the page correct
+under every compiler: convert with `Array.from(...)` before spreading, looping or
+destructuring, for example `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`,
+`for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and
+`[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary
+array spreads and loops remain valid. `Object.keys`, `Object.values` and
+`Object.entries` return arrays. Rest destructuring of a non-iterable array-like without `slice`
+throws under every compiler. A destructuring default must not write to the array being
+destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old value
+here, unlike modern JavaScript. See **Common Errors > 5. Iteration that another page
+compiler can lose** in `references/rules.md` for the pairs.
 
-Write every form your edit adds with that conversion. A form the page already had
-before your edit loses its values today, and converting it with `Array.from` can make
-previously absent values appear or stop a throw — a change users see. Do not silently
+Write every form your edit adds with that conversion. The upload compiles the whole page
+again with iterator support, so a form the page already had now reads its values or stops
+throwing where an earlier release's upload lost them — a change users see, converted or
+not: say so in the summary when the page has such a form. Converting it keeps the page
+correct under an older compiler, but `Array.from` reads the whole iterable at once: where a
+loop stops early or a destructure reads only the first values of a generator or another
+iterator, the conversion reads the rest too — check that doing so changes nothing the page
+shows or does before converting such a form. Do not silently
 expand an unrelated edit: convert an existing form only when the requested change needs
 it or the user asks for it, and state any resulting behavior change in the summary.
 
