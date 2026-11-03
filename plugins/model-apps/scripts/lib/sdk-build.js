@@ -191,6 +191,7 @@ const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent
 // Declared dashboards (dashboards[].reconcile "declared", lib/dashboard-reconcile.js) the same way: only while their flag is on. With it
 // off, validation refuses `reconcile` on a dashboard, and every dashboard takes the build's own create-or-reuse path below.
 const isDeclaredDashboardOn = (d) => declaredFeatureOn('dashboards') && !!d && d.reconcile === 'declared';
+const { withDashboardWorkspaceScope } = require('./dashboard-recovery-workspace.js');
 const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey: declaredDashboardKey } = require('./dashboard-reconcile.js');
 // The create identity each retired declared key takes when it is declared again (managed-bindings.js incarnations()), handed to
 // every declared family's create catalog: a key whose root was proved gone and retired is created again under a fresh id, never
@@ -8501,56 +8502,62 @@ async function runSdkBuildPhases(spec, opts, owed) {
             }
           }
         }
-        const out = await settleDeclaredDashboard({
-          dashboard: dash,
-          catalog: dashboardCatalog,
-          sdk: provision,
-          store,
-          barrier: owed.barrier,
-          halt: declaredDashboardStop,
-          resolveTile: (tile) => dashboardTileOpts(spec, tile, result),
-          toComponent: dashboardComponent,
-          // A tile the settle creates is sent with its caption in every language of the organization, read with this
-          // (readProvisionedLanguages); without it such a send stops before it is made.
-          provisionedLanguages: opts.provisionedLanguages,
-          retainedCreationIds: creations.idsOf(dash.name) || [],
-          resolvedId,
-          // The run's typed approvals: only `dashboard:<key>` (and `dashboard:<key>/<tile>` for one tile's overwrite) approve
-          // this dashboard; --allow-destructive is what clears its description.
-          approvals: { adopt: featureCtx.authorizedAdoption, overwrite: featureCtx.authorizedOverwrite, destructive: featureCtx.authorizedDestructive },
-          // Solution membership of the bound dashboard, an adopted one included: read once per run (solutionMembers) and added unless proved.
-          ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.dashboard); },
-          sendObserver: opts.sendObserver || null,
-          // The records are written for the app and environment the store is bound to (as the forms helper writes them), so
-          // the identity the store checks each record against is the one it holds, never a caller's copy.
-          ctx: (() => {
-            const envelope = store && typeof store.snapshot === 'function' ? store.snapshot().envelope : null;
-            return envelope ? { appUniqueName: envelope.appUniqueName, environmentFingerprint: envelope.environmentFingerprint } : {};
-          })(),
-        });
-        // A read-only inspection (a match nobody approved adopting, already as declared) binds nothing and owes nothing; the
-        // publish below then has no group to pay. The app still names the row it found.
-        const id = out.id || resolvedId;
-        let pub;
-        try {
-                    // opts.publicationSettle paces the read-back after the publish (publishManagedScope `settle`); only a test sets it.
-          pub = await publishDeclaredDashboard({ store, barrier: owed.barrier, sdk: provision, key, id, settle: opts.publicationSettle });
-        } catch (err) {
-          // The refusal keeps its cause: a blocked uncertain publication carries its dispatch as data there (build-model-app.js
-          // blockedPublicationOf reads err.cause), never in the message.
-          const code = (err && err.code) || 'managed-publication-failed';
-          throw managedStop('dashboards', label, code, { cause: err, findings: [{ key, code, message: String((err && err.message) || err).replace(/\s+/g, ' ') }] });
-        }
-        if (pub && pub.withheld) {
-          markIncomplete({
-            phase: 'dashboards',
-            code: pub.held ? 'managed-publication-unverified' : 'managed-publication-owed',
-            message: pub.held
-              ? `${label}: its saved and published layers could not be read, so it was not published in this run; the change is saved, re-run the build to publish it`
-              : `${label}: its publish is owed to the managed binding store and was not sent in this run; the change is saved, re-run the build to publish it`,
+        // The settle and its publish share one dashboard workspace scope (dashboard-recovery-workspace.js): when the
+        // workspace copy is exactly this build's own acknowledged create draft, both work in an isolated workspace over the
+        // same connection and the copy is left as it is. Otherwise `scope.currentSdk` is `provision` itself.
+        await withDashboardWorkspaceScope({ sourceSdk: provision }, async (workspaceScope) => {
+          const out = await settleDeclaredDashboard({
+            dashboard: dash,
+            catalog: dashboardCatalog,
+            sdk: provision,
+            workspaceScope,
+            store,
+            barrier: owed.barrier,
+            halt: declaredDashboardStop,
+            resolveTile: (tile) => dashboardTileOpts(spec, tile, result),
+            toComponent: dashboardComponent,
+            // A tile the settle creates is sent with its caption in every language of the organization, read with this
+            // (readProvisionedLanguages); without it such a send stops before it is made.
+            provisionedLanguages: opts.provisionedLanguages,
+            retainedCreationIds: creations.idsOf(dash.name) || [],
+            resolvedId,
+            // The run's typed approvals: only `dashboard:<key>` (and `dashboard:<key>/<tile>` for one tile's overwrite) approve
+            // this dashboard; --allow-destructive is what clears its description.
+            approvals: { adopt: featureCtx.authorizedAdoption, overwrite: featureCtx.authorizedOverwrite, destructive: featureCtx.authorizedDestructive },
+            // Solution membership of the bound dashboard, an adopted one included: read once per run (solutionMembers) and added unless proved.
+            ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.dashboard); },
+            sendObserver: opts.sendObserver || null,
+            // The records are written for the app and environment the store is bound to (as the forms helper writes them), so
+            // the identity the store checks each record against is the one it holds, never a caller's copy.
+            ctx: (() => {
+              const envelope = store && typeof store.snapshot === 'function' ? store.snapshot().envelope : null;
+              return envelope ? { appUniqueName: envelope.appUniqueName, environmentFingerprint: envelope.environmentFingerprint } : {};
+            })(),
           });
-        }
-        if (id) result.created.dashboards[dash.name] = id;
+          // A read-only inspection (a match nobody approved adopting, already as declared) binds nothing and owes nothing; the
+          // publish below then has no group to pay. The app still names the row it found.
+          const id = out.id || resolvedId;
+          let pub;
+          try {
+                      // opts.publicationSettle paces the read-back after the publish (publishManagedScope `settle`); only a test sets it.
+            pub = await publishDeclaredDashboard({ store, barrier: owed.barrier, sdk: workspaceScope.currentSdk, key, id, settle: opts.publicationSettle });
+          } catch (err) {
+            // The refusal keeps its cause: a blocked uncertain publication carries its dispatch as data there (build-model-app.js
+            // blockedPublicationOf reads err.cause), never in the message.
+            const code = (err && err.code) || 'managed-publication-failed';
+            throw managedStop('dashboards', label, code, { cause: err, findings: [{ key, code, message: String((err && err.message) || err).replace(/\s+/g, ' ') }] });
+          }
+          if (pub && pub.withheld) {
+            markIncomplete({
+              phase: 'dashboards',
+              code: pub.held ? 'managed-publication-unverified' : 'managed-publication-owed',
+              message: pub.held
+                ? `${label}: its saved and published layers could not be read, so it was not published in this run; the change is saved, re-run the build to publish it`
+                : `${label}: its publish is owed to the managed binding store and was not sent in this run; the change is saved, re-run the build to publish it`,
+            });
+          }
+          if (id) result.created.dashboards[dash.name] = id;
+        });
       });
     };
     // Stored dashboard groups this run does not settle (the spec no longer declares them, or declares them with the build path

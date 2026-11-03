@@ -879,21 +879,44 @@ existing one is reused and its tiles are never edited.
   new tile that cannot be added without moving rows the dashboard already has, a part changed elsewhere
   since the last build, and a dashboard of the same name that an earlier build created and did not
   finish: that one is not taken over and not deleted. The dashboard is left as it is and the stop names
-  the cause.
+  the cause. A new dashboard is also not sent when the local copy the build assembled is not exactly the
+  draft it planned (`create-local-draft-changed`).
+- **A create whose answer was lost.** Before it sends a new dashboard, the build writes a receipt for it in
+  the binding store (its id, and a hash of the draft and of the exact request), and it writes the
+  acknowledgement there when the service answers that the dashboard was created, before anything else
+  runs. When the build stops after that (a crash, a lost connection, a failed later step), the next build
+  recovers it by itself: it does not send the create again, needs no `adopt:` approval, reads the
+  dashboard fresh to prove what it holds, binds it as created and publishes it. It does this only when the
+  local copy the SDK kept is still exactly the draft the receipt names. It does not refresh or delete that
+  copy: it works in a separate throwaway folder, and leaves the copy as it was. These cases still stop and
+  need you:
+  - The build stopped after the dashboard was sent but before the acknowledgement was written (or that
+    write failed). The stop names the cause; this is the earlier behavior. Settle it as described for a
+    lost create under `createIdentity` (**Local copy**): keep the declaration as it was, discard only the
+    local copy, and build again with `--authorize adopt:dashboard:<key>` if it asks for it.
+  - The local copy was changed since the send: the build stops with `workspace-copy-unsent-edits` and keeps
+    it. Keep the change you want apart, discard only the local copy, build again, then put your change into
+    the spec.
+  - A dashboard acknowledged and then deleted by hand is created again under the same id only when a fresh
+    read of both the saved and the published dashboard answers that it does not exist.
 - **Approvals.** The key is `dashboard:<key>`. A dashboard that already exists and that this build did
   not create is bound only with `--authorize adopt:dashboard:<key>`; the first binding needs it, later
   builds do not. `--authorize overwrite:dashboard:<key>` approves replacing a description changed
   elsewhere, and `overwrite:dashboard:<key>/<tile>` one tile changed elsewhere. A local copy that differs
-  from the server's stops the build (`workspace-copy-unsent-edits`).
+  from the server's stops the build (`workspace-copy-unsent-edits`), except the exact copy of an
+  acknowledged create (see **A create whose answer was lost**), which needs no approval.
 - **Publishing.** The dashboards step publishes the dashboard by itself, once, after its write, and only
   when the write is proved, with or without `--publish` (with it, the app's publish later in the build can
   publish it again). A dashboard this build cannot finish is not published, not even by the app's publish: an
-  app that would hold it is not written in that run.
+  app that would hold it is not written in that run. A recovered create is published by the build that
+  recovers it.
 - **Concurrent edits.** Dataverse does not version a dashboard's saved layer: a dashboard is a form row,
   and a plain read answers the published row's version, so a conditional write cannot reject a stale
   edit of it. The build re-reads the saved dashboard just before it writes and stops when it changed
   since the build read it. An edit made in Maker in the instant between that check and the write cannot
-  be detected: do not edit a declared dashboard while a build runs.
+  be detected: do not edit a declared dashboard while a build runs. Do not edit the local copy of a new
+  dashboard while its build runs, or before the next build after a stop: a changed copy is never recovered
+  over.
 - **Verify.** `--verify` reads each bound declared dashboard again by its id and holds it to what its last
   build proved: the managed tiles (each exactly once, with the target, name and size the build wrote), the
   description, and everything the spec does not declare (other tiles, tabs, sections and a tile's other
@@ -913,7 +936,12 @@ existing one is reused and its tiles are never edited.
   attempt, then by its `dashboardId`, and only then by its name. A `dashboardId` that is not the bound
   dashboard stops the build. `--verify` uses the same bound dashboard for every dashboard check, the site
   map's included. Before its first binding, `--verify` holds a declared dashboard to its `dashboardId`: if
-  that id names no dashboard, the check fails, even when another dashboard has the same name.
+  that id names no dashboard, the check fails, even when another dashboard has the same name. A new
+  dashboard's id stays the same for the spec, and a recovered create keeps it.
+- **The binding store.** The receipt and its acknowledgement are new, optional fields in the binding store
+  file; a store without them reads as before, and opening a store does not rewrite it. An older plugin
+  refuses a store that holds them (`managed-binding-store-unreadable`): build with this version or later.
+  Do not reset, delete or edit the file to let an older plugin read it, and never put back an older copy.
 - **A removed declaration.** When the spec no longer declares a dashboard whose last change is not
   settled, the build reads it before it builds any other dashboard:
   - A publish that is not confirmed is confirmed when a fresh read proves it live. It is never published
@@ -1106,6 +1134,8 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   "views": [{ "entity": "new_ticket", "name": "Open Tickets", "reconcile": "declared", "columns": ["new_name"] }] }
 ```
 
+- **Dashboards.** A declared dashboard already has an id fixed by the spec, without this field; there is
+  no dashboard value for `createIdentity`. A fixed id finds a row, but is never an approval to bind it.
 - **What gets a stable id.** A declared view or chart (`reconcile: "declared"`) is created with an id
   the spec fixes (from the solution, the table and the name). A build that lost the answer to its
   create, run again from the same or a fresh workspace, finds the row at that id and binds it instead

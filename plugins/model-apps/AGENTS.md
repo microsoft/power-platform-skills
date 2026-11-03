@@ -3017,6 +3017,45 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   applies unchanged: a GET answers the PUBLISHED row's ETag and `If-Match` does not protect the saved
   layer. The SDK re-reads the saved layer just before its PATCH; an edit landing between that read and
   the write cannot be detected, and nothing here claims a stale saved-layer write is rejected.
+  **An acknowledged create** (`lib/create-request-body.js`, `lib/dashboard-recovery-workspace.js`): when the
+  run's send observer is installed and the barrier gates the transport, a new dashboard's create is receipted
+  before it is sent; without them no receipt is made and recovery stays manual as before. `intendedDashboard`
+  keeps the complete build-owned **create draft** (the reseeded bag, tiles and captions). After `applyDashboard`
+  assembles the local copy, the copy must equal that draft (whole-artifact canonical hash), else
+  `create-local-draft-changed` and nothing is sent. `expectedCreateBody` serializes the draft through a fresh
+  throwaway SDK (`workspace.writeArtifact`, then a dry `pushArtifact` whose sink never transmits); real-bundle
+  tests pin that this body equals the wire POST for one and two languages. The store records the receipt on the
+  attempt (`noteDashboardCreateDraft`: root, send epoch, draft and body SHA-256) before the POST. The observer's
+  `withDashboardCreateReceipt` scope wraps only the create `pushChecked`; for the exact `systemforms` POST of
+  that root and body it persists a dispatch token before the bytes leave (`noteDashboardCreateDispatch`) and,
+  for a 200/201/204 with no error and no contradicting id, the acknowledgement before the SDK sees the answer
+  (`noteDashboardCreateAnswer`). A store failure keeps its own code and is thrown after `pushChecked` returns: a
+  failed dispatch record answers a synthetic, non-retried 409 and sends nothing; a failed answer record returns
+  the real response, so the SDK never replays the POST, and the receipt stays unacknowledged. A receipt proves
+  the row was created, not its content or its publication: fresh proof, `noteSaved`, consent, membership and the
+  whole-group commit still run. The commit turns an acknowledged receipt into `localCreateDraft` on the created
+  root (minted by the store only, kept for later generations of that root, dropped by a retirement; a caller
+  cannot add or change one). An epoch advance keeps the receipt's root and hashes and clears its dispatch and
+  acknowledgement; an acknowledged receipt never takes the proven-unsent `continue` claim. The empty seed cell
+  gets a fixed id (UUIDv5 under the section's catalog id, as `settleControlIds` derives BPF control ids):
+  the SDK's `createDefault` mints a random one on every call, and the draft hash must not change between runs.
+  The SDK copy of an acknowledged create is dirty (the SDK never recorded the answer). Preflight lets it through
+  only when it is the pending root with an acknowledged receipt, or the committed created root with
+  `localCreateDraft`, and its complete local artifact hashes to the recorded `draftSha256`; every other id keeps
+  the unsent-edit check, and another root, an unreadable copy or any changed value is
+  `workspace-copy-unsent-edits`. The build never refreshes or deletes that copy: `withDashboardWorkspaceScope`
+  (around the dashboard settle and publish in `sdk-build.js`) moves the dashboard's reads and writes to an
+  isolated SDK in a throwaway folder (same client, URL, language and solution header), checks the source copy
+  still hashes to the draft before membership and before the commit, and leaves it byte for byte as it was. So
+  the recovering build sends no second POST and needs no `adopt:` approval: it proves the row, commits it as
+  created and publishes it. A receipted create read absent in both layers (two `0x80040217` 404s) is sent again
+  under the same root only through the fenced branch of `recoverManagedAttempt` (`observeDashboardCreateResume`,
+  then `markSending` `claim: "resume"` with that observation; a stale observation refuses). What stays manual:
+  a stop inside the raw response handler before the acknowledgement is written (the receipt is not acknowledged:
+  the old `create-completion-required` and adoption path), a retained copy changed since the send, and a run
+  without the observer or gated transport. The pending declaration is kept as before. Tests: "dashboard create
+  receipt" and "created dashboard root" in `tests/managed-bindings.test.js`; the receipt and recovery tests in
+  `tests/dashboard-settlement-real-bundle.test.js`.
   **Verify and download** (`lib/declared-dashboard-io.js`): verify reads each bound declared dashboard fresh
   by its recorded id through the isolated reader (`readerFor(...).declaredDashboard`, which answers the
   artifact and the reading SDK's language) and runs `verifyDeclaredDashboard` (`managed-dashboard` check):
@@ -3227,7 +3266,9 @@ made before any number of retirements is refused. Adoption of a different id is 
 still wins over the catalog id, adoption by name or by the `adopt:` approval is unchanged, and a lost
 create keeps the incarnation in its pending attempt; in a retained SDK workspace the dirty-copy fence
 stops with `create-completion-required` and sends nothing until the owned local copy is discarded, after
-which the create resumes (or, when it landed, is adopted with approval) under the same id. A direct store
+which the create resumes (or, when it landed, is adopted with approval) under the same id. A dashboard
+whose create has an acknowledged receipt and an exactly matching retained draft is the one exception: it is
+recovered without approval through an isolated workspace (see **Dashboard** above). A direct store
 caller that passes no token is fenced by its handle's read and by key only. Views and charts are never
 retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js` ("incarnation"),
 `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after" / "after
@@ -3240,7 +3281,8 @@ and sends the same requests as before). For a declared view or chart, `lib/creat
 the id (`lib/creates-identity.js`), `lib/creates-port.js` creates or finds the row at that id, and
 `lib/managed-bindings.js` records the binding in the workspace (`managed-bindings.<hash>.json`, opened
 by `openBuildBindingGroups` for an apply with an app, a solution and an https environment). Every other
-kind keeps its current ids. A local copy at the id with an unsent edit, or a local create never
+kind keeps its current ids (a declared dashboard already has its catalog id; its create receipt adds no
+`createIdentity` value and does not make an id into consent). A local copy at the id with an unsent edit, or a local create never
 acknowledged, is refused before any read-back, reapply or send (`create-completion-required`, via
 `lib/creates-local.js`); there is no `overwrite:` approval for it, and no exception for the build's own
 draft: a diff cannot tell it from one a maker edited since (a name or description outside the

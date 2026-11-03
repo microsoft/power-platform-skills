@@ -31,8 +31,10 @@
 // Nothing calls this module until a declared form, dashboard, rule or process flow is wired to it.
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
-const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, checkDeclaration, checkCompletionBytes, rootCreateAcknowledged, publicationRiskApproval, publicationRemedy, blockedPublication } = require('./managed-bindings.js');
-const { canonicalJson } = require('./reconcile-common.js');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const crypto = require('node:crypto');
+const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, dashboardCreateResumable, checkDeclaration, checkCompletionBytes, rootCreateAcknowledged, publicationRiskApproval, publicationRemedy, blockedPublication } = require('./managed-bindings.js');
+const { canonicalJson, normalizeGuid } = require('./reconcile-common.js');
 const { LAYER_READERS } = require('./managed-layer-readers.js');
 
 const PUBLICATION_UNVERIFIED = 'managed-publication-unverified';
@@ -161,7 +163,10 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                                        (acknowledgedRoot false). The commit then records the new declaration as
  *                                        `originalDeclaration` under a new generation, through the same checks, with
  *                                        no effect. A no-op plan keeps the committed declaration as it is;
- *   apply({ token, plan, resolution, resuming?, continuing? })  send the approved change once; answers what it sent.
+ *   apply({ token, plan, resolution, sendEpoch, resuming?, continuing? })  send the approved change once; answers what
+ *                               it sent. `sendEpoch` is the epoch THIS send's markSending answered (null without an
+ *                               observer): a feature that keeps a create receipt (withDashboardCreateReceipt) records it
+ *                               under that epoch, never under one it rereads (a newer claimant's).
  *                               With a sendObserver, every mutation it makes must go through the observed transport;
  *   prove({ token, expected, applied, recovering, declaration })  a fresh read against `expected`; answers { savedProof,
  *                               acknowledgedRoot, acknowledgedChildCreates?, records, proof, consumerState,
@@ -181,6 +186,10 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                               the authored input to compare against; the answered consumerState is the feature's
  *                               own derived state and is committed as answered;
  *   ensureMembership({ root, records, recovering })  solution membership, for a clean reused root too;
+ *   beforeCommit?()             optional: run after membership and before the commit, on a send and on every recovery.
+ *                               A throw is a required failure (quarantined, the attempt and its hold kept, nothing
+ *                               committed). The dashboard feature checks here that the retained local copy it worked
+ *                               around is still the one it read (lib/dashboard-recovery-workspace.js);
  *   sendObserver?               the build's createAttemptSendObserver, already wrapped around its transport (refused
  *                               otherwise). markSending then arms the attempt's send window and `apply` runs inside it,
  *                               so an attempt whose window shows nothing carried out (a local failure before any
@@ -200,6 +209,12 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                               the attempt recorded (root, expected proof, declaration hash, publication; otherwise
  *                               `create-completion-required`), and `apply` sends the same create under the same token.
  *                               Its failure, or any other answer, quarantines like a failed proof.
+ *                               A dashboard create whose answer the observer receipted (dashboardCreateResumable: no
+ *                               committed group, no saved observation) is asked too, with a send observer, after the
+ *                               store fingerprinted the group (observeDashboardCreateResume): present is proved as
+ *                               above, needing no adoption approval (the receipt acknowledges the create); absent sends
+ *                               the same create again only through markSending `claim: 'resume'` with that fingerprint,
+ *                               refused when anything changed since, and never retried with a new one in this run.
  * A pending attempt still `prepared` (never marked sending) met by a no-op plan is retired with
  * store.retireUnsentAttempt and its hold ends; a store that refuses it stops the build with the hold kept.
  * Answers { result, committedGroup }: result is { noop: true } or { committed: true, recovered, resumed?, continued? }.
@@ -214,6 +229,8 @@ async function runManagedFeature(args) {
     if (typeof fn !== 'function') throw codedError(CODES.notSettled, `runManagedFeature needs ${name}`);
   }
   if ('adoptionApproved' in args && typeof args.adoptionApproved !== 'boolean') throw codedError(CODES.notSettled, 'runManagedFeature takes adoptionApproved only as a boolean the feature derives from its own adoption approval');
+  if (args.beforeCommit !== undefined && typeof args.beforeCommit !== 'function') throw codedError(CODES.notSettled, 'runManagedFeature takes beforeCommit only as a function');
+  const beforeCommit = args.beforeCommit || null;
   const adoptionApproved = args.adoptionApproved === true;
   if (!store || typeof store.readGroup !== 'function') throw codedError(CODES.notSettled, 'runManagedFeature needs the managed binding store');
   // A send observer that is not on the transport would arm windows nothing counts in, and an unsent-looking window is
@@ -354,7 +371,22 @@ async function runManagedFeature(args) {
       const out = await sendAgain(committed, pending, 'continuing', 'was declared differently since its change was prepared; it is not sent');
       return { result: { committed: true, recovered: true, continued: true }, committedGroup: out };
     }
-    if (typeof args.resumeCreate === 'function' && resumableCreate(committed, pending, effects)) {
+    // A dashboard create whose answer the observer durably receipted: its own branch, ahead of resumableCreate, which
+    // stays the rule for creates no answer acknowledged. The store is fingerprinted BEFORE the root is read by id, and
+    // markSending admits the resend only against that fingerprint, under its lease: a run that raced this one, or a
+    // receipt that changed, is refused there and not observed again in this invocation.
+    if (family === 'dashboard' && observer && typeof args.resumeCreate === 'function' && dashboardCreateResumable(committed, pending, effects)) {
+      step = 'resume';
+      const { observation } = store.observeDashboardCreateResume({ family, key });
+      const seen = await args.resumeCreate({ token, pending, expected: pending.expected });
+      const root = seen && seen.root;
+      if (root !== 'absent' && root !== 'present') throw codedError(CODES.notSettled, `${label}: resumeCreate answered neither "absent" nor "present" for its root`);
+      if (root === 'absent') {
+        const out = await sendAgain(committed, pending, 'resuming', 'was declared differently since its create was sent; it is not resent', { resumeObservation: observation });
+        return { result: { committed: true, recovered: true, resumed: true }, committedGroup: out };
+      }
+      // Present: proved below; the receipt is the acknowledgement requireAdoptionConsent reads.
+    } else if (typeof args.resumeCreate === 'function' && resumableCreate(committed, pending, effects)) {
       step = 'resume';
       const seen = await args.resumeCreate({ token, pending, expected: pending.expected });
       const root = seen && seen.root;
@@ -370,6 +402,7 @@ async function runManagedFeature(args) {
     requireAdoptionConsent(!!committed);
     step = 'membership';
     await ensureMembership({ root: pending.root, records: proved.records, recovering: true });
+    if (beforeCommit) await beforeCommit();
     step = 'commit';
     const group = commit(store, token, pending.baseGeneration, proved, adoptionApproved);
     barrier.release(token);
@@ -377,7 +410,7 @@ async function runManagedFeature(args) {
   }
 
   // Resolve and plan again under `flag` ('continuing' / 'resuming'), require the plan the attempt recorded, send it.
-  async function sendAgain(committed, pending, flag, differs) {
+  async function sendAgain(committed, pending, flag, differs, claimExtra = {}) {
     // The attempt was planned against the committed generation it recorded; anything else committed since is a
     // different base, and the change is not sent over it.
     step = 'resolve';
@@ -387,21 +420,26 @@ async function runManagedFeature(args) {
     const planned = await plan({ resolution, committed, [flag]: true });
     if (!samePlan(planned, pending)) throw codedError(CODES.completion, `${label} ${differs}`);
     checkCompletionBytes(planned.completionBytes, `${label}: plan \`completionBytes\``);
-    return send(planned, resolution, pending.baseGeneration, flag);
+    return send(planned, resolution, pending.baseGeneration, flag, claimExtra);
   }
 
   // Persist the expected proof, send once, prove from a fresh read, ensure membership, commit, end the hold. With a send
   // observer, markSending arms the attempt's send window and `apply` runs inside it: every mutation that reaches the
   // transport is counted on the attempt before it leaves, so a later run can tell a send that never left from one that
   // may have landed (recoverManagedAttempt).
-  async function send(planned, resolution, baseGeneration, flag = null) {
+  async function send(planned, resolution, baseGeneration, flag = null, { resumeObservation } = {}) {
     step = 'send';
     // The claim on the attempt's sends, made against the record the store rereads under its lease: a second run on the
     // same attempt, or one whose zero went stale while it resolved and planned, is refused here, before anything leaves.
     const claim = flag === 'continuing' ? 'continue' : flag === 'resuming' ? 'resume' : 'first';
     // The plan's estimate goes with the claim: an attempt whose reservation is smaller (or absent, an older build's)
     // acquires the rest here, admitted under the lease, or the send is refused before anything leaves.
-    const marked = store.markSending(token, planned.expected, { observed: !!observer, claim, ...(planned.completionBytes !== undefined ? { completionBytes: planned.completionBytes } : {}) });
+    const marked = store.markSending(token, planned.expected, {
+      observed: !!observer, claim,
+      ...(planned.completionBytes !== undefined ? { completionBytes: planned.completionBytes } : {}),
+      ...(resumeObservation !== undefined ? { resumeObservation } : {}),
+    });
+    const sendEpoch = marked && Number.isSafeInteger(marked.epoch) ? marked.epoch : null;
     // The declaration the attempt recorded before this send (prepareAttempt), as the store now holds it: the one prove
     // is given (the store commits it as the group's originalDeclaration). An attempt an earlier build prepared recorded
     // none; prove is then given the plan's.
@@ -410,7 +448,7 @@ async function runManagedFeature(args) {
     const window = observer ? observer.open(store, token, marked && marked.epoch !== undefined ? marked.epoch : null) : null;
     let applied;
     try {
-      applied = await apply({ token, plan: planned, resolution, ...(flag ? { [flag]: true } : {}) });
+      applied = await apply({ token, plan: planned, resolution, sendEpoch, ...(flag ? { [flag]: true } : {}) });
     } finally {
       // Trailing, not ended: a request `apply` left in flight, or a re-send of one, is still counted on the attempt.
       if (window) window.close();
@@ -426,6 +464,7 @@ async function runManagedFeature(args) {
     requireAdoptionConsent(baseGeneration !== null);
     step = 'membership';
     await ensureMembership({ root: planned.root, records: proved.records, recovering: false });
+    if (beforeCommit) await beforeCommit();
     step = 'commit';
     const group = commit(store, token, baseGeneration, proved, adoptionApproved);
     // The attempt is gone from the store: nothing of it is left to count.
@@ -597,6 +636,67 @@ function notStartedAnswer(req, res) {
   return NOT_STARTED_WITH_CODE.has(res.statusCode) && dataverseErrorCode(res.body) !== null;
 }
 
+// --- dashboard create receipts (withDashboardCreateReceipt) ---------------------------------------------------------------
+const plainGuid = (value) => normalizeGuid(value) || null;
+const sha256Hex = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+
+// A request or answer body as a JSON object, or null: makeRequest carries text (a string or a Buffer); an object is taken
+// as it is. An array, a scalar or text that does not parse is null.
+function jsonObjectOf(body) {
+  let value = body;
+  try {
+    if (Buffer.isBuffer(body)) value = JSON.parse(body.toString('utf8'));
+    else if (typeof body === 'string') value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) && !Buffer.isBuffer(value) ? value : null;
+}
+
+// Is `req` the receipt's own create? Only a direct POST to the systemforms collection (no `$batch`, the path read as the
+// service reads it: canonicalOperationPath) whose body names the root in `formid` and hashes to the recorded body, e.g.
+//   POST https://contoso.crm.dynamics.com/api/data/v9.2/systemforms
+//   {"formid":"0b7c…","name":"Declared Dashboard","type":0,"objecttypecode":"none","formxml":"<form …>",…}
+function receiptOwns(scope, req) {
+  const path = canonicalOperationPath(req && req.url);
+  if (path === null || /\$batch/i.test(path) || !/\/systemforms\/?$/i.test(path)) return false;
+  const body = jsonObjectOf(req.body);
+  if (!body || plainGuid(body.formid) !== scope.rootId) return false;
+  return sha256Hex(canonicalJson(body)) === scope.bodySha256;
+}
+
+// Did the service answer the create as made? The raw transport's answer (makeRequest: { statusCode, headers, body }, with
+// `error` / `incompleteResponse` on a cut-off one): 200, 201 or 204, complete; an empty body, or a JSON object with no
+// `error` whose `formid`, if any, is the root; an `OData-EntityId` header, if any, naming the root, e.g.
+//   OData-EntityId: https://contoso.crm.dynamics.com/api/data/v9.2/systemforms(0b7c…)
+// Anything else — a 202, a duplicate key, a timeout, another row's id — acknowledges nothing.
+function createAnswered(res, rootId) {
+  if (!res || res.error || res.incompleteResponse || ![200, 201, 204].includes(res.statusCode)) return false;
+  const raw = res.body;
+  const empty = raw === undefined || raw === null || raw === '' || (Buffer.isBuffer(raw) && raw.length === 0);
+  if (!empty) {
+    const body = jsonObjectOf(raw);
+    if (!body || body.error !== undefined) return false;
+    if (body.formid !== undefined && plainGuid(body.formid) !== rootId) return false;
+  }
+  const entityId = headerOf(res.headers, 'odata-entityid');
+  if (entityId !== undefined) {
+    const m = /\/systemforms\((\{?[0-9a-f-]{36}\}?)\)\/?$/i.exec(String(entityId).trim());
+    if (!m || plainGuid(m[1]) !== rootId) return false;
+  }
+  return true;
+}
+
+// The local answer to a receipt's create that is not sent: a final status (lib/retry-policy.js), so the client does not
+// send it again, in the barrier's refusal shape (lib/publication-barrier.js).
+function receiptRefused(message) {
+  return {
+    statusCode: 409,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ error: { code: 'dashboard-create-receipt-refused', message: `the dashboard create was not sent: ${message}` } }),
+  };
+}
+
 /**
  * The send observer of managed attempts: the build's transport, wrapped so that a mutation sent while an attempt's
  * window is open is recorded on that attempt before it leaves (recoverManagedAttempt reads the record). Install it
@@ -620,7 +720,53 @@ function notStartedAnswer(req, res) {
  */
 function createAttemptSendObserver() {
   const windows = new Set();
+  // The create receipt in force for the async context of one dashboard create push (withDashboardCreateReceipt). Its own
+  // instance per observer, so an observer never reads another's scope.
+  const receipts = new AsyncLocalStorage();
   let installed = false;
+  // Count `req` on every window now open or trailing, before it leaves. Answers the windows open at that moment.
+  const countOnWindows = () => {
+    const counted = [...windows];
+    for (const w of counted) w.store.noteAttemptDispatch(w.token, w.epoch);
+    return counted.filter((w) => w.state === 'open');
+  };
+  const noteNotStarted = (openAtSend, req, res) => {
+    if (!notStartedAnswer(req, res)) return;
+    for (const w of openAtSend) {
+      if (w.state !== 'open') continue;
+      // A failed write leaves this mutation counted as possibly applied: the record may overstate, never understate.
+      try { w.store.noteAttemptNotStarted(w.token, w.epoch); } catch { /* stays possibly applied */ }
+    }
+  };
+  // The exact create of a receipt's root (withDashboardCreateReceipt). Its dispatch is recorded first and the request is
+  // counted on the windows as any mutation; a store that refuses either sends nothing. A client re-send of the same POST
+  // (a transient answer, a refreshed token) keeps the receipt's one dispatch token and is counted again.
+  const receiptedCreate = async (scope, req, transport) => {
+    // A receipt write that already failed in this push: nothing more of it is sent.
+    if (scope.error) return receiptRefused('an earlier write of its create receipt failed');
+    let dispatchToken;
+    let openAtSend;
+    try {
+      ({ dispatchToken } = scope.store.noteDashboardCreateDispatch(scope.token, { sendEpoch: scope.sendEpoch, bodySha256: scope.bodySha256 }));
+      openAtSend = countOnWindows();
+    } catch (err) {
+      scope.error = err;
+      return receiptRefused(err && err.message ? err.message : String(err));
+    }
+    const res = await transport(req);
+    if (createAnswered(res, scope.rootId)) {
+      try {
+        scope.store.noteDashboardCreateAnswer(scope.token, { sendEpoch: scope.sendEpoch, dispatchToken, bodySha256: scope.bodySha256 });
+      } catch (err) {
+        // Never a network failure the client would retry: the real answer goes back as it came, the create is not sent
+        // again, and the store's error stops the build once the push returns. The answer may have landed, so nothing
+        // here says it did not start.
+        if (!scope.error) scope.error = err;
+      }
+    }
+    noteNotStarted(openAtSend, req, res);
+    return res;
+  };
   return {
     get installed() { return installed; },
     wrap(transport = require('./dataverse-auth.js').makeRequest) {
@@ -628,22 +774,56 @@ function createAttemptSendObserver() {
       installed = true;
       return async function observedRequest(req) {
         const method = String((req && req.method) || 'GET').toUpperCase();
+        const scope = receipts.getStore();
+        if (scope && method === 'POST' && receiptOwns(scope, req)) return receiptedCreate(scope, req, transport);
         if (!windows.size || method === 'GET' || method === 'HEAD') return transport(req);
-        const counted = [...windows];
-        for (const w of counted) w.store.noteAttemptDispatch(w.token, w.epoch);
         // Which windows were open when the request left: only those may record its not-started answer, and only if they
-        // are still open when the answer arrives (checked below).
-        const openAtSend = counted.filter((w) => w.state === 'open');
+        // are still open when the answer arrives (noteNotStarted).
+        const openAtSend = countOnWindows();
         const res = await transport(req);
-        if (notStartedAnswer(req, res)) {
-          for (const w of openAtSend) {
-            if (w.state !== 'open') continue;
-            // A failed write leaves this mutation counted as possibly applied: the record may overstate, never understate.
-            try { w.store.noteAttemptNotStarted(w.token, w.epoch); } catch { /* stays possibly applied */ }
-          }
-        }
+        noteNotStarted(openAtSend, req, res);
         return res;
       };
+    },
+    /**
+     * Run `fn` — the one push of a new dashboard's create — with its durable create receipt (store
+     * noteDashboardCreateDraft already recorded it, under the attempt `token` and the send epoch `sendEpoch` its
+     * markSending answered). Only the exact create is the receipt's: a direct POST to the systemforms collection, not a
+     * `$batch`, whose JSON body names `rootId` in `formid` and whose canonical hash is `bodySha256`. For that request:
+     *   1. before it leaves, the receipt's dispatch is recorded (store.noteDashboardCreateDispatch), then it is counted on
+     *      every window as any mutation is; a refusal of either sends nothing and answers a local final 409
+     *      (`dashboard-create-receipt-refused`, read as final by lib/retry-policy.js, so the client does not send again);
+     *   2. a success — 200, 201 or 204, a complete answer, any body a JSON object with no error, any `formid` or
+     *      `OData-EntityId` naming the root — is acknowledged (store.noteDashboardCreateAnswer) BEFORE the answer is
+     *      handed back. A refusal of that write still hands back the real answer, unchanged: a replaced answer would
+     *      make the client send the create again;
+     *   3. any other answer acknowledges nothing; a not-started answer is recorded on the windows as for any request.
+     * Every other request inside `fn` passes as without a receipt. A store error met in 1 or 2 is kept, and thrown here
+     * once `fn` has returned or thrown — after the push, so the push's own error handling never turns a store failure
+     * into an unknown write. Answers what `fn` answers.
+     */
+    withDashboardCreateReceipt({ store, token, sendEpoch, rootId, bodySha256 } = {}, fn) {
+      if (!installed) throw codedError(CODES.notSettled, 'a dashboard create receipt needs the send observer installed on the build\'s transport');
+      const root = plainGuid(rootId);
+      if (!store || typeof store.noteDashboardCreateDispatch !== 'function' || typeof store.noteDashboardCreateAnswer !== 'function'
+        || typeof token !== 'string' || !token || !Number.isSafeInteger(sendEpoch) || sendEpoch < 1 || !root
+        || typeof bodySha256 !== 'string' || !/^[0-9a-f]{64}$/.test(bodySha256) || typeof fn !== 'function') {
+        throw new TypeError('withDashboardCreateReceipt: a store, the attempt token, its send epoch, the root id, the body hash and the push are required');
+      }
+      const scope = { store, token, sendEpoch, rootId: root, bodySha256, error: null };
+      const rethrow = () => { if (scope.error) throw scope.error; };
+      return receipts.run(scope, async () => {
+        let out;
+        try {
+          out = await fn();
+        } catch (err) {
+          // The store's refusal is what stopped the push: it is the error the build reports, with its own code.
+          rethrow();
+          throw err;
+        }
+        rethrow();
+        return out;
+      });
     },
     /**
      * Open the send window of the attempt `token` in `store`, under the `epoch` its markSending answered (fenced: a
