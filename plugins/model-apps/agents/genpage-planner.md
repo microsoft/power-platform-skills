@@ -7,6 +7,9 @@ description: >-
   present for approval. Writes genpage-plan.md, for downstream agents to consume,
   once the orchestrator re-invokes it with the approval outcome.
   Called by the genpage skill — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: cyan
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -75,9 +78,10 @@ section MUST record commands and structured calls verbatim — not just their
 outcomes — because the eval harness greps the log for these tokens. Concretely:
 
 - Every shell command invocation is recorded on its own line as
-  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` `` /
+  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` /
   `` `node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'` `` /
-  `` `pac model list-languages --environment '<envUrl>'` `` (the fallback below). Include the literal flag values. Result goes on the next line.
+  `` `node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search '<term>'` `` /
+  `` `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` ``. Include the literal flag values. Result goes on the next line.
 - Every question **the orchestrator asks on your behalf** is recorded as
   `AskUserQuestion: <question text> → <selected option>`. The literal string
   `AskUserQuestion` is required. You do not make that call — you return a
@@ -90,7 +94,9 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
   unattended, never write the literal attended markers `AskUserQuestion:`,
   `EnterPlanMode called`, or `ExitPlanMode called` — not even in explanatory
   prose such as "was not called". Record only
-  `Unattended default: <question> → <answer> (<reason>)`. The evaluator treats
+  `Unattended default: <question> → <answer> (<reason>)` — for a data-semantics
+  question, `Unattended default: <assumption id> / <question id> → <answer> (<reason>)`,
+  whose reason never contains the word "approved". The evaluator treats
   those attended markers as real invocations.
 - The PAC CLI version output is recorded explicitly (the assertion checks
   for `> 2.10.0`-shaped text — `PAC CLI Version 2.10.x` is the canonical
@@ -115,8 +121,7 @@ pac help
 ```
 
 `pac help` output includes the version number. Verify the version is **> 2.10.0**
-(required for `pac model create` support and the genpage `upload` connector/Custom API
-flags). If the version is older, instruct the user to update:
+(the plugin's minimum; see the README prerequisites). If the version is older, instruct the user to update:
 `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
@@ -165,8 +170,8 @@ These questions are asked by the ORCHESTRATOR, one at a time. Return them as a
 ### Detect Configured Languages
 
 After confirming the user wants to create **new** pages, detect the languages the
-environment has provisioned. Try the plugin's own script first: it reads them through the
-Dataverse Web API with the Azure CLI (`az`) token.
+environment has provisioned with the plugin's own script. It is the only source: it reads them
+through the SDK with the Azure CLI (`az`) token, which every `/genpage` page operation needs anyway.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'
@@ -200,42 +205,19 @@ remembers (`references/localization.md` → *RTL Layout Support*).
   Record it that way and tell the user which LCID it is. Do not guess a code or a
   direction: the page builder gives such a language no entry of its own.
 
-**Any non-zero exit — or no answer before your shell tool gives up — means the script could not
-read the languages; decide by the exit status, never by the wording of the message.** A failed read prints
+**Any non-zero exit — or no answer before your shell tool gives up — means the script could not read the languages; decide by the exit status, never by the wording of the message.** A failed read prints
 `{ "ok": false, "error": "…", "code": "…" }` on stdout (`code` only when the SDK gave one); a
 usage error, such as an `--env` that carries a path, prints nothing there and names the flag on
 stderr. The cause is most often the Azure CLI: not installed, not signed in, too slow to answer,
-or signed in to another tenant than the `pac` profile. `/genpage` has never needed `az` for a
-page over existing entities or mock data, so whatever the cause, do not stop and do not ask the
-user to run `az login`: fall back to the command that read the languages before this script,
-which signs in through `pac`:
+or signed in to another tenant than the `pac` profile — the SDK reports all of these alike, as
+`CONNECTION_ERROR`, so no code tells them apart.
 
-```powershell
-pac model list-languages --environment '<envUrl>'
-```
-
-Pass the same `<envUrl>` the script was given: without `--environment`, `pac` answers for the
-active organization of its auth profile, which is not necessarily the environment this plan is
-for, and the plan would carry another environment's languages under this one's URL.
-
-Its table carries the same facts:
-
-```
-LCID Language                Code  RTL
-1025 Arabic (Saudi Arabia)   ar-SA Yes
-```
-
-Take each row's **LCID**, **Code** and **RTL** columns as the languages, and write the plan's
-lines from them as `<LCID> <Code> — RTL: Yes|No`. Then **say that you did**:
-
-- In `workflow-log.md`, record the script's command line with its result (its stdout, or its
-  stderr when stdout is empty), and then the `pac model list-languages` line with its table,
-  each verbatim.
-- In your report of the environment, say so: "Languages read with `pac model list-languages`:
-  the languages script could not read them (<its `error`, or its stderr>)."
-
-If `pac model list-languages` fails as well, report that and stop. Never assume the
-environment is English-only — the plan's localization decision depends on this answer.
+**A failed read ends language detection: report why and stop.** Put the script's `error` (or its stderr when
+stdout is empty) in your report of the environment, record the command and that result in `workflow-log.md`
+verbatim, and do not go on to requirements gathering with a guess. Never assume the environment is
+English-only — the plan's localization decision depends on this answer — and never read languages from any
+other source: there is none. Fixing the cause is the maker's (`az login` with the same identity as the
+`pac` profile; `check-auth.js` says which part is wrong).
 
 ### Continue Requirements Gathering
 
@@ -254,6 +236,18 @@ environment is English-only — the plan's localization decision depends on this
 4. **"Any specific requirements?"** — styling, features (search, filtering, sorting),
    accessibility, responsive behavior, interactions
 
+   **A look of the maker's own wins over the default model-driven look.** The maker can attach a
+   screenshot or mockup, name a website to match, or describe the style. Turn the request into
+   concrete values and write them in the plan's `## Design Preferences` as a `Styling:` line that
+   starts with `Maker-requested:`. Give each color as a hex value with its role (primary, accent,
+   background, text), the font family with a fallback, the corner radius, the density, the borders
+   and shadows, and how buttons, cards and tables look. Then add `(from: screenshot)`,
+   `(from: website <url>)` or `(from: description)`. Read a screenshot or a website for these values.
+   If you cannot open a website, ask the maker for a screenshot or for its colors and fonts. Do not
+   assume them. If part of the request cannot be matched (`references/rules.md` → *Maker-requested
+   styling*, "What cannot be matched"), say so in the plan. When the maker asks for no look, write
+   the defaults (`Fluent UI V9 defaults`).
+
 **Skip logic:**
 - If the user provided a description with the `/genpage` command, skip question 2.
 - If the description already specifies a data source, skip question 3.
@@ -262,24 +256,29 @@ environment is English-only — the plan's localization decision depends on this
 
 ### Entity Detection
 
-Use `pac model list-tables` to check which entities exist in the environment.
-Pass the user's requested entity logical names via `--search` (comma-separated):
+Use `scripts/list-tables.js` to check which entities exist in the environment.
+Pass the user's requested entity logical names via `--search` (comma-separated) with
+`--exact`; `<envUrl>` is the environment URL from the language step above:
 
 ```powershell
-pac model list-tables --search "entity1,entity2"
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search 'entity1,entity2' --exact
 ```
 
-**Important:** `--search` matches **substrings** across logical name, schema name,
-and display name — so `--search "account"` also returns `accountleads`,
-`accountlevelmonitoring`, etc. You **must** post-process the results and compare
-the `Logical Name` column against your requested entities using **exact equality**:
+It prints one JSON line: `{ "ok": true, "search": [...], "exact": true, "count": N,
+"tables": [{ "logicalName", "displayName", "schemaName", "isCustom" }], "missing": [...] }`.
 
-- For each requested entity, look for a row where `Logical Name == <entity>`.
+**Important:** without `--exact`, `--search` matches **substrings** across logical name,
+schema name, and display name — so `--search 'account'` also returns `accountleads`,
+`accountlevelmonitoring`, etc. `--exact` keeps only the tables whose logical name **is** a
+search term (any letter case) and names the terms that have none in `missing`:
+
+- For each requested entity, look for a table whose `logicalName` equals it.
 - If found → mark as **"exists"**.
-- If not found → mark as **"needs creation"**.
+- If it is in `missing` → mark as **"needs creation"**.
 
-Do NOT trust the raw output as "exists" just because the search returned a match —
-the search is fuzzy, your check must be exact.
+If the script fails (exit 1, `{ "ok": false, "error", "code" }`), entity detection did not
+happen. Report why (most often the Azure CLI is missing, signed out or signed in to another
+tenant) and stop: a failed read is never "no entities exist", and nothing is created on it.
 
 #### Dominant-prefix detection (for solution UX)
 
@@ -287,12 +286,12 @@ Also run a broader scan to detect the env's working prefix. This lets the
 solution question (later) steer the user to a consistent choice:
 
 ```powershell
-pac model list-tables
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --type custom
 ```
 
-From the full output, look at the **Custom** rows only (Type column = Custom).
-Extract each logical name's prefix (everything before the first `_`). Count
-prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
+`--type custom` keeps only the custom tables (`isCustom: true`; a table a managed solution
+brought counts as custom). Extract each `logicalName`'s prefix (everything before the first
+`_`). Count prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
 `mscrm`, `appsource`, `msft`).
 
 - If one non-system prefix accounts for **≥50%** of custom tables AND there
@@ -307,7 +306,7 @@ If any entities need creating, note that entity creation requires:
 - **Azure CLI (`az`)** logged in with the same identity as the active `pac auth` profile
 - A target solution (the planner asks you to pick one in the next step)
 
-Detection uses `pac model list-tables` natively; creation runs through the
+Detection uses `scripts/list-tables.js`; creation runs through the
 plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
 ### Connector Detection (handled by the orchestrator, not by you)
@@ -401,8 +400,8 @@ Two cases:
    the builder against exactly those. Return this only after your auth/environment and entity
    detection steps have run, so all three values are real.
 
-`genpage-customapi-builder` remains the single owner of the `custom-api` feature gate, Custom
-API discovery, and the binding contract. When the orchestrator forwards results it provides:
+`genpage-customapi-builder` remains the single owner of Custom API discovery and the binding
+contract. When the orchestrator forwards results it provides:
 
 - `custom-api-bindings.md` — the exact body for the plan's `## Custom API Bindings` section
   (either `No custom API bindings.` or the binding table).
@@ -414,13 +413,45 @@ Read `custom-api-bindings.md` and splice its contents verbatim into the
 If the request implies **no** server-side Custom API operation (plain Dataverse CRUD and/or
 mock data only), write `## Custom API Bindings` as exactly `No custom API bindings.`.
 
+### Built-in Dataverse Operation Detection (handled by the orchestrator, not by you)
+
+Two **built-in** Dataverse Functions — `WhoAmI` (the signed-in user's identifiers) and
+`RetrieveVersion` (the server's version) — can be offered to a page. They are not Custom APIs
+and never go into `## Custom API Bindings`. Do **not** probe the `dataverse-operations` flag, run
+`list-dataverse-operations.js`, or decide a binding yourself; `genpage-customapi-builder` owns
+the gate, the offer and the maker's selection (`references/dataverse-operations.md`).
+
+- When the maker affirmatively asks for one of them, or asks for the identity or server version
+  the page should show, return `{ "action": "dataverse_operation_discovery_required", "intent":
+  "<the maker's words>", "resolvedAction": "create" | "edit", "envUrl": "<the environment you
+  resolved>" }` — or include it beside `custom_api_discovery_required` when both are needed; the
+  orchestrator dispatches the builder once. A mere mention, a question, or "do not add" is not a
+  request. The `whoAmI` your auth preflight runs is neither signal.
+- When your prompt carries a `## Dataverse Operations` block from this run's builder, copy it
+  verbatim into the plan's `## Dataverse Operations` section, right after
+  `## Custom API Bindings` — never re-derive or edit it. Without one, write no such section: it
+  is optional, and absent means no new built-in operation.
+- When your prompt says `none — not added this run`, the builder was already dispatched for the
+  request and added none — its `dataverse-operations` gate is off, or the maker declined the
+  offer or selected neither. Plan the page without that call, write no `## Dataverse Operations`
+  section, and do not signal again: the request is complete without it.
+
 ### App Detection
 
 Run:
 
 ```powershell
-pac model list
+node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'
 ```
+
+It prints `{ "ok": true, "count": N, "apps": [{ "id", "name", "uniqueName", "description",
+"published", "unpublishedChanges" }] }` — the model-driven apps, drafts included. Offer each app by its
+`name` and `id`. `name` and `description` come from the app's saved layer (what a maker sees in the
+designer): an app whose rename is saved but not yet published (`unpublishedChanges: true`) is listed by
+its new name, which its users see only after a publish. `published` (users can open the app) and `unpublishedChanges`
+(a saved edit is waiting for a publish) are two separate facts about it — an app can be both published and
+have changes — so say which applies when it matters. If the script fails (exit 1), report why and stop: a
+failed read is never "no apps".
 
 - **0 apps:** Return a `needs_input` request: "No model-driven apps found. Would you
   like to create a new one, or cancel?"
@@ -514,8 +545,9 @@ in the plan's `## Environment`. Specifics:
   Omit `--publisher` to use the env's Default Publisher (prefix `new`).
   If the uniqueName collides, retry once with a numeric suffix.
 - **Default Solution** → `Solution: Default`, `Publisher Prefix: new`. Note: this
-  is mandatory because `pac model create` errors out with
-  `"The given solution name is not valid: ()"` if `--solution` is omitted.
+  is mandatory because `apps.js create` refuses a call without `--solution` (it has no
+  "active solution" fallback), and a system solution such as `Default` already holds every
+  component, so creating an app into it needs no solution add.
 
 If the chosen prefix differs from `detectedPrefix`, log a one-line warning to
 the user before continuing:
@@ -523,9 +555,95 @@ the user before continuing:
 > "Heads up — env has `<detectedPrefix>_*` tables but you chose `<chosenPrefix>`.
 > New tables won't match the prefix of your existing work."
 
+### Resolve Data Semantics (after Entity Detection, before the plan)
+
+Metadata can list the relationships a request **could** use; it cannot say which one the maker meant. Before
+you hand the plan back, settle every relationship and filter each page will use, and record what you decided
+that the request did not state.
+
+**1. Read the lookup metadata** of every existing table a page reads through a lookup (a join, a filter, a
+navigation to the referenced record, a picker that writes one), and of the target tables whose columns an
+approved filter or search needs (their primary name column):
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/get-lookup-metadata.js" --env '<envUrl>' --tables '<table1>,<table2>'
+```
+
+Exit 0 prints one JSON line, `{ "ok": true, "tables": [ { "logicalName", "primaryIdAttribute",
+"primaryNameAttribute", "lookups": [ { "column", "readProperty", "attributeType", "targets", "paths",
+"sharedPaths" } ] } ] }`, only after every read completed. Save it verbatim as
+`<working-dir>/lookup-metadata.json` and carry it across re-invocations. `targets` is each lookup's
+**complete** target set; `paths` are the concrete per-target navigation paths a filter may use;
+`sharedPaths` (Owner's `ownerid`, for one) are never a target discriminator — do not invent a path such as
+`ownerid_team`. Any non-zero exit (`{ "ok": false, "code", "error" }`) means discovery failed: report it and
+stop, or ask for a supported alternative — never read a failure as "no candidates" or "one candidate". A table
+this run will create has no metadata yet: record its lookups as `planned` (below).
+
+**2. Ask rather than assume** when the meaning is open. Return the existing `needs_input` request — the
+orchestrator asks and re-invokes you — never a log line in place of the question:
+
+| Situation | Decision |
+|---|---|
+| Explicit lookup and predicate, valid in metadata | Record the stated meaning; do not ask again. |
+| Several relationships can implement "opportunities for this account" | Ask which lookup, and whether contacts roll up; show each source column and its complete targets. No default. |
+| "Recent", "open", "my" or another unresolved column, value or range | Ask, offering the discovered fields and choice values. Metadata alone cannot choose the business predicate. |
+| Unqualified list, no restriction requested | Add no active-only, owner-only or date restriction; record that no extra restriction is added. |
+| Explicit direct-relationship intent, exactly one valid candidate, no open target or roll-up choice, but the mapping still needs confirming | Ask with exactly one option marked `"default": true`; settle it only after the answer returns. |
+| Unstated layout, sort, page size or the mandatory initial-read cache | Record a visible `planner-default`; ask nothing. |
+| Failed or partial metadata | Stop, or ask for a supported alternative. |
+
+A question with several candidates carries no default:
+
+```json
+{ "action": "needs_input",
+  "why": "The possible account relationships select different opportunities.",
+  "questions": [ { "id": "opportunities-account-scope",
+    "question": "Which opportunities should this account show?",
+    "options": [
+      { "label": "Parent account", "description": "Filter parentaccountid; metadata targets account." },
+      { "label": "Direct customer", "description": "Filter customerid for account customers; metadata targets account and contact." },
+      { "label": "Customer plus contacts", "description": "Include direct account customers and contact customers linked through the verified contact relationship." } ],
+    "multiSelect": false } ] }
+```
+
+Only a sole candidate that implements an already explicit meaning is marked as the default:
+
+```json
+{ "action": "needs_input",
+  "why": "Confirm the sole metadata-backed direct relationship implementing the requested scope.",
+  "questions": [ { "id": "opportunities-account-scope",
+    "question": "Use the direct account-customer relationship, excluding contact roll-up?",
+    "options": [ { "label": "Direct customer account only",
+      "description": "The request excludes contact roll-up and metadata leaves exactly this matching path.",
+      "default": true } ],
+    "multiSelect": false } ] }
+```
+
+Return the metadata you read and the assumption ids you reserved alongside the request. On re-invocation, bind
+the returned answer to the same question id and candidates, and only then write the settled assumption. In an
+unattended run the orchestrator answers with the marked default and records
+`Unattended default: <assumption id> / <question id> → <answer> (<reason>)` — copy that line into the
+assumption's `Default record`. A question with no marked default halts an unattended run; plan approval never
+answers a semantic question. Whether a phrase entails a filter, and whether a default is genuinely safe, is
+your judgment: the validators prove the records' shape and consistency, not that judgment.
+
+**3. Record the result** in the plan (`references/plan-schema.md`, "Assumptions, data semantics and lookup
+metadata"): one `## Assumptions` entry per decision the request did not state (exactly `No assumptions.` when
+there is none); per page, its `#### Data semantics` (`R<n>`/`F<n>` decisions, each citing its assumption or
+quoting the requirement — `None.` when there is none) and its `#### Lookup metadata` (complete targets,
+uses, `observed` with concrete paths from `lookup-metadata.json`, or `planned` for a table not created yet —
+`None.` when the page uses no lookup). Keep `## User Requirements` exactly the original request.
+
+**4. Reconcile after provisioning.** When the orchestrator re-invokes you with `Lookup reconciliation:` and a
+fresh `lookup-metadata.json` (after Phase 2 created the tables), promote each `planned` lookup whose source
+column and complete target set the read confirms to `observed` and add its measured paths — change nothing
+else. If the read disagrees (another target set, no such column), do not rewrite the plan: return a revised
+plan for approval, naming the difference.
+
 ## Step 5 — Hand the Plan Back for Approval
 
-Create tasks via `TaskCreate`:
+If you have a task tool (`TaskCreate`, or `todo`), create tasks; if you have none, skip this
+and never say you created a task:
 1. "Design page plan and data strategy"
 2. "Write plan document (genpage-plan.md)"
 
@@ -536,10 +654,34 @@ plan mode does not reach the user from a subagent.
 ```
 ## Genpage Plan
 
+### Assumptions
+#### A1 — [title]
+- Decision: [what the plan does]
+- Alternatives considered: [the other candidates]
+- Evidence: [metadata: … | sample: … | default: …]
+- Resolution: [user-confirmed | planner-default | unattended-default]
+[- Question / - Answer / - Default record, exactly as the plan will carry them]
+[or exactly: No assumptions.]
+
 ### Pages (N total)
 | Page | File | Purpose | Entities |
 |------|------|---------|----------|
 | [Name] | [name].tsx | [one-line description] | [entity1, entity2] |
+
+### Data Semantics
+#### [name].tsx
+##### R1
+- Kind: relationship
+- Definition: [source column, target scope, predicate and value source, null and roll-up behaviour]
+- Source: [A1, or User Requirements with a - Requirement quote:]
+[or exactly: None.]
+
+### Lookup Metadata
+#### [name].tsx
+| Table | Column | Read property | Targets | Used by | Metadata state |
+|-------|--------|---------------|---------|---------|----------------|
+| [source table] | [lookup column] | _[column]_value | [complete target set] | [decision ids; purposes] | [observed / planned] |
+[the concrete path table, the - Evidence: and - Read target strategy: lines, as in the plan — or exactly: None.]
 
 ### Data Strategy
 - Entities needed: [list]
@@ -547,6 +689,7 @@ plan mode does not reach the user from a subagent.
 - Entities to create: [list — with columns, types, relationships, choices]
 - Connector bindings: [ready-to-bind connectionreference logical names, or "none"]
 - Custom API bindings: [bound Custom API names (Action/Function), or "none"]
+- Built-in Dataverse operations: [the WhoAmI / RetrieveVersion rows this run's builder selected, each a user-triggered button with availability, runtime and privileges not checked — or "none"]
 - Sample data: will ask after entity creation
 
 ### App
@@ -556,13 +699,18 @@ plan mode does not reach the user from a subagent.
 - [solution unique name and prefix — always shown, "Default / new" for code-only flows]
 
 ### Localization
-- [each detected language as `<LCID> <Code> — RTL: Yes|No` — the `summary` lines of `list-languages.js`,
-  or the rows of `pac model list-languages` when you fell back to it (e.g. `1025 ar-SA — RTL: Yes`) —
+- [each detected language as `<LCID> <Code> — RTL: Yes|No` — the `summary` lines of `list-languages.js`
+  (e.g. `1025 ar-SA — RTL: Yes`) —
   or "English only — no localization needed"]
 
 ### Design
 - [styling preferences, features, accessibility notes from requirements]
 ```
+
+The preview shows `### Assumptions` **first**, so the maker sees what was assumed before the page list, and
+carries the same records the plan will (`references/plan-schema.md`, at the preview's own heading levels; a
+page's records are grouped under its file). The provenance gate compares them field by field with the
+written plan, so write them unchanged in Step 6.
 
 The orchestrator calls `ExitPlanMode` to request user approval and tells you the
 outcome when it re-invokes you.
@@ -585,7 +733,10 @@ ${PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
-the exact heading. Page filenames in the `## Pages` table must be unique, and use only letters,
+the exact heading. Write `## Assumptions` right after `## User Requirements`, and in each page's
+specification its `#### Data semantics` and `#### Lookup metadata` after the bullet fields: the records
+the maker approved, unchanged — only their heading levels differ from the preview's. Keep
+`## User Requirements` the original request, byte for byte; a later answer belongs in an assumption. Page filenames in the `## Pages` table must be unique, and use only letters,
 digits, `-`, `_` and `.` — kebab-case such as `project-overview.tsx`, never a space or a shell
 character: the dispatch gate refuses any other name, and the build halts.
 
@@ -602,7 +753,7 @@ constructs `${prefix}_${suffix}` at runtime.
   no underscores, no separators)
 
 **Even if you're inspired by an existing entity in the env** (e.g., you ran
-`pac model list-tables` and saw `crb2b_testclaude007`), do NOT copy its prefix
+`list-tables.js` and saw `crb2b_testclaude007`), do NOT copy its prefix
 into the plan. Strip the prefix and write only the suffix. The prefix you
 record in `## Environment` is the one downstream agents will use — and any
 prefix you embed in a column name is a silent footgun.
@@ -625,6 +776,15 @@ layouts, 2-wizard-multi-step.tsx for wizards, 12-dialog-form-overlay.tsx for any
 page with a modal/dialog — create/edit forms, confirm-delete, detail-in-a-dialog).
 Do NOT list reference docs as samples — only files under `samples/`.
 
+For a page that navigates to an existing page that this plan does not build (a page of the chosen
+app, by its page id), read what that page accepts before you plan the call. Follow
+`${PLUGIN_ROOT}/references/rules.md` → **Page Input > What another page accepts**: download the page
+into `<working-dir>/targets` with `genpage.js download` and read its `pageInput` reads. Then write
+in the page's **Interactions** the target's page id, the exact `data` keys it reads (each with the
+type it converts the value to), and whether it reads record context (`pageInput.recordId`,
+`pageInput.entityName`), which the call passes at the top level, not in `data`. If it reads neither,
+write that it takes no input. The page-builder uses what you wrote and never guesses it.
+
 ### CRITICAL — Pre-write validation pass
 
 Before calling `Write` to save `genpage-plan.md`, scan the in-memory document
@@ -639,6 +799,9 @@ and verify the prefix discipline:
 
 2. If any value fails, do NOT write the plan. Rewrite the offending values to
    their bare suffix form and re-validate. Only write once all values pass.
+
+3. Every relationship and every server-side or client-side filter used in `## Per-Page Specifications` traces to the user's stated text in `## User Requirements` or a named `## Assumptions` entry. The builder introduces no unrecorded business predicate, relationship or roll-up.
+   Validation proves structure, ID resolution, quote presence and agreement with approved structured decisions. It does not prove natural-language entailment, judge materiality, or discover arbitrary contradictory prose. Those remain planner/reviewer responsibilities, supplemented by scenario-specific code checks.
 
 This is a hard gate. If you can't produce a valid plan after one rewrite,
 abort and report the offending name to the user — better to fail loudly than

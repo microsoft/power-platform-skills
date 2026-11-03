@@ -313,7 +313,7 @@ ASSERTIONS.set('changed-only: page bytes use a page-only fast path data-model ed
 // generate-pages stage -------------------------------------------------------
 
 ASSERTIONS.set('generate-pages: no PAGEREF_ navigation target is left unresolved', ({ facts }) => {
-  if (facts.page === null) return skip('pageref-resolver.js not landed (Plan 3)');
+  if (facts.page === null) return skip('pageref-resolver.js not landed');
   return facts.page.unresolved.length
     ? fail(`unresolved PAGEREF_: ${facts.page.unresolved.join(', ')}`)
     : PASS;

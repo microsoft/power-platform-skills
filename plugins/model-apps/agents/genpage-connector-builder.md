@@ -6,6 +6,9 @@ description: >-
   connection references when needed, and produces the ## Connector Bindings
   contract. Invoked only by the top-level genpage orchestrator from BOTH the
   create and edit flows; never invoked by planners or directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for
+  a generic React or web app, or when the user rules out Power Platform, Dataverse,
+  or model-driven apps (for example "no Power Platform").
 color: green
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -93,10 +96,10 @@ Write both of these into the working directory, then return a one-line summary:
    orchestrator forwards this verbatim to the planner/edit-planner; the create
    planner splices it into `genpage-plan.md`.
 2. **`connectors.json`** — the working-dir binding file for
-   `pac model genpage upload --connectors`. It is a **bare JSON array** of
+   `genpage-upload.js --connectors`. It is a **bare JSON array** of
    bindings (see `${PLUGIN_ROOT}/references/connectors.md`), or `[]` when there
    are no bindings. Never the `{ "connectorBindings": [...] }` object wrapper —
-   that is the deployed page `config.json` shape, which `pac` writes.
+   that is the deployed page `config.json` shape, which the upload writes for you.
 
 Return a concise summary, but the files are the contract. The orchestrator must
 forward the entire `connector-bindings.md` body and the `connectors.json` path (or
@@ -120,15 +123,29 @@ is actually bound to that connection (its `connectionId` matches) — prefer tho
 Offer ready-to-bind choices first in a `needs_input` request, showing the
 connectionreference logical name, connector id, and connection display name.
 
-If the script fails (`ok: false`), discovery did not happen — it refuses PAC output
-it cannot read rather than report it as "no connections". Do **not** treat that as
-"no suitable connection exists" below, and never create a connection on it: return
-`needs_input` with the script's error.
+The listing also says where the connections came from: `connectionsSource` is `"sdk"`
+(the Power Apps connections API, read with the Azure CLI's token for that service) or
+`"pac"` — then `connectionsFallback` (`{ code, message }`) says why the SDK was not
+used (an environment in a cloud it does not read connections in, a token the service
+refused — HTTP 401 or 403, `CONNECTIVITY_UNAUTHORIZED` —, a service that has been
+switched off, or no Azure CLI token for the Power Apps service) and `pac` listed the
+connections instead. The rows have the same fields either way. Record the source in the log.
+
+If the script fails (exit 1), discovery did not happen — it never reports a failed read as
+"no connections". Every failure past the arguments — the SDK's read, `pac`, the connection
+references, an environment URL that is not a Dataverse one — prints one
+`{ "ok": false, "error" }` line on stdout, with the error's `code` when it has one (the
+SDK's errors do), and the message on stderr — a failure of `pac`, which is asked only because
+the SDK refused, also carries `connectionsFallback`, the reason `pac` was asked, so read it
+before deciding what to repair; a usage error (no URL, an unknown flag) is the
+problem on stderr alone. Whichever it is, do **not** treat that as "no suitable connection
+exists" below, and never create a connection on it: return `needs_input` with the script's
+error.
 
 After selecting any existing connection — before branching into tabular versus
 REST/action discovery — derive `connectorName` from the final path segment of
-its full `connectorId`. PAC metadata commands use `connectorName`; binding files
-retain the full `connectorId`.
+its full `connectorId`. `connector.js` takes the short `connectorName` (or the full
+API id) as `--connector-id`; binding files retain the full `connectorId`.
 
 ### No suitable connection exists — set one up
 
@@ -201,31 +218,38 @@ node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logic
 
 - Identify the connector from the chosen connection.
 - Enumerate datasets, then tables, for that connection (connector runtime
-  metadata discovery; `list-connector-tables` may help pick the table).
+  metadata discovery). `pac model genpage list-connector-tables --environment '<ENV_URL>'
+  --connector-id <connectorName> --connection-id <connId> [--dataset <ds>]` may help pick
+  the table: no script replaces it, because the plugin cannot build the client the SDK reads a
+  connector's tables with.
+  Always pass `--environment`; without it `pac` answers for the active organization of its
+  auth profile, which may be another environment.
 - Store SharePoint datasets as the **site URL** and tables as **list GUIDs** (not
   display names); put display names only in `Table Display Names`.
 
-**REST/action connectors** (weather, …): resolve the operation and its schema.
+**REST/action connectors** (weather, …): resolve the operation and its schema with
+`scripts/connector.js`. Every form takes the environment (`--env`, the `<ENV_URL>` you were
+given), the connector (`--connector-id`) and the selected connection (`--connection-id`, the id
+`list-connections.js` printed).
 
-- Pre-flight that `pac model genpage --help` lists `list-connector-operations`
-  and `get-connector-schema`.
-- PAC metadata commands require the already-derived **connector name**, even
-  though the flag is named `--connector-id`. Keep the full connectorId value
-  (`/providers/Microsoft.PowerApps/apis/...`) for `connectors.json`.
+- `--connector-id` takes the already-derived **connector name** (or the full API id). Keep the
+  full connectorId value (`/providers/Microsoft.PowerApps/apis/...`) for `connectors.json`.
 - Enumerate operations:
   ```powershell
-  pac model genpage list-connector-operations --connector-id <connectorName> --connection-id <connId>
+  node "${PLUGIN_ROOT}/scripts/connector.js" operations --env '<ENV_URL>' --connector-id <connectorName> --connection-id <connId>
   ```
 - Let the maker pick via a `needs_input` request when the requirement doesn't imply
   exactly one operation.
 - Discover the operation schema:
   ```powershell
-  pac model genpage get-connector-schema --connector-id <connectorName> --connection-id <connId> --operation <op>
+  node "${PLUGIN_ROOT}/scripts/connector.js" schema --env '<ENV_URL>' --connector-id <connectorName> --connection-id <connId> --operation <op>
   ```
-- Parse `{ operation, parameters:[{ name, required }], response:{...} }` and
-  record `Operations`, `Parameters`, and `Response`.
-- If either verb is unavailable, fall back to asking the maker for the operation,
-  parameters, and expected response shape. Never fabricate names.
+- Parse `{ ok, operation, parameters:[{ name, required }], response:{...}, source }` and
+  record `Operations`, `Parameters`, and `Response`. `operations` answers
+  `{ ok, operations:[{ name, summary }], source }`. `source` is `"sdk"` or `"pac"`; with `"pac"`
+  the answer carries `fallback` (`{ code, message }`), the reason the SDK was not used.
+- If the script fails (exit 1, `{ "ok": false, "error", "code" }`), fall back to asking
+  the maker for the operation, parameters, and expected response shape. Never fabricate names.
 
 ## Step 4 — Column/schema discovery (every tabular binding)
 
@@ -234,12 +258,15 @@ The binding tells the runtime *where* to fetch; `Fields` tells the page-builder
 connection id, dataset, and table:
 
 ```powershell
-pac model genpage get-connector-schema --connector-id <connectorName> --connection-id <connId> --dataset <ds> --table <tableId>
+node "${PLUGIN_ROOT}/scripts/connector.js" schema --env '<ENV_URL>' --connector-id <connectorName> --connection-id <connId> --dataset <ds> --table <tableId>
 ```
 
-Parse `{ table, columns:[{ name, type, required }] }` and record each column in
+Parse `{ ok, table, columns:[{ name, type, required }], source }` and record each column in
 the binding's `Fields` cell, e.g.
 `PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime)`.
+This form is always answered by `pac` (`"source": "pac"`, no `fallback`): the plugin cannot build the client
+the SDK reads a connector's tables with, so `pac` must be signed in to an account that can reach `<ENV_URL>`. `--table`
+is the table's id (a SharePoint list GUID), never a display name.
 Treat all connector fields as **optional** — connector rows are dynamic; the
 generated TSX declares `field?` regardless of the discovery payload's `required`.
 
@@ -253,7 +280,7 @@ For SharePoint, filter columns before recording `Fields`:
 - Treat `type:"object"` choice columns as `{Value:string}` (SharePoint choice
   values arrive as `{ Value }`).
 
-Fallback when the PAC verb is unavailable: sample the top 1 row and record its
+Fallback when `connector.js` fails for this form: sample the top 1 row and record its
 keys/observed shapes, or ask the maker via a `needs_input` request. **Never fabricate
 field names.** If fields cannot be discovered or supplied, keep the binding out of
 the result rather than letting the page-builder guess.

@@ -63,7 +63,7 @@ function topBorder(title) {
 const BOTTOM = `└${'─'.repeat(INNER + 2)}┘`;
 
 // Display label for a field logical name. compileFormIntent emits push-ready cells that OMIT the
-// label (the SDK adapter derives it from attribute metadata at push, per T4), so the preview
+// label (the SDK adapter derives it from attribute metadata at push), so the preview
 // resolves the display name itself from the spec entity (falling back to the logical name).
 //
 // A relationship's lookup is not in entities[].columns, so `lookups` (logical -> label, from

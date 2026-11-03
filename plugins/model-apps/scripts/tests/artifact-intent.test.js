@@ -70,10 +70,10 @@ function makeHeavySpec() {
 test('fieldCellIntent: returns minimal bound-field cell — omits classId, label, type, id, visible', () => {
   const cell = fieldCellIntent('new_Name');
   assert.strictEqual(cell.control.fieldName, 'new_name', 'fieldName is lowercased');
-  // SDK T4: adapter derives classId and label from Dataverse attribute metadata.
+  // The adapter derives classId and label from Dataverse attribute metadata.
   // If we emitted them here they would drift from the adapter's values.
-  assert.ok(!('classId' in cell.control), 'classId must be omitted (SDK T4)');
-  assert.ok(!('label' in cell.control), 'label must be omitted (SDK T4)');
+  assert.ok(!('classId' in cell.control), 'classId must be omitted (the adapter derives it)');
+  assert.ok(!('label' in cell.control), 'label must be omitted (the adapter derives it)');
   assert.ok(!('type' in cell.control), 'type must be omitted');
   assert.ok(!('isRequired' in cell.control), 'isRequired omitted when not required');
   assert.ok(!('id' in cell), 'cell id must be omitted');
@@ -334,7 +334,7 @@ test('compileFormIntent: QuickCreate clamps section columns to 1 regardless of f
   assert.strictEqual(result.formType, 'QuickCreate');
 });
 
-test('compileFormIntent: auto layout field cells omit classId and label (SDK T4)', () => {
+test('compileFormIntent: auto layout field cells omit classId and label (the adapter derives them)', () => {
   const spec = makeSpec();
   const result = compileFormIntent(spec, { entity: 'new_item' });
   const allCells = result.tabs[0].columns[0].sections[0].rows.flatMap(function (r) { return r.cells; });

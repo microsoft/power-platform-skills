@@ -34,11 +34,15 @@ const {
   makeChoiceReader,
   makeGlobalChoiceReader,
 } = require('../lib/view-filter-labels.js');
-const { runSdkBuild, viewDef, annotateLivePlan, planFor, BuildHalt } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, viewDef, annotateLivePlan, planFor, BuildHalt } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { verifySpec } = require('../lib/verify-spec.js');
 const { lintAppSpec } = require('../lib/spec-lint.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
-const { isTransientHalt, buildModelApp } = require('../build-model-app.js');
+const { isTransientHalt, buildModelApp: buildModelAppInPlace } = require('../build-model-app.js');
+const buildModelApp = inOwnFolder(buildModelAppInPlace);
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 
@@ -873,13 +877,16 @@ test('ADO 6691114 pre-flight: what the environment already held is final and not
   assert.ifError((await had.run(spec, { phases: FULL })).error);
   assert.strictEqual(castReads(had), 4, 'read once, before the build; the views phase took that answer');
   assert.deepStrictEqual(viewCondition(had.defs, 'Gold customers', 'new_tier'), ['227350001']);
-  // A status reason the build inserts is not there to read until it has run, so the views phase asks again: eight.
+  // A status reason the build inserts is not there to read until it has run, so the views phase
+  // asks again: eight resolver casts, plus the data model's one deferred no-op status proof.
   const byTable = { account: { Status: { statuscode: opts([1, [1033, 'Active']], [2, [1033, 'Inactive']]) } } };
   const made = viewsEngine({ byTable });
   made.sdk.insertStatusValue = async (logical, o) => { byTable.account.Status.statuscode.push({ Value: 100000000, Label: lbl([1033, o.label]) }); return 100000000; };
   const withReason = specOf([{ ...ACCOUNT, statusReasons: [{ label: 'Passed QA', state: 'Active' }] }], [view('account', [eq('statuscode', 'Passed QA')], 'Passed accounts')]);
   assert.ifError((await made.run(withReason, { phases: FULL })).error);
-  assert.strictEqual(castReads(made), 8, 'four cast reads before the build, four after it');
+  assert.strictEqual(castReads(made), 9, 'four resolver casts before the build, four after it, and one status no-op proof');
+  assert.strictEqual(made.client.paths.filter((p) => /StatusAttributeMetadata\?/.test(p)).length, 3);
+  assert.deepStrictEqual(viewCondition(made.defs, 'Passed accounts', 'statuscode'), ['100000000']);
   // A run with nothing written before the views phase has no pre-flight, so its own check is the only one.
   const only = viewsEngine({ byTable: { new_customer: { Picklist: { new_tier: TIER } } } });
   assert.ifError((await only.run(spec, { phases: ['views'] })).error);

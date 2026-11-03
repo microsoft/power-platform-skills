@@ -132,7 +132,7 @@ test('decide: ineligible (debt-carrying) snapshot -> full even for a page edit',
   assert.match(d.reason, /not eligible|debt/);
 });
 
-test('decide: eligible snapshot but app DELETED (live appId null) -> full, not a false noop (C1)', () => {
+test('decide: eligible snapshot but app DELETED (live appId null) -> full, not a false noop', () => {
   const prior = annotate(baseSpec(), 'v1');
   const env = seedFromPrior(prior); // records appId app-1
   // Same spec (would be noop) but the live app is gone -> identity fails -> full build, never noop.
@@ -265,6 +265,44 @@ test('run: FAST apply calls buildModelApp pages-only + re-blesses the snapshot e
   } finally { rm(dir); }
 });
 
+// The fast apply writes the changed pages, and a navigation target only when it is absent (the pages phase makes it first). The build checks a page's bindings before it writes anything, before the pages
+// phase has read which targets exist, so the flow tells it the pages its snapshot records the last verified apply deployed: a target among them is not checked, and one that is not may be absent.
+test('run: a FAST apply tells the build which pages its snapshot records as deployed — each with a page id, and no other', async () => {
+  const dir = ws();
+  try {
+    const prior = annotate(baseSpec(), 'v1');
+    const env = snap.makeEnvelope(LIVE, { generation: 'g0' });
+    env.priorSpec = prior;
+    env.artifacts = { pages: {
+      overview: { pageId: 'page-1', sourceSha: prior.pages[0].__contentSha, deployedSha: prior.pages[0].__contentSha },
+      detail: { pageId: 'page-2', sourceSha: 'sha-detail', deployedSha: 'sha-detail' },
+      unplaced: { pageId: null, sourceSha: 'sha-unplaced', deployedSha: 'sha-unplaced' },
+    } };
+    snap.markEligible(env);
+    store.writeSnapshotAtomic(dir, env);
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { record, buildModelApp: stubBuild(record), readContent: readFor('v2') }) });
+    assert.strictEqual(r.changedOnly.decision, 'fast');
+    assert.deepStrictEqual(record[0].changedOnly.selectedKeys, ['overview']);
+    assert.deepStrictEqual([...record[0].changedOnly.deployedKeys].sort(), ['detail', 'overview'], 'a record without a page id proves no page');
+  } finally { rm(dir); }
+});
+
+test('run: a FAST apply over a snapshot that records no pages tells the build that none is deployed — so it checks every navigation target', async () => {
+  const dir = ws();
+  try {
+    const prior = annotate(baseSpec(), 'v1');
+    const env = snap.makeEnvelope(LIVE, { generation: 'g0' });
+    env.priorSpec = prior;
+    snap.markEligible(env);
+    store.writeSnapshotAtomic(dir, env);
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { record, buildModelApp: stubBuild(record), readContent: readFor('v2') }) });
+    assert.strictEqual(r.changedOnly.decision, 'fast');
+    assert.deepStrictEqual(record[0].changedOnly.deployedKeys, []);
+  } finally { rm(dir); }
+});
+
 test('run: a fast apply whose page VERIFY did not pass is NOT re-blessed (fail-closed)', async () => {
   const dir = ws();
   try {
@@ -323,7 +361,7 @@ test('run: FULL baseline against a PRE-EXISTING app is recorded INELIGIBLE (cann
   try {
     const record = [];
     // The app ALREADY exists at flow start (appId non-null) -> a full build may have additive-skipped a
-    // diverged artifact -> uncertified-baseline debt -> ineligible (Sol #7 / Opus H2).
+    // diverged artifact -> uncertified-baseline debt -> ineligible.
     const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), resolveLiveIdentity: async () => LIVE, readContent: readFor('v1') }) });
     assert.strictEqual(r.changedOnly.decision, 'full');
     const disk = store.readSnapshot(dir);
@@ -597,6 +635,12 @@ test('run: the no-identity fallback on a workspace with no snapshot sees a teard
 
 // Two no-identity builds that read the same generation, one inside the other, each saw it unchanged at the end and
 // both reported success. Each now takes a generation of its own before it builds, so the first sees the second's.
+//
+// The build lease (lib/app-operation-lease.js) now refuses a second apply of the same app in the same workspace before it
+// reads anything, so a build of this release can no longer start inside another. The snapshot's generation fence is still
+// what guards against a writer the lease does not hold back — a build of an earlier release, which takes no build lease, a
+// teardown — so the tests of that fence start their second writer with the first one's lease (`buildLease: o.buildLease`,
+// what a nested apply borrows): it then runs beside the first exactly as such a writer would.
 test('run: overlapping no-identity builds do not both pass', async () => {
   for (const [what, seed] of [
     ['on a workspace with no snapshot', () => {}],
@@ -607,8 +651,8 @@ test('run: overlapping no-identity builds do not both pass', async () => {
       seed(dir);
       let inner = null;
       const innerDeps = baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => null });
-      const build = async () => {
-        inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: innerDeps });
+      const build = async (s, o) => {
+        inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true, buildLease: o.buildLease }, deps: innerDeps });
         return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
       };
       const outer = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: async () => null }) });
@@ -651,8 +695,8 @@ test('run: the no-identity fallback invalidates an existing baseline before it b
 // cannot noop on it.
 test('run: a build that saw the workspace change under it leaves no eligible baseline behind', async () => {
   const FRESH = { ...LIVE, appId: null, appIdKnown: true };
-  const blessedInside = async (dir) => {
-    const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+  const blessedInside = async (dir, buildLease) => {
+    const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true, buildLease }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
     assert.strictEqual(inner.ok, true, JSON.stringify(inner.errors));
     assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: the inner build blessed a fresh baseline');
   };
@@ -663,7 +707,7 @@ test('run: a build that saw the workspace change under it leaves no eligible bas
     const dir = ws();
     try {
       seed(dir);
-      const build = async () => { await blessedInside(dir); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
+      const build = async (s, o) => { await blessedInside(dir, o.buildLease); return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } }; };
       await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: outerIdentity }) });
       assert.strictEqual(store.readSnapshot(dir).eligible, false, `${what}: the baseline blessed meanwhile is no longer eligible`);
       const next = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => ({ ...LIVE }) }) });
@@ -691,8 +735,8 @@ test('run: a build paused before its baseline write cannot bless it after anothe
       resolveLiveIdentity: async () => { calls += 1; if (calls === 2) { signalPaused(); await gate; } return FRESH; },
     });
     let inner = null;
-    const outerBuild = async () => {
-      inner = flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: innerDeps });
+    const outerBuild = async (s, o) => {
+      inner = flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true, buildLease: o.buildLease }, deps: innerDeps });
       await paused;
       return { ok: true, dryRun: false, created: { app: 'app-1' }, verify: { ok: true } };
     };
@@ -715,8 +759,8 @@ test('run: a build that fails or throws still distrusts a baseline another build
   ]) {
     const dir = ws();
     try {
-      const build = async () => {
-        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+      const build = async (s, o) => {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true, buildLease: o.buildLease }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
         assert.strictEqual(inner.ok, true, `${what}: ${JSON.stringify(inner.errors)}`);
         assert.strictEqual(store.readSnapshot(dir).eligible, true, `${what}: precondition: the inner build blessed a baseline`);
         return finish();
@@ -738,16 +782,19 @@ test('run: a baseline blessed between a build and its own baseline write is dist
   const dir = ws();
   try {
     let calls = 0;
+    // The other writer runs with this build's lease (see 'run: overlapping no-identity builds do not both pass'), which the build hands its builds.
+    let held;
+    const build = async (s, o, d) => { held = o.buildLease; return stubBuild([])(s, o, d); };
     const resolve = async () => {
       calls += 1;
       if (calls === 2) {
-        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true, buildLease: held }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
         assert.strictEqual(inner.ok, true, JSON.stringify(inner.errors));
         assert.strictEqual(store.readSnapshot(dir).eligible, true, 'precondition: blessed between the build and the write');
       }
       return FRESH;
     };
-    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: resolve }) });
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: build, readContent: readFor('v1'), resolveLiveIdentity: resolve }) });
     assert.ok(calls >= 2, 'the fresh build looked its identity up again before writing');
     assert.strictEqual(store.readSnapshot(dir).eligible, false);
     assert.strictEqual(r.ok, false, 'the refused write was a conflict, so the run fails');
@@ -809,8 +856,8 @@ test('run: a distrust that cannot land leaves a marker, and the next run builds 
   ]) {
     const dir = ws();
     try {
-      const build = async () => {
-        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
+      const build = async (s, o) => {
+        const inner = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true, buildLease: o.buildLease }, deps: baseDeps(dir, { buildModelApp: stubBuild([]), readContent: readFor('v1'), resolveLiveIdentity: async () => FRESH }) });
         assert.strictEqual(inner.ok, true, `${what}: ${JSON.stringify(inner.errors)}`);
         // Another live writer holds the lease, so no invalidate this run's distrust tries can land.
         fs.writeFileSync(store.leasePath(dir), JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'held' }));
@@ -952,7 +999,7 @@ test('run: FULL fallback for an unsupported edit records the sticky debt (inelig
   } finally { rm(dir); }
 });
 
-test('run: --sample-data requested but baseline did not seed rows -> forced FULL, not noop (Sol #11)', async () => {
+test('run: --sample-data requested but baseline did not seed rows -> forced FULL, not noop', async () => {
   const dir = ws();
   try {
     // Baseline recorded sampleDataApplied:false (built without --sample-data).

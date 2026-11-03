@@ -210,7 +210,10 @@ test('AB#6688906: a platform icon PATH ending .svg is not flagged', () => {
 
 // --- AB#6688905: the workspace-metadata race must retry, not halt UNKNOWN ------------------------
 
-const { runSdkBuild } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 
 const eventSpec = () => ({

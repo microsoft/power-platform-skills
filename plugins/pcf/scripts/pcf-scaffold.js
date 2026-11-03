@@ -11,6 +11,7 @@ const {
   planScaffold,
   writeScaffold,
 } = require('./lib/pcf-scaffold.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = `Usage:
   node scripts/pcf-scaffold.js --list
@@ -32,6 +33,7 @@ const KNOWN = [
 const NEED_VALUE = ['template', 'namespace', 'name', 'out', 'recipe', 'hosts', 'display-name', 'description', 'npm-cli'];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }

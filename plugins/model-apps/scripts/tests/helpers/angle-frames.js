@@ -234,23 +234,28 @@ const DECOYS = {
   regex: `const re = /[</NAME>;${CALL}]/;`,
 };
 
-// The page: the frame with the signature and what follows it, then a decoy, then the one real call. `at` is the offset of the signature's `<`.
+// The page: the frame with the signature and what follows it, then a decoy, then the one real call. `at` is the offset of the signature's `<`. The name that the closing tag has is the head's tag name: `T` in `<T>`, `in` in `<in U>`,
+// nothing in `<>`, and `U` in `delete<U>`.
 function signaturePage(frame, head, ending, decoy = DECOYS.string) {
-  const name = /<(\w+)>/.exec(head)[1];
+  const name = /<(\w*)/.exec(head)[1];
   const member = `${head}${ending.replaceAll('</T>', `</${name}>`).replaceAll('<T>', `<${name}>`)}`;
   return { code: `${frame.replace('@', member)}\n${decoy.replaceAll('NAME', name)}\n${CALL};\n`, at: frame.indexOf('@') + head.indexOf('<'), name };
 }
 const signaturePages = (endings, decoy = DECOYS.string) => SIGNATURE_FRAMES.flatMap(([frameName, frame]) => SIGNATURE_HEADS.flatMap((head) => endings.map((ending) => ({ ...signaturePage(frame, head, ending, decoy), label: `${frameName} / ${head} / ${JSON.stringify(ending)}` }))));
 
-// The places an element stands. The third entry says whether a member of a type may begin there (after a `{`, a `,`, a `;`, `return`, `default`, a `?`): where none can — after an `=`, a `(`, a `[`, a `:` or an `=>` — the text of a head
-// with a parameter list that neither `=>` nor `:` follows is an element, for certain, whatever it holds (source-literals.js, NO_MEMBER_BEFORE).
+// The places an element stands. The third entry says whether a member of a type may stand there, as far as the lexer can tell (membersMayStandAt): where it may — in the braces of a JSX container and of a template's substitution, of an arrow function and of a label,
+// which it does not know for a block — the text of a head with a parameter list that neither `=>` nor `:` follows is a guess where it could hide its closing tag; where none can, after an `=`, a `(`, a `[`, a `:` or an `=>`, after `return` or a `,` in parentheses, and at the start of
+// a statement in a function, a block or the top level, it is an element, for certain, whatever it holds (source-literals.js, NO_MEMBER_BEFORE, angleOpens).
 const ELEMENT_FRAMES = [
-  ['a declaration', 'const e = @;', false], ['an argument', 'f(@);', false], ['a property', 'const o = { k: @ };', false], ['a child', 'const p = <p>{@}</p>;', true], ['a return', 'function g() { return @; }', true],
-  ['a default export', 'export default @;', true], ['a conditional', 'const k = c ? @ : null;', true], ['an arrow body', 'const m = items.map((x) => @);', false], ['a block', 'if (a) { @ }', true], ['an array', 'const l = [@];', false],
+  ['a declaration', 'const e = @;', false], ['an argument', 'f(@);', false], ['a property', 'const o = { k: @ };', false], ['a child', 'const p = <p>{@}</p>;', true], ['a return', 'function g() { return @; }', false],
+  ['a default export', 'export default @;', false], ['a conditional', 'const k = c ? @ : null;', false], ['an arrow body', 'const m = items.map((x) => @);', false], ['a block', 'if (a) { @ }', false], ['an array', 'const l = [@];', false],
   // A quote on the line after the element: the apostrophe in its text is no string that this quote could close.
-  ['a conditional with a string', "const k = c ? @ : 'none';", true], ['a template', 'const k = `${@}`;', true],
+  ['a conditional with a string', "const k = c ? @ : 'none';", false], ['a template', 'const k = `${@}`;', true],
+  // The braces of an arrow function are a function type's object type as well, and so are the braces after a `:`: a member of a type may begin in them, wherever a statement does.
+  ['a return in the block of an arrow', 'const g = () => { return @; };', true], ['a statement in the block of an arrow', 'const g = () => { @ };', true], ['a conditional in the block of an arrow', 'const g = () => { const k = c ? @ : null; };', true],
+  ['a conditional with a string in the block of an arrow', "const g = () => { const k = c ? @ : 'none'; };", true], ['a statement in a labelled block', 'l: { @ }', true],
 ];
-// The frames where a member of a type may begin at the head, and where none can.
+// The frames where a member of a type may stand at the head, and where none can.
 const MEMBER_ELEMENT_FRAMES = ELEMENT_FRAMES.filter(([, , member]) => member);
 const NO_MEMBER_ELEMENT_FRAMES = ELEMENT_FRAMES.filter(([, , member]) => !member);
 // A tag that no type has — an attribute with a value, an attribute that `extends` does not introduce, a dotted name with an attribute, a fragment — is an element to every reading, and its text opens nothing: a URL, an apostrophe, a back-tick or a
@@ -313,7 +318,8 @@ const UNREAD_LIST_ELEMENTS = [
 const GUESSED_ELEMENTS = [...HIDDEN_TEXT_ELEMENTS, ...UNREAD_LIST_ELEMENTS];
 
 function elementPage(frame, element, decoy = DECOYS.string) {
-  const name = /^<([\w.]+)>/.exec(element)[1];
+  // The name of the tag, which the closing tag has: `p` in `<p>`, `in` in `<in U>`, nothing in `<>`.
+  const name = /^<([\w.]*)/.exec(element)[1];
   return { code: `${frame.replace('@', element)}\n${decoy.replaceAll('NAME', name)}\n${CALL};\n`, at: frame.indexOf('@'), name };
 }
 const elementPages = (elements, decoy = DECOYS.string, frames = ELEMENT_FRAMES) => frames.flatMap(([frameName, frame]) => elements.map((element) => ({ ...elementPage(frame, element, decoy), label: `${frameName} / ${JSON.stringify(element)}` })));
@@ -483,6 +489,21 @@ const PROSE_HIDING_ENDINGS = [';\n  https: // </T>\n  string', ',\n  see: // </T
 // Members of a type that read like the prose above and compile, with no closing tag: the type is code, for certain.
 const PROSE_TYPE_ENDINGS = [';\n  https: // c\n  string', ',\n  see: // c\n  T', ';\n  name // c\n  m: T', ';\n  a: b // c\n  c: d', ';\n  type: // c\n  string', '\n  b\n  // c\n  m: T'];
 
+// ─── Type parameters that start like an element's head ─────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The rule for a `<` where an expression starts reads `<in U>(y)`, `<public U>(y)` and `<>(y)` as elements. In the members of a type they are the type parameters of a signature: the parser takes any modifier before a parameter's name,
+// and an empty list, and only the checker objects. So are the lists of a method named `delete`, `typeof`, `void` or `instanceof`, which are operators that take an element anywhere else. The words are written out here, apart from the
+// lexer's own list (source-literals.js, TYPE_PARAMETER_MODIFIERS), which a test measures against TypeScript's parser.
+const PARAMETER_MODIFIERS = ['in', 'out', 'public', 'private', 'protected', 'readonly', 'static', 'abstract', 'async', 'declare', 'override', 'accessor'];
+const MODIFIER_HEADS = [...PARAMETER_MODIFIERS.map((word) => `<${word} U>(y)`), '<in out U>(y)', '<public in U>(y)', '<const in U>(y)', '<const in out U>(y)', '<in const U>(y)', '<const static U>(y)', '<>(y)', '<>()'];
+// The signatures of these heads, and the construct signature of each, and the methods named like an operator.
+const KEYWORD_SIGNATURE_HEADS = [...MODIFIER_HEADS, ...MODIFIER_HEADS.map((head) => `new ${head}`), 'delete<U>(y)', 'typeof<U>(y)', 'void<U>(y)', 'instanceof<U>(y)'];
+// The elements of the same heads: the text of an element that starts with a parenthesis, which the closing tag ends. Each has no text that could hold the closing tag, so each is read exactly wherever it stands.
+const KEYWORD_HEAD_ELEMENTS = PARAMETER_MODIFIERS.flatMap((word) => [`<${word} U>(a); see https://x.y</${word}>`, `<${word} U>(a), text</${word}>`, `<${word} U>(a)\n  text\n</${word}>`, `<${word} U>(a)</${word}>`])
+  .concat(['<>(a); see https://x.y</>', '<>(a), text</>', '<>(a)\n  text\n</>', '<>(a)</>', '<in out U>(a); text</in>', '<public in U>(a), text</public>', '<const in U>(a); see https://x.y</const>', '<in const U>(a), text</in>', '<const public U>(a)\n  text\n</const>']);
+// ... and where the closing tag could be in a comment of the text, which a type with the same text holds it in: a guess where a member of a type may begin at the head, an element for certain where none can.
+const KEYWORD_HIDING_ELEMENTS = [...PARAMETER_MODIFIERS.map((word) => `<${word} U>(a); // c </${word}>`), '<>(a); // c </>', '<in out U>(a), x // c </in>', '<const in U>(a); // c </const>'];
+
 module.exports = {
   REGEX_BODY, AFTER, AFTER_WITH_CALL, CONTINUATIONS, SEPARATORS, TRIVIA_SEPARATORS, FRAMES, PRODUCER_FRAMES, tokenVocabulary, programsFor, cleanSourceFile, readingAt, isElement,
   CALL, SIGNATURE_FRAMES, SIGNATURE_HEADS, SIGNATURE_ENDINGS, HIDING_ENDINGS, DECOYS, signaturePage, signaturePages, ELEMENT_FRAMES, MEMBER_ELEMENT_FRAMES, NO_MEMBER_ELEMENT_FRAMES, JSX_ONLY_ELEMENTS, valuedKeywordElements, CERTAIN_ELEMENTS, GUESSED_ELEMENTS,
@@ -490,4 +511,5 @@ module.exports = {
   failingLists, LEFT_LISTS, EXACT_DEFAULTS, UNREAD_DEFAULTS, UNTERMINATED_DEFAULTS, defaultLists, exactDefaultLists,
   LINE_COMMENT_GAPS, commentedDefaultLists, commentedConstraintLists, commentedMemberEndings, commentedArrowContinuations,
   PROSE_LEADS, PROSE_URLS, PROSE_LABELS, PROSE_NAMES, PROSE_PATHS, PROSE_COMMENT_LINES, PROSE_LINE_CLASSES, PROSE_SHAPED_LINES, PROSE_OPEN_LINES, PROSE_HIDING_ELEMENTS, PROSE_HIDING_ENDINGS, PROSE_TYPE_ENDINGS, proseElements,
+  PARAMETER_MODIFIERS, MODIFIER_HEADS, KEYWORD_SIGNATURE_HEADS, KEYWORD_HEAD_ELEMENTS, KEYWORD_HIDING_ELEMENTS,
 };

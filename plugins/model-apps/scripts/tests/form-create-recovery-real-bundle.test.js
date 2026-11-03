@@ -42,7 +42,7 @@ async function buildOptions() {
     requires: {
       './lib/dataverse-auth.js': authCli.exports,
       './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createNodeWorkspaceStorage: (d) => ({ dir: d }),
         createMakerSdk: (options) => { captured.push(options); return { initWorkspace: async () => { throw SENTINEL; } }; },
       },

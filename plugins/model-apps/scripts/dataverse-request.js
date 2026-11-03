@@ -28,6 +28,7 @@
 //   1 - Fatal error (no token, invalid args, network failure after retries)
 
 const { dataverseRequest, parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -40,6 +41,7 @@ async function main() {
     hints: { timeout: 'a positive millisecond value (for example, --timeout 60000)' },
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -57,6 +59,7 @@ async function main() {
   if (flags.timeout !== undefined) {
     const parsed = Number(flags.timeout);
     if (!Number.isFinite(parsed) || parsed <= 0) {
+      makeWritesBlocking(process.stdout, process.stderr);
       process.stderr.write(`--timeout must be a positive number (got "${flags.timeout}")\n`);
       process.exit(1);
     }
@@ -65,9 +68,13 @@ async function main() {
 
   try {
     const res = await dataverseRequest(envUrl, method, apiPath, body, { includeHeaders, timeout });
+    // An answer can be megabytes, and the process exits right after printing it: blocking writes put the whole text in the pipe
+    // first (on Linux and macOS a pipe's writes are queued, and process.exit does not wait for them — lib/output-redaction.js).
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stdout.write(JSON.stringify(res) + '\n');
     process.exit(0);
   } catch (e) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(e.message + '\n');
     process.exit(1);
   }

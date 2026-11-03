@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runDownload } = require('../download-model-app.js');
+const { runDownload, main } = require('../download-model-app.js');
 const { migrateAppSpec, validateAppSpec } = require('../lib/app-spec.js');
 const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
 const { planTeardown } = require('../lib/sdk-teardown.js');
@@ -14,6 +14,8 @@ const snapshot = require('../lib/apply-snapshot.js');
 const snapshotStore = require('../lib/apply-snapshot-store.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { withPageType } = require('./helpers/page-component-type.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = '11111111-0000-4000-8000-000000000001';
@@ -105,11 +107,17 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     entitySetName: `${logical}s`, attributes: [], relationships: [{ schemaName: RELATIONSHIP }],
   });
   sdk.getSolution = async (uniqueName) => ({ uniqueName, publisherPrefix: 'contoso' });
-  sdk.dataverse = { get: async (url) => {
+  // The page table's solution component type is answered in front of the rest: a build adds the pages it writes to the spec's solution (helpers/page-component-type.js).
+  sdk.dataverse = { get: withPageType(async (url) => {
     const logical = (url.match(/LogicalName='([^']+)'/) || [])[1];
     if (url.includes('/ManyToOneRelationships')) return { status: 200, body: { value: logical === 'contoso_task' ? [{
       SchemaName: RELATIONSHIP, ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task',
       ReferencingAttribute: 'contoso_projectid', IsCustomRelationship: true,
+    }] : [] } };
+    // The collection the rebuild's own probe reads, from the referenced table: the relationship as the platform lists it, with the lookup
+    // that says which relationship it is (a name alone does not identify one).
+    if (url.includes('/OneToManyRelationships')) return { status: 200, body: { value: logical === 'contoso_project' ? [{
+      SchemaName: RELATIONSHIP, ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid',
     }] : [] } };
     if (url.includes('/LookupAttributeMetadata')) return { status: 200, body: { value: [] } };
     if (/\/(?:Attributes|ManyToManyRelationships)/.test(url)) return { status: 200, body: { value: [] } };
@@ -122,9 +130,15 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
       return { status: 200, body: { value: [...state.apps.values()].map((a) => ({ appmoduleid: a.id, appmoduleidunique: a.lookup, uniquename: a.uniquename, componentstate: 0 })) } };
     }
+    // The pages in their saved layer, which is where teardown looks for them. Every page here is published, so each has its one row.
+    if (url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+      return { status: 200, body: { value: [...state.pages].filter((id) => url.includes(`uxagentprojectid eq ${id}`)).map((uxagentprojectid) => ({
+        uxagentprojectid, name: uxagentprojectid === OVERVIEW_ID ? 'Overview' : 'Detail', componentstate: 0,
+      })) } };
+    }
     assert.ok(state.tables.has(logical), `only declared table metadata may be read: ${url}`);
     return { status: 200, body: { LogicalName: logical, EntitySetName: `${logical}s` } };
-  } };
+  }) };
   sdk.queryRecords = async (set, opts = {}) => {
     const filter = opts.filter || '';
     if (set === 'appmodule') {
@@ -156,9 +170,6 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
       const name = (filter.match(/name eq '([^']+)'/) || [])[1];
       return state.resources.has(name) ? [state.resources.get(name)] : [];
     }
-    if (set === 'uxagentproject') return [...state.pages].filter((id) => filter.includes(`uxagentprojectid eq ${id}`)).map((uxagentprojectid) => ({
-      uxagentprojectid, name: uxagentprojectid === OVERVIEW_ID ? 'Overview' : 'Detail',
-    }));
     return [];
   };
   sdk.createWebResource = async (o) => {
@@ -192,9 +203,10 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     state.apps.delete(app.uniquename);
     return { success: true, deleted: [], failures: [] };
   };
-  sdk.deleteRecord = async (set, id) => {
+  // A page is deleted through the SDK's own page delete, which removes its project row (the files cascade) and its conversation.
+  sdk.deleteRemoteArtifact = async (type, id) => {
     state.beforeDelete();
-    assert.strictEqual(set, 'uxagentproject', 'project files must never be deleted separately');
+    assert.strictEqual(type, 'genPage', 'project files must never be deleted separately');
     if (state.failure === 'page') throw new Error('offline page delete failed');
     if (id === DETAIL_ID && !state.sharedReferenceRemoved) throw new Error('The component cannot be deleted because it is referenced by 1 other components.');
     state.pages.delete(id);
@@ -214,28 +226,17 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     const original = sdk[method];
     sdk[method] = (...args) => { calls.push({ method, args }); return original(...args); };
   }
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, ids: [...state.pages], pages: [
-      { pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }, { pageId: FOREIGN_PAGE_ID, name: 'Detail' },
-    ] }),
-    download: async ({ appId, outputDir, pageIds }) => {
-      assert.strictEqual(appId, APP_ID);
-      assert.deepStrictEqual(pageIds.slice().sort(), [OVERVIEW_ID, DETAIL_ID]);
-      for (const id of pageIds) {
-        const dir = path.join(outputDir, id);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'page.tsx'), 'export default function Page(){ return null; }', 'utf8');
-        fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ dataSources: ['contoso_project'] }), 'utf8');
-      }
+  const pageDefaults = { source: 'export default function Page(){ return null; }', dataSources: ['contoso_project'] };
+  const genpage = fakeGenpage({
+    pages: [
+      { pageId: OVERVIEW_ID, name: 'Overview', ...pageDefaults }, { pageId: DETAIL_ID, name: 'Detail', ...pageDefaults }, { pageId: FOREIGN_PAGE_ID, name: 'Detail', ...pageDefaults },
+    ],
+    onUpdate: (id, args) => {
+      calls.push({ method: 'update', args: [id, args] });
+      assert.ok([OVERVIEW_ID, DETAIL_ID].includes(id), 'rebuild updates only downloaded page IDs');
     },
-    upload: async (o) => {
-      calls.push({ method: 'upload', args: [o] });
-      assert.strictEqual(o.appId, APP_ID);
-      assert.ok([OVERVIEW_ID, DETAIL_ID].includes(o.pageId), 'rebuild updates only downloaded page IDs');
-      return { pageId: o.pageId };
-    },
-  };
-  return { sdk, genpageCli, calls, state };
+  });
+  return { sdk, genpage, calls, state };
 }
 
 test('downloaded ownership survives rebuild and teardown planning', async () => {
@@ -251,9 +252,10 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     const sitemap = await fixture.sdk.queryRecords('sitemap', { filter: `sitemapid eq ${SITEMAP_ID}`, top: 1 });
     const downloaded = await runDownload({
       sdk: currentReadSdk(fixture.sdk, { appId: APP_ID, layerId: APP_LOOKUP, sitemapXml: sitemap[0].sitemapxml }),
-      genpageCli: fixture.genpageCli, outDir, appId: APP_ID, appUnique: APP_UNIQUE,
+      genpage: fixture.genpage, outDir, appId: APP_ID, appUnique: APP_UNIQUE,
     });
     assert.strictEqual(downloaded.ok, true, JSON.stringify(downloaded));
+    assert.deepStrictEqual(fixture.genpage.of('read').map((c) => c.args[0]).sort(), [OVERVIEW_ID, DETAIL_ID].sort(), 'the download reads exactly the app\'s pages, by id');
     assert.deepStrictEqual(downloaded.relationshipsSkipped, []);
     const specFile = path.join(outDir, 'app-spec.json');
     fs.writeFileSync(specFile, JSON.stringify(downloaded.spec), 'utf8');
@@ -262,11 +264,12 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     assert.strictEqual(spec.solution.uniqueName, systemOnly ? 'Default' : 'ContosoOwnership');
     const rebuild = await runSdkBuild(spec, {
       sdk: fixture.sdk, apply: true, env: ENV, appDir: outDir, workspaceDir,
-      preResolvedLanguageCode: 1033, genpageCli: fixture.genpageCli,
+      preResolvedLanguageCode: 1033, genpage: fixture.genpage,
     });
     assert.strictEqual(rebuild.ok, true);
     assert.strictEqual(rebuild.created.app, APP_ID, 'a display-name rename cannot redirect the rebuild');
-    assert.deepStrictEqual(rebuild.created.pages, { overview: OVERVIEW_ID, detail: DETAIL_ID });
+    // `created.pages` is a null-prototype map (lib/own-keys.js: a page's key can be `constructor`), so its entries are compared.
+    assert.deepStrictEqual({ ...rebuild.created.pages }, { overview: OVERVIEW_ID, detail: DETAIL_ID });
     assert.ok(!fixture.calls.some((c) => ['createTable', 'createRelationship', 'enrichDefaultViews'].includes(c.method)),
       `reused tables and relationships are not recreated or enriched: ${JSON.stringify(fixture.calls.filter((c) => ['createTable', 'createRelationship', 'enrichDefaultViews'].includes(c.method)))}`);
     assert.strictEqual(spec.entities.every((e) => e.existing === true), true);
@@ -342,9 +345,10 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     assert.ok(clean.skipped.some((s) => /table contoso_task.*existing: true/.test(s)));
     assert.ok(clean.skipped.some((s) => /relationship contoso_project_task.*existing: true/.test(s)));
     const deletes = calls.filter((c) => c.method.startsWith('delete'));
-    assert.deepStrictEqual(deletes.map((c) => c.method), ['deleteAppCascade', 'deleteRecord', 'deleteRecord', 'deleteWebResource']);
+    assert.deepStrictEqual(deletes.map((c) => c.method), ['deleteAppCascade', 'deleteRemoteArtifact', 'deleteRemoteArtifact', 'deleteWebResource']);
     assert.deepStrictEqual(deletes[0].args, [APP_ID, APP_LOOKUP], 'atomic delete uses the resolved app and its unique lookup');
-    assert.deepStrictEqual(deletes.filter((c) => c.method === 'deleteRecord').map((c) => c.args), [['uxagentproject', OVERVIEW_ID], ['uxagentproject', DETAIL_ID]]);
+    // In the spec's page order, which a download gives by name (Detail, Overview), then id.
+    assert.deepStrictEqual(deletes.filter((c) => c.method === 'deleteRemoteArtifact').map((c) => c.args), [['genPage', DETAIL_ID], ['genPage', OVERVIEW_ID]]);
     assert.deepStrictEqual(events.filter((e) => e.status === 'start').map((e) => e.label), plan.map((s) => s.label), 'execution preserves the dependency-safe plan order');
     assertReusedRetained(fixture);
     assert.strictEqual(state.resources.has(OWNED_ICON), false, 'owned-icon positive control is deleted');
@@ -420,4 +424,227 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     fs.rmSync(root, { recursive: true, force: true });
   }
   assert.strictEqual(fs.existsSync(root), false, 'all downloaded specs, pages and workspaces are removed');
+});
+
+// A key is a page's identity in a rebuild: a spec that holds no page ids (a copy deployed to another environment) is bound to the pages that environment
+// built by the page manifest's key -> id. So a download that gives an unchanged page another key makes the next deployment of the spec update a DIFFERENT
+// page there: the build succeeds and the verifier passes, since both pages still exist, and two pages have swapped what they hold. Sorting the pages by name
+// before minting their keys did exactly that for two names that make one slug ("Work_Order" and "Work Order").
+//
+// The source environment is an app made in Maker, so it carries no page manifest, with two pages whose names make one slug. The lower id is "Work_Order"; by
+// name "Work Order" comes first (a space sorts before an underscore), so the order the pages are written in is not the id order. `earlierKeyOfId` is how
+// the earlier download — an earlier release's — keyed them: in id order (a file system that lists folders by name) or in the other order (one that does not).
+// The other environment holds its pages under ids of its own. `beforeRedownload({ sourceDir, first, rekeyed, portable, attempt, runCli, treeOf })` is
+// called once the copy is deployed and before the app is downloaded again, to leave the working folder as a test needs it; `attempt(options)` is one
+// `runDownload` and `runCli(...flags)` one run of the command line's `main`. Answers what the last download said on stderr.
+async function redeployAfterRedownload(earlierKeyOfId, { fromEmptyFolder = false, beforeRedownload = null } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'download-keys-redeploy-'));
+  const previousPath = process.env.PATH;
+  process.env.PATH = path.dirname(process.execPath);
+  const TARGET = 'https://contoso-target.crm.dynamics.com';
+  const IDS = [OVERVIEW_ID, DETAIL_ID];
+  const TARGET_IDS = ['77777777-0000-4000-8000-000000000001', '77777777-0000-4000-8000-000000000002'];
+  const NAMES = ['Work_Order', 'Work Order'];
+  const SOURCES = ['export default function Page(){ return "underscore-page"; }\n', 'export default function Page(){ return "space-page"; }\n'];
+  const holdTwoPages = (fixture) => IDS.forEach((id, i) => Object.assign(fixture.genpage.pages.get(id), { name: NAMES[i], source: SOURCES[i] }));
+  // The environment a copy is deployed to holds the pages under ids of its own: the source's ids belong to the source, and a copy of the spec holds none of
+  // them, so the only thing that binds a key to a page there is that environment's page manifest.
+  const holdTargetPages = (fixture) => {
+    IDS.forEach((id, i) => {
+      const page = fixture.genpage.pages.get(id);
+      fixture.genpage.pages.delete(id);
+      fixture.genpage.pages.set(TARGET_IDS[i], { ...page, id: TARGET_IDS[i], name: NAMES[i], source: SOURCES[i] });
+      fixture.state.pages.delete(id);
+      fixture.state.pages.add(TARGET_IDS[i]);
+    });
+    for (const app of fixture.state.apps.values()) for (const area of app.siteMap.areas) for (const group of area.groups) for (const sub of group.subAreas) {
+      if (IDS.includes(sub.genPageId)) sub.genPageId = TARGET_IDS[IDS.indexOf(sub.genPageId)];
+    }
+    // The stand-in's page backend accepts the source's ids only; this one takes the target's, and a rebuild of an existing copy creates nothing.
+    fixture.genpage = fakeGenpage({
+      pages: [...fixture.genpage.pages.values()],
+      onUpdate: (id) => assert.ok(TARGET_IDS.includes(id), 'a rebuild updates only the pages the other environment holds'),
+    });
+  };
+  const held = (fixture, ids = IDS) => ids.map((id) => { const page = fixture.genpage.pages.get(id); return { id, name: page.name, source: page.source }; });
+  // Every file under `dir`, by its path: what a refused download must leave exactly as it was.
+  const treeOf = (dir) => {
+    const files = {};
+    const walk = (current) => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) walk(full); else files[path.relative(dir, full)] = fs.readFileSync(full, 'utf8');
+      }
+    };
+    walk(dir);
+    return files;
+  };
+  // The spec as a copy for another environment holds it: the source's page ids belong to the source, so they are left out.
+  const portable = (spec) => {
+    const copy = migrateAppSpec(clone(spec));
+    for (const page of copy.pages) delete page.pageId;
+    const validation = validateAppSpec(copy, { profile: 'deploy' });
+    assert.strictEqual(validation.ok, true, JSON.stringify(validation.errors));
+    return copy;
+  };
+  // A spec with each page given the key `keyOfId` names, and the navigation pointing at the new keys.
+  const rekeyed = (spec, keyOfId) => {
+    const copy = clone(spec);
+    const renamed = new Map(copy.pages.map((p) => [p.key, keyOfId[p.pageId]]));
+    for (const page of copy.pages) page.key = keyOfId[page.pageId];
+    for (const area of copy.appShell.areas) for (const group of area.groups) for (const sub of group.subAreas) if (sub.page) sub.page = renamed.get(sub.page);
+    return copy;
+  };
+  try {
+    const source = recordingLifecycleSdk();
+    source.state.resources.delete(MANIFEST);
+    holdTwoPages(source);
+    const sourceDir = path.join(root, 'source');
+    const targetWorkspace = path.join(root, 'target-workspace');
+    fs.mkdirSync(sourceDir);
+    // One `runDownload`, as the real download makes it: the app is read through the source environment's stand-in, the pages through its page backend.
+    const readerOf = async () => {
+      const sitemap = await source.sdk.queryRecords('sitemap', { filter: `sitemapid eq ${SITEMAP_ID}`, top: 1 });
+      return currentReadSdk(source.sdk, { appId: APP_ID, layerId: APP_LOOKUP, sitemapXml: sitemap[0].sitemapxml });
+    };
+    const saying = async (run) => {
+      const said = [];
+      const realWrite = process.stderr.write;
+      try {
+        process.stderr.write = (chunk) => { said.push(String(chunk)); return true; };
+        return { ...(await run()), stderr: said.join('') };
+      } finally {
+        process.stderr.write = realWrite;
+      }
+    };
+    const attempt = (options = {}) => saying(async () => ({
+      result: await runDownload({ sdk: await readerOf(), genpage: source.genpage, outDir: sourceDir, appId: APP_ID, appUnique: APP_UNIQUE, ...options }),
+    }));
+    // The same through the command line's own entry point, with only its side effects replaced.
+    const runCli = (...flags) => saying(async () => {
+      const emitted = [];
+      const sdk = await readerOf();
+      await main({
+        argv: ['--env', ENV, '--app', APP_UNIQUE, '--out', sourceDir, ...flags],
+        preflightAuth: async () => ({ ok: true }),
+        makeDownloadSdk: async () => ({ sdk, cleanup() {} }),
+        makeGenpageSdk: () => source.genpage,
+        emitResult: (ok, payload) => emitted.push({ ok, payload }),
+        exit: (code) => assert.fail(`unexpected exit ${code}`),
+      });
+      return { emitted };
+    });
+    let lastStderr = '';
+    const download = async () => {
+      const { result, stderr } = await attempt();
+      lastStderr = stderr;
+      assert.strictEqual(result.ok, true, JSON.stringify(result));
+      fs.writeFileSync(path.join(sourceDir, 'app-spec.json'), JSON.stringify(result.spec, null, 2));
+      return result.spec;
+    };
+    const keysByName = (spec) => spec.pages.map((p) => [p.key, p.pageId]);
+    const expectedKeys = [[earlierKeyOfId[DETAIL_ID], DETAIL_ID], [earlierKeyOfId[OVERVIEW_ID], OVERVIEW_ID]]; // written by name: "Work Order" first
+
+    // The download the earlier release made. Its spec stays in the working folder, as it does through an edit session, and a copy of it is what was deployed.
+    const first = rekeyed(await download(), earlierKeyOfId);
+    fs.writeFileSync(path.join(sourceDir, 'app-spec.json'), JSON.stringify(first, null, 2));
+    const earlier = portable(first);
+    assert.deepStrictEqual(earlier.pages.map((p) => [p.key, p.name]), [[earlierKeyOfId[DETAIL_ID], 'Work Order'], [earlierKeyOfId[OVERVIEW_ID], 'Work_Order']]);
+
+    // The other environment holds the pages that copy built there, under ids of its own, and the manifest that binds each key to its page.
+    const target = recordingLifecycleSdk();
+    holdTargetPages(target);
+    target.state.resources.get(MANIFEST).content = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [
+      { key: earlierKeyOfId[OVERVIEW_ID], name: 'Work_Order', pageId: TARGET_IDS[0] }, { key: earlierKeyOfId[DETAIL_ID], name: 'Work Order', pageId: TARGET_IDS[1] },
+    ] })).toString('base64');
+    const deploy = async (spec) => {
+      const result = await runSdkBuild(spec, { sdk: target.sdk, genpage: target.genpage, apply: true, env: TARGET, appDir: sourceDir, workspaceDir: targetWorkspace, preResolvedLanguageCode: 1033 });
+      assert.strictEqual(result.ok, true, JSON.stringify(result));
+      return result;
+    };
+    const before = held(target, TARGET_IDS);
+    await deploy(earlier);
+    await deploy(earlier);
+    assert.deepStrictEqual(held(target, TARGET_IDS), before, 'deploying the earlier copy again changes nothing');
+
+    // The unchanged app is downloaded again, into the same folder (as a test may have left it) or (the earlier spec being gone) into an empty one.
+    if (fromEmptyFolder) fs.rmSync(path.join(sourceDir, 'app-spec.json'));
+    if (beforeRedownload) await beforeRedownload({ sourceDir, first, rekeyed, portable, attempt, runCli, treeOf });
+    const again = await download();
+    const rebuilt = await deploy(portable(again));
+    // What matters first: the other environment's pages. Each id holds its own name and content, as it did before the second download.
+    assert.deepStrictEqual(held(target, TARGET_IDS), before, 'each page of the other environment still holds its own name and content');
+    assert.deepStrictEqual({ ...rebuilt.created.pages }, { [earlierKeyOfId[OVERVIEW_ID]]: TARGET_IDS[0], [earlierKeyOfId[DETAIL_ID]]: TARGET_IDS[1] });
+    assert.strictEqual(target.genpage.of('create').length, 0, 'no page is created: every key binds the page it built');
+    // And why: each page has the key it had.
+    assert.deepStrictEqual(keysByName(again), expectedKeys, 'every page keeps the key it had');
+    return { stderr: lastStderr };
+  } finally {
+    process.env.PATH = previousPath;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('a re-download keeps each page\'s key, so a copy of the spec already deployed to another environment still updates the page it built there (earlier download in id order)', async () => {
+  // The order an earlier release minted in on a file system that lists folders by name (NTFS, HFS+): the lower id has the plain key.
+  await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order', [DETAIL_ID]: 'work-order-2' });
+});
+
+test('a re-download keeps each page\'s key even when the earlier download minted them in the other order (a file system that lists folders by hash)', async () => {
+  // Minting by page id alone would give the lower id the plain key again and swap the two pages; the key comes from the earlier spec in the folder.
+  await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order-2', [DETAIL_ID]: 'work-order' });
+});
+
+test('with the earlier spec gone, a download into an empty folder mints the keys an earlier release minted on NTFS, so a copy deployed then is still bound', async () => {
+  await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order', [DETAIL_ID]: 'work-order-2' }, { fromEmptyFolder: true });
+});
+
+// A page id does not say which app a key belongs to — a page can be in several apps, each with its own page manifest and so its own keys — so a spec in the working
+// folder is the earlier keys of THIS app only when it says it is of this app (`app.uniqueName`). An authored spec derives its identity from its publisher prefix and
+// name (appUniqueName in lib/sdk-build.js) and writes none, and it can hold the page ids of this app with the keys of another.
+test('a spec of another app that names no app.uniqueName cannot give the pages of a deployed copy each other\'s keys, and the download says the file was not used', async () => {
+  const { stderr } = await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order', [DETAIL_ID]: 'work-order-2' }, {
+    beforeRedownload: async ({ sourceDir, first, rekeyed, portable }) => {
+      const foreign = rekeyed(first, { [OVERVIEW_ID]: 'work-order-2', [DETAIL_ID]: 'work-order' });
+      delete foreign.app.uniqueName;
+      foreign.app.name = 'Other App';
+      assert.notStrictEqual(appUniqueName(foreign), APP_UNIQUE, 'the build takes it for another app');
+      portable(foreign); // a valid spec, for the deploy profile too
+      fs.writeFileSync(path.join(sourceDir, 'app-spec.json'), JSON.stringify(foreign, null, 2));
+    },
+  });
+  assert.match(stderr, /WARNING: the app-spec\.json in .* does not say which app it describes/);
+});
+
+// A hand edit has left the earlier spec giving `work-order` to two pages (and the lower page two keys). The earlier download that wrote it was made on a file system that lists
+// folders by hash, so the higher id has the plain key — the opposite of what minting by page id gives — and a copy of it is deployed. Which key each page was built with is not in
+// the file, so the download stops instead of guessing; once the file is corrected it keeps the earlier keys.
+test('an earlier spec that gives one key to two pages is refused without touching the folder, and once it is corrected a re-download still cannot swap the pages of a deployed copy', async () => {
+  await redeployAfterRedownload({ [OVERVIEW_ID]: 'work-order-2', [DETAIL_ID]: 'work-order' }, {
+    beforeRedownload: async ({ sourceDir, first, attempt, runCli, treeOf }) => {
+      const specPath = path.join(sourceDir, 'app-spec.json');
+      const erroneous = clone(first);
+      erroneous.pages.push({ ...clone(erroneous.pages.find((p) => p.pageId === OVERVIEW_ID)), key: 'work-order' });
+      fs.writeFileSync(specPath, JSON.stringify(erroneous, null, 2));
+      const untouched = treeOf(sourceDir);
+
+      const refused = await attempt();
+      assert.strictEqual(refused.result.ok, false, 'the download does not guess which page owns `work-order`');
+      assert.strictEqual(refused.result.code, 'page-keys-ambiguous');
+      assert.ok(refused.result.error.includes('--reset-page-keys'), refused.result.error);
+      // The command line gives the same answer, in the JSON a caller reads, and the folder is as it was.
+      const cli = await runCli();
+      assert.deepStrictEqual(cli.emitted.map((e) => [e.ok, e.payload.code, e.payload.pages.map((p) => p.name)]), [[false, 'page-keys-ambiguous', ['Work Order', 'Work_Order']]]);
+      assert.deepStrictEqual(treeOf(sourceDir), untouched, 'a refused download changes nothing in the working folder');
+
+      // The explicit way on: fresh keys for the two pages, by page id, and the download says so. (That is the one way left to exchange what they hold.)
+      const reset = await attempt({ resetPageKeys: true });
+      assert.strictEqual(reset.result.ok, true);
+      assert.deepStrictEqual(reset.result.spec.pages.map((p) => [p.pageId, p.key]).sort(), [[OVERVIEW_ID, 'work-order'], [DETAIL_ID, 'work-order-2']]);
+      assert.match(reset.stderr, /WARNING: --reset-page-keys: 2 page\(s\) were given a fresh key/);
+
+      // The maker corrects the file instead: the erroneous entry goes, and the download goes on from the keys the file holds.
+      fs.writeFileSync(specPath, JSON.stringify(first, null, 2));
+    },
+  });
 });

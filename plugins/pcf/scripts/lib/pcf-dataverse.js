@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 
 const { createAzHttpClient } = require('./sdk-http-client.js');
+const { guardWorkspaceStorage } = require('./output-redaction.js');
 const { odataLit } = require('./odata.js');
 
 const CUSTOM_CONTROL_SELECT = ['customcontrolid', 'name', 'version', 'componentstate', 'ismanaged'];
@@ -18,7 +19,8 @@ const WHERE_USED_CAVEAT = "registered solution dependencies only — not proof o
 async function makePcfSdk(env, workspaceDir, httpClient = createAzHttpClient(env)) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+  // Every file the SDK writes into its workspace goes through the storage's `writeTextAtomic`; guarded, none of them can carry an access token this process obtained (lib/output-redaction.js) — as in model-apps' factory.
+  const sdk = createMakerSdk({ workspaceStorage: guardWorkspaceStorage(createNodeWorkspaceStorage(workspaceDir)), instanceUrl: env, httpClient });
   await sdk.initWorkspace();
   return sdk;
 }

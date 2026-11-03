@@ -134,4 +134,25 @@ const HIDDEN_CLOSING_TAG_PAGES = [
   { name: 'an accessor whose computed name holds a comma and a regex that holds the closing tag', code: typePage(`get [a, ${REGEX}](): string`) },
 ];
 
-module.exports = { RESOLVED_PAGES, REFUSED_PAGES, HIDDEN_CLOSING_TAG_PAGES, DECOY };
+// A page whose types have members that start like an element's head — a method named `delete`, `typeof`, `void` or `instanceof` that has type parameters, a signature whose type parameter has a modifier (`<out U>`, `<in U>`), an empty
+// list of type parameters (`<>(y)`) — and then a note that holds the closing tag of that head and the text of a navigation call: a doc comment, a string, a template. TypeScript's parser reads the type (the checker, not the parser,
+// objects to an empty list or to a modifier that is no variance modifier), and the note is data. A lexer that read the head as an element took the closing tag in the note for the end of its text and the call after it for code,
+// and rewrote the token that is data. Here the type is read for certain: the one real call is rewritten, the token in the note is the only stray one, and no guess is named.
+const TYPE_HEAD_PAGES = [
+  { name: 'a client interface with a method named `delete` that has type parameters, and a doc comment that holds the closing tag and a call', code: page(...IMPORTS, 'interface Client {', '  post<T>(url: string, body: unknown): Promise<T>;', '  delete<T>(url: string): Promise<T>;', '}', `/** Usage: ${CALL} </T> */`, ...COMPONENT) },
+  { name: 'a type literal with methods named `typeof`, `void` and `instanceof` that have type parameters, and a template that holds the closing tag and a call', code: page(...IMPORTS, 'type Guards = { typeof<T>(value: T): boolean; void<T>(value: T): void; instanceof<T>(value: T, kind: T): boolean };', `const usage = \`</T> ${CALL}\`;`, 'export const guards: Guards | null = null;', ...COMPONENT) },
+  { name: 'a listener interface with a signature whose type parameter is a variance modifier (`<in U>`), and a string that holds the closing tag and a call', code: page(...IMPORTS, 'interface Listener {', '  <in U>(event: U): void;', '  readonly name: string;', '}', `const usage = '</in> ${CALL}';`, ...COMPONENT) },
+  { name: 'a source interface with a construct signature whose type parameter is `out`, and a comment that holds the closing tag and a call', code: page(...IMPORTS, 'interface Source {', '  new <out U>(value: U): Source;', '}', `// </out> ${CALL}`, ...COMPONENT) },
+  { name: 'a factory interface with an empty list of type parameters, and a string that holds the closing tag and a call', code: page(...IMPORTS, 'interface Factory {', '  <>(): void;', '}', `const usage = '</> ${CALL}';`, ...COMPONENT) },
+  { name: 'a member with a modifier before the name of its type parameter (`<readonly U>`) after other members, and a template that holds the closing tag and a call', code: page(...IMPORTS, 'interface Store {', '  count: number;', '  <readonly U>(value: U): U;', '  reset(): void;', '}', `const usage = \`</readonly>`, `${CALL}\`;`, ...COMPONENT) },
+];
+
+// The same members with the closing tag of the head in a string or a comment of the type itself: an element that has the head has the same text up to that closing tag, so the page is refused after a guess at the head, and neither token is
+// rewritten.
+const TYPE_HEAD_HIDDEN_PAGES = [
+  { name: 'a signature whose type parameter is a variance modifier, and a string in the type that holds the closing tag and a call', head: '<in U>', code: page(...IMPORTS, 'interface Listener {', '  <in U>(event: U): void;', `  readonly usage: '</in> ${CALL}';`, '}', ...COMPONENT) },
+  { name: 'an empty list of type parameters, and a comment in the type that holds the closing tag and a call', head: '<>', code: page(...IMPORTS, 'interface Factory {', '  <>(): void;', `  // </> ${CALL}`, '}', ...COMPONENT) },
+  { name: 'a method named `delete` that has type parameters, and a template in the type that holds the closing tag and a call', head: '<T>', code: page(...IMPORTS, 'interface Client {', '  delete<T>(url: string): void;', `  readonly usage: \`</T> ${CALL}\`;`, '}', ...COMPONENT) },
+];
+
+module.exports = { RESOLVED_PAGES, REFUSED_PAGES, HIDDEN_CLOSING_TAG_PAGES, TYPE_HEAD_PAGES, TYPE_HEAD_HIDDEN_PAGES, DECOY };

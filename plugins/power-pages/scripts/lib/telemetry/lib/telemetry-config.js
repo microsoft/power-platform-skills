@@ -19,7 +19,11 @@ function dataDisclosure(plugin) {
         "   choices, canonical locales, public package names/versions, stable\n" +
         "   validation outcomes, and localization completion.\n"
       : plugin === "model-apps"
-        ? "   Model Apps excludes the signed-in user's Entra object ID.\n"
+        ? "   Model Apps excludes the signed-in user's Entra object ID. When an app\n" +
+          "   build or a page upload finishes, it records the outcome, duration, a\n" +
+          "   fixed error class and per-phase step counts, with the organization and\n" +
+          "   tenant IDs of the environment it targeted — never app, table, page or\n" +
+          "   environment names.\n"
         : "";
   return (
     "ℹ️  Usage telemetry records skill, plugin, PAC, agent, OS, Node, session,\n" +

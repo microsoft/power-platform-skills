@@ -1,0 +1,36 @@
+{
+  "solution": {
+    "uniqueName": "ContosoOperations",
+    "publisherPrefix": "cr"
+  },
+  "entities": [
+    {
+      "schemaName": "cr_Widget",
+      "displayName": "Widget",
+      "pluralName": "Widgets",
+      "description": "A stocked widget with its SKU and the quantity on hand.",
+      "primaryAttribute": {
+        "schemaName": "cr_Name",
+        "displayName": "Widget Name",
+        "maxLength": 100
+      },
+      "columns": [
+        {
+          "schemaName": "cr_Sku",
+          "displayName": "SKU",
+          "type": "Text",
+          "maxLength": 40,
+          "required": true
+        },
+        {
+          "schemaName": "cr_Quantity",
+          "displayName": "Quantity",
+          "type": "Integer",
+          "minValue": 0,
+          "maxValue": 100000
+        }
+      ]
+    }
+  ],
+  "relationships": []
+}

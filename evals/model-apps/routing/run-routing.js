@@ -15,6 +15,13 @@
 // it the moment a plugin skill is invoked (see lib/agents.js for the isolation flags and
 // lib/transcript.js for the event shapes). Cost is therefore ~one model turn per trial.
 //
+// A case is graded on the first plugin skill the agent asks for, at ANY turn. The decision of its FIRST turn
+// is reported beside the grade and never in place of it: the tool menu is read-only (no file writes, no
+// shell), so a request that is not for the plugin can go "turn 0 looks at the empty workspace and decides no
+// skill applies, turn 1 asks for a skill because nothing else can do the work". The case fails on that
+// request, and its line says the first turn chose none, so a stand-in can be told from a description that
+// pulls the request in (lib/grade.js; EVAL_GUIDE.md → "What counts as the decision").
+//
 // NOT part of the per-PR gate: it needs model credentials, is non-deterministic, and costs money.
 // See EVAL_GUIDE.md → "Cadence" and .github/workflows/model-apps-agent-evals.yml.
 //
@@ -34,7 +41,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { TIERS } = require('../lib/eval-args.js');
 const { TranscriptParser, AGENTS } = require('./lib/transcript.js');
 const { buildInvocation, quoteForCmd } = require('./lib/agents.js');
-const { summarizeCase, validateEvals } = require('./lib/grade.js');
+const { summarizeCase, validateEvals, decisionOf } = require('./lib/grade.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const PLUGIN_DIR = path.join(REPO_ROOT, 'plugins', 'model-apps');
@@ -210,20 +217,32 @@ function copilotSkillInventory({ bin, binArgs = [], pluginDir, env, cwd }) {
 }
 
 /**
- * Launch one agent run and resolve when it ROUTED, finished, timed out, or failed to start.
+ * Launch one agent run and resolve when it ROUTED, finished, timed out, or failed to start — and,
+ * for a run the harness had to kill, once the agent has closed, so the caller may remove the trial's
+ * working directory at once. A kill takes effect a moment after it is sent, and until then the agent
+ * still holds that directory (on Windows removing it failed with `EBUSY`); so the wait is for the
+ * process to exit and its pipes to end. It is bounded (`closeWaitMs`): an agent that will not die, or a
+ * grandchild that keeps a pipe open, must not hold the whole run, and the result is the same either way.
  * Never rejects: every failure becomes `trial.error`, which grading excludes from the pass rate.
  * `loadedSkills` / `loadError` carry a preflight's skill inventory for agents whose transcript does
  * not report it (Copilot); a `loadError` fails the trial before any model call is made.
  *
- * Two seams exist for the tests, and neither changes what a run does:
+ * Four seams exist for the tests, and none changes what a run does:
  *   `clock`    the timer pair the `timeoutMs` deadline runs on. A test that must fire the deadline at
  *              a chosen moment (after the agent has printed its first event, say) passes its own,
  *              rather than racing a real timer against how long a loaded machine takes to start Node.
  *   `onStart`  called once, right after the process is launched, with `{ child, parser }`, so a test
  *              can tell when the parser has seen a line and when the killed process has really exited.
+ *   `kill`     what ends the agent (default `killTree`). A test that must have an agent die late, or not
+ *              at all, passes its own to see that the trial waits for the close and that the wait ends.
+ *   `closeWaitMs`  the bound on that wait (default `CLOSE_WAIT_MS`); a test shortens it. It runs on the
+ *              real timer, never on `clock`, which stays the trial's deadline alone.
  */
 const REAL_CLOCK = { setTimeout, clearTimeout };
-function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent, loadedSkills = null, loadError = null, clock = REAL_CLOCK, onStart = null }) {
+// A killed process closes within tens of milliseconds (40 ms at most in 40 measured runs of an agent stand-in on
+// Windows), so seconds are ample; a longer bound only costs a run whose agent really cannot be ended.
+const CLOSE_WAIT_MS = 5000;
+function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent, loadedSkills = null, loadError = null, clock = REAL_CLOCK, onStart = null, kill = killTree, closeWaitMs = CLOSE_WAIT_MS }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const parser = new TranscriptParser(agent, plugin);
@@ -251,11 +270,22 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
     let buf = '';
     let timedOut = false;
     let settled = false;
+    // `closed`: the 'close' event has fired, so the process has exited and its pipes have ended. finish() can run
+    // long before that (at the routing decision, at the deadline), right after it sends the kill.
+    let closed = false;
+    let afterClose = null;
+    const resolveWhenClosed = (outcome) => {
+      if (closed) { resolve(outcome); return; }
+      // The outcome is already decided, so the wait changes nothing but WHEN the caller hears of it. It runs on the
+      // real timer: `clock` is the trial's deadline, and a test that controls it must not control this.
+      const giveUp = setTimeout(() => { afterClose = null; resolve(outcome); }, closeWaitMs);
+      afterClose = () => { clearTimeout(giveUp); resolve(outcome); };
+    };
     const finish = (extra = {}) => {
       if (settled) return;
       settled = true;
       clock.clearTimeout(timer);
-      killTree(child);
+      kill(child);
       let error = extra.error || null;
       // "none" is a DECISION only when the run ended on its own without choosing a plugin skill.
       // A run cut off by the timeout has not decided anything — even if it streamed events (an
@@ -282,7 +312,7 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
         const missing = plugin.pluginSkills.filter((s) => !loaded.includes(`${plugin.pluginName}:${s}`) && !loaded.includes(s));
         if (missing.length) error = `plugin skills not loaded: ${missing.join(', ')} (check --plugin-dir)`;
       }
-      resolve({
+      resolveWhenClosed({
         routedTo: parser.routedTo,
         skillCalls: parser.skillCalls,
         loadedSkills: loaded,
@@ -309,6 +339,7 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
     child.stderr.on('data', (c) => { stderr += c.toString('utf8'); });
     child.on('error', (err) => finish({ error: `could not start ${bin}: ${err.message}` }));
     child.on('close', (code) => {
+      closed = true;
       if (buf) parser.push(buf);
       const tail = stderr.trim().split(/\r?\n/).slice(-3).join(' | ');
       // A run that ends without routing is a valid "none" outcome only if it ended SUCCESSFULLY.
@@ -319,6 +350,8 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
       } else {
         finish();
       }
+      // A trial that finished earlier is waiting for exactly this.
+      if (afterClose) afterClose();
     });
     child.stdin.on('error', () => { /* agent exited before reading the prompt; 'close' reports it */ });
     child.stdin.end(prompt);
@@ -432,8 +465,9 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
   write('TAP version 13');
   write(`# agent ${opts.agent} · model ${opts.model || '(cli default)'} · runs ${opts.runs} · threshold ${opts.thresholdLabel || opts.threshold}`);
   write(`1..${cases.length}`);
-  const summary = { pass: 0, fail: 0, error: 0, trials: 0, trialErrors: 0, costUsd: 0 };
+  const summary = { pass: 0, fail: 0, error: 0, trials: 0, trialErrors: 0, costUsd: 0, delayedTrials: 0, delayedCases: 0 };
   const caseResults = [];
+  const spread = (counts) => Object.entries(counts).map(([k, v]) => `${k}×${v}`).join(', ');
   cases.forEach((c, i) => {
     const ts = byCase.get(c.id);
     const s = summarizeCase(c, ts, opts.threshold);
@@ -441,13 +475,22 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
     summary.trials += ts.length;
     summary.trialErrors += s.errors.length;
     for (const t of ts) if (t.result && typeof t.result.costUsd === 'number') summary.costUsd += t.result.costUsd;
-    const dist = Object.entries(s.outcomes).map(([k, v]) => `${k}×${v}`).join(', ') || 'no valid trials';
-    const head = `#${c.id} [${c.tier}] expect ${c.expect === null ? 'none' : c.expect} — ${s.passes}/${s.valid} (${dist})`;
+    const delayedTrials = Object.values(s.delayed).reduce((n, v) => n + v, 0);
+    summary.delayedTrials += delayedTrials;
+    if (delayedTrials) summary.delayedCases += 1;
+    const dist = spread(s.outcomes) || 'no valid trials';
+    const later = spread(s.delayed);
+    // The first turn's decision is printed only where a later request makes it differ from the grade; where
+    // nothing was asked for late the two are the same and the line reads as it always did (the results file
+    // carries `initial` for every case).
+    const firstTurn = later ? ` · first turn: ${s.initial.passes}/${s.initial.valid} (${spread(s.initial.outcomes)})` : '';
+    const head = `#${c.id} [${c.tier}] expect ${c.expect === null ? 'none' : c.expect} — ${s.passes}/${s.valid} (${dist})${firstTurn}${later ? ` · later: ${later}` : ''}`;
     write(`${s.status === 'pass' ? 'ok' : 'not ok'} ${i + 1} - ${head}`);
     if (s.status !== 'pass' || s.errors.length) {
       write('  ---');
       write(`  prompt: ${yamlStr(c.prompt)}`);
       if (c.trap) write(`  trap: ${yamlStr(c.trap)}`);
+      if (later) write(`  later: ${yamlStr(`${later} — asked for only after a first turn that chose none; counted in the grade, as is any skill the agent asks for`)}`);
       for (const e of [...new Set(s.errors)]) write(`  error: ${yamlStr(e)}`);
       write('  ...');
     }
@@ -456,12 +499,18 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
     }
     caseResults.push({
       id: c.id, tier: c.tier, prompt: c.prompt, expect: c.expect, accept: c.accept || [],
-      status: s.status, rate: s.rate, passes: s.passes, valid: s.valid, outcomes: s.outcomes, errors: s.errors,
-      trials: ts.map((t) => ({ routedTo: t.routedTo, skills: (t.skillCalls || []).map((k) => k.raw), timedOut: !!t.timedOut, error: t.error || null, durationMs: t.durationMs })),
+      status: s.status, rate: s.rate, passes: s.passes, valid: s.valid, outcomes: s.outcomes, delayed: s.delayed, initial: s.initial, errors: s.errors,
+      trials: ts.map((t) => {
+        const d = decisionOf(t);
+        return { routedTo: t.routedTo, initial: d.initial, delayed: d.delayed, turn: d.turn, skills: (t.skillCalls || []).map((k) => k.raw), timedOut: !!t.timedOut, error: t.error || null, durationMs: t.durationMs };
+      }),
     });
   });
   write(`# cases ${cases.length} (pass ${summary.pass}, fail ${summary.fail}, error ${summary.error})`);
   write(`# trials ${summary.trials} (errors ${summary.trialErrors})`);
+  if (summary.delayedTrials) {
+    write(`# later fallbacks: ${summary.delayedTrials} trial(s) in ${summary.delayedCases} case(s) chose a plugin skill only after a first turn that chose none (counted in the grade; the first-turn decision is shown beside each case)`);
+  }
   // Only runs that reach their `result` event report cost; trials killed at the routing decision
   // never do, so this is a lower bound and is labelled as one.
   if (summary.costUsd) write(`# cost >= $${summary.costUsd.toFixed(2)} (killed trials do not report cost)`);

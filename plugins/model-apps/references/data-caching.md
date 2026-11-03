@@ -37,7 +37,15 @@ the fix lives on `window`:
   and return visits read the cache: no re-fetch, no spinner.
 
 Always use a **single batched state object** (`{ records, loading, error }`) and
-one `setData(...)` call to avoid intermediate renders in React 17.
+one `setData(...)` call to avoid intermediate renders in React 17. `error` is the
+`PageErrorView | null` that the page's `reportPageError` returns (rules.md →
+*Missing Error Handling*), never a string, and a `PageErrorBar` renders it. A
+rejected read is reported and shown — it is never written to the cache, so the
+next mount or "Try again" reads again.
+
+Both patterns below are a complete `PageBody`: put it, with its module-level keys,
+into the page error block of rules.md (which supplies `PAGE_NAME`,
+`reportPageError`, `PageErrorBar`, the boundary and the default export).
 
 ## Pattern 1 — List / array cache
 
@@ -55,57 +63,76 @@ const winAny = window as any;
 const CACHE_KEY = "__ppMyEntityCache";
 const INFLIGHT_KEY = "__ppMyEntityInflight";
 
-// In component:
-const dataReady = !!dataApi;   // the host may hand `dataApi` after first render
-const [{ records, loading, error }, setData] = useState<{
-    records: MyRow[];
-    loading: boolean;
-    error: string | null;
-}>(() => {
-    const cached = winAny[CACHE_KEY] as MyRow[] | undefined;
-    return { records: cached ?? [], loading: cached === undefined, error: null };
-});
+function PageBody(props: GeneratedComponentProps) {
+    const { dataApi, pageInput } = props;
+    void pageInput;
+    const dataReady = !!dataApi;   // the host may hand `dataApi` after first render
+    const [reloadKey, setReloadKey] = React.useState(0);
+    const [{ records, loading, error }, setData] = React.useState<{
+        records: MyRow[];
+        loading: boolean;
+        error: PageErrorView | null;
+    }>(() => {
+        const cached = winAny[CACHE_KEY] as MyRow[] | undefined;
+        return { records: cached ?? [], loading: cached === undefined, error: null };
+    });
 
-useEffect(() => {
-    if (!dataReady) return;   // wait until the host hands us the DataAPI
-
-    // Read the AUTHORITATIVE window cache (never a module-local snapshot): the
-    // other mount may have resolved it between this mount's render and this
-    // effect, and a module re-eval can leave a local copy stale. Sync state on a
-    // hit (reference compare avoids a redundant render) so we never stick on the
-    // spinner and we pick up an invalidated/replaced array.
-    const cached = winAny[CACHE_KEY] as MyRow[] | undefined;
-    if (cached !== undefined) {
-        if (records !== cached) setData({ records: cached, loading: false, error: null });
-        return;
-    }
-    let cancelled = false;
-
-    // De-dupe the host double-mount: share ONE in-flight promise on `window` so a
-    // racing second mount awaits it instead of firing a duplicate query.
-    let inflight = winAny[INFLIGHT_KEY] as Promise<MyRow[]> | undefined;
-    if (!inflight) {
-        inflight = dataApi
-            .queryTable("myentity", { select: ["name", "statuscode"] })  // VERIFIED columns
-            .then((result: { rows: MyRow[] }) => {
-                winAny[CACHE_KEY] = result.rows;   // window = source of truth
-                return result.rows;
-            })
-            // Clear only if still ours — a concurrent refresh may have replaced
-            // this entry with a newer promise we must not delete.
-            .finally(() => { if (winAny[INFLIGHT_KEY] === inflight) delete winAny[INFLIGHT_KEY]; });
-        winAny[INFLIGHT_KEY] = inflight;
+    // "Try again" after a failed load: drop the failed in-flight entry and run the effect again.
+    function retryLoad() {
+        delete winAny[CACHE_KEY];
+        delete winAny[INFLIGHT_KEY];
+        setReloadKey((key) => key + 1);
     }
 
-    inflight
-        .then((rows) => { if (!cancelled) setData({ records: rows, loading: false, error: null }); })
-        .catch(() => { if (!cancelled) setData({ records: [], loading: false, error: "Unable to load records." }); });
+    React.useEffect(() => {
+        if (!dataReady) return;   // wait until the host hands us the DataAPI
 
-    return () => { cancelled = true; };
-    // Depend on readiness only — NOT `dataApi` (a new ref each render would
-    // re-fire this effect every render). `dataReady` flips false->true once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [dataReady]);
+        // Read the AUTHORITATIVE window cache (never a module-local snapshot): the
+        // other mount may have resolved it between this mount's render and this
+        // effect, and a module re-eval can leave a local copy stale. Sync state on a
+        // hit (reference compare avoids a redundant render) so we never stick on the
+        // spinner and we pick up an invalidated/replaced array.
+        const cached = winAny[CACHE_KEY] as MyRow[] | undefined;
+        if (cached !== undefined) {
+            if (records !== cached) setData({ records: cached, loading: false, error: null });
+            return;
+        }
+        let cancelled = false;
+
+        // De-dupe the host double-mount: share ONE in-flight promise on `window` so a
+        // racing second mount awaits it instead of firing a duplicate query.
+        let inflight = winAny[INFLIGHT_KEY] as Promise<MyRow[]> | undefined;
+        if (!inflight) {
+            inflight = dataApi
+                .queryTable("myentity", { select: ["myentityid", "name", "statuscode"] })  // VERIFIED columns
+                .then((result: { rows: MyRow[] }) => {
+                    winAny[CACHE_KEY] = result.rows;   // window = source of truth
+                    return result.rows;
+                })
+                // Clear only if still ours — a concurrent refresh may have replaced
+                // this entry with a newer promise we must not delete.
+                .finally(() => { if (winAny[INFLIGHT_KEY] === inflight) delete winAny[INFLIGHT_KEY]; });
+            winAny[INFLIGHT_KEY] = inflight;
+        }
+
+        inflight
+            .then((rows) => { if (!cancelled) setData({ records: rows, loading: false, error: null }); })
+            // Reported once and shown; the cache is never written with a failure.
+            .catch((failure) => { if (!cancelled) setData({ records: [], loading: false, error: reportPageError(PAGE_NAME, "loadRecords", undefined, failure, "read", retryLoad) }); });
+
+        return () => { cancelled = true; };
+        // Depend on readiness only — NOT `dataApi` (a new ref each render would
+        // re-fire this effect every render). `dataReady` flips false->true once.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady, reloadKey]);
+
+    return (
+        <div>
+            <PageErrorBar error={error} />
+            {loading ? <Spinner label="Loading" /> : records.map((row) => <Text key={row.myentityid}>{row.name}</Text>)}
+        </div>
+    );
+}
 ```
 
 ## Pattern 2 — Detail / per-record Map cache
@@ -121,62 +148,92 @@ const _detailCache: Map<string, MyRow> =
 const _detailInflight: Map<string, Promise<MyRow>> =
     winAny.__ppMyEntityDetailInflight ?? (winAny.__ppMyEntityDetailInflight = new Map());
 
-// In component:
-const recordId = pageInput?.recordId;
-const dataReady = !!dataApi && !!recordId;
-const cachedRecord = recordId ? (_detailCache.get(recordId) ?? null) : null;
+function PageBody(props: GeneratedComponentProps) {
+    const { dataApi, pageInput } = props;
+    const recordId = pageInput?.recordId;
+    const dataReady = !!dataApi && !!recordId;
+    const cachedRecord = recordId ? (_detailCache.get(recordId) ?? null) : null;
 
-const [{ record, loading, error }, setData] = useState(() => ({
-    record: cachedRecord,
-    loading: !!recordId && cachedRecord === null,
-    error: null as string | null,
-}));
+    const [{ record, loading, error }, setData] = React.useState<{
+        record: MyRow | null;
+        loading: boolean;
+        error: PageErrorView | null;
+    }>(() => ({
+        record: cachedRecord,
+        loading: !!recordId && cachedRecord === null,
+        error: null,
+    }));
 
-useEffect(() => {
-    if (!dataReady) return;
-    const id = recordId as string;
+    React.useEffect(() => {
+        if (!dataReady) return;
+        const id = recordId as string;
 
-    // Sync from the authoritative window Map on a hit — the other mount may have
-    // resolved it between this mount's render and this effect, or `recordId` may
-    // have changed in place. Reference compare avoids a redundant render.
-    const hit = _detailCache.get(id);
-    if (hit !== undefined) {
-        if (record !== hit) setData({ record: hit, loading: false, error: null });
-        return;
-    }
-    let cancelled = false;
+        // Sync from the authoritative window Map on a hit — the other mount may have
+        // resolved it between this mount's render and this effect, or `recordId` may
+        // have changed in place. Reference compare avoids a redundant render.
+        const hit = _detailCache.get(id);
+        if (hit !== undefined) {
+            if (record !== hit) setData({ record: hit, loading: false, error: null });
+            return;
+        }
+        let cancelled = false;
 
-    // Share one in-flight fetch per recordId across concurrent mounts.
-    let pending = _detailInflight.get(id);
-    if (!pending) {
-        pending = dataApi
-            .retrieveRow("myentity", { id, select: ["name", "statuscode"] })  // VERIFIED columns
-            .then((row: MyRow) => { _detailCache.set(id, row); return row; })
-            // Delete only if still ours (a concurrent refresh may have replaced it).
-            .finally(() => { if (_detailInflight.get(id) === pending) _detailInflight.delete(id); });
-        _detailInflight.set(id, pending);
-    }
+        // Share one in-flight fetch per recordId across concurrent mounts.
+        let pending = _detailInflight.get(id);
+        if (!pending) {
+            pending = dataApi
+                .retrieveRow("myentity", { id, select: ["name", "statuscode"] })  // VERIFIED columns
+                .then((row: MyRow) => { _detailCache.set(id, row); return row; })
+                // Delete only if still ours (a concurrent refresh may have replaced it).
+                .finally(() => { if (_detailInflight.get(id) === pending) _detailInflight.delete(id); });
+            _detailInflight.set(id, pending);
+        }
 
-    pending
-        .then((row) => { if (!cancelled) setData({ record: row, loading: false, error: null }); })
-        .catch(() => { if (!cancelled) setData({ record: null, loading: false, error: "Unable to load record." }); });
+        pending
+            .then((row) => { if (!cancelled) setData({ record: row, loading: false, error: null }); })
+            .catch((failure) => { if (!cancelled) setData({ record: null, loading: false, error: reportPageError(PAGE_NAME, "loadRecord", undefined, failure, "read") }); });
 
-    return () => { cancelled = true; };
-    // Readiness + recordId only — never `dataApi`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [dataReady, recordId]);
+        return () => { cancelled = true; };
+        // Readiness + recordId only — never `dataApi`.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady, recordId]);
+
+    return (
+        <div>
+            <PageErrorBar error={error} />
+            {loading ? <Spinner label="Loading" /> : record && <Text>{record.name}</Text>}
+        </div>
+    );
+}
 ```
-
 ## Cache invalidation and manual refresh
 
 After a mutation (create/update/delete), or when a manual refresh control fires,
 evict the relevant cache(s) **and any in-flight promise** before refetching, then
 bump a `reloadKey` state so the effect re-runs. Clear the in-flight entry too —
-otherwise the effect reuses the stale pending promise instead of fetching fresh:
+otherwise the effect reuses the stale pending promise instead of fetching fresh.
+A write that fails is reported as `'write'` (no retry) and evicts nothing:
 
 ```typescript
-await dataApi.updateRow("myentity", recordId, changes);
+try {
+    await dataApi.updateRow("myentity", recordId, changes);
+} catch (error) {
+    setSave({ saving: false, error: reportPageError(PAGE_NAME, "saveRecord", undefined, error, "write") });
+    return;
+}
 const w = window as any;
+
+// Detail: evict just the one row + its in-flight entry.
+_detailCache.delete(recordId);
+_detailInflight.delete(recordId);
+
+// List: evict the whole array + its in-flight promise so the next mount refetches.
+delete w.__ppMyEntityCache;
+delete w.__ppMyEntityInflight;
+
+// Then trigger a re-run (readiness dep won't change, so use an explicit key):
+setReloadKey((k) => k + 1);   // add `reloadKey` to the effect's dep array
+```
 
 // Detail: evict just the one row + its in-flight entry.
 _detailCache.delete(recordId);
@@ -230,6 +287,9 @@ if (!inflight) {
 The reason this is identical to Dataverse caching is the host behavior, not the
 backend: the double-mount re-runs any on-mount effect, and a connector call is a
 real network read with the same duplicate-request and spinner-flash failure mode.
+The consumer is Pattern 1's too: `inflight.then(…).catch(…)` on the same binding,
+whose `catch` reports `reportPageError(PAGE_NAME, "loadDocuments", undefined, failure, "read", retryLoad)`
+into the panel's state and never writes the cache.
 
 ## Scope — de-dupe always, cache when it helps
 

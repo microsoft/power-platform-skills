@@ -28,7 +28,9 @@ function client(routes) {
 const ONE_TO_MANY_BASE = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_task')?$select=SchemaName,RelationshipType";
 const ONE_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_task')/Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute";
 const MANY_TO_MANY_BASE = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')?$select=SchemaName,RelationshipType";
-const MANY_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata?$select=SchemaName,Entity1LogicalName,Entity2LogicalName";
+const MANY_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute";
+// The N:N properties beyond its two tables: the table that holds its links and the column each table has in it.
+const MANY_TO_MANY_SELECT = 'SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute';
 
 test('readRelationshipsOf uses the narrow collection selects and stamps the queried end', async () => {
   const c = client([
@@ -43,9 +45,12 @@ test('readRelationshipsOf uses the narrow collection selects and stamps the quer
       body: { value: [{ SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingAttribute: 'contoso_projectid' }] },
     },
     {
-      path: "/EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName",
+      path: `/EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=${MANY_TO_MANY_SELECT}`,
       status: 200,
-      body: { value: [{ SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_tag' }] },
+      body: { value: [{
+        SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_tag',
+        IntersectEntityName: 'contoso_project_contoso_tag', Entity1IntersectAttribute: 'contoso_projectid', Entity2IntersectAttribute: 'contoso_tagid',
+      }] },
     },
   ]);
   const one = await readRelationshipsOf(c, 'contoso_project', 'OneToMany');
@@ -54,7 +59,10 @@ test('readRelationshipsOf uses the narrow collection selects and stamps the quer
   assert.deepStrictEqual(one, { ok: true, rows: [{ schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' }] });
   assert.deepStrictEqual(many.rows[0].referencingEntity, 'contoso_task');
   assert.strictEqual(many.rows[0].referencedEntity, 'contoso_project');
-  assert.deepStrictEqual(nn.rows[0], { schemaName: 'contoso_project_contoso_tag', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' });
+  assert.deepStrictEqual(nn.rows[0], {
+    schemaName: 'contoso_project_contoso_tag', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag',
+    intersectEntityName: 'contoso_project_contoso_tag', entity1IntersectAttribute: 'contoso_projectid', entity2IntersectAttribute: 'contoso_tagid',
+  });
 });
 
 test('a 404 on the table is an empty read, not a failure', async () => {
@@ -66,7 +74,7 @@ test('a 404 on the table is an empty read, not a failure', async () => {
 test('a quote in a logical name is escaped with odataLit', async () => {
   const c = client([{ test: () => true, status: 200, body: { value: [] } }]);
   await readRelationshipsOf(c, "contoso_o'brien", 'ManyToMany');
-  assert.strictEqual(c.paths[0], "/EntityDefinitions(LogicalName='contoso_o''brien')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName");
+  assert.strictEqual(c.paths[0], `/EntityDefinitions(LogicalName='contoso_o''brien')/ManyToManyRelationships?$select=${MANY_TO_MANY_SELECT}`);
 });
 
 test('findRelationshipHolder reads the 1:N cast after the base type', async () => {
@@ -83,11 +91,14 @@ test('findRelationshipHolder reads the 1:N cast after the base type', async () =
 test('findRelationshipHolder reads the N:N cast after the base type', async () => {
   const c = client([
     { path: MANY_TO_MANY_BASE, status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_tag', RelationshipType: 'ManyToManyRelationship' } },
-    { path: MANY_TO_MANY_CAST, status: 200, body: { SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_tag', Entity2LogicalName: 'contoso_project' } },
+    { path: MANY_TO_MANY_CAST, status: 200, body: { SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_tag', Entity2LogicalName: 'contoso_project', IntersectEntityName: 'contoso_project_contoso_tag', Entity1IntersectAttribute: 'contoso_tagid', Entity2IntersectAttribute: 'contoso_projectid' } },
   ]);
   const found = await findRelationshipHolder(c, 'contoso_project_contoso_tag', { candidates: [] });
   assert.deepStrictEqual(c.paths, [MANY_TO_MANY_BASE, MANY_TO_MANY_CAST]);
-  assert.strictEqual(describeRelationship(found.holder), 'N:N contoso_tag <-> contoso_project');
+  assert.strictEqual(describeRelationship(found.holder), 'N:N contoso_tag <-> contoso_project (intersect contoso_project_contoso_tag)');
+  assert.strictEqual(found.holder.intersectEntityName, 'contoso_project_contoso_tag');
+  assert.strictEqual(found.holder.entity1IntersectAttribute, 'contoso_tagid');
+  assert.strictEqual(found.holder.entity2IntersectAttribute, 'contoso_projectid');
 });
 
 test('a case-sensitive 404 falls back to the candidate collections and finds the other casing', async () => {
@@ -135,6 +146,33 @@ test('a 429 on the exact-name read is found:null with status 429', async () => {
   assert.ok(!c.paths.some((p) => p.includes('/EntityDefinitions(')));
 });
 
+// A read that failed is reported by value, and the halt raised around it (lib/entity-provision.js) hands the service's code to the build's retry (lib/retry-policy.js, serviceFailure's
+// `answered`): so the OData `error` of the answer rides along on the result — not enumerable, so a result prints and compares as it did — and only an object is one.
+test('a failed read carries the OData error of its answer, unseen: the exact-name read, its cast, and a candidate collection', async () => {
+  const LOCKED = { code: '0x8004F064', message: 'Cannot start the requested operation [Update] because there is another [EntityCustomization] running at this moment.' };
+  const TIMEOUT = { code: '0x80044151', message: 'SQL timeout expired.' };
+  const exact = await findRelationshipHolder(client([{ test: (p) => p.startsWith('/RelationshipDefinitions('), status: 409, body: { error: LOCKED } }]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.deepStrictEqual(exact, { found: null, status: 409, error: LOCKED.message }, 'the result is what it was');
+  assert.deepStrictEqual(exact.answered, LOCKED, 'and the answer\'s error rides along');
+  assert.ok(!Object.keys(exact).includes('answered'), 'unseen');
+  const cast = await findRelationshipHolder(client([
+    { path: ONE_TO_MANY_BASE, status: 200, body: { SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } },
+    { path: ONE_TO_MANY_CAST, status: 500, body: { error: TIMEOUT } },
+  ]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.deepStrictEqual([cast.found, cast.status, cast.answered], [null, 500, TIMEOUT], 'the read of the cast');
+  const collection = await findRelationshipHolder(client([
+    { test: (p) => p.startsWith('/RelationshipDefinitions('), status: 404, body: { error: { message: 'does not exist' } } },
+    { test: (p) => p.includes('/EntityDefinitions('), status: 500, body: { error: TIMEOUT } },
+  ]), 'contoso_project_contoso_task', { candidates: ['contoso_project'] });
+  assert.deepStrictEqual(collection, { found: null, status: 500, error: TIMEOUT.message });
+  assert.deepStrictEqual(collection.answered, TIMEOUT, 'a candidate collection');
+  const listed = await readRelationshipsOf(client([{ test: () => true, status: 500, body: { error: TIMEOUT } }]), 'contoso_project', 'OneToMany');
+  assert.deepStrictEqual([listed, listed.answered], [{ ok: false, status: 500, error: TIMEOUT.message }, TIMEOUT], 'and the collection read itself');
+  // A body whose error is not an object carries none.
+  const plain = await findRelationshipHolder(client([{ test: () => true, status: 500, body: { error: 'SQL timeout expired.' } }]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.strictEqual(plain.answered, undefined);
+});
+
 test('projectionHolder turns the SDK row into ends before compare or describe', () => {
   const { projectionHolder } = require(path.join(__dirname, '..', 'lib', 'relationship-metadata.js'));
   const one = projectionHolder(
@@ -172,7 +210,108 @@ test('sameRelationship matches endpoints case-insensitively and rejects a differ
     { schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' },
   ), false);
   assert.strictEqual(sameRelationship(
-    { type: 'ManyToMany', entity1: 'contoso_tag', entity2: 'contoso_project' },
-    { type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' },
+    { type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_tag', entity2: 'contoso_project' },
+    {
+      type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_project', entity2: 'contoso_tag',
+      intersectEntityName: 'contoso_project_contoso_tag', entity1IntersectAttribute: 'contoso_projectid', entity2IntersectAttribute: 'contoso_tagid',
+    },
   ), true);
+});
+
+// --- Lookup-details mode (lookup discovery: lib/lookup-metadata.js) ---------------------------------------------------------------
+// The default read above is unchanged; this mode adds two scalars, reads every page, and fails rather than shrinks.
+const DETAILS = 'SchemaName,ReferencedEntity,ReferencingAttribute,ReferencedAttribute,ReferencingEntityNavigationPropertyName';
+const DETAILS_PATH = `/EntityDefinitions(LogicalName='opportunity')/ManyToOneRelationships?$select=${DETAILS}`;
+const NEXT = 'https://contoso.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName=\'opportunity\')/ManyToOneRelationships?$select=x&$skiptoken=2';
+const ACCOUNT = { SchemaName: 'opportunity_customer_accounts', ReferencedEntity: 'account', ReferencingAttribute: 'customerid', ReferencedAttribute: 'accountid', ReferencingEntityNavigationPropertyName: 'customerid_account' };
+const CONTACT = { SchemaName: 'opportunity_customer_contacts', ReferencedEntity: 'contact', ReferencingAttribute: 'customerid', ReferencedAttribute: 'contactid', ReferencingEntityNavigationPropertyName: 'customerid_contact' };
+
+function pagedClient(pages) {
+  const paths = [];
+  const answer = (p) => {
+    paths.push(p);
+    const hit = pages[p];
+    if (hit === undefined) return { status: 404, body: { error: { code: '0x80060888', message: `no route for ${p}` } } };
+    if (hit instanceof Error) throw hit;
+    return hit;
+  };
+  return { paths, get: async (p) => answer(p), getAbsolute: async (url) => answer(url) };
+}
+
+test('lookup details: the added scalars, every page, and the rows keep them', async () => {
+  const c = pagedClient({
+    [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT], '@odata.nextLink': NEXT } },
+    [NEXT]: { status: 200, body: { value: [CONTACT] } },
+  });
+  const read = await readRelationshipsOf(c, 'Opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.deepStrictEqual(c.paths, [DETAILS_PATH, NEXT]);
+  assert.deepStrictEqual(read, { ok: true, rows: [
+    { schemaName: 'opportunity_customer_accounts', type: 'OneToMany', referencedEntity: 'account', referencingEntity: 'opportunity', referencingAttribute: 'customerid', referencedAttribute: 'accountid', navigationProperty: 'customerid_account' },
+    { schemaName: 'opportunity_customer_contacts', type: 'OneToMany', referencedEntity: 'contact', referencingEntity: 'opportunity', referencingAttribute: 'customerid', referencedAttribute: 'contactid', navigationProperty: 'customerid_contact' },
+  ] });
+  assert.ok(!c.paths.some((p) => /DisplayName|LocalizedLabels/.test(p)), 'still a label-free read');
+});
+
+test('lookup details: a failed, malformed or repeated page fails the whole read — never a shorter candidate list', async () => {
+  for (const [label, second] of [
+    ['a refused second page', { status: 503, body: { error: { code: '0x80040216', message: 'Service unavailable.' } } }],
+    ['a second page with no value list', { status: 200, body: {} }],
+    ['a second page that loops back', { status: 200, body: { value: [CONTACT], '@odata.nextLink': NEXT } }],
+    ['a transport failure', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })],
+  ]) {
+    const c = pagedClient({ [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT], '@odata.nextLink': NEXT } }, [NEXT]: second });
+    const read = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+    assert.equal(read.ok, false, label);
+    assert.equal(read.rows, undefined, `${label}: no partial rows`);
+  }
+  const refused = pagedClient({ [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT], '@odata.nextLink': NEXT } }, [NEXT]: { status: 503, body: { Error: { code: '0x80040216', message: 'Service unavailable.' } } } });
+  const read = await readRelationshipsOf(refused, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.equal(read.error, 'Service unavailable.', 'the service\'s words, from the capitalized envelope too');
+  assert.equal(read.status, 503);
+  const coded = pagedClient({ [DETAILS_PATH]: { status: 500, body: { error: { code: '0x80044151', message: 'SQL timeout expired.' } } } });
+  const timedOut = await readRelationshipsOf(coded, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.equal(timedOut.error, 'SQL timeout expired.');
+  assert.equal(timedOut.answered.code, '0x80044151', 'the OData error rides along for the retry policy');
+  assert.ok(!Object.keys(timedOut).includes('answered'), '…not enumerable');
+});
+
+test('lookup details: a missing table is a failure, not a table without lookups; the default read keeps its meaning', async () => {
+  const missing = { status: 404, body: { error: { code: '0x80060888', message: "EntityMetadata With Id = LogicalName='nosuch' does not exist." } } };
+  const c = pagedClient({});
+  c.get = async () => missing;
+  const detailed = await readRelationshipsOf(c, 'nosuch', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.equal(detailed.ok, false);
+  assert.equal(detailed.tableMissing, true);
+  assert.match(detailed.error, /does not exist/);
+  assert.deepStrictEqual(await readRelationshipsOf(c, 'nosuch', 'ManyToOne'), { ok: true, rows: [], tableMissing: true });
+});
+
+test('lookup details: a row that does not state the added scalars fails the read', async () => {
+  for (const field of ['ReferencedAttribute', 'ReferencingEntityNavigationPropertyName', 'ReferencingAttribute']) {
+    const row = { ...ACCOUNT };
+    delete row[field];
+    const c = pagedClient({ [DETAILS_PATH]: { status: 200, body: { value: [CONTACT, row] } } });
+    const read = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+    assert.equal(read.ok, false, field);
+    assert.match(read.error, new RegExp(field), field);
+  }
+});
+
+test('lookup details and the default read never answer for each other from a shared cache', async () => {
+  const defaultPath = "/EntityDefinitions(LogicalName='opportunity')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingAttribute";
+  const c = pagedClient({
+    [defaultPath]: { status: 200, body: { value: [{ SchemaName: ACCOUNT.SchemaName, ReferencedEntity: 'account', ReferencingAttribute: 'customerid' }] } },
+    [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT] } },
+  });
+  const cache = new Map();
+  const narrow = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache);
+  const detailed = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache, { lookupDetails: true });
+  assert.deepStrictEqual(c.paths, [defaultPath, DETAILS_PATH], 'two reads, one per mode');
+  assert.equal(narrow.rows[0].navigationProperty, undefined);
+  assert.equal(detailed.rows[0].navigationProperty, 'customerid_account');
+  assert.equal(await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache, { lookupDetails: true }), detailed, 'each mode is cached under its own key');
+  assert.equal(await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache), narrow);
+  assert.equal(c.paths.length, 2);
+  const other = await readRelationshipsOf(c, 'opportunity', 'OneToMany', undefined, { lookupDetails: true });
+  assert.equal(other.ok, false, 'lookup details are a ManyToOne read only');
 });

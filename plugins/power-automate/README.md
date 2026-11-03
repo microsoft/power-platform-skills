@@ -72,3 +72,32 @@ change its path. The core log is not automatically pruned. See
 [`skills/telemetry/SKILL.md`](skills/telemetry/SKILL.md) for telemetry controls and
 [`references/telemetry.md`](references/telemetry.md) for collection and routing
 details. Both guides ship inside the plugin.
+
+## Local flow backups
+
+Before every update or delete, the engine saves the flow's current definition
+so `list_backups` / `restore_backup` can roll it back. These local snapshots
+provide a recovery option alongside Power Automate's recovery features.
+
+- **Location**: `%LOCALAPPDATA%\flowagent\backups` on Windows, otherwise
+  `$XDG_CACHE_HOME/flowagent/backups` (default `~/.cache/flowagent/backups`).
+  Setting `FLOWAGENT_HOME` moves them to `$FLOWAGENT_HOME/.flowagent/backups`.
+  Backups from older versions in a
+  project's `.flowagent/backups` folder are still listed and restorable
+  (marked `legacy`) but never written to.
+- **Size**: files are gzipped, and a snapshot identical to the flow's latest
+  backup is not written again.
+- **Retention**: per flow, the last 10 snapshots plus up to 5 pinned ones (the
+  first snapshot each session, i.e. the state before the agent started
+  editing). Files older than 30 days are pruned whenever a backup is written,
+  across all flows, but each flow's newest backup is always kept. The whole
+  store is capped at 100 MB, oldest unpinned first.
+  Override with `FLOWAGENT_BACKUP_RETENTION`, `FLOWAGENT_BACKUP_PINNED_RETENTION`,
+  `FLOWAGENT_BACKUP_MAX_AGE_DAYS` and `FLOWAGENT_BACKUP_MAX_TOTAL_MB`.
+- **Delete and restore are fail-closed**: if the backup of the current state
+  can't be taken, the operation is refused. Pass `skipBackup` to delete anyway.
+- **Restore** compares the saved flow's trigger/action structure with the
+  backup and reports any mismatch.
+  If the flow no longer exists it is recreated with a new ID; a recreated
+  solution flow sits outside its solution, and an admin can still restore the
+  original (within 21 days of deletion) to keep its ID and solution membership.

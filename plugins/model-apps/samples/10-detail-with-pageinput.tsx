@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type {
     TableRow,
     ReadableTableRow,
@@ -12,8 +12,127 @@ import {
     Button,
     Card,
     Divider,
+    MessageBar,
+    MessageBarBody,
 } from '@fluentui/react-components';
 import { ArrowLeftRegular } from '@fluentui/react-icons';
+
+// ---------- Page errors ----------
+// The page error block of references/rules.md ("Missing Error Handling"), copied unchanged: every failed data
+// operation goes through reportPageError, PageErrorBar shows the view it returns, and the page renders inside
+// PageErrorBoundary.
+
+type PageErrorKind = 'read' | 'write' | 'indeterminate' | 'network' | 'render';
+type PageErrorView = {
+  operation: string;
+  message: string;
+  fallbackKey: string;
+  code?: string;
+  kind: PageErrorKind;
+  retry?: () => void;
+};
+type PageErrorTelemetry = {
+  trackException?: (error: unknown, properties?: Record<string, unknown>) => void;
+};
+
+// The plan's display name for this page: a fixed literal, not the file name.
+const PAGE_NAME = 'Contact Detail';
+
+// The error copy of an English-only page. A localized page keeps these keys in its translations dictionary instead.
+const ERROR_COPY: Record<string, string> = {
+  'error.read': 'Unable to load data. Please try again.',
+  'error.write': 'The change could not be saved. Refresh before trying again.',
+  'error.network': 'The request did not go through. You can try again.',
+  'error.indeterminate': "We couldn't confirm this completed — refresh before retrying.",
+  'error.render': 'This page hit a problem and could not render. Refresh the page.',
+  'error.tryAgain': 'Try again',
+};
+
+function translate(key: string): string {
+  return ERROR_COPY[key] || key;
+}
+
+// The page's one error reporter. It logs bounded diagnostics once and returns the view the failed
+// operation stores; it never sets state, never calls retry, and reads only the named fields of a
+// thrown value, each on its own, so a throwing getter leaves that one field empty.
+function reportPageError(
+  pageName: string,
+  operation: string,
+  code: unknown,
+  message: unknown,
+  kind: PageErrorKind,
+  retry?: () => void,
+  appInsights?: PageErrorTelemetry,
+): PageErrorView {
+  const fields: Record<string, unknown> = {};
+  for (const path of ['code', 'errorCode', 'message', 'error.code', 'error.message']) {
+    try {
+      let value: unknown = message;
+      for (const part of path.split('.')) {
+        value = value !== null && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined;
+      }
+      fields[path] = value;
+    } catch {
+      fields[path] = undefined;
+    }
+  }
+  let normalizedCode = '';
+  for (const candidate of [code, fields['code'], fields['errorCode'], fields['error.code']]) {
+    const text = typeof candidate === 'string' ? candidate : typeof candidate === 'number' && Number.isFinite(candidate) ? String(candidate) : '';
+    normalizedCode = text.replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim().slice(0, 80);
+    if (normalizedCode) break;
+  }
+  let normalizedMessage = '';
+  for (const candidate of [message, fields['message'], fields['error.message']]) {
+    const line = typeof candidate === 'string' ? candidate.trim().split(/[\r\n\u2028\u2029]/)[0].replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim() : '';
+    if (!line || /^\[object [^\]]*\]$/.test(line) || /^at\s.*(?::\d+:\d+\)?|\((?:native|<anonymous>)\))$/.test(line)) continue;
+    normalizedMessage = line.length > 300 ? line.slice(0, 299) + '\u2026' : line;
+    break;
+  }
+  console.error('[' + String(pageName).replace(/[\r\n\]]/g, '') + '] ' + operation + ' failed', { code: normalizedCode, message: normalizedMessage });
+  const quiet = kind === 'indeterminate' || kind === 'render';
+  const view: PageErrorView = { operation, message: quiet ? '' : normalizedMessage, fallbackKey: 'error.' + kind, kind };
+  if (normalizedCode) view.code = normalizedCode;
+  if (typeof retry === 'function' && (kind === 'read' || kind === 'network')) view.retry = retry;
+  return view;
+}
+
+function PageErrorBar(props: { error: PageErrorView | null }) {
+  const { error } = props;
+  if (!error) return null;
+  return (
+    <MessageBar intent="error">
+      <MessageBarBody>{error.message || translate(error.fallbackKey)}</MessageBarBody>
+    </MessageBar>
+  );
+}
+
+// The page's one class component: it catches a render crash below it and shows a fixed message.
+class PageErrorBoundary extends React.Component<
+  { children: React.ReactNode; appInsights?: PageErrorTelemetry },
+  { failed: boolean }
+> {
+  public state = { failed: false };
+
+  public static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  public componentDidCatch(error: Error): void {
+    reportPageError(PAGE_NAME, 'render', undefined, error, 'render');
+  }
+
+  public render(): React.ReactNode {
+    if (this.state.failed) {
+      return (
+        <MessageBar intent="error">
+          <MessageBarBody>{translate('error.render')}</MessageBarBody>
+        </MessageBar>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Sample: detail page receiving pageInput from a sibling list page.
 // Demonstrates:
@@ -27,6 +146,8 @@ import { ArrowLeftRegular } from '@fluentui/react-icons';
 //     detail-page pattern) so the host double-mount fetches once and return
 //     visits render instantly; readiness-only deps (never `dataApi`)
 //   - Lookup formatted-value access via @OData.Community.Display.V1.FormattedValue
+//   - Rule 22: a failed read goes through reportPageError and PageErrorBar; the page
+//     renders inside PageErrorBoundary
 
 type ContactRow = TableRow<{
     readonly contactid: string;
@@ -92,12 +213,6 @@ const useStyles = makeStyles({
         textAlign: 'center',
         color: tokens.colorNeutralForeground2,
     },
-    errorBanner: {
-        padding: tokens.spacingHorizontalM,
-        backgroundColor: tokens.colorStatusDangerBackground2,
-        color: tokens.colorStatusDangerForeground2,
-        borderRadius: tokens.borderRadiusMedium,
-    },
     divider: {
         marginTop: tokens.spacingVerticalM,
         marginBottom: tokens.spacingVerticalM,
@@ -118,7 +233,7 @@ const Field = (props: { label: string; value?: string | null }) => {
 
 // ---------- Component ----------
 
-const GeneratedComponent = (props: GeneratedComponentProps) => {
+function PageBody(props: GeneratedComponentProps) {
     const { dataApi, pageInput } = props;
     const styles = useStyles();
 
@@ -143,7 +258,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
     // on frame 0, not a blank page that flips to a spinner.
     // Pre-warm `record` from the cache if we have it (return visits = instant).
     const cached = cache.get(recordId);
-    const [data, setData] = useState<{ record: ReadableContact | null; loading: boolean; error: string | null }>(
+    const [data, setData] = useState<{ record: ReadableContact | null; loading: boolean; error: PageErrorView | null }>(
         () => ({
             record: cached ?? null,
             loading: cached === undefined,
@@ -193,10 +308,10 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
 
         pending
             .then((row) => { if (!cancelled) setData({ record: row, loading: false, error: null }); })
-            .catch((err) => {
+            .catch((failure) => {
                 if (cancelled) return;
-                const message = err instanceof Error ? err.message : 'Failed to load contact.';
-                setData({ record: null, loading: false, error: message });
+                // Reported once — bounded code and message, never the thrown value; never cached.
+                setData({ record: null, loading: false, error: reportPageError(PAGE_NAME, 'loadContact', undefined, failure, 'read') });
             });
 
         return () => { cancelled = true; };
@@ -242,11 +357,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
                 </Text>
             </header>
 
-            {data.error && (
-                <div role="alert" className={styles.errorBanner}>
-                    {data.error}
-                </div>
-            )}
+            <PageErrorBar error={data.error} />
 
             {row && (
                 <Card className={styles.card}>
@@ -266,6 +377,12 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
             )}
         </div>
     );
-};
+}
+
+const GeneratedComponent = (props: GeneratedComponentProps) => (
+    <PageErrorBoundary>
+        <PageBody {...props} />
+    </PageErrorBoundary>
+);
 
 export default GeneratedComponent;

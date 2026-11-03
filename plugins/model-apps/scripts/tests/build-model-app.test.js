@@ -6,7 +6,12 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
+// An apply that names no app folder and no workspace gets a workspace of its own, which holds its build lease (helpers/own-app-folder.js): its specs name
+// page source that is not on disk, which an app folder would make the build check.
+const { inOwnWorkspace } = require('./helpers/own-app-folder.js');
+const { buildModelApp: buildModelAppInPlace, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const buildModelApp = inOwnWorkspace(buildModelAppInPlace);
+const { verifySpec } = require(path.join(__dirname, '..', 'lib', 'verify-spec.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
@@ -127,7 +132,7 @@ test('apply threads through to the SDK engine (solution + tables created)', asyn
   assert.ok(calls.some((c) => c[0] === 'createSolution'));  assert.ok(calls.filter((c) => c[0] === 'createTable').length >= 1);
 });
 
-// R3 — auto-verify after a successful --apply (opt-in; deps.verify injected)
+// Auto-verify after a successful --apply (opt-in; deps.verify injected)
 test('data-model languageCode defaults to the org base language and reaches table/column labels', async () => {
   const { sdk, calls } = mockSdk();
   sdk.queryRecords = async (set) => {
@@ -176,6 +181,36 @@ test('language resolution warns when org-language discovery fails but still fall
   assert.ok(warnings.some((w) => /base language/i.test(w) && /boom/.test(w)));
 });
 
+// A caller that has to KNOW the language rather than choose one — `--verify`, holding an existing deployment to the language its labels were
+// written in — must not be handed the build's fallback: a 1033 picked because the organization could not be read is an assumption about what
+// was built, not evidence of it. `undetermined` takes the place of the fallback: it is told why, and what it answers is what comes back.
+test('language resolution lets a caller that must not guess take the failure, with the reason, in place of the 1033 fallback', async () => {
+  const asked = [];
+  const unknown = (reason) => { asked.push(reason); return null; };
+  const warnings = [];
+  const reads = (queryRecords) => resolveLanguageCode({ provision: queryRecords && { queryRecords }, spec: {}, warn: (m) => warnings.push(m), undetermined: unknown });
+  assert.strictEqual(await reads(async () => { throw new Error('HTTP 503'); }), null);
+  assert.strictEqual(await reads(async () => []), null);
+  assert.strictEqual(await reads(async () => [{ languagecode: 'x' }]), null);
+  assert.strictEqual(await reads(undefined), null);
+  assert.deepStrictEqual(asked, [
+    'the organization read failed: HTTP 503',
+    'organization.languagecode was missing or not a valid LCID',
+    'organization.languagecode was missing or not a valid LCID',
+    'no Dataverse reader was supplied',
+  ]);
+  assert.deepStrictEqual(warnings, [], 'the hook replaces the build\'s warning: the caller says what it makes of the answer');
+  // Only a failure reaches it: every language the build is TOLD, and the organization's own, are returned as they always were.
+  asked.length = 0;
+  assert.strictEqual(await resolveLanguageCode({ provision: {}, spec: { languageCode: 1031 }, undetermined: unknown }), 1031);
+  assert.strictEqual(await resolveLanguageCode({ provision: {}, spec: { languageCode: 1031 }, languageCode: 3082, undetermined: unknown }), 3082);
+  assert.strictEqual(await resolveLanguageCode({ provision: { queryRecords: async () => [{ languagecode: 1036 }] }, spec: {}, undetermined: unknown }), 1036);
+  assert.deepStrictEqual(asked, []);
+  // And a build that passes no hook keeps its fallback and its warning, exactly as before.
+  assert.strictEqual(await resolveLanguageCode({ provision: { queryRecords: async () => { throw new Error('boom'); } }, spec: {}, warn: (m) => warnings.push(m) }), 1033);
+  assert.strictEqual(warnings.length, 1);
+});
+
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
   const { sdk } = mockSdk();
   let received = null;
@@ -186,7 +221,7 @@ test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verif
   assert.strictEqual(received, desk, 'the injected verifier received the spec');
   assert.deepStrictEqual(r.verify, { ok: true, present: 2, total: 2, missing: [] });
 
-  // The CALL SITE, which nothing covered until a reviewer pointed it out. Dropping the second
+  // The CALL SITE, which nothing covered at first. Dropping the second
   // argument here leaves every other test green while verify goes back to reporting an
   // environment-gated business rule as `not deployed` — which drives verify.ok false, which withholds
   // the exit code, `.last-applied.json` and the `--changed-only` snapshot. The whole fix would be
@@ -294,8 +329,14 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(isTransientHalt({ message: 'Microsoft.Crm.ObjectModel.CustomizationLockException: ...' }));
   assert.ok(isTransientHalt({ cause: { message: 'SQL timeout expired' } }));
   assert.ok(isTransientHalt({ message: 'More than one concurrent Delete requests detected' }));
-  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live.
-  assert.ok(isTransientHalt({ message: 'HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' }));
+  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live. Said in words alone (an error with no status), it is still read; as the service answers it, a 500, it takes the
+  // generic SQL error code every SQL failure shares AND the platform's signature in the service's own answer (lib/retry-policy.js, isDeadlockVictimAnswer): neither alone is a deadlock victim.
+  const DEADLOCK = ' Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+  const answered = (words, code) => Object.assign(new Error(`HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1): ${words}`), { code: 'CONNECTION_ERROR', statusCode: 500, url: 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1)', cause: { error: { ...(code ? { code } : {}), message: words } } });
+  assert.ok(isTransientHalt({ message: `HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1): ${DEADLOCK}` }));
+  assert.ok(isTransientHalt(answered(DEADLOCK, '0x80044150')), 'a 500 with the generic SQL error code and the signature');
+  assert.ok(!isTransientHalt(answered(DEADLOCK)), 'the signature in a 500 that names no code');
+  assert.ok(!isTransientHalt(answered(DEADLOCK.replace('1205', '547'), '0x80044150')), 'the code beside another SQL number');
   assert.ok(!isTransientHalt({ message: 'Sql error: Generic SQL error. Sql Number: 547' }), 'another SQL error is not a deadlock');
   assert.ok(!isTransientHalt({ transient: false, message: 'Sql Number: 1205' }), 'an explicit non-transient still wins');
   // recoverable is a re-runnable-phase flag, NOT a transient signal — must not trigger a retry alone.
@@ -308,29 +349,105 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
 });
 
-// Live-captured shape, renamed onto the support-desk sample: a view pushed moments after the build created the
-// relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse reports the
-// logical (lower-case) name.
-const LAG_MESSAGE = "HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has invalid fetch.  Error : 'new_ticket' entity doesn't contain attribute with Name = 'new_customerid' and NameMapping = 'Logical' (look up";
+// A halt that quotes the maker's own words beside the service's — a page's name, then the answer to its refused publish — names the words that decide (`retryText`), so the maker's cannot.
+test('isTransientHalt: a halt that names the words it is judged by is judged by them alone — the message, which quotes the maker, is not read', () => {
+  const quoting = (retryText, extra = {}) => Object.assign(new Error('page "SQL Timeout Report" was updated as 1 and saved, but publishing it failed (…)'), { retryText }, extra);
+  assert.ok(!isTransientHalt(quoting('PublishXml answered 500: the service is busy')), 'the page\'s name is a SQL timeout to the whole message, and to nothing else');
+  assert.ok(isTransientHalt(quoting('The service is unavailable. Please try again later.')), 'the service\'s own words still decide');
+  assert.ok(isTransientHalt(quoting('Microsoft.Crm.ObjectModel.CustomizationLockException: ...')));
+  assert.ok(!isTransientHalt(quoting('')), 'a refusal with no words says nothing');
+  // The runner wraps every step's halt once, with the text of the first in its own message: the declaration on the cause is read, and the wrapper's message — the name again — is not.
+  const wrapped = (cause) => ({ message: `pages failed: ${cause.message}`, cause });
+  assert.ok(!isTransientHalt(wrapped(quoting('PublishXml answered 500: the service is busy'))));
+  assert.ok(isTransientHalt(wrapped(quoting('SQL timeout expired'))));
+  // A status still counts, and an explicit never-retry still wins over the words.
+  assert.ok(isTransientHalt(quoting('busy', { statusCode: 503 })));
+  assert.ok(!isTransientHalt(quoting('try again later', { transient: false })));
+  // A halt that names nothing is read as it always was.
+  assert.ok(isTransientHalt(new Error('page "SQL Timeout Report" has a token')), 'unmarked and undeclared: the whole message is read');
+});
 
-test('isTransientHalt: a missing-attribute fetch error is transient only for a column the spec creates', () => {
+// ── What a halt is judged by ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A halt's message is the plugin's own, and it quotes what the maker named; the failure the halt wraps is the service's. The decision to run the whole build again reads the second, by
+// structure first (the HTTP status, the transport, the SDK's typed errors) and by the service's words after — never the first. lib/retry-policy.js holds the rule; halt-retry-policy.test.js holds each halt.
+const SERVICE_URL = "https://contoso.crm.dynamics.com/api/data/v9.2/roles?$filter=name eq 'SQL Timeout Reader'";
+const serviceError = (statusCode, words, url = SERVICE_URL) => Object.assign(new Error(`${statusCode > 0 ? `HTTP ${statusCode} from ${url}` : `Transport failure reaching ${url}`}: ${words}`), { code: 'CONNECTION_ERROR', statusCode, url });
+
+test('isTransientHalt: a halt is judged by the failure it wraps — its own message, which quotes the maker, is never read', () => {
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const quoting = 'security role "SQL Timeout Reader" could not be authored: same-name role is managed';
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed' })), false, 'a halt with no failure behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed', cause: new Error('same-name role is managed') })), false, 'a failure with nothing transient in it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'security-role-failed', cause: serviceError(503, 'The service is unavailable.') })), true, 'a 503 behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt('x', { phase: 'security', code: 'x', cause: new Error('Please try again later.') })), true, 'the service\'s words behind it');
+  assert.strictEqual(isTransientHalt(new BuildHalt(quoting, { phase: 'security', code: 'x', retry: 'never', cause: serviceError(503, 'x') })), false, 'a halt that says never');
+});
+
+test('isTransientHalt: 502 and 504 are transient beside 429 and 503, and so are a timeout and a reset of the transport — a 500 and a certificate failure are not', () => {
+  for (const status of [429, 502, 503, 504]) assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(status, 'nothing to read') }), true, String(status));
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'nothing to read') }), false, 'a bare 500');
+  for (const words of ['Request failed: read ECONNRESET', 'Request timed out', 'Request failed: connect ETIMEDOUT 10.0.0.1:443']) assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(0, words) }), true, words);
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(0, 'Request failed: unable to verify the first certificate') }), false);
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })), true, 'a system error of the transport');
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('EACCES: permission denied, open \'/work/SQL Timeout/page.json\''), { code: 'EACCES' })), false, 'a file error');
+});
+
+test('isTransientHalt: an error the SDK or the plugin types is a refusal whatever its message quotes — and a typed error that carries a throttle is the service\'s answer all the same', () => {
+  for (const code of ['VALIDATION_ERROR', 'VERSION_CONFLICT', 'APP_SOURCE_PATH']) {
+    assert.strictEqual(isTransientHalt({ message: 'wrapper', cause: Object.assign(new Error('"SQL Timeout Reader": try again later'), { code }) }), false, code);
+  }
+  assert.strictEqual(isTransientHalt(Object.assign(new Error('x'), { code: 'APP_COMPONENT_UNREADABLE', statusCode: 429 })), true);
+});
+
+test('isTransientHalt: the url of a request is where it went, not what the service said — a maker\'s name in the query is not a SQL timeout, and the words of an answer under a status that says no are not read either', () => {
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'The server is busy') }), false, 'SQL Timeout in the url only');
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(500, 'SQL timeout expired') }), false, 'in the answer of a 500: a status that is not transient is final, and an answer echoes what the maker named');
+  assert.strictEqual(isTransientHalt({ message: 'x', cause: serviceError(503, 'SQL timeout expired') }), true, 'a 503 is run again, whatever it says');
+});
+
+test('transient auto-retry: a refusal whose message quotes a name that reads as a transient error is run once — a 503 is retried, whatever the name', async () => {
+  const run = async (failure) => {
+    const { sdk } = mockSdk();
+    let attempts = 0;
+    sdk.createTable = async () => { attempts += 1; throw failure; };
+    await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk }));
+    return attempts;
+  };
+  assert.strictEqual(await run(Object.assign(new Error('Table "SQL Timeout 503 try again later" is invalid'), { code: 'VALIDATION_ERROR' })), 1, 'a typed refusal');
+  assert.strictEqual(await run(serviceError(403, 'permission denied')), 1, 'a 403 whose url quotes the name');
+  assert.strictEqual(await run(serviceError(503, 'The service is unavailable.')), 4, 'a 503: the first run and three more');
+});
+
+// The lag is the SERVICE's answer — an HTTP 400 — and a 400 is final unless the service names the condition by the code it returns (lib/retry-policy.js): `QueryBuilderNoAttribute`, "The specified attribute does not
+// exist on this entity" (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes). The words alone — which any answer that echoes a table can hold — decide nothing; the code
+// says what kind of answer it is, and the spec says whether the missing column is one this build creates. The SDK's own ConnectionError carries the answer's body as its cause.
+// Live-captured words, renamed onto the support-desk sample: a view pushed moments after the build created the relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse
+// reports the logical (lower-case) name.
+const LAG_WORDS = "The column, fetchxml, has invalid fetch.  Error : 'new_ticket' entity doesn't contain attribute with Name = 'new_customerid' and NameMapping = 'Logical' (look up";
+const lagAnswer = (words, code = '0x80041103', status = 400) => new (require('../lib/maker-sdk.js').ConnectionError)('https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries?$select=savedqueryid', status, words, { error: { ...(code ? { code } : {}), message: words } });
+
+test('isTransientHalt: the lag is run again when the service names it by its code and the spec creates the column — and by nothing the answer\'s words say', () => {
   const spec = desk;
-  const err = (message) => ({ message, cause: { statusCode: 400 } });
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE), { spec }), true, 'a relationship lookup the spec declares (case differs)');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE)), false, 'without the spec nothing proves the column is ours');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")), { spec }), false, 'an undeclared column is an authoring error');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_ticket'", "'new_comment'")), { spec }), false, 'declared on another table only');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_priority'")), { spec }), true, 'a declared column');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_name'")), { spec }), true, 'the primary name column');
-  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("doesn't", 'doesn\u2019t')), { spec }), true, 'a typographic apostrophe');
-  assert.strictEqual(isTransientHalt({ message: 'view "Tickets" failed', cause: { statusCode: 400, message: LAG_MESSAGE } }, { spec }), true, 'the Dataverse text in the cause');
-  assert.strictEqual(isTransientHalt({ transient: false, message: LAG_MESSAGE }, { spec }), false, 'an explicit non-transient still wins');
-  assert.strictEqual(isTransientHalt(err('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS), { spec }), true, 'the code, and a column the spec declares (case differs)');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, '0x80040303'), { spec }), true, 'the code of the validation that wraps the missing attribute: both documented codes are taken');
+  assert.strictEqual(isTransientHalt({ message: 'views failed', cause: lagAnswer(LAG_WORDS) }, { spec }), true, 'behind the halt the runner raises');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, '0x80041103', 500), { spec }), true, 'the status the service gave it does not matter: the code says what it is');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS), {}), false, 'without the spec nothing proves the column is ours');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, null), { spec }), false, 'the same words with no code: any answer that echoes a table can say them');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS, '0x80040220'), { spec }), false, 'the words under another code (a missing privilege)');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_typo'")), { spec }), false, 'a column nobody declared is an authoring error');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_ticket'", "'new_comment'")), { spec }), false, 'declared on another table only');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_priority'")), { spec }), true, 'a declared column');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_name'")), { spec }), true, 'the primary name column');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS.replace("doesn't", 'doesn\u2019t')), { spec }), true, 'a typographic apostrophe');
+  assert.strictEqual(isTransientHalt(lagAnswer('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
+  assert.strictEqual(isTransientHalt(Object.assign(lagAnswer(LAG_WORDS), { transient: false }), { spec }), false, 'an explicit non-transient still wins');
+  // The words of an answer with no code and no ConnectionError behind them — what an older caller's failure looked like — are not the lag either.
+  assert.strictEqual(isTransientHalt({ message: LAG_WORDS, cause: { statusCode: 400 } }, { spec }), false);
 });
 
 test('isTransientHalt: only attributes the build materializes ride the lag retry', () => {
-  const err = (message) => ({ message, cause: { statusCode: 400 } });
-  const lag = (table, column) => err(LAG_MESSAGE.replace("'new_ticket'", `'${table}'`).replace("'new_customerid'", `'${column}'`));
+  const lag = (table, column) => lagAnswer(LAG_WORDS.replace("'new_ticket'", `'${table}'`).replace("'new_customerid'", `'${column}'`));
   const spec = {
     entities: [
       { schemaName: 'new_asset', existing: true, primaryAttribute: { schemaName: 'new_title' },
@@ -353,7 +470,7 @@ test('transient auto-retry: a view rejected for a lookup the build just created 
   let failed = 0;
   const push = sdk.pushArtifact;
   sdk.pushArtifact = async (type, ...rest) => {
-    if (type === 'view' && failed === 0) { failed += 1; const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    if (type === 'view' && failed === 0) { failed += 1; throw lagAnswer(LAG_WORDS); }
     return push(type, ...rest);
   };
   const events = [];
@@ -369,7 +486,7 @@ test('transient auto-retry: a view rejected for a column the spec never declared
   const { sdk } = mockSdk();
   const push = sdk.pushArtifact;
   sdk.pushArtifact = async (type, ...rest) => {
-    if (type === 'view') { const e = new Error(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")); e.statusCode = 400; throw e; }
+    if (type === 'view') throw lagAnswer(LAG_WORDS.replace("'new_customerid'", "'new_typo'"));
     return push(type, ...rest);
   };
   const events = [];
@@ -378,13 +495,26 @@ test('transient auto-retry: a view rejected for a column the spec never declared
   assert.ok(!events.some((e) => e.status === 'retry'), 'no retry for a column nobody declared');
 });
 
+test('transient auto-retry: the same words under no code halt at once — the lag is the service\'s answer by its code, not by what an answer says', async () => {
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') throw lagAnswer(LAG_WORDS, null);
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }));
+  assert.ok(!events.some((e) => e.status === 'retry'), 'no retry');
+});
+
 test('transient auto-retry: a declared column that never appears exhausts the retries and surfaces the original error', async () => {
   // The lag clause must not loop: maxRetries (3 on --apply) bounds it to four attempts, and the halt that ends the
   // run still carries Dataverse's own words so the operator can see which column never became visible.
   const { sdk } = mockSdk();
   const push = sdk.pushArtifact;
   sdk.pushArtifact = async (type, ...rest) => {
-    if (type === 'view') { const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    if (type === 'view') throw lagAnswer(LAG_WORDS);
     return push(type, ...rest);
   };
   const events = [];
@@ -418,6 +548,208 @@ test('transient auto-retry: a non-transient halt is NOT retried', async () => {
   sdk.createTable = async () => { attempts += 1; const e = new Error('bad request'); e.recoverable = false; throw e; };
   await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk }));
   assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
+});
+
+// ── A throttle's wait crosses the layers, and the waits the build's own layers add are one budget with the HTTP client's ─────────────────────────────────
+// The page backend sends a throttled page write again up to six times, waiting what the service asked; when that is not enough it raises an error that carries the last ask (`retryAfterMs`) and the moment before which
+// nothing may be sent (`retryNotBefore`). The loop that runs the build again then waits for THAT — never its own, shorter, backoff — and every wait it spends on a throttle comes out of the budget the backend spends from:
+// five minutes for the whole run (lib/throttle-budget.js). A wait that does not fit ends the run with a halt that says what the service asked, and that a later run continues.
+const throttleDriver = async ({ failures, budget, retryDelayMs, spec = desk, onRun }) => {
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const { sdk } = mockSdk();
+  let clock = 1800000000000;
+  let attempts = 0;
+  const sleeps = [];
+  const logs = [];
+  const warnings = [];
+  const budgets = [];
+  const closed = [];
+  let halt = null;
+  let result = null;
+  try {
+    result = await buildModelApp(spec, { apply: true, env: 'https://x', ...(retryDelayMs !== undefined ? { retryDelayMs } : {}) }, {
+      sdk, provisionSdk: sdk, ...(budget ? { throttle: budget } : {}), now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms; },
+      log: (m) => logs.push(String(m)), warn: (m) => warnings.push(String(m)),
+      journal: { path: 'x', record: () => {}, close: (s) => closed.push(s) },
+      discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+      runBuild: async (s, o) => {
+        attempts += 1;
+        budgets.push(o.throttle);
+        if (onRun) onRun(attempts, () => clock, (ms) => { clock += ms; }, o.throttle);
+        const failure = failures(attempts, clock);
+        if (failure) throw new BuildHalt(`pages failed: ${failure.message}`, { phase: 'pages', code: 'CONNECTION_ERROR', recoverable: true, cause: failure });
+        return { ok: true };
+      },
+    });
+  } catch (e) { halt = e; }
+  return { halt, result, attempts, sleeps, logs, warnings, budgets, closed, throttle: budgets[0], clock: () => clock };
+};
+// What the page backend raises when a throttle outlasts its sends.
+const throttledFailure = (clock, askedMs, extra = {}) => Object.assign(new Error('the service throttled all 6 sends, waiting between them (HTTP 429 from https://x/api/data/v9.0/$batch: Too many requests)'), {
+  statusCode: 429, ...(askedMs ? { retryAfterMs: askedMs, retryNotBefore: clock + askedMs } : {}), ...extra,
+});
+
+test('retry loop: the wait the service asked for crosses to the build — it is waited whole before the next run, and the build\'s own shorter backoff does not replace it', async () => {
+  const out = await throttleDriver({ failures: (n, clock) => (n === 1 ? throttledFailure(clock, 7000) : null) });
+  assert.strictEqual(out.halt, null);
+  assert.strictEqual(out.attempts, 2);
+  assert.deepStrictEqual(out.sleeps, [7000], 'the ask, which is longer than the first backoff (3 s plus under a second of jitter)');
+  assert.match(out.logs.join('\n'), /retrying \(attempt 1\/3\) after 7000ms.*the service asked to wait 7 s/, 'and the line the build writes says why');
+  // An ask shorter than the backoff leaves the backoff in charge, and a throttle that asked for nothing waits the backoff.
+  const short = await throttleDriver({ failures: (n, clock) => (n === 1 ? throttledFailure(clock, 1000) : null) });
+  assert.ok(short.sleeps.length === 1 && short.sleeps[0] >= 3000 && short.sleeps[0] < 4000, `the build's backoff: ${short.sleeps}`);
+  const bare = await throttleDriver({ failures: (n) => (n === 1 ? throttledFailure(0, 0) : null) });
+  assert.ok(bare.sleeps.length === 1 && bare.sleeps[0] >= 3000 && bare.sleeps[0] < 4000, `${bare.sleeps}`);
+});
+
+test('retry loop: the ask is a moment on the clock — what has passed since the answer is not waited again, and a fraction of a second is waited as the whole second the service counts in', async () => {
+  // The failure was raised 2.5 s before the loop looked at it (the layers between did work): 4.5 s of the 7 s are left, and that is waited as 5 s.
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const { sdk } = mockSdk();
+  let clock = 1800000000000;
+  const sleeps = [];
+  let n = 0;
+  await buildModelApp(desk, { apply: true, env: 'https://x' }, {
+    sdk, provisionSdk: sdk, now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms; }, log: () => {}, warn: () => {},
+    discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+    runBuild: async () => {
+      n += 1;
+      if (n > 1) return { ok: true };
+      const failure = throttledFailure(clock, 7000);
+      clock += 2500;
+      throw new BuildHalt('pages failed', { phase: 'pages', code: 'CONNECTION_ERROR', recoverable: true, cause: failure });
+    },
+  });
+  assert.deepStrictEqual(sleeps, [5000], '4.5 s were left, and a second is the unit the service counts in');
+  // A moment already past asks for nothing: the build's own backoff is all there is.
+  const past = await throttleDriver({ failures: (n2, c) => (n2 === 1 ? throttledFailure(c, 2000, { retryNotBefore: c - 60000 }) : null) });
+  assert.ok(past.sleeps.length === 1 && past.sleeps[0] >= 3000 && past.sleeps[0] < 4000, `${past.sleeps}`);
+});
+
+test('retry loop: every wait the build adds for a throttle comes out of one budget of five minutes — the build stops, with a halt that says what the service asked, when the next wait does not fit', async () => {
+  // The service asks for two minutes each time: two waits are 240 s of the 300, and the third does not fit.
+  const out = await throttleDriver({ failures: (n, clock) => throttledFailure(clock, 120000) });
+  assert.strictEqual(out.attempts, 3, 'the build ran three times, and not a fourth');
+  assert.deepStrictEqual(out.sleeps, [120000, 120000], 'two waits were taken');
+  assert.strictEqual(out.throttle.spentMs(), 240000);
+  assert.ok(out.halt, 'the build stops');
+  assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+  assert.strictEqual(out.halt.phase, 'pages');
+  assert.strictEqual(out.halt.recoverable, true);
+  assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: the service is throttling, and a later run can go on');
+  assert.strictEqual(out.halt.statusCode, 429);
+  assert.match(out.halt.message, /the service asked to wait 120 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(240 s are spent\)/);
+  assert.match(out.halt.message, /run the same command again later, and it continues from here/);
+  assert.strictEqual(out.halt.cause.cause.statusCode, 429, 'the failure itself is its cause');
+  assert.strictEqual(out.closed.length, 1, 'the journal says where the run stopped');
+  assert.deepStrictEqual([out.closed[0].status, out.closed[0].code, out.closed[0].phase, out.closed[0].recoverable], ['halt', 'throttle-budget-exhausted', 'pages', true]);
+  // One ask that is longer than the whole budget stops the run at once, with nothing waited.
+  const long = await throttleDriver({ failures: (n, clock) => throttledFailure(clock, 600000) });
+  assert.strictEqual(long.attempts, 1);
+  assert.deepStrictEqual(long.sleeps, []);
+  assert.match(long.halt.message, /the service asked to wait 600 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(0 s are spent\)/);
+});
+
+test('retry loop: the budget is the run\'s — the backend\'s waits count, so what is left for the build is what the backend did not spend — and a caller may give a smaller one', async () => {
+  const { makeThrottleBudget } = require('../lib/throttle-budget.js');
+  // The backend spent 250 s: a 60 s ask does not fit in the 50 that are left.
+  const spentByBackend = makeThrottleBudget();
+  spentByBackend.spend(250000);
+  const out = await throttleDriver({ budget: spentByBackend, failures: (n, clock) => throttledFailure(clock, 60000) });
+  assert.strictEqual(out.attempts, 1);
+  assert.deepStrictEqual(out.sleeps, []);
+  assert.match(out.halt.message, /does not fit in what is left of the 5 minutes .*\(250 s are spent\)/);
+  // The one budget is handed to every run of the engine: the same object each time, the caller's when it gave one.
+  const given = makeThrottleBudget({ totalMs: 10000 });
+  const twice = await throttleDriver({ budget: given, failures: (n, clock) => (n === 1 ? throttledFailure(clock, 7000) : null) });
+  assert.strictEqual(twice.attempts, 2);
+  assert.ok(twice.budgets.every((b) => b === given), 'the caller\'s budget reaches the engine on every run');
+  assert.strictEqual(given.spentMs(), 7000, 'and the wait was spent from it');
+  const second = await throttleDriver({ budget: makeThrottleBudget({ totalMs: 10000 }), failures: (n, clock) => throttledFailure(clock, 7000) });
+  assert.strictEqual(second.attempts, 2, '7 s fits in 10 s, and a second 7 s does not');
+  assert.match(second.halt.message, /what is left of the 10 seconds a run allows itself/);
+  const own = await throttleDriver({ failures: (n) => (n === 1 ? throttledFailure(0, 0) : null) });
+  assert.ok(own.budgets.length === 2 && own.budgets[0] === own.budgets[1], 'a run with no budget given makes one, the same for every run of the engine');
+  assert.ok(own.budgets[0].spentMs() >= 3000, 'and a throttle that asked for nothing still waited the build\'s backoff, which is a throttle wait too');
+});
+
+// The HTTP client draws its waits for a throttled answer from this same budget (lib/sdk-http-client.js). A wait that does not fit is not taken: the answer comes back as the 429 it is — the SDK's error carries none of what the service asked, nor
+// that nothing more was sent — and the client tells the budget (`decline`). The loop reads that, so a request the budget stopped ends the run as the budget's halt does, with what the service asked, and is not run again to be refused again.
+const declinedBy = (askedMs, waitMs = askedMs, spent = 250000) => (n, clock, advance, throttle) => { if (n === 1) { throttle.spend(spent); throttle.decline({ askedMs, waitMs }); } };
+const sdkThrottle = () => throttledFailure(0, 0);
+
+test('retry loop: a request the HTTP client did not wait for — the budget had no room for what the service asked — ends the run with the budget\'s halt, naming what the service asked, and is not run again', async () => {
+  const out = await throttleDriver({ onRun: declinedBy(90000), failures: (n) => (n === 1 ? sdkThrottle() : null) });
+  assert.strictEqual(out.attempts, 1, 'the run is not run again to meet the same answer: the service said it was not ready');
+  assert.deepStrictEqual(out.sleeps, [], 'and nothing was waited for');
+  assert.ok(out.halt, 'the build stops');
+  assert.strictEqual(out.halt.code, 'throttle-budget-exhausted');
+  assert.strictEqual(out.halt.phase, 'pages');
+  assert.strictEqual(out.halt.recoverable, true);
+  assert.strictEqual(out.halt.statusCode, 429);
+  assert.strictEqual(isTransientHalt(out.halt), true, 'a transient halt: nothing is wrong with the build, and a later run can go on');
+  assert.strictEqual(out.halt.message, 'pages stopped: the service asked to wait 90 s before the next send, which does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service (250 s are spent). Nothing more is sent now: run the same command again later, and it continues from here.');
+  assert.strictEqual(out.halt.cause.cause.statusCode, 429, 'the failure itself is its cause');
+  assert.deepStrictEqual([out.closed[0].status, out.closed[0].code, out.closed[0].recoverable], ['halt', 'throttle-budget-exhausted', true], 'the journal says where the run stopped');
+  // A decline whose service asked for nothing — the wait that did not fit was the schedule's — says so in the words of the budget's other halt.
+  const bare = await throttleDriver({ onRun: declinedBy(0, 8000, 296000), failures: (n) => (n === 1 ? sdkThrottle() : null) });
+  assert.strictEqual(bare.halt.code, 'throttle-budget-exhausted');
+  assert.match(bare.halt.message, /^pages stopped: the next wait, 8 s, does not fit in what is left of the 5 minutes a run allows itself for waiting out a throttled service \(296 s are spent\)/);
+  // What the failure itself asked, when it carries an ask (the page backend's), counts too: the longer of the two is said.
+  const both = await throttleDriver({ onRun: declinedBy(90000), failures: (n, clock) => (n === 1 ? throttledFailure(clock, 120000) : null) });
+  assert.strictEqual(both.attempts, 1);
+  assert.match(both.halt.message, /^pages stopped: the service asked to wait 120 s before the next send, which does not fit/);
+});
+
+test('retry loop: a request the client did not wait for ends the run on the last run as on the first — the failure the retries ran out on is the budget\'s halt, not a bare 429', async () => {
+  // Three runs end in a throttle that asked for nothing (the build waits 3, 6 and 12 s between them); in the fourth the client is refused a wait.
+  const out = await throttleDriver({ onRun: (n, clock, advance, throttle) => { if (n === 4) throttle.decline({ askedMs: 0, waitMs: 9000 }); }, failures: () => sdkThrottle() });
+  assert.strictEqual(out.attempts, 4, 'the retries were spent');
+  assert.strictEqual(out.halt.code, 'throttle-budget-exhausted', 'and what stopped the last one was the budget');
+  assert.match(out.halt.message, /^pages stopped: the next wait, 9 s, does not fit in what is left of the 5 minutes/);
+});
+
+test('retry loop: a request the client did not wait for changes nothing for a failure that is not a throttle, nor for a later run in which nothing was refused', async () => {
+  // A 503 that follows a refused wait is the service's gateway, not a throttle: the build runs again after its own backoff, as it does for any 503, and the budget's halt is not for it.
+  const gateway = await throttleDriver({ onRun: declinedBy(90000), failures: (n) => (n === 1 ? Object.assign(new Error('the service is unavailable'), { statusCode: 503 }) : null) });
+  assert.strictEqual(gateway.halt, null);
+  assert.strictEqual(gateway.attempts, 2);
+  assert.ok(gateway.sleeps.length === 1 && gateway.sleeps[0] >= 3000 && gateway.sleeps[0] < 4000, `the build's backoff: ${gateway.sleeps}`);
+  // What was refused in one run is not read again in the next: a throttle in the second run, with nothing refused in it, is waited for as any other.
+  const later = await throttleDriver({ onRun: declinedBy(0, 8000, 0), failures: (n) => (n === 1 ? Object.assign(new Error('the service is unavailable'), { statusCode: 503 }) : n === 2 ? sdkThrottle() : null) });
+  assert.strictEqual(later.halt, null, 'the third run got through');
+  assert.strictEqual(later.attempts, 3);
+  assert.deepStrictEqual(later.sleeps.map((ms) => Math.floor(ms / 1000)), [3, 6], 'the build\'s own backoff before each run, and no halt for a refusal of the first');
+});
+
+test('retry loop: only a throttle spends the budget — the backoff of any other transient failure is the build\'s own, as it was', async () => {
+  const out = await throttleDriver({ failures: (n) => (n <= 3 ? Object.assign(new Error('the service is unavailable'), { statusCode: 503 }) : null) });
+  assert.strictEqual(out.attempts, 4, 'three more runs, as ever');
+  assert.deepStrictEqual(out.sleeps.map((ms) => Math.floor(ms / 1000)), [3, 6, 12]);
+  assert.strictEqual(out.throttle.spentMs(), 0, 'and none of it is the budget\'s');
+  // Nor does a throttle whose retries ran out change what the run says: the failure itself.
+  const spent = await throttleDriver({ failures: (n) => throttledFailure(0, 0) });
+  assert.strictEqual(spent.attempts, 4);
+  assert.strictEqual(spent.halt.code, 'CONNECTION_ERROR', 'the retries ran out before the budget did');
+});
+
+test('retry loop: the waits the loop takes are on stderr — the retry line says what the service asked — and the budget\'s own announcements go to the warn seam, never anywhere else', async () => {
+  const stdout = [];
+  const write = process.stdout.write;
+  process.stdout.write = (chunk, ...rest) => { stdout.push(String(chunk)); return typeof rest[rest.length - 1] === 'function' ? rest[rest.length - 1]() : true; };
+  let out;
+  try {
+    out = await throttleDriver({ failures: (n, clock) => (n === 1 ? throttledFailure(clock, 30000) : null) });
+  } finally { process.stdout.write = write; }
+  assert.deepStrictEqual(stdout, [], 'nothing was written to stdout, which carries the JSON result');
+  assert.deepStrictEqual(out.sleeps, [30000]);
+  assert.ok(out.logs.some((l) => /retrying \(attempt 1\/3\) after 30000ms.*the service asked to wait 30 s/.test(l)), out.logs.join('\n'));
+});
+
+test('transient auto-retry: a non-transient halt is NOT retried (the budget is not consulted)', async () => {
+  const out = await throttleDriver({ failures: () => Object.assign(new Error('bad request'), { statusCode: 400, retryAfterMs: 5000, retryNotBefore: 1800000000000 + 5000 }) });
+  assert.strictEqual(out.attempts, 1, 'a status that says no is final, whatever else the failure carries');
+  assert.deepStrictEqual(out.sleeps, []);
 });
 
 // With --publish the views a rebuild reconciles are published just before the app is written (sdk-build.js,
@@ -547,6 +879,138 @@ test('the names an earlier attempt recorded for a debt are kept when a later att
   await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, discoverOpDiffState: async () => quietState, warn: (m) => warnings.push(m) }), /bad request/);
   assert.strictEqual(n, 2, 'every attempt ran');
   assert.deepStrictEqual(warnings.filter((w) => /FAILED/.test(w)).map((w) => w.replace(/ FAILED:.*/, '')), ['the build stopped before its publish phase; publish view Open Tickets, form Ticket']);
+});
+
+// What a failed attempt still owes for the primary name column of a table it created (`owedLengths`, from runSdkBuild in sdk-build.js) is
+// carried the same way: handed to the next attempt, replaced by what that attempt reports, and — for what no attempt got as far as —
+// settled once no retry follows. A debt holds the MetadataId of the table the attempt created, which the settle checks before it writes
+// (a table of that name that is not that one is not the build's to change).
+const TICKET_ID = '3f2a9c10-0000-4000-8000-00000000a001';
+const NAME_ID = '3f2a9c10-0000-4000-8000-00000000a002';
+const lengthDebt = (table = 'new_ticket', extra = {}) => ({ table, column: 'new_name', asked: 120, tried: false, tableId: TICKET_ID, columnId: NAME_ID, ...extra });
+const owingLengths = (message, owedLengths) => Object.defineProperties(new Error(message), { owedLengths: { value: owedLengths } });
+async function attemptsOf(errors, { spec = desk, configure } = {}) {
+  const { sdk } = mockSdk();
+  if (configure) configure(sdk);
+  const handed = [];
+  const warnings = [];
+  let n = 0;
+  const runBuild = async (_spec, options) => {
+    handed.push(options.owedLengths);
+    const next = errors[n++];
+    if (next instanceof Error) throw next;
+    return { ok: true, created: {}, skipped: { layout: [] } };
+  };
+  const outcome = await buildModelApp(spec, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, discoverOpDiffState: async () => quietState, warn: (m) => warnings.push(m) })
+    .then((result) => ({ result }), (error) => ({ error }));
+  return { handed, warnings, attempts: n, ...outcome };
+}
+// The support desk with a name column length asked of its Ticket table, and an SDK that can read and set it. `reads` are the reads of the
+// column's length, `identity` the reads of which table answers to the name, `definitions` the reads of the column's whole definition, and
+// `tableId` is the id of the table that answers. A debt is paid by requests addressed with the MetadataIds it records (the table's and its
+// name column's), not through the SDK's updateColumn, which resolves them by name again — so the update is a PUT of the column's definition.
+const deskAskingALength = () => { const spec = jclone(desk); spec.entities.find((e) => e.schemaName === 'new_ticket').primaryAttribute.maxLength = 120; return spec; };
+const NAME_URL = `/EntityDefinitions(${TICKET_ID})/Attributes(${NAME_ID})`;
+function lengthSdk(sdk, { current = 850, update, tableId = TICKET_ID } = {}) {
+  const writes = [];
+  const reads = [];
+  const identity = [];
+  const definitions = [];
+  sdk.dataverse = {
+    get: async (url) => {
+      if (/\?\$select=MetadataId,PrimaryNameAttribute$/.test(url)) {
+        identity.push(url);
+        return { status: 200, headers: {}, body: { MetadataId: tableId, PrimaryNameAttribute: 'new_name' } };
+      }
+      if (/StringAttributeMetadata$/.test(url)) {
+        definitions.push(url);
+        return { status: 200, headers: {}, body: { '@odata.context': 'https://x/api/data/v9.2/$metadata#EntityDefinitions', MetadataId: NAME_ID, LogicalName: 'new_name', MaxLength: current } };
+      }
+      reads.push(url);
+      return { status: 200, headers: {}, body: { MaxLength: current, MetadataId: NAME_ID } };
+    },
+    put: async (url, body, options) => { writes.push([url, body, options && options.headers]); if (update) await update(); return { status: 204, headers: {}, body: null }; },
+  };
+  return { writes, reads, identity, definitions };
+}
+
+test('the name column lengths a failed attempt still owes are handed to the next attempt, and what that attempt reports takes their place', async () => {
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), owingLengths(TRANSIENT, []), null]);
+  assert.strictEqual(out.result.ok, true);
+  assert.deepStrictEqual(out.handed, [[], [lengthDebt()], []], 'the first attempt is handed nothing; the second what the first owed; the third what the second left — nothing');
+});
+
+test('a halt that carries no record of the lengths leaves what was owed as it was', async () => {
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error(TRANSIENT), null]);
+  assert.strictEqual(out.result.ok, true);
+  assert.deepStrictEqual(out.handed, [[], [lengthDebt()], [lengthDebt()]]);
+});
+
+test('a halt with a record that is not a list of debts is not taken for one', async () => {
+  for (const odd of ['new_ticket', { new_ticket: lengthDebt() }, null, 7]) {
+    const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), owingLengths(TRANSIENT, odd), null]);
+    assert.strictEqual(out.result.ok, true);
+    assert.deepStrictEqual(out.handed, [[], [lengthDebt()], [lengthDebt()]], JSON.stringify(odd));
+  }
+});
+
+test('a halt no retry follows sets the length of a table whose debt no attempt tried, once, and reports the halt', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
+  assert.match(out.error.message, /bad request/, 'the halt is what is reported');
+  assert.strictEqual(out.attempts, 2);
+  assert.deepStrictEqual(spy.writes, [[NAME_URL, { MetadataId: NAME_ID, LogicalName: 'new_name', MaxLength: 120, '@odata.type': 'Microsoft.Dynamics.CRM.StringAttributeMetadata' }, { 'MSCRM.MergeLabels': 'true' }]],
+    'the length asked, written once, to the column the debt records: addressed by the ids, with the labels kept');
+  assert.strictEqual(spy.identity.length, 1, 'after one read of which table answers to the name');
+  assert.deepStrictEqual(spy.reads, [`${NAME_URL}/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength`], 'and one read of the column, by the ids');
+  assert.deepStrictEqual(spy.definitions, [`${NAME_URL}/Microsoft.Dynamics.CRM.StringAttributeMetadata`], 'and one of its definition');
+  assert.deepStrictEqual(out.warnings, []);
+});
+
+test('a halt no retry follows leaves a table that is not the one the debt records alone, says so, and reports the halt', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], {
+    spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk, { tableId: '3f2a9c10-0000-4000-8000-00000000b001' }); },
+  });
+  assert.match(out.error.message, /bad request/, 'the halt is what is reported');
+  assert.deepStrictEqual(spy.writes, [], 'the table another maker made again is not written to');
+  assert.deepStrictEqual([spy.reads, spy.definitions], [[], []], 'nor is its column read');
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /^did not set the length of the primary name column new_ticket\.new_name to 120 — the table new_ticket is not the one this build created /);
+});
+
+test('what an attempt already tried is not settled again, and a build that owes nothing settles nothing', async () => {
+  for (const [what, errors] of [
+    ['a debt an attempt tried', [owingLengths(TRANSIENT, [lengthDebt('new_ticket', { tried: true })]), new Error('bad request')]],
+    ['no debt', [new Error(TRANSIENT), new Error('bad request')]],
+    ['a debt paid by the attempt after', [owingLengths(TRANSIENT, [lengthDebt()]), owingLengths('bad request', [])]],
+    ['a debt for a table the spec asks no length of', [owingLengths(TRANSIENT, [lengthDebt('new_customer')]), new Error('bad request')]],
+  ]) {
+    let spy;
+    const out = await attemptsOf(errors, { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
+    assert.match(out.error.message, /bad request/, what);
+    assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []], `${what}: nothing is read or written`);
+    assert.deepStrictEqual(out.warnings, [], what);
+  }
+});
+
+test('a build that succeeds after a retry settles nothing: what the retry owed it paid or reported itself', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), null], { spec: deskAskingALength(), configure: (sdk) => { spy = lengthSdk(sdk); } });
+  assert.strictEqual(out.result.ok, true);
+  assert.deepStrictEqual([spy.identity, spy.reads, spy.definitions, spy.writes], [[], [], [], []]);
+});
+
+test('a settle that cannot set the length warns, names the table and the length, and the halt is still what is reported', async () => {
+  let spy;
+  const out = await attemptsOf([owingLengths(TRANSIENT, [lengthDebt()]), new Error('bad request')], {
+    spec: deskAskingALength(),
+    configure: (sdk) => { spy = lengthSdk(sdk, { update: async () => { throw new Error('the update was refused'); } }); },
+  });
+  assert.match(out.error.message, /bad request/);
+  assert.strictEqual(spy.writes.length, 1);
+  assert.strictEqual(out.warnings.length, 1);
+  assert.match(out.warnings[0], /^could not set the length of the primary name column new_ticket\.new_name to 120 .*asked 120, the platform made 850: the update was refused/);
 });
 
 test('transient auto-retry: no retries in dry-run', async () => {
@@ -1267,7 +1731,7 @@ test('discoverOpDiffState resolves an explicit-layout form by (entity, name, TYP
   assert.ok(formQueries.length >= 1 && /name eq 'Information'/.test(formQueries[0]), 'resolved by (entity, name, type)');
 });
 
-test('I1: apply refuses ANY partial phase range except the full build or exactly --stage data', async () => {
+test('apply refuses ANY partial phase range except the full build or exactly --stage data', async () => {
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }], appShell: { areas: [] } };
   for (const phases of [['pages'], ['views', 'charts'], ['app-shell', 'pages', 'ai-features']]) {
     const r = await buildModelApp(spec, { apply: true, phases }, { log: () => {} });
@@ -1276,20 +1740,20 @@ test('I1: apply refuses ANY partial phase range except the full build or exactly
   }
 });
 
-test('I1 exception: a changed-only pages-only fast apply is NOT refused (fastApply seam); other partials still are', async () => {
+test('partial-apply exception: a changed-only pages-only fast apply is NOT refused (fastApply seam); other partials still are', async () => {
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' }, columns: [] }], pages: [{ key: 'p', name: 'P', source: { kind: 'tsx', codeFile: 'p.tsx' } }], appShell: { areas: [] } };
-  // pages-only WITH the changed-only fastApply seam is the ONE sanctioned partial range — the I1 gate must
+  // pages-only WITH the changed-only fastApply seam is the ONE sanctioned partial range — the partial-apply guard must
   // let it through (a stub runBuild proves it reached the build, not the gate rejection).
   const okDeps = { log: () => {}, runBuild: async () => ({ ok: true, dryRun: false, created: { app: 'app-1' } }) };
   const rOk = await buildModelApp(spec, { apply: true, phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: 'app-1', skipSitemapFinalize: true } }, okDeps);
-  assert.strictEqual(rOk.ok, true, 'the changed-only pages-only fast apply must pass the I1 gate');
+  assert.strictEqual(rOk.ok, true, 'the changed-only pages-only fast apply must pass the partial-apply guard');
   // The SAME seam does NOT whitelist an arbitrary partial range (only exactly ['pages']).
   const rBad = await buildModelApp(spec, { apply: true, phases: ['views', 'pages'], changedOnly: { fastApply: true } }, { log: () => {} });
   assert.strictEqual(rBad.ok, false, 'the fastApply seam must not whitelist a non-pages partial range');
 });
 
 // ---------------------------------------------------------------------------
-// Task 10: mandatory fail-closed page verify gate + RECONCILIATION 1/2
+// Mandatory fail-closed page verify gate
 // ---------------------------------------------------------------------------
 
 const { PHASES, STAGES } = require('../lib/stages.js');
@@ -1306,7 +1770,7 @@ function pageBearingSpec() {
   };
 }
 
-test('page verify is MANDATORY even without --verify: a failing page verify exits non-zero (C6)', async () => {
+test('page verify is MANDATORY even without --verify: a failing page verify exits non-zero', async () => {
   // The build is apply:true, phases:PHASES (full build) with a page-bearing spec. Even without
   // opts.verify:true, the gate must run because the pages phase is applied.
   const deps = {
@@ -1318,7 +1782,7 @@ test('page verify is MANDATORY even without --verify: a failing page verify exit
   assert.strictEqual(r.verify.ok, false, 'page verify ran and failed despite --verify not being set');
 });
 
-test('page verify is FAIL-CLOSED: a verify that throws is fatal for a page-bearing spec (C6 unableToRun)', async () => {
+test('page verify is FAIL-CLOSED: a verify that throws is fatal for a page-bearing spec (unableToRun)', async () => {
   // An enumeration/download failure in the verifier MUST produce r.verify={ok:false,unableToRun:true}
   // — not a warning that leaves r.verify undefined.
   const deps = {
@@ -1331,7 +1795,7 @@ test('page verify is FAIL-CLOSED: a verify that throws is fatal for a page-beari
   assert.ok(r.verify.unableToRun, 'an unrunnable verify is fatal for pages');
 });
 
-test('page verify is FAIL-CLOSED: a page-bearing spec with NO verifier wired is unable-to-run (C6)', async () => {
+test('page verify is FAIL-CLOSED: a page-bearing spec with NO verifier wired is unable-to-run', async () => {
   // No deps.verify at all — the gate must not silently skip for a page-bearing spec.
   const deps = {
     log: () => {},
@@ -1342,7 +1806,7 @@ test('page verify is FAIL-CLOSED: a page-bearing spec with NO verifier wired is 
   assert.ok(r.verify.unableToRun);
 });
 
-test('RECONCILIATION 2: --stage data apply of a page-bearing spec does NOT trigger mandatory page verify', async () => {
+test('--stage data apply of a page-bearing spec does NOT trigger mandatory page verify', async () => {
   // pages phase is NOT included in STAGES.data → mandatory verify must NOT be triggered.
   // A build that fails verify with r.verify.ok===false would mean the gate fired; we assert it did not.
   const deps = {
@@ -1355,7 +1819,7 @@ test('RECONCILIATION 2: --stage data apply of a page-bearing spec does NOT trigg
   assert.strictEqual(r.ok, true, 'the build itself succeeded');
 });
 
-test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)', async () => {
+test('unableToRun is propagated from verifySpec into r.verify', async () => {
   // verifySpec can itself return unableToRun:true (reader-incapacity). The build gate must
   // propagate that flag into r.verify so callers can distinguish reader-incapacity from a
   // normal failed check.
@@ -1387,8 +1851,9 @@ test('build --verify wires readers that verify-spec will NOT skip role-privilege
   // Matched on the wiring, not the exact arity: the deps.verify lambda gained a second parameter so
   // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
   // business-rule skip must not read as "not deployed"). Pinning `(s)` exactly made this test fail
-  // for a change that did not touch what it is actually guarding.
-  const call = src.split(/\r?\n/).find((l) => /verify: \([^)]*\) => verifySpec/.test(l));
+  // for a change that did not touch what it is actually guarding. The lambda now makes (and disposes)
+  // the page backend around that call, so the line is found by what it calls.
+  const call = src.split(/\r?\n/).find((l) => /verifySpec\(\s*s\s*,\s*readerFor\(provisionSdk,/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
   assert.match(call, /readerFor\(provisionSdk,/, 'verify must read through the provisioning SDK');
   // The second argument must actually be forwarded, or the environment-skip list is silently
@@ -1401,12 +1866,12 @@ test('build --verify wires readers that verify-spec will NOT skip role-privilege
   // conditional again on something the build does not supply.
   const optsSrc = /readerFor\(provisionSdk,[^,]+,\s*(\{[^}]*\})\s*\)/.exec(call);
   assert.ok(optsSrc, `could not extract the readerFor options from: ${call}`);
-  // Shorthand-aware: `{ genpageCli: makeGenpageCli(env), workspaceDir }` carries one `key:` and one
-  // SHORTHAND key. A colon-only pattern silently saw just `genpageCli`, which made the assertion
-  // below weaker than it looks — it would have kept passing for an option bag that had lost
-  // `workspaceDir` entirely. Match a name followed by `:`, `,` or `}`.
+  // Shorthand-aware: `{ genpage, workspaceDir, isolatedReader }` carries only SHORTHAND keys, and a
+  // colon-only pattern would see none of them, which would make the assertion below weaker than it
+  // looks — it would have kept passing for an option bag that had lost `workspaceDir` entirely.
+  // Match a name followed by `:`, `,` or `}`.
   const optKeys = [...optsSrc[1].matchAll(/([A-Za-z_$][\w$]*)\s*(?::|[,}])/g)].map((m) => m[1]);
-  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpageCli'),
+  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpage'),
     `expected both readerFor options to be extracted, got ${JSON.stringify(optKeys)}`);
   const { readerFor } = require('../verify-model-app.js');
   // A bare object is enough: every base reader is a lazy closure, so this asserts PRESENCE, which is
@@ -1442,10 +1907,10 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env\);/);
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: isTranslationExport \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export once');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
-  const wiring = src.slice(src.indexOf('verify: (s, verifyOpts) =>'));
-  assert.match(wiring.slice(0, wiring.indexOf('\n')), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
+  const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
+  assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
   assert.strictEqual((src.match(/isolatedReaderFor\(/g) || []).length, 1, 'no second reader, and so no second client, is made');
 });
 
@@ -1484,6 +1949,27 @@ test('parseLanguageCode (CLI) rejects the same coercible values', () => {
   }
   assert.strictEqual(parseLanguageCode('1031'), 1031);
   assert.strictEqual(parseLanguageCode(undefined), undefined);
+});
+
+// The standalone verifier takes the build's flag (verify-model-app.js) and must mean what the build means by it: the same spellings, the same
+// refusal of a pair that disagrees, the same notion of a valid LCID and the same message. Asserted against the build's own parser so the two
+// cannot drift.
+test('readLanguageCodeFlag reads --language-code / --languageCode exactly as the build does', () => {
+  const { readLanguageCodeFlag } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  assert.strictEqual(readLanguageCodeFlag({}), undefined, 'no flag, no language');
+  assert.strictEqual(readLanguageCodeFlag({ 'language-code': '1036' }), 1036);
+  assert.strictEqual(readLanguageCodeFlag({ languageCode: '1036' }), 1036);
+  assert.strictEqual(readLanguageCodeFlag({ 'language-code': ' 1036 ', languageCode: '1036' }), 1036, 'a pair that agrees (as the build compares them) is one value');
+  assert.throws(() => readLanguageCodeFlag({ 'language-code': '1031', languageCode: '1036' }), /--language-code '1031' and --languageCode '1036' disagree — pass only one/);
+  for (const v of ['abc', '0', '-1', '1e3', '12.5', '65536', '', 'de-DE']) {
+    assert.throws(() => readLanguageCodeFlag({ 'language-code': v }), /--language-code \/ --languageCode must be digits only, a positive integer LCID up to 65535/, `${JSON.stringify(v)}`);
+    // …with the build's own message, word for word.
+    let build; let verify;
+    try { parseLanguageCode(v); } catch (e) { build = e.message; }
+    try { readLanguageCodeFlag({ 'language-code': v }); } catch (e) { verify = e.message; }
+    assert.strictEqual(verify, build, `the same refusal for ${JSON.stringify(v)}`);
+  }
+  for (const v of ['1', '1031', '65535', ' 1033 ']) assert.strictEqual(readLanguageCodeFlag({ languageCode: v }), parseLanguageCode(v), `${JSON.stringify(v)} is the same LCID to both`);
 });
 
 // #447 follow-up: 1033 is the exact value that breaks a non-English org, so EVERY path that falls
@@ -2021,13 +2507,13 @@ test('--language-code only warns "no effect" for phases that genuinely create no
 
 test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // The previous assertion was `'phases' in receivedOpts`, which any value satisfies — including a
-  // hardcoded constant or an explicit undefined. A reviewer showed the --changed-only fast path
+  // hardcoded constant or an explicit undefined. So the --changed-only fast path
   // could be broken again with the suite green by replacing `opts.phases` with a literal.
   //
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)? \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)?(, appDir: opts\.appDir)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 
@@ -2081,13 +2567,89 @@ test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated on
   assert.deepStrictEqual(r.verify.phaseSkipped, ['business-rule:new_ticket.Lock notes']);
 });
 
+// A build run with `--language-code` writes its form labels in that language, which need not be the organization's. The build already knows
+// which — the flag, and what its SDK was made for — so it tells verify, which would otherwise hold a correctly published caption to the
+// organization's language and call it missing: a false `verify FAIL` for the build that had just written it.
+test('the build hands verify the language it wrote its labels in', async () => {
+  const { sdk } = mockSdk();
+  let received = null;
+  const verify = async (s, o) => { received = o; return { ok: true, checks: [], missing: [] }; };
+  await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, languageCode: 1036, preResolvedLanguageCode: 1036 }, { sdk, verify });
+  assert.strictEqual(received.languageCode, 1036, 'the --language-code the build was given');
+  assert.strictEqual(received.preResolvedLanguageCode, 1036, 'and the language its SDK was made for, which is what every label was written in');
+  // A build that resolved its language itself (the organization's, with no flag) hands over what it resolved.
+  await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, preResolvedLanguageCode: 1031 }, { sdk, verify });
+  assert.strictEqual(received.languageCode, undefined);
+  assert.strictEqual(received.preResolvedLanguageCode, 1031);
+  // The rest of the options are exactly what they were, and the app folder, from which verify reads a web resource's contentPath to
+  // compare its deployed content.
+  assert.deepStrictEqual(Object.keys(received).sort(), ['appDir', 'baselineSpec', 'environmentSkipped', 'languageCode', 'phases', 'preResolvedLanguageCode']);
+  await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, appDir: path.join(__dirname, '..', '..', 'samples') }, { sdk, verify });
+  assert.strictEqual(received.appDir, path.join(__dirname, '..', '..', 'samples'), 'the folder the build read the spec\'s sources from');
+});
+
+test('verify NARRATES what it could not verify beside its PASS — it is neither a pass nor a failure — and the result carries it', async () => {
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  const unverified = ['form-labels:new_ticket.Main (the label of tab \'tab_main\' was not compared: the language the build wrote it in could not be established (503). Pass --language-code <lcid> or set "languageCode" in the spec to compare it)'];
+  const verify = async () => ({ ok: true, checks: [{ kind: 'entity', name: 'a', present: true }], missing: [], unverified });
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify, log: cap.log });
+  assert.match(cap.logs.join('\n'), /✓ verify PASS \(1\/1 present\)/, 'what was checked passed');
+  assert.match(cap.logs.join('\n'), /⊘ 1 check could not be verified — it is neither passed nor failed/, 'the human channel says so');
+  assert.ok(cap.logs.some((l) => l.includes(unverified[0])), 'and names what, with the reason');
+  assert.strictEqual(r.verify.ok, true, 'it is not a failure');
+  assert.deepStrictEqual(r.verify.unverified, unverified, 'the machine channel — this is what emitResult serializes');
+});
+
+// A build run in a language the environment's form read does not show: live, Spanish (3082) captions in an organization whose base language is English
+// (1033), read back with the form's labels in English only. The build wrote what the spec says; its own verify cannot read it back, and says so — the
+// captions are listed unverified, neither passed nor failed, and the build is not reported as a partial one.
+test('the build\'s own verify of a form whose read carries no label in the language it wrote ends PASS — the captions are narrated unverified, not failed', async () => {
+  const spanish = {
+    solution: { uniqueName: 'FormProbe', displayName: 'Form Probe', publisherPrefix: 'new' },
+    app: { name: 'Form Probe', uniqueName: 'new_formprobe' },
+    entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', existing: true, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+    forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', layout: 'explicit', prune: false, notes: false,
+      tabs: [{ name: 'tab_main', label: 'Resumen', sections: [{ name: 'sec_main', label: 'Detalles', columns: 1, fields: ['new_name'] }] }] }],
+  };
+  // What the read returns: every label in 1033.
+  const formxml = '<form><tabs><tab id="{1}" name="tab_main" expanded="true" visible="true"><labels><label description="Overview" languagecode="1033" /></labels><columns><column width="100%"><sections>'
+    + '<section id="{2}" name="sec_main" showlabel="true" visible="true" columns="1"><labels><label description="Basics" languagecode="1033" /></labels><rows><row><cell id="{3}"><control id="new_name" classid="{4273EDBD-AC1D-40D3-9FB2-095C621B552D}" datafieldname="new_name" /></cell></row></rows></section>'
+    + '</sections></column></columns></tab></tabs><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+  const reader = {
+    findTable: async () => ({ logicalName: 'new_ticket' }),
+    findColumns: async () => [{ logicalName: 'new_name' }],
+    sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'f1', name: 'Main', objecttypecode: 'new_ticket', type: 2, isdefault: true }] : []),
+    formTopology: async () => formxml,
+  };
+  const cap = logCapture();
+  const r = await buildModelApp(spanish, { apply: true, verify: true, env: 'https://contoso.crm.dynamics.com', languageCode: 3082, preResolvedLanguageCode: 3082 }, {
+    log: cap.log,
+    // The build itself is not what this test is about: its verification step runs for real, over the form that build wrote.
+    runBuild: async () => ({ ok: true, dryRun: false, created: {}, skipped: {} }),
+    verify: (s, options) => verifySpec(s, reader, options),
+  });
+  const logs = cap.logs.join('\n');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.verify.ok, true, `no caption is reported missing: ${JSON.stringify(r.verify.missing)}`);
+  assert.deepStrictEqual(r.verify.missing, []);
+  assert.strictEqual(r.verify.present, r.verify.total, 'every check that was made passed');
+  assert.deepStrictEqual(r.verify.unverified, ['form-labels:new_ticket.Main (the labels of tab \'tab_main\', section \'sec_main\' in language 3082 were not compared: '
+    + 'the environment\'s form read returns labels only in 1033, so labels written in 3082 cannot be read back from it. Check them in Power Apps with that language, or verify in a language the read carries)'], 'the machine channel');
+  assert.match(logs, /✓ verify PASS/);
+  assert.match(logs, /⊘ 1 check could not be verified — it is neither passed nor failed/, 'the human channel says so');
+  assert.ok(cap.logs.some((l) => l.includes(r.verify.unverified[0])), 'and names what, with the reason');
+  assert.doesNotMatch(logs, /form-topology/, 'the captions are not reported as a failed check');
+});
+
 // #587 item 3 — a plain `--apply` called invalidateSnapshot but DISCARDED its `{ ok, reason }`
 // result and swallowed any throw, under a "never block a build" rationale. That is not cosmetic:
 // the snapshot is what a later `--changed-only` run trusts to decide what it may SKIP, so an
 // eligible snapshot surviving a full apply lets that run certify pre-apply state and skip work this
 // apply just made necessary. Halting costs a retry; continuing costs a silently incomplete deploy.
 //
-// The first version of this test was SOURCE-LEVEL, and an adversarial review proved it worthless:
+// The first version of this test was SOURCE-LEVEL, and proved worthless:
 // both `if (false && …)` and a catch manufacturing `{ ok: true }` left all 74 tests green. The
 // guard is now an exported function, so it is tested by BEHAVIOUR instead.
 test('#587 the snapshot guard refuses every outcome that is not a definite success', () => {
@@ -2143,9 +2705,10 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
   const os = require('node:os');
   const { loadCli } = require('./helpers/cli-harness.js');
   const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+  const { withPageType, PAGE_TYPE } = require('./helpers/page-component-type.js');
   const snapshotStore = require('../lib/apply-snapshot-store.js');
   const { sha256 } = require('../lib/hash.js');
-  const { makeGenpageCli } = require('../lib/genpage-cli.js');
+  const genpageSdk = require('../lib/genpage-sdk.js');
   const scriptsDir = path.join(__dirname, '..');
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-changed-only-'));
   const workspaceDir = path.join(appDir, '.maker-workspace');
@@ -2168,15 +2731,18 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
       { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
       { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
     ],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview' }, { page: 'detail' }] }] }] },
+    // A new app is created with its navigation minus the pages, and Dataverse refuses a navigation with nothing left
+    // (lib/app-navigation.js), so the first run builds an app that has an entry that is not a page beside its pages.
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview' }, { page: 'detail' }, { url: 'https://contoso.example/help', title: 'Help' }] }] }] },
   };
-  const state = { orgId, app: null, creates: 0, table: null, resources: new Map(), pages: new Map(), failDownload: false };
+  const state = { orgId, app: null, creates: 0, table: null, resources: new Map(), pages: new Map(), failDownload: false, left: [] };
   const { sdk } = makeSimpleMockSdk();
   const writes = [];
   const uploads = [];
   const whoAmI = [];
   const sdkTempDirs = [];
-  const uploadTempDirs = [];
+  // What the last run printed on stderr (see runMain).
+  let lastStderr = '';
   const createArtifact = sdk.createArtifact;
   sdk.createArtifact = (type, def) => {
     if (type !== 'app') return createArtifact(type, def);
@@ -2222,7 +2788,8 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     assert.ok(row, `web resource ${id} exists`);
     row.content = Buffer.from(o.content, 'utf8').toString('base64');
   };
-  sdk.dataverse = { get: async (url) => {
+  // The page table's component type is answered first: the build's pages join the spec's solution (lib/page-solution.js).
+  sdk.dataverse = { get: withPageType(async (url) => {
     // The shared-page scan lists the apps that were never published: the one app here is published, so it is the only row.
     if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
       return { status: 200, body: { value: state.app ? [{ appmoduleid: state.app.id, appmoduleidunique: appUniqueValue, uniquename: spec.app.uniqueName, componentstate: 0 }] : [] } };
@@ -2231,7 +2798,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     return state.table && !url.includes("LogicalName='entity'")
       ? { status: 200, body: { LogicalName: state.table.logicalName, EntitySetName: state.table.entitySetName } }
       : { status: 404, body: {} };
-  } };
+  }) };
   sdk.queryRecords = async (set, o = {}) => {
     const filter = o.filter || '';
     if (set === 'appmodule') {
@@ -2265,48 +2832,52 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     const original = sdk[method];
     sdk[method] = (...args) => { writes.push({ method, args }); return original(...args); };
   }
-  const pacRun = async (args) => {
-    const value = (flag) => args[args.indexOf(flag) + 1];
-    assert.deepStrictEqual(args.slice(0, 2), ['model', 'genpage']);
-    assert.strictEqual(value('--environment'), env);
-    if (args[2] === 'list') {
-      const pages = [...state.pages.values()];
-      return { status: 0, stdout: `Found ${pages.length} generated page(s):\nPage ID                              Name          Published\n`
-        + pages.map((p) => `${p.pageId} ${p.name.padEnd(14)}-\n`).join(''), stderr: '' };
-    }
-    assert.strictEqual(value('--app-id'), state.app.id, 'PAC is scoped to the app resolved by main');
-    if (args[2] === 'upload') {
-      const name = value('--name');
-      const pageId = args.includes('--page-id') ? value('--page-id') : pageIds[name];
-      const code = fs.readFileSync(value('--code-file'), 'utf8');
-      uploads.push({ name, pageId, requestedId: args.includes('--page-id') ? value('--page-id') : null, code });
-      uploadTempDirs.push(path.dirname(value('--prompt-file')));
-      state.pages.set(pageId, { pageId, name, code });
-      return { status: 0, stdout: `Page ID: ${pageId}`, stderr: '' };
-    }
-    assert.strictEqual(args[2], 'download', 'no other PAC command is allowed');
-    if (state.failDownload) return { status: 1, stdout: '', stderr: 'offline verification download failed' };
-    for (const pageId of value('--page-id').split(',')) {
-      const dir = path.join(value('--output-directory'), pageId);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, 'page.tsx'), state.pages.get(pageId).code, 'utf8');
-    }
-    return { status: 0, stdout: '', stderr: '' };
+  // The page backend the build and verify make (lib/genpage-sdk.js `makeGenpageSdk`), over the pages this fake environment holds: a write records what it was sent, and a read answers the page
+  // as the last write left it — or fails, as a verification read that cannot reach the service does. Every backend made through the seam is kept, to see that each was disposed.
+  const backends = [];
+  const answer = (o, pageId) => ({ pageId, name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [] });
+  const makeBackend = () => {
+    const backend = {
+      disposed: false,
+      enumerateEnv: async () => {
+        const pages = [...state.pages.values()].map((p) => ({ pageId: p.pageId, name: p.name }));
+        return { ok: true, ids: pages.map((p) => p.pageId.toLowerCase()), pages };
+      },
+      create: async (o) => {
+        const pageId = pageIds[o.name];
+        uploads.push({ name: o.name, pageId, requestedId: null, code: o.source });
+        state.pages.set(pageId, { pageId, name: o.name, code: o.source });
+        return answer(o, pageId);
+      },
+      update: async (id, o) => {
+        uploads.push({ name: o.name, pageId: id, requestedId: id, code: o.source });
+        state.pages.set(id, { pageId: id, name: o.name, code: o.source });
+        return answer(o, id);
+      },
+      read: async (id) => {
+        if (state.failDownload) throw new Error('offline verification download failed');
+        const page = state.pages.get(id);
+        return { id, name: page.name, source: page.code, dataSources: [], conversation: [] };
+      },
+      dispose: () => { backend.disposed = true; return { left: state.left }; },
+    };
+    backends.push(backend);
+    return backend;
   };
-  const genpageModule = { ...require('../lib/genpage-cli.js'), makeGenpageCli: (url) => {
+  const genpageModule = { ...genpageSdk, makeGenpageSdk: (url) => {
     assert.strictEqual(url, env);
-    return makeGenpageCli(url, { run: pacRun, attempts: 1, request: async () => { throw new Error('unexpected Dataverse page request'); } });
+    return makeBackend();
   } };
   // Only transport/SDK construction is fake: main, buildModelApp, engine, verifier, flow and snapshot
-  // store remain real. Loading the engine with the PAC seam avoids replacing the build with a stub.
-  const engine = loadCli(path.join(scriptsDir, 'lib', 'sdk-build.js'), { requires: { './genpage-cli.js': genpageModule } }).exports;
+  // store remain real. Loading the engine with the page-backend seam avoids replacing the build with a stub.
+  const engine = loadCli(path.join(scriptsDir, 'lib', 'sdk-build.js'), { requires: { './genpage-sdk.js': genpageModule } }).exports;
   const previousPath = process.env.PATH;
   process.env.PATH = path.dirname(process.execPath);
   const assertCleaned = () => {
-    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) assert.strictEqual(fs.existsSync(dir), false, `temporary workspace removed: ${dir}`);
+    for (const dir of sdkTempDirs) assert.strictEqual(fs.existsSync(dir), false, `temporary workspace removed: ${dir}`);
+    assert.deepStrictEqual(backends.filter((b) => !b.disposed).length, 0, 'every page backend the run made was disposed — each holds a workspace of page sources');
     assert.strictEqual(fs.existsSync(snapshotStore.leasePath(workspaceDir)), false, 'snapshot lease released');
-    const staging = path.join(workspaceDir, '.pageref-deploy');
-    assert.ok(!fs.existsSync(staging) || fs.readdirSync(staging).length === 0, 'page staging removed');
+    assert.strictEqual(fs.existsSync(path.join(workspaceDir, '.pageref-deploy')), false, 'no page staging folder is made');
   };
   const runMain = async (exitCode = 0) => {
     writes.length = uploads.length = 0;
@@ -2335,9 +2906,9 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
         './lib/dataverse-auth.js': auth,
         './lib/entity-provision.js': entityProvision,
         './lib/sdk-build.js': engine,
-        './lib/genpage-cli.js': genpageModule,
+        './lib/genpage-sdk.js': genpageModule,
         './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
-        './vendor/cds-maker-sdk.cjs': {
+        './lib/maker-sdk.js': {
           createNodeWorkspaceStorage: (dir) => { if (dir !== workspaceDir) sdkTempDirs.push(dir); return { dir }; },
           createMakerSdk: (o) => { assert.strictEqual(o.instanceUrl, env); assert.strictEqual(o.languageCode, 1033); return sdk; },
         },
@@ -2346,6 +2917,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     await assert.rejects(cli.main(), (e) => e.exitCode === exitCode, cli.stderrText());
     assert.strictEqual(authCli.exitCode, exitCode, 'the real emitter uses effective build/verify success');
     assertCleaned();
+    lastStderr = cli.stderrText();
     return JSON.parse(authCli.stdoutText());
   };
   try {
@@ -2379,8 +2951,13 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     assert.strictEqual(fast.verify.ok, true);
     assert.deepStrictEqual(fast.changedOnly.pageKeys, ['overview']);
     assert.deepStrictEqual(uploads, [{ name: 'Overview', pageId: pageIds.Overview, requestedId: pageIds.Overview, code: deployedCode }]);
-    assert.ok(writes.every((w) => w.method === 'updateWebResource' || (w.method === 'addSolutionComponent' && w.args[0].componentType === 61)),
-      `fast apply writes only the page manifest, never the data model or sitemap: ${JSON.stringify(writes)}`);
+    // Each page is re-asserted in the spec's solution, as the manifest is: the one the fast apply writes, and the one it leaves as it is (sdk-build.js, the page manifest
+    // step), which gets the add and no write. This double keeps no solution, so none of them is found there and each is added.
+    assert.ok(writes.every((w) => w.method === 'updateWebResource' || (w.method === 'addSolutionComponent' && (w.args[0].componentType === 61
+      || (w.args[0].componentType === PAGE_TYPE && [pageIds.Overview, pageIds.Detail].includes(w.args[0].componentId))))),
+      `fast apply writes only the page manifest and the solution membership of the app's pages, never the data model or sitemap: ${JSON.stringify(writes)}`);
+    assert.deepStrictEqual(writes.filter((w) => w.method === 'addSolutionComponent' && w.args[0].componentType === PAGE_TYPE).map((w) => [w.args[0].componentId, w.args[0].addRequiredComponents]),
+      [[pageIds.Overview, true], [pageIds.Detail, true]], 'both pages are in the spec\'s solution, with their files: the changed one as it is written, the other once the pages are');
     const eligible = snapshotStore.readSnapshot(workspaceDir);
     assert.strictEqual(eligible.eligible, true);
     assert.notStrictEqual(eligible.generation, baseline.generation);
@@ -2394,7 +2971,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     assert.strictEqual(noop.noop, true);
     assert.strictEqual(noop.changedOnly.decision, 'noop');
     assert.deepStrictEqual(writes, [], 'NOOP makes no SDK writes');
-    assert.deepStrictEqual(uploads, [], 'NOOP makes no PAC writes');
+    assert.deepStrictEqual(uploads, [], 'NOOP makes no page writes');
     assert.deepStrictEqual(fs.readFileSync(snapshotStore.snapshotPath(workspaceDir)), snapshotBytes, 'NOOP leaves the snapshot byte-identical');
 
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode + '\n', 'utf8');
@@ -2413,7 +2990,11 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
       state.orgId = identity === 'foreign-org' ? '11111111-0000-4000-8000-000000000002' : orgId;
       if (identity === 'foreign-app') state.app.id = appIds[2];
       if (identity === 'deleted') state.app = null;
+      // A page workspace each backend could not remove: the pages phase's own backend and the inline verify's each say so (dispose() answers `{ left }`), and the run still succeeds.
+      state.left = ['C:\\temp\\genpage-x1y2z3'];
       const fallback = await runMain();
+      state.left = [];
+      assert.strictEqual(lastStderr.split('page source may be left on disk: C:\\temp\\genpage-x1y2z3').length - 1, 2, `${identity}: said by the pages phase's backend and by the inline verify's`);
       assert.strictEqual(fallback.ok, true);
       assert.strictEqual(fallback.changedOnly.decision, 'full', `${identity} identity cannot NOOP`);
       assert.strictEqual(fallback.verify.ok, true);
@@ -2425,7 +3006,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     }
   } finally {
     process.env.PATH = previousPath;
-    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) fs.rmSync(dir, { recursive: true, force: true });
+    for (const dir of sdkTempDirs) fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(appDir, { recursive: true, force: true });
   }
   assert.strictEqual(fs.existsSync(appDir), false, 'the test removes its durable temporary state too');

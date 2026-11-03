@@ -46,6 +46,7 @@ if (process.env.PCF_DISABLE_HOOKS === '1' || process.env.PCF_DISABLE_HOOKS === '
 }
 
 const { readUtf8Stream } = require('../scripts/lib/utf8-stream.js');
+const { makeWritesBlocking } = require('../scripts/lib/output-redaction.js');
 
 function debug(msg) {
   if (DEBUG) process.stderr.write(`[write-safety] ${msg}\n`);
@@ -54,6 +55,7 @@ function debug(msg) {
 // Non-blocking warning. Exit 1 (not 2) so Claude Code shows this on stderr to the
 // USER and still lets the write through — the guard flags, it does not block.
 function warn(userMsg) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`[pcf] ${userMsg}\n`);
   process.exit(1);
 }
@@ -140,6 +142,7 @@ readUtf8Stream(process.stdin).then((inputData) => {
   try {
     input = JSON.parse(inputData);
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     debug(`stdin parse failed: ${err.message}`);
     process.exit(0); // never block on hook-side bugs
   }
@@ -169,9 +172,11 @@ readUtf8Stream(process.stdin).then((inputData) => {
     }
   }
 
+  makeWritesBlocking(process.stdout, process.stderr);
   debug(`OK ${toolName} ${extractWritePaths(toolName, toolInput).join(',')}`);
   process.exit(0);
 }).catch((err) => {
+  makeWritesBlocking(process.stdout, process.stderr);
   debug(`stdin read failed: ${err.message}`);
   process.exit(0);
 });

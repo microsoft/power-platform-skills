@@ -65,6 +65,28 @@ test('hydrateSpec reconstructs a valid, complete spec (entities + appShell + pag
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+// A download writes no form (hydrate-spec.js says why `forms` stays empty), so it cannot write a
+// `fieldOptions` key the spec gate refuses. The forms of a downloaded spec are the author's: one that
+// uses every per-field option must pass the build's gate after the file round trip, and a misspelled
+// option must not.
+test('a downloaded spec writes no field option, and a form the author adds with every option still passes the build gate', async () => {
+  const spec = JSON.parse(JSON.stringify(await hydrateSpec(deployedRead())));
+  assert.deepStrictEqual(spec.forms, [], 'a download writes no form, so no fieldOptions');
+  spec.entities[0].columns.push({ schemaName: 'new_due', displayName: 'Due', type: 'DateTime' });
+  spec.forms.push({ entity: 'new_order', name: 'Order', fieldOptions: {
+    new_name: { readOnly: true },
+    new_status: { hidden: true, colspan: 2, rowspan: 1 },
+    new_due: { after: 'new_name' },
+  } });
+  const r = validateAppSpec(spec);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+
+  spec.forms[0].fieldOptions.new_due = { aftr: 'new_name' };
+  assert.deepStrictEqual(validateAppSpec(spec).errors, [
+    "form 'Order' (table new_order): unknown key 'aftr' on fieldOptions['new_due'] — did you mean 'after'? (allowed: readOnly, hidden, after, colspan, rowspan)",
+  ]);
+});
+
 test('hydrateSpec unwraps Dataverse Label descriptions and omits absent descriptions', async () => {
   const spec = await hydrateSpec({
     app: async () => ({ name: 'A', description: null, siteMap: { areas: [] } }),
@@ -193,7 +215,7 @@ test('hydrateSpec carries every deployed page into pages[] (incl. Maker-authored
   assert.deepStrictEqual(spec.pages[0], { name: 'Overview', dataSources: ['new_order'], prompt: 'kpis', codeFile: 'pages/Overview.tsx' });
 });
 
-// ── Task 11: v2 shape emission + legacy back-compat ───────────────────────────
+// ── v2 shape emission + legacy back-compat ───────────────────────────
 test('hydrateSpec emits the v2 shape when pages carry keys (schemaVersion 2, source.kind tsx, design, key subareas)', async () => {
   const read = {
     app: async () => ({ name: 'A', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'GenPage', genPageId: 'gp-o', title: 'Overview' }] }] }] } }),
@@ -242,8 +264,8 @@ test('hydrateSpec keeps the legacy name-based shape when pages carry no key (bac
   assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'Overview', 'legacy GenPage subarea resolved by NAME');
 });
 
-// ── Task 6: pageId kept in the v2 edit-snapshot (C3) ─────────────────────────
-test('hydrateSpec emits pageId on v2 pages (edit-snapshot self-describes its ids, C3)', async () => {
+// ── pageId kept in the v2 edit-snapshot ─────────────────────────
+test('hydrateSpec emits pageId on v2 pages (edit-snapshot self-describes its ids)', async () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const read = {
     app: async () => ({ name: 'A', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'GenPage', genPageId: GP_O, title: 'Overview' }] }] }] } }),
@@ -253,7 +275,7 @@ test('hydrateSpec emits pageId on v2 pages (edit-snapshot self-describes its ids
   const spec = await hydrateSpec(read);
   assert.strictEqual(spec.schemaVersion, 2, 'v2 shape (pages have keys)');
   assert.strictEqual(spec.pages[0].key, 'overview');
-  assert.strictEqual(spec.pages[0].pageId, GP_O, 'pageId carried through as C3 edit-snapshot marker');
+  assert.strictEqual(spec.pages[0].pageId, GP_O, 'pageId carried through as the edit-snapshot marker');
   // A legacy page (no key) must NOT get pageId even if one is present on the page object
   const spec2 = await hydrateSpec({
     app: async () => ({ name: 'A', description: '', siteMap: { areas: [] } }),

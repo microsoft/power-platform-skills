@@ -25,7 +25,25 @@ same relative position so downstream parsers can find them predictably:
 # Genpage Plan
 
 ## User Requirements
-[The original user requirements passed to the planner]
+[The original user requirements passed to the planner — verbatim, never rewritten]
+
+## Assumptions
+[Every newly authored standalone `/genpage` create plan writes this section. Exactly:]
+No assumptions.
+
+[or one entry per decision the planner made that the request did not state — relationships, target or
+roll-up scope, server or client filters, default sort, paging limits, initial-read caching, material page
+behaviour (not every CSS token):]
+
+### A1 — [short title]
+- Decision: [what the plan does]
+- Alternatives considered: [the other candidates]
+- Evidence: [metadata: … | sample: … | default: …]
+- Resolution: [user-confirmed | planner-default | unattended-default]
+- Question: [the question's id — user-confirmed and unattended-default only]
+- Answer: [the actual answer — user-confirmed and unattended-default only]
+- Default record: [unattended-default only — the exact line logged in workflow-log.md:
+  Unattended default: A1 / <question id> → <answer> (<reason>)]
 
 ## Working Directory
 [Absolute path where .tsx files and RuntimeTypes.ts should be written]
@@ -39,8 +57,7 @@ same relative position so downstream parsers can find them predictably:
 - Mode: app-builder    ← **only** when the plan was projected from an App Spec by
   `scripts/write-page-plan.js`; omitted for a planner-authored (standalone `/genpage`) plan
 - Languages: [each detected language with its LCID and code, marked `— RTL` when `scripts/list-languages.js`
-  reports `rtl: true` for it — or, when the planner fell back to `pac model list-languages --environment '<envUrl>'`, when that table's RTL
-  column says Yes — e.g. "English (1033, en-US); Arabic (Saudi Arabia) (1025,
+  reports `rtl: true` for it — e.g. "English (1033, en-US); Arabic (Saudi Arabia) (1025,
   ar-SA) — RTL" — or "English (1033) only". A language the script could not name keeps its number and is written
   "<LCID> (no culture code)" with no mark. The page builder takes text direction from that mark.]
 - Solution: [solution unique name — ALWAYS present, default fallback is "Default"]
@@ -59,17 +76,18 @@ planner picks them by asking the user (when metadata work is needed) or by
 writing the safe defaults `Solution: Default` + `Publisher Prefix: new` (when
 no question is needed). They are never omitted.
 
-Why mandatory: `pac model create --solution <name>` errors out with
-`"The given solution name is not valid: ()"` when `--solution` is missing —
-its documented "active solution" fallback does not work in practice. Always
-writing the field eliminates a fragile conditional branch in the orchestrator.
+Why mandatory: `apps.js create --solution <name>` takes the solution the new app, its
+sitemap and its pages are added to, and has no "active solution" fallback — a missing `--solution` is a usage
+error. Always writing the field eliminates a fragile conditional branch in the orchestrator.
 
 Downstream consumers honour them:
 - `genpage-entity-builder` passes `--solution <Solution>` on every script call
   so newly-created tables/columns/relationships land in that solution. It also
   uses `Publisher Prefix` to build schema names (e.g. `<prefix>_Candidate`).
-- The orchestrator (skill) passes `--solution <Solution>` to `pac model create`
-  when provisioning a new model-driven app.
+- The orchestrator (skill) passes `--solution <Solution>` to `apps.js create`
+  when provisioning a new model-driven app, and to every `genpage-upload.js`
+  create, so each page this run makes joins that solution too (a page joins no
+  solution on its own, and the app's add never brings the pages it shows).
 
 ## Pages
 | Page | File | Purpose | Entities |
@@ -151,11 +169,25 @@ executeAction) or Function (read-only; called with executeFunction). `Bound Enti
 table logical name for an entity-bound API, or `(Global)` for an unbound one. `Parameters`
 lists each request parameter as `name: Kind` using the declared Dataverse parameter kind.
 All values are discovered by genpage-customapi-builder via list-custom-apis.js — never
-fabricated. Persisted (via `pac ... upload --actions`) into config.json's `actionBindings`.]
+fabricated. Persisted (via `genpage-upload.js --actions`) into config.json's `actionBindings`.]
 | Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |
 |------|------|--------------|--------------|-------------------------|
 | new_ApproveOrder | Action | salesorder | Approve Order | Comment: String, Amount: Decimal |
 | new_GetOrderSummary | Function | (Global) | Get Order Summary | OrderId: Guid |
+
+## Dataverse Operations
+[OPTIONAL section — present ONLY when this run's genpage-customapi-builder added or replaced a
+built-in Dataverse operation (WhoAmI, RetrieveVersion; see references/dataverse-operations.md).
+Absent means no new built-in operation. When present it is either exactly:]
+No Dataverse operations.
+
+[or the builder's `dataverse-operations.md` body, copied verbatim: the verification line, then one
+row per selected operation in catalogue order, every cell the catalogue's own. `Invoke` is always
+`button`. These rows are never Custom APIs and never go into `## Custom API Bindings`.]
+Verification: environment not-checked, runtime not-checked, privileges not-checked.
+| Name | Kind | Bound Entity | Display Name | Parameters | Response fields | Invoke |
+|------|------|--------------|--------------|------------|-----------------|--------|
+| WhoAmI | Function | (Global) | Current Dataverse identity | (none) | BusinessUnitId, UserId, OrganizationId | button |
 
 ## Solution Packaging
 [OPTIONAL section — include ONLY when packaging into a solution. Omit it entirely
@@ -167,7 +199,12 @@ connector bindings." sentinel).]
 - Connection references: [comma-separated connectionreference logical names to include, or "none"]
 
 ## Design Preferences
-- Styling: [user's styling preferences — colors, theme, visual aesthetic]
+- Styling: [EITHER `Maker-requested: <the look as concrete values — each color as a hex value with
+  its role (primary, accent, background, text), the font family with a fallback, corner radius,
+  density, borders and shadows, and the component treatments> (from: screenshot | website <url> |
+  description)` when the maker asked for a look of their own — a screenshot or mockup, a website to
+  match, or a description; OR the model-driven defaults (`Fluent UI V9 defaults`, plus any
+  preference that does not replace that look) when they did not]
 - Features: [specific features mentioned — search, filtering, sorting, navigation, etc.]
 - Accessibility: [any specific accessibility requirements beyond WCAG AA defaults]
 
@@ -194,9 +231,101 @@ connector bindings." sentinel).]
 - **Data Binding:** [how data flows — queryTable, retrieveRow, mock arrays]
 - **Interactions:** [click handlers, drag-drop, navigation, etc.]
 
+#### Data semantics
+[Every relationship and every server-side or client-side filter this page uses — the internal source-row
+and target-resolution filters included. Exactly `None.` when the page has none:]
+
+##### R1
+- Kind: relationship
+- Definition: [source column, target scope, predicate and value source, null and roll-up behaviour]
+- Source: [A1 — the assumption that settled it]
+
+##### F1
+- Kind: filter
+- Definition: [what rows the filter keeps]
+- Source: User Requirements
+- Requirement quote: [the words of ## User Requirements that state it]
+
+#### Lookup metadata
+[Every lookup a join, a filter, a target-dependent navigation or a write uses, single-target ones included.
+Exactly `None.` when the page uses none:]
+
+| Table | Column | Read property | Targets | Used by | Metadata state |
+|-------|--------|---------------|---------|---------|----------------|
+| [source table] | [lookup column] | _[column]_value | [the COMPLETE target set] | [decision ids; purposes] | [observed / planned] |
+
+| Table | Column | Target | Navigation property | Referenced key |
+|-------|--------|--------|---------------------|----------------|
+| [source table] | [lookup column] | [target] | [concrete navigation property] | [target key] |
+
+- Evidence: [lookup-metadata.json; successful source/target metadata discovery — or "planned: <table> is created in Phase 2"]
+- Read target strategy: normalize the logical-name annotation and qualified prefix; use the metadata-backed
+  fallback only for a bare id with missing target evidence.
+
 ### [Page Name]
 [Repeat the above block once per page in the Pages table]
 ```
+
+---
+
+## Assumptions, data semantics and lookup metadata
+
+A plan states what the maker asked for in `## User Requirements` — kept **byte for byte** as the original
+request, never rewritten — and everything the planner decided on its own in `## Assumptions`, so the approval
+gate shows which details are guesses. A later clarification answer is recorded in an assumption, not added to
+the requirements (or to the first upload's prompt).
+
+**`## Assumptions` entries** (`### A<n> — <title>`):
+
+- Ids are unique `A1`, `A2`, … — stable across revisions, not necessarily contiguous.
+- `Decision`, `Alternatives considered`, `Evidence` and `Resolution` are required, each once and non-empty.
+  `Evidence` starts with `metadata:`, `sample:` or `default:`. A sample proves an observed shape, not the
+  intended business scope or a lookup's complete target set.
+- `Resolution` is `user-confirmed` (the maker answered: `Question` and the actual `Answer` are required),
+  `planner-default` (no question was asked, so neither appears) or `unattended-default` (an unattended run
+  took the option the planner marked as the default: `Question`, `Answer` and `Default record` are required).
+  An automatic pick is never `user-confirmed`.
+- `Default record` is the exact line the run logged: `Unattended default: <assumption id> / <question id> →
+  <answer> (<reason>)` — the answer word for word, a reason that never contains the word "approved" (that word
+  belongs to the separate plan-approval record).
+- A question still waiting for its answer is a pending interaction, not an assumption: an entry is written
+  only after the answer returns.
+- A value may continue on indented lines. Values are compared after line endings, continuation whitespace and
+  Unicode normalization; case and wording are substantive. Any other line, field or nested heading is refused.
+
+**`#### Data semantics`** (inside each `### <Page Name>`, after its bullet fields): entries are `##### R<n>`
+(`Kind: relationship`) and `##### F<n>` (`Kind: filter`) — level five, never level three, which would read as
+another page. `Definition` records the source column, the target scope, the predicate and value source, and
+material null or roll-up behaviour. `Source` is one assumption id or exactly `User Requirements`; the latter
+also needs a `Requirement quote` that the original requirements contain (whitespace aside). A decision that
+is only partly stated cites its assumption rather than the user's broad phrase. The page's `Data Binding` and
+`Interactions` refer to these ids and add no unrecorded predicate.
+
+**`#### Lookup metadata`**: one row per lookup a join, a filter, a target-dependent navigation or a write
+uses — single-target lookups included. `Targets` is the lookup's **complete** set from metadata, never the
+subset a page shows; `Read property` is `_<column>_value`; `Used by` names decision ids and declared purposes
+(customer navigation, customer picker). The path table lists only **concrete** paths read from metadata
+(`scripts/get-lookup-metadata.js`): a shared path such as Owner's `ownerid` is never a target discriminator,
+and no path is invented. Write exactly `None.` when the page uses no lookup.
+
+**Planned and observed.** A lookup on a table this run creates is recorded `planned`, with no paths. After
+Phase 2 the orchestrator reads its metadata (`get-lookup-metadata.js`, saved as `lookup-metadata.json`) and
+re-invokes the planner, which may only promote a matching record to `observed` and add its measured paths —
+never change its column, target set, uses, a decision or an assumption. A difference needs new approval.
+
+**The approval preview** carries the same records at its own levels: `### Assumptions` **first** (entries
+`#### A<n> — <title>`, or `No assumptions.`), then `### Pages (N total)`, then `### Data Semantics` and
+`### Lookup Metadata`, each grouped under `#### <page file>` (records, or `None.`), then the existing Data
+Strategy, App, Solution, Localization and Design sections. `scripts/genpage-plan-provenance.js verify`
+compares the two documents' records field by field (never a whole-document hash): a written plan whose
+assumptions, decisions or lookup records differ from the approved ones — or that has the contract where the
+preview has none, or the reverse — fails even when its page files match. `--require-assumptions` requires the
+whole contract of a newly authored plan; `--lookup-metadata <file>` checks every observed lookup against the
+saved metadata read (and lets a planned one be promoted); `--require-observed-lookups` refuses a lookup still
+planned before generation.
+
+An older plan without these sections is **not recorded**, not "everything was stated": it stays valid. A
+present section that is malformed fails whatever the plan's `Mode` — an App Spec projection included.
 
 ---
 
@@ -205,19 +334,21 @@ connector bindings." sentinel).]
 | Section | Consumers | Rules |
 |---------|-----------|-------|
 | `# Genpage Plan` | N/A | Title only, no content |
-| `## User Requirements` | Orchestrator — used as the `--prompt` value on the **first** `pac model genpage upload` for each new page only. Subsequent uploads (Phase 6.5 PAGEREF re-upload, Phase 7.5 fix re-deploy, edit flow) use delta prompts, NOT this field. | Verbatim user input |
+| `## User Requirements` | Orchestrator — used as the `--prompt` value on the **first** `genpage-upload.js` upload (the create) for each new page only. Subsequent uploads (Phase 6.5 PAGEREF re-upload, Phase 7.5 fix re-deploy, edit flow) use delta prompts, NOT this field. | Verbatim user input — never rewritten; later answers go to `## Assumptions` |
+| `## Assumptions` | Orchestrator (approval, shown first), page-builder, provenance verify | Optional on read; written by every new standalone create plan: entries or exactly "No assumptions." (see above) |
 | `## Working Directory` | All downstream agents | Absolute path, forward slashes on Windows |
 | `## Plugin Root` | Page-builder (to Read references/samples) | Absolute path |
 | `## Environment` | Orchestrator | URL, app decision, languages |
 | `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique, and use only letters, digits, `.`, `-` and `_` (kebab-case, e.g. `project-overview.tsx`). Exactly one Pages table with a File column: `check-page-files.js` refuses a plan with a second, one quoted in `## User Requirements` included |
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
-| `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
+| `## Existing Entities` | Orchestrator (for `genpage.js types --data-sources`) | Comma-separated logical names |
 | `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields`; REST/action bindings must include discovered `Parameters` and `Response` |
 | `## Custom API Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No custom API bindings." when empty; names must match existing Dataverse Custom APIs (`customapi.uniquename`); entity-bound rows carry the bound table (else `(Global)`); every row carries its discovered `Parameters` kinds |
+| `## Dataverse Operations` | Planner, page-builder, orchestrator deploy (Phase 4.6b) | Optional; absent = no new built-in operation. Exact literal "No Dataverse operations." or the builder's table under its not-checked verification line; only `WhoAmI` / `RetrieveVersion`, catalogue cells, `Invoke` = `button` |
 | `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |
-| `## Design Preferences` | Page-builder | Prose, free-form |
+| `## Design Preferences` | Page-builder | Prose, free-form; a `Styling:` line that starts with `Maker-requested:` wins over the default look (`references/rules.md` → *Maker-requested styling*) |
 | `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${PLUGIN_ROOT}/samples/` |
-| `## Per-Page Specifications` | Page-builder | Each page gets one `### [Page Name]` subsection matching the Pages table |
+| `## Per-Page Specifications` | Page-builder | Each page gets one `### [Page Name]` subsection matching the Pages table; a new plan also gives each its `#### Data semantics` and `#### Lookup metadata` (entries or exactly "None.") |
 
 ---
 
@@ -230,8 +361,12 @@ Before the orchestrator fans out to builders in Phase 5, it should verify:
 - [ ] If `## Pages` contains Dataverse entities, `## Existing Entities` is non-empty OR `## Entity Creation Required` is non-empty
 - [ ] Every non-empty `## Connector Bindings` logical name matches an existing `connectionreference` in the selected environment
 - [ ] Every non-empty `## Custom API Bindings` name matches an existing `customapi` (uniquename) in the selected environment; entity-bound rows carry the bound table and every row its parameter kinds
+- [ ] A `## Dataverse Operations` section, when present, is the exact sentinel or the built-in table (WhoAmI / RetrieveVersion only); its names are never checked against `customapi`
 - [ ] Every tabular connector binding records discovered `Fields`; generated connector row interfaces must mark every field optional
 - [ ] Every REST/action connector binding records discovered `Parameters` and `Response`; generated request/response interfaces must be built from those schemas only
+- [ ] Every relationship and every server-side or client-side filter used in `## Per-Page Specifications` traces to the user's stated text in `## User Requirements` or a named `## Assumptions` entry. The builder introduces no unrecorded business predicate, relationship or roll-up.
+  Validation proves structure, ID resolution, quote presence and agreement with approved structured decisions. It does not prove natural-language entailment, judge materiality, or discover arbitrary contradictory prose. Those remain planner/reviewer responsibilities, supplemented by scenario-specific code checks.
+- [ ] Every lookup a page record uses names its complete metadata target set, and is `observed` before generation (`genpage-plan-provenance.js verify --require-observed-lookups --lookup-metadata <working-dir>/lookup-metadata.json`)
 
 If validation fails, the orchestrator should surface a clear error to the user rather
 than dispatching builders that will fail silently.

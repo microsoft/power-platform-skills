@@ -61,6 +61,60 @@ test('drops platform relationships rather than declaring them as app relationshi
   assert.deepStrictEqual(skipped, []); // not app relationships at all, so nothing to report as lost
 });
 
+// The platform's own relationship of a File and of an Image column, as a table's ManyToOneRelationships answers them (LIVE-MEASURED):
+//   { "SchemaName": "FileAttachment_<table>_<file>", "ReferencedEntity": "fileattachment", "ReferencingAttribute": "<file>", "IsCustomRelationship": true }
+//   { "SchemaName": "ImageDescriptor_<table>_<image>", "ReferencedEntity": "imagedescriptor", "ReferencingAttribute": "<image>id", "IsCustomRelationship": false }
+// and fileattachment is a stock table. The File one was carried as an `existing` relationship, warned about for a name without the
+// publisher prefix, though nothing but the column makes it: a build that creates the column gets it back.
+const mediaRows = (table, file, image) => [
+  rel({ SchemaName: `FileAttachment_${table}_${file}`, ReferencedEntity: 'fileattachment', ReferencingEntity: table, ReferencingAttribute: file }),
+  { IsCustomRelationship: false, SchemaName: `ImageDescriptor_${table}_${image}`, ReferencedEntity: 'imagedescriptor', ReferencingEntity: table, ReferencingAttribute: `${image}id` },
+];
+const mediaTable = (table, file, image) => ({ schemaName: table, columns: [{ schemaName: file, type: 'File' }, { schemaName: image, type: 'Image' }] });
+const recordingReads = (sdk) => {
+  const reads = [];
+  const get = sdk.dataverse.get;
+  sdk.dataverse.get = async (p) => { reads.push(p); return get(p); };
+  return reads;
+};
+
+test('the platform relationship of a File or an Image column is not carried, not warned about and not reported as lost', async () => {
+  const sdk = makeSdk({ m2o: { contoso_card: mediaRows('contoso_card', 'contoso_contract', 'contoso_photo') }, custom: { fileattachment: false, imagedescriptor: false } });
+  const reads = recordingReads(sdk);
+  const warnings = [];
+  const { relationships, skipped } = await readRelationships(sdk, ['contoso_card'], 'contoso', (m) => warnings.push(m), { entities: [mediaTable('contoso_card', 'contoso_contract', 'contoso_photo')] });
+  assert.deepStrictEqual(relationships, []);
+  assert.deepStrictEqual(skipped, [], 'nothing is lost: the column brings it back');
+  assert.deepStrictEqual(warnings, []);
+  // ...and nothing is read for it: no lookup labels for a table it was the only custom relationship of, no parent table.
+  assert.deepStrictEqual(reads.filter((p) => /LookupAttributeMetadata|fileattachment|imagedescriptor/.test(p)), []);
+});
+
+test('beside the platform relationship of a File column, the table\'s own relationships are carried exactly as before', async () => {
+  const sdk = makeSdk({
+    m2o: { contoso_card: [
+      ...mediaRows('contoso_card', 'contoso_contract', 'contoso_photo'),
+      rel({ SchemaName: 'contoso_deck_contoso_card', ReferencedEntity: 'contoso_deck', ReferencingEntity: 'contoso_card', ReferencingAttribute: 'contoso_deckid' }),
+    ] },
+    lookups: { contoso_card: [{ LogicalName: 'contoso_deckid', SchemaName: 'contoso_DeckId', DisplayName: label('Deck'), Targets: ['contoso_deck'] }] },
+    custom: { fileattachment: false, imagedescriptor: false },
+  });
+  const warnings = [];
+  const { relationships, skipped } = await readRelationships(sdk, ['contoso_deck', 'contoso_card'], 'contoso', (m) => warnings.push(m), { entities: [mediaTable('contoso_card', 'contoso_contract', 'contoso_photo')] });
+  assert.deepStrictEqual(skipped, []);
+  assert.deepStrictEqual(warnings, []);
+  assert.deepStrictEqual(relationships, [{ type: 'OneToMany', referenced: 'contoso_deck', referencing: 'contoso_card', lookup: { schemaName: 'contoso_DeckId', displayName: 'Deck' }, existing: true }]);
+});
+
+test('a relationship to fileattachment that is no File column\'s of the table is not taken for the platform\'s, and reads as before', async () => {
+  // The rule is the column's, not the parent's: here the download typed no File column named by the relationship (a read that failed, say).
+  const sdk = makeSdk({ m2o: { contoso_card: mediaRows('contoso_card', 'contoso_contract', 'contoso_photo') }, custom: { fileattachment: false, imagedescriptor: false } });
+  const warnings = [];
+  const { relationships } = await readRelationships(sdk, ['contoso_card'], 'contoso', (m) => warnings.push(m), { entities: [{ schemaName: 'contoso_card', columns: [] }] });
+  assert.deepStrictEqual(relationships.map((r) => r.schemaName), ['FileAttachment_contoso_card_contoso_contract']);
+  assert.ok(warnings.some((w) => /FileAttachment_contoso_card_contoso_contract/.test(w) && /publisher prefix/.test(w)), JSON.stringify(warnings));
+});
+
 test('skips AND reports a polymorphic lookup, which relationships[] cannot express (#567)', async () => {
   // LIVE-MEASURED: `cfo_billto` targeting account+contact produced TWO relationships sharing ONE
   // ReferencingAttribute. Emitting both would declare the same lookup schema name twice.
@@ -328,4 +382,13 @@ test('a single foreign 1:N keeps its deployed name and a same-environment rebuil
   });
   assert.strictEqual(created, 0);
   assert.ok(events.some((e) => e.status === 'skip' && /legacy_ProjectTask/.test(e.label) && /\(exists\)/.test(e.label)), JSON.stringify(events));
+});
+
+// The capabilities doc says what a download does with relationships[], as the tests above show it: they are reconstructed, flagged
+// `existing: true`, and what relationships[] cannot express is named. It said they were not reconstructed at all.
+test('the capabilities doc says a download reconstructs relationships[] and names the ones it leaves out (#567)', () => {
+  const doc = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'docs', 'app-builder-capabilities.md'), 'utf8');
+  assert.doesNotMatch(doc, /`relationships\[\]` are NOT reconstructed/);
+  assert.match(doc, /\*\*`relationships\[\]` are reconstructed\*\*/);
+  assert.match(doc, /Round-trip scope \(not yet "complete"\):\*\* tables, relationships, sitemap\/appShell/);
 });

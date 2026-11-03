@@ -1,5 +1,5 @@
 'use strict';
-// Projection/verifier framework for safe `--changed-only` (design v7, deliverable #1).
+// Projection/verifier framework for safe `--changed-only` (design deliverable #1).
 //
 // PURE + I/O-free. Produces canonical, id-free, normalized PROJECTIONS of the artifacts on the
 // `--changed-only` fast path, so a spec-side projection and a deployed-side projection can be compared
@@ -56,7 +56,7 @@ function cellProjection(cell) {
 // Placement-EXACT form projection over the NEW topology tabs → columns → sections → rows → cells.
 // Captures ORDER + placement + binding + isRequired + subgrid, and NO ids/widths that the adapter
 // defaults — so two forms with identical field NAMES but different tab/section/cell/requiredness/subgrid
-// produce DIFFERENT projections (Sol adversarial test #1). Works for a compiled intent OR a fetched form.
+// produce DIFFERENT projections (adversarial test #1). Works for a compiled intent OR a fetched form.
 function formProjection(form) {
   const tabs = (form && form.tabs ? form.tabs : []).map((t) => ({
     label: String(t.label || ''),
@@ -77,7 +77,7 @@ function formProjectionHash(form) {
 
 // Normalized structural sitemap projection: ordered areas → groups → subareas as {type, ref}, with every
 // id normId'd. GUID casing/brace + env-url noise are removed (compare EQUAL), while a reordered / renamed
-// / retargeted subarea compares UNEQUAL (Sol adversarial test #3). Accepts the SDK siteMap object shape
+// / retargeted subarea compares UNEQUAL (adversarial test #3). Accepts the SDK siteMap object shape
 // { areas:[{ title/label, groups:[{ title/label, subAreas:[{ type, entity|genPageId|dashboardId|url }] }] }] }.
 function sitemapProjection(siteMap) {
   const areas = (siteMap && siteMap.areas ? siteMap.areas : []).map((a) => ({

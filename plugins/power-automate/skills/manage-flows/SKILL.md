@@ -1,6 +1,6 @@
 ---
 name: manage-flows
-description: Manage flow lifecycle - publish, test, batch operations, inventory reports. Use when the user asks to publish, test, batch manage, or get an inventory of flows.
+description: Manage flow lifecycle - publish, test, batch operations, inventory reports. Use when the user asks to publish, test, batch manage, or get an inventory of flows. Inventories page large environment lists and state which environments were covered.
 user-invocable: true
 argument-hint: "<operation> [flow-ids...]"
 context: fork
@@ -30,14 +30,15 @@ are present.
 ### 2. Batch Operations
 For multiple flows (IDs from `$ARGUMENTS` or from `list_flows`):
 - **Batch disable**: Call `disable_flow` per flow
-- **Batch delete**: Call `delete_flow` per flow (confirm first)
+- **Batch delete**: First list the exact flows (name + ID) to the user and get explicit confirmation. Never delete "all flows" in an environment from a single instruction. Then call `delete_flow` per flow. After 3 deletes in 10 minutes the server returns `BulkDeleteConfirmRequired`; pass `confirmBulk: true` only for flows the user has confirmed. Deleted flows can be recovered with `list_backups` / `restore_backup`.
 - **Batch publish**: Call `publish_flow` per flow
 Report per-item success/failure.
 
 ### 3. Inventory Report
-1. Call `list_environments` to get environments
-2. Call `list_flows` on each (or specified) environment
+1. Call `list_environments` to get environments. Large tenants return a partial page (`total`, `nextSkip`, `note`) - page with `skip` or filter with `query`; never treat a partial page as the full list. Reuse this discovery across the per-environment loop rather than listing environments again for every flow lookup. Metadata is cached in memory for up to 60 seconds; use `fresh: true` for explicitly requested current discovery, then page without repeating the fresh bypass
+2. Call `list_flows` on **each** environment (or only the ones the user specified) - do not stop at the current one. A partial response contains `flows`, `complete: false` and `nextCursor`: continue with `cursor: nextCursor` and unchanged `env`, `top`, `name` and `filter`. Follow all cursors before treating an environment's count as complete. Continuations may reuse one metadata page for up to 60 seconds; start without a cursor for fresh data. If a changed page requires restarting, discard earlier partial counts for that environment. For many environments, cap the loop (e.g. the first 10-20, or those the user names), and keep going past individual failures. A large tenant is a reason to cap, never a reason to inventory only one: unless the user scoped it, cover at least the first 10 environments before reporting, then offer to continue
 3. Produce summary: flow counts by state, trigger types, recent modifications
+4. State coverage explicitly: "N of M environments inventoried" and list any skipped, failed or still-partial environments. Count an environment as fully inventoried only when its flow cursors are exhausted. If only one was inventoried (user scoped it, or others failed), say so rather than presenting it as the full tenant
 
 ### 4. Health Check
 For each flow in an environment:

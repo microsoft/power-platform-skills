@@ -40,14 +40,14 @@ function mockEval2Artifacts() {
 - Solution selection question SKIPPED (code-only flow)
 - EnterPlanMode → approved
 ## Phase 2 — SKIPPED (mock data)
-## Phase 4 — pac model genpage generate-types not run (mock data)
+## Phase 4 — genpage.js types not run (mock data)
 ## Phase 5b — single-page fast path, inlined build
 - Data mode: mock
 - read verified-icons.txt
 - read samples/8-dashboard-with-charts.tsx
 - icon verification: grep "react-icons", verified icons against verified-icons.txt
 ## Phase 6
-- pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --model claude-sonnet --name "p" --agent-message "m" --add-to-sitemap
+- node scripts/genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 1 --code-file p.tsx --prompt-file prompt.txt --model claude-sonnet --name-file page-name.txt --agent-message-file agent-message.txt --add-to-sitemap
 `,
     'genpage-plan.md': `# Genpage Plan
 ## User Requirements
@@ -187,5 +187,64 @@ test('runner: emits TAP version 13 and aggregate counts', () => {
     assert.match(stdout, /# skip\s+\d+/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------- a newly authored plan's semantic records: a real callback and a real exit status ----------
+
+const NEW_CONTRACT = "Phase 1 (Planner): The newly authored plan records its assumptions and every page's data semantics and lookup metadata, the approved preview carries the same records, and provenance is verified with --require-assumptions";
+
+test('runner: fixture 27 grades its newly authored plan, and a copy verified without --require-assumptions fails with exit 1', (t) => {
+  const green = runRunner(['--eval', '27']);
+  assert.equal(green.code, 0, green.stdout + green.stderr);
+  const line = green.stdout.split('\n').find((entry) => entry.includes(NEW_CONTRACT));
+  assert.ok(line && /^\s*ok \d+ - /.test(line) && !/# SKIP/.test(line), `graded and passing, not skipped: ${line}`);
+  const root = mkTempFixturesDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const copy = path.join(root, '27-page-error-helper');
+  fs.cpSync(path.join(__dirname, '..', 'fixtures', '27-page-error-helper'), copy, { recursive: true });
+  const results = path.join(copy, 'tool-results.json');
+  const events = JSON.parse(fs.readFileSync(results, 'utf8'));
+  for (const event of events) event.command = event.command.replace(' --require-assumptions', '');
+  fs.writeFileSync(results, JSON.stringify(events, null, 2));
+  const red = runRunner(['--fixtures', root, '--eval', '27']);
+  assert.equal(red.code, 1, red.stdout);
+  assert.match(red.stdout, /provenance was never verified with --require-assumptions/);
+  // A preview whose assumption differs from the written plan's is not the approval of that plan.
+  fs.writeFileSync(results, JSON.stringify(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'fixtures', '27-page-error-helper', 'tool-results.json'), 'utf8')), null, 2));
+  const preview = path.join(copy, 'approved-plan.md');
+  fs.writeFileSync(preview, fs.readFileSync(preview, 'utf8').replace('sorted by name ascending, 50 rows per page.', 'sorted by name ascending, 100 rows per page.'));
+  const changed = runRunner(['--fixtures', root, '--eval', '27']);
+  assert.equal(changed.code, 1, changed.stdout);
+  assert.match(changed.stdout, /the written plan differs from the approved preview: .*A1/);
+});
+
+test('runner: fixture 26 grades its answered question, lookup metadata, typed lookup and gate; a copy that drops a declared reference fails with exit 1', (t) => {
+  const green = runRunner(['--eval', '26']);
+  assert.equal(green.code, 0, green.stdout + green.stderr);
+  const graded = [
+    'The open account-scope question reaches the maker as needs_input',
+    "get-lookup-metadata.js reads opportunity's lookups before approval",
+    NEW_CONTRACT,
+    "RuntimeTypes.ts is generated for opportunity and types each recorded lookup's read property",
+    'The page is generated only after provenance is verified with --require-assumptions --require-observed-lookups',
+  ];
+  for (const text of graded) {
+    const line = green.stdout.split('\n').find((entry) => entry.includes(text));
+    assert.ok(line && /^\s*ok \d+ - /.test(line) && !/# SKIP/.test(line), `graded and passing, not skipped: ${line}`);
+  }
+  const root = mkTempFixturesDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const copy = path.join(root, '26-customer-lookup');
+  fs.cpSync(path.join(__dirname, '..', 'fixtures', '26-customer-lookup'), copy, { recursive: true });
+  const manifestPath = path.join(copy, 'fixture.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  for (const [key, reason] of [['interactions', /does not declare its interactions evidence/], ['lookupMetadata', /does not declare its lookupMetadata evidence/]]) {
+    const changed = structuredClone(manifest);
+    delete changed.semantics[key];
+    fs.writeFileSync(manifestPath, JSON.stringify(changed, null, 2));
+    const red = runRunner(['--fixtures', root, '--eval', '26']);
+    assert.equal(red.code, 1, `${key}: ${red.stdout}`);
+    assert.match(red.stdout, reason);
   }
 });

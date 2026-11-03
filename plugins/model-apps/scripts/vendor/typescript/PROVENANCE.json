@@ -1,0 +1,31 @@
+{
+  "package": "typescript",
+  "version": "5.8.3",
+  "tarball": {
+    "sha1": "92f8a3e5e3cf497356f4178c34cd65a7f5e8440e",
+    "integrity": "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="
+  },
+  "source": {
+    "path": "package/lib/typescript.js",
+    "sha256": "dd17428736a07e1db1a138d8a14295ddb2699ba780ee15038acdd2c6da5373a0",
+    "bytes": 9066411
+  },
+  "esbuild": {
+    "version": "0.28.1",
+    "options": {
+      "loader": "js",
+      "minify": true,
+      "target": "es2019",
+      "legalComments": "inline"
+    }
+  },
+  "minified": {
+    "sha256": "6f644c10d4e37e1a09df6e0ac2db430b22e55808750207aae6ae60f448e918f1",
+    "bytes": 3587449
+  },
+  "brotli": {
+    "quality": 11,
+    "sha256": "3a329be57fe8553d43bbddcf9763bfd7aa34a222d28d6a92f492acf629ee3a2f",
+    "bytes": 796551
+  }
+}

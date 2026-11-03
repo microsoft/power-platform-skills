@@ -125,6 +125,9 @@ const hasLabelUses = (spec, view) => labelUses(spec, view).length > 0;
 // read: it is populated for a LOCAL set too, and then carries only the set's name. `Label` is read by
 // language code rather than through `UserLocalizedLabel`, which is only the calling user's language — a
 // filter may name a label in any.
+// A status reason (an option of a table's Status attribute, `statuscode`) also carries the state it belongs to,
+// `"State": 0`, which is kept as `state`; no other kind of option has one, and its options are answered as before.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/statusoptionmetadata
 function parseOptions(rawOptions, languageCode) {
   const options = [];
   for (const raw of Array.isArray(rawOptions) ? rawOptions : []) {
@@ -133,7 +136,7 @@ function parseOptions(rawOptions, languageCode) {
     const labels = Object.values(byLcid);
     const user = raw.Label && raw.Label.UserLocalizedLabel && raw.Label.UserLocalizedLabel.Label;
     if (typeof user === 'string' && user.trim() && !labels.includes(user)) labels.push(user);
-    options.push({ value: Number(raw.Value), labels, shown: labelText(byLcid, languageCode) || labels[0] || String(raw.Value) });
+    options.push({ value: Number(raw.Value), labels, shown: labelText(byLcid, languageCode) || labels[0] || String(raw.Value), ...(Number.isInteger(raw.State) ? { state: raw.State } : {}) });
   }
   return options;
 }
@@ -146,8 +149,13 @@ function parseOptions(rawOptions, languageCode) {
 //      https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/enumattributemetadata
 const OPTION_CASTS = ['Picklist', 'MultiSelectPicklist', 'State', 'Status'];
 
+// The read of one kind of a table's choice attributes, with every option and every language of its labels:
+//   /EntityDefinitions(LogicalName='new_customer')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)
+// Shared with the status reason read verify makes (lib/status-reasons-keys.js), so the two cannot ask differently.
+const optionCastUrl = (entityLogical, cast) => `/EntityDefinitions(LogicalName='${odataLit(lc(entityLogical))}')/Attributes/Microsoft.Dynamics.CRM.${cast}AttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`;
+
 // The choice attributes of one table, with every option and every language of its label:
-//   { state: 'ok', attributes: Map(logicalName -> { kind, options: [{ value, labels, shown }] }), complete, why? }
+//   { state: 'ok', attributes: Map(logicalName -> { kind, options: [{ value, labels, shown, state? }] }), complete, why? }
 //   { state: 'absent' }                      — the table is not in the environment (every cast answered 404)
 //   { state: 'error', why }                  — nothing could be read
 // `complete` is false when a cast failed: what the others returned is usable, but an attribute missing from
@@ -162,10 +170,9 @@ const OPTION_CASTS = ['Picklist', 'MultiSelectPicklist', 'State', 'Status'];
 // "nothing there". Remove this when the SDK offers a read of a column's options that neither writes the
 // workspace nor drops languages.
 async function readChoiceAttributes(client, entityLogical, { languageCode } = {}) {
-  const base = `/EntityDefinitions(LogicalName='${odataLit(lc(entityLogical))}')/Attributes/Microsoft.Dynamics.CRM.`;
   const reads = await Promise.all(OPTION_CASTS.map(async (cast) => {
     try {
-      const res = await client.get(`${base}${cast}AttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`);
+      const res = await client.get(optionCastUrl(entityLogical, cast));
       return { cast, res };
     } catch (err) {
       return { cast, why: (err && err.message) || String(err) };
@@ -623,6 +630,8 @@ module.exports = {
   labelLintWarnings,
   readChoiceAttributes,
   readGlobalChoiceOptions,
+  optionCastUrl,
+  parseOptions,
   makeChoiceReader,
   makeGlobalChoiceReader,
   memoizeChoiceReader,

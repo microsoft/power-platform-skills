@@ -14,15 +14,21 @@
 // path re-resolves live and treats a missing entry as "must full-build that artifact").
 
 const { identityOf } = require('./classify-changes.js');
+const { ownValue } = require('./own-keys.js');
 
 function low(s) { return String(s == null ? '' : s).toLowerCase(); }
 
 // Build artifacts = { pages, forms, views, app, webResources, entities, charts, commands, dashboards }.
 // created = result.created from sdk-build; opts carries the build-time hashes the fast path verifies with.
+//
+// A page's key and a dashboard's name can be a member of Object.prototype (`constructor`, `__proto__`, …): the two maps keyed by them are
+// null-prototype objects, so every such name is recorded as an entry, and they are READ with ownValue, so a page or dashboard the build did
+// not report reads as absent instead of as an inherited member (lib/own-keys.js). The snapshot is written with JSON.stringify, which writes
+// them exactly as a plain object with the same entries.
 function indexArtifacts(spec, created, opts = {}) {
   const s = spec || {};
   const c = created || {};
-  const out = { pages: {}, forms: {}, views: {}, app: {}, webResources: {}, entities: {}, charts: {}, commands: {}, dashboards: {} };
+  const out = { pages: Object.create(null), forms: {}, views: {}, app: {}, webResources: {}, entities: {}, charts: {}, commands: {}, dashboards: Object.create(null) };
   const pageDeployedShas = opts.pageDeployedShas || {};
   const formProjections = opts.formProjections || {};
   const viewProjections = opts.viewProjections || {};
@@ -33,12 +39,13 @@ function indexArtifacts(spec, created, opts = {}) {
   for (const p of Array.isArray(s.pages) ? s.pages : []) {
     if (!p || typeof p !== 'object') continue;
     const key = identityOf.page(p);
-    const pageId = c.pages && c.pages[key];
+    const pageId = ownValue(c.pages, key);
     if (!pageId) continue; // an intent page or one that wasn't deployed — nothing to record
+    const deployedSha = ownValue(pageDeployedShas, key);
     out.pages[key] = {
       pageId,
       sourceSha: p.__contentSha != null ? p.__contentSha : null,
-      deployedSha: pageDeployedShas[key] != null ? pageDeployedShas[key] : (p.__contentSha != null ? p.__contentSha : null),
+      deployedSha: deployedSha != null ? deployedSha : (p.__contentSha != null ? p.__contentSha : null),
     };
   }
 
@@ -99,7 +106,7 @@ function indexArtifacts(spec, created, opts = {}) {
   }
   for (const d of Array.isArray(s.dashboards) ? s.dashboards : []) {
     if (!d || typeof d !== 'object') continue;
-    const id = c.dashboards && c.dashboards[d.name];
+    const id = ownValue(c.dashboards, d.name);
     if (id) out.dashboards[identityOf.dashboard(d)] = { id };
   }
 

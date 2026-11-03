@@ -8,7 +8,7 @@ description: >-
   HTML report with an at-a-glance verdict and per-category scores in the Overview plus a
   single list of **major/minor** issues (each major issue labelled permissions-only or upstream-caused with a short justification), and suggested fixes.
   Use when the user wants to review, verify, check, score,
-  or grade table permissions for security issues.
+  or grade table permissions for security issues. Supports SPA and PAC-downloaded non-SPA sites.
 user-invocable: true
 argument-hint: "[optional: specific table or concern]"
 allowed-tools: Read, Write, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, Agent
@@ -27,6 +27,24 @@ The skill has two parts:
 2. **Scoring** (reproducible result) — a **3-category** rubric (9 dimensions) anchored by a **recurring-issue catalog** of fixed detection triggers + severities, followed by a **single consolidation** into root causes and **one batched root-cause attribution** pass for major issues. It turns the findings into **pure-formula 1–5 category scores** so two runs on the same configuration yield the same numbers.
 
 > **Golden rule of scoring:** you only ever **find and label issues** (`major` / `minor`). You do NOT invent the numeric score. The 1–5 numbers come from a **fixed formula** applied to the issue counts (see [Appendix A](#appendix-a--scoring-model)). Same issue set ⇒ same score.
+
+## Site type routing
+
+Before reading or executing the workflow below, perform the existing SPA project lookup first.
+
+- Look for `powerpages.config.json` in the current directory or immediate subdirectories using the
+  existing file-search patterns.
+- If found, continue with the existing SPA workflow below.
+- Only when that existing SPA lookup finds no `powerpages.config.json`, run:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+  ```
+
+- If it returns `siteType: "non-spa"`, read and follow
+  `${PLUGIN_ROOT}/skills/audit-permissions/references/non-spa-site-workflow.md`.
+  Do not execute the SPA workflow below.
+- Otherwise, continue to Step 1 and preserve its existing not-found behavior.
 
 ## Workflow
 

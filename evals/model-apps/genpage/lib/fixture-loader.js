@@ -109,7 +109,7 @@ function loadFixtures(fixturesDir) {
       workflowLog: readOptional(dir, 'workflow-log.md'),
       genpagePlan: readOptional(dir, 'genpage-plan.md'),
       genpageEditPlan: readOptional(dir, 'genpage-edit-plan.md'),
-      // The schema `pac model genpage generate-types` wrote from the live environment. It is not a
+      // The schema the type generator (`genpage.js types`, or `pac model genpage generate-types` in a capture made before it) wrote from the live environment. It is not a
       // generated page (listTsxFiles skips it), but it is the only captured record of the choice
       // values Dataverse actually holds after provisioning.
       runtimeTypes: readOptional(dir, 'RuntimeTypes.ts'),

@@ -29,7 +29,7 @@ const { hydrateSpec } = pluginLib('hydrate-spec.js');
 // `columns[]`. Grading it here (rather than only in the plugin's unit tests) puts the download
 // side of the round-trip under the same fixture corpus as the build side.
 const { entityFromMetadata, parseDownloadedPages, assignPageKeys } = pluginLib2('download-model-app.js');
-const { unescapePacName } = pluginLib('genpage-cli.js');
+const { unescapePacName } = pluginLib('genpage-sdk.js');
 const { classifyChanges } = pluginLib('classify-changes.js');
 const { annotateContentHashes, pageSourceFileErrors } = pluginLib('content-hash.js');
 const { makeEnvelope, markEligible, parseEnvelope, serializeEnvelope, isFastPathEligible } = pluginLib('apply-snapshot.js');
@@ -776,8 +776,8 @@ async function changedOnlyFacts(spec, fixture) {
   }
 }
 
-// page: PAGEREF_ resolution facts (Plan 3). Returns null when pageref-resolver isn't loaded →
-// the assertion layer emits SKIP (loose Plan-3 coupling). When present, each declared nav edge
+// page: PAGEREF_ resolution facts. Returns null when pageref-resolver isn't loaded →
+// the assertion layer emits SKIP (loose coupling). When present, each declared nav edge
 // is represented as a canonical navigateTo call site so resolvePageRefs can parse and resolve it.
 // A missing keyToId entry → unresolved entry (tests prove the assertion can FAIL).
 function pageFacts(spec) {

@@ -1,7 +1,7 @@
 ---
 name: add-seo
 description: >-
-  Adds SEO essentials to a Power Pages code site, including robots.txt, sitemap.xml,
+  Adds SEO essentials to a Power Pages SPA site, including robots.txt, sitemap.xml,
   meta tags, Open Graph tags, and favicon configuration. Use when the user wants to
   improve search engine optimization or make their site more searchable.
 user-invocable: true
@@ -13,9 +13,9 @@ model: sonnet
 
 # Add SEO
 
-Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`, and meta tags.
+Add essential SEO assets to a Power Pages SPA site: `robots.txt`, `sitemap.xml`, and meta tags.
 
-> **Prerequisite:** This skill expects an existing Power Pages code site created via `/create-site`. Run that skill first if the site does not exist yet.
+> **Prerequisite:** This skill expects an existing Power Pages SPA site created via `/create-site`. Run that skill first if the site does not exist yet.
 
 ## Core Principles
 
@@ -40,7 +40,7 @@ Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`
 
 ## Phase 1: Verify Site Exists
 
-**Goal:** Confirm a Power Pages code site exists and understand its structure.
+**Goal:** Confirm a Power Pages SPA site exists and understand its structure.
 
 ### Actions
 

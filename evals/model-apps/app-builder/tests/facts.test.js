@@ -299,8 +299,8 @@ test('stageFacts round-trips a classic DashBoard subarea and plans its teardown'
 });
 
 // A lookup-heavy child (8 scalars + a 1:N parent lookup) with a no-label sub-grid — exercises the
-// 2026-07-15 fixes at the fact level: #2 (default view keeps the lookup), #7 (no createdon), #5
-// (sub-grid own 1-column section titled by the child pluralName).
+// hardening fixes at the fact level: the default view keeps the lookup, there is no createdon, and
+// the sub-grid gets its own 1-column section titled by the child pluralName.
 const hardeningSpec = {
   schemaVersion: 2,
   solution: { uniqueName: 'H', publisherPrefix: 'new' },

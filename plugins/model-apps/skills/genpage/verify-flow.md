@@ -111,6 +111,9 @@ deployed page did not already have, or gives one it had another value (`griffel-
 upload, not a shipped defect. A key the page already had before your fix, set the same, is reported as well:
 delete it to keep the page looking as it does, or write the longhands to make the style start to
 render (a visible change, so only when it is wanted).
+A fix is held to the iteration rule too: convert a Map, Set or iterator with `Array.from` before
+spreading, looping over or destructuring it (`references/rules.md`, **Common Errors > 5. Iteration
+that compiles to nothing**).
 Per the "Prompt semantics" rule, the prompt for this
 re-deploy describes the fix delta only — e.g.
 `"Fix sort handler on Name column; correct accidental DataGrid type prop"` —

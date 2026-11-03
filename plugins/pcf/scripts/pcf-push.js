@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const nodeProcess = require('node:process');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
+const { redactOutput, makeWritesBlocking } = require('./lib/output-redaction.js');
 const { runPac } = require('./lib/pac-exec.js');
 const { validatePublisherPrefix, validateSolutionUniqueName, validateNamespace, validateControlName, orgControlName } = require('./lib/pcf-names.js');
 const { findControlProject } = require('./lib/pcf-build.js');
@@ -12,6 +13,7 @@ const { pcfprojBuildMode } = require('./lib/pcf-doctor.js');
 const { makePcfSdk, findCustomControl, solutionPrefix } = require('./lib/pcf-dataverse.js');
 const { parseManifest } = require('./lib/pcf-manifest.js');
 const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
+const { emitSkillCompleted } = require('./lib/telemetry/skill-completed.js');
 
 const USAGE = `Usage:
   node scripts/pcf-push.js --project <dir> --env <url> (--solution <uniqueName> | --publisher-prefix <p>) [--incremental] [--verbosity minimal|normal|detailed|diagnostic] [--allow-dev-bundle] [--no-verify]
@@ -68,11 +70,13 @@ const HINTS = [
 ];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }
 
 async function main(argv = process.argv.slice(2)) {
+  const startedAt = Date.now();
   const parsed = parseArgs(argv);
   const flagError = validateFlags(argv, {
     known: KNOWN,
@@ -135,21 +139,26 @@ async function main(argv = process.argv.slice(2)) {
   ];
 
   const push = runPac(pacArgs, { cwd: projectDir, timeoutMs: PUSH_TIMEOUT_MS });
+  // From here the push has run, so every exit reports skill_completed before the result is printed (emitResult exits the process).
+  const finish = async (ok, payload, facts) => {
+    await reportPush({ envOrigin, startedAt, incremental: !!flags.incremental, noVerify: !!flags['no-verify'], ...facts });
+    return emitResult(ok, payload);
+  };
   if (timedOut(push)) {
     // On Windows, process-runner starts a pac.cmd batch shim under checked cmd.exe arguments. Killing
     // that wrapper on timeout is best-effort and may leave the MSBuild child running, so report the
     // diagnostic log path and never claim the push was aborted.
-    return emitResult(false, {
+    return finish(false, {
       ok: false,
       stage: 'push',
       timedOut: true,
       log: buildLogPath(projectDir),
       message: 'pac pcf push timed out; the push or its MSBuild child may still be running. Inspect the build log before retrying.',
-    });
+    }, { stage: 'push', timedOut: true });
   }
 
   if ((push.status || 0) !== 0) {
-    return emitResult(false, {
+    return finish(false, {
       ok: false,
       stage: 'push',
       status: push.status,
@@ -158,7 +167,7 @@ async function main(argv = process.argv.slice(2)) {
       logTail: readBuildLogTail(projectDir),
       stdout: scrubbedTail(push.stdout, 60),
       stderr: scrubbedTail(push.stderr, 60),
-    });
+    }, { stage: 'push' });
   }
 
   const expectedVersion = manifest.model.control.version || null;
@@ -183,23 +192,50 @@ async function main(argv = process.argv.slice(2)) {
       registered,
     });
   } catch (err) {
-    return emitResult(false, {
+    return finish(false, {
       ok: false,
       stage: 'receipt',
       reason: errorReason(err),
       registered: stripPrivateRegistration(registered),
-    });
+    }, { stage: 'receipt', registered: !!registered.ok });
   }
 
   const ok = !!registered.ok || !!flags['no-verify'];
-  return emitResult(ok, {
+  return finish(ok, {
     ok,
     stage: 'done',
     control: controlName,
     version: expectedVersion,
     registered: stripPrivateRegistration(registered),
     receipt,
-  });
+  }, { stage: 'done', ok, registered: !!registered.ok });
+}
+
+// What a push's result says, in the closed vocabulary of lib/telemetry/skill-completed.js — never a control, solution or environment name.
+//   done, ok                   → success; registration verified | skipped (--no-verify)
+//   done, registration not read back → verify-failed      push timed out → timeout
+//   pac pcf push failed        → deploy-failed           the receipt could not be written → unexpected
+function pushCompletion({ stage, ok, timedOut: timedOutPush, registered, incremental, noVerify } = {}) {
+  const pushed = stage === 'done' || stage === 'receipt';
+  const eventInfo = {
+    operation: 'control-push',
+    incremental: !!incremental,
+    registration: noVerify ? 'skipped' : registered ? 'verified' : 'not-verified',
+    steps: { push: pushed ? { ok: 1 } : { error: 1 } },
+  };
+  if (stage === 'done' && ok) return { outcome: 'success', eventInfo };
+  if (stage === 'done') return { outcome: 'failure', errorClass: 'verify-failed', eventInfo };
+  if (stage === 'receipt') return { outcome: 'failure', errorClass: 'unexpected', eventInfo };
+  return { outcome: 'failure', errorClass: timedOutPush ? 'timeout' : 'deploy-failed', eventInfo: { ...eventInfo, haltPhase: 'push' } };
+}
+
+async function reportPush(facts, emit = emitSkillCompleted) {
+  try {
+    const { outcome, errorClass, eventInfo } = pushCompletion(facts);
+    await emit({
+      skillName: 'pcf', outcome, errorClass, eventInfo, envUrl: facts.envOrigin, durationMs: Date.now() - facts.startedAt,
+    });
+  } catch { /* telemetry never changes the push's result */ }
 }
 
 function normalizeEnvOrigin(value) {
@@ -365,7 +401,9 @@ function writeReceipt(projectDir, data) {
   let fd = null;
   try {
     fd = fs.openSync(tempPath, 'wx');
-    fs.writeFileSync(fd, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+    // The receipt carries the service's own words (`registered.reason` is the text of a refused read), and a service may repeat the access token it was sent in them — folded onto several lines or with a JSON escape,
+    // which `scrubSecrets` does not read. So the whole text goes through the one function that keeps every token this process obtained out of what it writes (lib/output-redaction.js), as model-apps' file writers do.
+    fs.writeFileSync(fd, redactOutput(`${JSON.stringify(receipt, null, 2)}\n`), 'utf8');
     fs.closeSync(fd);
     fd = null;
     fs.renameSync(tempPath, receiptPath);
@@ -383,4 +421,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { main };
+module.exports = { main, pushCompletion };

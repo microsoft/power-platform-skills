@@ -9,17 +9,20 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 const CLI = path.join(__dirname, '..', 'promote-intent-pages.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
+// What a guess costs a page where the TypeScript parser does not settle it (lib/typescript-views.js): the script these tests run reads the page with the lexer
+// alone (MODEL_APPS_LEXER_ALONE). parser-check.test.js holds what the parser settles, and the tests below what promotion does with it.
+const lexerAlone = (t) => { process.env.MODEL_APPS_LEXER_ALONE = '1'; t.after(() => { delete process.env.MODEL_APPS_LEXER_ALONE; }); };
 
 const GOOD = 'export default function P() { return <div>ok</div>; }\n';
 
 function makeWorkspace(spec, files) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-'));
+  const dir = makeTempDir('promote-');
   fs.writeFileSync(path.join(dir, 'app-spec.json'), JSON.stringify(spec, null, 2), 'utf8');
   for (const [name, code] of Object.entries(files || {})) fs.writeFileSync(path.join(dir, name), code, 'utf8');
   return dir;
@@ -207,7 +210,8 @@ test('refuses a page holding a PAGEREF_ token no navigation rewrite resolves, an
 // A page whose `/` after an object literal hides a call: JavaScript makes both navigations, but the lexer reads the `/` after the object literal on line 4 as a regex
 // and the `/*` in `/\/*$/` as a comment over the second call. Promotion used to pass it, and the build then shipped the second
 // token unresolved. The token is refused here — where the page can be regenerated — naming it and the `/`.
-test('refuses the page whose "/" after an object literal hides a navigation call, naming the call and the "/"', () => {
+test('refuses the page whose "/" after an object literal hides a navigation call, naming the call and the "/"', (t) => {
+  lexerAlone(t);
   const spec = twoPageSpec();
   spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
   const dir = makeWorkspace(spec, { 'overview.tsx': OBJECT_DIVISION_PAGE, 'detail.tsx': GOOD });
@@ -226,7 +230,8 @@ test('refuses the page whose "/" after an object literal hides a navigation call
 // Every misread page (tests/helpers/misread-page.js) is refused at its first guess, naming each token after it
 // and the kind and position of the guess, and the spec is left as it was. A page regenerated here costs a retry; one that reached the
 // build would ship a dead link.
-test('refuses each misread page, naming the token and the guess', () => {
+test('refuses each misread page, naming the token and the guess', (t) => {
+  lexerAlone(t);
   const spec = twoPageSpec();
   spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
   for (const [name, { kind, frontier, code, reaching }] of Object.entries(MISREAD_PAGES)) {
@@ -314,7 +319,19 @@ test('refuses a token in the regex after an element whose text looks like a para
   }
 });
 
-test('names the guess when a declared call is absent, once, and only a guess the page has', () => {
+// The same pages, read as the TypeScript parser reads them where the lexer guessed (lib/typescript-views.js): every call is seen, and the pages promote.
+test('promotes the pages the lexer misreads, read as TypeScript parses them', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  for (const code of [OBJECT_DIVISION_PAGE, HIDDEN_CALL_PAGE.code]) {
+    const dir = makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD });
+    const r = run(dir);
+    assert.equal(r.code, 0, r.stderr);
+  }
+});
+
+test('names the guess when a declared call is absent, once, and only a guess the page has', (t) => {
+  lexerAlone(t);
   const spec = twoPageSpec();
   spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
   const { code, frontier } = HIDDEN_CALL_PAGE;
@@ -384,7 +401,10 @@ test('validatePage refuses a codeFile that escapes the working directory', () =>
   // (which promotion skips), but codeFile is author-editable and download-derived, so the check
   // lives with the read rather than relying on that invariant holding forever.
   const { validatePage } = require('../promote-intent-pages.js');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-esc-'));
+  // The working directory is a folder inside this test's own temporary folder, so the file "outside" it is
+  // still inside a folder the test removes (it used to be written straight into the OS temp folder).
+  const dir = path.join(makeTempDir('promote-esc-'), 'work');
+  fs.mkdirSync(dir);
   fs.writeFileSync(path.join(dir, '..', 'outside.tsx'), GOOD, 'utf8');
   for (const codeFile of ['../outside.tsx', path.join(dir, '..', 'outside.tsx')]) {
     const r = validatePage({ key: 'evil', name: 'Evil', source: { kind: 'tsx', codeFile } }, dir);
@@ -394,7 +414,7 @@ test('validatePage refuses a codeFile that escapes the working directory', () =>
 });
 
 test('a malformed or missing spec fails closed with the same exit contract', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'promote-bad-'));
+  const dir = makeTempDir('promote-bad-');
   let r = run(dir);
   assert.equal(r.code, 3, 'missing spec');
   assert.match(r.stderr, /cannot read app spec/);

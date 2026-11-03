@@ -53,7 +53,8 @@ Match on intent, not exact wording.
 | Maker says something like... | Add |
 |---|---|
 | "track when a user completes a task" | `trackEvent('TaskCompleted', { ... })` in the completion handler |
-| "log errors to App Insights" / "report failures" | `trackException(err, { ... })` in the relevant `catch` blocks |
+| "log errors to App Insights" / "report failures" | the failure-telemetry lines inserted into the page's `reportPageError` (rules.md → *Missing Error Handling*), and `props.appInsights` as the **seventh argument** of every data failure's report; render crashes too, through the boundary (section 3) |
+| "report failed saves" | the same insertion, and `props.appInsights` as the seventh argument of the save's reports **only** — never the loads' and never the boundary's |
 | "measure how many records load" | `trackMetric('AccountsLoaded', rows.length)` after the load resolves |
 | "track which filters users apply" | `trackEvent('FilterApplied', { ... }, { throttle: { key: 'FilterApplied', windowMs: 1000 } })` |
 | "track searches as the user types" | debounce at the source, then `trackEvent('Searched', { count }, { throttle: ... })` |
@@ -65,6 +66,15 @@ Match on intent, not exact wording.
 Counter-examples that **do not** authorize instrumentation: "show a chart of sales by
 region", "display the record count", "add a KPI tile", "show an error message if the
 save fails", "add a retry button", "make the page load fast".
+
+**Failures are reported in one place.** Every page reports its failures through its one
+`reportPageError` (rules.md, Critical Rule 22) whether or not telemetry is on. A request to
+report failures does not add `trackException` calls to catch blocks: it inserts the documented
+lines into that reporter and hands `props.appInsights` to exactly the reports the request
+covers. The reporter sends a new `<operation> failed` error with `outcome`, `category`,
+`source` and a recognized `statusCode` — never the thrown value, the host's message, a row, a
+lookup or an identity. A request that asks only for success events ("track when a user completes
+a task") leaves the reporter and the boundary as they are.
 
 ---
 
@@ -120,7 +130,7 @@ export interface GenUXTelemetryCallOptions {
  * Do NOT await these calls and do NOT wrap them in try/catch.
  */
 export interface IGenUXPageAppInsightsTelemetry {
-    /** Report a caught error. Prefer this over trackTrace inside a catch block. */
+    /** Report a failure. A page calls it ONLY from inside its reportPageError (rules.md, "Missing Error Handling"). */
     trackException(error: unknown, properties?: GenUXTelemetryProperties, options?: GenUXTelemetryCallOptions): void;
 
     /** Report a diagnostic message. Use sparingly. */
@@ -153,20 +163,26 @@ carries the prop, because the generated `RuntimeTypes.ts` may predate it:
 ```typescript
 type PageTelemetry = {
     trackEvent(name: string, properties?: Record<string, unknown>, options?: unknown): void;
-    trackException(error: unknown, properties?: Record<string, unknown>, options?: unknown): void;
     trackMetric(name: string, value: number, properties?: Record<string, unknown>, options?: unknown): void;
     startTrack(name: string): void;
     stopTrack(name: string, properties?: Record<string, unknown>, options?: unknown): void;
 };
 
-const GeneratedComponent = (props: GeneratedComponentProps & { appInsights?: PageTelemetry }) => {
+function PageBody(props: GeneratedComponentProps & { appInsights?: PageTelemetry }) {
     const { dataApi, pageInput, appInsights } = props;
     // ...
-};
+}
+
+const GeneratedComponent = (props: GeneratedComponentProps & { appInsights?: PageTelemetry }) => (
+    <PageErrorBoundary>
+        <PageBody {...props} />
+    </PageErrorBoundary>
+);
 ```
 
-Only declare the methods the page actually calls. On a page you are **not**
-instrumenting, add none of this - the signature stays exactly
+Only declare the methods the page actually calls. `trackException` is not one of them: the
+reporter's own `PageErrorTelemetry` type declares it, because only the reporter calls it. On a
+page you are **not** instrumenting, add none of this - the signatures stay exactly
 `(props: GeneratedComponentProps)`.
 
 ---
@@ -217,16 +233,20 @@ justify adding telemetry on their own.
   but is still worth measuring (typing in a search box, dragging a slider, applying
   filters), you **must** pass the throttle option with a stable, distinct `key` per
   call site: `{ throttle: { key: 'ordersSearch', windowMs: 1000 } }`.
-- **Prefer `trackException` in catch blocks over `trackTrace`.** Reserve it for
-  errors genuinely worth surfacing - a failed save, a failed load, a rejected
-  request. Do **not** call it for expected empty states (a query returning zero rows,
-  an optional lookup finding nothing) or for validation the user is expected to hit;
-  those are normal outcomes, not failures.
-- **Instrument the error boundary.** If the page has a React error boundary - or you
-  add one for resilience - call
-  `appInsights?.trackException(error, { category: 'errorBoundary' })` from its
-  `componentDidCatch`. A render crash is the single most valuable error to report,
-  and it never reaches a `catch` block.
+- **Failures go through `reportPageError` only.** Never call `trackException` — or
+  `trackTrace` — in a `catch` block or anywhere else yourself. Insert the documented
+  telemetry lines into the page's reporter (right after its `console.error` line) and pass
+  `props.appInsights` as the seventh argument of exactly the reports the request covers:
+  `reportPageError(PAGE_NAME, 'saveOrder', undefined, error, 'write', undefined, props.appInsights)`.
+  Do **not** report expected empty states (a query returning zero rows, an optional lookup
+  finding nothing) or validation the user is expected to hit; those are normal outcomes, not
+  failures, and they never reach the reporter.
+- **The boundary reports render crashes only when the request covers them.** A render crash
+  never reaches a `catch` block, so a request to report failures generally covers it: then
+  render `<PageErrorBoundary appInsights={props.appInsights}>` and make its `componentDidCatch`
+  report `reportPageError(PAGE_NAME, 'render', undefined, error, 'render', undefined, this.props.appInsights)`
+  (rules.md shows both). A request about one operation ("report failed saves") leaves the
+  boundary as it is.
 - **`trackTrace`** is for a diagnostic breadcrumb at a key decision point in
   genuinely complex logic (which branch a multi-step flow took, why a fallback
   engaged). Do not narrate ordinary control flow with it.
@@ -250,55 +270,82 @@ justify adding telemetry on their own.
 
 Shape references for pages whose maker **asked** to track or measure something - not
 a default template. Note how few calls even an intentionally instrumented page makes.
+Each page is built on the page error block of rules.md: its failures are reported through
+`reportPageError` either way, and only an authorized request hands that reporter
+`props.appInsights`.
+
+A whole `PageBody` for "report failed saves": the reporter carries the inserted telemetry
+lines, the save's two reports pass `appInsights` as the seventh argument, and nothing else is
+instrumented — not the load, not the boundary.
 
 ```tsx
-// GOOD: one page-level load event, emitted once, with a count and a duration.
-const GeneratedComponent = (props: GeneratedComponentProps & { appInsights?: PageTelemetry }) => {
+type OrderRow = { orderid: string; name: string };
+type PageTelemetry = { trackEvent(name: string, properties?: Record<string, unknown>, options?: unknown): void };
+
+function PageBody(props: GeneratedComponentProps & { appInsights?: PageTelemetry }) {
     const { dataApi, pageInput, appInsights } = props;
-    const [orders, setOrders] = useState<TableRow[]>([]);
+    void pageInput;
+    const [name, setName] = React.useState('');
+    const [save, setSave] = React.useState<{ saving: boolean; error: PageErrorView | null }>({ saving: false, error: null });
+    const pending = React.useRef(false);
 
-    useEffect(() => {
-        let cancelled = false;
-        appInsights?.startTrack('OrdersLoad');
-        (async () => {
-            try {
-                const result = await dataApi.queryTable('order', { select: ['name', 'statuscode'], pageSize: 50 });
-                if (cancelled) {
-                    return;
-                }
-                setOrders(result.rows);
-                // stopTrack reports the elapsed time for you - do not compute it yourself.
-                appInsights?.stopTrack('OrdersLoad', { outcome: 'success', entityName: 'order', count: result.rows.length });
-            } catch (error) {
-                // A catch block is the single highest-value place to instrument.
-                appInsights?.stopTrack('OrdersLoad', { outcome: 'failure', entityName: 'order' });
-                appInsights?.trackException(error, { entityName: 'order', category: 'grid', source: 'pageLoad' });
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-        // Never put dataApi in a dependency array - see rules.md Rule 15.
-    }, []);
+    async function saveOrder() {
+        if (pending.current) return;
+        pending.current = true;
+        setSave({ saving: true, error: null });
+        try {
+            await dataApi.createRow('order', { name });
+            setSave({ saving: false, error: null });
+        } catch (error) {
+            // The one call that reaches Application Insights for this failure: the reporter sends
+            // `saveOrder failed` with approved properties only — never `error` itself.
+            setSave({ saving: false, error: reportPageError(PAGE_NAME, 'saveOrder', undefined, error, 'write', undefined, appInsights) });
+        } finally {
+            pending.current = false;
+        }
+    }
 
-    // ...
-};
+    return (
+        <div>
+            <PageErrorBar error={save.error} />
+            <Input aria-label="Order name" value={name} onChange={(_, data) => setName(data.value)} />
+            <Button appearance="primary" disabled={save.saving || !name.trim()} onClick={() => void saveOrder()}>Save order</Button>
+        </div>
+    );
+}
+```
 
-// GOOD: a completed user action, instrumented on BOTH the success and failure paths.
-const handleSubmit = async (): Promise<void> => {
+Handler shapes for other requests. Each sits inside `PageBody`, which destructures
+`appInsights` from its props:
+
+```tsx
+// GOOD: "how long saving takes" - one timed operation, stopped on BOTH paths. The failure is
+// reported without telemetry: this request measures a duration, it does not ask to report failures.
+async function submitOrder(): Promise<void> {
+    appInsights?.startTrack('OrderSubmit');
+    try {
+        await dataApi.createRow('order', values);
+        // stopTrack reports the elapsed time for you - do not compute it yourself.
+        appInsights?.stopTrack('OrderSubmit', { outcome: 'success', entityName: 'order' });
+        setSubmit({ submitting: false, error: null });
+    } catch (error) {
+        appInsights?.stopTrack('OrderSubmit', { outcome: 'failure', entityName: 'order' });
+        setSubmit({ submitting: false, error: reportPageError(PAGE_NAME, 'submitOrder', undefined, error, 'write') });
+    }
+}
+
+// GOOD: "log when a form is submitted" - an event on BOTH the success and failure paths. The
+// event names the outcome; it carries no error, and the failure goes to the reporter as usual.
+async function handleSubmit(): Promise<void> {
     try {
         const recordId = await dataApi.createRow('order', values);
-        appInsights?.trackEvent('OrderSubmitted', {
-            outcome: 'success',
-            entityName: 'order',
-            recordId,
-            source: 'toolbar',
-        });
+        appInsights?.trackEvent('OrderSubmitted', { outcome: 'success', entityName: 'order', recordId, source: 'toolbar' });
+        setSubmit({ submitting: false, error: null });
     } catch (error) {
         appInsights?.trackEvent('OrderSubmitted', { outcome: 'failure', entityName: 'order', source: 'toolbar' });
-        appInsights?.trackException(error, { entityName: 'order', category: 'form' });
+        setSubmit({ submitting: false, error: reportPageError(PAGE_NAME, 'submitOrder', undefined, error, 'write') });
     }
-};
+}
 
 // GOOD: a rapid-fire call site MUST pass a throttle with a stable key.
 const handleSearchChange = (value: string): void => {
@@ -310,27 +357,16 @@ const handleSearchChange = (value: string): void => {
         { throttle: { key: 'ordersSearch', windowMs: 1000 } }
     );
 };
-
-// GOOD: an error boundary reports render crashes, which never reach a catch block.
-class PageErrorBoundary extends React.Component<{ appInsights?: PageTelemetry }, { hasError: boolean }> {
-    public state = { hasError: false };
-
-    public static getDerivedStateFromError(): { hasError: boolean } {
-        return { hasError: true };
-    }
-
-    public componentDidCatch(error: Error): void {
-        this.props.appInsights?.trackException(error, { category: 'errorBoundary', source: 'render' });
-    }
-
-    public render(): React.ReactNode {
-        return this.state.hasError ? <div>Something went wrong.</div> : this.props.children;
-    }
-}
 ```
 
----
+For "report failures" (every failure), insert the reporter's telemetry lines, pass
+`props.appInsights` as the seventh argument of every data failure's report, and instrument the
+boundary as rules.md shows: `<PageErrorBoundary appInsights={props.appInsights}>` in the default
+export, and `reportPageError(PAGE_NAME, 'render', undefined, error, 'render', undefined, this.props.appInsights)`
+in its `componentDidCatch`. A render crash never reaches a `catch` block, so the boundary is
+the only place it can be reported.
 
+---
 ## 5. Anti-patterns
 
 ```tsx
@@ -380,6 +416,19 @@ useEffect(() => {
 if (rows.length === 0) {
     appInsights?.trackException(new Error('No orders found'), { entityName: 'order' });
 }
+
+// BAD: a trackException of its own in a catch block. It sends the thrown value - which can
+// carry record text - and bypasses the page's reporter. Report through reportPageError, which
+// alone calls trackException, and only with a fixed `<operation> failed` error.
+try {
+    await dataApi.createRow('order', values);
+} catch (error) {
+    appInsights?.trackException(error, { entityName: 'order', category: 'form' });
+}
+
+// BAD: a save-only request ("report failed saves") spread to the load and the boundary.
+// A narrow request stays narrow: only the save's reports get `appInsights`.
+reportPageError(PAGE_NAME, 'loadOrders', undefined, failure, 'read', retryLoad, appInsights);
 
 // BAD: an un-throttled rapid call site.
 const onSliderChange = (v: number): void => appInsights?.trackMetric('SliderValue', v);

@@ -1,7 +1,7 @@
 ---
 name: exceptional-web-design
 description: >-
-  Reviews the design of an existing Power Pages site - a live URL or a local
+  Reviews the design of an existing non-SPA (classic) or SPA Power Pages site - a live URL or a local
   project folder - and recommends what to change, without modifying anything.
   Captures up to eight key pages at desktop and mobile, scores them against the plugin's
   design rubric (first impression, hierarchy, narrative, copy, trust, brand,
@@ -16,6 +16,12 @@ model: opus
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
+## Non-SPA-site routing
+
+Before creating tasks, reuse a site type/root already established by the caller. An explicit non-SPA (classic/traditional) request or a selected root containing `.portalconfig` plus `website.yml` takes `${PLUGIN_ROOT}/skills/exceptional-web-design/workflows/non-spa-site.md`; follow it and **do not continue into the workflow below**. `website.yml` alone is not a non-SPA marker.
+
+For a supplied folder or folder-based request without an established type, use Read/Glob to identify its code config or native export through `${PLUGIN_ROOT}/references/design-studio-site-discovery.md`, excluding dependency/build folders. Do not add native discovery or questions to an already identified SPA site. Without positive non-SPA evidence, retain the existing workflow below unchanged, including arbitrary supplied folders and unspecified URLs; do not require a native export or new confirmation.
 
 # Exceptional Web Design
 

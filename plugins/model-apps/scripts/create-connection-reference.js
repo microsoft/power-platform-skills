@@ -24,6 +24,7 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -34,6 +35,7 @@ async function main() {
     needValue: ['connection-id', 'display-name'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

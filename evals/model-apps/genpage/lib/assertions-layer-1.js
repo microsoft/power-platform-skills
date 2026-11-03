@@ -16,33 +16,47 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pageFileProblems } = require('../../../../plugins/model-apps/scripts/lib/page-file-targets.js');
-const { currentContract, workflowCalls, isAuth, isDiscovery, authGateProblems, discoveryProblems, refusalProblems, resultObject, isGeneration, isUpload } = require('./workflow-evidence.js');
+const { currentContract, workflowCalls, isAuth, isDiscovery, authGateProblems, discoveryProblems, refusalProblems, emptyPageListingProblems, isEmptyPageListing, resultObject, isGeneration, isUpload, isMutation } = require('./workflow-evidence.js');
 const { gradeEvidence, isGuid, fileName, artifactText, commandInfo } = require('./evidence-utils.js');
 const { navigationProblems, navTargets } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
 const { uploadProblems, uploadPreservationProblems } = require('./upload-contract.js');
 const { planSection, findMarkdownTable, parseMarkdownRows } = require('./plan-evidence.js');
-const { customApiProblems, customApiGateProblems } = require('./custom-api-contract.js');
+const { gradeCustomApi } = require('./custom-api-contract.js');
+const { plannedBuiltIns } = require('./action-binding-union.js');
 const { packagingProblems, isPackaging } = require('./packaging-contract.js');
+const { preservationProblems } = require('./preservation-contract.js');
+const { columnProblems } = require('./column-contract.js');
+const { escapeRe } = require('./source-evidence.js');
 const evidence = require('./expectation-evidence.js');
 const { blankLiterals } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
-const { planTargets } = require('../../../../plugins/model-apps/scripts/genpage-plan-provenance.js');
+const { planTargets, sha256 } = require('../../../../plugins/model-apps/scripts/genpage-plan-provenance.js');
+// The gate provision-entities.js puts its input through, so an input the plugin would refuse is never graded as written right.
+const { validateProvisionInput } = require('../../../../plugins/model-apps/scripts/lib/provision-input.js');
+const {
+  writtenSemanticsProblems, readWrittenSemantics, readPreviewSemantics, requiredContractProblems, compareSemantics, semanticRecord,
+  lookupEvidenceProblems, normalizeValue,
+} = require('../../../../plugins/model-apps/scripts/lib/genpage-plan-semantics.js');
 
 function fail(reason) { return { status: 'fail', reason }; }
 function pass() { return { status: 'pass', reason: '' }; }
 
 // The two upload transports, recognised in ONE place.
 //
-// New runs deploy through `scripts/genpage-upload.js`, which hands the prompt to pac BY FILE so a
-// shell cannot reinterpret quotes/newlines (#589). The fixtures checked in here are captured
-// transcripts from before that change and show the raw `pac model genpage upload` form; rewriting a
-// captured transcript to match today's skill would be falsifying the evidence it exists to be.
+// New runs deploy through `scripts/genpage-upload.js`, which takes the prompt BY FILE (so a shell cannot reinterpret quotes/newlines, #589) and writes the page through the SDK. The
+// fixtures checked in here that are captured transcripts from before that change show the raw `pac model genpage upload` form; rewriting a captured transcript to match today's skill
+// would be falsifying the evidence it exists to be.
 //
 // Defined once because the two DID drift: the common assertion was updated and the per-eval Phase
 // expectations were not, so a correct new-transport run failed the evals while a raw
 // `pac … --prompt "…"` run passed — the evals were grading the quoting-unsafe transport as correct.
 const UPLOAD_CMD = /pac\s+model\s+genpage\s+upload|genpage-upload\.js/;
 const uploadLinesOf = (log) => String(log || '').split('\n').filter((l) => UPLOAD_CMD.test(l));
+
+// A run of the type generator in a log line: the script (`genpage.js types --…`, its flags before the verb or after it) or the verb it replaced (`generate-types --…`, which a capture made before the
+// script records, with or without the `pac model genpage` before it). A flag must be there, so prose such as "genpage.js types not run" is no invocation. Read by the one reader of a script's verb
+// the other expectations use (lib/expectation-evidence.js), so a run with its flags first is not credited to a phase that was skipped.
+const { TYPES_RUN } = evidence;
 
 // What the log records about an upload's PROMPT, whichever transport carried it: the inline quoted
 // value, or — for the file transport, where there is no inline value to read — the `Prompt scope:`
@@ -64,7 +78,21 @@ function skip(reason) { return { status: 'skip', reason }; }
 // COMMON assertions was never exercised, and the first edit fixture added reported six false
 // failures that say nothing about the page under test.
 function isEditFlowFixture(fixture) {
-  return Boolean(fixture && fixture.genpageEditPlan && !fixture.genpagePlan);
+  return Boolean(fixture && ((fixture.genpageEditPlan && !fixture.genpagePlan) || noPagesRefusal(fixture)));
+}
+
+// An edit run refused at Edit Phase 1b because the chosen app has no generative pages (fixture.json
+// `"expectedOutcome": "refused", "refusal": { "stage": "edit-pages" }`). It ends before a page is chosen, so it
+// writes no plan of either kind, and refusalProblems grades the stop itself.
+function noPagesRefusal(fixture) {
+  return fixture?.manifest?.expectedOutcome === 'refused' && fixture.manifest.refusal?.stage === 'edit-pages';
+}
+
+// The page listing a run refused at Edit Phase 1b stopped at: its first listing that came back empty (the
+// same stop emptyPageListingProblems grades), else its last listing.
+function stopListing(fixture) {
+  const listings = evidence.commandCalls(fixture, evidence.GENPAGE_LIST);
+  return listings.find((entry) => isEmptyPageListing(resultObject(entry.call))) || listings.at(-1);
 }
 
 function beforePlanningRefusal(fixture) {
@@ -108,6 +136,15 @@ function isUnattendedLog(log) {
     // English is not. Re-adding a prose alternative re-opens the negation problem.
   );
 }
+
+// The unattended plan-approval record (skills/genpage/SKILL.md, unattended table), recognized by its PURPOSE — the words right
+// after the marker — so a semantic default on the same marker never stands in for it:
+//   Unattended default: plan approval → approved (unattended mode; all semantic questions resolved)
+//   - Unattended default: plan approval -> approved, including explicit optional packaging into ContosoPages.
+// Leading whitespace or a list bullet, either arrow (`→`, or the historical `->`), the whole word `approved`, then nothing, a
+// parenthesized reason or a comma tail. Not matched: `Unattended default: A1 / plan-status → Approved (…)` (an answer), a reason
+// that says "approved plan", `plan approval → auto-approve`.
+const PLAN_APPROVAL_RECORD = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?Unattended default:[ \t]*plan approval[ \t]*(?:→|->)[ \t]*approved(?:[ \t]*\(.*\)|,.*)?[ \t]*\.?[ \t]*\r?$/im;
 
 function entitiesNeedCreating(plan) {
   const section = planSection(plan, 'Entity Creation Required');
@@ -155,7 +192,12 @@ const REQUIRED_PLAN_SECTIONS = [
   'Per-Page Specifications',
 ];
 
-const OPTIONAL_PLAN_SECTIONS = new Set(['Solution Packaging']);
+const OPTIONAL_PLAN_SECTIONS = new Set(['Assumptions', 'Dataverse Operations', 'Solution Packaging']);
+
+// The codes of the plan's semantic records (plugins/model-apps/scripts/lib/genpage-plan-semantics.js): a present Assumptions
+// section or per-page Data semantics / Lookup metadata block that the reader refuses. Phase 5a routes them like the page rules —
+// a plan that fails one must not reach the builders.
+const SEMANTIC_CODES = ['invalid-assumptions', 'unknown-assumption', 'missing-semantic-source', 'unmatched-requirement-quote', 'invalid-data-semantics', 'invalid-lookup-metadata'];
 
 const REQUIRED_PER_PAGE_FIELDS = [
   'File',
@@ -298,7 +340,7 @@ function validateEntityCreationSection(sectionText, errors) {
   }
 }
 
-function validateGenpagePlanSchema(plan) {
+function validateGenpagePlanSchema(plan, { requireSemantics = false } = {}) {
   const errors = [];
   if (!plan || typeof plan !== 'string') {
     return [schemaError('missing-plan', 'genpage-plan.md is empty or missing')];
@@ -324,9 +366,18 @@ function validateGenpagePlanSchema(plan) {
   // Solution Packaging is optional and sits between Custom API Bindings and Design Preferences, as in
   // references/plan-schema.md. Split at that point by NAME: an index goes stale the moment a required
   // section is added before it — which is exactly how Custom API Bindings ended up expected after it.
+  // Dataverse Operations is optional too, and sits right after Custom API Bindings, before Solution
+  // Packaging; either is checked for order only when the plan has it, so a plan without them is unchanged.
+  // Assumptions is optional on read (an older plan has none: "not recorded") and sits right after User Requirements, spliced in
+  // by that name too — adding it only to the optional set would not do: the comparable filter keeps only expected titles, so a
+  // misplaced Assumptions would be dropped from the comparison instead of failing it.
   const packagingAt = REQUIRED_PLAN_SECTIONS.indexOf('Design Preferences');
+  const assumptionsAt = REQUIRED_PLAN_SECTIONS.indexOf('User Requirements') + 1;
   const expected = [
-    ...REQUIRED_PLAN_SECTIONS.slice(0, packagingAt),
+    ...REQUIRED_PLAN_SECTIONS.slice(0, assumptionsAt),
+    ...(observed.includes('Assumptions') ? ['Assumptions'] : []),
+    ...REQUIRED_PLAN_SECTIONS.slice(assumptionsAt, packagingAt),
+    ...(observed.includes('Dataverse Operations') ? ['Dataverse Operations'] : []),
     ...(observed.includes('Solution Packaging') ? ['Solution Packaging'] : []),
     ...REQUIRED_PLAN_SECTIONS.slice(packagingAt),
   ];
@@ -373,6 +424,16 @@ function validateGenpagePlanSchema(plan) {
     }
   }
 
+  // Optional: absent is no new built-in authoring. Present, it is the exact sentinel or the catalogue's own table, read by the same rule the
+  // lifecycle evaluator uses (action-binding-union.js) — anything else halts, so an unreadable selection is never read as "none".
+  if (byTitle.has('Dataverse Operations')) {
+    try {
+      plannedBuiltIns(plan);
+    } catch (error) {
+      errors.push(schemaError('invalid-dataverse-operations', `## Dataverse Operations must be the exact sentinel "No Dataverse operations." or the built-in operation table: ${error.message}`, { section: 'Dataverse Operations' }));
+    }
+  }
+
   const samplesSection = byTitle.get('Relevant Samples');
   if (samplesSection && !findMarkdownTable(samplesSection.content, ['Page', 'Sample', 'Reason'])) {
     errors.push(schemaError('missing-samples-table', '## Relevant Samples must contain a table with Page, Sample, and Reason columns', { section: 'Relevant Samples' }));
@@ -408,6 +469,13 @@ function validateGenpagePlanSchema(plan) {
         errors.push(schemaError('extra-page-spec', `per-page subsection "### ${pageName}" has no matching ## Pages row`, { section: 'Per-Page Specifications', page: pageName }));
       }
     }
+  }
+
+  // The semantic records (## Assumptions; per page, #### Data semantics and #### Lookup metadata): validated whenever present, on any
+  // plan — an App Spec projection (`Mode: app-builder`) included, since a mode never waives malformed content — and required of every
+  // page only for a newly authored plan (`requireSemantics`). Absent on an older plan, they are "not recorded" and nothing more.
+  for (const found of writtenSemanticsProblems(plan, { require: requireSemantics })) {
+    errors.push(schemaError(found.code, found.message, { section: found.code === 'invalid-assumptions' ? 'Assumptions' : 'Per-Page Specifications' }));
   }
 
   return errors;
@@ -591,7 +659,11 @@ WORKFLOW_ASSERTIONS.set(
       // plan/approval context dead code: any `Unattended default:` line containing "approved" —
       // e.g. a solution-selection default — satisfied an assertion that claims to check PLAN
       // approval. The documented marker is `Unattended default: plan approval → approved (...)`.
-      if (!/Unattended default:[^\n]*(plan|approval)[^\n]*approved/i.test(log)) {
+      // Its successor (`plan` or `approval` anywhere before `approved`) was still too loose once runs
+      // record semantic defaults on the same marker: `Unattended default: A1 / plan-status → Approved
+      // (…)` answers a question, and a reason such as "planner default; approved plan" explains one.
+      // So the record is recognized by its own purpose, the words right after the marker.
+      if (!PLAN_APPROVAL_RECORD.test(log)) {
         return fail('unattended workflow-log does not record plan approval');
       }
       return pass();
@@ -633,7 +705,7 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST pac model genpage upload for each new page passes --prompt with the FULL page description (from plan\'s ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id, no --add-to-sitemap) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description',
+  'Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST upload (the create) for each new page passes --prompt with the FULL page description (from plan\'s ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -726,18 +798,9 @@ WORKFLOW_ASSERTIONS.set(PACKAGING_ASSERTION, ({ fixture }) => {
   return gradeEvidence(packagingProblems, fixture);
 });
 
-WORKFLOW_ASSERTIONS.set(
-  'Phase 4.6: A populated Custom API plan never discovers, generates or uploads after a disabled or unreadable feature gate',
-  ({ fixture }) => {
-    const body = planSection(fixture.genpagePlan, 'Custom API Bindings');
-    if (!fixture.manifest?.customApi && (!body || body === 'No custom API bindings.')) return skip('no Custom API lifecycle in this workflow');
-    return gradeEvidence(customApiGateProblems, fixture);
-  }
-);
-
 PHASE_EXPECTATIONS.set(
   'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree',
-  ({ fixture }) => gradeEvidence(customApiProblems, fixture)
+  ({ fixture }) => gradeCustomApi(fixture)
 );
 
 PHASE_EXPECTATIONS.set(
@@ -760,9 +823,18 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => gradeEvidence(workerProblems, fixture)
 );
 
+// A refusal is graded whole: its failed gate, the halt, and nothing provisioned or uploaded. A run that went
+// on is graded only when an auth call timed out on the way — it must then have retried once and been
+// authorized by a later ok:true gate (authGateProblems counts the attempts). A run with no timeout at all
+// has nothing for this expectation to grade.
 PHASE_EXPECTATIONS.set(
   'Phase 2a: Auth timeout retries once then halts before provisioning or upload',
-  ({ fixture }) => checkProblems(refusalProblems(fixture))
+  ({ fixture }) => {
+    if (fixture.manifest?.expectedOutcome === 'refused') return checkProblems(refusalProblems(fixture));
+    const timedOut = workflowCalls(fixture).some((call) => isAuth(call.command) && /^(az|pac)_timeout$/.test(resultObject(call)?.blocker || ''));
+    if (!timedOut) return skip('no auth timeout in this scenario');
+    return checkProblems(authGateProblems(fixture, { required: true }));
+  }
 );
 
 PHASE_EXPECTATIONS.set(
@@ -785,12 +857,15 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 1 (Planner): pac model list-tables --search \'account\' is run and results are filtered by exact logical-name match',
+  'Phase 1 (Planner): list-tables.js --search \'account\' --exact is run and the result is matched by exact logical name',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+list-tables/.test(log)) return fail('pac model list-tables not invoked');
+    // scripts/list-tables.js, or `pac model list-tables` in a capture made before it (see LIST_TABLES).
+    if (!evidence.LIST_TABLES.test(log)) return fail('list-tables.js (or pac model list-tables) not invoked');
     if (!/--search/.test(log)) return fail('list-tables invoked without --search');
+    // The script's own `--exact` is what makes the match exact; a pac capture matched by hand (the plan's verdict is graded separately).
+    if (/\blist-tables\.js\b/.test(log) && !/\blist-tables\.js\b[^\n]*--exact\b/.test(log)) return fail('list-tables.js was run without --exact, so its substring matches were not narrowed to the exact logical name');
     return pass();
   }
 );
@@ -838,21 +913,21 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    // Match an actual invocation (generate-types followed by a --flag), not
-    // descriptive prose like "generate-types not run".
-    if (/generate-types\s+--/.test(log)) return fail('generate-types invoked on mock-data eval');
+    // Match an actual invocation (the type generator followed by a --flag), not
+    // descriptive prose like "genpage.js types not run".
+    if (TYPES_RUN.test(log)) return fail('the type generator (genpage.js types) was invoked on a mock-data eval');
     return pass();
   }
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 4: pac model genpage generate-types --data-sources \'account\' --output-file <working-dir>/RuntimeTypes.ts is run',
+  'Phase 4: genpage.js types --data-sources \'account\' --output-file <working-dir>/RuntimeTypes.ts is run',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/generate-types\s+--/.test(log)) return fail('generate-types not invoked');
+    if (!TYPES_RUN.test(log)) return fail('the type generator (genpage.js types) was not invoked');
     if (!/--data-sources\s+['"]?account['"]?/.test(log)) {
-      return fail('generate-types missing --data-sources account');
+      return fail('genpage.js types missing --data-sources account');
     }
     return pass();
   }
@@ -900,7 +975,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap',
+  'Phase 6: the upload (genpage-upload.js) includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -969,9 +1044,17 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// The same check Layer 2 runs on the code (lib/column-contract.js): the column names the pages give their
+// dataApi calls, against the RuntimeTypes.ts the run kept. A trace that kept no RuntimeTypes.ts has no
+// schema to verify them against.
 PHASE_EXPECTATIONS.set(
   'Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names',
-  () => skip('column-name verification needs schema cross-check')
+  ({ fixture }) => {
+    if (!fixture.runtimeTypes) return skip('column-name verification requires RuntimeTypes.ts fixture');
+    const problems = columnProblems(fixture.files || [], fixture.runtimeTypes);
+    if (problems === null) return skip('the pages name no Dataverse column for RuntimeTypes.ts to verify');
+    return resultOf(problems);
+  }
 );
 
 PHASE_EXPECTATIONS.set(
@@ -999,21 +1082,23 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1a: pac model list is run to discover available apps — orchestrator does NOT guess or invent app names',
+  'Edit Phase 1a: apps.js list is run to discover available apps — orchestrator does NOT guess or invent app names',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+list\b/.test(log)) return fail('pac model list not invoked');
+    // scripts/apps.js list, or `pac model list` in a capture made before it (see LIST_APPS).
+    if (!evidence.LIST_APPS.test(log)) return fail('apps.js list (or pac model list) not invoked');
     return pass();
   }
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 2: pac model genpage download produces <working-dir>/<page-id>/ with page.tsx, page.js, config.json, prompt.txt',
+  'Edit Phase 2: genpage.js download produces <working-dir>/<page-id>/ with page.tsx, config.json, prompt.txt',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+download/.test(log)) return fail('pac model genpage download not invoked');
+    // scripts/genpage.js download, or `pac model genpage download` in a capture made before it (see GENPAGE_DOWNLOAD).
+    if (!evidence.GENPAGE_DOWNLOAD.test(log)) return fail('genpage.js download (or pac model genpage download) not invoked');
     return pass();
   }
 );
@@ -1039,7 +1124,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 6: pac model genpage upload uses --page-id flag; omits --add-to-sitemap',
+  'Edit Phase 6: the upload (genpage-upload.js) uses --page-id flag; omits --add-to-sitemap',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -1102,38 +1187,55 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
-PHASE_EXPECTATIONS.set(
-  'Phase 3: pac model create --name \'Account Metrics\' --solution \'<Solution from plan>\' is run; --solution is ALWAYS passed (pac model create errors out without it)',
-  ({ fixture }) => {
-    const log = fixture.workflowLog;
-    if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+create/.test(log)) return fail('pac model create not invoked');
-    if (!/pac\s+model\s+create[^\n]*--solution/.test(log)) return fail('pac model create missing --solution');
-    return pass();
-  }
-);
-
+// The blocker is read from check-auth.js's own result — `{ "ok": false, "blocker": "az_not_logged_in",
+// "message": "Azure CLI is installed but not logged in. Run `az login` with the same identity as your active
+// `pac auth` profile." }` — and from a historical log's `Result: ok=false, blocker=az_not_logged_in` line
+// (workflow-evidence.js historicalResult). A current trace must show the message reaching the user verbatim
+// (the event's `userMessage`); a historical one, the `az login` advice in its log. Halting is nothing that
+// writes or generates after the blocker, and the log saying the run stopped.
 PHASE_EXPECTATIONS.set(
   'Phase 2a: If the script returns blocker:\'az_not_logged_in\', orchestrator surfaces the message (\'Run `az login`...\') to the user and halts (entity-builder is NOT invoked)',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/blocker[:\s]+['"]?az_not_logged_in['"]?/i.test(log)) {
-      return skip('az_not_logged_in blocker not in scenario');
+    const calls = workflowCalls(fixture);
+    const at = calls.findIndex((call) => isAuth(call.command) && resultObject(call)?.blocker === 'az_not_logged_in');
+    if (at === -1) {
+      // A log that names the blocker only in prose, with no result line to read it from.
+      if (!/blocker[:\s]+['"]?az_not_logged_in['"]?/i.test(log)) return skip('az_not_logged_in blocker not in scenario');
+      if (/genpage-entity-builder\s+invoked/i.test(log)) return fail('entity-builder invoked despite az_not_logged_in blocker');
+      if (!/halt|halted|stopped|abort/i.test(log)) return fail('orchestrator did not halt after blocker');
+      return pass();
     }
-    if (/genpage-entity-builder\s+invoked/i.test(log)) {
-      return fail('entity-builder invoked despite az_not_logged_in blocker');
+    const result = resultObject(calls[at]);
+    if (currentContract(fixture)) {
+      if (!/\baz login\b/.test(result.message || '')) return fail('the az_not_logged_in result carries no `az login` advice');
+      if (calls[at].userMessage !== result.message) return fail('the az_not_logged_in message was not surfaced to the user verbatim');
+    } else if (!/\baz login\b/.test(log)) {
+      return fail('the log records no `az login` advice for the az_not_logged_in blocker');
     }
+    if (calls.slice(at + 1).some((call) => isMutation(call) || isGeneration(call.command))) return fail('entity-builder invoked despite az_not_logged_in blocker');
     if (!/halt|halted|stopped|abort/i.test(log)) return fail('orchestrator did not halt after blocker');
     return pass();
   }
 );
 
+// The builder is found among the recorded calls — its dispatch (`Task genpage-entity-builder`) or the
+// provisioning only it runs (BUILDER_CALL) — and the latest check-auth.js result before the first of them must
+// be ok:true. A capture that predates both says "entity-builder invoked" in prose, and is read by position.
 PHASE_EXPECTATIONS.set(
   'Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
+    const calls = workflowCalls(fixture);
+    const builderAt = calls.findIndex((call) => BUILDER_CALL.test(call.command));
+    if (builderAt !== -1) {
+      const gate = calls.slice(0, builderAt).filter((call) => isAuth(call.command)).at(-1);
+      if (!gate) return fail('entity-builder invoked before check-auth.js');
+      if (resultObject(gate)?.ok !== true) return fail('entity-builder invoked although the check-auth.js result before it is not ok:true');
+      return checkProblems(authGateProblems(fixture, { required: true }));
+    }
     const idxCheck = log.search(/check-auth\.js/);
     const idxBuilder = log.search(/genpage-entity-builder\s+invoked|entity-builder\s+invoked/i);
     if (idxBuilder === -1) return skip('entity-builder not invoked');
@@ -1146,8 +1248,7 @@ PHASE_EXPECTATIONS.set(
 // connector discovery for a page with no connector data source, leaving
 // ## Connector Bindings as the exact sentinel. (Connector authoring has no feature
 // flag and is always available, so the thing worth pinning is that it stays OFF THE PATH when
-// the maker asked for mock data — otherwise every mock page pays for a `pac
-// connection list` round trip and risks inventing a binding nobody asked for.)
+// the maker asked for mock data — otherwise every mock page pays for a connection-list round trip and risks inventing a binding nobody asked for.)
 PHASE_EXPECTATIONS.set(
   "Phase 1 (Planner): For a mock-data page, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
   ({ fixture }) => {
@@ -1264,7 +1365,7 @@ PHASE_EXPECTATIONS.set(
     const discovery = discoveryProblems(fixture, { required: true, needsBinding: true });
     if (discovery.length) return checkProblems(discovery);
 
-    // (c) Same bare-array shape as the create path — `pac` wraps it into config.json itself.
+    // (c) Same bare-array shape as the create path — genpage-upload.js wraps it into the page's `connectorBindings` itself.
     //     Asserted POSITIVELY (the recorded content opens with `[{`) rather than by banning the
     //     string `{ "connectorBindings"`: a log line legitimately names the wrapper in order to
     //     contrast with it, and a negative match cannot tell the two apart.
@@ -1374,10 +1475,12 @@ PHASE_EXPECTATIONS.set(
 // RuntimeTypes.ts — through lib/expectation-evidence.js. It SKIPs only where that artifact is not
 // part of the fixture's shape, and names the exact value that disagrees when it fails.
 
+// The app listing and the app create are `scripts/apps.js list` / `apps.js create`; a capture made before them records the `pac model list` / `pac model create` they replaced, and
+// LIST_APPS / CREATE_APP accept both.
 const {
-  csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, generateTypesCalls, uploadCalls,
+  csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, tableAbsent, searchFailed, generateTypesCalls, uploadCalls,
   provisionCalls, legacyProvisionCalls, planPrefix, planSolution, planEntityBlocks, existingEntities, entityLog,
-  createdTableNames, runtimeEnums, choiceEnum, NOT_FOUND, LIST_LANGUAGES, GENPAGE_LIST, GUID_RE, listingRows, conversationSteps,
+  createdTableNames, runtimeEnums, choiceEnum, LIST_LANGUAGES, LIST_APPS, CREATE_APP, GENPAGE_LIST, GUID_RE, listingRows, conversationSteps,
 } = evidence;
 
 const resultOf = (problems) => (problems.length ? fail(problems[0]) : pass());
@@ -1416,19 +1519,21 @@ function entityBuilderInvoked(fixture) {
 
 // An existing table is confirmed by BOTH halves of discovery: a `list-tables --search` that covered
 // it without reporting it absent, and the plan's verdict (listed under Existing Entities, not
-// scheduled for creation). The list-tables wording varies by capture, so the plan is the
+// scheduled for creation). scripts/list-tables.js answers as data (`tables`, `missing`) and tableAbsent
+// reads that; a capture made before it records prose, which tableAbsent matches. The plan is the
 // structured verdict and the search result is only checked for a contradiction.
 function existingEntityProblems(fixture, names) {
   if (!fixture.genpagePlan) return ['no genpage-plan.md'];
   const searches = listTablesSearches(fixture);
-  if (!searches.length) return ['pac model list-tables --search was not run'];
+  if (!searches.length) return ['list-tables --search was not run'];
   const existing = existingEntities(fixture.genpagePlan);
   const planned = planEntityBlocks(fixture.genpagePlan).map((block) => block.suffix);
   const problems = [];
   for (const name of names) {
     const search = searches.find((s) => s.terms.includes(name));
-    if (!search) problems.push(`no pac model list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
-    else if (NOT_FOUND.test(search.text)) problems.push(`list-tables recorded ${name} as not found`);
+    if (!search) problems.push(`no list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
+    else if (searchFailed(search)) problems.push(`list-tables failed, so ${name} was not confirmed to exist`);
+    else if (tableAbsent(search, name)) problems.push(`list-tables recorded ${name} as not found`);
     if (!existing.includes(name)) problems.push(`plan ## Existing Entities does not confirm ${name}`);
     if (planned.includes(suffixOf(name))) problems.push(`plan schedules ${name} for creation although it exists`);
   }
@@ -1438,38 +1543,53 @@ function existingEntityProblems(fixture, names) {
 // The mirror image for a table the run must create. `exact` additionally requires the verdict to
 // rest on an exact logical-name match: a search for `cr_candidate` can return `cr_candidatenote`,
 // and a fuzzy reading of that hit would skip creating a table that does not exist. A search that
-// returned no rows at all cannot have been misread, so it satisfies `exact` on its own.
+// returned no rows at all cannot have been misread, so it satisfies `exact` on its own. For
+// list-tables.js the match is exact when the run passed `--exact` (the table is then named in
+// `missing`) or when `tables` holds no row of that exact logical name, which is how tableAbsent decides.
 function missingEntityProblems(fixture, names, { exact = false } = {}) {
   if (!fixture.genpagePlan) return ['no genpage-plan.md'];
   const searches = listTablesSearches(fixture);
-  if (!searches.length) return ['pac model list-tables --search was not run'];
+  if (!searches.length) return ['list-tables --search was not run'];
   const existing = existingEntities(fixture.genpagePlan);
   const planned = planEntityBlocks(fixture.genpagePlan).map((block) => block.suffix);
   const problems = [];
   for (const name of names) {
     const search = searches.find((s) => s.terms.includes(name) || s.terms.includes(suffixOf(name)));
-    if (!search) problems.push(`no pac model list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
-    else if (!NOT_FOUND.test(search.text)) problems.push(`list-tables result does not record ${name} as absent`);
-    else if (exact && !/\bexact\b/i.test(search.text) && !/\bNo\s+tables?\s+found\b/i.test(search.text)) {
-      problems.push(`list-tables verdict for ${name} does not rest on an exact logical-name match`);
-    }
+    if (!search) problems.push(`no list-tables --search covered ${name} (searched: ${searches.map((s) => listText(s.terms)).join('; ')})`);
+    else if (searchFailed(search)) problems.push(`list-tables failed, so ${name} was not confirmed to be absent`);
+    else if (!tableAbsent(search, name)) problems.push(`list-tables result does not record ${name} as absent`);
+    else if (exact && !exactAbsence(search, name)) problems.push(`list-tables verdict for ${name} does not rest on an exact logical-name match`);
     if (!planned.includes(suffixOf(name))) problems.push(`plan ## Entity Creation Required has no "### ${suffixOf(name)}" block for ${name}`);
     if (existing.includes(name)) problems.push(`plan ## Existing Entities lists ${name} although it must be created`);
   }
   return problems;
 }
 
+// Whether a search that found `name` absent said so on an exact logical-name match. A structured
+// list-tables.js result with `ok: true` is exact when it was asked for `--exact` (the table is in
+// `missing`) and also when it returned no row at all; the substring rows it returned beside the name
+// would otherwise be a fuzzy reading. A prose capture states it ("exact logical-name match: NOT FOUND")
+// or returned nothing ("No tables found").
+function exactAbsence(search, name) {
+  const result = resultObject(search.call);
+  if (result && result.ok === true && Array.isArray(result.tables)) {
+    const missing = Array.isArray(result.missing) ? result.missing.map((m) => String(m).toLowerCase()) : [];
+    return (result.exact === true && missing.includes(String(name).toLowerCase())) || result.tables.length === 0;
+  }
+  return /\bexact\b/i.test(search.text) || /\bNo\s+tables?\s+found\b/i.test(search.text);
+}
+
 function generateTypesProblems(fixture, names, { exact = false } = {}) {
   const calls = generateTypesCalls(fixture);
-  if (!calls.length) return ['pac model genpage generate-types was not run'];
+  if (!calls.length) return ['genpage.js types was not run'];
   if (!names.length) return ['no entity names to generate types for'];
   const covers = (c) => (exact ? sameSet(c.sources, names) : containsAll(c.sources, names));
-  if (!calls.some(covers)) return [`no generate-types run has --data-sources ${listText(names)} (saw ${calls.map((c) => listText(c.sources)).join('; ')})`];
+  if (!calls.some(covers)) return [`no genpage.js types run has --data-sources ${listText(names)} (saw ${calls.map((c) => listText(c.sources)).join('; ')})`];
   return [];
 }
 
-// Every upload of the page must bind the tables: the raw `pac` transport persists exactly the
-// `--data-sources` it is given, so an update that drops one silently unbinds the page.
+// Every upload of the page names the tables it binds: the skill passes the page's `--data-sources`
+// on the create and again on each update, so no upload rebinds the page to a different set.
 function uploadSourcesProblems(fixture, names, { exact = false } = {}) {
   const uploads = uploadCalls(fixture);
   if (!uploads.length) return ['no genpage upload command recorded'];
@@ -1647,7 +1767,7 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 4 ------------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  "Phase 1 (Planner): pac model list-tables --search 'incident,contact' is run; both entities confirmed as existing",
+  "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing",
   ({ fixture }) => resultOf(existingEntityProblems(fixture, ['incident', 'contact']))
 );
 
@@ -1663,7 +1783,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  "Phase 4: pac model genpage generate-types --data-sources 'incident,contact' is run",
+  "Phase 4: genpage.js types --data-sources 'incident,contact' is run",
   ({ fixture }) => resultOf(generateTypesProblems(fixture, ['incident', 'contact'], { exact: true }))
 );
 
@@ -1705,7 +1825,7 @@ PHASE_EXPECTATIONS.set(
   'Phase 4: RuntimeTypes.ts is read — status field enum values are identified for column mapping',
   ({ fixture }) => {
     const calls = generateTypesCalls(fixture);
-    if (!calls.length) return fail('pac model genpage generate-types was not run');
+    if (!calls.length) return fail('genpage.js types was not run');
     // What the log records AFTER the command line, e.g.
     //   - Critical finding: planner's statuscode mapping was incorrect. RuntimeTypes shows:
     //     - `"Not Started" = 2` → To Do column
@@ -1730,7 +1850,7 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 7 ------------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  'Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)',
+  'Phase 1 (Planner): list-tables.js --search --exact confirms cr_candidate and cr_jobrequisition do NOT exist (named in missing — an exact logical-name match, not fuzzy)',
   ({ fixture }) => resultOf(missingEntityProblems(fixture, ['cr_candidate', 'cr_jobrequisition'], { exact: true }))
 );
 
@@ -1880,7 +2000,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 4: pac model genpage generate-types is run with the created entity names',
+  'Phase 4: genpage.js types is run with the created entity names',
   ({ fixture }) => resultOf(generateTypesProblems(fixture, createdTableNames(fixture)))
 );
 
@@ -1918,6 +2038,84 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => checkProblems(authGateProblems(fixture, { required: true }))
 );
 
+// The table is the one the plan creates — `### widget` under the selected publisher's prefix (cnt_widget for
+// a cnt publisher) — or the prompt's own cr_widget, whichever name the planner searched for (suffixOf); the
+// verdict must rest on an exact logical-name match (missingEntityProblems `exact`), so a `cr_widgetpart` row
+// a substring search returns is never read as the table existing.
+PHASE_EXPECTATIONS.set(
+  'Phase 1 (Planner): cr_widget is identified as NOT existing (exact logical-name match, not fuzzy)',
+  ({ fixture }) => {
+    const prefix = planPrefix(fixture.genpagePlan);
+    const names = [...new Set([prefix && `${prefix}_widget`, 'cr_widget'].filter(Boolean))];
+    const verdicts = names.map((name) => missingEntityProblems(fixture, [name], { exact: true }));
+    return resultOf(verdicts.find((problems) => !problems.length) || verdicts[0]);
+  }
+);
+
+// check-auth.js answers a 403 from WhoAmI with the fix when pac is signed in as someone else:
+//   { "ok": false, "blocker": "whoami_403", "pacUser": "maker@contoso.onmicrosoft.com", "identitiesMatch": false,
+//     "message": "WhoAmI returned 403. az is signed in as \"…\" but pac is using \"maker@…\". Run `az login --username maker@…` so both clients use the same identity." }
+// With matching identities there is no such command (the user needs access to the environment instead), so
+// only the verbatim message and the halt are required then. SKILL.md Phase 2a: `ok: false` → show the
+// `message` field verbatim and stop the workflow.
+PHASE_EXPECTATIONS.set(
+  'Phase 2a: If blocker:\'whoami_403\', orchestrator surfaces the message including the specific `az login --username <pacUser>` command and halts',
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    const calls = workflowCalls(fixture);
+    const at = calls.findIndex((call) => isAuth(call.command) && resultObject(call)?.blocker === 'whoami_403');
+    if (at === -1) return skip('whoami_403 blocker not in scenario');
+    const result = resultObject(calls[at]);
+    const strict = currentContract(fixture);
+    if (strict && result.identitiesMatch === false) {
+      if (typeof result.pacUser !== 'string' || !result.pacUser) return fail('the whoami_403 result names no pacUser to sign in as');
+      if (!String(result.message || '').includes(`az login --username ${result.pacUser}`)) return fail(`the whoami_403 message does not name \`az login --username ${result.pacUser}\``);
+    }
+    if (strict && calls[at].userMessage !== result.message) return fail('the whoami_403 message was not surfaced to the user verbatim');
+    if (!strict && !/\baz login --username\b/.test(log)) return fail('the log records no `az login --username` advice for the whoami_403 blocker');
+    if (calls.slice(at + 1).some((call) => isMutation(call) || isGeneration(call.command))) return fail('the run provisioned, generated or uploaded after the whoami_403 blocker');
+    if (!/\bhalt(?:ed)?\b|\bstop(?:ped)?\b/i.test(log)) return fail('the workflow did not halt after the whoami_403 blocker');
+    return pass();
+  }
+);
+
+// check-auth.js answers a working sign-in whose az and pac identities differ with ok:true and a warning, not a
+// blocker (scripts/check-auth.js):
+//   { "ok": true, "blocker": null, "identitiesMatch": false, "azUser": "admin@…", "pacUser": "maker@…",
+//     "message": "Ready, but az (\"admin@…\") and pac (\"maker@…\") use different identities. WhoAmI passed so this
+//                 works for now — but if a later step returns 403, run `az login --username maker@…` to align them." }
+// SKILL.md Phase 2a: proceed to 2b, but surface the `message` to the user as an inline warning. The orchestrator's
+// gate is the one graded (a builder's re-probe logs its warning in the transaction log, which authGateProblems
+// checks): its one-line message must reach the user verbatim, carry the `az login --username <pacUser>` fix, and
+// the run must go on to the entity-builder rather than stop.
+PHASE_EXPECTATIONS.set(
+  'Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning',
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    const calls = workflowCalls(fixture);
+    const at = calls.findIndex((call) => isAuth(call.command) && call.by !== 'genpage-entity-builder'
+      && resultObject(call)?.ok === true && resultObject(call).identitiesMatch === false);
+    if (at === -1) return skip('no ok:true, identitiesMatch:false auth result in this scenario');
+    const result = resultObject(calls[at]);
+    if (currentContract(fixture)) {
+      const warning = typeof result.message === 'string' ? result.message.trim() : '';
+      if (!warning) return fail('the identity-mismatch result carries no warning message');
+      if (calls[at].userMessage !== result.message) return fail('the identity-mismatch warning was not surfaced to the user verbatim');
+      if (/[\r\n]/.test(warning)) return fail('the identity-mismatch warning is not one line');
+      if (typeof result.pacUser === 'string' && result.pacUser && !warning.includes(`az login --username ${result.pacUser}`)) {
+        return fail(`the identity-mismatch warning does not name \`az login --username ${result.pacUser}\``);
+      }
+    } else if (!/\baz login --username\b/.test(log)) {
+      return fail('the log records no identity-mismatch warning naming `az login --username`');
+    }
+    if (fixture.manifest?.expectedOutcome === 'refused') return fail('the run stopped although its only auth finding was a warning-only identity mismatch');
+    if (!calls.slice(at + 1).some((call) => isMutation(call) || isGeneration(call.command))) return fail('the run did not go on past the ok:true, identitiesMatch:false gate');
+    return checkProblems(authGateProblems(fixture, { required: true }));
+  }
+);
+
 // --- Eval 11 -----------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
@@ -1951,8 +2149,10 @@ PHASE_EXPECTATIONS.set(
     if (!fixture.genpagePlan) return fail('no genpage-plan.md');
     // The gate's observable outcome is what is graded: a plan that fails any Phase 5a rule must not
     // reach the builders. The rules are the plan-schema validator's (Pages table, page-file targets,
-    // one matching Per-Page Specifications subsection per row) plus the at-least-one-page rule.
-    const codes = new Set(['missing-pages-table', 'duplicate-page-file', 'invalid-page-file', 'missing-page-spec', 'extra-page-spec', 'page-file-mismatch']);
+    // one matching Per-Page Specifications subsection per row) plus the at-least-one-page rule — and
+    // the plan's semantic records, when it has them: a malformed Assumptions section, a decision whose
+    // source does not resolve, a quote the requirements do not hold or malformed lookup metadata.
+    const codes = new Set(['missing-pages-table', 'duplicate-page-file', 'invalid-page-file', 'missing-page-spec', 'extra-page-spec', 'page-file-mismatch', ...SEMANTIC_CODES]);
     const problems = validateGenpagePlanSchema(fixture.genpagePlan).filter((e) => codes.has(e.code)).map((e) => e.message);
     if (!pageRowsOf(fixture.genpagePlan).length) problems.unshift('plan has no pages');
     if (!problems.length) return pass();
@@ -1962,14 +2162,14 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  "Phase 4: pac model genpage generate-types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated",
+  "Phase 4: genpage.js types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated",
   ({ fixture }) => {
     const calls = generateTypesCalls(fixture);
-    if (calls.length !== 1) return fail(`generate-types ran ${calls.length} time(s), expected once`);
+    if (calls.length !== 1) return fail(`genpage.js types ran ${calls.length} time(s), expected once`);
     const problems = generateTypesProblems(fixture, ['contact', 'appointment'], { exact: true });
     if (problems.length) return fail(problems[0]);
     const output = fileName(calls[0].flags['output-file']);
-    return output === 'RuntimeTypes.ts' ? pass() : fail(`generate-types wrote ${output || 'no --output-file'}, not RuntimeTypes.ts`);
+    return output === 'RuntimeTypes.ts' ? pass() : fail(`genpage.js types wrote ${output || 'no --output-file'}, not RuntimeTypes.ts`);
   }
 );
 
@@ -2019,9 +2219,9 @@ PHASE_EXPECTATIONS.set(
   'Phase 5c: Each builder reads the same RuntimeTypes.ts for column verification',
   ({ fixture }) => {
     const calls = generateTypesCalls(fixture);
-    if (!calls.length) return fail('pac model genpage generate-types was not run');
+    if (!calls.length) return fail('genpage.js types was not run');
     const outputs = new Set(calls.map((c) => String(c.flags['output-file'] || '').replace(/\\/g, '/').toLowerCase()));
-    if (outputs.size !== 1) return fail(`builders could read different schemas: generate-types wrote ${[...outputs].join(', ')}`);
+    if (outputs.size !== 1) return fail(`builders could read different schemas: genpage.js types wrote ${[...outputs].join(', ')}`);
     // Every Dataverse page resolves its types from the one sibling module the run generated.
     const rows = pageRowsOf(fixture.genpagePlan);
     const dataverse = rows.filter((r) => !/mock/i.test(r.entities));
@@ -2054,7 +2254,7 @@ function createUploadProblems(fixture, rows) {
 }
 
 PHASE_EXPECTATIONS.set(
-  'Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file',
+  'Phase 6: All 3 pages are deployed via separate genpage-upload.js create uploads, each with the correct --code-file',
   ({ fixture }) => {
     if (!fixture.genpagePlan) return fail('no genpage-plan.md');
     const rows = pageRowsOf(fixture.genpagePlan);
@@ -2099,7 +2299,7 @@ PHASE_EXPECTATIONS.set(
       if (!u.flags['agent-message'] && !u.flags['agent-message-file']) missing.push('agent-message');
       if (missing.length) return fail(`${u.file}: re-upload lacks --${missing.join(', --')}`);
       if (u.flags['add-to-sitemap']) return fail(`${u.file}: re-upload passes --add-to-sitemap`);
-      // Raw pac persists exactly the data sources it is given, so an update that drops them unbinds.
+      // The Phase 6.5 command repeats the page's data sources, as the create named them; a different set would rebind the page.
       const create = uploads.find((c) => !c.update && c.file === u.file);
       if (create && !sameSet(u.sources, create.sources)) return fail(`${u.file}: re-upload --data-sources ${listText(u.sources)} differs from its create (${listText(create.sources)})`);
       if (isGuid(u.flags['page-id']) && !returned.has(u.flags['page-id'].toLowerCase())) return fail(`${u.file}: --page-id ${u.flags['page-id']} was never returned by an upload`);
@@ -2188,12 +2388,12 @@ PHASE_EXPECTATIONS.set(
 
 // LCIDs in the recorded language-discovery output. Four shapes are captured:
 //   {"ok":true,"baseLanguage":{…},"languages":[{"lcid":1033,"code":"en-US",…},…],…}   (scripts/list-languages.js)
-//   {"ok":false,"error":"…","code":"CONNECTION_ERROR"}   (the same script failing — the planner then runs the next shape)
-//   1033 English (United States) en-US No          (the PAC table: a capture made before that script, or the fallback after it)
+//   {"ok":false,"error":"…","code":"CONNECTION_ERROR"}   (the same script failing: it is the only source, so the planner reports why and stops)
+//   1033 English (United States) en-US No          (the PAC table: a capture made before that script, when `pac model list-languages` was its fallback)
 //   English (United States) (1033, en-US), Arabic (Saudi Arabia) (1025, ar-SA)   (a summary)
 // A result that parses as the script's own JSON is read as data and as nothing else. Its `languages` are the
 // PROVISIONED languages — `baseLanguage`, `unmapped` and `summary` are not extra evidence — and a failure found nothing,
-// whatever its error text says: only the fallback after it can. A contract-2 event's result always parses, and so
+// whatever its error text says. A contract-2 event's result always parses, and so
 // does a log's `Result: {…}` line. Falling through to the text shapes for such a result would read an LCID out of the
 // JSON's own punctuation (`"unmapped":[1036],"summary":["1033 en-US …`) and out of an error message. In the text
 // shapes an LCID counts only next to a language tag, so a version or row count never does.
@@ -2204,10 +2404,19 @@ function detectedLanguages(fixture) {
   const calls = commandCalls(fixture, LIST_LANGUAGES);
   if (!calls.length) return null;
   const found = new Set();
+  let scriptFailed = false;
   for (const { call, text } of calls) {
+    const viaScript = /\blist-languages\.js\b/.test(call.command);
+    // The script is the only source. After it fails the planner reports why and stops, so a `pac model list-languages` that follows a failed
+    // script is the removed fallback, not a way of detecting the languages. (One that comes first is a capture made before the script.)
+    if (!viaScript && scriptFailed) continue;
     const result = resultObject(call);
     if (isLanguagesResult(result)) {
-      if (result.ok) for (const language of result.languages) if (Number.isInteger(language?.lcid)) found.add(language.lcid);
+      if (result.ok) {
+        for (const language of result.languages) if (Number.isInteger(language?.lcid)) found.add(language.lcid);
+      } else if (viaScript) {
+        scriptFailed = true;
+      }
       continue;
     }
     for (const m of text.matchAll(/\b(\d{4,5})\b[^\n]{0,60}?\b[a-z]{2,3}-[A-Z]{2,4}\b/g)) found.add(Number(m[1]));
@@ -2219,7 +2428,7 @@ PHASE_EXPECTATIONS.set(
   'Phase 1 (Planner): language discovery output includes Arabic (1025) and French (1036) in addition to English',
   ({ fixture }) => {
     const lcids = detectedLanguages(fixture);
-    if (lcids === null) return fail('language discovery was not run (scripts/list-languages.js, or pac model list-languages as its fallback)');
+    if (lcids === null) return fail('language discovery was not run (scripts/list-languages.js)');
     const missing = [1033, 1025, 1036].filter((id) => !lcids.includes(id));
     return missing.length ? fail(`recorded language-discovery output lacks LCID ${missing.join(', ')} (saw ${listText(lcids)})`) : pass();
   }
@@ -2231,9 +2440,9 @@ PHASE_EXPECTATIONS.set(
     if (!fixture.genpagePlan) return fail('no genpage-plan.md');
     const lcids = detectedLanguages(fixture);
     if (lcids === null) return fail('language discovery was not run, so no languages were detected');
-    // A script that failed and no fallback after it: the discovery ran and read nothing, so a Localization section has
+    // A script that failed ends language detection: the discovery ran and read nothing, so a Localization section has
     // no detected language to be listing — it would otherwise pass for want of anything to compare.
-    if (lcids.length === 0) return fail('language discovery detected no languages (a failed read with no pac fallback after it), so the plan has none to list');
+    if (lcids.length === 0) return fail('language discovery detected no languages (the read failed, and nothing else is read in its place), so the plan has none to list');
     const section = headingSection(fixture.genpagePlan, /^#{2,3}\s+Localization\s*$/i);
     if (section === null) return fail('plan has no Localization section');
     const missing = lcids.filter((id) => !new RegExp(`\\b${id}\\b`).test(section));
@@ -2244,7 +2453,7 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 15 -----------------------------------------------------------------------------------
 
 // A choice column as Dataverse holds it after provisioning, read from the RuntimeTypes.ts that
-// generate-types wrote from the live schema — the plan and the input JSON only say what was asked.
+// the type generator wrote from the live schema — the plan and the input JSON only say what was asked.
 function picklistResult(fixture, tableSuffix, columnSuffix, { labels = null, count }) {
   if (!fixture.runtimeTypes) return skip('RuntimeTypes.ts was not captured');
   const found = choiceEnum(fixture.runtimeTypes, tableSuffix, columnSuffix);
@@ -2321,6 +2530,54 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => picklistResult(fixture, 'ticket', 'status', { count: 4 })
 );
 
+// What the entity-builder handed provision-entities.js for the two choice columns (agents/genpage-entity-builder.md Step 4): each option
+// is its label — a string, or a map of LCID to label — in the plan's order, and that order is what numbers it 100000000 + index. An option
+// written as a {"label", "value"} object is refused by the plugin's own gate ("'label' is not an LCID"), so the gate is asked rather than
+// its rule repeated here. Only the captured input JSON shows how the options were written: a capture made without it is skipped, a
+// current fixture without it fails. Provisioned means APPLIED: without --apply the CLI only plans, writes nothing and answers
+//   { "ok": true, "dryRun": true, "plan": [ … ] }
+// so the inputs graded are the ones the applying runs were handed, each of them — never a preview's.
+PHASE_EXPECTATIONS.set(
+  "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; each picklist option is written as its label, in the plan's order (numbered 100000000 + index)",
+  ({ fixture }) => {
+    const calls = provisionCalls(fixture).filter((c) => typeof c.flags.input === 'string');
+    if (!calls.length) return fail('provision-entities.js was not run with --input <json>');
+    if (calls.some((c) => !c.call.historical && resultObject(c.call)?.ok !== true)) return fail('a provision-entities.js run did not return ok:true');
+    const applied = calls.filter((c) => c.flags.apply === true && resultObject(c.call)?.dryRun !== true);
+    if (!applied.length) return fail('provision-entities.js was not run with --input <json> --apply');
+    const inputs = [];
+    for (const run of applied) {
+      const name = provisionInputName(run);
+      const input = provisionInput(fixture, run);
+      if (input === null) return currentContract(fixture) ? fail(`${name} was not captured`) : skip(`${name} was not captured`);
+      if (input === undefined) return fail(`${name} is not JSON`);
+      const gate = validateProvisionInput(input);
+      if (!gate.ok) return fail(`provision-entities.js refuses the captured input: ${gate.errors[0]}`);
+      inputs.push(input);
+    }
+    const tickets = inputs.map((input) => (input.entities || []).find((e) => schemaSuffix(e.schemaName) === 'ticket')).filter(Boolean);
+    if (!tickets.length) return fail('provision-input.json does not declare ticket');
+    const block = planEntityBlocks(fixture.genpagePlan).find((b) => b.suffix === 'ticket');
+    // A string option is its label; a language map holds it under one of its languages.
+    const isLabel = (option, label) => (typeof option === 'string' ? option.trim() === label : Object.values(option || {}).some((text) => String(text).trim() === label));
+    for (const ticket of tickets) {
+      for (const name of ['priority', 'status']) {
+        const column = (ticket.columns || []).find((c) => schemaSuffix(c.schemaName) === name);
+        if (!column) return fail(`provision-input.json declares no ticket ${name} column`);
+        if (column.type !== 'Choice') return fail(`ticket ${name} is ${column.type === undefined ? 'untyped' : column.type}, not a Choice column`);
+        const planned = block && block.choices.find((c) => c.suffix === name);
+        if (!planned || !planned.options.length) return fail(`the plan lists no ${name} options to number the input's by`);
+        const labels = [...planned.options].sort((a, b) => a.value - b.value).map((o) => o.label);
+        const options = Array.isArray(column.options) ? column.options : [];
+        if (options.length !== labels.length || options.some((option, i) => !isLabel(option, labels[i]))) {
+          return fail(`ticket ${name} options are ${options.map((o) => JSON.stringify(o)).join(', ')}, but the plan numbers ${labels.join(', ')} from 100000000 in that order`);
+        }
+      }
+    }
+    return pass();
+  }
+);
+
 PHASE_EXPECTATIONS.set(
   'Phase 2b (Entity Builder): Solution is specified via provision-entities.js input JSON; verified through ## Environment → Solution: declaration',
   ({ fixture }) => {
@@ -2356,7 +2613,7 @@ PHASE_EXPECTATIONS.set(
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 4: pac model genpage generate-types picks up the enum registrations',
+  'Phase 4: genpage.js types picks up the enum registrations',
   ({ fixture }) => {
     const problems = generateTypesProblems(fixture, createdTableNames(fixture));
     if (problems.length) return fail(problems[0]);
@@ -2379,29 +2636,40 @@ PHASE_EXPECTATIONS.set(
 // --- Eval 19 -----------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names',
+  'Edit Phase 1b: After app selection, genpage.js list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names',
   ({ fixture }) => {
     if (!fixture.workflowLog) return fail('no workflow-log.md');
     const calls = workflowCalls(fixture);
     const at = (pattern) => calls.findIndex((c) => pattern.test(c.command));
-    const download = commandCalls(fixture, /\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+download\b/)[0];
-    if (!download) return fail('pac model genpage download was not run, so no page was selected');
+    // commandCalls re-reads the log, so locate its calls in `calls` by their recorded command text.
+    const positionOf = (entry) => calls.findIndex((c) => c.command === entry.call.command);
+    const download = commandCalls(fixture, evidence.GENPAGE_DOWNLOAD)[0];
+    if (!download) {
+      if (!noPagesRefusal(fixture)) return fail('genpage.js download was not run, so no page was selected');
+      // The run stopped at an empty listing (the app has no pages), so that listing is what is graded: it must
+      // be of an app the apps.js list output returned, run after that discovery.
+      const list = stopListing(fixture);
+      if (!list) return fail('genpage.js list --app-id <selected> was not run');
+      const listedApp = String(list.flags['app-id'] || '').toLowerCase();
+      const apps = commandCalls(fixture, LIST_APPS).at(-1);
+      if (!apps || positionOf(apps) > positionOf(list)) return fail('pages were listed before the app was discovered with apps.js list');
+      if (!listedApp || !listingRows(apps.call).some((r) => r.id === listedApp)) return fail(`genpage.js list ran for app ${listedApp || '(none)'}, which apps.js list did not return`);
+      return pass();
+    }
     const app = String(download.flags['app-id'] || '').toLowerCase();
     const page = String(download.flags['page-id'] || '').toLowerCase();
     const lists = commandCalls(fixture, GENPAGE_LIST).filter((c) => String(c.flags['app-id'] || '').toLowerCase() === app);
-    if (!lists.length) return fail(`pac model genpage list --app-id ${app || '<selected>'} was not run`);
+    if (!lists.length) return fail(`genpage.js list --app-id ${app || '<selected>'} was not run`);
     // The edited page must come from that listing's recorded output, not from a guess. The call's
     // text also carries the selection that followed it (`- User selected "Seattle Weather"
     // (\`bb22…\`)`), which restates the id and so cannot count as the listing:
-    //   - `pac model genpage list --app-id aa11…` → 2 pages found:
+    //   - `genpage.js list --app-id aa11…` → 2 pages found:   (`pac model genpage list --app-id aa11…` in a capture made before the script)
     //     - Seattle Weather — `bb223344-2233-2233-2233-bbccddee2345`
     const listed = (c) => c.text.split(/\r?\n/).some((line) => !/\bselect/i.test(line) && line.toLowerCase().includes(page));
     if (!page || !lists.some(listed)) return fail(`page ${page || '(none)'} does not appear in the recorded genpage list output`);
-    const appsAt = at(/\bpac(?:\.exe|\.cmd)?\s+model\s+list(?![\w-])/);
-    // commandCalls re-reads the log, so locate its calls in `calls` by their recorded command text.
-    const positionOf = (entry) => calls.findIndex((c) => c.command === entry.call.command);
+    const appsAt = at(LIST_APPS);
     const listAt = positionOf(lists[0]);
-    if (appsAt === -1 || appsAt > listAt) return fail('pages were listed before the app was discovered with pac model list');
+    if (appsAt === -1 || appsAt > listAt) return fail('pages were listed before the app was discovered with apps.js list');
     if (listAt > positionOf(download)) return fail('the page was downloaded before pages were listed');
     return pass();
   }
@@ -2436,9 +2704,7 @@ PHASE_EXPECTATIONS.set(
 // plan presentations) in workflow-log.md, so checks read commands through workflowCalls/commandCalls
 // and the conversation through conversationSteps or the log lines.
 
-const PAC_MODEL_LIST = /\bpac(?:\.exe|\.cmd)?\s+model\s+list(?![\w-])/;
-const PAC_MODEL_CREATE = /\bpac(?:\.exe|\.cmd)?\s+model\s+create\b/;
-const GENPAGE_DOWNLOAD = /\bpac(?:\.exe|\.cmd)?\s+model\s+genpage\s+download\b/;
+const GENPAGE_DOWNLOAD = evidence.GENPAGE_DOWNLOAD;
 const PAGE_FILES_GATE = /\bcheck-page-files\.js\b/;
 const WORKER_STAMP = /\bgenpage-worker-output\.js\b[^\n]*--stamp\b/;
 const PAGE_BUILDER = /\b(?:Task|Dispatched)\s+genpage-page-builder\b/;
@@ -2464,14 +2730,14 @@ function answerOf(step) {
   return arrow ? arrow[1].trim() : null;
 }
 
-// The app and page the edit flow actually downloaded (`pac model genpage download --app-id --page-id`).
+// The app and page the edit flow actually downloaded (`genpage.js download --app-id --page-id`, or `pac model genpage download` in a capture made before the script).
 function downloadTarget(fixture) {
   const entry = commandCalls(fixture, GENPAGE_DOWNLOAD)[0];
   if (!entry) return null;
   return { entry, app: String(entry.flags['app-id'] || '').toLowerCase(), page: String(entry.flags['page-id'] || '').toLowerCase() };
 }
 
-// The question that follows a PAC listing must offer the listing's own rows — each offered GUID is
+// The question that follows an app or page listing must offer the listing's own rows — each offered GUID is
 // one the listing returned, shown with the name the listing gave it — and the item the run went on
 // with must be one of them. A log may record only the option the maker picked, so the check grades
 // what was offered and chosen, not whether every listed row appeared.
@@ -2506,11 +2772,14 @@ function planLookupProblems(plan, child, parent) {
     : [`${child} has no lookup relationship to ${parent}`];
 }
 
-// provision-input.json, when captured: the App Spec the entity-builder handed provision-entities.js.
-function provisionInput(fixture) {
-  const entry = provisionCalls(fixture).find((c) => typeof c.flags.input === 'string');
-  const name = entry ? fileName(String(entry.flags.input).replace(/^@/, '')) : 'provision-input.json';
-  const text = artifactOrNull(fixture, name);
+// The file name of the input JSON a provision-entities.js run was handed: `--input @D:/temp/support-tickets/provision-input.json` →
+// provision-input.json (no run: the name the entity-builder writes).
+const provisionInputName = (entry) => (entry ? fileName(String(entry.flags.input).replace(/^@/, '')) : 'provision-input.json');
+
+// provision-input.json, when captured: the App Spec the entity-builder handed provision-entities.js — the input of `entry` (a
+// provisionCalls entry), by default of the first run that names one.
+function provisionInput(fixture, entry = provisionCalls(fixture).find((c) => typeof c.flags.input === 'string')) {
+  const text = artifactOrNull(fixture, provisionInputName(entry));
   if (text === null) return null;
   try { return JSON.parse(text.replace(/^\uFEFF/, '')); } catch { return undefined; }
 }
@@ -2554,12 +2823,15 @@ const pageFilesOf = (plan) => pageRowsOf(plan).map((r) => r.file);
 // --- Eval 3 ------------------------------------------------------------------------------------
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual Display Name and app-id GUID from pac model list output',
-  ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: PAC_MODEL_LIST, noun: 'app', selected: downloadTarget(fixture)?.app }))
+  'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output',
+  // The app the run went on with: the one it downloaded from, or — for a run that stopped because that app
+  // listed no pages — the one whose empty listing it stopped at.
+  ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: LIST_APPS, noun: 'app',
+    selected: downloadTarget(fixture)?.app ?? (String(stopListing(fixture)?.flags['app-id'] || '').toLowerCase() || undefined) }))
 );
 
 PHASE_EXPECTATIONS.set(
-  'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output',
+  'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from genpage.js list output',
   ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: GENPAGE_LIST, noun: 'page', selected: downloadTarget(fixture)?.page }))
 );
 
@@ -2567,7 +2839,7 @@ PHASE_EXPECTATIONS.set(
   'Edit Phase 1c: Selection is restated to the user before proceeding to download',
   ({ fixture }) => {
     const target = downloadTarget(fixture);
-    if (!target) return fail('pac model genpage download was not run, so nothing was selected');
+    if (!target) return fail('genpage.js download was not run, so nothing was selected');
     // e.g. `- "Editing **Contacts Directory** (2222…) in app **Sales Hub** (1111…). Continuing to download…"`
     // — a statement (not a question) naming both selected ids, after the page was chosen and before
     // the download command.
@@ -2586,7 +2858,7 @@ PHASE_EXPECTATIONS.set(
   "Edit Phase 3: config.json is read; since dataSources contains 'contact', RuntimeTypes.ts is generated",
   ({ fixture }) => {
     const target = downloadTarget(fixture);
-    if (!target) return fail('pac model genpage download was not run');
+    if (!target) return fail('genpage.js download was not run');
     const configText = artifactOrNull(fixture, 'before/config.json');
     if (configText === null) return skip('the downloaded config.json was not captured');
     let config;
@@ -2596,9 +2868,9 @@ PHASE_EXPECTATIONS.set(
     if (!/\bconfig\.json\b/.test(headingSection(fixture.workflowLog, /^#{2,3}\s+Edit Phase 3\b/i) || '')) return fail('Edit Phase 3 does not record reading config.json');
     const types = generateTypesCalls(fixture);
     const run = types.find((c) => sameSet(c.sources, sources));
-    if (!run) return fail(`generate-types was not run with config.json's dataSources ${listText(sources)} (saw ${types.map((c) => listText(c.sources)).join('; ') || 'none'})`);
-    if (callIndex(fixture, run) < callIndex(fixture, target.entry)) return fail('generate-types ran before the page was downloaded');
-    return fileName(run.flags['output-file']) === 'RuntimeTypes.ts' ? pass() : fail('generate-types did not write RuntimeTypes.ts');
+    if (!run) return fail(`genpage.js types was not run with config.json's dataSources ${listText(sources)} (saw ${types.map((c) => listText(c.sources)).join('; ') || 'none'})`);
+    if (callIndex(fixture, run) < callIndex(fixture, target.entry)) return fail('genpage.js types ran before the page was downloaded');
+    return fileName(run.flags['output-file']) === 'RuntimeTypes.ts' ? pass() : fail('genpage.js types did not write RuntimeTypes.ts');
   }
 );
 
@@ -2608,7 +2880,7 @@ PHASE_EXPECTATIONS.set(
     const plan = fixture.genpageEditPlan;
     if (!plan) return fail('no genpage-edit-plan.md');
     const target = downloadTarget(fixture);
-    if (!target) return fail('pac model genpage download was not run');
+    if (!target) return fail('genpage.js download was not run');
     const prompt = artifactOrNull(fixture, 'before/prompt.txt');
     const configText = artifactOrNull(fixture, 'before/config.json');
     if (prompt === null || configText === null) return skip('the downloaded <page-id>/ snapshot was not captured');
@@ -2684,32 +2956,47 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// What the approved edit plan promised to keep, checked against the page the run downloaded and the
+// page it uploaded (lib/preservation-contract.js): every identifier a Preservation Constraint quotes
+// in a code span and the downloaded page uses must still be used after the edit.
+PHASE_EXPECTATIONS.set(
+  'Edit Phase 5: Existing functionality is preserved per the edit plan\'s Preservation Constraints',
+  ({ fixture }) => {
+    const problems = preservationProblems(fixture);
+    return Array.isArray(problems) ? resultOf(problems) : skip(problems.skip);
+  }
+);
+
 // --- Eval 8 ------------------------------------------------------------------------------------
 
 function returnedAppId(entry) {
   const result = entry.call.historical ? null : resultObject(entry.call);
-  const id = result?.appId || GUID_RE.exec(entry.text.split(/\r?\n/).slice(1).join('\n'))?.[0];
+  // apps.js create prints `appId` beside the sitemap and page ids, so a structured result is read by that field alone; only a log's prose falls back to the first GUID in it.
+  const id = result ? result.appId : GUID_RE.exec(entry.text.split(/\r?\n/).slice(1).join('\n'))?.[0];
   return id ? String(id).toLowerCase() : null;
 }
 
 PHASE_EXPECTATIONS.set(
-  'Phase 1 (Planner): pac model list returns zero apps',
+  'Phase 1 (Planner): apps.js list returns zero apps',
   ({ fixture }) => {
-    const entry = commandCalls(fixture, PAC_MODEL_LIST)[0];
-    if (!entry) return fail('pac model list was not run');
+    const entry = commandCalls(fixture, LIST_APPS)[0];
+    if (!entry) return fail('apps.js list (or pac model list) was not run');
+    const result = entry.call.historical ? null : resultObject(entry.call);
+    // apps.js list says it as data: { "ok": true, "count": 0, "apps": [] }. A failed listing is { "ok": false, … } and is not an empty one.
+    if (result && result.ok === false) return fail(`apps.js list failed: ${result.error || result.code || 'no reason given'}`);
     const rows = listingRows(entry.call);
-    if (rows.length) return fail(`pac model list returned ${rows.length} app(s)`);
+    if (rows.length) return fail(`apps.js list returned ${rows.length} app(s)`);
     // Zero rows must be STATED, so an unparsed listing is never mistaken for an empty one:
-    //   {"apps":[]}   /   → no model-driven apps found (0 apps returned)
-    return /"apps"\s*:\s*\[\s*\]|\bno model-driven apps\b|\b0 apps\b/i.test(entry.text) ? pass() : fail('pac model list result does not record zero apps');
+    //   {"ok":true,"count":0,"apps":[]}   /   {"apps":[]} (an older capture)   /   → no model-driven apps found (0 apps returned)
+    return /"apps"\s*:\s*\[\s*\]|\bno model-driven apps\b|\b0 apps\b/i.test(entry.text) ? pass() : fail('apps.js list result does not record zero apps');
   }
 );
 
 // The create-or-cancel question asked after an empty app listing, with its recorded answer.
 function createAppDecision(fixture) {
   const steps = conversationSteps(fixture);
-  const listedAt = steps.findIndex((s) => PAC_MODEL_LIST.test(s));
-  if (listedAt === -1) return { problem: 'pac model list was not run' };
+  const listedAt = steps.findIndex((s) => LIST_APPS.test(s));
+  if (listedAt === -1) return { problem: 'apps.js list was not run' };
   const question = steps.slice(listedAt + 1).find((s) => /AskUserQuestion/.test(s) && /\bcreate\b/i.test(s) && /\bcancel\b/i.test(s));
   if (!question) return { problem: 'no AskUserQuestion offered to create a new app or cancel after the app listing' };
   const answer = answerOf(question);
@@ -2748,35 +3035,79 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// A new app is built around its first page (SKILL.md Phase 6, "A new app: the first page, then the app, then the rest"):
+//   1. genpage-upload.js with no --app-id creates the first page,
+//   2. apps.js create --name … --solution … --page-id <that page> --publish makes the app and prints its appId — and pins the page's tables into it itself,
+//   3. every page after it carries --app-id <appId> (a create adds --add-to-sitemap); a one-page app has none.
+// Only the script is accepted here: `pac model create` is the command it replaced, and a run that still ran it did not follow the skill. The script is read the way CREATE_APP reads it, its flags
+// before its verb or after.
+const isAppsCreate = (entry) => CREATE_APP.script(entry.call.command);
+
+function newAppRun(fixture) {
+  const create = commandCalls(fixture, CREATE_APP)[0];
+  if (!create) return { problem: 'apps.js create was not run' };
+  if (!isAppsCreate(create)) return { problem: 'the app was made with `pac model create`, not apps.js create' };
+  const result = create.call.historical ? null : resultObject(create.call);
+  if (result && result.ok !== true) return { problem: `apps.js create did not succeed: ${result.error || result.code || 'ok is not true'}` };
+  const appId = returnedAppId(create);
+  if (!appId) return { problem: 'apps.js create recorded no returned appId' };
+  const uploads = uploadCalls(fixture);
+  return { create, appId, uploads, createAt: callIndex(fixture, create), first: uploads.find((u) => !u.update) || null };
+}
+
 PHASE_EXPECTATIONS.set(
-  'Phase 3: The new app-id returned from pac model create is stored for Phase 6',
+  "Phase 6 (new app): apps.js create --name 'Account Metrics' --solution '<Solution from plan>' --page-id <first page> --publish is run after the first page's upload; --solution is ALWAYS passed (apps.js create refuses a call without it)",
   ({ fixture }) => {
-    const create = commandCalls(fixture, PAC_MODEL_CREATE)[0];
-    if (!create) return fail('pac model create was not run');
+    const run = newAppRun(fixture);
+    if (run.problem) return fail(run.problem);
+    const { create, first } = run;
+    for (const flag of ['name', 'solution']) {
+      if (typeof create.flags[flag] !== 'string' || !create.flags[flag].trim()) return fail(`apps.js create is missing --${flag}`);
+    }
     const solution = planSolution(fixture.genpagePlan);
-    if (create.flags.solution !== solution) return fail(`pac model create --solution ${create.flags.solution || 'missing'} is not the plan's Solution: ${solution}`);
-    const appId = returnedAppId(create);
-    if (!appId) return fail('pac model create recorded no returned app-id');
-    const upload = uploadCalls(fixture)[0];
-    if (!upload) return fail('no upload consumed the stored app-id');
-    if (callIndex(fixture, upload) < callIndex(fixture, create)) return fail('the first upload ran before the app was created');
-    const used = String(upload.flags['app-id'] || '').toLowerCase();
-    return used === appId ? pass() : fail(`the first upload used --app-id ${used || 'missing'}, not the created ${appId}`);
+    if (solution && create.flags.solution !== solution) return fail(`apps.js create --solution ${create.flags.solution} is not the plan's Solution: ${solution}`);
+    const planned = /^\s*[-*]?\s*App:\s*create new:\s*(.+?)\s*$/im.exec(planSection(fixture.genpagePlan, 'Environment') || '')?.[1];
+    if (planned && create.flags.name !== planned) return fail(`apps.js create --name ${create.flags.name} is not the app the plan names: ${planned}`);
+    // Without --publish the app stays in draft, and the page's runtime URL errors with "app not published".
+    if (create.flags.publish !== true) return fail('apps.js create has no --publish, so the new app is left in draft');
+    // The app opens on a page that exists: the first page's upload runs first and its pageId is the --page-id.
+    if (!first) return fail('no first page was uploaded (a create with no --app-id) for the app to be built from');
+    if (callIndex(fixture, first) > run.createAt) return fail('apps.js create ran before the first page was uploaded; it needs that page');
+    const pageId = String(create.flags['page-id'] || '').toLowerCase();
+    if (!isGuid(pageId)) return fail('apps.js create has no --page-id');
+    const created = first.call.historical ? null : resultObject(first.call)?.pageId;
+    if (created && pageId !== String(created).toLowerCase()) return fail(`apps.js create --page-id ${pageId} is not the page the first upload created (${created})`);
+    return pass();
   }
 );
 
 PHASE_EXPECTATIONS.set(
-  'Phase 6: Upload uses the newly created app-id',
+  'Phase 6 (new app): The first page is created with no --app-id and no --add-to-sitemap, before the app exists',
   ({ fixture }) => {
-    const create = commandCalls(fixture, PAC_MODEL_CREATE)[0];
-    if (!create) return fail('pac model create was not run');
-    const appId = returnedAppId(create);
-    if (!appId) return fail('pac model create recorded no returned app-id');
-    const uploads = uploadCalls(fixture);
-    if (!uploads.length) return fail('no genpage upload command recorded');
-    const other = uploads.find((u) => String(u.flags['app-id'] || '').toLowerCase() !== appId);
+    const run = newAppRun(fixture);
+    if (run.problem) return fail(run.problem);
+    const { first } = run;
+    if (!first) return fail('no first page was uploaded');
+    if (callIndex(fixture, first) > run.createAt) return fail('the first page was uploaded after the app was created');
+    // There is no app yet to name or to place the page in.
+    if (first.flags['app-id']) return fail(`the first page's upload passed --app-id ${first.flags['app-id']}, but the app did not exist yet`);
+    if (first.flags['add-to-sitemap']) return fail("the first page's upload passed --add-to-sitemap, but there was no app to add it to");
+    return pass();
+  }
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 6: Every upload after the app is created uses the newly created app-id',
+  ({ fixture }) => {
+    const run = newAppRun(fixture);
+    if (run.problem) return fail(run.problem);
+    const { uploads, appId } = run;
+    const later = uploads.filter((u) => callIndex(fixture, u) > run.createAt);
+    // apps.js create pins the first page's tables into the app itself, so an app of one page is complete with it and has no upload to make after it: "every upload after" holds of none.
+    if (!later.length) return pass();
+    const other = later.find((u) => String(u.flags['app-id'] || '').toLowerCase() !== appId);
     if (other) return fail(`${other.file || 'upload'}: --app-id ${other.flags['app-id'] || 'missing'} is not the created app ${appId}`);
-    const result = uploads.map((u) => (u.call.historical ? null : resultObject(u.call))).find((r) => r?.appId && String(r.appId).toLowerCase() !== appId);
+    const result = later.map((u) => (u.call.historical ? null : resultObject(u.call))).find((r) => r?.appId && String(r.appId).toLowerCase() !== appId);
     return result ? fail(`upload result names app ${result.appId}, not the created ${appId}`) : pass();
   }
 );
@@ -2841,6 +3172,49 @@ PHASE_EXPECTATIONS.set(
     if (seeded.some((c) => !c.call.historical && resultObject(c.call)?.ok !== true)) return fail('the --sample-data run did not return ok:true');
     const input = provisionInput(fixture);
     if (input && !Object.values(input.sampleData || {}).some((rows) => Array.isArray(rows) && rows.length)) return fail('provision-input.json carries no sampleData rows');
+    return pass();
+  }
+);
+
+// "Realistic values (not lorem ipsum)", decided from the rows provision-entities.js was handed: the
+// `sampleData` of the captured input JSON, e.g.
+//   "sampleData": { "cr_Project": [ { "cr_name": "Contoso Website Redesign", "cr_manager": "Avery Chen", … } ] }
+// A text value is filler when it is lorem-ipsum Latin, a placeholder word on its own ("test", "sample",
+// "foo", "TBD", "N/A", "xxx", optionally numbered) or the table's own name numbered ("Project 1",
+// "Milestone #3"); and a table whose rows repeat one primary name holds copies, not records. Keys that
+// start with `$` (the `$parent` reference) are not values. That is the line the expectation draws; whether a
+// value is plausible for its column beyond it is left to a person (Layer 3).
+const LOREM_IPSUM = /\b(?:lorem|ipsum|dolor\s+sit|consectetur|adipiscing|eiusmod|incididunt)\b/i;
+const PLACEHOLDER_VALUE = /^\s*(?:test(?:ing)?|sample|dummy|placeholder|example|foo|bar|baz|qux|asdf|qwerty|x{2,}|abc|string|text|value|tbd|todo|n\/a|none|null|undefined)(?:[\s_#-]*\d+)?\s*$/i;
+
+PHASE_EXPECTATIONS.set(
+  'Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js; realistic values (not lorem ipsum)',
+  ({ fixture }) => {
+    const seeded = provisionCalls(fixture).filter((c) => c.flags['sample-data'] === true);
+    if (!seeded.length) return fail('no provision-entities.js --sample-data run');
+    if (!seeded.some((c) => typeof c.flags.input === 'string')) return fail('sample data was not passed through an --input <json>');
+    if (seeded.some((c) => !c.call.historical && resultObject(c.call)?.ok !== true)) return fail('the --sample-data run did not return ok:true');
+    const input = provisionInput(fixture);
+    if (input === null) return currentContract(fixture) ? fail('provision-input.json was not captured') : skip('provision-input.json was not captured');
+    if (input === undefined) return fail('provision-input.json is not JSON');
+    const tables = Object.entries(input.sampleData || {}).filter(([, rows]) => Array.isArray(rows) && rows.length);
+    if (!tables.length) return fail('provision-input.json carries no sampleData rows');
+    for (const [table, rows] of tables) {
+      const entity = (input.entities || []).find((e) => String(e.schemaName || '').toLowerCase() === table.toLowerCase());
+      const ownNames = [entity?.displayName, schemaSuffix(table)].filter((name) => typeof name === 'string' && name);
+      const numberedName = new RegExp(`^\\s*(?:${ownNames.map(escapeRe).join('|')})\\s*#?\\s*\\d+\\s*$`, 'i');
+      for (const [i, row] of rows.entries()) {
+        for (const [column, value] of Object.entries(row || {})) {
+          if (column.startsWith('$') || typeof value !== 'string') continue;
+          if (LOREM_IPSUM.test(value)) return fail(`${table} row ${i + 1} ${column} is lorem ipsum: "${value}"`);
+          if (PLACEHOLDER_VALUE.test(value) || numberedName.test(value)) return fail(`${table} row ${i + 1} ${column} is a placeholder, not a realistic value: "${value}"`);
+        }
+      }
+      const primary = String(entity?.primaryAttribute?.schemaName || '').toLowerCase();
+      const names = primary ? rows.map((row) => Object.entries(row || {}).find(([key]) => key.toLowerCase() === primary)?.[1]).filter((v) => typeof v === 'string') : [];
+      const repeated = names.find((name, i) => names.indexOf(name) !== i);
+      if (repeated !== undefined) return fail(`${table} rows repeat the name "${repeated}"`);
+    }
     return pass();
   }
 );
@@ -3198,12 +3572,324 @@ PHASE_EXPECTATIONS.set(
     const existing = existingEntities(fixture.genpagePlan);
     if (!existing.includes('account')) return fail(`## Existing Entities lists ${listText(existing)}, not account`);
     const calls = generateTypesCalls(fixture);
-    if (!calls.length) return fail('pac model genpage generate-types was not run');
+    if (!calls.length) return fail('genpage.js types was not run');
     const unlisted = calls.flatMap((c) => c.sources).filter((s) => !existing.includes(s));
-    if (unlisted.length) return fail(`generate-types used ${unlisted.join(', ')}, which ## Existing Entities does not list`);
-    return calls.some((c) => c.sources.includes('account')) ? pass() : fail('generate-types was not run for account');
+    if (unlisted.length) return fail(`genpage.js types used ${unlisted.join(', ')}, which ## Existing Entities does not list`);
+    return calls.some((c) => c.sources.includes('account')) ? pass() : fail('genpage.js types was not run for account');
   }
 );
+
+// --- Evals 26 and 27: a newly authored plan's semantic records ----------------------------------
+// A plan written today carries ## Assumptions and, per page, #### Data semantics and #### Lookup metadata (references/plan-schema.md);
+// older stored plans do not, and eval 16's exact-heading list stays as it was. These scenarios grade the new contract directly:
+// the written plan in required mode, the approved preview the run saved (manifest `semantics.approvedPlan`), the two compared
+// field by field the way genpage-plan-provenance.js compares them, and the run's own --require-assumptions verification, whose
+// semanticsHash must be the hash of THIS plan's records. Nothing here is skipped for a missing artifact: a fixture that lost its
+// preview, its records or its verification fails.
+
+// The successful lookup metadata read a scenario declares (manifest `semantics.lookupMetadata`), parsed; null when it declares none.
+function declaredLookupEvidence(fixture) {
+  const name = fixture.manifest?.semantics?.lookupMetadata;
+  if (!name) return null;
+  const text = fixture.artifacts?.[name];
+  if (typeof text !== 'string') return { declaredMissing: name };
+  try { return JSON.parse(text); } catch { return { unreadable: name }; }
+}
+
+function newContractProblems(fixture) {
+  const plan = fixture.genpagePlan;
+  if (!plan) return ['genpage-plan.md not present in fixture'];
+  const problems = validateGenpagePlanSchema(plan, { requireSemantics: true }).map((error) => `genpage-plan.md: ${error.message}`);
+  const previewName = fixture.manifest?.semantics?.approvedPlan;
+  const preview = previewName ? fixture.artifacts?.[previewName] : undefined;
+  if (typeof preview !== 'string') return [...problems, 'the fixture does not carry the approved preview the run verified (fixture.json semantics.approvedPlan)'];
+  const targets = planTargets(plan, { kind: 'create' })?.targets || [];
+  const previewRead = readPreviewSemantics(preview);
+  const writtenRead = readWrittenSemantics(plan);
+  problems.push(...previewRead.problems.map((p) => `the approved preview: ${p.message}`));
+  problems.push(...requiredContractProblems(previewRead, targets, 'the approved preview').map((p) => p.message));
+  const evidence = declaredLookupEvidence(fixture);
+  if (evidence && (evidence.declaredMissing || evidence.unreadable)) problems.push(`the declared lookup metadata ${evidence.declaredMissing || evidence.unreadable} is missing or not JSON`);
+  const promotions = Boolean(evidence && evidence.ok === true);
+  problems.push(...compareSemantics(previewRead, writtenRead, { promotions }).map((p) => `the written plan differs from the approved preview: ${p}`));
+  if (promotions) problems.push(...lookupEvidenceProblems(writtenRead, evidence).map((p) => p.message));
+  const verifies = commandCalls(fixture, PROVENANCE_VERIFY).filter((verify) => REQUIRE_ASSUMPTIONS.test(verify.call.command));
+  if (!verifies.length) problems.push('provenance was never verified with --require-assumptions');
+  const hash = sha256(JSON.stringify(semanticRecord(writtenRead)));
+  for (const verify of verifies) {
+    const result = resultObject(verify.call);
+    if (result?.ok !== true) problems.push(`${verify.call.id || verify.call.command}: the --require-assumptions verification did not pass`);
+    else if (result.semanticsHash !== hash) problems.push(`${verify.call.id || verify.call.command}: its semanticsHash is not the hash of this plan's records`);
+  }
+  return problems;
+}
+
+const REQUIRE_ASSUMPTIONS = /(?:^|\s)--require-assumptions(?=\s|$|['"`])/;
+const NEW_CONTRACT = 'Phase 1 (Planner): The newly authored plan records its assumptions and every page\'s data semantics and lookup metadata, the approved preview carries the same records, and provenance is verified with --require-assumptions';
+PHASE_EXPECTATIONS.set(NEW_CONTRACT, ({ fixture }) => resultOf(newContractProblems(fixture)));
+
+// --- Eval 26: an answered semantic question, the lookup metadata behind the records, the gate before generation ----
+// Each check reads evidence the fixture DECLARES under fixture.json `semantics` — the approved preview, the saved lookup metadata
+// read, the ordered semantic interactions — and fails when the declaration, the artifact or an event it names is gone: a
+// scenario that lost its evidence is a failure, never a skip. What they prove is that the recorded run agrees with itself (the
+// question the planner returned, the answer relayed back by its id, the assumption both documents keep, the approval after it;
+// the metadata read and the records built from it), not that a person answered or that the answer is what the request meant.
+
+const GET_LOOKUP_METADATA = /\bget-lookup-metadata\.js\b/;
+
+// A JSON artifact the fixture declares as fixture.json `semantics.<key>`: { name, value }, or { problem } when it is not declared,
+// not among the artifacts, or not JSON.
+function declaredJson(fixture, key) {
+  const name = fixture.manifest?.semantics?.[key];
+  if (!name) return { problem: `the fixture does not declare its ${key} evidence (fixture.json semantics.${key})` };
+  const text = fixture.artifacts?.[name];
+  if (typeof text !== 'string') return { problem: `the declared ${key} evidence ${name} is not one of the fixture's artifacts` };
+  try { return { name, value: JSON.parse(text) }; } catch { return { problem: `the declared ${key} evidence ${name} is not JSON` }; }
+}
+
+// The lookup rows the written plan records, across its pages (a page with `None.` records none).
+function recordedLookups(read) {
+  return [...read.pages.values()].flatMap((page) => (page.lookups && !page.lookups.sentinel ? [...page.lookups.rows.values()] : []));
+}
+
+const optionLabel = (option) => (typeof option === 'string' ? option : typeof option?.label === 'string' ? option.label : '');
+const sameList = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// The semantic interactions a run records (fixture.json `semantics.interactions`), in order:
+//   { "type": "needs_input", "event": "<tool-results id>", "question": "<id>", "options": ["<label>", …], "defaults": [] }
+//   { "type": "answer", "event": "<tool-results id>", "question": "<id>", "selected": "<label>", "source": "AskUserQuestion" }
+//   { "type": "approval", "preview": "<approved preview artifact>", "outcome": "approved", "source": "ExitPlanMode" }
+// A needs_input is the planner event it names returning that question with those options and defaults (several candidates carry
+// no default). Its answer is one of the options, asked with AskUserQuestion — or, unattended (`"source": "unattended-default"`),
+// the one option the planner marked — and handed back by question id in the later planner event it names. The written plan and
+// the approved preview both record it as the assumption with that Question and Answer (user-confirmed, or unattended-default with
+// its Default record logged). The approval comes last, after every answer: the preview the fixture declares, saved after the
+// answer reached the planner, with the ExitPlanMode approval logged after the question (or the unattended plan-approval record).
+function semanticInteractionProblems(fixture) {
+  const declared = declaredJson(fixture, 'interactions');
+  if (declared.problem) return [declared.problem];
+  if (!Array.isArray(declared.value) || !declared.value.length) return [`${declared.name} must be an ordered array of needs_input, answer and approval entries`];
+  const problems = [];
+  const calls = workflowCalls(fixture);
+  const eventAt = (id) => (typeof id === 'string' ? calls.findIndex((call) => call.id === id) : -1);
+  const log = String(fixture.workflowLog || '');
+  const logAt = (pattern) => { const match = pattern.exec(log); return match ? match.index : -1; };
+  const previewName = fixture.manifest?.semantics?.approvedPlan;
+  const previewText = previewName ? fixture.artifacts?.[previewName] : undefined;
+  const documents = [
+    ['the written plan', readWrittenSemantics(fixture.genpagePlan || '')],
+    ['the approved preview', typeof previewText === 'string' ? readPreviewSemantics(previewText) : null],
+  ];
+  const asked = new Map();
+  const answered = new Map();
+  let approval = null;
+  declared.value.forEach((entry, index) => {
+    const where = `${declared.name} entry ${index + 1}`;
+    if (approval) { problems.push(`${where}: nothing follows the plan approval`); return; }
+    if (entry?.type === 'needs_input') {
+      const at = eventAt(entry.event);
+      const result = at >= 0 ? resultObject(calls[at]) : null;
+      const question = result?.action === 'needs_input' && Array.isArray(result.questions) ? result.questions.find((q) => q?.id === entry.question) : null;
+      if (!question) { problems.push(`${where}: the planner event ${entry.event} did not return ${entry.question} as needs_input`); return; }
+      if (asked.has(entry.question)) { problems.push(`${where}: ${entry.question} is asked twice`); return; }
+      const options = (Array.isArray(question.options) ? question.options : []).map(optionLabel);
+      const defaults = (Array.isArray(question.options) ? question.options : []).filter((option) => option?.default === true).map(optionLabel);
+      if (!sameList(options, entry.options)) problems.push(`${where}: its options are not the ones the planner returned`);
+      if (!sameList(defaults, entry.defaults)) problems.push(`${where}: its defaults are not the ones the planner marked`);
+      if (options.length > 1 && defaults.length) problems.push(`${where}: a question with several candidates carries no default`);
+      asked.set(entry.question, { text: String(question.question || ''), options, defaults, at });
+    } else if (entry?.type === 'answer') {
+      const ask = asked.get(entry.question);
+      if (!ask) { problems.push(`${where}: answers ${entry.question}, which no earlier needs_input asked`); return; }
+      if (answered.has(entry.question)) { problems.push(`${where}: ${entry.question} is answered twice`); return; }
+      if (!ask.options.includes(entry.selected)) problems.push(`${where}: "${entry.selected}" is not one of the options of ${entry.question}`);
+      const at = eventAt(entry.event);
+      if (at <= ask.at) problems.push(`${where}: no planner event after the question carries its answer (event ${entry.event})`);
+      else if (!calls[at].command.includes(entry.question) || !calls[at].command.includes(String(entry.selected))) {
+        problems.push(`${where}: the planner event ${entry.event} does not hand back ${entry.question} → ${entry.selected}`);
+      }
+      let resolution = null;
+      let line = -1;
+      if (entry.source === 'AskUserQuestion') {
+        resolution = 'user-confirmed';
+        if (isUnattendedLog(log)) problems.push(`${where}: an unattended run asks no question`);
+        // - AskUserQuestion: Which opportunities should this account show? → Direct customer
+        line = logAt(new RegExp(`AskUserQuestion:[ \\t]*${escapeRe(ask.text)}[^\\n]*?[ \\t](?:→|->)[ \\t]*${escapeRe(String(entry.selected))}[ \\t]*\\r?$`, 'm'));
+        if (line < 0) problems.push(`${where}: workflow-log.md has no "AskUserQuestion: ${ask.text} → ${entry.selected}"`);
+      } else if (entry.source === 'unattended-default') {
+        resolution = 'unattended-default';
+        if (ask.defaults.length !== 1 || ask.defaults[0] !== entry.selected) problems.push(`${where}: an unattended run may take only the one option the planner marked as the default`);
+        if (!isUnattendedLog(log)) problems.push(`${where}: an attended run asks the maker; it never takes the default`);
+      } else problems.push(`${where}: source must be AskUserQuestion or unattended-default`);
+      for (const [label, read] of documents) {
+        if (!read) { problems.push(`${where}: the fixture does not declare the approved preview (fixture.json semantics.approvedPlan)`); continue; }
+        const assumption = read.assumptions ? [...read.assumptions.entries.values()].find((item) => item.question === entry.question) : undefined;
+        if (!assumption) { problems.push(`${where}: ${label} records no assumption answering ${entry.question}`); continue; }
+        if (assumption.answer !== normalizeValue(String(entry.selected))) problems.push(`${where}: ${label} records ${assumption.id}'s Answer as "${assumption.answer}", not "${entry.selected}"`);
+        if (resolution && assumption.resolution !== resolution) problems.push(`${where}: ${label} records ${assumption.id} as ${assumption.resolution}, not ${resolution}`);
+        if (resolution === 'unattended-default' && label === 'the written plan') {
+          line = assumption.defaultRecord ? log.indexOf(assumption.defaultRecord) : -1;
+          if (line < 0) problems.push(`${where}: workflow-log.md does not hold ${assumption.id}'s Default record`);
+        }
+      }
+      answered.set(entry.question, { at, line });
+    } else if (entry?.type === 'approval') {
+      for (const question of asked.keys()) if (!answered.has(question)) problems.push(`${where}: the plan was approved while ${question} was unanswered`);
+      if (!previewName || entry.preview !== previewName) problems.push(`${where}: the approval names ${entry.preview}, not the approved preview the fixture declares (${previewName || 'none'})`);
+      if (entry.outcome !== 'approved') problems.push(`${where}: outcome must be approved (got ${entry.outcome})`);
+      const saved = previewName ? calls.findIndex((call) => call.artifact === previewName) : -1;
+      const lastAnswer = Math.max(-1, ...[...answered.values()].map((item) => item.at));
+      if (saved < 0) problems.push(`${where}: no event saved the approved preview`);
+      else if (saved < lastAnswer) problems.push(`${where}: the approved preview was saved before the answer reached the planner`);
+      if (entry.source === 'ExitPlanMode') {
+        const approvedAt = logAt(/^[^\n]*\bExitPlanMode\b[^\n]*\bapproved\b/im);
+        if (approvedAt < 0) problems.push(`${where}: workflow-log.md records no ExitPlanMode approval`);
+        else if (approvedAt < Math.max(-1, ...[...answered.values()].map((item) => item.line))) problems.push(`${where}: the plan was approved before the question was answered`);
+      } else if (entry.source === 'unattended-default') {
+        // As in the attended branch: the approval follows every answer's own record in the log (here each Default record),
+        // so an approval logged first — before the semantic default was settled — fails even when the interaction artifact
+        // lists the approval last. The first approval record counts: a later copy does not repair an earlier approval.
+        const approvedAt = logAt(PLAN_APPROVAL_RECORD);
+        if (approvedAt < 0) problems.push(`${where}: workflow-log.md has no unattended plan-approval record`);
+        else if (approvedAt < Math.max(-1, ...[...answered.values()].map((item) => item.line))) problems.push(`${where}: the plan was approved before its unattended default was recorded`);
+      } else problems.push(`${where}: source must be ExitPlanMode or unattended-default`);
+      approval = entry;
+    } else problems.push(`${where}: type must be needs_input, answer or approval`);
+  });
+  if (!asked.size) problems.push(`${declared.name} records no semantic question`);
+  if (!approval) problems.push(`${declared.name} does not end with the plan approval`);
+  return problems;
+}
+
+// The lookup metadata behind the plan's records: a get-lookup-metadata.js read of every table the records name, made before the
+// approved preview was saved, whose successful answer IS the saved artifact; every lookup of an existing table recorded
+// `observed`, its Evidence naming that artifact, and each record agreeing with the read (complete targets, concrete paths).
+function lookupDiscoveryProblems(fixture) {
+  const declared = declaredJson(fixture, 'lookupMetadata');
+  if (declared.problem) return [declared.problem];
+  const written = readWrittenSemantics(fixture.genpagePlan || '');
+  const rows = recordedLookups(written);
+  if (!rows.length) return ['the plan records no lookup, but the scenario relies on one'];
+  const problems = [];
+  if (declared.value?.ok !== true) problems.push(`${declared.name} is not a successful get-lookup-metadata.js answer`);
+  const calls = workflowCalls(fixture);
+  const tables = [...new Set(rows.map((row) => row.table))];
+  const reads = commandCalls(fixture, GET_LOOKUP_METADATA).filter(({ flags }) => tables.every((table) => csvList(flags.tables).includes(table)));
+  const read = reads.find(({ call }) => JSON.stringify(resultObject(call)) === JSON.stringify(declared.value));
+  if (!reads.length) problems.push(`get-lookup-metadata.js never read ${tables.join(', ')}`);
+  else if (!read) problems.push(`no get-lookup-metadata.js answer is the saved ${declared.name}`);
+  const saved = calls.findIndex((call) => call.artifact === fixture.manifest?.semantics?.approvedPlan);
+  if (saved < 0) problems.push('no event saved the approved preview');
+  else if (read && calls.indexOf(read.call) > saved) problems.push('the lookup metadata was read after the plan was approved');
+  const existing = existingEntities(fixture.genpagePlan || '');
+  for (const row of rows) {
+    if (existing.includes(row.table) && row.state !== 'observed') problems.push(`${row.table}.${row.column} is recorded ${row.state}, but ${row.table} exists: its lookup is read before the plan`);
+  }
+  for (const [file, page] of written.pages) {
+    if (page.lookups && !page.lookups.sentinel && !String(page.lookups.evidence || '').includes(declared.name)) problems.push(`${file}: the lookup Evidence does not name ${declared.name}`);
+  }
+  problems.push(...lookupEvidenceProblems(written, declared.value).map((p) => p.message));
+  return problems;
+}
+
+// RuntimeTypes.ts types a lookup's read property as the union of its targets' qualified forms (the type generator's shape):
+//   _customerid_value: `/account(${string})` | `/contact(${string})`,
+// Returns the sorted target tables, or null when the table or the property is not declared.
+function runtimeLookupTargets(runtimeTypes, table, readProperty) {
+  const block = new RegExp(`^export type ${escapeRe(table)} = TableRow<\\{\\r?\\n([\\s\\S]*?)^\\}>`, 'm').exec(runtimeTypes);
+  if (!block) return null;
+  const line = new RegExp(`^[ \\t]*(?:readonly[ \\t]+)?${escapeRe(readProperty)}[ \\t]*:([^\\r\\n]*)$`, 'm').exec(block[1]);
+  if (!line) return null;
+  return [...line[1].matchAll(/`\/([a-z_][a-z0-9_]*)\(\$\{string\}\)`/g)].map((match) => match[1]).sort();
+}
+
+function runtimeLookupProblems(fixture) {
+  if (!fixture.runtimeTypes) return ['RuntimeTypes.ts was not captured'];
+  const rows = recordedLookups(readWrittenSemantics(fixture.genpagePlan || ''));
+  if (!rows.length) return ['the plan records no lookup, but the scenario relies on one'];
+  const problems = [];
+  const sources = generateTypesCalls(fixture).flatMap((call) => call.sources);
+  for (const row of rows) {
+    if (!sources.includes(row.table)) problems.push(`genpage.js types was not run for ${row.table}`);
+    const typed = runtimeLookupTargets(fixture.runtimeTypes, row.table, row.readProperty);
+    if (!typed) problems.push(`RuntimeTypes.ts does not declare ${row.table}.${row.readProperty}`);
+    else if (!sameList(typed, [...row.targets].sort())) problems.push(`RuntimeTypes.ts types ${row.table}.${row.readProperty} as ${typed.join(' | ') || 'no table'}, the plan records ${row.targets.join(', ')}`);
+  }
+  return problems;
+}
+
+// SKILL.md Phase 5a's gate for a plan that records a lookup: before the page is generated, a verification with
+// --require-assumptions --require-observed-lookups and the saved --lookup-metadata passes on THIS plan's records (its
+// semanticsHash), and no lookup is still `planned`.
+function observedLookupGateProblems(fixture) {
+  const plan = fixture.genpagePlan;
+  if (!plan) return ['genpage-plan.md not present in fixture'];
+  const written = readWrittenSemantics(plan);
+  const rows = recordedLookups(written);
+  const problems = [];
+  if (!rows.length) problems.push('the plan records no lookup, but the scenario relies on one');
+  for (const row of rows) if (row.state !== 'observed') problems.push(`${row.table}.${row.column} is still ${row.state} when the page is generated`);
+  const declared = declaredJson(fixture, 'lookupMetadata');
+  if (declared.problem) problems.push(declared.problem);
+  const calls = workflowCalls(fixture);
+  const generated = calls.findIndex((call) => isGeneration(call.command));
+  if (generated < 0) problems.push('the page was never generated');
+  const gates = commandCalls(fixture, PROVENANCE_VERIFY).filter(({ call }) => REQUIRE_ASSUMPTIONS.test(call.command)
+    && /--require-observed-lookups\b/.test(call.command) && /--lookup-metadata\b/.test(call.command));
+  if (!gates.length) return [...problems, 'generation was not gated by a verification with --require-assumptions --require-observed-lookups --lookup-metadata'];
+  const hash = sha256(JSON.stringify(semanticRecord(written)));
+  const passed = gates.filter(({ call, flags }) => {
+    const result = resultObject(call);
+    return result?.ok === true && result.semanticsHash === hash && (!declared.name || fileName(flags['lookup-metadata']) === declared.name);
+  });
+  if (!passed.length) problems.push('no observed-lookups verification passed on this plan\'s records with the saved lookup metadata');
+  else if (generated >= 0 && !passed.some(({ call }) => calls.indexOf(call) < generated)) problems.push('the observed-lookups verification ran after the page was generated');
+  return problems;
+}
+
+PHASE_EXPECTATIONS.set(
+  'Phase 1 (Planner): The open account-scope question reaches the maker as needs_input with no default, the answer returns to the planner by its question id, and the written plan and the approved preview record it as a user-confirmed assumption before approval',
+  ({ fixture }) => resultOf(semanticInteractionProblems(fixture))
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 1 (Planner): get-lookup-metadata.js reads opportunity\'s lookups before approval, its successful answer is the saved lookup-metadata.json, and every recorded lookup is observed with the complete targets and concrete paths it read',
+  ({ fixture }) => resultOf(lookupDiscoveryProblems(fixture))
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 4: RuntimeTypes.ts is generated for opportunity and types each recorded lookup\'s read property with exactly its recorded targets',
+  ({ fixture }) => resultOf(runtimeLookupProblems(fixture))
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 5a: The page is generated only after provenance is verified with --require-assumptions --require-observed-lookups --lookup-metadata on this plan\'s records',
+  ({ fixture }) => resultOf(observedLookupGateProblems(fixture))
+);
+
+// --- Eval 3: an app with no pages ---------------------------------------------------------------------
+
+PHASE_EXPECTATIONS.set(
+  'Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops',
+  ({ fixture }) => {
+    // Any listing that came back empty puts the run on this branch, wherever it is in the run.
+    const empty = commandCalls(fixture, GENPAGE_LIST).some((listing) => isEmptyPageListing(resultObject(listing.call)));
+    if (!empty && !noPagesRefusal(fixture)) return skip('no page listing came back empty in this scenario');
+    return resultOf(emptyPageListingProblems(fixture));
+  }
+);
+
+// A run that stopped at Edit Phase 1b because the app has no pages never reaches a page choice, a download,
+// an edit plan, an edit or an upload, so the expectations of those phases do not apply to it: they skip with
+// that reason instead of failing. The stop itself is graded by the zero-pages expectation above and by
+// refusalProblems (the common upload assertion and Layer 2's refusal gate).
+const AFTER_PAGE_LISTING = /^Edit Phase (?:1b: Pages are presented\b|1c\b|[2-9])/;
+for (const [text, check] of PHASE_EXPECTATIONS) {
+  if (!AFTER_PAGE_LISTING.test(text)) continue;
+  PHASE_EXPECTATIONS.set(text, (context) => (noPagesRefusal(context.fixture)
+    ? skip('the run stopped at Edit Phase 1b: the app has no pages to edit')
+    : check(context)));
+}
 
 module.exports = {
   WORKFLOW_ASSERTIONS,

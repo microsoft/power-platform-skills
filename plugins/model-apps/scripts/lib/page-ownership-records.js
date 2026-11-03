@@ -44,17 +44,30 @@ function workspaceRoot(workspaceDir, create = false) {
 }
 
 function recordName(r) {
-  const identity = [r.environmentFingerprint, r.appUniqueName, r.key, r.pageId];
+  // A pending record is one per create sent under the id — its name and source are part of what it identifies — where the others are one per page.
+  const identity = [r.environmentFingerprint, r.appUniqueName, r.key, r.pageId, ...(r.kind === 'pending' ? [r.name, r.sourceSha256] : [])];
   return `${PREFIX}${r.kind}.${sha256(JSON.stringify(identity))}.json`;
 }
 
 // Example: { schemaVersion:2, kind:"created", appUniqueName:"contoso_app", key:"overview",
 // pageId:"11111111-1111-4111-8111-111111111111", name:"Overview", environmentFingerprint:"<sha256>" }.
 // Baselines and journals include adopted/downloaded ids; only an acknowledged CREATE writes "created".
+// A "pending" record has the same shape plus `sourceSha256`, and is written BEFORE a create is sent, under the page id the build minted for it: it says "a create
+// of this key under this id, carrying this name and this source, may have reached the environment", which is all a build that was cut short needs to find the page
+// again and to tell it from any other page that comes to hold the id. It is intent, not ownership — it never authorizes anything (see readPendingCreations).
+//   { schemaVersion:2, kind:"pending", appUniqueName:"contoso_app", key:"overview", pageId:"11111111-…", name:"Overview",
+//     environmentFingerprint:"<sha256>", sourceSha256:"<sha256 of the page source that create sent>" }
+// WHY the name and the source, and not the whole create: they are what a page read back serves exactly as it was written (the SDK stores both verbatim), so "this page holds
+// what a create under this id sent" is decided by an exact comparison; a model, the data sources, the bindings and the prompt pass through projections that normalize them,
+// and a proof that depended on them could refuse the very page it is meant to recognise. What a page holds beyond that is not part of recognising it — it is brought to
+// what the build asks for by the ordinary update. One record per create that was sent under the id: a resumed create with another name or source adds a record, and
+// the earlier one stays, because the page may hold either.
+const SOURCE_HASH = FINGERPRINT; // both are a SHA-256 in lower-case hex
 function validRecord(r) {
   return r && r.schemaVersion === 2 && FINGERPRINT.test(r.environmentFingerprint)
-    && ['created', 'teardown'].includes(r.kind)
-    && Object.keys(r).length === 7
+    && ['created', 'teardown', 'pending'].includes(r.kind)
+    && Object.keys(r).length === (r.kind === 'pending' ? 8 : 7)
+    && (r.kind !== 'pending' || (typeof r.sourceSha256 === 'string' && SOURCE_HASH.test(r.sourceSha256)))
     && nonempty(r.appUniqueName) && r.appUniqueName === r.appUniqueName.toLowerCase()
     && nonempty(r.pageId) && GUID.test(r.pageId) && nonempty(r.name)
     && (nonempty(r.key) || (r.kind === 'teardown' && r.key === null));
@@ -84,7 +97,7 @@ function readRecord(root, file) {
 // The exact name recordName() produces: page-ownership.<kind>.<64 hex>.json. Anything else in the
 // folder — an editor backup such as page-ownership.created.<hash>.backup.json, a temp file — is
 // not a record and is ignored, rather than halting every build as a malformed one.
-const RECORD_FILE = /^page-ownership\.(created|teardown)\.[0-9a-f]{64}\.json$/;
+const RECORD_FILE = /^page-ownership\.(created|teardown|pending)\.[0-9a-f]{64}\.json$/;
 
 function readAllRecords(workspaceDir) {
   const records = [];
@@ -111,15 +124,17 @@ function readPageOwnership(workspaceDir, appUniqueName, environment) {
   const fingerprint = environmentFingerprint(environment);
   const app = String(appUniqueName || '').toLowerCase();
   for (const r of readAllRecords(workspaceDir)) {
+    // A pending creation is intent, not ownership: it is not part of what a receipt proves, so it is not part of this state (readPendingCreations).
+    if (r.kind === 'pending') continue;
     if (r.environmentFingerprint === fingerprint && r.appUniqueName === app) state[r.kind].push(r);
   }
   return state;
 }
 
-function saveRecord(workspaceDir, kind, appUniqueName, key, pageId, name, environment) {
+function saveRecord(workspaceDir, kind, appUniqueName, key, pageId, name, environment, sourceSha256) {
   if (!workspaceDir) throw new Error('a build workspace is required to persist local page ownership');
-  const r = { schemaVersion: 2, kind, appUniqueName: String(appUniqueName || '').toLowerCase(), key: key || null, pageId: String(pageId || '').toLowerCase(), name, environmentFingerprint: environmentFingerprint(environment) };
-  if (!validRecord(r)) throw new Error('local page ownership record needs an app unique name, page key, page GUID and stored name');
+  const r = { schemaVersion: 2, kind, appUniqueName: String(appUniqueName || '').toLowerCase(), key: key || null, pageId: String(pageId || '').toLowerCase(), name, environmentFingerprint: environmentFingerprint(environment), ...(kind === 'pending' ? { sourceSha256 } : {}) };
+  if (!validRecord(r)) throw new Error(kind === 'pending' ? 'a pending page creation needs an app unique name, page key, page GUID, the name sent and the SHA-256 of the source sent' : 'local page ownership record needs an app unique name, page key, page GUID and stored name');
   const root = workspaceRoot(workspaceDir, true);
   const file = recordName(r);
   let existing;
@@ -136,6 +151,61 @@ function saveRecord(workspaceDir, kind, appUniqueName, key, pageId, name, enviro
 
 function recordPageCreation(workspaceDir, appUniqueName, key, pageId, name, environment) {
   return saveRecord(workspaceDir, 'created', appUniqueName, key, pageId, name, environment);
+}
+
+// Written BEFORE a page create is sent, durably, under the id the create will use, with the name and the source hash it sends. A create whose answer never arrives — and
+// whose page cannot be read back either — leaves the page on the environment with nothing local that names it; the next build then finds a page it has no link to, and creates another
+// for the same spec entry. This record is the link: the next build reads the id it names (readPendingCreations), and either finds the page there — and adopts it only if it
+// holds what a create under that id sent — or does not, and creates it under the SAME id.
+function recordPagePending(workspaceDir, appUniqueName, key, pageId, name, environment, sourceSha256) {
+  return saveRecord(workspaceDir, 'pending', appUniqueName, key, pageId, name, environment, sourceSha256);
+}
+
+// The creations this app started in this environment and never acknowledged, as Map<key, [{ pageId, sent: [{ name, sourceSha256 }] }]> — one entry per page id, `sent` the
+// name and source hash of every create that was sent under it (a build resumed under the same id with another name or source adds one; the page may hold either).
+// A pending record is INTENT, and grants nothing: it is not a creation receipt, so it never makes a page this build "owns" (readPageOwnership and creationIds do not see
+// it) and never authorizes an update. A delete needs more than the record: teardown deletes a page found under a pending id only when its stored name is one the
+// create sent. What a build may do with one is settle it — adopt the page it names, after proving it holds what was sent, or send the create again under that id.
+function readPendingCreations(workspaceDir, appUniqueName, environment) {
+  const pending = new Map();
+  if (!workspaceDir) return pending;
+  const fingerprint = environmentFingerprint(environment);
+  const app = String(appUniqueName || '').toLowerCase();
+  for (const r of readAllRecords(workspaceDir)) {
+    if (r.kind !== 'pending' || r.environmentFingerprint !== fingerprint || r.appUniqueName !== app) continue;
+    if (!pending.has(r.key)) pending.set(r.key, []);
+    const entries = pending.get(r.key);
+    let entry = entries.find((e) => e.pageId === r.pageId);
+    if (!entry) { entry = { pageId: r.pageId, sent: [] }; entries.push(entry); }
+    entry.sent.push({ name: r.name, sourceSha256: r.sourceSha256 });
+  }
+  // The files come back in the order of their hashed names: sorted, so what a message says does not depend on it.
+  const byText = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+  for (const entries of pending.values()) {
+    entries.sort((a, b) => byText(a.pageId, b.pageId));
+    for (const entry of entries) entry.sent.sort((a, b) => byText(`${a.name}\n${a.sourceSha256}`, `${b.name}\n${b.sourceSha256}`));
+  }
+  return pending;
+}
+
+// A pending record is consumed once what it stood for is SETTLED BY EVIDENCE: the page was created and acknowledged (a creation receipt now says so), adopted as the
+// page that was sent, found and deleted by teardown, or the create is known to have written nothing (the SDK refused it before it sent anything). Never because a page
+// is not in one listing: an absence is a snapshot, and a request still in flight can create the page after it — whatever the spec key has been bound to since. Consuming
+// the record before then would forget a page that may exist, which is what it is written to prevent.
+function completePendingCreations(workspaceDir, appUniqueName, pageIds, environment) {
+  const root = workspaceRoot(workspaceDir);
+  if (!root) return;
+  const done = new Set(pageIds.map((id) => String(id).toLowerCase()));
+  const fingerprint = environmentFingerprint(environment);
+  const app = String(appUniqueName || '').toLowerCase();
+  for (const r of readAllRecords(root)) {
+    if (r.kind !== 'pending' || r.environmentFingerprint !== fingerprint || r.appUniqueName !== app || !done.has(r.pageId)) continue;
+    const file = recordName(r);
+    try {
+      readRecord(root, file);
+      fs.unlinkSync(path.join(root, file));
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
 }
 
 function recordPageTeardown(workspaceDir, appUniqueName, items, environment) {
@@ -174,7 +244,12 @@ function checkPageOwnershipClearable(workspaceDir) {
   if (!records.length) return { ok: true };
   const root = path.resolve(workspaceDir);
   const remaining = records.map((r) => `${path.join(root, recordName(r))}: ${r.appUniqueName}/${r.key || '(navigation)'}, page ${r.pageId}, ${r.kind}, environment ${r.environmentFingerprint}`).join('; ');
-  return { ok: false, reason: `unconsumed local page ownership records remain: ${remaining}. Preserve the workspace; resume teardown in the original app and environment. Teardown consumes a record when it deletes the page or confirms its absence. A record whose page you have confirmed gone may be deleted by hand, then re-run --clear-workspace. Do not relabel records to another environment.` };
+  // A pending record is the only pointer to a page whose create was cut short, so it is kept like a receipt — and says how it is settled. The record is kept, never dropped on
+  // the evidence of one listing: the request that made it may still reach the service, and the page it makes would then have no local trace.
+  const pending = records.some((r) => r.kind === 'pending')
+    ? ' A "pending" record is a page creation that was started and never acknowledged — the page may exist, or may still appear: run the build again in the original app and environment (it adopts the page if it is there and is the one that was sent, creates it under the same id while its key has no page, and reports it as an unused page when the key is bound to another one — teardown deletes it too), or delete the record by hand once you have confirmed that no such page exists, here or in Maker, and that no request can still create it.'
+    : '';
+  return { ok: false, reason: `unconsumed local page ownership records remain: ${remaining}. Preserve the workspace; resume teardown in the original app and environment. Teardown consumes a record when it deletes the page or confirms its absence. A record whose page you have confirmed gone may be deleted by hand, then re-run --clear-workspace. Do not relabel records to another environment.${pending}` };
 }
 
-module.exports = { PREFIX, environmentFingerprint, readPageOwnership, recordPageCreation, recordPageTeardown, creationIds, completePageDeletions, checkPageOwnershipClearable };
+module.exports = { PREFIX, environmentFingerprint, workspaceRoot, readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, recordPageTeardown, creationIds, completePageDeletions, checkPageOwnershipClearable };

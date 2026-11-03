@@ -13,6 +13,7 @@ Working directory created: D:\work\widget-page.
 - Unattended default: new or edit -> create new page
 - Unattended default: solution -> ContosoPages, Publisher Prefix cnt
 - Unattended default: plan approval -> approved
+- Planner ran `node scripts\list-tables.js --env https://contoso.crm.dynamics.com --search cnt_widget --exact` -> 0 tables, missing: cnt_widget (exact logical-name match: the table does not exist, so it must be created)
 - genpage-plan.md records suffix widget under Entity Creation Required.
 
 ## Phase 2a - Pre-flight and one retry

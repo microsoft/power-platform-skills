@@ -378,7 +378,10 @@ test('MODEL_APPS_DISABLE_HOOKS=1 disables the validator (exit 0 despite bad icon
 });
 
 test('MODEL_APPS_DISABLE_HOOKS=1 exits 0 even when skill discovery would throw', () => {
-  const preload = path.join(__dirname, 'hook-readdir-throw-preload.js');
+  // The preload goes in this test's own temp folder, not in __dirname: validate-write-safety.test.js
+  // writes files with the same names, and node --test runs the two files in parallel, so one file's
+  // cleanup could delete the other's preload before its child process loaded it (MODULE_NOT_FOUND).
+  const preload = path.join(tmp, 'hook-readdir-throw-preload.js');
   fs.writeFileSync(preload, [
     "const fs = require('node:fs');",
     'const real = fs.readdirSync;',
@@ -406,7 +409,7 @@ test('MODEL_APPS_DISABLE_HOOKS=1 exits 0 even when skill discovery would throw',
 test('icon validator: an unreadable skills folder cannot crash the ENABLED hook', () => {
   // The hook needs only the stdin reader, not skill discovery. Loading discovery would scan the skills
   // folder at require time, so an EACCES there would crash the hook even though it never uses it.
-  const preload = path.join(__dirname, 'hook-readdir-throw-preload-enabled.js');
+  const preload = path.join(tmp, 'hook-readdir-throw-preload-enabled.js');
   fs.writeFileSync(preload, [
     "const fs = require('node:fs');",
     'const real = fs.readdirSync;',

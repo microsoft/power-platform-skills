@@ -72,7 +72,7 @@ function fakeMainDeps({ outDir, makeDownloadSdkImpl, runDownloadImpl, emitResult
     emitResult: (ok, payload) => emitResults.push({ ok, payload }),
     // The download only uses the verdict, so it must not pay the success-path `az account show`.
     preflightAuth: async (url, opts) => { assert.strictEqual(opts && opts.identityOnSuccess, false); return { ok: true }; },
-    makeGenpageCli: () => ({ unused: true }),
+    makeGenpageSdk: () => ({ unused: true }),
     makeDownloadSdk: makeDownloadSdkImpl || (async () => ({ sdk, cleanup: () => {} })),
     runDownload: runDownloadImpl || (async ({ sdk: gotSdk, outDir: gotOutDir, appId, appUnique }) => {
       assert.strictEqual(gotSdk, sdk);
@@ -124,6 +124,33 @@ test('the throwaway workspace is removed BEFORE the result is printed, since the
   }
 });
 
+test('the page backend is lent the download\'s own throwaway SDK — the pages are read with no second workspace to make, and the one workspace is removed once', async () => {
+  const outDir = tmp('download-lend-');
+  const tempWorkspace = tmp('model-app-download-lend-');
+  const downloadSdk = { queryRecords: async (logical, opts = {}) => (/uniquename eq/.test(opts.filter || '') ? [{ appmoduleid: APP_ID }] : [{ uniquename: APP_UNIQUE }]) };
+  const made = [];
+  let cleanups = 0;
+  let received;
+  const emitResults = [];
+  const deps = fakeMainDeps({
+    outDir,
+    emitResults,
+    makeDownloadSdkImpl: async () => ({ sdk: downloadSdk, workspaceDir: tempWorkspace, cleanup: () => { cleanups += 1; } }),
+    runDownloadImpl: async (args) => {
+      received = args;
+      return { ok: true, spec: minimalSpec(), pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [], dashboardWarnings: [] };
+    },
+  });
+  deps.makeGenpageSdk = (env, lent) => { const backend = { env, lent }; made.push(backend); return backend; };
+  await main(deps);
+  assert.strictEqual(made.length, 1, 'one page backend per download');
+  assert.strictEqual(made[0].env, ENV);
+  assert.strictEqual(made[0].lent.sdk, downloadSdk, 'it works through the SDK the download itself reads with');
+  assert.strictEqual(received.genpage, made[0], 'and runDownload is handed it');
+  assert.strictEqual(emitResults[0].ok, true);
+  assert.strictEqual(cleanups, 1, 'the download\'s one workspace is removed once');
+});
+
 test('makeDownloadSdk constructs the real bundle through its default import path, in a temp workspace it then removes', async () => {
   const made = await makeDownloadSdk(ENV, { httpClient: realBundleHttp({ etag: 'W/"1"', description: 'Server description' }) });
   try {
@@ -141,7 +168,7 @@ test('constructs the download SDK on a temp workspace outside the output folder,
   const constructed = [];
   const made = await makeDownloadSdk(ENV, {
     mkdtempSync: (prefix) => {
-      assert.match(prefix, /model-app-download-$/);
+      assert.match(prefix, /model-app-download-\d+-$/, 'the maker is asked for a name in the plugin\u2019s folder: the prefix, then the pid of this process');
       return tmp('model-app-download-');
     },
     createHttpClient: () => ({ get: async () => ({ status: 200, headers: {}, body: { value: [] } }) }),
@@ -249,7 +276,7 @@ test('CLI keeps existing messages for inconclusive auth, display-name resolution
       emitResult: (ok, payload) => emitResults.push({ ok, payload }),
       preflightAuth: async () => auth,
       makeDownloadSdk: async () => ({ sdk, cleanup: () => {} }),
-      makeGenpageCli: () => ({}),
+      makeGenpageSdk: () => ({}),
       runDownload: runDownloadImpl,
       validateAppSpec: validateAppSpec || (() => ({ ok: true, warnings: [] })),
     });
@@ -441,7 +468,7 @@ test('main wires the real download SDK factory to a throwaway workspace and stil
     stderr: { write: () => {} },
     emitResult: (ok, payload) => emitResults.push({ ok, payload }),
     preflightAuth: async () => ({ ok: true }),
-    createHttpClient: () => ({}),
+    createHttpClient: () => ({ get: async () => ({ status: 200, headers: {}, body: { value: [{ languagecode: 1033 }] } }) }),
     createNodeWorkspaceStorage: (workspaceDir) => {
       constructed.push(workspaceDir);
       return { workspaceDir };
@@ -459,7 +486,7 @@ test('main wires the real download SDK factory to a throwaway workspace and stil
         return [];
       },
     }),
-    makeGenpageCli: () => ({}),
+    makeGenpageSdk: () => ({}),
     runDownload: async () => ({
       ok: true,
       spec: minimalSpec(),

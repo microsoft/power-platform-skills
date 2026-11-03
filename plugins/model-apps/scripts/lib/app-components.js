@@ -6,16 +6,23 @@
 // references; its cached fetchEntityMetadata projection cannot supply these membership reads.
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
 const { odataLit } = require('./odata.js');
+const { postPublishXml } = require('./publish-xml.js');
 const { dashboardNameKey, FORM_GUID_RE, formIdentityKey, compareVersions, isPluginVersion, APP_MEMBERSHIP_MIN_VERSION } = require('./app-spec.js');
 const { isMainForm } = require('./form-order.js');
+const { compareText } = require('./compare-text.js');
 
 const guidKey = (id) => String(id || '').replace(/^\{|\}$/g, '').toLowerCase();
 const reasonOf = (error) => String((error && error.message) || error || 'read failed');
 const APP_COMPONENT_ENTITY_SOURCES = [
-  { componentType: 26, set: 'savedquery', idField: 'savedqueryid', entityField: 'returnedtypecode' },
-  { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
-  { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
+  { componentType: 26, set: 'savedquery', collection: 'savedqueries', idField: 'savedqueryid', entityField: 'returnedtypecode' },
+  { componentType: 59, set: 'savedqueryvisualization', collection: 'savedqueryvisualizations', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
+  { componentType: 60, set: 'systemform', collection: 'systemforms', idField: 'formid', entityField: 'objecttypecode' },
 ];
+
+// What Dataverse accepts as a table's logical name: lower case letters, digits and underscores, not starting with a digit. A table name goes into an XML body
+// (a table's PublishXml: lib/table-publish.js), so one that is not shaped like this is left out rather than sent: the platform has no table by that name. An
+// answer that names a table of a component in any other shape is not a table either, and a read that must be complete does not take it for one.
+const TABLE_NAME = /^[a-z_][a-z0-9_]*$/;
 
 function componentError(code, message, status) {
   const error = new Error(message);
@@ -30,34 +37,84 @@ function requireGuid(id, label) {
   return key;
 }
 
-async function collectionRows(client, path, label) {
+// Reads a collection page by page: { "value": [ ... ], "@odata.nextLink": "<URL>" }. A refusal, an answer that is no list, a link that is no link and a page
+// that repeats are each an error, never a shorter list: the callers prove things from the rows that come back, and a missing row cannot be told from a missing page.
+//   path     below the API root, e.g. `/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid`
+//   label    what is being read, for a message
+//   options.code  the `code` of the error thrown (default APP_COMPONENTS_UNVERIFIED), for a caller whose own callers know another vocabulary
+async function collectionRows(client, path, label, { code = 'APP_COMPONENTS_UNVERIFIED' } = {}) {
   const rows = [];
   const seen = new Set();
   while (path) {
-    if (seen.has(path)) throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: repeated @odata.nextLink`);
+    if (seen.has(path)) throw componentError(code, `${label}: repeated @odata.nextLink`);
     seen.add(path);
-    const response = await client.get(path);
+    // The continuation the platform gives is ABSOLUTE and on the same origin:
+    //   "@odata.nextLink": "https://contoso.crm.dynamics.com/api/data/v9.0/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=...&$skiptoken=..."
+    // The SDK client's `get` puts the API root in front of whatever it is given, which would make that
+    // `/api/data/v9.0/https://contoso.crm.dynamics.com/api/data/v9.0/...` (HTTP 404), so such a link goes through its `getAbsolute` — which also refuses a link to another origin.
+    // A client without it (a test fake) is handed the link as it was.
+    const absolute = /^https?:/i.test(path);
+    const response = absolute && typeof client.getAbsolute === 'function' ? await client.getAbsolute(path) : await client.get(path);
     if (!response || response.status < 200 || response.status >= 300) {
-      throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: HTTP ${response && response.status}`, response && response.status);
+      // The platform's own words, as the SDK reports its reads: { "error": { "code": "0x80040220", "message": "The user is not a member of the organization." } }
+      const errorBody = response && response.body;
+      const reason = errorBody && errorBody.error && typeof errorBody.error.message === 'string' ? errorBody.error.message : '';
+      const url = !absolute && typeof client.apiUrl === 'function' ? client.apiUrl(path) : path;
+      throw componentError(code, `${label}: HTTP ${response && response.status} from ${url}${reason ? `: ${reason}` : ''}`, response && response.status);
     }
     // Dataverse collections are { value: [...], "@odata.nextLink": "<API URL>" }; an absent/malformed
     // value or continuation is not an empty collection, and cannot prove a complete membership read.
     const body = response.body;
-    if (!body || !Array.isArray(body.value)) throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: no readable result set`);
+    if (!body || !Array.isArray(body.value)) throw componentError(code, `${label}: no readable result set`);
     rows.push(...body.value);
     const next = body['@odata.nextLink'];
     if (next !== undefined && (typeof next !== 'string' || !next)) {
-      throw componentError('APP_COMPONENTS_UNVERIFIED', `${label}: malformed @odata.nextLink`);
+      throw componentError(code, `${label}: malformed @odata.nextLink`);
     }
     path = next;
   }
   return rows;
 }
 
-// The rows of ONE app that are its current layer: the only row, or — when a pending edit makes the platform answer with both layers — the authored one (componentstate 1).
-// Anything other than exactly one is for the caller to refuse: it does not say which layer is current.
+// The rows of ONE record that are its current layer: the only row, or — when a pending edit makes the platform answer with both layers — the authored one
+// (componentstate 1, Unpublished: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appmodule). Anything other than exactly
+// one is for the caller to refuse: it does not say which layer is current.
 function currentLayerRows(rows) {
   return rows.length === 1 ? rows : rows.filter((row) => row && Number(row.componentstate) === 1);
+}
+
+// The one row a LISTING shows for a record: its current layer when the rows say which it is, else the first row. A list shows what it cannot place exactly rather
+// than hide it, where currentLayerRows leaves the doubt to a caller that must not guess. `rows` are the rows of ONE record.
+function currentLayerRow(rows) {
+  return currentLayerRows(rows)[0] || rows[0];
+}
+
+// How many page ids one read names. The SDK's own check of the pages a sitemap opens reads 50 at a time, so the filter stays a URL.
+const PAGE_LOOKUP_CHUNK = 50;
+
+// The generative pages `ids` in the SAVED layer — the current one, a page that was never published included — as Map<id (lower case), the rows the platform answered for it>: one row, or two when a
+// pending edit makes it answer with both layers (`currentLayerRow` picks the one an author sees). An id that no row answers to is not in the map, and a caller that needs one to exist says so.
+// A plain read of the `uxagentproject` collection answers the PUBLISHED layer only, so a page that was created and never published — a build killed after the create change set, a publish that was
+// refused and never finished, a create nobody published — is "not found" by it. A caller that decides whether a page exists, or what to delete, must read this layer:
+//   GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq 4444… or uxagentprojectid eq 5555…
+//   { "value": [ { "uxagentprojectid": "44444444-…", "name": "Overview", "componentstate": 0 } ] }       (componentstate 0 Published, 1 Unpublished: a never-published page has this one row, with 1)
+// A read that fails, an answer that is no list, and a row with no page id are each an error, never a shorter map: the callers prove things from the rows that come back (see collectionRows).
+async function savedPageRows(client, ids, { label = 'the generative pages', code } = {}) {
+  const wanted = [...new Set(ids.map((id) => guidKey(id)))];
+  const rowsById = new Map();
+  for (let at = 0; at < wanted.length; at += PAGE_LOOKUP_CHUNK) {
+    const filter = wanted.slice(at, at + PAGE_LOOKUP_CHUNK).map((id) => `uxagentprojectid eq ${requireGuid(id, 'page id')}`).join(' or ');
+    const rows = await collectionRows(client,
+      `/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=${filter}`,
+      label, code ? { code } : undefined);
+    for (const row of rows) {
+      const id = row && typeof row.uxagentprojectid === 'string' ? guidKey(row.uxagentprojectid) : '';
+      if (!FORM_GUID_RE.test(id)) throw componentError(code || 'APP_COMPONENTS_UNVERIFIED', `${label}: a row has no readable page id`);
+      if (!rowsById.has(id)) rowsById.set(id, []);
+      rowsById.get(id).push(row);
+    }
+  }
+  return rowsById;
 }
 
 async function currentAppLayer(client, appId) {
@@ -85,6 +142,37 @@ async function publishedAppLayer(sdk, { appId, appUnique } = {}) {
   return { ok: true, appId: row.appmoduleid, appModuleIdUnique: guidKey(row.appmoduleidunique) };
 }
 
+// The rows of an app's component list that a STRICT read cannot place, each with why, for a message. The list is the server's, filtered to one component type:
+//   GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <layer> and componenttype eq 60
+//   { "value": [ { "objectid": "44444444-0000-4000-8000-000000000012", "componenttype": 60 }, null, { "objectid": "{}", "componenttype": 60 } ] }
+// The second row is no record at all and the third names no component (`{}` is braces around nothing). The filter says what type every row is, so a row that says another,
+// or none, is an answer that cannot be relied on as well. A caller that proves something from the whole list (the build's publish before the app) has to be able to place
+// every row, because a row it cannot place is silently left out below, by the filter or by the normalising of the ids, and the component it stood for then reads as "the app
+// holds no such component": an incomplete list that looks complete. One reason a row, the first that applies.
+function unplaceableRows(rows, componentType) {
+  const shown = (value) => String(JSON.stringify(value)).slice(0, 40);
+  const bad = [];
+  rows.forEach((row, index) => {
+    const at = `row ${index + 1}`;
+    let why;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      why = `${at} is not a record`;
+    } else if (row.objectid === undefined || row.objectid === null || row.objectid === '') {
+      why = `${at} has no objectid`;
+    } else if (typeof row.objectid !== 'string' || !FORM_GUID_RE.test(guidKey(row.objectid))) {
+      why = `${at} has an objectid that is no GUID (${shown(row.objectid)})`;
+    } else if (row.componenttype === undefined || row.componenttype === null) {
+      why = `${at} says no component type`;
+    } else {
+      // A number, or text that is only a number, as the filter below reads it; `true` and '' are not a type, though Number() would make them 1 and 0.
+      const type = typeof row.componenttype === 'number' ? row.componenttype : typeof row.componenttype === 'string' && /^\s*\d+\s*$/.test(row.componenttype) ? Number(row.componenttype) : NaN;
+      if (type !== componentType) why = `${at} has component type ${shown(row.componenttype)}, not ${componentType}`;
+    }
+    if (why) bad.push(why);
+  });
+  return bad;
+}
+
 async function appComponentRows(reader, appModuleIdUnique, componentType, opts = {}) {
   const parent = guidKey(appModuleIdUnique);
   const filter = `_appmoduleidunique_value eq ${parent} and componenttype eq ${componentType}`;
@@ -97,6 +185,13 @@ async function appComponentRows(reader, appModuleIdUnique, componentType, opts =
       `/appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq ${requireGuid(parent, 'app layer id')} and componenttype eq ${componentType}`,
       `app component type ${componentType}`);
   if (!Array.isArray(rows)) throw componentError('APP_COMPONENTS_UNVERIFIED', 'app components returned no readable result set');
+  if (opts.strict) {
+    const bad = unplaceableRows(rows, componentType);
+    if (bad.length) {
+      const named = bad.slice(0, 3).join('; ');
+      throw componentError('APP_COMPONENTS_UNVERIFIED', `the component list holds ${bad.length} row${bad.length === 1 ? '' : 's'} it cannot place: ${named}${bad.length > 3 ? ` and ${bad.length - 3} more` : ''}`);
+    }
+  }
   return rows.filter((row) => row && (row.componenttype === undefined || Number(row.componenttype) === componentType));
 }
 
@@ -160,14 +255,13 @@ async function pinAppTables(client, appId, logicalNames, { refs: resolvedRefs } 
   return { added, already };
 }
 
-async function publishAppComponents(client, appId) {
+async function publishAppComponents(client, appId, { sleep } = {}) {
   const id = requireGuid(appId, 'app id');
   // A fresh SDK create already publishes before the plugin can pin hidden tables. Publish that
   // newly proven layer too, even without --publish, or a page-less create leaves its pins pending.
+  // Sent once but for a deadlock victim (postPublishXml): a refusal halts here, as it came.
   // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/publishxml
-  const response = await client.post('/PublishXml', {
-    ParameterXml: `<importexportxml><appmodules><appmodule>${id}</appmodule></appmodules></importexportxml>`,
-  });
+  const response = await postPublishXml(client, `<importexportxml><appmodules><appmodule>${id}</appmodule></appmodules></importexportxml>`, { sleep });
   if (!response || response.status < 200 || response.status >= 300) {
     throw componentError('APP_TABLES_NOT_PUBLISHED', `app '${id}' tables were pinned but publishing returned HTTP ${response && response.status}; re-run the build`, response && response.status);
   }
@@ -340,10 +434,64 @@ async function appMainFormsFor(sdk, appUnique, tables) {
   }
 }
 
-async function readAppComponentInventory(sdk, appId) {
+// How `requireIdentified` reads the answer to the lookup of the tables of one component type's records. The component list names ids and the proof is per id, so
+// a row counts for an id the list asked about and for no other: a row with no readable id, or for an id nobody asked about, says nothing of this app and is left out
+// before it can add a table. A row for an id that was asked about has to name its table in a shape a table can have, or `none` (a dashboard's: it names no table);
+// a value that is neither ('   ', 12345, 'two words') is an answer that cannot be relied on, and so are two rows of one id that name different tables: a record has
+// one table, and the platform answers it twice only for its other layer, with the same table. Neither lets a table in, and either keeps the read from being complete.
+//   { "value": [ { "formid": "33333333-0000-4000-8000-000000000012", "objecttypecode": "contoso_item" } ] }
+function strictAssetAnswers(askedAbout, source) {
+  const asked = new Set(askedAbout);
+  const answered = new Map(); // id -> the table its rows name (`none` for a dashboard)
+  const conflicting = new Set(); // ids whose rows name different tables
+  const unusable = new Map(); // id -> the value that names its table, as answered, when no table can be named so
+  const list = (ids) => `${ids.slice(0, 3).join(', ')}${ids.length > 3 ? ` and ${ids.length - 3} more` : ''}`;
+  return {
+    add(row) {
+      const given = row && typeof row === 'object' ? row[source.idField] : undefined;
+      const id = typeof given === 'string' ? guidKey(given) : '';
+      if (!asked.has(id)) return;
+      const value = row[source.entityField];
+      // Nothing named at all: the row answers nothing about this id, as if the platform had sent none.
+      if (value === undefined || value === null || value === '') return;
+      const table = typeof value === 'string' ? value.trim().toLowerCase() : '';
+      if (table !== 'none' && !TABLE_NAME.test(table)) { unusable.set(id, value); return; }
+      if (!answered.has(id)) answered.set(id, table);
+      else if (answered.get(id) !== table) conflicting.add(id);
+    },
+    // `tables`: those of the ids whose rows all agree on one table. `problem`: what keeps the answer from being complete, or undefined.
+    outcome() {
+      const tables = new Set();
+      for (const [id, table] of answered) if (table !== 'none' && !conflicting.has(id) && !unusable.has(id)) tables.add(table);
+      const missing = [...asked].filter((id) => !answered.has(id) && !unusable.has(id));
+      const reasons = [];
+      if (missing.length) reasons.push(`no ${source.set} record answered for ${list(missing)}`);
+      if (unusable.size) reasons.push(`the ${source.set} answer for ${list([...unusable.keys()])} names no usable table (${String(JSON.stringify([...unusable.values()][0])).slice(0, 40)})`);
+      if (conflicting.size) reasons.push(`the ${source.set} answer for ${list([...conflicting])} names more than one table`);
+      return { tables, problem: reasons.length ? reasons.join('; ') : undefined };
+    },
+  };
+}
+
+// What an app holds, from the server's CURRENT (saved) layer of it: its table components (resolved to logical names), and the tables of the views, forms and charts
+// it holds, resolved through the collection of each. The download builds its spec from this; the build's publish before the app reads the form and chart
+// components of it (table-publish.js readAppFormChartTables).
+//   options.componentTypes     read only these component types (1 table, 26 view, 59 chart, 60 form); all four when omitted. A table component costs one
+//                              metadata read EACH, and a view lookup one read per 20 views, so a caller that does not use them does not pay for them.
+//   options.requireIdentified  also note an asset component whose table the lookup did not answer for, and read the answer strictly (strictAssetAnswers). Each component
+//                              id must come back as a row of its own that names a table (a dashboard's is `none`); an id with no row (a stale component, a record the caller
+//                              may not read) or a row with no id or no table is a hole in the inventory, and a caller that proves something from what the inventory does hold
+//                              must not read it as complete. Off by default: the download reports what it has always reported.
+//   options.savedLayer         look the records up in their SAVED layer (RetrieveUnpublishedMultiple) instead of the published one a plain read answers. The component
+//                              list is the saved layer's (above), so a component a maker added in the designer and never published is in it, and a plain read of the record
+//                              does not answer for it: the saved layer does, with the table it belongs to. Off by default, as the download reads it.
+//                                GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq 33333333-… or formid eq 44444444-…
+//                              The function is bound to these collections and composable with `$select` and `$filter`:
+//                              https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrieveunpublishedmultiple
+async function readAppComponentInventory(sdk, appId, { componentTypes, requireIdentified = false, savedLayer = false } = {}) {
   const inventory = {
     layer: { ok: false, reason: 'app id is missing' }, components: new Map(), componentProblems: new Map(),
-    tables: new Map(), logicalNames: [], assetTables: [], notes: [],
+    tables: new Map(), logicalNames: [], assetTables: [], assetTablesByType: new Map(), notes: [],
   };
   if (!appId) return inventory;
   try {
@@ -359,10 +507,12 @@ async function readAppComponentInventory(sdk, appId) {
     return inventory;
   }
   const assetTables = new Set();
-  for (const componentType of [1, ...APP_COMPONENT_ENTITY_SOURCES.map((source) => source.componentType)]) {
+  const everyType = [1, ...APP_COMPONENT_ENTITY_SOURCES.map((source) => source.componentType)];
+  for (const componentType of everyType.filter((type) => !componentTypes || componentTypes.includes(type))) {
     let components;
     try {
-      components = await appComponentRows(sdk, inventory.layer.appModuleIdUnique, componentType);
+      // `requireIdentified` also means the list itself must be placeable row by row (unplaceableRows): a row this read cannot place is a component it would miss.
+      components = await appComponentRows(sdk, inventory.layer.appModuleIdUnique, componentType, { strict: requireIdentified });
       inventory.components.set(componentType, components);
     } catch (error) {
       inventory.componentProblems.set(componentType, reasonOf(error));
@@ -398,15 +548,27 @@ async function readAppComponentInventory(sdk, appId) {
       continue;
     }
     const source = APP_COMPONENT_ENTITY_SOURCES.find((candidate) => candidate.componentType === componentType);
+    const tablesOfType = new Set();
+    inventory.assetTablesByType.set(componentType, tablesOfType);
+    const strict = requireIdentified ? strictAssetAnswers(ids, source) : null;
     try {
       for (let start = 0; start < ids.length; start += 20) {
         const filter = ids.slice(start, start + 20).map((id) => `${source.idField} eq ${requireGuid(id, 'asset component objectid')}`).join(' or ');
-        const rows = await sdk.queryRecords(source.set, { select: [source.idField, source.entityField], filter, paginate: true });
+        const rows = savedLayer
+          ? await collectionRows(sdk.dataverse, `/${source.collection}/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${source.idField},${source.entityField}&$filter=${filter}`,
+            `the saved ${source.set} records of the app's components`)
+          : await sdk.queryRecords(source.set, { select: [source.idField, source.entityField], filter, paginate: true });
         if (!Array.isArray(rows)) throw componentError('APP_COMPONENTS_UNVERIFIED', `${source.set} returned no readable result set`);
         for (const row of rows) {
+          if (strict) { strict.add(row); continue; }
           const logical = row && row[source.entityField] ? String(row[source.entityField]).toLowerCase() : '';
-          if (logical && logical !== 'none') assetTables.add(logical);
+          if (logical && logical !== 'none') { assetTables.add(logical); tablesOfType.add(logical); }
         }
+      }
+      if (strict) {
+        const { tables, problem } = strict.outcome();
+        for (const table of tables) { assetTables.add(table); tablesOfType.add(table); }
+        if (problem) inventory.notes.push({ kind: 'tables', reason: `tables derived from app component type ${componentType} could not be fully identified (${problem})` });
       }
     } catch (error) {
       inventory.notes.push({ kind: 'tables', reason: `tables derived from app component type ${componentType} could not be read (${reasonOf(error)})` });
@@ -483,11 +645,16 @@ async function downloadAppMainForms(client, appModuleIdUnique, tables, { compone
     const ambiguous = members.filter((member) => typeof member.name !== 'string' || !member.name.trim()
       || catalog.filter((row) => dashboardNameKey(row.name) === dashboardNameKey(member.name)).length !== 1);
     if (ambiguous.length) {
+      // Named in code-unit order, not the order the catalog query answered in, which Dataverse does not fix: two downloads of one app must say
+      // the same, and the note's text is part of what is reported (notRoundTripped.appMembership, stderr).
+      const named = ambiguous.map((row) => `'${row.name || row.formid}'`).sort(compareText);
       notes.push({ kind: 'mainForms', table,
-        reason: `ambiguous or unreadable Main form name(s) ${ambiguous.map((row) => `'${row.name || row.formid}'`).join(', ')} of ${table}; app.mainForms cannot address them by name` });
+        reason: `ambiguous or unreadable Main form name(s) ${named.join(', ')} of ${table}; app.mainForms cannot address them by name` });
       continue;
     }
-    mainForms[table] = members.map((row) => row.name).sort((a, b) => a.localeCompare(b));
+    // The download's `app.mainForms` list: by code units, not `localeCompare`, so two downloads of one app list the same names in
+    // the same order on every machine (compare-text.js).
+    mainForms[table] = members.map((row) => row.name).sort(compareText);
   }
   return { mainForms, notes };
 }
@@ -529,8 +696,8 @@ async function appEntityComponentsFor(sdk, appUnique, wanted) {
 }
 
 module.exports = {
-  currentAppLayer, currentLayerRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
+  currentAppLayer, currentLayerRows, currentLayerRow, savedPageRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
   publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings,
   resolveMainForms, readMainFormMembership, appMainFormsFor, appEntityComponentsFor,
-  APP_COMPONENT_ENTITY_SOURCES, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,
+  APP_COMPONENT_ENTITY_SOURCES, TABLE_NAME, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,
 };
