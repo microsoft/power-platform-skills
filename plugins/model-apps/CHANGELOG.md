@@ -7,24 +7,18 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.21.0]
 
-SDK: 0eef55f8c2d0.
+- **`reconcile: "declared"`**: views/charts/web resources/forms/Global Standard dashboards; rules/flows create/adopt-only; adoption: `adopt:<family>:<key>`. Forms/dashboards/rules/flows `--verify`/download (`--include-managed --managed-manifest <store>`); removed, Maker-deleted roots can retire; re-declarations get fresh ids. New-app `createIdentity: "stable-v1"`: retry-stable view/chart ids. `quickFind.findColumns`, `app.mainFormsOnUpdate: "exact"`, `app.pinDeclaredArtifacts` (lost pin-add recovery).
+- Choice values, `dateTimeBehavior`/`isSecured`/`fieldSecurityProfiles`, table flags (`--authorize <key>` for destructive changes). Environment variables, connection references, Custom APIs, duplicate rules, `solution.version` (`--deployment-settings`). `app.theme` (Preview); `--include-capabilities` downloads theme/behaviours/flags. **Pages:** upload `--draft`/`--turn-id`, navigation drafts/leases, `prepare-compiler-refresh`. **Read-only:** `--dry-run --preview-push`/`--inspect-components`/`solutions.js inspect`/`plan-app-promotion.js`. `data-fix.js` writes.
+- Security/name/DateTime/page-form reads; teardown retains embedded pages/configuration/profiles. Unusable declared connections/APIs or unsettled publication halt page edits. **Default views:** never edit/send tableless copies; refresh otherwise-identical copies. Bounded retries: invocation-created tables only. Preserve/halt other unsent edits (`workspace-copy-unsent-edits`); follow keep/discard guidance.
+- **New declared dashboard tiles:** repeat captions across provisioned languages; only missing sent non-base captions are tolerated. Unreadable languages halt writes/request retries. Create-content mismatches: inspect id; delete only as advised.
+- Declared form tables/dashboards publish without `--publish`; lagging reads retry ~45s/scope plus request time. Process-flow deletes retry; unknown-outcome steps never replay; refused access-unlinks fail.
 
-- **Declared** views, charts, web resources, forms, Global Standard dashboards (`reconcile: "declared"`) preserve omitted settings/controls; business rules/process flows create/adopt-only. Existing-item binding: `adopt:<family>:<key>`. Forms/dashboards/rules/flows: `--verify`, downloads `--include-managed --managed-manifest <store>`; Maker-deleted removed roots can retire; re-declaring gets fresh ids.
-- New-app `createIdentity: "stable-v1"`: retry-stable view/chart ids; unproved changes withhold publication. `quickFind.findColumns`, `app.mainFormsOnUpdate: "exact"`, `app.pinDeclaredArtifacts`; lost pin-add recovery.
-- **Schema:** Choice values, `dateTimeBehavior`/`isSecured`/`fieldSecurityProfiles`, table flags; destructive changes: `--authorize <key>`. **Configuration:** environment variables, connection references, Custom APIs, duplicate rules, `solution.version` (`--deployment-settings`). **`app.theme`** (Preview): header/logo; `--include-capabilities` downloads theme/behaviours/flags.
-- **Pages:** upload `--draft`/`--turn-id`, navigation drafts/leases, `prepare-compiler-refresh`. **Read-only:** `--dry-run --preview-push`, `--inspect-components`, `solutions.js inspect`, `plan-app-promotion.js`. **`data-fix.js`** repairs rows.
+### Limits
 
-### Changed/fixed
-
-- Reads: `IsSecured`, all name matches, existing-table Date/Time preflights, forms before page deletion. Teardown keeps embedded pages/configuration/profiles. Pages refuse unusable declared connections/APIs; edits wait on unsettled publication.
-- New dashboard tiles repeat captions across all provisioned languages; unreadable languages prevent dashboard writes. Declared form tables/dashboards publish without `--publish`; lagging reads retry ~45s/scope plus request time.
-- Default-view cache-lag retries: invocation-created tables only, ≤4 sends. Process-flow deletes retry "no active transaction"; unknown-outcome steps never rerun; refused access-unlinks fail; duplicate-rule component types resolve; emptied declared `webResources` settle.
-
-### Known limitations
-
-- Form/dashboard saved layers miss mid-write edits. Publish checks skip captions in languages absent from published reads and some saved labels. Printed `--authorize publication-risk:<scope>/<dispatch>`: start-only; accepted/uncertain recording stops without service writes. Rerun to publish; re-declare removed dashboards.
-- Managed downloads omit `securityRoles` flows: copy flow/personas from source spec. No view/chart/profile/configuration downloads; charts verify presence only. Local-copy recovery: printed `overwrite:` keys; otherwise manual ([schema](references/app-spec-schema-advanced.md)).
-- Existing-app exact Main forms, empty web resources/Quick Find and removed view columns need `--allow-destructive`. Keyed commands/`forms[].genPages` refused; caption-only inspection fails. Unpublished duplicate rules need publishing; unprovisioned labels halt after solution creation. Lost-create retries can duplicate configuration; recovered-table Date/Time repairs may need rerunning.
+- Saved form/dashboard layers miss mid-write edits. Publish checks skip captions whose language is absent from published reads and some saved labels. Publish duplicate rules; unprovisioned languages fail after solution creation. Lost-create retries can duplicate configuration; recovered-table Date/Time repairs may need rerunning.
+- `--authorize publication-risk:<scope>/<dispatch>`: start-only; accepted/uncertain recording stops without service writes. Rerun to publish; re-declare removed dashboards. Adopted-form saved/published base-language caption differences may need repeated approvals after checking published forms in Maker.
+- Managed downloads omit `securityRoles` flows and forms lacking required downloaded handler libraries (`managedForms.stale`); copy flow/personas or form/libraries from source spec. No view/chart/profile/configuration downloads; charts verify presence only.
+- Local-copy recovery: printed `overwrite:` keys; otherwise manual ([schema](references/app-spec-schema-advanced.md)). `--allow-destructive`: existing-app exact Main forms, empty web resources/Quick Find, removed view columns. Keyed commands/`forms[].genPages` refused; caption-only inspection fails.
 
 ## [2.20.6]
 
