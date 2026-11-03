@@ -130,16 +130,22 @@ async function readLiveForm(sdk, formId) {
  *   - a fresh read of its bound form through `sdk` (the download's own throwaway SDK) answers,
  *   - the form helper's hydrate (hydrateDeclaredForm) certifies it: the same id, type and table, every proved child where it was,
  *     the layout, handlers and hosts exactly as the proof saw them; and
+ *   - every handler library the form names that the downloaded spec does not declare is downloaded with it (libraryEntry: this
+ *     publisher's own unmanaged script, declared `external`), all or none; and
  *   - the downloaded spec still validates with it (`validate`, the download's own validator): a declaration naming a table, column
  *     or sub-grid child the download did not carry would make the whole spec unwritable, so that one form is left out instead.
  * Every other group — unread, stale, not valid here, or still pending or unusable in the store — is answered in `stale` with its
- * reason, never silently dropped. Answers { restored: [key], stale: [{ key, reason }] }; a store file that cannot be used throws.
+ * reason, never silently dropped. Answers { restored: [key], stale: [{ key, reason }], libraries?: [{ name, forms: [key] }] }
+ * (`libraries` only when one was downloaded); a store file that cannot be used throws. `publisher` is the download's
+ * { prefix, resolved } (runDownload); without it no library is downloaded.
  * `fragments`, when given, is an array a stale form is pushed onto (noteFormFragment) when its declaration is proved and left out
  * only for the handler libraries it names; the caller writes them to the fragments file (lib/managed-fragments.js).
  */
-async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate, fragments }) {
+async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate, fragments, publisher }) {
   const { groups, pending, invalid } = readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName });
   const restored = [];
+  const libraries = [];
+  const libraryReads = new Map();
   const stale = [
     ...pending.map((p) => ({ key: p.key, reason: `its last attempt is not settled (${p.code}); build again to settle it` })),
     ...invalid.map((p) => ({ key: p.key, reason: `its stored record is not usable (${p.reason})` })),
@@ -159,7 +165,24 @@ async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName
     }
     const h = hydrateDeclaredForm(group, { formId, liveForm });
     if (!h.form) { stale.push({ key, reason: h.stale }); continue; }
-    const check = validate({ ...spec, forms: [...spec.forms, h.form] });
+    // The handler libraries the form names and the spec does not declare: each is downloaded as the build would need it, or the
+    // form is left out with why (all or nothing: a form is never restored with only some of its libraries).
+    const wanted = librariesNotIn(spec, h.form);
+    const libs = [];
+    const refusals = [];
+    for (const name of wanted) {
+      const got = await libraryEntry(sdk, publisher, name, libraryReads);
+      if (got.entry) libs.push(got.entry);
+      else refusals.push(`its ${eventOf(h.form, name)} handler library '${name}' was not downloaded: ${got.why}`);
+    }
+    if (refusals.length) {
+      const reason = refusals.join('; ');
+      stale.push({ key, reason });
+      noteFormFragment(fragments, { key, reason, spec, form: h.form, validate });
+      continue;
+    }
+    const webResources = [...(Array.isArray(spec.webResources) ? spec.webResources : []), ...libs];
+    const check = validate({ ...spec, ...(libs.length ? { webResources } : {}), forms: [...spec.forms, h.form] });
     if (!check || !check.ok) {
       const errors = ((check && check.errors) || []).slice(0, 3).map((x) => (typeof x === 'string' ? x : (x && x.message) || JSON.stringify(x)));
       const reason = `its declaration does not validate in the downloaded spec (${errors.join('; ') || 'invalid'})`;
@@ -167,11 +190,71 @@ async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName
       noteFormFragment(fragments, { key, reason, spec, form: h.form, validate });
       continue;
     }
+    // The form and its libraries are committed together. A new array, so the list runDownload counted is not grown under it.
+    if (libs.length) spec.webResources = webResources;
+    for (const lib of libs) libraries.push({ name: lib.name, forms: [key] });
     spec.forms.push(h.form);
     restored.push(key);
   }
   stale.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  return { restored, stale };
+  return { restored, stale, ...(libraries.length ? { libraries } : {}) };
+}
+
+// The event a form handler names `library` on, for the reason a library was not downloaded.
+function eventOf(form, library) {
+  const folded = String(library).toLowerCase();
+  const ev = (Array.isArray(form.events) ? form.events : []).find((e) => e && typeof e.library === 'string' && e.library.toLowerCase() === folded);
+  return (ev && ev.event) || 'form';
+}
+
+/**
+ * One handler library a restored form names, read from the environment and declared as a rebuild needs it, or why not.
+ * The entry is `external: true`, as a path-referenced navigation icon's is (download-model-app.js iconWebResources): a build
+ * reuses a library it finds without writing or comparing its content, creates it from this content only where it is missing,
+ * and a teardown never deletes it. It is downloaded only when all of these hold, because each one is what makes that safe:
+ *   - exactly one row answers the name (Dataverse matches it without regard to letter case);
+ *   - the row is unmanaged (`ismanaged === false`; an absent flag is unknown, not unmanaged): a managed library belongs to a
+ *     managed solution, and a build must not create an unmanaged copy of it where that solution is missing;
+ *   - it is a script (webresourcetype 3, JScript), the only kind a form handler runs;
+ *   - it has content, so a rebuild where it is missing creates it whole;
+ *   - its name carries the app's own publisher prefix, read from the solution's publisher and verified (`publisher.resolved`):
+ *     a build creates a missing web resource under the spec's publisher, and a name under another prefix stops that build.
+ * The read, as the platform answers it:
+ *   GET /webresourceset?$select=webresourceid,name,displayname,webresourcetype,content,ismanaged&$filter=name eq 'contoso_/scripts/item.js'&$top=2
+ *   { "value": [ { "webresourceid": "…", "name": "contoso_/scripts/item.js", "displayname": "Item script", "webresourcetype": 3,
+ *                  "content": "dmFyIEl0ZW0g…", "ismanaged": false } ] }
+ * `reads` caches each name's answer for the run, so two forms naming one library read it once.
+ */
+async function libraryEntry(sdk, publisher, name, reads) {
+  const folded = String(name).toLowerCase();
+  if (!reads.has(folded)) reads.set(folded, readLibrary(sdk, publisher, name));
+  return reads.get(folded);
+}
+
+const JSCRIPT = 3;
+
+async function readLibrary(sdk, publisher, name) {
+  const prefix = publisher && publisher.resolved === true && typeof publisher.prefix === 'string' && publisher.prefix ? publisher.prefix.toLowerCase() : null;
+  if (!prefix) return { why: 'the app\'s publisher prefix was not verified, so it is not known to be this publisher\'s' };
+  if (!String(name).toLowerCase().startsWith(`${prefix}_`)) return { why: `its name does not carry this publisher's prefix '${prefix}_'` };
+  let rows;
+  try {
+    rows = await sdk.queryRecords('webresource', {
+      select: ['webresourceid', 'name', 'displayname', 'webresourcetype', 'content', 'ismanaged'],
+      filter: `name eq '${String(name).replace(/'/g, "''")}'`,
+      top: 2,
+    });
+  } catch (e) {
+    return { why: `it could not be read (${(e && e.message) || e})` };
+  }
+  const found = (Array.isArray(rows) ? rows : []).filter((r) => r && typeof r.name === 'string' && r.name.toLowerCase() === String(name).toLowerCase());
+  if (!found.length) return { why: 'it was not found' };
+  if (found.length > 1) return { why: 'more than one web resource answers its name' };
+  const row = found[0];
+  if (row.ismanaged !== false) return { why: row.ismanaged === true ? 'it is managed' : 'whether it is managed is not known' };
+  if (row.webresourcetype !== JSCRIPT) return { why: 'it is not a script' };
+  if (typeof row.content !== 'string' || !row.content) return { why: 'it has no content' };
+  return { entry: { name: row.name, ...(row.displayname ? { displayName: row.displayname } : {}), type: 'js', contentBase64: row.content, external: true } };
 }
 
 // The handler libraries a form's events name that `spec.webResources` does not declare, in event order, each once. Matched

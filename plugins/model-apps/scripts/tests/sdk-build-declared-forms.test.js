@@ -819,8 +819,9 @@ test('verify still holds a plain Main form beside a declared one to the default 
 });
 
 // download-model-app.js main with its side effects replaced: the download's SDK is a real one over the fake org (it answers the app's
-// unique name itself), and runDownload answers the spec a download of this app would hydrate (forms[] empty, as every download).
-async function download(org, out, argv, extra = {}) {
+// unique name itself), and runDownload answers the spec a download of this app would hydrate (forms[] empty, as every download) and the
+// publisher it read (`publisher`: this app's own, verified, unless a test says otherwise).
+async function download(org, out, argv, extra = {}, publisher = { prefix: 'contoso', resolved: true }) {
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(newDir()), instanceUrl: org.origin, httpClient: org.httpClient });
   await sdk.initWorkspace();
   const dl = Object.create(sdk);
@@ -839,7 +840,7 @@ async function download(org, out, argv, extra = {}) {
     preflightAuth: async () => ({ ok: true }),
     makeDownloadSdk: async () => ({ sdk: dl, cleanup() {} }),
     makeGenpageSdk: () => ({}),
-    runDownload: async () => ({ ok: true, spec: downloaded, pages: [], entities: ['contoso_item'], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [] }),
+    runDownload: async () => ({ ok: true, spec: downloaded, pages: [], entities: ['contoso_item'], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [], publisher }),
     ...extra,
   });
   const specFile = path.join(out, 'app-spec.json');
@@ -855,33 +856,103 @@ function handledSpec() {
   s.webResources = [{ name: LIBRARY, displayName: 'Item script', type: 'js', content: LIBRARY_SOURCE }];
   return s;
 }
+// The library's row as the build left it, made the unmanaged row a maker's own build leaves (the fake's create keeps no management flag).
+function libraryRow(org) {
+  const row = [...org.resources.values()].find((r) => r.name === LIBRARY);
+  assert.ok(row, 'the build created the library');
+  row.ismanaged = false;
+  return row;
+}
+const libraryWrites = (calls) => calls.filter((c) => c.method !== 'GET' && /^\/webresources(?:et)?(?:[?(]|$)/i.test(c.path));
 
-test('the explicit managed download writes a proved form it left out only for its handler library to the fragments file, ready to paste', async () => {
+test('the explicit managed download restores a proved form with its handler library, declared external, and a rebuild from it writes no library where it exists', async () => {
   await withForms(true, async () => {
     const org = createFakeBuildOrg({ entities: ENTITIES });
     const dir = newDir();
     const built = handledSpec();
     assert.equal((await build(org, dir, built, { phases: ['web-resources', 'forms'] })).err, undefined);
+    const row = libraryRow(org);
     const out = newDir();
     const r = await download(org, out, ['--include-managed', '--managed-manifest', storeFileOf(org, dir)]);
     assert.equal(r.emitted[0].ok, true, JSON.stringify(r.emitted) + r.said);
-    const { stale } = r.emitted[0].payload.managedForms;
-    assert.deepEqual(stale.map((s) => s.key), [KEY]);
-    assert.match(stale[0].reason, new RegExp(`onload handler references undeclared web resource '${LIBRARY}'`));
-    assert.deepEqual(r.written.forms, []);
-    const file = path.join(out, '.maker-workspace', 'managed-fragments.json');
-    assert.deepEqual(r.emitted[0].payload.managedFragments, { file, keys: [{ family: 'form', key: KEY }] });
-    const fragments = JSON.parse(fs.readFileSync(file, 'utf8'));
-    assert.deepEqual(fragments.items, [{ family: 'form', key: KEY, reason: stale[0].reason, needs: [{ webResource: LIBRARY }], paste: { forms: built.forms } }]);
-    // Pasted with the library it needs, the downloaded spec validates.
-    const pasted = { ...r.written, webResources: [...(r.written.webResources || []), built.webResources[0]], forms: fragments.items[0].paste.forms };
-    assert.equal(validateAppSpec(pasted, { profile: 'plan', reconstructed: true }).ok, true);
+    assert.deepEqual(r.emitted[0].payload.managedForms, { restored: [KEY], stale: [], libraries: [{ name: LIBRARY, forms: [KEY] }] });
+    assert.equal('managedFragments' in r.emitted[0].payload, false);
+    assert.equal(fs.existsSync(path.join(out, '.maker-workspace', 'managed-fragments.json')), false);
+    assert.deepEqual(r.written.forms, built.forms, 'the declaration it was built from');
+    assert.deepEqual(r.written.webResources, [{ name: LIBRARY, displayName: 'Item script', type: 'js', contentBase64: row.publishedContent, external: true }]);
+    assert.equal(Buffer.from(row.publishedContent, 'base64').toString('utf8'), LIBRARY_SOURCE);
+    assert.match(r.said, new RegExp(`NOTE: handler library '${LIBRARY}' of managed form ${KEY} was downloaded into webResources\\[\\] as external`));
+    assert.deepEqual(libraryWrites(r.calls), [], 'the download writes nothing');
+    assert.equal(r.calls.filter((c) => /^\/webresources(?:et)?\?/i.test(c.path)).length, 1, 'the library is read once');
+    // The spec as written rebuilds where it was downloaded from: the library is reused as it is (external: its content is neither written
+    // nor compared) and the form binds it.
+    const again = await build(org, dir, r.written, { phases: ['web-resources', 'forms'] });
+    assert.equal(again.err, undefined, chainText(again.err));
+    assert.deepEqual(libraryWrites(again.calls), []);
+    // Where it is missing, a build creates it from the downloaded content.
+    const fresh = createFakeBuildOrg({ entities: ENTITIES });
+    assert.equal((await build(fresh, newDir(), { ...r.written, forms: [] }, { phases: ['web-resources'] })).err, undefined);
+    const made = [...fresh.resources.values()].find((x) => x.name === LIBRARY);
+    assert.equal(made && made.content, row.publishedContent);
+  });
+});
+
+test('the explicit managed download refuses a handler library it cannot prove is this publisher\'s own unmanaged script, and writes that form ready to paste', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const built = handledSpec();
+    assert.equal((await build(org, dir, built, { phases: ['web-resources', 'forms'] })).err, undefined);
+    const row = libraryRow(org);
+    const kept = { ...row };
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(org, dir)];
+    const byName = (c) => c.method === 'GET' && /^\/webresources(?:et)?\?/i.test(c.path);
+    const cases = [
+      ['managed', () => { row.ismanaged = true; }, /it is managed$/],
+      ['management unknown', () => { delete row.ismanaged; }, /whether it is managed is not known$/],
+      ['not a script', () => { row.webresourcetype = 1; }, /it is not a script$/],
+      ['no content', () => { row.publishedContent = ''; }, /it has no content$/],
+      ['another prefix', () => ({ prefix: 'fabrikam', resolved: true }), /its name does not carry this publisher's prefix 'fabrikam_'$/],
+      ['unverified prefix', () => ({ prefix: 'contoso', resolved: false }), /publisher prefix was not verified/],
+      ['no publisher', () => null, /publisher prefix was not verified/],
+      ['not found', () => org.intercept(byName, () => ({ status: 200, headers: {}, body: { value: [] } })), /it was not found$/],
+      ['two rows', () => org.intercept(byName, () => ({ status: 200, headers: {}, body: { value: [{ ...kept, content: kept.publishedContent }, { ...kept, content: kept.publishedContent }] } })), /more than one web resource answers its name$/],
+      ['read refused', () => org.intercept(byName, () => ({ status: 403, headers: {}, body: { error: { code: '0x80040220', message: 'no read privilege' } } })), /it could not be read \(.*\)$/],
+    ];
+    for (const [label, arrange, why] of cases) {
+      Object.keys(row).forEach((k) => delete row[k]);
+      Object.assign(row, kept);
+      const arranged = arrange();
+      const publisher = arranged === null ? null : arranged && arranged.prefix ? arranged : { prefix: 'contoso', resolved: true };
+      const out = newDir();
+      const r = await download(org, out, flags, {}, publisher);
+      if (typeof arranged === 'function') arranged();
+      assert.equal(r.emitted[0].ok, true, label);
+      const { managedForms } = r.emitted[0].payload;
+      assert.deepEqual(managedForms.restored, [], label);
+      assert.equal('libraries' in managedForms, false, label);
+      assert.match(managedForms.stale[0].reason, new RegExp(`^its onload handler library '${LIBRARY}' was not downloaded: `), label);
+      assert.match(managedForms.stale[0].reason, why, label);
+      assert.deepEqual(r.written.forms, [], label);
+      assert.equal(r.written.webResources, undefined, label);
+      const file = path.join(out, '.maker-workspace', 'managed-fragments.json');
+      assert.deepEqual(r.emitted[0].payload.managedFragments, { file, keys: [{ family: 'form', key: KEY }] }, label);
+      const fragments = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.deepEqual(fragments.items, [{ family: 'form', key: KEY, reason: managedForms.stale[0].reason, needs: [{ webResource: LIBRARY }], paste: { forms: built.forms } }], label);
+      // Pasted with the library it needs, the downloaded spec validates.
+      const pasted = { ...r.written, webResources: [built.webResources[0]], forms: fragments.items[0].paste.forms };
+      assert.equal(validateAppSpec(pasted, { profile: 'plan', reconstructed: true }).ok, true, label);
+    }
+    Object.keys(row).forEach((k) => delete row[k]);
+    Object.assign(row, kept);
     // A form left out for anything else gets no fragment: nothing proved it.
-    const refusing = await download(org, newDir(), ['--include-managed', '--managed-manifest', storeFileOf(org, dir)], {
+    const refusing = await download(org, newDir(), flags, {
       validateAppSpec: (s, o) => ((s.forms || []).length ? { ok: false, errors: ['forms: not in this download'], warnings: [] } : validateAppSpec(s, o)),
     });
     assert.equal(refusing.emitted[0].ok, true);
+    assert.match(refusing.emitted[0].payload.managedForms.stale[0].reason, /does not validate in the downloaded spec/);
     assert.equal('managedFragments' in refusing.emitted[0].payload, false);
+    assert.equal(refusing.written.webResources, undefined, 'a library is committed only with its form');
   });
 });
 

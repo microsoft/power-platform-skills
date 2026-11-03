@@ -2921,9 +2921,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   one leaves the host out as unverified, and the oracle has no wildcard. A quick view's target is looked up by
   name (ambiguous → unverified). `download-model-app.js --include-managed --managed-manifest <store file>`
   (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
-  pending, unreadable or invalid one is left out and named. A form with `events` is always invalid there:
-  the download writes only icon and logo web resources, so its handler library is undeclared and the form
-  is named in `managedForms.stale`; forms without a handler are restored. A form left out only for its
+  pending, unreadable or invalid one is left out and named. A form with `events` brings each handler library
+  the spec does not declare (`librariesNotIn`), read by name through the download's SDK (`libraryEntry`, cached
+  per run) and added as `{ name, displayName?, type: 'js', contentBase64, external: true }` together with the
+  form, all or none (`managedForms.libraries: [{ name, forms }]`, only when one was added, and a NOTE line).
+  The gates: exactly one row, `ismanaged === false` (absent is unknown), `webresourcetype === 3`, content,
+  and a name under the publisher prefix `runDownload` answers as `publisher: { prefix, resolved }` (internal,
+  not printed; `resolved` false refuses). `external` is what keeps a rebuild from writing or comparing the
+  library's content (`sdk-build.js` web-resources reuse) and a teardown from deleting it. A refused library
+  leaves the form in `managedForms.stale` ("handler library '<name>' was not downloaded: <why>"). A form left
+  out only for its
   handler libraries (the spec validates with the form and a stub `js` entry per missing library) is written
   to the fragments file, `<out>/.maker-workspace/managed-fragments.json` (`lib/managed-fragments.js`,
   `managedFragments` in the result), with `needs: [{ webResource }]` and a `paste` entry; a flow left out

@@ -26,6 +26,8 @@
 // flows (businessProcessFlows[].reconcile "declared"), which it leaves out too, into businessProcessFlows[] (`managedBpfs`). The download writes
 // no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>
 // (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>; each flow: adopt:bpf:<table>/<name>).
+// A declared form's handler library the spec does not declare is downloaded with the form, as an `external` web resource, when it is
+// this publisher's own unmanaged script (lib/declared-form-io.js libraryEntry; `managedForms.libraries`).
 // A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
 // `<out>/.maker-workspace/managed-fragments.json` (`managedFragments` in the result; lib/managed-fragments.js). The download writes
@@ -3688,7 +3690,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
+  // `publisher` is internal (main hands it to the managed restore, which downloads a form's handler library only under this
+  // publisher's verified prefix); it is not part of the printed result.
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
 async function main(deps = {}) {
@@ -3883,6 +3887,7 @@ async function main(deps = {}) {
         solutionUniqueName: spec.solution && spec.solution.uniqueName,
         validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
         fragments,
+        publisher: result.publisher,
       };
       try {
         managedForms = await restoreManagedForms(source);
@@ -3894,6 +3899,7 @@ async function main(deps = {}) {
         return;
       }
       for (const s of managedForms.stale) io.stderr.write(`WARNING: managed form ${s.key} was not restored: ${s.reason}. It is left out of forms[], as every form is without --include-managed.\n`);
+      for (const l of managedForms.libraries || []) io.stderr.write(`NOTE: handler library '${l.name}' of managed form ${l.forms.join(', ')} was downloaded into webResources[] as external: a build reuses it where it exists without writing its content, creates it where it is missing, and a teardown never deletes it.\n`);
       for (const s of managedDashboards.stale) io.stderr.write(`WARNING: managed dashboard ${s.key} was not restored: ${s.reason}. Its dashboard is downloaded as every dashboard is without --include-managed.\n`);
       for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
       for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);

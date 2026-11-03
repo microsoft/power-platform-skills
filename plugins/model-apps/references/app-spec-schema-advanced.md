@@ -813,11 +813,16 @@ are only added.
   build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
   `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
   that is pending, gone or not valid is left out and named. A declared form with an event handler
-  (`events`) is not valid in the downloaded spec, because a download brings back only icon and logo web
-  resources, not the handler's library: it is left out and named in `managedForms.stale` ("onload handler
-  references undeclared web resource"), while the forms without a handler are restored. Its declaration is
-  written ready to paste in the build folder's `.maker-workspace/managed-fragments.json` (see below), with
-  the library it needs: add both to the spec. The download transfers no binding: the
+  (`events`) comes back with each handler library the spec does not declare, added to `webResources[]` as
+  `external: true` and named in `managedForms.libraries` (`[{ name, forms }]`) and in a note. A library is
+  downloaded only when it is this app's own: exactly one web resource of that name, unmanaged, a script,
+  with content, and named under the solution publisher's prefix, read and verified by the download. A
+  rebuild reuses an `external` library where it exists without writing or comparing its content, creates
+  it from the downloaded content where it is missing, and a teardown never deletes it. When a library
+  fails any of those checks the form is left out and named in `managedForms.stale` ("handler library
+  '<name>' was not downloaded: <why>"), and its declaration is written ready to paste in the build
+  folder's `.maker-workspace/managed-fragments.json` (see below), with the library it needs: add both to
+  the spec. The download transfers no binding: the
   downloaded folder has no store, so the first build that binds a form there needs
   `--authorize "adopt:form:<key>"`. A rebuild that finds the form already as declared writes nothing and
   may leave it unbound.

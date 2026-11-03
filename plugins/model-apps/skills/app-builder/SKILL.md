@@ -168,8 +168,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
   declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
   not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
-  file>` (one with an event handler is left out and named in `managedForms.stale`, as its handler's web
-  resource is not downloaded; its declaration is written ready to paste in `.maker-workspace/managed-fragments.json`
+  file>` (one with an event handler comes back with its handler library as an `external` web resource when
+  that library is this publisher's own unmanaged script; otherwise it is left out and named in
+  `managedForms.stale`, and its declaration is written ready to paste in `.maker-workspace/managed-fragments.json`
   with the library it needs, so tell the maker to add both from the spec it was built from); it carries no binding, so the first build that binds each form from the downloaded folder needs
   `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
