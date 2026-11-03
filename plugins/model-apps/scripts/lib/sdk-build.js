@@ -3988,7 +3988,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // the points below where the build would have published it. With no store file nothing is routed, and every request is the
   // one the build always sent.
   const managedTables = bindingGroups && bindingGroups.store && provision.dataverse
-    ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: managedStop })
+    ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: managedStop, settle: opts.publicationSettle })
     : null;
   if (managedTables) await retireAbsentRemovedForms();
   // haltOnUnconfirmedRetirements: a dashboard or form retirement the sweeps above could not confirm ends this invocation
@@ -8423,7 +8423,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const id = out.id || resolvedId;
         let pub;
         try {
-          pub = await publishDeclaredDashboard({ store, barrier: owed.barrier, sdk: provision, key, id });
+                    // opts.publicationSettle paces the read-back after the publish (publishManagedScope `settle`); only a test sets it.
+          pub = await publishDeclaredDashboard({ store, barrier: owed.barrier, sdk: provision, key, id, settle: opts.publicationSettle });
         } catch (err) {
           // The refusal keeps its cause: a blocked uncertain publication carries its dispatch as data there (build-model-app.js
           // blockedPublicationOf reads err.cause), never in the message.

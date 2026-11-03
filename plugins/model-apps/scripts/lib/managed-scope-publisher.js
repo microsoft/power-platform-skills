@@ -39,9 +39,10 @@ const lc = (s) => String(s == null ? '' : s).toLowerCase();
  *            passes it under its send permit;
  *   client   the Dataverse client the layers are read and the publish is sent with (`get(path)` / `post(path, body)`
  *            answering { status, body });
- *   halt     the build's halt factory, for a publish the protocol refused.
+ *   halt     the build's halt factory, for a publish the protocol refused;
+ *   settle   optional, the pacing of the read-back after each publish (publishManagedScope `settle`); only a test sets it.
  */
-function createManagedTablePublisher({ store, barrier, client, halt } = {}) {
+function createManagedTablePublisher({ store, barrier, client, halt, settle } = {}) {
   if (!store || !barrier || typeof barrier.route !== 'function' || !client || typeof halt !== 'function') {
     throw new TypeError('createManagedTablePublisher needs the store, the barrier, a client and the halt factory');
   }
@@ -92,7 +93,7 @@ function createManagedTablePublisher({ store, barrier, client, halt } = {}) {
         let out;
         try {
           out = await publishManagedScope({
-            store, barrier, client, path,
+            store, barrier, client, path, settle,
             scope: { type: 'table', table },
             groups: owedOn(table),
             carry: true,

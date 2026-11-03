@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
 const { openManagedContext, openManagedBindings, CODES, COMPLETION_BASE_BYTES, publicationRiskApproval, publicationRemedy } = require('../lib/managed-bindings.js');
-const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, editSwitchRequired, WORKFLOW_EFFECT_FULFILLED, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
+const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, editSwitchRequired, WORKFLOW_EFFECT_FULFILLED, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING, PUBLICATION_SETTLE_DELAYS_MS } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256, systemFormRootLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
@@ -97,8 +97,8 @@ const publishDashboard = (sdk, store, barrier, family, key, id) => publishManage
   publish: async () => { await sdk.fetchArtifact('dashboard', id); await sdk.publishArtifact('dashboard', id); },
 });
 
-async function setup() {
-  const wire = createManagedWire();
+async function setup(wireOptions) {
+  const wire = createManagedWire(wireOptions);
   const barrier = createPublicationBarrier();
   const { sdk } = await sdkOver(wire, { barrier });
   const dir = makeTempDir('mp-');
@@ -2362,16 +2362,20 @@ test('carry: a publish() answer is judged by its publish kind, never by `shipped
 });
 
 test('publication refusals: a send answered but not read back names its own dispatch as data; a send with no managed group on the scope journals nothing and names none', async () => {
+  const waits = [];
   const send = (s, readers) => caught(publishManagedScope({
     store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, path: 'managed forms of account', ...(readers ? { readers } : {}),
-    publish: () => publishTablesXml(s.sdk.dataverse, ['account']),
+    publish: () => publishTablesXml(s.sdk.dataverse, ['account']), settle: { sleep: async (ms) => { waits.push(ms); } },
   }));
-  // The publish answers success but the service did not apply it: the read-back does not show the debt.
+  // The publish answers success but the service did not apply it: the read-back does not show the debt, nor does any
+  // read after each of the bounded settle delays.
   const a = await setup();
   committedForm(a, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
   a.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 204, unapplied: true });
   const unshown = await send(a);
   assert.match(unshown.message, /does not show what it shipped/);
+  assert.deepEqual(waits, [...PUBLICATION_SETTLE_DELAYS_MS], 'the read-back is made again after each settle delay, and no more');
+  assert.equal(a.wire.publishes('account').length, 1, 'a read-back that never shows the send is never answered with a second publish');
   assert.deepEqual(shapeOf(unshown), blockedBy(pubOf(a.store).dispatchToken));
   // The read-back itself fails.
   const b = await setup();
@@ -2386,6 +2390,51 @@ test('publication refusals: a send answered but not read back names its own disp
   c.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } }, unapplied: true });
   const bare = await caught(carryTable(c.sdk, c.store, c.barrier));
   assert.deepEqual(shapeOf(bare), [PUBLICATION_UNCONFIRMED, undefined, undefined, undefined]);
+});
+
+// Straight after a publish the platform may answer a cell caption still being rewritten (the wire's `rewritingReads`), while a
+// read some seconds later is the saved layer exactly: the read-back is made again on the bounded settle schedule, and only a
+// read that shows the send confirms it.
+const cellForm = (caption) => `<form><tabs><tab id="{t}"><labels><label description="General" languagecode="1033" /></labels><columns><column><sections><section id="{s}">`
+  + `<labels><label description="Main" languagecode="1033" /></labels><rows><row><cell id="{c}"><labels><label description="${caption}" languagecode="1033" /></labels>`
+  + '<control id="name" datafieldname="name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>';
+test('publication read-back: a published read that lags behind a publish is read again after each settle delay and confirms once it shows the send; without the re-read, or when a re-read fails, it stays unconfirmed', async () => {
+  const run = async (rewritingReads, settle, readers) => {
+    const s = await setup({ platform: { rewritingReads } });
+    committedForm(s, { id: MAIN, key: 'account/main', publishedXml: cellForm('Account name'), savedXml: cellForm('Customer name') });
+    const out = await caught(publishManagedScope({
+      store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, path: 'managed forms of account', settle, ...(readers ? { readers } : {}),
+      publish: () => publishTablesXml(s.sdk.dataverse, ['account']),
+    }));
+    return { s, out };
+  };
+  const waits = [];
+  const sleep = async (ms) => { waits.push(ms); };
+  const lagging = await run(2, { sleep });
+  assert.equal(lagging.out, null);
+  assert.equal(pubOf(lagging.s.store).state, 'confirmed');
+  assert.deepEqual(waits, PUBLICATION_SETTLE_DELAYS_MS.slice(0, 2), 'two reads lagged, so two waits, then the read that shows the send');
+  assert.equal(lagging.s.wire.publishes('account').length, 1, 'one publish: the lag is read through, never published over');
+  // The same lag with no re-read (an empty schedule) is not confirmed: what confirms is a read that shows the send.
+  const once = await run(2, { delaysMs: [], sleep });
+  assert.equal(once.out && once.out.code, PUBLICATION_UNCONFIRMED);
+  assert.match(once.out.message, /does not show what it shipped/);
+  assert.equal(pubOf(once.s.store).state, 'unconfirmed');
+  // A re-read that fails is not waited out: the scope is unconfirmed at once and blocked for the run.
+  const { LAYER_READERS } = require('../lib/managed-layer-readers.js');
+  let reads = 0;
+  waits.length = 0;
+  const failing = await run(5, { sleep }, { ...LAYER_READERS, form: async (...args) => { reads += 1; if (reads > 2) throw new Error('reset'); return LAYER_READERS.form(...args); } });
+  assert.equal(failing.out && failing.out.code, PUBLICATION_UNCONFIRMED);
+  assert.match(failing.out.message, /could not be read back/);
+  assert.deepEqual(waits, PUBLICATION_SETTLE_DELAYS_MS.slice(0, 1));
+  assert.equal(failing.s.barrier.allowScope(ACCOUNT, 'a sibling view'), false);
+  // A schedule that is not whole milliseconds is the caller's mistake, refused before anything is sent.
+  for (const delaysMs of [[1.5], [-1], 'soon', [Number.NaN]]) {
+    const bad = await run(0, { delaysMs, sleep });
+    assert.ok(bad.out instanceof TypeError, JSON.stringify(delaysMs));
+    assert.equal(bad.s.wire.publishes('account').length, 0);
+  }
 });
 
 test('carry: a table with no managed group is published as before — no store write and no extra request', async () => {

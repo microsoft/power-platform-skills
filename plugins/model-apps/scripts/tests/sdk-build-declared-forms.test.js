@@ -28,6 +28,7 @@ const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { DECLARED_FEATURES } = require('../lib/declared-features.js');
 const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
 const { gatedClient } = require('./helpers/gated-fake-client.js');
+const { withSecondLanguageCaptions, withoutLanguage } = require('./helpers/platform-labels.js');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -191,6 +192,44 @@ test('a declared form is created once, published once with its table, and a rebu
     assert.equal(again.err, undefined, chainText(again.err));
     assert.deepEqual(formWrites(again), []);
     assert.deepEqual(again.tablePublishes, []);
+  });
+});
+
+// An organization with a second language (3082) provisioned beside its base one: the saved read of a form carries a caption in it
+// beside the base one on each cell whose caption has text, and the published read never returns one (helpers/platform-labels.js).
+// The caption the published read cannot carry is not compared, so the table publish of a declared form is confirmed there too.
+function twoLanguages(org, lcid = 3082) {
+  return org.intercept((r) => r.method === 'GET' && /^\/systemforms/.test(r.path), async (r) => {
+    const res = await org.fake.httpClient.get(`${org.origin}/api/data/v9.2${r.path}`);
+    const savedLayer = /RetrieveUnpublished/.test(r.path);
+    const read = (row) => (row && typeof row.formxml === 'string' ? { ...row, formxml: savedLayer ? withSecondLanguageCaptions(row.formxml, lcid) : withoutLanguage(row.formxml, lcid) } : row);
+    return { ...res, body: res.body && Array.isArray(res.body.value) ? { ...res.body, value: res.body.value.map(read) } : read(res.body) };
+  });
+}
+
+test('in an organization of two languages a declared form is created and its table publish confirmed; a rebuild sends nothing and a changed declaration publishes once', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    twoLanguages(org);
+    const dir = newDir();
+    const first = await build(org, dir, makeSpec(), { publicationSettle: { sleep: async () => {} } });
+    assert.equal(first.err, undefined, chainText(first.err));
+    assert.equal(formPosts(first).length, 1);
+    assert.deepEqual(first.tablePublishes, [['contoso_item']]);
+    const id = storeOf(org, dir).readGroup('form', KEY).committed.root.id;
+    assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'confirmed');
+    const saved = String((await org.fake.httpClient.get(`${org.origin}/api/data/v9.2/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`)).body.formxml);
+    assert.ok(!saved.includes('languagecode="3082"'), 'the fake org itself holds one language; the second is in its reads');
+    const again = await build(org, dir, makeSpec(), { publicationSettle: { sleep: async () => {} } });
+    assert.equal(again.err, undefined, chainText(again.err));
+    assert.deepEqual(formWrites(again), []);
+    assert.deepEqual(again.tablePublishes, []);
+    const changed = makeSpec();
+    changed.forms[0].tabs[0].sections[0].fields = ['contoso_code', 'contoso_name'];
+    const moved = await build(org, dir, changed, { publicationSettle: { sleep: async () => {} } });
+    assert.equal(moved.err, undefined, chainText(moved.err));
+    assert.deepEqual(moved.tablePublishes, [['contoso_item']]);
+    assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'confirmed');
   });
 });
 

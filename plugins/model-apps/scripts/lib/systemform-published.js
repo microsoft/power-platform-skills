@@ -14,6 +14,7 @@
 // Dataverse "object does not exist" code, e.g. { "error": { "code": "0x80040217", "message": "systemform With Id = … Does Not Exist" } }.
 
 const { normalizeGuid, intentSha256 } = require('./reconcile-common.js');
+const { comparableSavedFormXml } = require('./formxml-layers.js');
 
 const SELECT = '$select=formid,name,description,formxml';
 // The root fields a dashboard's support and identity depend on: its systemform `type` (0 a Standard dashboard, 10 an
@@ -76,9 +77,19 @@ async function get(client, path, id, layer) {
 /**
  * Read both layers of systemform `id` and compare name, description and formxml — and, with `{ rootFields: true }`,
  * also `type` and `objecttypecode`, read in the same GET of each layer (ROOT_SELECT).
- * Answers { state: 'equal' | 'differs' | 'never-published', saved, published } (published is null when never
- * published). Throws `managed-publication-unverified` for every other answer: a failed read is not evidence that
+ * Answers { state: 'equal' | 'differs' | 'never-published', saved, published, savedCompared } (published is null when
+ * never published). Throws `managed-publication-unverified` for every other answer: a failed read is not evidence that
  * the layers are equal, nor that they differ.
+ *
+ * `saved` and `published` are the rows as read. What is compared is `savedCompared` — the saved row with the captions
+ * of its formxml that the published read cannot carry set aside (lib/formxml-layers.js, comparableSavedFormXml) — with
+ * `published` as read. In an organization with a second language provisioned, the saved read carries that language's
+ * captions on some labels and the published read carries none, so compared as text no publish could ever be confirmed.
+ * NOT COMPARED: a caption in a language the published read does not return and that is not on every label of the saved
+ * form (a translation); everything else, a caption in any language the published read returns included, is compared
+ * byte for byte. A managed group's publication hash is taken of `savedCompared` (systemFormLayerSha256), so the layer
+ * readers below and every caller that records a desired hash compare like with like; in an organization of one
+ * language `savedCompared` is the saved row's content unchanged, and so is every hash.
  */
 async function readSystemFormPublication(client, rawId, { rootFields = false } = {}) {
   const id = normalizeGuid(rawId);
@@ -89,12 +100,15 @@ async function readSystemFormPublication(client, rawId, { rootFields = false } =
   if (!ok(savedRes)) throw unverified(`the saved systemform ${id} could not be read (status ${savedRes && savedRes.status})`);
   const saved = rowOf(savedRes, id, 'saved', rootFields);
   const pubRes = await get(client, `/systemforms(${id})?${select}`, id, 'published');
-  if (pubRes && pubRes.status === 404 && errorCode(pubRes.body) === NOT_FOUND) return { state: 'never-published', saved, published: null };
+  if (pubRes && pubRes.status === 404 && errorCode(pubRes.body) === NOT_FOUND) {
+    return { state: 'never-published', saved, published: null, savedCompared: { ...saved, formxml: comparableSavedFormXml(saved.formxml, null) } };
+  }
   if (!ok(pubRes)) throw unverified(`the published systemform ${id} could not be read (status ${pubRes && pubRes.status})`);
   const published = rowOf(pubRes, id, 'published', rootFields);
-  const same = saved.name === published.name && saved.description === published.description && saved.formxml === published.formxml &&
-    (!rootFields || (saved.type === published.type && saved.objecttypecode === published.objecttypecode));
-  return { state: same ? 'equal' : 'differs', saved, published };
+  const savedCompared = { ...saved, formxml: comparableSavedFormXml(saved.formxml, published.formxml) };
+  const same = savedCompared.name === published.name && savedCompared.description === published.description && savedCompared.formxml === published.formxml &&
+    (!rootFields || (savedCompared.type === published.type && savedCompared.objecttypecode === published.objecttypecode));
+  return { state: same ? 'equal' : 'differs', saved, published, savedCompared };
 }
 
 /**
@@ -130,7 +144,7 @@ const NEVER_PUBLISHED_SHA256 = intentSha256({ neverPublished: true });
  */
 async function readSystemFormLayers(client, group) {
   const r = await readSystemFormPublication(client, group && group.root && group.root.id);
-  return { savedSha256: systemFormLayerSha256(r.saved), publishedSha256: r.published ? systemFormLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
+  return { savedSha256: systemFormLayerSha256(r.savedCompared), publishedSha256: r.published ? systemFormLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
 }
 
 /**
@@ -139,7 +153,7 @@ async function readSystemFormLayers(client, group) {
  */
 async function readSystemFormRootLayers(client, group) {
   const r = await readSystemFormPublication(client, group && group.root && group.root.id, { rootFields: true });
-  return { savedSha256: systemFormRootLayerSha256(r.saved), publishedSha256: r.published ? systemFormRootLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
+  return { savedSha256: systemFormRootLayerSha256(r.savedCompared), publishedSha256: r.published ? systemFormRootLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
 }
 
 /**

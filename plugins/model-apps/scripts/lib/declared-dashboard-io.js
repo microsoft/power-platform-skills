@@ -14,7 +14,7 @@
 // workspace is the caller's own and throwaway (verify's isolated reader, the download's SDK), never the build's. It shows
 // whether the row still is what the last build proved; it shows nothing about an edit that lands after it.
 const { canonicalJson } = require('./reconcile-common.js');
-const { KIND, projectDashboard, committedProjectionInput, committedDeclaration, canonicalDeclaration } = require('./dashboard-reconcile.js');
+const { KIND, projectDashboard, preservationMatches, committedProjectionInput, committedDeclaration, canonicalDeclaration } = require('./dashboard-reconcile.js');
 const { readManagedFormFile } = require('./declared-form-io.js');
 
 const bareId = (id) => String(id == null ? '' : id).toLowerCase().replace(/^\{|\}$/g, '');
@@ -54,7 +54,7 @@ function dashboardProofIssues(group, art, languageCode) {
   if (p.semanticSha256 !== proof.semanticSha256) {
     issues.push({ code: 'dashboard-changed', message: 'the dashboard\'s name, description or managed tiles are not what its last build proved' });
   }
-  if (p.preservationSha256 !== proof.preservationSha256) {
+  if (!preservationMatches(p, proof.preservationSha256)) {
     issues.push({ code: 'dashboard-kept-content-changed', message: 'what the declaration does not own (another tile, a tab, a section, the layout, or a managed tile\'s other settings) is not what its last build proved' });
   }
   return issues;

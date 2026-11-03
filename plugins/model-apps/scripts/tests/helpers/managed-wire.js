@@ -26,16 +26,25 @@
 // Anything else: a GET answers an empty collection, a write 204. `script(match, answer)` makes the next request that
 // `match`es answer `answer` instead (`{ statusCode, body }`, or `{ error }` for a transport failure after the send) —
 // the request is still recorded and still applied unless `answer.unapplied`.
+// `platform` turns on what the live platform does to a systemform's captions on its own (helpers/platform-labels.js), each off by
+// default so every other test sees the rows exactly as written:
+//   emptyContainerCaptions  a POST of a systemform saves an empty caption on each tab and section it sent without one;
+//   secondLanguage: <lcid>  an organization with that language provisioned: the saved-layer read carries a caption in it beside a
+//                           cell's base-language one, and the published-layer read never carries one;
+//   rewritingReads: <n>     the first n published-layer reads of a row after a PublishXml that names it answer its cell captions
+//                           as still being rewritten (empty); the read after them is the published row.
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../../vendor/cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../../lib/sdk-http-client.js');
 const { makeTempDir } = require('./temp-dirs.js');
+const { withEmptyContainerCaptions, withSecondLanguageCaptions, withoutLanguage, withRewritingCellCaptions } = require('./platform-labels.js');
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const ENTITY_SETS = { systemform: 'systemforms', workflow: 'workflows', savedquery: 'savedqueries' };
 
-function createManagedWire() {
+function createManagedWire({ platform = {} } = {}) {
   const saved = new Map();
   const published = new Map();
+  const rewriting = new Map();
   const workflows = new Map();
   // savedqueries / savedqueryvisualizations: collection -> { saved: Map, published: Map }
   const queries = { savedqueries: { saved: new Map(), published: new Map(), table: 'returnedtypecode' }, savedqueryvisualizations: { saved: new Map(), published: new Map(), table: 'primaryentitytypecode' } };
@@ -46,18 +55,27 @@ function createManagedWire() {
   const bump = (id) => { version += 1; versions.set(id, `W/"${version}"`); };
   const json = (statusCode, body, headers = {}) => ({ statusCode, headers, body: body === undefined ? '' : JSON.stringify(body) });
   const notFound = () => json(404, { error: { code: '0x80040217', message: 'Does Not Exist' } });
+  const lcid = platform.secondLanguage;
+  const savedRead = (r) => (lcid ? { ...r, formxml: withSecondLanguageCaptions(r.formxml, lcid) } : r);
+  const publishedRead = (id, r) => {
+    let out = lcid ? { ...r, formxml: withoutLanguage(r.formxml, lcid) } : r;
+    const left = rewriting.get(id) || 0;
+    if (left > 0) { rewriting.set(id, left - 1); out = { ...out, formxml: withRewritingCellCaptions(out.formxml) }; }
+    return out;
+  };
+  const publishRow = (id, r) => { published.set(id, { ...r }); if (platform.rewritingReads) rewriting.set(id, platform.rewritingReads); };
 
   function apply(method, p, body, query = new URLSearchParams()) {
     let m = /^systemforms\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\)$/i.exec(p);
     if (m && method === 'GET') {
       const id = m[1].toLowerCase();
       const r = saved.get(id);
-      return r ? json(200, { ...r, '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound();
+      return r ? json(200, { ...savedRead(r), '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound();
     }
     m = /^systemforms\(([^)]+)\)$/i.exec(p);
     // The test keeps one version per row whichever layer is read (the SDK's pre-push read is this GET). The service
     // answers the published row's ETag here instead; see the header.
-    if (m && method === 'GET') { const id = m[1].toLowerCase(); const r = published.get(id); return r ? json(200, { ...r, '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound(); }
+    if (m && method === 'GET') { const id = m[1].toLowerCase(); const r = published.get(id); return r ? json(200, { ...publishedRead(id, r), '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound(); }
     if (m && method === 'PATCH') {
       const id = m[1].toLowerCase();
       saved.set(id, { ...saved.get(id), ...body, formid: id });
@@ -68,7 +86,7 @@ function createManagedWire() {
       // A create names its own formid. A second create of an id that exists fails on the primary key and changes nothing.
       const id = String(body && body.formid).toLowerCase();
       if (saved.has(id) || published.has(id)) return json(412, { error: { code: '0x80040237', message: 'Cannot insert duplicate key.' } });
-      saved.set(id, { description: null, ...body, formid: id });
+      saved.set(id, { description: null, ...body, formid: id, ...(platform.emptyContainerCaptions ? { formxml: withEmptyContainerCaptions(body && body.formxml) } : {}) });
       bump(id);
       return json(204, undefined, { etag: versions.get(id), 'odata-entityid': `${ORIGIN}/api/data/v9.0/systemforms(${id})` });
     }
@@ -77,12 +95,12 @@ function createManagedWire() {
     if (/^PublishXml$/i.test(p) && method === 'POST') {
       const xml = String(body && body.ParameterXml);
       for (const [, t] of xml.matchAll(/<entity>([^<]+)<\/entity>/g)) {
-        for (const [id, r] of saved) if (r.objecttypecode === t && r.type !== 0) published.set(id, { ...r });
+        for (const [id, r] of saved) if (r.objecttypecode === t && r.type !== 0) publishRow(id, r);
         for (const q of Object.values(queries)) for (const [id, r] of q.saved) if (r[q.table] === t) q.published.set(id, { ...r });
       }
       for (const [, id] of xml.matchAll(/<dashboard>([^<]+)<\/dashboard>/g)) {
         const r = saved.get(id.toLowerCase());
-        if (r) published.set(id.toLowerCase(), { ...r });
+        if (r) publishRow(id.toLowerCase(), r);
       }
       return json(204);
     }

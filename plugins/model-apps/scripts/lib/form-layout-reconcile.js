@@ -1963,8 +1963,9 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     const differs = layers.state !== 'equal';
     let publication;
     if (differs && ((applied && applied.sent) || recovering)) {
-      // Hashed exactly as the shared form reader (LAYER_READERS.form) hashes the saved layer it will compare.
-      publication = { scope, state: 'owed', desiredSha256: systemFormLayerSha256(layers.saved), dispatchToken: null };
+      // Hashed exactly as the shared form reader (LAYER_READERS.form) hashes the saved layer it will compare: the saved row
+      // as compared with the published one (savedCompared, systemform-published.js), not the row as read.
+      publication = { scope, state: 'owed', desiredSha256: systemFormLayerSha256(layers.savedCompared), dispatchToken: null };
     } else if (differs && committed && committed.publication && committed.publication.state === 'owed') {
       // Debt this group already owed stays owed for exactly what it owed: if the saved layer has moved on since,
       // the publish refuses it (the saved layer is not ours to put live).
@@ -2098,7 +2099,7 @@ async function publishTableOnce(dataverse, table) {
  * answers { sent: false, withheld: true }. Any other outcome is a hold: the scope is blocked for the run and the error
  * is rethrown with `hold: true` (and `refusal: true` when the send boundary refused the request unsent).
  */
-async function publishDeclaredFormTable({ store, barrier, sdk, table, keys = [] } = {}) {
+async function publishDeclaredFormTable({ store, barrier, sdk, table, keys = [], settle } = {}) {
   const t = lc(table);
   const scope = { type: 'table', table: t };
   const gate = barrier || store;
@@ -2114,7 +2115,7 @@ async function publishDeclaredFormTable({ store, barrier, sdk, table, keys = [] 
     return await publishManagedScope({
       // Every committed group on the table, of any family, is read by its own family's shared reader
       // (managed-layer-readers.js LAYER_READERS, the default); this helper supplies none and replaces none.
-      store, barrier, scope, groups, client: sdk && sdk.dataverse, path: `declared forms of ${t}`,
+      store, barrier, scope, groups, client: sdk && sdk.dataverse, path: `declared forms of ${t}`, settle,
       publish: () => publishTableOnce(sdk && sdk.dataverse, t),
     });
   } catch (err) {

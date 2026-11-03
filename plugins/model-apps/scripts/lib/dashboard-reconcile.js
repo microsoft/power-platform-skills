@@ -336,12 +336,39 @@ function strippedManagedCell(cell, type, languageCode) {
 }
 
 /**
+ * Whether `el` is the caption the platform gives a tab or a section that a write left without one. The SDK writes no
+ * <labels> on a declared dashboard's seed tab or section, e.g.
+ *   <tab id="{…}" name="General" showlabel="true" expanded="true" verticallayout="true"><columns>…
+ *   <section id="{…}" name="Section 1" showlabel="false" columns="2"><rows>…
+ * and the saved row read straight after the create (RetrieveUnpublished; live-measured, on every create and re-create)
+ * holds, as the FIRST child of each, nothing changed besides:
+ *   <labels><label description="" languagecode="1033" /></labels>
+ * A caption with no text shows nothing, so it is not content anyone wrote: compared, it made every create's stored row
+ * differ from the layout the send was modelled to leave, permanently (create-completion-required on every run).
+ * It is exactly: a <labels> with no attribute, holding one or more <label> elements and nothing else, each with no
+ * content and only a `description` that is EMPTY and a numeric `languagecode`. A caption with any text, any other
+ * attribute or child, or a <labels> holding anything else, is not this and stays compared — so a maker's tab or section
+ * label stays proved, and clearing one is a change (its text is gone). What this cannot see is a tab or section label
+ * set to empty where there was none, which shows nothing either. Should the platform ever write a caption WITH text, or
+ * should an empty one come to mean something, this stops being safe and must go.
+ */
+const EMPTY_CAPTION_ATTRS = new Set(['description', 'languagecode', '#empty']);
+function isPlatformEmptyCaption(el) {
+  if (!el || el.n !== 'labels' || (el.a || []).some((p) => !Array.isArray(p) || p[0] !== '#empty')) return false;
+  const labels = (el.c || []).map(nodeOf);
+  return labels.length > 0 && labels.every((l) => l && l.n === 'label' && !(l.c || []).length &&
+    (l.a || []).every((p) => Array.isArray(p) && EMPTY_CAPTION_ATTRS.has(p[0])) &&
+    attrOf(l, 'description') === '' && /^\d+$/.test(String(attrOf(l, 'languagecode') || '')));
+}
+
+/**
  * The layout as the declaration does NOT own it: the whole bag (tabs, columns, sections, rows and their order, every
  * foreign cell and its control, the root's other parts), each managed cell — a cell whose one control is a managed
- * tile's — kept in place by strippedManagedCell. `managedTypes` maps each managed control id (bare) to its tile type.
- * null for no bag.
+ * tile's — kept in place by strippedManagedCell, and without the empty caption the platform gives a tab or section
+ * written without one (isPlatformEmptyCaption). `managedTypes` maps each managed control id (bare) to its tile type.
+ * null for no bag. `{ raw: true }` keeps those empty captions: the layout as a proof before this rule hashed it.
  */
-function preservedLayout(bag, managedTypes, languageCode) {
+function preservedLayout(bag, managedTypes, languageCode, { raw = false } = {}) {
   if (!bag) return null;
   const walk = (el) => {
     if (!el || typeof el !== 'object') return el;
@@ -351,7 +378,8 @@ function preservedLayout(bag, managedTypes, languageCode) {
       // A cell with several controls is never stripped: an authored change in it then fails the proof (fail closed).
       if (id && managedTypes.has(id)) return strippedManagedCell(el, managedTypes.get(id), languageCode);
     }
-    return mapChildren(el, walk);
+    const kept = !raw && (el.n === 'tab' || el.n === 'section') ? { ...el, c: (el.c || []).filter((ch) => !isPlatformEmptyCaption(nodeOf(ch))) } : el;
+    return mapChildren(kept, walk);
   };
   return walk(bag);
 }
@@ -360,8 +388,19 @@ function preservedLayout(bag, managedTypes, languageCode) {
  * The hash of everything the declaration does NOT own: the preserved layout above. A component's `position` is not
  * hashed: it is an index the SDK assigns on read; the layout tree carries the order it is derived from.
  */
-function preservationSha256(bag, managedTypes, languageCode) {
-  return sha({ layout: preservedLayout(bag, managedTypes, languageCode) });
+function preservationSha256(bag, managedTypes, languageCode, options) {
+  return sha({ layout: preservedLayout(bag, managedTypes, languageCode, options) });
+}
+
+/**
+ * Whether a projection's preserved layout is the one `recorded` (an expected or committed preservationSha256) holds.
+ * It is when `recorded` is the projection's preservationSha256; or its rawPreservationSha256, the hash an earlier build
+ * of this release recorded before the platform's empty tab and section captions were set aside — that is the very
+ * layout it proved, captions included, so it is no weaker. A recorded hash is never rewritten here; the next proof
+ * commits the current one.
+ */
+function preservationMatches(projected, recorded) {
+  return typeof recorded === 'string' && !!projected && (projected.preservationSha256 === recorded || projected.rawPreservationSha256 === recorded);
 }
 
 /**
@@ -434,7 +473,7 @@ function appendKeepsLayout(live, intended, additionIds, managedTypes, languageCo
  *   const artifact = await sdk.getArtifact('dashboard', id);   // after sdk.fetchArtifact('dashboard', id, { overwrite: true })
  *   const p = projectDashboard(artifact, { ...committedProjectionInput(group), languageCode: sdk.languageCode });
  *   const certified = p.invalid.length === 0 && p.missing.length === 0 && p.duplicated.length === 0 &&
- *     p.semanticSha256 === group.proof.semanticSha256 && p.preservationSha256 === group.proof.preservationSha256;
+ *     p.semanticSha256 === group.proof.semanticSha256 && preservationMatches(p, group.proof.preservationSha256);
  *
  * Every one of those five checks is needed: a tile in `missing` or `duplicated` is absent from both hashes.
  *   art           the dashboard as the SDK reads it;
@@ -456,7 +495,10 @@ function appendKeepsLayout(live, intended, additionIds, managedTypes, languageCo
  *   preservationSha256  everything the declaration does not own: the whole layout with each managed cell's authored
  *                       parts taken out (strippedManagedCell) — every foreign cell and control, every tab, section and
  *                       row and their order, and each managed cell's other attributes, labels and parameters (a
- *                       committed group's proof.preservationSha256).
+ *                       committed group's proof.preservationSha256). The empty caption the platform gives a tab or
+ *                       section written without one is not in it (isPlatformEmptyCaption);
+ *   rawPreservationSha256  the same with those empty captions kept: what an earlier build of this release recorded.
+ *                       Compare a recorded hash with preservationMatches, never with either field alone.
  */
 function projectDashboard(art, { managed = [], seedIds = [], languageCode = DEFAULT_LCID } = {}) {
   const components = (art && art.components) || [];
@@ -490,6 +532,7 @@ function projectDashboard(art, { managed = [], seedIds = [], languageCode = DEFA
     duplicated,
     semanticSha256: projectionSha256(root, tiles),
     preservationSha256: preservationSha256(art ? art.bag : null, types, languageCode),
+    rawPreservationSha256: preservationSha256(art ? art.bag : null, types, languageCode, { raw: true }),
   };
 }
 
@@ -1115,8 +1158,18 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   // to leave (expected.preservationSha256, intendedDashboard): an attribute of an appended cell or of the seed, a label,
   // a foreign cell, a row. Binding or publishing it would claim content this build never wrote — after a crash,
   // someone's edit made since. The committed preservation is then the stored row's, as projectDashboard answers it to
-  // verify and hydrate.
-  if (semantic !== expected.sentProjectionSha256 || projected.preservationSha256 !== expected.preservationSha256) {
+  // verify and hydrate. An attempt an earlier build of this release planned recorded the raw hash (preservationMatches).
+  // In an organization with a second language, the platform adds a caption in it to some cells of the saved row (live-
+  // measured on a dashboard this build created: a 3082 caption in each of its tile cells), which no send wrote and the
+  // published read never returns:
+  //   <labels><label description="By Priority" languagecode="1033" /><label description="Work Orders" languagecode="3082" /></labels>
+  // So the layout is also held to the send with the captions the saved/published comparison sets aside taken out
+  // (savedCompared, comparableSavedFormXml): a language the published read does not carry and that is not on every
+  // <labels>. Only that comparison is added; the proof still binds the stored row as read (projected, committed below).
+  const comparable = pub.savedCompared && pub.savedCompared.formxml !== pub.saved.formxml
+    ? projectDashboard(savedSnapshot(sdk, pub.savedCompared, key), { managed: expected.children.map((c) => ({ key: c.key, id: c.id })), seedIds, languageCode: s.languageCode })
+    : projected;
+  if (semantic !== expected.sentProjectionSha256 || !(preservationMatches(projected, expected.preservationSha256) || preservationMatches(comparable, expected.preservationSha256))) {
     throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published`);
   }
   const preserved = projected.preservationSha256;
@@ -1147,8 +1200,11 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     ...found.map(({ child, parts }) => record(TILE_KIND, child.key, child.id, parts, { origin: originOf(TILE_KIND, child.key, createdTiles.has(child.key)), parentKey: key })),
     record(KIND, key, id, { description: String(saved.description == null ? '' : saved.description) }, { origin: originOf(KIND, key, created) }),
   ];
-  // The debt's desired hash is the one the shared `dashboard` layer reader answers, so publishManagedScope compares like with like.
+  // The debt's desired hash is the one the shared `dashboard` layer reader answers, so publishManagedScope compares like with like:
+  // of the saved row as compared with the published one (savedCompared, systemform-published.js). The proof's savedSha256 stays the
+  // hash of the saved row as read — it says which saved layer was proved, and compares with no other layer.
   const savedSha = systemFormRootLayerSha256(pub.saved);
+  const desiredSha = systemFormRootLayerSha256(pub.savedCompared);
   const scope = scopeOf(id);
   const notNeeded = { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null };
   // Publication provenance: a debt is owed only for THIS attempt's proved content write (its planned publication — the
@@ -1158,7 +1214,7 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   const plannedPub = recovering ? (attempt ? attempt.publication : null) : (s.lastPlan ? s.lastPlan.publication : null);
   let publication = notNeeded;
   if (plannedPub && plannedPub.state === 'owed') {
-    publication = pub.state === 'equal' ? notNeeded : { scope, state: 'owed', desiredSha256: savedSha, dispatchToken: null };
+    publication = pub.state === 'equal' ? notNeeded : { scope, state: 'owed', desiredSha256: desiredSha, dispatchToken: null };
   } else if (committed && committed.publication && committed.publication.state === 'owed' && pub.state !== 'equal') {
     publication = { ...committed.publication };
   }
@@ -1355,13 +1411,13 @@ function publishOutcome(answer, id) {
  * Every managed dashboard publish goes through here, so a change of the publication contract touches one place.
  * Answers { sent, withheld, held, confirmed, code? }.
  */
-async function publishDeclaredDashboard({ store, barrier, sdk, key, id, newToken } = {}) {
+async function publishDeclaredDashboard({ store, barrier, sdk, key, id, newToken, settle } = {}) {
   const gate = barrier || store;
   const scope = scopeOf(id);
   try {
     requireOriginalDeclaration(key, store.readGroup(KIND, key));
     const out = await publishManagedScope({
-      store, barrier: gate, scope, groups: [{ family: KIND, key }], path: `declared dashboard "${key}"`, newToken,
+      store, barrier: gate, scope, groups: [{ family: KIND, key }], path: `declared dashboard "${key}"`, newToken, settle,
       client: sdk.dataverse,
       publish: async () => {
         await sdk.fetchArtifact(KIND, scope.id);
@@ -1395,6 +1451,7 @@ module.exports = {
   layoutOf,
   seedInPlace,
   projectDashboard,
+  preservationMatches,
   committedProjectionInput,
   canonicalDeclaration,
   committedDeclaration,

@@ -172,6 +172,58 @@ test('a declared dashboard is created once, published once by its own id, and a 
   });
 });
 
+// What the platform does to a dashboard's captions on its own (helpers/managed-wire.js `platform`): on create it saves an empty
+// caption on each tab and section sent without one; in an organization with a second language the saved read carries a caption in
+// it on each cell, which the published read never returns; and straight after a publish the published read may answer the cell
+// captions still being rewritten. None of them is a change of the dashboard, so none stops its create or its publish.
+test('a declared dashboard settles and its publish is confirmed over the captions the platform writes: empty tab and section captions, a second language, a lagging read-back', async () => {
+  await withDashboards(true, async () => {
+    const noWait = { sleep: async () => {} };
+    for (const [label, platform] of [
+      ['empty tab and section captions', { emptyContainerCaptions: true }],
+      ['a second language', { emptyContainerCaptions: true, secondLanguage: 3082 }],
+      ['a lagging read-back', { emptyContainerCaptions: true, rewritingReads: 2 }],
+      ['all three', { emptyContainerCaptions: true, secondLanguage: 3082, rewritingReads: 1 }],
+    ]) {
+      const wire = createManagedWire({ platform });
+      const dir = makeTempDir('declared-dash-');
+      const first = await build(wire, dir, makeSpec(), { publicationSettle: noWait });
+      assert.equal(first.err, undefined, `${label}: ${chainText(first.err)}`);
+      const g = storeOf(dir).readGroup('dashboard', KEY).committed;
+      assert.equal(g.publication.state, 'confirmed', label);
+      assert.equal(first.formWrites.filter((c) => c.method === 'POST').length, 1, label);
+      assert.equal(first.publishes.length, 1, label);
+      const xml = wire.saved.get(g.root.id).formxml;
+      if (platform.emptyContainerCaptions) assert.match(xml, /<tab\b[^>]*><labels><label description="" languagecode="1033" \/><\/labels>/, label);
+      const again = await build(wire, dir, makeSpec(), { publicationSettle: noWait });
+      assert.equal(again.err, undefined, `${label}: ${chainText(again.err)}`);
+      assert.deepEqual(again.formWrites, [], label);
+      assert.deepEqual(again.publishes, [], label);
+      const changed = await build(wire, dir, makeSpec({ dashboard: { description: 'Weekly' } }), { publicationSettle: noWait });
+      assert.equal(changed.err, undefined, `${label}: ${chainText(changed.err)}`);
+      assert.equal(changed.publishes.length, 1, label);
+      assert.equal(storeOf(dir).readGroup('dashboard', KEY).committed.publication.state, 'confirmed', label);
+    }
+  });
+});
+
+test('in an organization of two languages a tile\u2019s base-language caption changed outside the spec is still drift — only the caption in the language the published read does not return is set aside', async () => {
+  await withDashboards(true, async () => {
+    const wire = createManagedWire({ platform: { emptyContainerCaptions: true, secondLanguage: 3082 } });
+    const dir = makeTempDir('declared-dash-');
+    assert.equal((await build(wire, dir, makeSpec(), { publicationSettle: { sleep: async () => {} } })).err, undefined);
+    const id = storeOf(dir).readGroup('dashboard', KEY).committed.root.id;
+    const row = wire.saved.get(id);
+    const was = row.formxml;
+    row.formxml = was.replace(/(<cell\b[^>]*><labels><label description=")[^"]+(" languagecode="1033")/, '$1Maker caption$2');
+    assert.notEqual(row.formxml, was);
+    const r = await build(wire, dir, makeSpec(), { publicationSettle: { sleep: async () => {} } });
+    assert.match(chainText(r.err), /dashboard-tile-drift/);
+    assert.deepEqual(r.formWrites, []);
+    assert.deepEqual(r.publishes, []);
+  });
+});
+
 test('a declared dashboard found by name halts naming the typed adoption approval, writes nothing, and binds with it', async () => {
   await withDashboards(true, async () => {
     const wire = createManagedWire();

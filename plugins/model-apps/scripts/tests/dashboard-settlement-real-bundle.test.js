@@ -57,8 +57,8 @@ const declared = (tiles, extra = {}) => ({ name: 'Ops', reconcile: 'declared', t
 
 // The build-wide send observer is installed on the client every send goes through (the build installs it once for the
 // run); `observer: false` is a run without it.
-async function world({ observer = true } = {}) {
-  const wire = createManagedWire();
+async function world({ observer = true, platform } = {}) {
+  const wire = createManagedWire(platform ? { platform } : undefined);
   const barrier = createPublicationBarrier();
   const obs = observer ? createAttemptSendObserver() : null;
   const { sdk } = await sdkOver(wire, { barrier, observer: obs });
@@ -711,6 +711,38 @@ test('the shared read-only projection reproduces the committed proof of a create
     assert.equal(b.certified, false);
     row.formxml = was;
   }
+});
+
+// On create the platform saves an empty caption on each tab and section the dashboard was sent without (the wire's
+// `emptyContainerCaptions`). That caption is the platform's, not a change: the create settles and the projection certifies
+// with it there or not. A caption the maker gives a tab, with text, is outside the declaration and is still seen.
+test('the empty tab and section captions the platform adds on create are no change; a tab caption with text is', async () => {
+  const w = await world({ platform: { emptyContainerCaptions: true } });
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const out = await settle(w, d);
+  assert.deepEqual(out.result, { committed: true, recovered: false });
+  const row = w.wire.saved.get(out.id);
+  const was = row.formxml;
+  assert.match(was, /<tab\b[^>]*><labels><label description="" languagecode="1033" \/><\/labels>/);
+  assert.match(was, /<section\b[^>]*><labels><label description="" languagecode="1033" \/><\/labels>/);
+  const c = await projectCommitted(w, out.id);
+  assert.equal(c.certified, true);
+  // The same dashboard read without the empty captions is the same dashboard.
+  row.formxml = was.replace(/<labels><label description="" languagecode="1033" \/><\/labels>/g, '');
+  assert.equal((await projectCommitted(w, out.id)).certified, true);
+  // A tab caption with text, or a caption in a second attribute, is the maker's.
+  for (const change of [
+    (xml) => xml.replace(/(<tab\b[^>]*><labels><label description=")(")/, '$1Maker tab$2'),
+    (xml) => xml.replace(/(<section\b[^>]*><labels><label description="" languagecode="1033")/, '$1 maker="yes"'),
+  ]) {
+    row.formxml = change(was);
+    assert.notEqual(row.formxml, was);
+    const b = await projectCommitted(w, out.id);
+    assert.equal(b.out.semanticSha256, c.group.proof.semanticSha256, 'the authored projection is unchanged');
+    assert.notEqual(b.out.preservationSha256, c.group.proof.preservationSha256, 'the change outside the declaration is seen');
+    assert.equal(b.certified, false);
+  }
+  row.formxml = was;
 });
 
 test('the shared projection refuses what the proof refuses: a table-scoped or non-Standard root, a duplicated seed', async () => {

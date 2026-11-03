@@ -684,6 +684,23 @@ printed: `--allow-destructive` and any other key never give it. Accepting it is 
 decision to take the risk, not a proof: that build stays stopped, and the next one publishes the table
 again after the usual checks.
 
+**How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
+build reads the published layer and compares it with what it saved. The platform changes some captions by
+itself, and these do not count as a difference:
+
+- Straight after a publish, the published layer can show a cell caption that is still being changed. If
+  the first read does not show the publish, the build reads it again, for up to about 45 seconds in all.
+  If no read shows it, the publish is not confirmed (`managed-publication-unconfirmed`), as before.
+- When a dashboard is created, the platform adds an empty caption to each tab and section that has none.
+  An empty caption is not compared. A tab or section caption with text is compared.
+- In an organization with more than one language, the saved layer has captions in a second language on
+  some labels, and the published layer does not return them. **A caption in a language that the published
+  layer does not return, and that is not on every label of the form, is not compared.** Thus a change only
+  to such a translation is not seen as unpublished and does not stop the build as drift. A caption in a
+  language that both layers return is compared, and so is all other content. A form that has a second
+  language on every label, or a published read in more than one language (the read of a user whose own
+  language is not the base one), can stay unconfirmed.
+
 ## forms[].reconcile (optional — declared form layouts)
 
 Requires `minimumPluginVersion: "2.21.0"`. A form without `reconcile` builds exactly as before: fields

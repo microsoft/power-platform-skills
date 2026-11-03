@@ -828,6 +828,21 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
 // success, as before. Returns the failure to raise, or null.
 const PUBLISH_ANSWERED = new Set(['submitted', 'verified', 'unverifiable']);
 const PUBLISH_NOT_REQUESTED = new Set(['none', 'notApplicable', 'notRequested']);
+
+// How long publishManagedScope waits before each repeated read-back of a publish whose first read does not show it yet:
+// 45 s in all, as the live reads that first agreed came 42 s after the publish answered (see the read-back below).
+const PUBLICATION_SETTLE_DELAYS_MS = Object.freeze([3000, 5000, 7000, 15000, 15000]);
+// A caller's `settle.delaysMs` must be a list of whole, non-negative milliseconds; anything else is a mistake of the
+// caller, which must not read as "no waiting" or as an unbounded wait.
+function settleDelays(settle) {
+  const d = settle && settle.delaysMs !== undefined ? settle.delaysMs : PUBLICATION_SETTLE_DELAYS_MS;
+  if (!Array.isArray(d) || d.some((ms) => !Number.isSafeInteger(ms) || ms < 0)) throw new TypeError('settle.delaysMs must be a list of whole milliseconds');
+  return d;
+}
+function settleSleep(settle) {
+  if (settle && typeof settle.sleep === 'function') return settle.sleep;
+  return (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+}
 function publishAnswerFailure(answer, dispatched, scopeKey) {
   if (!answer || typeof answer !== 'object') return null;
   const where = scopeKey.replace(':', ' ');
@@ -873,6 +888,9 @@ function publishAnswerFailure(answer, dispatched, scopeKey) {
  *     clears it.
  * `publish()` throws on any failure (see below); with `definiteNoStart: true` only when the request is known not to have started.
  * `readers` replaces the shared map whole (a test's fault injection); a caller's own `readLayers` is not accepted.
+ * `settle` ({ delaysMs, sleep }, both optional) paces the read-back after a success answer: a read that does not show the
+ * send yet is made again after each of `delaysMs` (PUBLICATION_SETTLE_DELAYS_MS by default, about 45 s in all) before the
+ * send is unconfirmed; `sleep(ms)` waits (a timer by default). A test passes its own so it does not wait in real time.
  * Every `managed-publication-unconfirmed` refusal that names a durable dispatch — a group passed in `groups` whose
  * publish is already uncertain, a covered group of such a dispatch, or this call's own send left unconfirmed — carries
  * that dispatch as data, `{ dispatchToken, approval, remedy }` (managed-bindings blockedPublication: the remedy is
@@ -912,7 +930,7 @@ function publishAnswerFailure(answer, dispatched, scopeKey) {
  * a no-request kind beside a request that passed the permit, an unknown kind, or `shipped: false` with no kind fail
  * closed as unknown.
  */
-async function publishManagedScope({ store, barrier, scope, groups, client, readers = LAYER_READERS, publish, path = 'managed publication', newToken, carry = false, ...rest } = {}) {
+async function publishManagedScope({ store, barrier, scope, groups, client, readers = LAYER_READERS, publish, path = 'managed publication', newToken, carry = false, settle, ...rest } = {}) {
   if ('readLayers' in rest) throw codedError(CODES.notSettled, 'publishManagedScope reads every covered group with its family\'s shared reader (client, lib/managed-layer-readers.js); a caller\'s readLayers is not accepted');
   if (!store || !client || typeof client.get !== 'function' || !readers || typeof readers !== 'object' || typeof publish !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store, a Dataverse client to read the saved and published layers with, and the publish');
   const gate = barrier || store;
@@ -921,6 +939,8 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
   }
   const want = scopeId(scope);
   if (!want) throw codedError(CODES.notSettled, 'publishManagedScope needs the table or dashboard scope it publishes');
+  const waits = settleDelays(settle);
+  const pause = settleSleep(settle);
   if (typeof store.snapshot !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store\'s snapshot to see every group of the scope');
   // A publish of this scope that may have been sent is confirmed read-only first, when a fresh read proves it live; what
   // it confirms is answered with this call's own confirmations. One it cannot prove leaves the scope blocked, and the
@@ -1090,6 +1110,31 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
       const sent = carriedReads.find((c) => c.family === o.family && c.key === o.key);
       return sent ? o.publishedSha256 === sent.savedSha256 : o.equal;
     };
+    // The published read straight after the publish answers can still show the layer as it was being rewritten, so a
+    // read that does not show the send yet is read again, a bounded number of times (settle.delaysMs, about 45 s in
+    // all), before the send is called unconfirmed. Live-measured on a declared dashboard: PublishXml answered success
+    // (after 7–32 s), and the published read 0.1 s later held a tile's cell caption empty, or as a name the platform
+    // derives (the tile's view's), each in the published layer only:
+    //   saved      <label description="Own host frame" languagecode="1033" />   <label description="Open work orders" languagecode="1033" />
+    //   published  <label description="" languagecode="1033" />                 <label description="Work Orders" languagecode="1033" />
+    // while the reads 42 s and 54 s later were the saved layer exactly. That caption is in a language both layers return,
+    // so it is never set aside: only waiting tells a rewrite in flight from a publish that did not ship. Each read
+    // must still show exactly what was shipped — a layer that never comes to equal it stays unconfirmed after the last
+    // read, as before — and a read that fails is unconfirmed at once (fail closed). Only the reads that do not show the
+    // send yet are made again: a read that showed it is evidence already.
+    for (let attempt = 0; attempt < waits.length && after.some((o) => !shipped(o)); attempt += 1) {
+      await pause(waits[attempt]);
+      const again = after.filter((o) => !shipped(o));
+      let reread;
+      try {
+        reread = await readAll(again);
+      } catch (e) {
+        gate.blockScope(scope, `${label} (its publish was sent and could not be read back)`);
+        note('unconfirmed');
+        throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and its published layer could not be read back', { cause: e, ...journaled() });
+      }
+      after = after.map((o) => (again.includes(o) ? reread[again.indexOf(o)] : o));
+    }
     if (after.some((o) => !shipped(o))) {
       gate.blockScope(scope, `${label} (its publish was sent and the published layer does not show it)`);
       note('unconfirmed');
@@ -1126,5 +1171,6 @@ module.exports = {
   WORKFLOW_EFFECT_FULFILLED,
   withWorkflowEffect,
   publishManagedScope,
+  PUBLICATION_SETTLE_DELAYS_MS,
   confirmUncertainPublication,
 };
