@@ -2868,7 +2868,10 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   group, so omitting a declaration, or every form, never skips an owed or uncertain publish). Default-form
   promotion and Main Form Set order skip declared forms (`formOrderSpecOf`), and validation refuses
   `isDefault`, `deactivateOtherMainForms`, `securityRoles`, `mainFormOrder`, `prune` and `genPages`
-  on them, because each would rewrite the proved saved layer. Approvals are typed:
+  on them, because each would rewrite the proved saved layer. For the same reason the CLI's destructive-operation gate
+  (`discoverOpDiffState`) skips a declared form while the path is on: its build keeps every control it does not declare
+  and deletes none, so a maker's control on it is not a removal and needs no `--allow-destructive`; a plain explicit
+  form is compared as before. Approvals are typed:
   `adopt|overwrite:form:<table>/<formtype>/<name>` (lower case); an adopted form's first binding needs
   `form:<key>`, later commits do not. **Concurrent edits:** the service does not provide a working
   conditional-write guard for a form's saved layer. A `systemforms` GET answers the PUBLISHED
@@ -3284,7 +3287,12 @@ typed on any cell, tab or section between the send and the proof, in any languag
 (`create-completion-required`). The committed preservation stays that of the saved row as
 read, and a proof an earlier build of this release recorded with the empty captions kept still matches
 (`rawPreservationSha256`, `preservationMatches`). A declared form's proof holds the SDK's `readForm`
-projection of the saved row, which never went through the publication view. The
+projection of the saved row, which never went through the publication view.
+`--publish` decides only where a declared form's table is published, never whether: with
+it, with the tables published before the app (or in the publish phase); without it, in the forms phase, as every
+reconcile of an existing form or view publishes its own artifact (the flag gates only the final bulk publish). A
+declared dashboard is published right after its write either way. Leaving either owed instead would leave a change
+saved and not live, which `--verify` lists as unverified until a later run publishes it. The
 entries that publish without a build — `genpage.js` add-to-app and remove-from-app,
 `genpage-upload.js` with `--app-id`, and teardown — read the same debt first
 (`lib/managed-standalone-fence.js`, read-only; no store changes nothing) and refuse the app write
@@ -3329,7 +3337,7 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 | --- | --- |
 | Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>`; a declared dashboard's is `adopt:dashboard:<key>`; a declared business rule's is `adopt:rule:<table>/<name>`, also for its drift (a rule is re-adopted whole, never overwritten); a declared process flow's is `adopt:bpf:<table>/<name>`, likewise | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `dashboard-adoption-not-authorized`, `managed-adoption-required` (form, dashboard, rule, process flow), `create-ownership-required` (rule, process flow), `rule-drift`, `bpf-drift` |
 | Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>`; a declared form's is `overwrite:form:<table>/<formtype>/<name>`; a declared dashboard's is `overwrite:dashboard:<key>`, one tile's `overwrite:dashboard:<key>/<tile>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift`, `form-layout-drift`, `dashboard-drift`, `dashboard-tile-drift` |
-| Risk approval: `--authorize publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, only as printed; read from the refusal's data (`dispatchToken`, `approval`, `remedy`), recorded with `acceptUncertainPublication`; the run stays stopped | `managed-publication-unconfirmed` when no fresh read can settle a lost publish |
+| Risk approval: `--authorize publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, only as printed; recorded with `acceptUncertainPublication` right after the store opens, before any phase or write, for every `dispatching`/`unconfirmed` group whose scope the exact key names (`acceptPublicationRiskAtStart`, from the store's own scope and dispatch token, whatever stop printed it: the forms phase, the app write the quarantine withheld, a removed declaration, a run without that family's phase or with `--publish`); that run stops (`publication-risk-accepted`, no service write, no final cleanup); a dispatch that becomes uncertain within a run is offered from the halt's data (`dispatchToken`, `approval`, `remedy`) as before | `managed-publication-unconfirmed` when no fresh read can settle a lost publish; `publication-risk-accepted` for the run that records it |
 | Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized`, `dashboard-description-clear-not-authorized` |
 | Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `workspace-copy-unsent-edits`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
 

@@ -681,8 +681,10 @@ it (the publish carried only layers that were already live), the table stays blo
 the build stops and prints the approval that releases it: `--authorize publication-risk:table:<table>`
 (`publication-risk:dashboard:<id>` for a dashboard). Check what is live first. Pass the key exactly as
 printed: `--allow-destructive` and any other key never give it. Accepting it is a
-decision to take the risk, not a proof: that build stays stopped, and the next one publishes the table
-again after the usual checks.
+decision to take the risk, not a proof. The build records it as it starts, before it writes anything,
+whichever step printed the approval (also when the spec no longer declares the form or dashboard, or the
+run does not build forms or dashboards); that build then stops (`publication-risk-accepted`), and the next
+one publishes the table again after the usual checks.
 
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by
@@ -730,7 +732,8 @@ are only added.
   `false` clears the flag). A missing sub-grid, quick view, timeline or event handler is added. A new
   form is created whole in one write, with an id that stays the same for the spec.
 - **What is kept.** A control the spec does not declare (a maker's field, a sub-grid, a web resource)
-  keeps its place, and nothing is deleted: `prune` is refused on a declared form. Labels, required
+  keeps its place, and nothing is deleted: `prune` is refused on a declared form, and such a control is
+  never listed as a destructive removal (no `--allow-destructive` is needed). Labels, required
   flags and control settings of existing cells are not changed unless the spec states them.
 - **What stops before a write.** A layout the build cannot place without moving a control it does not
   own; an existing sub-grid or quick view that shows something else than the spec asks; a section the
@@ -747,7 +750,8 @@ are only added.
 - **Publishing.** A table is published once, after all its form work, and only when every declared
   change on it succeeded. A table publish puts live every saved change on that table, not only this
   form's, so the build withholds it while another managed change on the table is not proved. A saved
-  form that is definitely unpublished is published without a rewrite.
+  form that is definitely unpublished is published without a rewrite. `--publish` does not turn this off:
+  without it the table is published in the forms step, as the reconcile of any existing form is.
 - **Concurrent edits.** Dataverse does not provide a working conditional-write guard for a form's saved
   layer, so a conditional write cannot reject a stale edit of it. The build re-reads the saved form just
   before it writes and stops when it changed since the build read it. An edit made in Maker in the
@@ -834,7 +838,7 @@ existing one is reused and its tiles are never edited.
   elsewhere, and `overwrite:dashboard:<key>/<tile>` one tile changed elsewhere. A local copy that differs
   from the server's stops the build (`workspace-copy-unsent-edits`).
 - **Publishing.** The dashboard is published by itself, once, after its write, and only when the write
-  is proved. A dashboard this build cannot finish is not published, not even by the app's publish: an
+  is proved, with or without `--publish`. A dashboard this build cannot finish is not published, not even by the app's publish: an
   app that would hold it is not written in that run.
 - **Concurrent edits.** Dataverse does not version a dashboard's saved layer: a dashboard is a form row,
   and a plain read answers the published row's version, so a conditional write cannot reject a stale
