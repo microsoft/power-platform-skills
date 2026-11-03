@@ -86,6 +86,8 @@ const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const contract = require('./managed-feature-contract.js');
 const { runManagedFeature, publishManagedScope, CREATION_RECORD_UNSETTLED, PUBLICATION_UNVERIFIED, PUBLICATION_REFUSED } = contract;
 const { readSystemFormPublication, readSystemFormRootPresence, systemFormRootLayerSha256 } = require('./systemform-published.js');
+const { languagesSetAside } = require('./formxml-layers.js');
+const { normalizeLanguageCode } = require('./app-spec.js');
 const { LAYER_READERS } = require('./managed-layer-readers.js');
 
 const KIND = 'dashboard';
@@ -316,14 +318,15 @@ const withoutAttrs = (el, names) => ({ ...el, a: (el.a || []).filter((p) => !(Ar
  * language, the control's attributes, its non-authored parameters (RecordsPerPage, ...) and any other child. The
  * tile's name itself is in the semantic projection, read by the SDK's read rule (its language, else the first label).
  */
-function strippedManagedCell(cell, type, languageCode) {
+function strippedManagedCell(cell, type, languageCode, translations = null) {
   const owned = new Set(OWNED_PARAMS[type] || []);
   const labelsEl = childrenNamed(cell, 'labels')[0] || null;
-  const written = childrenNamed(labelsEl, 'label').find((l) => attrOf(l, 'languagecode') === String(languageCode)) || null;
+  const labels = childrenNamed(labelsEl, 'label');
+  const written = labels.find((l) => attrOf(l, 'languagecode') === String(languageCode)) || null;
   const DROP = {};
   const stripped = mapChildren(withoutAttrs(cell, AUTHORED_CELL_ATTRS), (child) => {
     if (written && child === labelsEl) {
-      const rest = { ...child, c: (child.c || []).filter((x) => nodeOf(x) !== written) };
+      const rest = { ...child, c: (child.c || []).filter((x) => nodeOf(x) !== written && !isPlatformTileTranslation(nodeOf(x), labels, languageCode, translations)) };
       // The SDK creates the <labels> element for the label it adds, so one left holding no label goes with it.
       return childrenNamed(rest, 'label').length ? rest : DROP;
     }
@@ -362,13 +365,40 @@ function isPlatformEmptyCaption(el) {
 }
 
 /**
+ * Whether `label` is the caption the platform adds, in an organization with a second language, to a tile's cell a
+ * write has just saved. The SDK writes one caption on a tile's cell, in its own language; the saved row read straight
+ * after the create (RetrieveUnpublished; live-measured on a dashboard this build created in an organization of 1033
+ * and 3082) holds a second one after it, in the other language, on each of its tile cells, e.g.
+ *   sent   <cell …><labels><label description="By Priority" languagecode="1033" /></labels><control …
+ *   saved  <cell …><labels><label description="By Priority" languagecode="1033" /><label description="Work Orders" languagecode="3082" /></labels><control …
+ * and the published read never returns it. It has text (a name the platform derives, here the table's), so it is not
+ * the empty caption above, and no rule over the text can tell it from a translation someone typed.
+ * It is exactly: a <label> with no content and only a `description` and a numeric `languagecode`, in the FIRST
+ * <labels> of a managed cell that also holds the build's own caption (`languageCode`), the only caption there in its
+ * language, and in a language of `translations.languages` — the languages the saved/published comparison sets aside
+ * (formxml-layers.js languagesSetAside: on some labels of the row only, and not returned by its published read),
+ * never the build's own. `translations` is passed by the proof of a write alone, and only for the cells of the tiles
+ * that write created (proveDashboard), so a caption on a tab, a section, a foreign cell or a tile cell that was there
+ * before the write is always compared, whatever its language.
+ */
+function isPlatformTileTranslation(label, siblings, languageCode, translations) {
+  if (!translations || !label || label.n !== 'label' || (label.c || []).length) return false;
+  if (!(label.a || []).every((p) => Array.isArray(p) && EMPTY_CAPTION_ATTRS.has(p[0]))) return false;
+  const lcid = normalizeLanguageCode(attrOf(label, 'languagecode'));
+  if (lcid === null || lcid === normalizeLanguageCode(languageCode) || !translations.languages.has(lcid)) return false;
+  return siblings.filter((l) => normalizeLanguageCode(attrOf(l, 'languagecode')) === lcid).length === 1;
+}
+
+/**
  * The layout as the declaration does NOT own it: the whole bag (tabs, columns, sections, rows and their order, every
  * foreign cell and its control, the root's other parts), each managed cell — a cell whose one control is a managed
  * tile's — kept in place by strippedManagedCell, and without the empty caption the platform gives a tab or section
  * written without one (isPlatformEmptyCaption). `managedTypes` maps each managed control id (bare) to its tile type.
  * null for no bag. `{ raw: true }` keeps those empty captions: the layout as a proof before this rule hashed it.
+ * `{ translations: { cells, languages } }` also sets aside, on the managed cells whose control id is in `cells`, the
+ * caption the platform adds in a language of `languages` (isPlatformTileTranslation): for the proof of a write only.
  */
-function preservedLayout(bag, managedTypes, languageCode, { raw = false } = {}) {
+function preservedLayout(bag, managedTypes, languageCode, { raw = false, translations = null } = {}) {
   if (!bag) return null;
   const walk = (el) => {
     if (!el || typeof el !== 'object') return el;
@@ -376,7 +406,7 @@ function preservedLayout(bag, managedTypes, languageCode, { raw = false } = {}) 
       const controls = childrenNamed(el, 'control');
       const id = controls.length === 1 ? bareId(attrOf(controls[0], 'id')) : '';
       // A cell with several controls is never stripped: an authored change in it then fails the proof (fail closed).
-      if (id && managedTypes.has(id)) return strippedManagedCell(el, managedTypes.get(id), languageCode);
+      if (id && managedTypes.has(id)) return strippedManagedCell(el, managedTypes.get(id), languageCode, translations && translations.cells.has(id) ? translations : null);
     }
     const kept = !raw && (el.n === 'tab' || el.n === 'section') ? { ...el, c: (el.c || []).filter((ch) => !isPlatformEmptyCaption(nodeOf(ch))) } : el;
     return mapChildren(kept, walk);
@@ -1154,27 +1184,42 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); complete or remove it in Maker, then run again`);
   if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); check the dashboard`);
   const semantic = projected.semanticSha256;
+  const { committed, pending } = store.readGroup(KIND, key);
   // What is stored now is not what was sent, or anything the spec does not own differs from what the send was modelled
   // to leave (expected.preservationSha256, intendedDashboard): an attribute of an appended cell or of the seed, a label,
   // a foreign cell, a row. Binding or publishing it would claim content this build never wrote — after a crash,
   // someone's edit made since. The committed preservation is then the stored row's, as projectDashboard answers it to
   // verify and hydrate. An attempt an earlier build of this release planned recorded the raw hash (preservationMatches).
-  // In an organization with a second language, the platform adds a caption in it to some cells of the saved row (live-
-  // measured on a dashboard this build created: a 3082 caption in each of its tile cells), which no send wrote and the
-  // published read never returns:
+  // This proof holds the saved row AS READ. It never uses the publication view (savedCompared, comparableSavedFormXml),
+  // which sets aside any caption in a language the published read does not return: a maker's tab caption with text,
+  // in 3082 or 1036, added between the send and this read, would then be certified and published as this build's.
+  // The one thing it also accepts is the platform's own caption on the cells of the tiles THIS write created, in an
+  // organization with a second language (isPlatformTileTranslation): live-measured, the saved row read straight after
+  // the create holds, on each tile cell, a caption in that language after the one the SDK wrote, e.g.
   //   <labels><label description="By Priority" languagecode="1033" /><label description="Work Orders" languagecode="3082" /></labels>
-  // So the layout is also held to the send with the captions the saved/published comparison sets aside taken out
-  // (savedCompared, comparableSavedFormXml): a language the published read does not carry and that is not on every
-  // <labels>. Only that comparison is added; the proof still binds the stored row as read (projected, committed below).
-  const comparable = pub.savedCompared && pub.savedCompared.formxml !== pub.saved.formxml
-    ? projectDashboard(savedSnapshot(sdk, pub.savedCompared, key), { managed: expected.children.map((c) => ({ key: c.key, id: c.id })), seedIds, languageCode: s.languageCode })
-    : projected;
-  if (semantic !== expected.sentProjectionSha256 || !(preservationMatches(projected, expected.preservationSha256) || preservationMatches(comparable, expected.preservationSha256))) {
+  // Which tiles this write created: this run's answer (applied.createdTiles); for a recovery, every tile of a create, or
+  // the tiles an append added: a tile of the attempt's own declaration with no componentId that the committed group does
+  // not hold yet (the plan appends exactly those, under catalog ids no live control may carry; a pinned tile is a
+  // control that was already there). Nowhere else is a caption set aside, so the cost is bounded to that shape on those
+  // cells: a translation typed onto a tile this write has just created, between the send and this read, is taken as the
+  // platform's.
+  const held = (k) => !!committed && committed.records.some((x) => x.kind === TILE_KIND && x.key === k);
+  const unpinned = new Set(((declaration && Array.isArray(declaration.tiles)) ? declaration.tiles : [])
+    .filter((t) => t && t.componentId === undefined).map((t) => `${key}/${t.key}`));
+  const createdTileKeys = recovering
+    ? expected.children.map((c) => c.key).filter((k) => created || (unpinned.has(k) && !held(k)))
+    : ((applied && applied.createdTiles) || []);
+  const createdCells = new Set(expected.children.filter((c) => createdTileKeys.includes(c.key)).map((c) => bareId(c.id)));
+  const languages = languagesSetAside(pub.saved.formxml, pub.published ? pub.published.formxml : null);
+  languages.delete(normalizeLanguageCode(s.languageCode));
+  const withTranslations = createdCells.size && languages.size
+    ? preservationSha256(saved.bag, new Map(projected.tiles.map((t) => [t.id, t.type])), s.languageCode, { translations: { cells: createdCells, languages } })
+    : null;
+  if (semantic !== expected.sentProjectionSha256 || !(preservationMatches(projected, expected.preservationSha256) || withTranslations === expected.preservationSha256)) {
     throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published`);
   }
   const preserved = projected.preservationSha256;
 
-  const { committed, pending } = store.readGroup(KIND, key);
   const attempt = recovering ? (pending && (!token || pending.token === token) ? pending : null) : null;
   // The root create is acknowledged only by this run's own answer to its create, never by a read. A recovered
   // attempt counts it only when the attempt itself durably recorded that acknowledgement before the run stopped.

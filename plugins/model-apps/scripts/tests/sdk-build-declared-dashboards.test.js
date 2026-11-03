@@ -224,6 +224,31 @@ test('in an organization of two languages a tile\u2019s base-language caption ch
   });
 });
 
+// Every hash a publication records and every read that confirms it are in one domain: the saved layer as the saved/published
+// comparison sees it (systemform-published.js savedCompared). In a two-language organization the raw saved row differs from it,
+// so a debt recorded in the raw domain would never read as published, and a fresh run would publish again.
+test('in an organization of two languages a dashboard publish whose answer was lost is confirmed read-only by the next build, and the one after is clean', async () => {
+  await withDashboards(true, async () => {
+    const noWait = { publicationSettle: { sleep: async () => {} } };
+    const wire = createManagedWire({ platform: { emptyContainerCaptions: true, secondLanguage: 3082 } });
+    const dir = makeTempDir('declared-dash-');
+    wire.script((e) => e.method === 'POST' && e.path === 'PublishXml', { error: new Error('lost answer after apply') });
+    const lost = await build(wire, dir, makeSpec(), noWait);
+    assert.ok(lost.err, 'the lost answer stops the build');
+    const g = committedGroup(dir);
+    assert.equal(g.publication.state, 'unconfirmed');
+    assert.equal(lost.publishes.length, 1);
+    const next = await build(wire, dir, makeSpec(), noWait);
+    assert.ok(next.err, 'the invocation that confirms it stays withheld, as every uncertain publication leaves it');
+    assert.deepEqual(next.publishes, [], 'the applied publish is never sent again');
+    assert.deepEqual(next.formWrites, []);
+    assert.equal(committedGroup(dir).publication.state, 'confirmed');
+    const clean = await build(wire, dir, makeSpec(), noWait);
+    assert.equal(clean.err, undefined, chainText(clean.err));
+    assert.deepEqual([...clean.publishes, ...clean.formWrites], []);
+  });
+});
+
 test('a declared dashboard found by name halts naming the typed adoption approval, writes nothing, and binds with it', async () => {
   await withDashboards(true, async () => {
     const wire = createManagedWire();

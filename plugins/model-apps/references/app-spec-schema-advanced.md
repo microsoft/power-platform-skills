@@ -694,12 +694,19 @@ itself, and these do not count as a difference:
 - When a dashboard is created, the platform adds an empty caption to each tab and section that has none.
   An empty caption is not compared. A tab or section caption with text is compared.
 - In an organization with more than one language, the saved layer has captions in a second language on
-  some labels, and the published layer does not return them. **A caption in a language that the published
-  layer does not return, and that is not on every label of the form, is not compared.** Thus a change only
-  to such a translation is not seen as unpublished and does not stop the build as drift. A caption in a
-  language that both layers return is compared, and so is all other content. A form that has a second
-  language on every label, or a published read in more than one language (the read of a user whose own
-  language is not the base one), can stay unconfirmed.
+  some labels, and the published layer does not return them. **When the build checks that a publish is
+  live, a caption in a language that the published layer does not return, and that is not on every label
+  of the form, is not compared.** Thus a change only to such a translation is not seen as unpublished and
+  does not stop the build as drift. A caption in a language that both layers return is compared, and so is
+  all other content. A form that has a second language on every label, or a published read in more than
+  one language (the read of a user whose own language is not the base one), can stay unconfirmed.
+- This rule applies only to the publish check. It does not apply when the build proves that a dashboard
+  it wrote holds what it sent. That proof compares every caption in every language, with two exceptions
+  that the platform adds by itself: the empty caption above, and the caption in the second language that
+  the platform adds to the tiles that this write created. A caption with text that someone adds to a tab,
+  a section or another tile before the proof stops the create (`create-completion-required`). A
+  translation that someone adds to a tile that this write has just created, before the proof, cannot be
+  told from the platform's caption, and is accepted.
 
 ## forms[].reconcile (optional — declared form layouts)
 

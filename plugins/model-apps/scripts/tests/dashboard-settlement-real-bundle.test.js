@@ -751,6 +751,117 @@ test('the empty tab and section captions the platform adds on create are no chan
   row.formxml = was;
 });
 
+// Someone's edit lands on the saved row after this build's send and before its proof reads it back: `change` rewrites the
+// stored FormXML once, at the first saved-layer read after a write to the row. Answers whether it was applied.
+function changeBetweenSendAndProof(w, change) {
+  const state = { sent: false, injected: false };
+  w.wire.script((e) => {
+    if (e.method !== 'GET' && /^systemforms/i.test(e.path)) state.sent = true;
+    if (state.sent && !state.injected && e.method === 'GET' && /RetrieveUnpublished/.test(e.path)) {
+      const id = (/systemforms\(([^)]+)\)/i.exec(e.path) || [])[1];
+      const row = id && w.wire.saved.get(id.toLowerCase());
+      if (row) { const was = row.formxml; row.formxml = change(was); state.injected = row.formxml !== was; }
+    }
+    return false;
+  }, {});
+  return state;
+}
+const caption = (lcid, text) => `<label description="${text}" languagecode="${lcid}" />`;
+const withTabCaption = (lcid, text) => (xml) => xml.replace(/(<tab\b[^>]*><labels>(?:<label [^>]*\/>)*)(<\/labels>)/, `$1${caption(lcid, text)}$2`);
+const withCellCaption = (controlId, lcid, text) => (xml) => xml.replace(
+  new RegExp(`(<cell\\b[^>]*><labels>(?:<label [^>]*\\/>)*)(<\\/labels><control\\b[^>]*\\bid="\\{${controlId}\\}")`, 'i'), `$1${caption(lcid, text)}$2`);
+const TWO_LANGUAGES = { emptyContainerCaptions: true, secondLanguage: 3082 };
+const refusedUnbound = async (w, d, name = '') => {
+  assert.equal(await codeOf(settle(w, d)), 'create-completion-required', name);
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed, null, 'nothing is certified or bound');
+  assert.equal(w.wire.publishes().length, 0, 'nothing is published');
+};
+
+// The proof holds the saved row as read, never the publication view (comparableSavedFormXml), which sets aside a caption
+// in a language the published read does not return: a caption with text typed on a tab between the send and the proof
+// is someone's edit in any language — the base one, the organization's second one (3082) or a third (1036).
+for (const lcid of [1033, 3082, 1036]) {
+  test(`a tab caption with text in language ${lcid}, typed between the send and the proof, is not certified, bound or published`, async () => {
+    const w = await world({ platform: TWO_LANGUAGES });
+    const state = changeBetweenSendAndProof(w, withTabCaption(lcid, 'Maker-owned tab'));
+    await refusedUnbound(w, declared([{ key: 'open', type: 'list', view: 'Open cases' }]));
+    assert.equal(state.injected, true);
+  });
+}
+
+// In a two-language organization the saved row of a created dashboard holds, on each tile cell, the platform's caption in
+// the second language (the wire's `secondLanguage`): the create still settles. That allowance is the only one, and it is
+// bounded to exactly that shape on the cells of the tiles the write created; anywhere else, or in any other shape, a
+// caption typed between the send and the proof is refused.
+test('a two-language create settles over the platform tile caption; a caption anywhere else, or of another shape, is refused', async () => {
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const clean = await world({ platform: TWO_LANGUAGES });
+  const out = await settle(clean, d);
+  assert.deepEqual(out.result, { committed: true, recovered: false });
+  const control = clean.store.readGroup('dashboard', 'ops').committed.records.find((r) => r.kind === 'dashboard-tile').id;
+  for (const [name, change] of [
+    ['a section caption', (xml) => xml.replace(/(<section\b[^>]*><labels>(?:<label [^>]*\/>)*)(<\/labels>)/, `$1${caption(3082, 'Maker section')}$2`)],
+    ['two tile captions in the language', (xml) => withCellCaption(control, 3082, 'Two')(withCellCaption(control, 3082, 'One')(xml))],
+    ['a tile caption with another attribute', (xml) => withCellCaption(control, 1036, 'Maker')(xml).replace(caption(1036, 'Maker'), '<label description="Maker" languagecode="1036" maker="yes" />')],
+  ]) {
+    const w = await world({ platform: TWO_LANGUAGES });
+    const state = changeBetweenSendAndProof(w, change);
+    await refusedUnbound(w, d, name);
+    assert.equal(state.injected, true, name);
+  }
+  // The disclosed bound of the allowance: one caption with text in a set-aside language, alone in it, on the cell of a tile
+  // this write created, cannot be told from the platform's own and is taken as it.
+  const r = await world({ platform: TWO_LANGUAGES });
+  const typed = changeBetweenSendAndProof(r, withCellCaption(control, 1036, 'Maker'));
+  assert.deepEqual((await settle(r, d)).result, { committed: true, recovered: false });
+  assert.equal(typed.injected, true);
+});
+
+// An adopted dashboard in a two-language organization: its tile cells already carry their second-language captions when the
+// plan reads it, so they are compared as they were read; only the appended tile's cell gets the allowance.
+test('a two-language adoption with an append settles; a caption typed on a tile cell it did not create is refused', async () => {
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }, { key: 'mine', type: 'list', view: 'My cases' }], { dashboardId: DID });
+  const w = await world({ platform: TWO_LANGUAGES });
+  putExisting(w.wire);
+  assert.deepEqual((await settle(w, d)).result, { committed: true, recovered: false });
+  for (const target of [C_OPEN, C_FOREIGN]) {
+    const v = await world({ platform: TWO_LANGUAGES });
+    putExisting(v.wire);
+    const state = changeBetweenSendAndProof(v, (xml) => withCellCaption(target, 1036, 'Maker')(xml));
+    await refusedUnbound(v, d);
+    assert.equal(state.injected, true, target);
+  }
+});
+
+// A recovery has only the attempt to say which tiles it created: on an append, the tiles of the attempt's own declaration
+// with no componentId that the committed group does not hold (the plan appends exactly those). A pinned tile is a control
+// that was there before, so a caption typed on it before the next run reads it is refused there too.
+test('a two-language append whose commit was lost is recovered over the platform tile caption; a caption typed on the pinned tile meanwhile is refused', async () => {
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }, { key: 'mine', type: 'list', view: 'My cases' }], { dashboardId: DID });
+  for (const typed of [null, withCellCaption(C_OPEN, 1036, 'Maker')]) {
+    const { failing, deps } = failNextStoreWrite();
+    const w = await world({ platform: TWO_LANGUAGES });
+    w.store = openManagedContext({ workspaceDir: w.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: w.barrier, deps }).store;
+    putExisting(w.wire);
+    assert.ok(await codeOf(settle(w, d, { ensureMembership: async () => { failing.armed = true; } })), 'the commit failed');
+    assert.equal(w.store.readGroup('dashboard', 'ops').committed, null);
+    if (typed) {
+      const row = w.wire.saved.get(DID);
+      const was = row.formxml;
+      row.formxml = typed(was);
+      assert.notEqual(row.formxml, was, 'the stimulus applies');
+    }
+    const next = await rerun(w);
+    if (!typed) {
+      assert.deepEqual((await settle(next, d)).result, { committed: true, recovered: true });
+      continue;
+    }
+    assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+    assert.equal(next.store.readGroup('dashboard', 'ops').committed, null);
+    assert.equal(w.wire.publishes().length, 0);
+  }
+});
+
 test('the shared projection refuses what the proof refuses: a table-scoped or non-Standard root, a duplicated seed', async () => {
   for (const [change, code] of [[{ objecttypecode: 'incident' }, 'dashboard-scope-unsupported'], [{ type: 10 }, 'dashboard-interactive-unsupported']]) {
     const w = await world();

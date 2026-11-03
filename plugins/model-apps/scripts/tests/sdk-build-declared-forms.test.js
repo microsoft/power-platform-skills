@@ -295,6 +295,31 @@ test('a lost publish answer the org applied is confirmed by the next build, whic
   });
 });
 
+// Every hash a publication records and every read that confirms it are in one domain: the saved layer as the saved/published
+// comparison sees it (systemform-published.js savedCompared). In a two-language organization the raw saved row differs from it,
+// so a debt recorded in the raw domain would never read as published, and a fresh run would publish the table again.
+test('in an organization of two languages a lost publish answer the org applied is confirmed read-only by the next build', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    twoLanguages(org);
+    const dir = newDir();
+    const noWait = { publicationSettle: { sleep: async () => {} } };
+    const restore = losePublish(org, { applied: true });
+    const first = await build(org, dir, makeSpec(), noWait);
+    restore();
+    assert.ok(first.err, 'the lost answer stops the build');
+    assert.notEqual(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'confirmed');
+    const second = await build(org, dir, makeSpec(), noWait);
+    assert.deepEqual(second.tablePublishes, [], 'the applied publish is never sent again');
+    assert.deepEqual(formWrites(second), []);
+    assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'confirmed');
+    const third = await build(org, dir, makeSpec(), noWait);
+    assert.equal(third.err, undefined, chainText(third.err));
+    assert.deepEqual(third.tablePublishes, []);
+    assert.deepEqual(formWrites(third), []);
+  });
+});
+
 test('a lost publish answer the org never applied blocks the table in every later build, with the approval as data', async () => {
   await withForms(true, async () => {
     const org = createFakeBuildOrg({ entities: ENTITIES });

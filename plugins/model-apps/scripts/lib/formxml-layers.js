@@ -164,6 +164,10 @@ function captionSetsOf(xml) {
  * A saved form that carries a second language on EVERY label, or a published read in more than one language (a user whose own language is not the
  * base one), sets nothing aside the other read lacks, so its publish stays unconfirmed: fail closed, as before.
  *
+ * This is the PUBLICATION VIEW — the saved layer as the saved/published comparison sees it (the layer readers' savedSha256 and a managed group's
+ * `publication.desiredSha256`) — and nothing else. It never certifies content: the proof that a saved row is what a build sent holds the row as read,
+ * so a caption with text that this sets aside (a maker's tab caption in 3082 or 1036, say) still fails that proof.
+ *
  *   comparableSavedFormXml('<form>…<labels><label description="Name" languagecode="1033" /><label description="Nombre" languagecode="3082" /></labels>…'
  *                          + '<labels><label description="Code" languagecode="1033" /></labels>…</form>',
  *                          '<form>…<labels><label description="Name" languagecode="1033" /></labels>…<labels><label description="Code" languagecode="1033" /></labels>…</form>')
@@ -174,23 +178,51 @@ function captionSetsOf(xml) {
  * @returns {*} `saved`, with the captions the rule sets aside taken out
  */
 function comparableSavedFormXml(saved, published) {
-  if (typeof saved !== 'string') return saved;
-  if (published !== null && typeof published !== 'string') return saved;
+  const { own, kept } = captionsKeptOf(saved, published);
+  return own ? withoutCaptionsOutside(saved, own.captions, kept) : saved;
+}
+
+/**
+ * The languages comparableSavedFormXml sets aside of `saved` against `published` (LCIDs as normalizeLanguageCode answers them), or an empty set when it
+ * sets nothing aside. This is the PUBLICATION VIEW only — which captions the saved/published comparison cannot see. It is not a rule about which
+ * captions are content: a proof that holds a saved row to what a build sent must not drop a caption because its language is in this set (see
+ * dashboard-reconcile.js, isPlatformTileTranslation, for the one measured shape a dashboard's proof sets aside).
+ *
+ * @param {*} saved the saved read's FormXML
+ * @param {string|null} published the published read's FormXML, or null when the row has no published layer
+ * @returns {Set<number>}
+ */
+function languagesSetAside(saved, published) {
+  const { own, kept } = captionsKeptOf(saved, published);
+  const aside = new Set();
+  for (const caption of own ? own.captions : []) {
+    const lcid = languageOf(caption);
+    if (lcid !== null && !kept.has(lcid)) aside.add(lcid);
+  }
+  return aside;
+}
+
+// THE RULE of comparableSavedFormXml: { own, kept } — the saved text's captions (captionSetsOf) and the languages compared — or { own: null } when it
+// sets nothing aside (a saved text that is not text or not one document, or a published read that is not either, or no language on every <labels>).
+function captionsKeptOf(saved, published) {
+  const nothing = { own: null, kept: null };
+  if (typeof saved !== 'string') return nothing;
+  if (published !== null && typeof published !== 'string') return nothing;
   const own = captionSetsOf(saved);
-  if (!own || !own.sets.length) return saved;
+  if (!own || !own.sets.length) return nothing;
   let common = null;
   for (const { languages } of own.sets) common = common ? new Set([...common].filter((lcid) => languages.has(lcid))) : new Set(languages);
-  if (!common.size) return saved;
+  if (!common.size) return nothing;
   const kept = new Set(common);
   if (published !== null) {
     const theirs = captionsOf(published);
-    if (!theirs) return saved;
+    if (!theirs) return nothing;
     for (const caption of theirs) {
       const lcid = languageOf(caption);
       if (lcid !== null) kept.add(lcid);
     }
   }
-  return withoutCaptionsOutside(saved, own.captions, kept);
+  return { own, kept };
 }
 
-module.exports = { sameFormXmlAcrossLayers, comparableSavedFormXml };
+module.exports = { sameFormXmlAcrossLayers, comparableSavedFormXml, languagesSetAside };
