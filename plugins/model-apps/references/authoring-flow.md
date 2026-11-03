@@ -323,6 +323,20 @@ That mapping is what the design document renders as a traceability table, and an
 flagged by the lint gate — so a job with no surface is a **visible** design gap rather than a
 silent one.
 
+**Offer the optional capabilities the jobs point to — once, as a question, never as a default.** Each is
+off unless the maker says yes; a "no" or silence adds nothing to the spec. Ask only when the jobs or the
+maker's words point to it, and skip the offer when the maker already asked for it:
+
+- **Branding** (brand colours, a header colour or logo): offer `app.theme` — Preview, published with the app,
+  and an app publication publishes every pending change of the app.
+- **A call to an outside service, or a value that differs per environment** (a base URL, a key, a
+  connector, an action a page calls): offer configuration items — environment variables, connection
+  references, Custom APIs, duplicate-detection rules; the values stay out of the spec.
+- **A rule that must always hold, or a guided process** (a required field once a record closes, stages a
+  record moves through): offer a declared business rule or business process flow — the build manages the
+  whole rule or flow, creates it or adopts one that exists, and never edits one in place; binding an
+  existing one needs an `--authorize adopt:` approval.
+
 ### Level (a) — Data model
 
 Propose the `entities` block (including `columns` and `primaryAttribute`) and
@@ -432,6 +446,12 @@ single turn (they are closely related — the user should see charts and sample
 data alongside the forms they reference). **This level is design-only: do not
 author page `.tsx` here** — propose page intents and defer code generation to
 Phase 1.5.
+
+**Offer declared layouts, once, as a question — never as a default.** When the maker cares how a form
+or a dashboard looks and wants it to stay that way on every rebuild, offer `reconcile: "declared"` on
+that one form or Global Standard dashboard: the parts the spec does not declare stay the maker's, and
+binding one that already exists needs an `--authorize adopt:` approval. Without a yes (or when the
+maker already asked), write nothing declared; forms stay `layout: "auto"`.
 
 #### Forms
 

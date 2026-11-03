@@ -94,7 +94,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
   **ON**, so set it to `false` only when the user explicitly wants the classic header.
 - **App theme and header logo (Preview, 2.21.0)** — `app.theme`. Add it **only when the maker explicitly asks
-  for branding** (brand colours, a header colour, a logo); an ordinary app gets **no** `app.theme`, and you never
+  for branding** (brand colours, a header colour, a logo) or says yes when you offer it at the personas step
+  (authoring-flow Level (a0)); an ordinary app gets **no** `app.theme`, and you never
   invent a palette, a font or a logo. Offer the choices: a `basePaletteColor` (or explicit `palette` slots), the
   `appHeader` colours, a `font` only if they name one, and a `logo` that is an **existing image web resource**
   (or one you also declare in `webResources[]`), never a URL. Say before the build that the theme is published
@@ -156,7 +157,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   in this version). Leave a downloaded or older spec without these fields as it is — see the advanced reference.
 - **Declared form layouts** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a form
   only when the maker asked its layout to follow the spec (fields, spans, sections, field options, sub-grids,
-  handlers); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
+  handlers) or said yes when you offered it at Level (b); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
   declare stay where they are and nothing is deleted (so no `--allow-destructive` is needed for them); a layout the build cannot place safely stops before any
   write; a table publish puts live every saved change on that table, not only this form, with or without
   `--publish` (a declared dashboard is published after its write either way); and Dataverse does
@@ -179,7 +180,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   unconfirmed publish) is refused (`managed-form-unsettled`):
   restore the declaration and let it settle, or run the build again later.
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
-  dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
+  dashboard only when the maker asked its tiles to follow the spec on rebuilds, or said yes when you offered it at Level (b); give it and every tile a
   `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are
   kept; a new tile is added after the last row; in an environment with more than one language a new tile gets
   its caption, with the same text, in every language the environment has (if the build cannot read those
@@ -202,7 +203,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   dashboard and tile ids it was proved on; its first binding needs `adopt:dashboard:<key>`, because the
   downloaded folder has no store.
 - **Declared business rules** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a rule only
-  when the maker accepts that the build manages the WHOLE rule; give every condition, action and apply-action a
+  when the maker accepts that the build manages the WHOLE rule (the offer at the personas step, or their own ask); give every condition, action and apply-action a
   `key`. Tell the maker: conditions and actions are never matched by their text; a new rule is created Draft and
   activated only if nobody changed it in between; a rule that already exists is never edited by the build
   (change it in Maker, then re-adopt it); a rule changed outside the spec stops the build until it is re-adopted
@@ -213,7 +214,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   out, as every business rule is); the first build that binds a rule that already exists needs
   `adopt:rule:<table>/<name>`, because the downloaded folder has no store.
 - **Declared business process flows** (`minimumPluginVersion: "2.21.0"`) — write
-  `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow; give every
+  `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow (the offer at the personas step, or their own ask); give every
   stage and step a `key`. Tell the maker: a key keeps a stage's or step's id, so a rename keeps the records on it;
   a new flow is created Draft and activated only if nobody changed it in between; a flow that already exists is
   never edited by the build (to change its body or status, change it in Maker, then re-adopt it, keeping every
@@ -255,7 +256,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   running again does not merge it: put the change into the spec, then refresh the local copy.
 - **Configuration items** (`minimumPluginVersion: "2.21.0"`) — `environmentVariables[]`,
   `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]` and `solution.version`. Declare one
-  only when the maker asks for it or a page of this app needs it (a page calling a connector needs its
+  only when the maker asks for it, accepts your offer at the personas step, or a page of this app needs it (a page calling a connector needs its
   connection reference; an action a page calls needs its Custom API). Never write a value that differs per
   environment into the spec — a current value, a connection id, a secret: those go in a `--deployment-settings`
   file (the solution deployment-settings shape), which the maker supplies, and a `secret` variable takes no
