@@ -1597,6 +1597,46 @@ code {
   color: var(--color-on-ink);
 }
 
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0.05em 0.45em;
+  border: 1px solid var(--color-border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.kbd-combo {
+  white-space: nowrap;
+}
+
+.kbd-plus {
+  margin-inline: 0.3em;
+  color: var(--color-text-muted);
+}
+
+.install-all kbd {
+  border-color: rgb(255 255 255 / 0.32);
+  background: rgb(255 255 255 / 0.08);
+  color: var(--color-on-ink);
+}
+
+.install-all .kbd-plus {
+  color: var(--color-on-ink-muted);
+}
+
+.os-steps li {
+  line-height: 1.8;
+}
+
 .os-steps .code-block {
   margin-top: var(--space-3);
 }

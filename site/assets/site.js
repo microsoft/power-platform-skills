@@ -189,6 +189,11 @@
       osHint.textContent = 'Run this on the computer where you use your AI assistant. Pick its system above.';
     }
     osHint.hidden = false;
+    // Once the visitor picks a system themselves, the hint must stop crediting the browser.
+    osPicker.addEventListener('change', (event) => {
+      if (!event.target.matches('input[type="radio"]')) return;
+      osHint.textContent = `Showing the steps for ${event.target.parentElement.textContent.trim()}.`;
+    });
   }
 
   // ── Hero session (the signature moment) ─────────────────────

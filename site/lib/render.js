@@ -431,11 +431,34 @@ function controlSection() {
 </section>`;
 }
 
-// How to open a terminal on each computer, in the words a non-developer would use.
+// Keyboard shortcuts drawn as keycaps joined by "+", e.g. Ctrl + Alt + T. Screen readers read
+// the "+" as "plus", so the shortcut still makes sense without the visual keycaps.
+function keys(...names) {
+  // One unbreakable unit, so a combination never splits across lines ("Ctrl +" / "Alt + T").
+  return `<span class="kbd-combo">${names.map((name) => `<kbd>${escapeHtml(name)}</kbd>`).join('<span class="kbd-plus">+</span>')}</span>`;
+}
+
+// How to open a terminal and paste on each computer, in the words a non-developer would use.
+// Paste is Ctrl + Shift + V in Linux terminals because plain Ctrl + V is a control character there.
 const OS_STEPS = {
-  windows: { label: 'Windows', open: 'Open PowerShell', how: 'Press the Windows key, type PowerShell, and press Enter.' },
-  macos: { label: 'macOS', open: 'Open Terminal', how: 'Press Command and Space, type Terminal, and press Return.' },
-  linux: { label: 'Linux', open: 'Open a terminal', how: 'Use your terminal app. On Ubuntu, press Ctrl, Alt, and T.' },
+  windows: {
+    label: 'Windows',
+    open: 'Open PowerShell',
+    how: `Press ${keys('Windows')}, type <strong>PowerShell</strong>, and press ${keys('Enter')}.`,
+    paste: `Paste this command with ${keys('Ctrl', 'V')}, then press ${keys('Enter')}.`,
+  },
+  macos: {
+    label: 'macOS',
+    open: 'Open Terminal',
+    how: `Press ${keys('⌘ Command', 'Space')}, type <strong>Terminal</strong>, and press ${keys('Return')}.`,
+    paste: `Paste this command with ${keys('⌘ Command', 'V')}, then press ${keys('Return')}.`,
+  },
+  linux: {
+    label: 'Linux',
+    open: 'Open a terminal',
+    how: `Use your terminal app. On Ubuntu, press ${keys('Ctrl', 'Alt', 'T')}.`,
+    paste: `Paste this command with ${keys('Ctrl', 'Shift', 'V')}, then press ${keys('Enter')}.`,
+  },
 };
 
 // The visitor picks their computer with radio buttons, styled as a segmented control, and
@@ -449,8 +472,8 @@ function installEverythingSection() {
           </label>`).join('');
   const panels = links.OPERATING_SYSTEMS.map((os) => `<div class="os-option" data-os="${os}">
         <ol class="os-steps">
-          <li><strong>${escapeHtml(OS_STEPS[os].open)}.</strong> ${escapeHtml(OS_STEPS[os].how)}</li>
-          <li><strong>Paste this command and press ${os === 'macos' ? 'Return' : 'Enter'}.</strong>
+          <li><strong>${escapeHtml(OS_STEPS[os].open)}.</strong> ${OS_STEPS[os].how}</li>
+          <li>${OS_STEPS[os].paste}
             ${codeBlock(links.installAllCommand(os), 'Copy command')}
           </li>
         </ol>
