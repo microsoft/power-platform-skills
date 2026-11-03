@@ -3264,8 +3264,9 @@ label, or a published read in more than one language, keeps failing closed. A de
 also sets aside the empty `<labels><label description="" languagecode="…" /></labels>` the platform adds,
 on create, to a tab or section sent without one (`isPlatformEmptyCaption` in `lib/dashboard-reconcile.js`:
 an empty caption with only `description` and `languagecode`; a caption with text is kept), and accepts the
-preservation of `savedCompared` beside the raw saved read's (`preservationMatches`); the committed
-preservation stays the raw one. The
+preservation of `savedCompared` beside the saved read's; the committed preservation stays that of the saved
+row as read, and a proof an earlier build of this release recorded with the empty captions kept still matches
+(`rawPreservationSha256`, `preservationMatches`). The
 entries that publish without a build — `genpage.js` add-to-app and remove-from-app,
 `genpage-upload.js` with `--app-id`, and teardown — read the same debt first
 (`lib/managed-standalone-fence.js`, read-only; no store changes nothing) and refuse the app write

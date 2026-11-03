@@ -16,7 +16,7 @@ const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
-const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
+const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, preservationMatches, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
 const { createAttemptSendObserver, publishManagedScope } = require('../lib/managed-feature-contract.js');
 const { LAYER_READERS } = require('../lib/managed-layer-readers.js');
 // The $select of the publication read of a systemform's saved layer (systemform-published.js), with and without its
@@ -727,6 +727,12 @@ test('the empty tab and section captions the platform adds on create are no chan
   assert.match(was, /<section\b[^>]*><labels><label description="" languagecode="1033" \/><\/labels>/);
   const c = await projectCommitted(w, out.id);
   assert.equal(c.certified, true);
+  // A proof an earlier build of this release committed hashed the layout with the empty captions kept; it still matches, and
+  // only it or the current hash does.
+  assert.notEqual(c.out.rawPreservationSha256, c.out.preservationSha256);
+  assert.equal(preservationMatches(c.out, c.out.rawPreservationSha256), true);
+  assert.equal(preservationMatches(c.out, c.group.proof.preservationSha256), true);
+  assert.equal(preservationMatches(c.out, 'f'.repeat(64)), false);
   // The same dashboard read without the empty captions is the same dashboard.
   row.formxml = was.replace(/<labels><label description="" languagecode="1033" \/><\/labels>/g, '');
   assert.equal((await projectCommitted(w, out.id)).certified, true);
