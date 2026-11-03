@@ -911,6 +911,18 @@ test('view-filter grading: the active-records condition is neither the filter no
   assert.strictEqual((await gradeViewFilter(null, (ev) => { delete ev.expect.viewFilters; })).status, 'fail', 'no independent expectation grades nothing');
 });
 
+test('view-filter grading: a declared view is graded as the declared compiler builds it, so a filter on a joined table is not one on the view\'s own table', async () => {
+  const join = (v) => { v.reconcile = 'declared'; v.linkEntities = [{ name: 'contact', from: 'contactid', to: 'ownerid', alias: 'c' }]; };
+  assert.strictEqual((await gradeViewFilter((v) => { v.reconcile = 'declared'; })).status, 'pass', 'declared, no join');
+  assert.strictEqual((await gradeViewFilter((v) => { v.reconcile = 'declared'; v.filters[0].value = 'High'; })).status, 'pass', 'a choice label resolves to its value as the build resolves it');
+  assert.strictEqual((await gradeViewFilter(join)).status, 'pass', 'a join the filter does not use leaves the filter on the view\'s own table');
+  const scoped = await gradeViewFilter((v) => { join(v); v.filters[0].relatedEntity = 'c'; });
+  assert.strictEqual(scoped.status, 'fail', 'the same condition scoped to the joined table constrains another table');
+  assert.match(scoped.reason, /no condition cnt_priority eq 5/);
+  assert.strictEqual((await gradeViewFilter((v) => { join(v); v.filters.push({ ...v.filters[0] }); v.filters[0].relatedEntity = 'c'; })).status, 'pass', 'an unscoped condition beside a scoped one still counts');
+  assert.strictEqual((await gradeViewFilter((v) => { join(v); v.filters[0].relatedEntity = 'nope'; })).status, 'fail', 'a declared view that does not compile builds no filter');
+});
+
 test('view grading by name and the other stage assertions are unchanged by the view-filter facts', async () => {
   const fixture = fixtureFor(11);
   const facts = await stageFacts(fixture.spec, { fixture });

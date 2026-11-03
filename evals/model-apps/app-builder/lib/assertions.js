@@ -221,14 +221,15 @@ ASSERTIONS.set('ui: wire-facts build exactly the expected views and charts', ({ 
 // expect.viewFilters = [{ entity, view, attr, op, value? }]: a filter the PROMPT names for a view (written here from the prompt, never
 // read off the fixture being graded). It must appear among the view's compiled conditions, which are what the build reads from the
 // supported filters[] { attr, op, value } shape; the active-records condition is not part of the comparison. A misspelled key
-// (`filter`, `column`, `operator`) is ignored by the build, leaves no condition, and so fails here — as a missing filter does.
+// (`filter`, `column`, `operator`) is ignored by the build, leaves no condition, and so fails here — as a missing filter does. The prompt
+// names a filter on the view's own table, so a condition scoped to a joined table (a declared view's `relatedEntity`) does not satisfy it.
 ASSERTIONS.set('ui: a view filter the prompt names is built from filters[] attr/op/value', ({ facts, eval: ev }) => {
   const expected = ev.expect && ev.expect.viewFilters;
   if (!Array.isArray(expected) || !expected.length) return fail('no independent view-filter expectations');
   for (const want of expected) {
     const view = facts.ui.views.find((v) => String(v.entity).toLowerCase() === String(want.entity).toLowerCase() && v.name === want.view);
     if (!view) return fail(`view '${want.view}' on ${want.entity} is not built`);
-    const hit = view.conditions.some((c) => c.attribute === String(want.attr).toLowerCase() && c.operator === (want.op || 'eq')
+    const hit = view.conditions.some((c) => !c.scope && c.attribute === String(want.attr).toLowerCase() && c.operator === (want.op || 'eq')
       && (want.value === undefined ? c.value === undefined : c.value === String(want.value)));
     if (!hit) return fail(`view '${want.view}': no condition ${want.attr} ${want.op || 'eq'} ${want.value === undefined ? '' : JSON.stringify(want.value)}; got ${JSON.stringify(view.conditions)}`);
   }

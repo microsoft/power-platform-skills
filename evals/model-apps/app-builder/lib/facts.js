@@ -12,6 +12,7 @@ function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..'
 
 const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE, formLayoutNames, subgridRelationshipName } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
+const { isDeclaredView, compileViewIntent } = pluginLib('view-reconcile.js');
 const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
 const { subgridSectionIntent, isNonFieldControl } = pluginLib('artifact-intent.js');
 const { SUBGRID_CLASS_ID, splitSubgrids, columnItems } = pluginLib('form-subgrid-placement.js');
@@ -112,16 +113,32 @@ function planFacts(spec) {
   return { byPhase, phases: Object.keys(byPhase), labels: items.map((i) => `${i.phase}\t${i.label}`) };
 }
 
+// The conditions the build gives a view from its filters[], each `{ attribute, operator, value }` plus `scope` (the join alias) on one that
+// constrains a joined table. The build compiles a view one of two ways and the facts must follow it: a declared view (`reconcile:
+// "declared"`) goes through compileViewIntent, which scopes a condition to its join (`relatedEntity`); every other view goes through viewDef,
+// which reads no scope at all. Reading a declared view through viewDef would grade a filter on a joined table as one on the view's own table.
+function viewConditions(spec, v, d) {
+  // The leading active-records condition (statecode eq 0, when activeOnly is not false) is the build's own, not the author's filter.
+  const authored = (list) => (v.activeOnly !== false ? list.slice(1) : list);
+  if (!isDeclaredView(v)) return authored(d.filters.conditions).map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value }));
+  // The build resolves a choice label to its value with resolveFilterValue, which sdk-build does not export; a one-condition view built by
+  // viewDef on the condition's own table runs exactly that rule.
+  const resolveValue = (table, attr, value) => viewDef(spec, { entity: table, name: 'x', activeOnly: false, filters: [{ attr, op: 'eq', value }] }).filters.conditions[0].value;
+  const { intent } = compileViewIntent(v, { resolveValue });
+  // A declared view that does not compile is refused by the build: no view, so no filter.
+  if (!intent) return [];
+  return authored(intent.filters.conditions).map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value, ...(c.entityname ? { scope: c.entityname } : {}) }));
+}
+
 // ui: normalized view/chart/form facts from the pure def builders — the pre-serialization equivalents
 // of wire-facts.js (viewFacts/chartFacts/formFacts), deterministic with no live env or bundle round-trip.
 function wireFacts(spec) {
   return {
     views: (spec.views || []).map((v) => {
       const d = viewDef(spec, v);
-      // viewDef puts the active-records condition (statecode eq 0) first, when activeOnly is not false. What remains is what the
-      // author's filters[] compiled to, so a filter the build ignored (a misspelled key) leaves nothing here.
-      const authored = v.activeOnly !== false ? d.filters.conditions.slice(1) : d.filters.conditions;
-      return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name), conditions: authored.map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value })) };
+      // What viewConditions returns is what the author's filters[] compiled to, so a filter the build ignored (a misspelled key) leaves
+      // nothing here.
+      return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name), conditions: viewConditions(spec, v, d) };
     }),
     charts: (spec.charts || []).map((c) => { const d = chartDef(spec, c); return { entity: d.entityLogicalName, name: d.name, measure: d.series[0].aggregate, groupBy: d.categories[0].attribute }; }),
     forms: (spec.forms || []).map((f) => {
