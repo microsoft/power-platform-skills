@@ -74,9 +74,17 @@ power-platform-skills/
 ├── shared/                   # Cross-plugin shared resources
 │   └── skills/               # Shared skill definitions
 │       └── <skill-name>/     # SKILL.template.md + workflow .md files
+├── site/                     # Plugin showcase site for GitHub Pages (see site/README.md)
+│   └── catalog.json          # Plain-language content for each marketplace plugin
+├── docs/                     # Developer docs moved out of the README (repository layout, installer notes)
 ├── AGENTS.md                 # Generic development guidelines (this file)
-└── README.md                 # Repository overview
+└── README.md                 # Repository overview, written for makers as well as developers
 ```
+
+The README's first half is for people who are not developers: plain words, outcomes before
+technology, and install steps before internals. Keep repository internals in the developer half
+or in `docs/`. The README's install links are checked against `site/lib/install-links.js`, so a new
+marketplace plugin also needs a `site/catalog.json` entry and README install links.
 
 ## Local Development
 
@@ -97,7 +105,9 @@ runs standalone installer regression tests on Linux and Windows.
 **Every test workflow is path-filtered** — to a single plugin (`power-pages` → `plugins/power-pages/**`;
 `model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles;
 `pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles), or,
-for code no plugin owns, to that code (`shared-telemetry-tests` → `shared/telemetry/**`).
+for code no plugin owns, to that code (`shared-telemetry-tests` → `shared/telemetry/**`;
+`showcase-site` → `site/**` plus every input the site reads: `marketplace.json`, plugin manifests and
+skills, `README.md` and `scripts/install.js`). `showcase-site` also deploys the site to GitHub Pages from `main`.
 This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
 *a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
 copies of `shared/` sources may list those sources too, so a change to one runs that plugin's drift

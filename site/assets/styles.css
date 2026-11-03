@@ -1,0 +1,1081 @@
+/*
+ * Power Platform Skills showcase site.
+ *
+ * Design notes:
+ * - One accent (plum) marks actions; everything else stays in ink and cool greys.
+ * - The hero prompt box is the one bold element. The rest is plain rows and rules.
+ * - Fonts come from the operating system only, so the site loads nothing from other origins:
+ *   a DIN-style face for headings (Bahnschrift on Windows, DIN Alternate on macOS) and the
+ *   system UI face for text.
+ */
+
+:root {
+  --paper: #f4f5f9;
+  --surface: #ffffff;
+  --sunken: #eceef5;
+  --ink: #1c1a2b;
+  --ink-2: #4d4a61;
+  --line: #d7d9e4;
+  --plum: #6b2a6f;
+  --plum-strong: #561f5a;
+  --plum-wash: #f3e9f3;
+  --on-plum: #ffffff;
+  --link: #1b58c4;
+  --ok: #0f6e4e;
+  --focus: #1b58c4;
+
+  --font-display: "Bahnschrift", "DIN Alternate", "DIN Next", "Avenir Next Condensed", "Segoe UI", system-ui, sans-serif;
+  --font-text: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-code: "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --step--1: 0.9375rem;
+  --step-0: 1.0625rem;
+  --step-1: 1.3125rem;
+  --step-2: 1.75rem;
+  --step-3: 2.25rem;
+  --step-4: clamp(2.25rem, 1.4rem + 3.6vw, 3.5rem);
+
+  --radius: 8px;
+  --gutter: clamp(1rem, 4vw, 2rem);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #16141e;
+    --surface: #1f1c29;
+    --sunken: #292536;
+    --ink: #edeaf4;
+    --ink-2: #b5b0c7;
+    --line: #3a3550;
+    --plum: #d9a3dd;
+    --plum-strong: #e8c1eb;
+    --plum-wash: #33243a;
+    --on-plum: #1c1a2b;
+    --link: #93b7ff;
+    --ok: #6fd3a8;
+    --focus: #93b7ff;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: 1rem;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: var(--step-0);
+  line-height: 1.55;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  font-stretch: semi-condensed;
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 0 0 0.5em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--step-4);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--step-3);
+}
+
+h3 {
+  font-size: var(--step-1);
+}
+
+h4 {
+  font-size: var(--step-1);
+}
+
+p {
+  margin: 0 0 1em;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+code {
+  font-family: var(--font-code);
+  font-size: 0.9em;
+  background: var(--sunken);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+
+/* Inline code holds short flags and commands, such as --include-dataverse, that must not split at a hyphen. */
+:not(pre) > code {
+  white-space: nowrap;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -4rem;
+  z-index: 10;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border: 2px solid var(--focus);
+  border-radius: var(--radius);
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+.wrap {
+  max-width: 72rem;
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.lede {
+  font-size: var(--step-1);
+  line-height: 1.45;
+  color: var(--ink-2);
+  max-width: 38em;
+}
+
+.fine-print {
+  font-size: var(--step--1);
+  color: var(--ink-2);
+}
+
+/* Header and footer */
+
+.site-header {
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 2rem;
+  padding-block: 1rem;
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-stretch: semi-condensed;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.nav-list,
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-list a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.nav-list a:hover {
+  text-decoration: underline;
+}
+
+.site-footer {
+  margin-top: 4rem;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: var(--step--1);
+}
+
+.footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  padding-block: 2rem;
+}
+
+.footer-row p {
+  margin: 0;
+  max-width: 36em;
+}
+
+/* Buttons */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border: 1.5px solid transparent;
+  border-radius: var(--radius);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button-primary {
+  background: var(--plum);
+  color: var(--on-plum);
+}
+
+.button-primary:hover {
+  background: var(--plum-strong);
+  text-decoration: none;
+}
+
+.button-quiet {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.button-quiet:hover {
+  border-color: var(--ink-2);
+  text-decoration: none;
+}
+
+.button-large {
+  min-height: 3.25rem;
+  padding: 0.75rem 1.375rem;
+}
+
+.text-link {
+  font-weight: 500;
+}
+
+.copy-button {
+  font: inherit;
+  font-size: var(--step--1);
+  font-weight: 600;
+  padding: 0.3rem 0.75rem;
+  border: 1.5px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.copy-button:hover {
+  border-color: var(--ink-2);
+}
+
+.copy-button[data-copied] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: 0.1em;
+}
+
+.badge-status {
+  background: var(--plum-wash);
+  color: var(--plum-strong);
+  border: 1px solid var(--plum);
+}
+
+/* Code */
+
+.code-block {
+  display: grid;
+  justify-items: end;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+.code-block pre {
+  justify-self: stretch;
+  margin: 0;
+  padding: 0.875rem 1rem;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code-block pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.code-line {
+  display: block;
+  padding-left: 1.5em;
+  text-indent: -1.5em;
+}
+
+.code-line + .code-line {
+  margin-top: 0.5em;
+}
+
+.code-word {
+  display: inline-block;
+  max-width: 100%;
+  text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Hero */
+
+.hero {
+  padding-block: clamp(2.5rem, 7vw, 5.5rem) clamp(2.5rem, 6vw, 4.5rem);
+}
+
+.hero-grid {
+  display: grid;
+  gap: 2.5rem;
+  align-items: center;
+}
+
+@media (min-width: 60rem) {
+  .hero-grid {
+    grid-template-columns: 1.05fr 1fr;
+    gap: 4rem;
+  }
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.demo-label,
+.try-label {
+  margin: 0 0 0.5rem;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.prompt-box {
+  border: 3px solid var(--plum);
+  border-radius: 16px;
+  background: var(--surface);
+  padding: 1.5rem 1.5rem 1.75rem;
+}
+
+.prompt-text {
+  margin: 0;
+  min-height: 3.9em;
+  font-size: clamp(1.375rem, 1.1rem + 1.2vw, 1.875rem);
+  line-height: 1.3;
+  font-weight: 500;
+}
+
+.caret {
+  display: inline-block;
+  width: 3px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--plum);
+  animation: blink 1.1s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.demo-result {
+  margin: 1rem 0 1.75rem;
+  color: var(--ink-2);
+}
+
+.demo-result a {
+  font-weight: 600;
+}
+
+.try-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.try-button {
+  font: inherit;
+  font-size: var(--step--1);
+  text-align: left;
+  padding: 0.4rem 0.875rem;
+  border: 1.5px solid var(--line);
+  /* Long requests wrap on phones; a full pill radius would turn them into stadium shapes. */
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.try-button:hover {
+  border-color: var(--ink-2);
+}
+
+.try-button[aria-pressed="true"] {
+  border-color: var(--plum);
+  background: var(--plum-wash);
+}
+
+/* How it works: a real sequence, so the steps carry numbers. */
+
+.steps {
+  padding-block: 1rem 3.5rem;
+}
+
+.step-list {
+  display: grid;
+  gap: 1.5rem 2.5rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+@media (min-width: 48rem) {
+  .step-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.step-list li {
+  counter-increment: step;
+  border-top: 2px solid var(--ink);
+  padding-top: 1rem;
+}
+
+.step-list li::before {
+  content: counter(step);
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--step-3);
+  line-height: 1;
+  color: var(--plum);
+  margin-bottom: 0.75rem;
+}
+
+.step-list p {
+  color: var(--ink-2);
+  margin: 0;
+}
+
+/* Plugin catalog */
+
+.plugins {
+  background: var(--surface);
+  border-block: 1px solid var(--line);
+  padding-block: 3.5rem 2rem;
+}
+
+.section-head p {
+  color: var(--ink-2);
+  max-width: 40em;
+}
+
+.catalog-tools {
+  display: grid;
+  gap: 1.25rem;
+  margin: 1.75rem 0 1.25rem;
+}
+
+.assistant-picker {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.assistant-picker legend {
+  padding: 0;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.picker-options {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.picker-option {
+  position: relative;
+}
+
+.picker-option input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.picker-option span {
+  display: block;
+  padding: 0.5rem 1rem;
+  border-radius: 9px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.picker-option input:checked + span {
+  background: var(--plum);
+  color: var(--on-plum);
+}
+
+.picker-option input:focus-visible + span {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.goal-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--step--1);
+}
+
+/*
+ * Show only the parts that match the chosen assistant. Each element type keeps its own
+ * display value through --shown. Browsers without :has() show every option instead.
+ */
+.button[data-for] {
+  --shown: inline-flex;
+}
+
+.callout[data-for] {
+  --shown: flex;
+}
+
+.install-option[data-for] {
+  --shown: block;
+}
+
+@supports selector(:has(*)) {
+  .assistant-scope [data-for] {
+    display: none;
+  }
+
+  .assistant-scope:has(input[value="claude-code"]:checked) [data-for="claude-code"],
+  .assistant-scope:has(input[value="copilot-app"]:checked) [data-for="copilot-app"],
+  .assistant-scope:has(input[value="copilot-cli"]:checked) [data-for="copilot-cli"] {
+    display: var(--shown, block);
+  }
+}
+
+.callout {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--plum);
+  background: var(--plum-wash);
+  border-radius: var(--radius);
+}
+
+.callout p {
+  margin: 0;
+  max-width: 48em;
+}
+
+.goal-group {
+  padding-top: 2rem;
+}
+
+.goal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 1rem;
+}
+
+.goal-head h3 {
+  margin-bottom: 0.25rem;
+}
+
+.goal-head p {
+  margin: 0 0 0.75rem;
+  color: var(--ink-2);
+}
+
+.plugin-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-row {
+  display: grid;
+  gap: 0.5rem 2rem;
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 56rem) {
+  .plugin-row {
+    grid-template-columns: 14rem 1fr 15rem;
+    align-items: start;
+  }
+}
+
+.plugin-name h4 {
+  margin-bottom: 0.25rem;
+}
+
+.plugin-name h4 a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.plugin-name h4 a:hover {
+  text-decoration: underline;
+}
+
+.plugin-meta {
+  margin: 0;
+  font-size: var(--step--1);
+  color: var(--ink-2);
+}
+
+.plugin-body p {
+  margin: 0 0 0.5rem;
+  max-width: 40em;
+}
+
+.sample-prompt,
+.prompt-quote {
+  color: var(--ink-2);
+}
+
+.sample-prompt::before,
+.prompt-quote::before {
+  content: "\201C";
+}
+
+.sample-prompt::after,
+.prompt-quote::after {
+  content: "\201D";
+}
+
+.plugin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+@media (min-width: 56rem) {
+  .plugin-actions {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+  }
+}
+
+.plugin-actions .button[data-copied] {
+  background: var(--ok);
+}
+
+/* Install everything */
+
+.install-all {
+  padding-block: 3.5rem 1rem;
+}
+
+.install-grid {
+  display: grid;
+  gap: 1.5rem 3rem;
+}
+
+@media (min-width: 60rem) {
+  .install-grid {
+    grid-template-columns: 0.8fr 1.2fr;
+  }
+}
+
+.dataverse-commands {
+  margin-top: 1.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+
+.dataverse-commands summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
+.install-commands h3 {
+  font-family: var(--font-text);
+  font-stretch: normal;
+  font-size: var(--step-0);
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+/* Before you start */
+
+.before {
+  padding-block: 2.5rem 1rem;
+}
+
+.check-list {
+  display: grid;
+  gap: 1rem 2.5rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 48rem) {
+  .check-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.check-list li {
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+  color: var(--ink-2);
+}
+
+.check-list strong {
+  display: block;
+  color: var(--ink);
+}
+
+/* Questions */
+
+.faq {
+  padding-block: 2.5rem 0;
+}
+
+.faq-grid {
+  display: grid;
+  gap: 1rem 3rem;
+}
+
+@media (min-width: 60rem) {
+  .faq-grid {
+    grid-template-columns: 0.8fr 1.2fr;
+  }
+}
+
+.faq-list details {
+  border-top: 1px solid var(--line);
+}
+
+.faq-list details:last-of-type {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1rem;
+}
+
+.faq-list summary {
+  cursor: pointer;
+  padding: 0.875rem 0;
+  font-weight: 600;
+}
+
+.faq-list details p {
+  color: var(--ink-2);
+  max-width: 40em;
+}
+
+/* Plugin page */
+
+.plugin-page {
+  padding-top: 1.5rem;
+}
+
+.breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0 0 2rem;
+  padding: 0;
+  list-style: none;
+  font-size: var(--step--1);
+}
+
+.breadcrumb li + li::before {
+  content: "/";
+  margin-right: 0.25rem;
+  color: var(--ink-2);
+}
+
+.plugin-header {
+  margin-bottom: 2.5rem;
+}
+
+.plugin-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--step--1);
+}
+
+.plugin-grid {
+  display: grid;
+  gap: 2.5rem;
+}
+
+@media (min-width: 60rem) {
+  .plugin-grid {
+    grid-template-columns: 1fr 26rem;
+    grid-template-areas: "details install";
+    align-items: start;
+    gap: 4rem;
+  }
+
+  .plugin-grid .install-panel {
+    grid-area: install;
+  }
+
+  .plugin-grid .plugin-details {
+    grid-area: details;
+  }
+}
+
+/* Only stick when the whole panel fits on screen; a taller panel would hide its own bottom. */
+@media (min-width: 60rem) and (min-height: 48rem) {
+  .plugin-grid .install-panel {
+    position: sticky;
+    top: 1.5rem;
+  }
+}
+
+.plugin-details section {
+  margin-bottom: 2.5rem;
+}
+
+.plugin-details h2 {
+  font-size: var(--step-2);
+}
+
+/* Plum outlines mark the places where you act: the hero prompt and the install panel. */
+.install-panel {
+  background: var(--surface);
+  border: 2px solid var(--plum);
+  border-radius: 16px;
+  padding: 1.5rem;
+}
+
+.install-panel h2 {
+  font-size: var(--step-2);
+}
+
+.install-panel .assistant-picker {
+  margin-bottom: 1.25rem;
+}
+
+.install-panel .picker-options {
+  display: grid;
+  width: 100%;
+}
+
+.install-option > .button {
+  margin-bottom: 1rem;
+}
+
+/* Sized so "microsoft/power-platform-skills" fits on one line inside the panel. */
+.install-panel .code-block pre {
+  padding-inline: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.install-steps {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+.install-steps li {
+  margin-bottom: 1rem;
+}
+
+.install-steps p {
+  margin-bottom: 0.5rem;
+}
+
+.prompt-list,
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.prompt-list .prompt-quote {
+  color: var(--ink);
+  font-size: var(--step-1);
+  line-height: 1.35;
+  flex: 1 1 18rem;
+}
+
+.plain-list li {
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--line);
+  max-width: 44em;
+}
+
+.plain-list.numbered {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+
+.plain-list.numbered li {
+  border-top: 0;
+  padding: 0.25rem 0;
+}
+
+.skill-list {
+  margin: 0;
+}
+
+.skill-list div {
+  display: grid;
+  gap: 0.25rem 1.5rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 40rem) {
+  .skill-list div {
+    grid-template-columns: 16rem 1fr;
+  }
+}
+
+.skill-list dt code {
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.skill-list dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+/* Launcher and 404 */
+
+.launcher {
+  max-width: 48rem;
+  padding-top: clamp(2.5rem, 7vw, 5rem);
+}
+
+.launcher h2 {
+  font-size: var(--step-2);
+  margin-top: 2.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+@media (forced-colors: active) {
+  .button,
+  .picker-option span,
+  .try-button,
+  .copy-button {
+    border: 1px solid ButtonText;
+  }
+
+  .picker-option input:checked + span,
+  .try-button[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+  }
+}

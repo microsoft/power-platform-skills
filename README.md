@@ -1,16 +1,46 @@
 # Power Platform Skills
 
-Official agent skills/plugins for Power Platform development by Microsoft.
+Plugins from Microsoft that teach AI assistants, such as GitHub Copilot and Claude Code, to build on Power Platform.
 
-## Overview
+**[Browse the plugins and install them with one click](https://microsoft.github.io/power-platform-skills/)**
 
-This repository is a **plugin marketplace** containing GitHub Copilot/Claude Code plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
+You describe what you want in your own words, such as "Create a Power Pages site with React for a job board" or "Why did the last run of my approval flow fail?".
+Your assistant asks follow-up questions, shows you what it plans to do, and asks before it runs commands or changes files.
+Then it does the work, from creating tables to publishing the result to your Power Platform environment.
+
+## What can I build?
+
+| I want to... | Plugin | Try asking |
+| --- | --- | --- |
+| Build a website | [Power Pages](plugins/power-pages/README.md) | "Create a Power Pages site with React for a job board" |
+| Build a business app | [Model-driven apps](plugins/model-apps/README.md) | "Build an app for tracking service requests" |
+| Build or change a canvas app | [Canvas apps](plugins/canvas-apps/README.md) | "Edit my Canvas App to add a new screen for reports" |
+| Build a web app with code | [Code apps](plugins/code-apps/README.md) (preview) | "Create a code app for tracking customer requests" |
+| Build a phone app | [Mobile apps](plugins/mobile-apps/README.md) (private preview) | "Build me a small notes app" |
+| Add native phone features to a canvas app | [Power Apps Mobile extensions](plugins/power-apps-mobile-extension/README.md) (preview) | "Design a native barcode scanning feature for my wrapped canvas app" |
+| Automate work | [Power Automate](plugins/power-automate/README.md) | "Create a flow that emails me when a new item is added to my SharePoint list" |
+| Work with Dataverse data | [Dataverse](https://github.com/microsoft/Dataverse-skills) | "Import this CSV into the contacts table" |
+| Find where a process slows down | [Process Intelligence](plugins/process-intelligence/README.md) | "Which steps cause the most waiting in this process?" |
+| Build custom controls for forms and views | [PCF](plugins/pcf/README.md) (preview) | "Create a PCF star rating control for a model-driven form" |
+| Build tools and widgets for AI assistants | [MCP Apps](plugins/mcp-apps/README.md) | "Show account revenue as a bar chart" |
+
+The [plugin website](https://microsoft.github.io/power-platform-skills/) shows what each plugin needs and more things to ask.
+
+## Before you start
+
+- **An AI assistant:** [Claude Code](https://code.claude.com/docs/en/setup), the [GitHub Copilot app](https://github.com/features/ai/github-app), or [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli).
+- **A Power Platform environment you can build in.** A [developer environment](https://learn.microsoft.com/power-platform/developer/create-developer-environment) is free and the safest place to try things.
+- **[Node.js](https://nodejs.org/en/download)**, which the installer and most plugins need.
+
+Some plugins need more tools, such as the Azure CLI or the .NET SDK.
+Each plugin's page lists them, and your assistant tells you when something is missing.
 
 ## Installation
 
-### Quick Install (Recommended)
+### Quick install (recommended)
 
-Run the installer to set up all plugins with auto-update enabled:
+Open a terminal and run one command.
+It installs every plugin into Claude Code and GitHub Copilot CLI, whichever you have.
 
 **Windows (PowerShell)**:
 
@@ -18,23 +48,18 @@ Run the installer to set up all plugins with auto-update enabled:
 iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js; del install.js
 ```
 
-**Mac OS/Linux/Windows (cmd)**:
+**macOS, Linux, or Windows (cmd)**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node
 ```
 
-The installer automatically:
+The installer:
 
-- Installs `pac` CLI if not already installed
-- Detects available tools (GitHub Copilot CLI, Claude Code)
-- Registers the plugin marketplace and installs all listed plugins except `dataverse`
-- Enables auto-update so plugins stay current
-
-The installer validates plugin names in local and downloaded marketplace manifests before
-installation. Names must follow the Open Plugins format: 1–64 lowercase ASCII letters or
-digits, with single dots or hyphens allowed between alphanumeric endpoints. CLI arguments
-are passed directly to executables; Windows batch launchers accept only shell-inert arguments.
+- Installs the Power Platform CLI (`pac`) if it is missing
+- Finds Claude Code and GitHub Copilot CLI on your computer
+- Adds this plugin marketplace and installs every plugin except `dataverse`
+- Turns on automatic updates, so your plugins stay current
 
 To also install the [Dataverse](#dataverse-external) plugin, pass `--include-dataverse`:
 
@@ -48,9 +73,36 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/mai
 
 The `-` tells Node to read the piped script, so the arguments after it reach the installer.
 
-### Manual Installation
+### Install one plugin with a click
 
-If you prefer to install manually, run these commands inside a GitHub Copilot CLI or Claude Code session:
+The **Claude Code** links open a terminal with the install command already typed.
+Press Enter to install.
+If nothing happens, open Claude Code once and send any message, then try the link again.
+
+For the **GitHub Copilot app**, [add the Power Platform marketplace](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Fmarketplace%2Fadd%3Fsource%3Dmicrosoft%252Fpower-platform-skills) first.
+You only do this once.
+The app asks you to confirm each step.
+
+| Plugin | Claude Code | GitHub Copilot app |
+| --- | --- | --- |
+| Power Pages | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=power-pages) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dpower-pages%2540power-platform-skills) |
+| Model-driven apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=model-apps) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dmodel-apps%2540power-platform-skills) |
+| Canvas apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=canvas-apps) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dcanvas-apps%2540power-platform-skills) |
+| Code apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=code-apps-preview) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dcode-apps-preview%2540power-platform-skills) |
+| Mobile apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=mobile-app) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dmobile-app%2540power-platform-skills) |
+| Power Apps Mobile extensions | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=power-apps-mobile-extension) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dpower-apps-mobile-extension%2540power-platform-skills) |
+| Power Automate | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=power-automate) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dpower-automate%2540power-platform-skills) |
+| Process Intelligence | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=process-intelligence) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dprocess-intelligence%2540power-platform-skills) |
+| Dataverse | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=dataverse) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Ddataverse%2540power-platform-skills) |
+| PCF code components | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=pcf) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dpcf%2540power-platform-skills) |
+| MCP Apps | [Install in Claude Code](https://microsoft.github.io/power-platform-skills/install/?app=claude-code&plugin=mcp-apps) | [Install in Copilot app](https://github.com/copilot/app/launch?open=ghapp%3A%2F%2Fplugins%2Finstall%3Fsource%3Dmcp-apps%2540power-platform-skills) |
+
+The Claude desktop app's Code tab and the Claude Code extension for VS Code use the plugins you install in Claude Code.
+VS Code also picks up plugins you install with GitHub Copilot CLI.
+
+### Manual installation
+
+To install from inside a GitHub Copilot CLI or Claude Code session, run these commands:
 
 1. Add the marketplace
 
@@ -58,21 +110,97 @@ If you prefer to install manually, run these commands inside a GitHub Copilot CL
     /plugin marketplace add microsoft/power-platform-skills
     ```
 
-2. Install the desired plugin
+2. Install the plugins you want
 
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
-    /plugin install pcf@power-platform-skills
-    /plugin install mcp-apps@power-platform-skills
+    /plugin install canvas-apps@power-platform-skills
     /plugin install code-apps-preview@power-platform-skills
     /plugin install mobile-app@power-platform-skills
     /plugin install power-apps-mobile-extension@power-platform-skills
-    /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
     /plugin install process-intelligence@power-platform-skills
     /plugin install dataverse@power-platform-skills
+    /plugin install pcf@power-platform-skills
+    /plugin install mcp-apps@power-platform-skills
     ```
+
+## Your first request
+
+1. Open a terminal, make an empty folder for your project, and go into it:
+
+    ```bash
+    mkdir my-first-site
+    cd my-first-site
+    ```
+
+2. Start your assistant by typing `claude` or `copilot`.
+   In the GitHub Copilot app, add the folder and start a session instead.
+3. Describe what you want, for example "Create a Power Pages site with React for a job board".
+4. Answer its questions.
+   It may ask you to sign in to Power Platform in your browser and to pick an environment.
+5. Read each permission request before you approve it.
+   When it finishes, it tells you what it created.
+
+## Questions
+
+### Do I need to know how to code?
+
+No.
+You describe what you want in your own words.
+You run a few commands to install things, and some plugins are aimed at developers.
+The [plugin website](https://microsoft.github.io/power-platform-skills/) says who each plugin is for.
+
+### What does it cost?
+
+The plugins are free and open source under the [MIT](LICENSE) license.
+You need your own AI assistant, such as GitHub Copilot or Claude, and a Power Platform environment, which can need Power Platform licenses.
+
+### Can it break something?
+
+Your assistant asks before it runs commands or changes files.
+Many plugins also show you a plan or confirm the environment before they publish.
+Try things in a [developer environment](https://learn.microsoft.com/power-platform/developer/create-developer-environment) first.
+It's free and separate from your organization's live apps.
+
+### Why does my assistant keep asking for permission?
+
+Plugins edit files, run commands, and call MCP servers, and your assistant asks before each one by default.
+Read what it wants to do before you approve it.
+If you trust the work and want fewer prompts, see [Running Without Interruption](#running-without-interruption).
+
+### What data is collected?
+
+Some plugins send usage data to Microsoft by default, and each one has a command to turn it off.
+See [Telemetry](#telemetry) for what is collected.
+
+### How do I update or remove a plugin?
+
+The quick install turns on automatic updates.
+Otherwise, run `claude plugin update <name>` or `copilot plugin update <name>`.
+To remove a plugin, run `claude plugin uninstall <name>` or `copilot plugin uninstall <name>`.
+
+### Where do I get help?
+
+Most plugins include a `report-issue` skill that drafts a bug report for you.
+You can also [open an issue](https://github.com/microsoft/power-platform-skills/issues) or read [SUPPORT.md](SUPPORT.md).
+
+## Words you'll see
+
+| Word | What it means |
+| --- | --- |
+| AI assistant | An AI tool that can work on your computer, such as Claude Code or GitHub Copilot. |
+| Plugin | A package that teaches your assistant a set of jobs. |
+| Skill | Instructions for one job, such as creating a site. Your assistant picks one from your request, or you can type its name, such as `/create-site`. |
+| Marketplace | A list of plugins your assistant can install. This repository is one. |
+| Environment | A space in Power Platform that holds your apps, flows, and data. |
+| Dataverse | The database behind Power Apps and Power Automate. |
+| PAC CLI | The Power Platform command-line tool. Plugins use it to sign in and publish. |
+| Azure CLI | Microsoft's command-line tool for Azure. Some plugins use it to sign in. |
+| MCP server | A small program that gives your assistant extra tools, such as access to a service. |
+
+The rest of this page is reference material for developers.
 
 ## Available Plugins
 
@@ -172,44 +300,6 @@ This plugin is maintained in [microsoft/Dataverse-skills](https://github.com/mic
 Report issues and send changes there.
 If you already installed `dataverse` from the `dataverse-skills` marketplace, keep only one of the two installs so its skills are not loaded twice.
 
-## Local Development
-
-To develop and test plugins locally, follow these steps:
-
-1. Clone this repository
-1. Launch GitHub Copilot CLI or Claude Code with the plugin path:
-
-    GitHub Copilot CLI:
-
-    ```bash
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/code-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-automate
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
-    ```
-
-    Claude Code:
-
-    ```bash
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
-    claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
-    claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
-    claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
-    ```
-
-For Process Intelligence, first follow its [setup instructions](plugins/process-intelligence/README.md#installation),
-including the explicit profile and absolute plugin root needed to avoid duplicate workspace MCP loads.
-
 ## Running Without Interruption
 
 Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
@@ -271,87 +361,45 @@ claude --dangerously-skip-permissions
 
 See the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions) for the full reference.
 
-## Repository Structure
+## Local Development
 
-```text
-power-platform-skills/
-├── marketplace.json          # Open Plugins marketplace manifest (lists all plugins)
-├── .claude-plugin/           # Legacy marketplace shim for existing subscriptions
-│   └── marketplace.json
-├── .claude/
-│   └── settings.json         # Auto-allowed tools (pac, node, dotnet, etc.)
-├── plugins/
-│   ├── power-pages/          # Power Pages plugin
-│   │   ├── .plugin/
-│   │   │   └── plugin.json
-│   │   ├── .claude-plugin/   # Legacy manifest mirror
-│   │   │   └── plugin.json
-│   │   ├── commands/
-│   │   ├── shared/
-│   │   └── skills/
-│   ├── model-apps/           # Model Apps plugin
-│   |   ├── .plugin/
-│   │   └── plugin.json
-│   |   ├── commands/
-│   |   ├── skills/
-│   |   ├── shared/           # Shared references + samples
-│   |   └── github/           # GitHub Copilot instructions
-│   ├── mcp-apps/             # MCP codeful tool + widget generator plugin
-│   │   ├── .plugin/
-│   │   │   └── plugin.json
-│   │   ├── references/
-│   │   ├── samples/
-│   │   └── skills/
-│   ├── code-apps/            # Code Apps plugin
-│   │   ├── .plugin/
-│   │   │   └── plugin.json
-│   │   ├── agents/
-│   │   ├── skills/
-│   │   └── shared/           # Shared instructions + references
-│   ├── mobile-apps/          # Mobile Apps plugin
-│   │   ├── .plugin/
-│   │   │   └── plugin.json
-│   │   ├── .claude-plugin/   # Legacy manifest mirror
-│   │   │   └── plugin.json
-│   │   ├── agents/
-│   │   ├── skills/
-│   │   ├── shared/           # Shared instructions + references
-│   │   └── template/         # Bundled Expo app template
-│   ├── power-apps-mobile-extension/ # Native controls for wrapped Canvas apps
-│   │   ├── .plugin/
-│   │   │   └── plugin.json
-│   │   ├── .claude-plugin/   # Legacy manifest mirror
-│   │   │   └── plugin.json
-│   │   ├── shared/
-│   │   └── skills/
-│   ├── canvas-apps/          # Canvas Apps plugin
-│   │   ├── .plugin/
-│   │   │   └── plugin.json
-│   │   ├── references/       # Technical + design guides
-│   │   └── skills/
-│   └── process-intelligence/ # Process Mining analytics plugin
-│       ├── .plugin/
-│       │   └── plugin.json
-│       ├── server/           # Self-contained MCP bundle
-│       ├── references/
-│       └── skills/
-├── AGENTS.md                 # Development guidelines
-└── README.md
-```
+To develop and test plugins locally, follow these steps:
 
-The `.claude-plugin` files are compatibility mirrors for users who subscribed
-before the Open Plugins migration. The root legacy marketplace mirrors
-`marketplace.json`, and per-plugin legacy manifests mirror `.plugin/plugin.json`.
-The shared marketplace keeps marketplace-level `owner` and `metadata`, while each
-plugin entry is intentionally just `name` plus repository-root-relative `source`.
-Plugin descriptions, versions, licenses, and keywords are controlled from each
-plugin's `.plugin/plugin.json`. This keeps existing subscriptions updating without
-duplicating display/update metadata.
+1. Clone this repository
+1. Launch GitHub Copilot CLI or Claude Code with the plugin path:
 
-Plugins maintained in other repositories, such as `dataverse`, use a remote `source` object instead of a path.
-Copilot CLI reads `marketplace.json` and Claude Code reads `.claude-plugin/marketplace.json`, and they spell a plugin in a repository subdirectory differently.
-So `marketplace.json` uses `"source": "github"` with `repo` and `path`, and the legacy file uses `"source": "git-subdir"` with `url` and `path`.
-`scripts/validate-legacy-compatibility.js` enforces that pairing.
+    GitHub Copilot CLI:
+
+    ```bash
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
+    ```
+
+    Claude Code:
+
+    ```bash
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
+    claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
+    ```
+
+For Process Intelligence, first follow its [setup instructions](plugins/process-intelligence/README.md#installation),
+including the explicit profile and absolute plugin root needed to avoid duplicate workspace MCP loads.
+
+For the repository layout and how the marketplace files fit together, see [docs/development.md](docs/development.md).
 
 ## Documentation
 
