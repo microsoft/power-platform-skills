@@ -163,7 +163,7 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 // service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
 const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSecurity } = require('./field-security.js');
 const { declaredTableFlags } = require('./schema-feature-contract.js');
-const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
+const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause, markFreshTable } = require('./retry-policy.js');
 const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
 const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approvalKey } = require('./reconcile-common.js');
 const { createPassthroughCreates } = require('./creates-passthrough.js');
@@ -6887,10 +6887,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (!enrichesDefaultViews(spec, e)) continue;
       const logical = e.schemaName.toLowerCase();
       const cols = defaultViewColumns(spec, e);
+      // Only a table THIS attempt created has a `metadataId` (the create's answer; a table found, or found after a create whose answer was lost, has none): a view saved moments after the table was created can be
+      // refused because the server that validates it does not have the table yet, which a run again rides out (retry-policy.js, markFreshTable). For any other table the same answer is a real refusal.
+      const createdHere = Boolean(result.created.entities[e.schemaName] && result.created.entities[e.schemaName].metadataId);
+      const marked = (err) => (createdHere ? markFreshTable(err, logical) : err);
       await runner.run('views', `enrich default views for ${logical}`, async () => {
         if (!deferDefaultViewPublish) {
           const held = !owed.barrier.allow(logical, `default views of ${logical}`);
-          const { updated } = await provision.enrichDefaultViews(logical, cols, held ? { excludeViewIds: authorViewIds, publish: false } : { excludeViewIds: authorViewIds });
+          const enrichOpts = held ? { excludeViewIds: authorViewIds, publish: false } : { excludeViewIds: authorViewIds };
+          let updated;
+          try {
+            ({ updated } = await provision.enrichDefaultViews(logical, cols, enrichOpts));
+          } catch (err) {
+            throw marked(err);
+          }
           // A routed table is held above; the managed publisher publishes it in place of the SDK.
           if (isRouted(logical)) await managedTables.flush([logical], { phase: 'views', path: `default views of ${logical}` });
           return updated;
@@ -6909,7 +6919,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return record.updated;
         } catch (err) {
           recordOwed(logical, partialEnrichment(err));
-          throw err;
+          throw marked(err);
         }
       });
     }

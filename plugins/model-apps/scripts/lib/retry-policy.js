@@ -296,13 +296,55 @@ function missingAttributeOf(error) {
   return named ? [named[1], named[2]] : null;
 }
 
-// Whether the answer this error carries is a condition the service names by its code as one a run again can ride out — see TRANSIENT_SERVICE_CODES — a SQL deadlock victim (isDeadlockVictimAnswer), or the lag of a column the
-// spec creates (`declares`).
-function isTransientServiceAnswer(error, declares) {
+// The lag of a TABLE the build has only just created. A view saved before the server that validates it has the new table's metadata is refused because it cannot resolve the table — live-captured, for the PATCH of a
+// default view of a table created moments before (the request names the table through `returnedtypecode`, so the lag shows up as the table not resolving, where a request that left it out got the missing-attribute
+// answer above):
+//   HTTP 400 from https://<org>/api/data/v9.0/savedqueries(<id>)?$select=savedqueryid: Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml          (code 0x80040203)
+// and the reads that follow it say the table is not in the cache yet (code 0x80041102):
+//   The entity with a name = 'contoso_task' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075
+// Neither says the request is wrong; a run again, once the cache has the table, succeeds. But the same words also describe a request that really names no table, so they are lag ONLY for a table THIS attempt of the
+// build created, which the caller marks on the failure it raises (`freshTable`, the logical name — markFreshTable): the first answer names no table, so the mark is what ties it to the one the step was saving; the
+// second names its table, and it must be the marked one. Anything else stays final.
+const SAVED_QUERY_NO_TABLE_CODE = '0x80040203';
+const SAVED_QUERY_NO_TABLE = /Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml/i;
+const METADATA_CACHE_CODE = '0x80041102';
+// Group 1 is the table's logical name.
+const TABLE_NOT_IN_CACHE = /The entity with a name = '([^']+)' with namemapping = 'Logical' was not found in the MetadataCache/i;
+
+// Mark a failure raised while the build saved something of a table it created in this attempt, so that the lag above is told from a real error. The mark is not enumerable: it rides along for the retry decision and never into
+// a serialized error or the journal. Returns the error it was given.
+function markFreshTable(error, tableLogical) {
+  if (isObject(error) && typeof tableLogical === 'string' && tableLogical) {
+    try {
+      Object.defineProperty(error, 'freshTable', { value: tableLogical.toLowerCase(), enumerable: false, configurable: true, writable: true });
+    } catch { /* a frozen error carries no mark, and its answer stays final */ }
+  }
+  return error;
+}
+const freshTableOf = (chain) => {
+  const marked = chain.find((e) => typeof e.freshTable === 'string' && e.freshTable);
+  return marked ? marked.freshTable : null;
+};
+
+// Whether the answer is the lag of the freshly created table `fresh` (see above): the code AND the platform's words, for the table the caller marked.
+function isFreshTableLag(error, fresh) {
+  if (!fresh) return false;
+  const code = serviceCodeOf(error);
+  const answered = code === SAVED_QUERY_NO_TABLE_CODE || code === METADATA_CACHE_CODE ? answeredErrorOf(error) : null;
+  const words = answered && typeof answered.message === 'string' ? answered.message : '';
+  if (code === SAVED_QUERY_NO_TABLE_CODE) return SAVED_QUERY_NO_TABLE.test(words);
+  const named = code === METADATA_CACHE_CODE ? TABLE_NOT_IN_CACHE.exec(words) : null;
+  return Boolean(named && named[1].toLowerCase() === fresh);
+}
+
+// Whether the answer this error carries is a condition the service names by its code as one a run again can ride out — see TRANSIENT_SERVICE_CODES — a SQL deadlock victim (isDeadlockVictimAnswer), the lag of a column the
+// spec creates (`declares`), or the lag of a table the build created in this attempt (`fresh`, the table the caller marked).
+function isTransientServiceAnswer(error, declares, fresh) {
   const code = serviceCodeOf(error);
   if (code === null) return false;
   if (TRANSIENT_SERVICE_CODES.has(code)) return true;
   if (isDeadlockVictimAnswer(error)) return true;
+  if (isFreshTableLag(error, fresh)) return true;
   const missing = typeof declares === 'function' ? missingAttributeOf(error) : null;
   return Boolean(missing && declares(missing[0], missing[1]));
 }
@@ -320,7 +362,8 @@ function judgeFailure(error, { declares } = {}) {
   const statuses = chain.flatMap(statusesOf);
   const transientStatus = statuses.some(isTransientStatus);
   const transport = chain.some(isTransportBlip);
-  const transientCode = chain.some((e) => isTransientServiceAnswer(e, declares));
+  const fresh = freshTableOf(chain);
+  const transientCode = chain.some((e) => isTransientServiceAnswer(e, declares, fresh));
   // A wrapper that carries no failure (CAUSE_WRAPPER_CODES): the write's outcome is not confirmed, and nothing says no.
   const unconfirmed = chain.some((e) => wrapsCause(e) && !isObject(e.cause));
   const transient = transientStatus || transport || transientCode || unconfirmed;
@@ -376,7 +419,7 @@ function throttleAskOf(error) {
 }
 
 module.exports = {
-  RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf,
+  RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf, markFreshTable,
   // Also the reader of an answer's code for lib/entity-provision.js, which recognises an "already exists" refusal by it (isAlreadyExists).
   serviceCodeOf,
   // And of its whole OData error ({ code, message }), for the teardown of a business process flow, which reads the message of the one answer it re-sends (lib/sdk-teardown.js).

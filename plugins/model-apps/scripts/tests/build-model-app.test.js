@@ -526,6 +526,85 @@ test('transient auto-retry: a declared column that never appears exhausts the re
   assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
 });
 
+// The lag of a TABLE the build has only just created (lib/retry-policy.js, markFreshTable). Live-captured: the update of a default view, which names its table, is refused 400 `0x80040203` while the server that
+// validates it does not have the new table, and a read of the table's forms is refused 400 `0x80041102` in the same window. Neither is a refusal of the request; a run again succeeds. The same answers are final for
+// a table the build did not create in this attempt, and for any other answer.
+const NO_TABLE_WORDS = 'Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml';
+const notInCache = (table) => `The entity with a name = '${table}' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075`;
+// A build whose table creates answer with the id of the table they made (what the real create answers), and whose default-view enrichment fails as `answers(table, n)` says, n counting that table's tries.
+const freshTableBuild = async ({ answers, created = true, publish = false, retryDelayMs = 0 }) => {
+  const { sdk, calls } = mockSdk();
+  if (created) {
+    const create = sdk.createTable;
+    sdk.createTable = async (o) => ({ ...(await create(o)), metadataId: `id-${o.schemaName.toLowerCase()}` });
+  }
+  const tries = {};
+  const enrich = sdk.enrichDefaultViews;
+  sdk.enrichDefaultViews = async (logical, ...rest) => {
+    tries[logical] = (tries[logical] || 0) + 1;
+    const failure = answers(logical, tries[logical]);
+    if (failure) throw failure;
+    return enrich(logical, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  let result = null;
+  let halt = null;
+  try {
+    result = await buildModelApp(desk, { apply: true, env: 'https://x', ...(publish ? { publish: true } : {}), retryDelayMs }, { sdk, journal });
+  } catch (err) { halt = err; }
+  return { result, halt, events, tries, calls };
+};
+const noTable = (code = '0x80040203') => lagAnswer(NO_TABLE_WORDS, code);
+
+test('transient auto-retry: the default views of a table the build just created are saved again after the table is refused, then the build completes', async () => {
+  for (const publish of [false, true]) {
+    const first = desk.entities[0].schemaName.toLowerCase();
+    const { result, halt, events, tries } = await freshTableBuild({ publish, answers: (logical, n) => (logical === first && n <= 2 ? (n === 1 ? noTable() : lagAnswer(notInCache(first), '0x80041102')) : null) });
+    assert.strictEqual(halt, null, `publish=${publish}: no halt (${halt && halt.message})`);
+    assert.strictEqual(result.ok, true, `publish=${publish}`);
+    assert.strictEqual(events.filter((e) => e.status === 'retry').length, 2, `publish=${publish}: two retries were journaled`);
+    assert.strictEqual(tries[first], 3, `publish=${publish}: the third try saved the views`);
+  }
+});
+
+test('transient auto-retry: a table that never resolves exhausts the retries and surfaces the original answer', async () => {
+  const { halt, events } = await freshTableBuild({ answers: () => noTable() });
+  assert.ok(halt, 'the build halted');
+  assert.match(String(halt.message) + String(halt.cause && halt.cause.message), /returnedTypeCode of 0/);
+  assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
+});
+
+test('transient auto-retry: the same answers for a table the build did not create, or for any other table or answer, halt at once', async () => {
+  const first = desk.entities[0].schemaName.toLowerCase();
+  const final = async (label, options) => {
+    const { halt, events } = await freshTableBuild(options);
+    assert.ok(halt, `${label}: the build halted`);
+    assert.strictEqual(events.filter((e) => e.status === 'retry').length, 0, `${label}: no retry`);
+  };
+  await final('a table found, not created', { created: false, answers: (logical) => (logical === first ? noTable() : null) });
+  await final('the cache answer for a table not created', { created: false, answers: (logical) => (logical === first ? lagAnswer(notInCache(first), '0x80041102') : null) });
+  await final('the cache answer names another table', { answers: (logical) => (logical === first ? lagAnswer(notInCache('new_elsewhere'), '0x80041102') : null) });
+  await final('the words under no code', { answers: (logical) => (logical === first ? noTable(null) : null) });
+  await final('the words under another code', { answers: (logical) => (logical === first ? noTable('0x80040220') : null) });
+  await final('another saved-query refusal', { answers: (logical) => (logical === first ? lagAnswer('Saved Query has an invalid layoutxml', '0x80040203') : null) });
+  await final('an unrelated 400', { answers: (logical) => (logical === first ? lagAnswer('The value of the attribute is not valid', '0x80040265') : null) });
+});
+
+test('isTransientHalt: the lag of a created table is read only where the build marked the table, and the answer names no other', () => {
+  const { markFreshTable } = require('../lib/retry-policy.js');
+  const answers = [noTable(), lagAnswer(notInCache('new_ticket'), '0x80041102')];
+  for (const answer of answers) {
+    assert.strictEqual(isTransientHalt(answer, { spec: desk }), false, 'no mark: the answer alone decides nothing');
+    assert.strictEqual(isTransientHalt(markFreshTable({ message: 'views failed', cause: answer }, 'new_ticket'), { spec: desk }), true, 'marked, behind the halt the runner raises');
+    assert.strictEqual(isTransientHalt(markFreshTable(answer, 'NEW_TICKET')), true, 'marked, whatever the case of the name, and with no spec');
+  }
+  assert.strictEqual(isTransientHalt(markFreshTable(lagAnswer(notInCache('new_comment'), '0x80041102'), 'new_ticket')), false, 'the cache answer is for another table');
+  assert.strictEqual(isTransientHalt(markFreshTable(Object.assign(noTable(), { transient: false }), 'new_ticket')), false, 'an explicit non-transient still wins');
+  assert.strictEqual(isTransientHalt(markFreshTable(lagAnswer(LAG_WORDS), 'new_ticket'), { spec: desk }), true, 'the 2.20.6 words stay the lag they were, marked or not');
+  assert.strictEqual(isTransientHalt(lagAnswer(LAG_WORDS), { spec: desk }), true);
+});
+
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
   const { sdk, calls } = mockSdk();
   let firstTable = true;
