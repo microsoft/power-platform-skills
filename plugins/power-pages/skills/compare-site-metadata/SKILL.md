@@ -174,7 +174,7 @@ Aggregate files hold many records, so name the records that changed.
 When a group has more than 25 changed files, read the most specific ones and report how many remain unread.
 Separate noise from real changes.
 When the two website IDs differ, record IDs differ almost everywhere; count an ID or lookup change as noise only after confirming that the lookup names the same record, such as the same web role or page template, on both sides.
-Whitespace changes and reordered YAML records are noise; reordered JavaScript, CSS or Liquid is a real change, because order controls execution and the CSS cascade.
+Indentation, blank lines and reordered YAML records are noise; whitespace inside a setting value, string or Liquid output, and reordered JavaScript, CSS or Liquid, are real changes, because they change the value used or the order of execution and the CSS cascade.
 
 Reply in chat with:
 
