@@ -343,6 +343,16 @@ function isFreshTableLag(error, fresh) {
   return Boolean(named && named[1].toLowerCase() === fresh);
 }
 
+// Whether anywhere along its chain the error carries the lag above for the table it was marked with (markFreshTable): what a READ of a table this invocation created meets in the same window — a view or chart
+// looked up by name, a process flow's or a rule's identity read, a form looked up by name (#796). Such a read is retried only through the build's own bounded loop (build-model-app.js), never in place, and the
+// classification is the one above: there is no second list of words. A read whose error the reader keeps by value (a planner's "could not be read" finding) is checked through this, so the stop it raises is
+// told from a real refusal by the same rule.
+function isFreshTableReadLag(error) {
+  const chain = causeChain(error);
+  const fresh = freshTableOf(chain);
+  return Boolean(fresh) && chain.some((e) => isFreshTableLag(e, fresh));
+}
+
 // Whether the error is the plugin's own stop before a default view of the freshly created table `fresh` that names no table was sent (DEFAULT_VIEW_NO_TABLE_CODE, see above): the code AND the table it names.
 function isUnsentFreshTableView(error, fresh) {
   return Boolean(fresh) && typedCode(error) === DEFAULT_VIEW_NO_TABLE_CODE && typeof error.table === 'string' && error.table.toLowerCase() === fresh;
@@ -435,7 +445,7 @@ function throttleAskOf(error) {
 }
 
 module.exports = {
-  RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf, markFreshTable,
+  RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf, markFreshTable, isFreshTableReadLag,
   // The code of the build's stop before a default view whose copy names no table, and the error it stops with (sdk-build.js, guardDefaultViewCopies).
   DEFAULT_VIEW_NO_TABLE_CODE, unsentDefaultView,
   // Also the reader of an answer's code for lib/entity-provision.js, which recognises an "already exists" refusal by it (isAlreadyExists).

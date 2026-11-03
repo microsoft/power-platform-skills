@@ -209,6 +209,30 @@ test('a declared flow is created Draft under its catalog ids, proved, then activ
   });
 });
 
+// #796: the flow's identity read on a table this invocation created can meet the table's metadata-cache lag (HTTP 400 0x80041102 "…was not found in the MetadataCache…"). The build's stop is then one its bounded
+// retry may ride out (build-model-app.js isTransientHalt); with the table not created by this invocation the same answer stays final. Nothing is sent either way, and the next build creates the flow once.
+test('a declared flow whose identity read meets the lag of a table this invocation created stops as a retry may ride out, and the next attempt creates it once (#796)', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const lag = { statusCode: 400, body: { error: { code: '0x80041102', message: "The entity with a name = 'new_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 1 and timestamp 1" } } };
+  const nameRead = (e) => e.method === 'GET' && e.path === 'workflows';
+  await withBpf(true, async () => {
+    for (const fresh of [true, false]) {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-bpf-');
+      const createdTables = fresh ? new Set(['new_ticket']) : new Set();
+      wire.script(nameRead, lag);
+      const first = await build(wire, dir, specWith([FLOW]), { createdTables });
+      assert.ok(first.err, `fresh=${fresh}: the run stops`);
+      assert.deepEqual(first.writes.filter((c) => /^workflows/i.test(c.path)), [], `fresh=${fresh}: nothing is sent for the flow`);
+      assert.equal(isTransientHalt(first.err, { spec: specWith([FLOW]) }), fresh, `fresh=${fresh}: ${chainText(first.err)}`);
+      if (!fresh) continue;
+      const again = await build(wire, dir, specWith([FLOW]), { createdTables });
+      assert.equal(again.err, undefined, chainText(again.err));
+      assert.deepEqual(again.writes.filter((c) => /^workflows/i.test(c.path)).map((c) => c.method), ['POST', 'PATCH'], 'created once, then activated');
+    }
+  });
+});
+
 test('a declared flow found unbound halts through the build halt with the typed adoption it needs; the adopted flow keeps its stored backing table', async () => {
   await withBpf(true, async () => {
     const wire = createWorkflowWire();

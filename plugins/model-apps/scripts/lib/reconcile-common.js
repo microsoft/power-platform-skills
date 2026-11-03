@@ -59,6 +59,17 @@ function refusal(key, code, message) {
   return { key, code, message };
 }
 
+/**
+ * An unknown outcome of a read (`refusal(key, code, message)`) that keeps the read's own failure as `cause`, so the build can
+ * tell the metadata-cache lag of a table it has only just created from a real failure (retry-policy.js isFreshTableReadLag).
+ * The cause is not enumerable: the finding is still exactly { key, code, message } wherever it is copied, reported or stored.
+ */
+function readFailure(key, code, message, cause) {
+  const out = refusal(key, code, message);
+  if (cause !== undefined) Object.defineProperty(out, 'cause', { value: cause, enumerable: false, configurable: true, writable: true });
+  return out;
+}
+
 function isAuthorized(flag, key) {
   if (flag === true) return true;
   if (flag instanceof Set) return flag.has(key);
@@ -449,6 +460,7 @@ module.exports = {
   mergeResults,
   operation,
   refusal,
+  readFailure,
   isAuthorized,
   approvalKey,
   isApproved,

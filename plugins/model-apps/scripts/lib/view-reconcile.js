@@ -45,6 +45,7 @@ const {
   emptyResult,
   operation,
   refusal,
+  readFailure,
   isAuthorized,
   approvalKey,
   isApproved,
@@ -349,8 +350,8 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
   if (!id && !binding && ctx.managed && typeof ctx.managed.observe === 'function') {
     try {
       id = normalizeGuid(await ctx.managed.observe('view', key)) || '';
-    } catch {
-      plan.unknown.push(refusal(key, 'view-lookup-unreadable', 'whether the view exists could not be read'));
+    } catch (err) {
+      plan.unknown.push(readFailure(key, 'view-lookup-unreadable', 'whether the view exists could not be read', err));
       return plan;
     }
   }
@@ -359,9 +360,11 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
       id = normalizeGuid(await sdk.findArtifact('view', { name: intent.name, entity: intent.entity }));
     } catch (err) {
       // The SDK refuses a name two rows share (AMBIGUOUS_ARTIFACT): choosing one would edit a row the spec
-      // may not mean, so the maker names it instead. Any other failure leaves existence unknown.
+      // may not mean, so the maker names it instead. Any other failure leaves existence unknown; the read's own failure is
+      // kept with it, so the build can tell a table it has only just created, not yet in the metadata cache, from a real
+      // failure (sdk-build.js, freshLagOf).
       if (err && err.code === 'AMBIGUOUS_ARTIFACT') plan.refused.push(refusal(key, 'view-name-ambiguous', 'several views on the table have this name; rename or remove the extra one before it can be managed'));
-      else plan.unknown.push(refusal(key, 'view-lookup-unreadable', 'whether the view exists could not be read'));
+      else plan.unknown.push(readFailure(key, 'view-lookup-unreadable', 'whether the view exists could not be read', err));
       return plan;
     }
   }
