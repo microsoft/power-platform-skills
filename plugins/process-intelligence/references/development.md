@@ -40,7 +40,7 @@ registering both MCP configurations. The package's version remains independent o
 
 All runtime files and references stay inside the installed subtree, with no symlinks or
 root-shared dependencies. `server/mcp.mjs` follows the packaged MCP entry-point pattern.
-The bridge uses official `@modelcontextprotocol/sdk` 1.30.0 and Zod 4.6.5.
+The bridge uses official `@modelcontextprotocol/sdk` 1.32.1 and Zod 4.6.6.
 Build-only esbuild 0.28.2 produces one complete Node.js ESM runtime; the installed bundle
 needs no .NET, npm, node_modules or source. Azure CLI is an external prerequisite.
 `process.mjs` invokes supported commands with bounded output/cancellation/timeouts;
@@ -253,7 +253,7 @@ wins and invalid selection never falls back to another profile.
 
 ## Dependency management and licenses
 
-`package.json` and `package-lock.json` pin MCP SDK 1.30.0, Zod 4.6.5 and build-only esbuild 0.28.2.
+`package.json` and `package-lock.json` pin MCP SDK 1.32.1, Zod 4.6.6 and build-only esbuild 0.28.2.
 When updating dependencies, review their licenses and upstream release notes, then regenerate
 the bundle and metadata together. The build includes full LICENSE/NOTICE texts for packages
 present in esbuild's output, plus the Microsoft MIT notice, in [server/mcp.mjs](../server/mcp.mjs).
