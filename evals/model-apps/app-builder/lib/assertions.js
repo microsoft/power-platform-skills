@@ -1170,4 +1170,87 @@ ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stop
   return missing.length ? fail(`the createIdentity guidance does not say ${missing.join(', ')}`) : PASS;
 });
 
+// Optional capabilities the authoring flow OFFERS (references/authoring-flow.md). None is on by default: the flow asks once, at
+// the step where the capability matters, and the spec carries one only after a yes. The suite grades fixture specs, not
+// conversations, so the offer is graded from the offer record in the fixture's evidence.json:
+//   "offers": [{ "family": "theme", "step": "personas-and-jobs", "answer": "no" }]
+// answer: "yes" (offered, accepted), "no" (offered, declined), "asked" (the maker asked first, so no offer was needed).
+const OFFER_STEPS = {
+  theme: 'personas-and-jobs',
+  configuration: 'personas-and-jobs',
+  'declared-process': 'personas-and-jobs',
+  'declared-layouts': 'forms-and-dashboards',
+};
+const OFFER_ANSWERS = ['yes', 'no', 'asked'];
+// Offers made, from the record, keyed by family; reports a malformed record so a typo cannot pass as "no offer".
+function readOfferRecord(recorded) {
+  const byFamily = new Map();
+  for (const [i, offer] of recorded.entries()) {
+    if (!Object.prototype.hasOwnProperty.call(OFFER_STEPS, offer.family)) return { problem: `offers[${i}] names the unknown family '${offer.family}'` };
+    if (offer.step !== OFFER_STEPS[offer.family]) return { problem: `offers[${i}] offers ${offer.family} at '${offer.step}', expected '${OFFER_STEPS[offer.family]}'` };
+    if (!OFFER_ANSWERS.includes(offer.answer)) return { problem: `offers[${i}] answers '${offer.answer}', expected one of ${OFFER_ANSWERS.join(', ')}` };
+    if (byFamily.has(offer.family)) return { problem: `${offer.family} is offered twice` };
+    byFamily.set(offer.family, offer.answer);
+  }
+  return { byFamily };
+}
+ASSERTIONS.set('offers: an optional capability is in the spec only after the maker accepted its offer or asked for it', ({ facts }) => {
+  const { recorded, used } = facts.offers;
+  if (recorded === null) return fail('the fixture records no offers (evidence.json "offers")');
+  const { byFamily, problem } = readOfferRecord(recorded);
+  if (problem) return fail(problem);
+  for (const family of used) {
+    const answer = byFamily.get(family);
+    if (answer === undefined) return fail(`the spec uses ${family}, but no offer for it is recorded`);
+    if (answer === 'no') return fail(`the spec uses ${family}, but the maker declined it`);
+  }
+  return PASS;
+});
+
+// expect.offers maps a family to the answer the prompt implies ("asked" when the prompt itself asks for the capability, "no" when
+// the maker turns the offer down). It is written from the prompt, so a record that drifts from it fails even if the spec agrees.
+ASSERTIONS.set('offers: each capability the prompt settles is recorded with the answer the prompt implies', ({ facts, eval: ev }) => {
+  const want = ev.expect && ev.expect.offers;
+  if (!want || typeof want !== 'object') return fail('no independent offer expectations');
+  const { recorded } = facts.offers;
+  if (recorded === null) return fail('the fixture records no offers (evidence.json "offers")');
+  const { byFamily, problem } = readOfferRecord(recorded);
+  if (problem) return fail(problem);
+  for (const [family, answer] of Object.entries(want)) {
+    const got = byFamily.get(family);
+    if (got !== answer) return fail(`${family} is ${got === undefined ? 'never offered' : `recorded '${got}'`}, expected '${answer}'`);
+  }
+  return PASS;
+});
+
+// The flow's own text is what makes the offers, so it is graded too: each offer sits in the section of its step, and says it is a
+// question and never a default. `facts.authoringFlow` lets a unit test grade a drifted copy without editing the real file.
+const AUTHORING_FLOW = path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'references', 'authoring-flow.md');
+ASSERTIONS.set('offers: the authoring flow offers each optional capability at its step, as a question and never as a default', ({ facts }) => {
+  let flow = facts && typeof facts.authoringFlow === 'string' ? facts.authoringFlow : null;
+  if (flow === null) {
+    try { flow = require('node:fs').readFileSync(AUTHORING_FLOW, 'utf8'); } catch (e) { return fail(`the authoring flow cannot be read: ${e.message}`); }
+  }
+  flow = flow.replace(/\r\n/g, '\n');
+  // A "### " heading ends a level; the "#### " subsections inside it do not match "\n### ".
+  const level = (heading) => {
+    const start = flow.indexOf(`\n${heading}`);
+    if (start < 0) return null;
+    const end = flow.indexOf('\n### ', start + 1);
+    return flow.slice(start, end < 0 ? undefined : end);
+  };
+  const checks = [
+    ['### Level (a0)', [[/app\.theme/, 'the app theme'], [/environment variables/, 'configuration items'], [/business rule/, 'a declared business rule'], [/business process flow/, 'a declared business process flow']]],
+    ['### Level (b)', [[/reconcile: "declared"/, 'declared layouts']]],
+  ];
+  for (const [heading, needs] of checks) {
+    const section = level(heading);
+    if (section === null) return fail(`the authoring flow has no '${heading}' section`);
+    if (!/never as a default/i.test(section)) return fail(`${heading} does not say an offer is never a default`);
+    const missing = needs.filter(([re]) => !re.test(section)).map(([, what]) => what);
+    if (missing.length) return fail(`${heading} does not offer ${missing.join(', ')}`);
+  }
+  return PASS;
+});
+
 module.exports = { ASSERTIONS };

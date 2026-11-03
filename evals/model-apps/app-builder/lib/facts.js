@@ -1079,6 +1079,25 @@ function securityFacts(spec) {
   });
 }
 
+// offers: the optional capabilities the authoring flow OFFERS and never turns on by itself. `used` is what the spec carries of each
+// family (read from the authored spec, not from a compiler); `recorded` is the offer record the fixture's evidence.json carries (what the
+// flow offered, at which step, and the maker's answer), or null when the fixture has none. See EVAL_GUIDE.md, "Offer records".
+const declaredAny = (list) => Array.isArray(list) && list.some((x) => x && x.reconcile === 'declared');
+const nonEmpty = (list) => Array.isArray(list) && list.length > 0;
+const OFFER_USED = {
+  theme: (s) => !!(s.app && s.app.theme),
+  'declared-layouts': (s) => declaredAny(s.forms) || declaredAny(s.dashboards),
+  'declared-process': (s) => declaredAny(s.businessRules) || declaredAny(s.businessProcessFlows),
+  configuration: (s) => ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules'].some((k) => nonEmpty(s[k])),
+};
+function offerFacts(spec, fixture) {
+  const evidence = fixture && fixture.evidence;
+  return {
+    recorded: evidence && evidence.offers !== undefined ? evidence.offers : null,
+    used: Object.keys(OFFER_USED).filter((family) => OFFER_USED[family](spec)),
+  };
+}
+
 async function stageFacts(rawSpec, options = {}) {
   // Capture approved text before any producer sees the input. Comparing with rawSpec after a
   // mutating lint/migration would let a sanitizer rewrite both the result and its expectation.
@@ -1097,6 +1116,7 @@ async function stageFacts(rawSpec, options = {}) {
     page: pageFacts(spec),
     process: processFacts(spec),
     teardown: teardownFacts(spec),
+    offers: offerFacts(spec, options.fixture),
     download: downloadFacts(spec),
     roundTrip: await roundTripFacts(spec, options),
     PHASES,

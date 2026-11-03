@@ -444,10 +444,13 @@
           "duplicateDetectionRules": [
             "contoso_request"
           ]
-        }
+        },
+        "offers": { "configuration": "asked" }
       },
       "expectations": [
-        "author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec"
+        "author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec",
+        "offers: an optional capability is in the spec only after the maker accepted its offer or asked for it",
+        "offers: each capability the prompt settles is recorded with the answer the prompt implies"
       ]
     },
     {
@@ -472,11 +475,14 @@
             "foreground": "#FFFFFF"
           },
           "logo": true
-        }
+        },
+        "offers": { "theme": "asked" }
       },
       "expectations": [
         "author: a theme is declared only on an explicit branding ask, with the asked colours, no unasked font, and a declared image web resource as the logo, never a URL",
-        "verify: a declared app theme is read back once, as API state, and passes only when live"
+        "verify: a declared app theme is read back once, as API state, and passes only when live",
+        "offers: an optional capability is in the spec only after the maker accepted its offer or asked for it",
+        "offers: each capability the prompt settles is recorded with the answer the prompt implies"
       ]
     },
     {
@@ -522,11 +528,14 @@
           "Sites by Region"
         ],
         "charts": [],
-        "pages": []
+        "pages": [],
+        "offers": { "declared-layouts": "asked" }
       },
       "expectations": [
         "ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)",
-        "ui: an authored colspan and rowspan survive into the compiled cell"
+        "ui: an authored colspan and rowspan survive into the compiled cell",
+        "offers: an optional capability is in the spec only after the maker accepted its offer or asked for it",
+        "offers: each capability the prompt settles is recorded with the answer the prompt implies"
       ]
     },
     {
@@ -545,9 +554,13 @@
         "charts": [
           "Work Orders by Status"
         ],
-        "pages": []
+        "pages": [],
+        "offers": { "declared-layouts": "asked" }
       },
-      "expectations": []
+      "expectations": [
+        "offers: an optional capability is in the spec only after the maker accepted its offer or asked for it",
+        "offers: each capability the prompt settles is recorded with the answer the prompt implies"
+      ]
     },
     {
       "id": 23,
@@ -563,9 +576,13 @@
           "Open Requests"
         ],
         "charts": [],
-        "pages": []
+        "pages": [],
+        "offers": { "declared-process": "asked" }
       },
-      "expectations": []
+      "expectations": [
+        "offers: an optional capability is in the spec only after the maker accepted its offer or asked for it",
+        "offers: each capability the prompt settles is recorded with the answer the prompt implies"
+      ]
     },
     {
       "id": 24,
@@ -581,9 +598,44 @@
           "Open Claims"
         ],
         "charts": [],
-        "pages": []
+        "pages": [],
+        "offers": { "declared-process": "asked" }
       },
-      "expectations": []
+      "expectations": [
+        "offers: an optional capability is in the spec only after the maker accepted its offer or asked for it",
+        "offers: each capability the prompt settles is recorded with the answer the prompt implies"
+      ]
+    },
+    {
+      "id": 25,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A new Parts Counter app: parts with a stock level and a price, and a list of all parts. When asked, say no to every optional extra: no branding, no outside services or per-environment settings, no business rules or process flows, and no fixed form or dashboard layouts.",
+      "expect": {
+        "tables": [
+          "cnt_part"
+        ],
+        "relationships": [],
+        "views": [
+          "All Parts"
+        ],
+        "charts": [],
+        "pages": [],
+        "configuration": {},
+        "offers": {
+          "theme": "no",
+          "configuration": "no",
+          "declared-process": "no",
+          "declared-layouts": "no"
+        }
+      },
+      "expectations": [
+        "author: a theme is declared only on an explicit branding ask, with the asked colours, no unasked font, and a declared image web resource as the logo, never a URL",
+        "author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec",
+        "offers: an optional capability is in the spec only after the maker accepted its offer or asked for it",
+        "offers: each capability the prompt settles is recorded with the answer the prompt implies",
+        "offers: the authoring flow offers each optional capability at its step, as a question and never as a default"
+      ]
     }
   ]
 }

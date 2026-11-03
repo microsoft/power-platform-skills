@@ -65,6 +65,16 @@ function loadFixtures(fixturesDir) {
         form.xml = fs.readFileSync(fixtureFile(dir, form.xmlFile, entry.name), 'utf8');
       }
     }
+    if (evidence.offers !== undefined) {
+      // Shape only: whether a family, step or answer is a KNOWN one is a grading question, so the
+      // offers assertion reports it as a failed check rather than the whole run dying on load.
+      if (!Array.isArray(evidence.offers)) throw new Error(`Fixture ${entry.name}: offers must be an array of { family, step, answer }`);
+      for (const [i, offer] of evidence.offers.entries()) {
+        if (!isObject(offer) || ['family', 'step', 'answer'].some((key) => typeof offer[key] !== 'string' || !offer[key].trim())) {
+          throw new Error(`Fixture ${entry.name}: offers[${i}] must be an object with family, step and answer`);
+        }
+      }
+    }
     const baselinePath = path.join(dir, 'baseline-app-spec.json');
     const baselineSpec = fs.existsSync(baselinePath) ? readFixtureJson(baselinePath, entry.name, 'an App Spec baseline') : null;
     const entityEditPath = path.join(dir, 'entity-edit-app-spec.json');

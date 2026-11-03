@@ -1159,3 +1159,149 @@ test('stable-identity expectations pass on their fixture, a download prompt must
   assert.strictEqual(teach(real.replace(/create-completion-required/g, 'a refusal')), 'fail', 'the stop not named');
   assert.strictEqual(teach(real.replace(/createIdentity/g, 'stableIds')), 'fail', 'no createIdentity guidance');
 });
+
+// Optional capabilities are OFFERED, never on by default (references/authoring-flow.md). The offer is graded from the record in a
+// fixture's evidence.json and from the authoring-flow text; the spec side reads the four families straight from the spec.
+const RECORDED = 'offers: an optional capability is in the spec only after the maker accepted its offer or asked for it';
+const SETTLED = 'offers: each capability the prompt settles is recorded with the answer the prompt implies';
+const FLOW_OFFERS = 'offers: the authoring flow offers each optional capability at its step, as a question and never as a default';
+async function gradeOffers(text, id, { mutateSpec, offers, mutateEval, authoringFlow } = {}) {
+  const base = fixtureFor(id);
+  const spec = structuredClone(base.spec);
+  if (mutateSpec) mutateSpec(spec);
+  const evidence = { ...base.evidence };
+  if (offers === null) delete evidence.offers;
+  else if (offers) evidence.offers = typeof offers === 'function' ? offers(structuredClone(base.evidence.offers)) : offers;
+  const fixture = { ...base, spec, evidence };
+  const ev = structuredClone(evalsManifest.evals.find((e) => e.id === id));
+  if (mutateEval) mutateEval(ev);
+  const facts = await stageFacts(spec, { fixture });
+  if (authoringFlow !== undefined) facts.authoringFlow = authoringFlow;
+  return ASSERTIONS.get(text)({ facts, spec, eval: ev });
+}
+const statusOf = async (...args) => (await gradeOffers(...args)).status;
+
+test('offers: every fixture that records offers passes both offer checks, and the negative fixture declines all four', async () => {
+  for (const id of [18, 19, 21, 22, 23, 24, 25]) {
+    assert.strictEqual(await statusOf(RECORDED, id), 'pass', `eval ${id} ${RECORDED}`);
+    assert.strictEqual(await statusOf(SETTLED, id), 'pass', `eval ${id} ${SETTLED}`);
+    assert.ok(evalsManifest.evals.find((e) => e.id === id).expectations.includes(RECORDED), `eval ${id} lists the offers check`);
+  }
+  const declined = fixtureFor(25).evidence.offers;
+  assert.deepStrictEqual(declined.map((o) => o.family).sort(), ['configuration', 'declared-layouts', 'declared-process', 'theme']);
+  assert.ok(declined.every((o) => o.answer === 'no'));
+  assert.deepStrictEqual((await stageFacts(fixtureFor(25).spec, { fixture: fixtureFor(25) })).offers.used, [], 'the negative fixture uses none of the four');
+});
+
+test('offers: a spec that uses a family the maker declined fails, whichever of the four it is', async () => {
+  const config = (key, item) => (s) => { s[key] = [item]; };
+  const cases = {
+    theme: (s) => { s.app.theme = { basePaletteColor: '#0F6CBD' }; },
+    'declared-layouts (form)': (s) => { s.forms[0].reconcile = 'declared'; },
+    'declared-layouts (dashboard)': (s) => { s.dashboards = [{ name: 'Ops', key: 'ops', reconcile: 'declared', tiles: [] }]; },
+    'declared-process (rule)': (s) => { s.businessRules = [{ entity: 'cnt_part', name: 'R', key: 'r', reconcile: 'declared' }]; },
+    'declared-process (flow)': (s) => { s.businessProcessFlows = [{ entity: 'cnt_part', name: 'F', reconcile: 'declared' }]; },
+    'configuration (environment variable)': config('environmentVariables', { schemaName: 'cnt_Base', type: 'string' }),
+    'configuration (connection reference)': config('connectionReferences', { logicalName: 'cnt_sharepoint' }),
+    'configuration (Custom API)': config('customApis', { uniqueName: 'cnt_Escalate' }),
+    'configuration (duplicate rule)': config('duplicateDetectionRules', { entity: 'cnt_part' }),
+  };
+  for (const [name, mutateSpec] of Object.entries(cases)) {
+    const result = await gradeOffers(RECORDED, 25, { mutateSpec });
+    assert.strictEqual(result.status, 'fail', name);
+    assert.match(result.reason, /the maker declined it/, name);
+  }
+});
+
+test('offers: the same spec passes when the maker said yes or asked, and fails when the offer was never made', async () => {
+  const theme = (s) => { s.app.theme = { basePaletteColor: '#0F6CBD' }; };
+  const answer = (value) => (offers) => offers.map((o) => (o.family === 'theme' ? { ...o, answer: value } : o));
+  assert.strictEqual(await statusOf(RECORDED, 25, { mutateSpec: theme, offers: answer('yes') }), 'pass', 'accepted');
+  assert.strictEqual(await statusOf(RECORDED, 25, { mutateSpec: theme, offers: answer('asked') }), 'pass', 'asked for');
+  const never = await gradeOffers(RECORDED, 25, { mutateSpec: theme, offers: (o) => o.filter((x) => x.family !== 'theme') });
+  assert.strictEqual(never.status, 'fail');
+  assert.match(never.reason, /no offer for it is recorded/);
+  const none = await gradeOffers(RECORDED, 19, { offers: null });
+  assert.strictEqual(none.status, 'fail', 'a branded app with no offer record');
+  assert.match(none.reason, /records no offers/);
+});
+
+test('offers: a rule or a flow without reconcile "declared" is not the declared family', async () => {
+  // Fixture 5 keeps its business rules and flow as plain (undeclared) logic; offering the declared form would be noise.
+  const facts = await stageFacts(fixtureFor(5).spec, { fixture: fixtureFor(5) });
+  assert.deepStrictEqual(facts.offers.used, []);
+  assert.strictEqual(facts.offers.recorded, null);
+  assert.strictEqual(await statusOf(RECORDED, 25, { mutateSpec: (s) => { s.businessRules = [{ entity: 'cnt_part', name: 'R' }]; } }), 'pass');
+  assert.strictEqual(await statusOf(RECORDED, 25, { mutateSpec: (s) => { s.dashboards = [{ name: 'Ops', key: 'ops' }]; } }), 'pass');
+});
+
+test('offers: a record that names an unknown family, the wrong step, a bad answer or a repeat fails by name', async () => {
+  const edit = (change) => (offers) => change(offers);
+  const cases = [
+    [edit((o) => [...o, { family: 'themes', step: 'personas-and-jobs', answer: 'no' }]), /unknown family 'themes'/],
+    [edit((o) => o.map((x) => (x.family === 'theme' ? { ...x, step: 'forms-and-dashboards' } : x))), /offers theme at 'forms-and-dashboards'/],
+    [edit((o) => o.map((x) => (x.family === 'declared-layouts' ? { ...x, step: 'personas-and-jobs' } : x))), /offers declared-layouts at 'personas-and-jobs'/],
+    [edit((o) => o.map((x) => (x.family === 'theme' ? { ...x, answer: 'maybe' } : x))), /answers 'maybe'/],
+    [edit((o) => [...o, o[0]]), /offered twice/],
+  ];
+  for (const [offers, reason] of cases) {
+    for (const text of [RECORDED, SETTLED]) {
+      const result = await gradeOffers(text, 25, { offers });
+      assert.strictEqual(result.status, 'fail', `${text} ${reason}`);
+      assert.match(result.reason, reason);
+    }
+  }
+});
+
+test('offers: the record is graded against the answer the prompt implies, so a drifted record fails even when the spec agrees', async () => {
+  const flip = (family, answer) => (offers) => offers.map((o) => (o.family === family ? { ...o, answer } : o));
+  const declined = await gradeOffers(SETTLED, 25, { offers: flip('configuration', 'yes') });
+  assert.strictEqual(declined.status, 'fail');
+  assert.match(declined.reason, /configuration is recorded 'yes', expected 'no'/);
+  const missing = await gradeOffers(SETTLED, 19, { offers: [] });
+  assert.match(missing.reason, /theme is never offered, expected 'asked'/);
+  assert.strictEqual(await statusOf(RECORDED, 25, { offers: flip('configuration', 'yes') }), 'pass', 'an accepted offer the spec does not use is not a spec fault');
+  assert.strictEqual((await gradeOffers(SETTLED, 19, { mutateEval: (ev) => { delete ev.expect.offers; } })).status, 'fail', 'no independent expectation grades nothing');
+});
+
+test('offers: the loader rejects a malformed offers record by fixture name', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ab-offers-'));
+  const dir = path.join(root, '25-offers-record');
+  try {
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'app-spec.json'), JSON.stringify(fixtureFor(25).spec));
+    const write = (offers) => fs.writeFileSync(path.join(dir, 'evidence.json'), JSON.stringify({ offers }));
+    write([{ family: 'theme', step: 'personas-and-jobs', answer: 'no' }]);
+    assert.strictEqual(loadFixtures(root)[0].evidence.offers.length, 1);
+    for (const offers of ['theme', [null], [{ family: 'theme', step: 'personas-and-jobs' }], [{ family: 'theme', step: '', answer: 'no' }]]) {
+      write(offers);
+      assert.throws(() => loadFixtures(root), /Fixture 25-offers-record: offers/);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('offers: the authoring flow must offer each capability at its step, as a question and never as a default', async () => {
+  const real = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'references', 'authoring-flow.md'), 'utf8');
+  assert.strictEqual(await statusOf(FLOW_OFFERS, 25), 'pass', 'the real flow');
+  const drift = async (flow) => gradeOffers(FLOW_OFFERS, 25, { authoringFlow: flow });
+  const noDefaultWording = await drift(real.replace(/never as a default/g, 'as a default'));
+  assert.strictEqual(noDefaultWording.status, 'fail');
+  assert.match(noDefaultWording.reason, /never a default/);
+  const [a0, rest] = [real.indexOf('### Level (a0)'), real.indexOf('### Level (a) ')];
+  const a0Text = real.slice(a0, rest);
+  for (const [needle, what] of [['app.theme', /the app theme/], ['environment variables', /configuration items/], ['business rule', /business rule/], ['business process flow', /business process flow/]]) {
+    const result = await drift(real.slice(0, a0) + a0Text.split(needle).join('xxxx') + real.slice(rest));
+    assert.strictEqual(result.status, 'fail', needle);
+    assert.match(result.reason, what);
+  }
+  const b = real.indexOf('### Level (b)');
+  const bEnd = real.indexOf('\n### ', b + 1);
+  const bText = real.slice(b, bEnd < 0 ? undefined : bEnd);
+  const noLayouts = await drift(real.replace(bText, () => bText.split('reconcile: "declared"').join('xxxx')));
+  assert.strictEqual(noLayouts.status, 'fail');
+  assert.match(noLayouts.reason, /Level \(b\) does not offer declared layouts/);
+  assert.strictEqual((await drift(real.replace('### Level (b)', '### Level B'))).status, 'fail', 'a missing section');
+  assert.strictEqual((await drift(real.replace(/\n/g, '\r\n'))).status, 'pass', 'CRLF checkouts grade the same');
+});
