@@ -1332,7 +1332,7 @@ function guardDefaultViewCopies(provision, table) {
     } else if (await holdsNothingOfItsOwn(id)) {
       fetched = await provision.fetchArtifact(type, id, { ...(options || {}), overwrite: true });
     } else {
-      throw refusal(`the local copy of the default view ${id} of ${want} in the workspace names no table of its own and holds a change that was never sent (an earlier run's or one made by hand — nothing can tell whose), so it was not replaced and nothing was written; the local copy was kept as it is. A copy that names no table can never be saved, so the change cannot reach the server from it. To keep the change, make it in the spec (the table's default-view columns) or on the server; to discard it, refresh the local copy: ${RESET_WORKSPACE}`, { code: 'workspace-copy-unsent-edits' });
+      throw refusal(`the local copy of the default view ${id} of ${want} in the workspace names no table of its own and holds a change that was never sent (an earlier run's or one made by hand — nothing can tell whose), so it was not replaced and nothing was written; the local copy was kept as it is. A copy that names no table can never be saved, so the change cannot reach the server from it. To keep the change, make it in the spec (the table's default-view columns) or on the server — a layout kept on the server survives the next build only with that table's enrichDefaultViews: false, since the build otherwise writes its own columns; to discard it, refresh the local copy: ${RESET_WORKSPACE}`, { code: 'workspace-copy-unsent-edits' });
     }
     await requireTable(type, id, 'not edited');
     return fetched;

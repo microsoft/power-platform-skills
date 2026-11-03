@@ -840,7 +840,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   but the table it names (`diffArtifact`, compared exactly), so nothing can be lost. A copy that names no table and
   holds any other unsent change — a column, its width or order, the description, whoever made it: a diff cannot
   say whose — is never replaced: the step stops before it writes anything with `workspace-copy-unsent-edits`, the
-  copy kept byte for byte, and the message says how to keep the change (in the spec or on the server) or discard
+  copy kept byte for byte, and the message says how to keep the change (in the spec, or on the server with that table's `enrichDefaultViews: false`, since the build otherwise writes its own columns) or discard
   it (reset the workspace). A copy that names its table goes through untouched, so a healthy build sends exactly
   the requests it did. The name column length a failed attempt left unset is carried across attempts the same way
   (`owedLengths`, `settleOwedLengths`; see *Primary name column length* below).

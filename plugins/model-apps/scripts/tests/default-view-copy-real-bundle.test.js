@@ -252,6 +252,7 @@ test('default view copy: a copy naming no table that holds any other unsent chan
       assert.ok(halt, `${what}: the build stopped`);
       assert.equal(halt.code, 'workspace-copy-unsent-edits', `${what}: ${halt.message}`);
       assert.match(halt.message, new RegExp(`default view ${id} of ${TABLE}.*the local copy was kept`));
+      assert.match(halt.message, /a layout kept on the server survives the next build only with that table's enrichDefaultViews: false, since the build otherwise writes its own columns/);
       assert.deepEqual(env.saves, [], `${what}: nothing was saved`);
       assert.deepEqual(env.fake.writeCounts(mark), {}, `${what}: nothing was written`);
       assert.deepEqual(copyBytes(dir, id), before, `${what}: the copy and its record are kept byte for byte`);
