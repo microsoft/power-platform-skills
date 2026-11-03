@@ -983,6 +983,22 @@ for (const [name, change, tiles] of [
   }
 }
 
+// Where the platform keeps every caption sent, the row as read matches the model without anything put back, so the
+// shape of a new tile's captions is checked before that hash too: both hashes set the base-language caption aside, and
+// with it gone the tile's name reads the same from the sent 3082 caption.
+for (const [name, change] of [
+  ['the base-language caption deleted', (labels) => labels.replace(caption(1033, 'Open work orders'), '')],
+  ['an attribute added to the base-language caption', (labels) => labels.replace('languagecode="1033"', 'languagecode="1033" maker="yes"')],
+]) {
+  test(`on a two-language platform that keeps every caption, a new tile's caption changed between the send and the proof is refused: ${name}`, async () => {
+    const w = await world({ platform: TWO_LANGUAGES });
+    const d = declared(LIST_AND_IFRAME);
+    const state = changeBetweenSendAndProof(w, withCellLabels(controlIds(d).open, change));
+    await refusedUnbound(w, d, name);
+    assert.equal(state.injected, true, name);
+  });
+}
+
 // A lost create answer is recovered by the same proof: a created tile whose base-language caption is gone while its
 // sent 3082 caption (the same text) stays is not bound, nothing is sent again and nothing is published.
 test('a create whose answer was lost is not recovered when a new tile lost its base-language caption since', async () => {
