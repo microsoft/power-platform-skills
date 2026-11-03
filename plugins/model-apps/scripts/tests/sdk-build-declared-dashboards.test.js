@@ -960,42 +960,55 @@ test('publication risk through the CLI: an unchanged all-carried dashboard stays
     assert.equal(next.calls.filter((c) => c.path === 'PublishXml').length, 0);
   });
 });
-// The printed approval is accepted in a run that never reaches the dashboards phase too: there the store's quarantine
-// withholds the app write, and that stop carries no dispatch as data.
-for (const removed of [false, true]) {
-  test(`publication risk through the CLI (${removed ? 'its declaration removed' : 'still declared'}, a run without the dashboards phase): the exact typed approval is accepted before any write, and that run stops`, async () => {
-    await withDashboards(true, async () => {
-      const wire = wireWithIdReads();
-      const appDir = makeTempDir('declared-dash-');
-      const spec = makeSpec();
-      wire.script((e) => e.method === 'POST' && e.path === 'PublishXml', { error: new Error('lost answer'), unapplied: true });
-      const first = await cliBuild(wire, appDir, spec);
-      assert.ok(first.error);
-      const g = committedGroup(first.dir);
-      const token = g.publication.dispatchToken;
-      const later = removed ? dropDashboard(spec) : clone(spec);
-      const approval = `publication-risk:dashboard:${g.root.id}`;
-      for (const extra of [{}, { approve: 'all', allowDestructive: true }]) {
-        const denied = await cliBuild(wire, appDir, later, extra, ['app-shell']);
-        assert.ok(denied.error, 'the store withholds the app write');
-        assert.ok(!denied.messages.some((m) => /accepted the risk/.test(m)), denied.messages.join('\n'));
-        assert.equal(committedGroup(first.dir).publication.dispatchToken, token);
-      }
-      const parsed = authorizationKeys(['--authorize', approval], later);
-      assert.equal(parsed.error, null);
-      const granted = await cliBuild(wire, appDir, later, { publicationRisk: parsed.publicationRisk }, ['app-shell']);
-      assert.equal(granted.error && granted.error.code, 'publication-risk-accepted', chainText(granted.error));
-      assert.ok(granted.messages.some((m) => m.includes(`accepted the risk of dispatch ${token} (${approval})`)), granted.messages.join('\n'));
-      assert.deepEqual(granted.calls.filter((c) => c.method !== 'GET'), [], 'the accepting run sends nothing');
-      assert.equal(committedGroup(first.dir).publication.state, 'owed');
-      if (!removed) {
-        const next = await cliBuild(wire, appDir, spec);
-        assert.equal(next.error, undefined, chainText(next.error));
-        assert.equal(committedGroup(first.dir).publication.state, 'confirmed');
-      }
+// A dashboard whose publish lost its answer and whose declaration the spec then removed: no later run reaches its
+// dashboards path, so no stop carries that dispatch as data. The run ends incomplete naming the approval, and the
+// printed approval must still be accepted, before any write, by the next run that is given exactly it.
+test('publication risk through the CLI (its declaration removed): the printed typed approval is accepted before any write, and that run stops', async () => {
+  await withDashboards(true, async () => {
+    const wire = wireWithIdReads();
+    const appDir = makeTempDir('declared-dash-');
+    const spec = makeSpec();
+    wire.script((e) => e.method === 'POST' && e.path === 'PublishXml', { error: new Error('lost answer'), unapplied: true });
+    const first = await cliBuild(wire, appDir, spec);
+    assert.ok(first.error);
+    const g = committedGroup(first.dir);
+    const token = g.publication.dispatchToken;
+    const later = dropDashboard(spec);
+    const approval = `publication-risk:dashboard:${g.root.id}`;
+    // The app shell's icon is found, not created: this fake answers no id for a created web resource.
+    const icon = () => wire.script((e) => e.method === 'GET' && /^webresources(?:et)?$/i.test(e.path) && e.url.includes('contoso_dash_icon'), {
+      statusCode: 200, body: { value: [{ webresourceid: '66666666-6666-4666-8666-666666666666', name: 'contoso_dash_icon', webresourcetype: 11 }] },
     });
+    for (const extra of [{}, { approve: 'all', allowDestructive: true }]) {
+      icon();
+      const denied = await cliBuild(wire, appDir, later, extra, ['app-shell']);
+      assert.equal(denied.error && denied.error.code, 'publication-withheld', chainText(denied.error));
+      assert.ok(String(denied.error.message).includes(approval), 'the stop names the approval');
+      assert.ok(!denied.messages.some((m) => /accepted the risk/.test(m)), denied.messages.join('\n'));
+      assert.equal(committedGroup(first.dir).publication.dispatchToken, token);
+    }
+    const parsed = authorizationKeys(['--authorize', approval], later);
+    assert.equal(parsed.error, null);
+    icon();
+    const granted = await cliBuild(wire, appDir, later, { publicationRisk: parsed.publicationRisk }, ['app-shell']);
+    assert.equal(granted.error && granted.error.code, 'publication-risk-accepted', chainText(granted.error));
+    assert.ok(granted.messages.some((m) => m.includes(`accepted the risk of dispatch ${token} (${approval})`)), granted.messages.join('\n'));
+    assert.deepEqual(granted.calls.filter((c) => c.method !== 'GET'), [], 'the accepting run sends nothing');
+    assert.equal(committedGroup(first.dir).publication.state, 'owed');
+    // The next run no longer needs the approval: the publish is owed, and the stop says how to pay it.
+    icon();
+    const next = await cliBuild(wire, appDir, later, {}, ['dashboards', 'app-shell']);
+    assert.equal(next.error && next.error.code, 'publication-withheld', chainText(next.error));
+    assert.match(String(next.error.message), /publish is owed/);
+    assert.ok(!String(next.error.message).includes(approval), 'the approval is not asked for again');
+    // Declaring it again publishes it through its proof.
+    icon();
+    const restored = await cliBuild(wire, appDir, spec, {}, ['dashboards', 'app-shell']);
+    assert.equal(restored.error, undefined, chainText(restored.error));
+    assert.equal(committedGroup(first.dir).publication.state, 'confirmed');
   });
-}
+});
+
 // One invocation with the caller's barrier (shared by the SDK's send boundary and the build), as build() makes its own.
 async function buildWith(wire, dir, spec, { barrier = createPublicationBarrier(), ...opts } = {}) {
   const sendObserver = createAttemptSendObserver();
