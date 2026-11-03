@@ -133,18 +133,29 @@ test('default view copy: on a table this invocation created, a view read with no
   }
 });
 
-test('default view copy: a table whose views never resolve stops after the CLI\'s three retries, with nothing that names no table sent', async () => {
+// The live sequence end to end: the first build of the table during the lag, the CLI's later attempts in the same invocation, then
+// a plain run again on the same workspace once the server answers the table. The build never edits a copy that names no table, so
+// what the stopped invocation leaves is a CLEAN copy, which the next run replaces and saves with no file deleted by hand.
+test('default view copy: a table whose views never resolve stops after the CLI\'s three retries with nothing sent, and a plain run again recovers once the server answers the table', async () => {
   const env = environment({ noTableReads: 100 });
-  const run = await invoke(env, makeTempDir('view-copy-'), { created: true });
+  const dir = makeTempDir('view-copy-');
+  const run = await invoke(env, dir, { created: true });
   assert.ok(run.halt || (run.result && run.result.ok === false), 'the build stopped');
   const halt = run.halt;
   assert.equal(halt && halt.code, 'default-view-table-unresolved', `the stop says why: ${halt && halt.message}`);
-  assert.match(String(halt.message), /returnedtypecode "none", so it was not saved and nothing was sent/);
+  assert.match(String(halt.message), /returnedtypecode "none", so it was not edited and nothing was sent/);
   assert.equal(run.retries, 3, 'three retries, then the halt');
   assert.equal(run.attempts, 4);
   assert.deepEqual(env.saves, [], 'no save was sent at all');
+  const left = (await run.sdk.listArtifacts('view')).filter((a) => defaultViewIds(env).includes(a.id.toLowerCase()));
+  assert.ok(left.length >= 1, 'the stopped run left a copy of the view it read');
+  assert.deepEqual(left.map((a) => [a.entityLogicalName, a.isDirty]), left.map(() => ['none', false]), 'the copy it left names no table and holds nothing of its own');
+  env.setLaggingReads(0);
+  const again = await invoke(env, dir, { created: false });
+  assert.equal(again.halt, null, again.halt && again.halt.message);
+  assert.equal(again.retries, 0);
+  assert.deepEqual(env.saves.map((s) => s.returnedtypecode), [TABLE, TABLE], 'each view saved once, naming its table');
 });
-
 test('default view copy: the server refusing a save that names the table is still the lag it was on a table this invocation created, and the resend succeeds', async () => {
   const env = environment({ refuseSaves: 1 });
   const run = await invoke(env, makeTempDir('view-copy-'), { created: true });
@@ -163,9 +174,12 @@ test('default view copy: on a table this invocation did not create, the same rea
   assert.deepEqual(env.saves, []);
 });
 
-// The workspace an earlier build left (2.21.0 as released, or a build stopped between the save it was refused and anything else): the
-// SDK's copy of a default view read during the lag, with the new columns written into it and never saved.
-async function poisonedWorkspace(env, { alsoEdit } = {}) {
+// The SDK's copy of a default view read during the lag ("Active Tickets"), in a workspace of its own; the lag is over when this returns.
+//   - by default the copy is what this build leaves: read, never edited (clean);
+//   - `stepColumns` writes the step's own new columns into it and does not save them: what a build before the guard left, stopped
+//     after the save it was refused;
+//   - `edit` ([pointer, value]) is a further change nobody sent, made with the SDK as a maker's would be.
+async function poisonedWorkspace(env, { stepColumns = false, edit } = {}) {
   const dir = makeTempDir('view-copy-');
   env.setLaggingReads(100);
   const sdk = await sdkOver(env, dir);
@@ -173,14 +187,18 @@ async function poisonedWorkspace(env, { alsoEdit } = {}) {
   await sdk.fetchArtifact('view', id);
   const copy = await sdk.getArtifact('view', id);
   assert.equal(copy.entityLogicalName, 'none', 'the copy read during the lag names no table');
-  await sdk.updateElement('view', id, '/columns', [...copy.columns, { ...copy.columns[0], name: 'new_code', id: undefined }].map((c) => Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined))));
-  if (alsoEdit) await sdk.updateElement('view', id, '/description', alsoEdit);
-  assert.equal((await sdk.listArtifacts('view')).find((a) => a.id.toLowerCase() === id).isDirty, true, 'the copy holds an edit that was not sent');
+  if (stepColumns) await sdk.updateElement('view', id, '/columns', [...copy.columns, { ...copy.columns[0], name: 'new_code', id: undefined }].map((c) => Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined))));
+  if (edit) await sdk.updateElement('view', id, edit[0], edit[1]);
+  const dirty = (await sdk.listArtifacts('view')).find((a) => a.id.toLowerCase() === id).isDirty;
+  assert.equal(dirty, Boolean(stepColumns || edit), 'the copy holds an unsent edit exactly when one was made');
   env.setLaggingReads(0);
   return { dir, id };
 }
 
-test('default view copy: a later run over a workspace that holds a copy naming no table recovers by itself, also once the server\'s row has moved', async () => {
+// The bytes of the copy and of the SDK's record of it, as the workspace holds them.
+const copyBytes = (dir, id) => [path.join(dir, 'views', `${id}.json`), path.join(dir, '.metadata', 'views', `${id}.meta.json`)].map((f) => fs.readFileSync(f).toString('base64'));
+
+test('default view copy: a later run over a workspace that holds a clean copy naming no table recovers by itself, also once the server\'s row has moved', async () => {
   for (const moved of [false, true]) {
     const env = environment();
     const { dir, id } = await poisonedWorkspace(env);
@@ -196,22 +214,54 @@ test('default view copy: a later run over a workspace that holds a copy naming n
   }
 });
 
-test('default view copy: a copy naming no table that also holds another unsent edit is kept, and the step stops before it writes anything', async () => {
+test('default view copy: a copy whose only unsent change is the table it names is replaced, as nothing else can be lost, and saved with its table', async () => {
   const env = environment();
-  const { dir, id } = await poisonedWorkspace(env, { alsoEdit: 'kept by hand' });
+  const dir = makeTempDir('view-copy-');
   const sdk = await sdkOver(env, dir);
-  const mark = env.fake.mark();
-  const halt = await runSdkBuild(spec(), { sdk, apply: true, phases: ['views'] }).then(() => null, (e) => e);
-  assert.ok(halt, 'the build stopped');
-  assert.equal(halt.code, 'workspace-copy-unsent-edits', halt.message);
-  assert.match(halt.message, new RegExp(`default view ${id} of ${TABLE}.*the local copy was kept`));
-  assert.deepEqual(env.saves, [], 'nothing was saved');
-  assert.deepEqual(env.fake.writeCounts(mark), {}, 'nothing was written');
-  const copy = await sdk.getArtifact('view', id);
-  assert.equal(copy.description, 'kept by hand', 'the unsent edit is still in the copy');
-  assert.equal(copy.entityLogicalName, 'none', 'the copy was not replaced');
+  const id = defaultViewIds(env)[0];
+  await sdk.fetchArtifact('view', id);
+  await sdk.updateElement('view', id, '/entityLogicalName', 'none');
+  assert.deepEqual((await sdk.diffArtifact('view', id)).changes.map((c) => c.pointer), ['/entityLogicalName']);
+  const run = await invoke(env, dir, { created: false });
+  assert.equal(run.halt, null, run.halt && run.halt.message);
+  assert.deepEqual(env.saves.map((s) => s.returnedtypecode), [TABLE, TABLE], 'each view saved once, naming its table');
 });
 
+// A copy naming no table that also holds a change nobody sent is never replaced, whoever made the change: a diff cannot say whose. The
+// step stops before it edits or writes anything, and the copy and its record are kept byte for byte. Each change is tried on the copy
+// a build before the guard left (its own columns unsent) and on the clean copy this build leaves. The columns' width and order are a
+// maker's values, not the step's; the SDK's next local edit is made to fail, so a copy replaced before that edit would show.
+test('default view copy: a copy naming no table that holds any other unsent change is kept byte for byte, and the step stops before it writes anything', async () => {
+  const changes = [
+    ['the step\'s own columns', null],
+    ['a description', ['/description', 'kept by hand']],
+    ['a maker\'s column width', ['/columns/0/width', 777]],
+    ['a maker\'s column order', ['/columns/0/order', 99]],
+  ];
+  for (const [label, edit] of changes) {
+    for (const stepColumns of edit ? [true, false] : [true]) {
+      const what = `${label}${edit && stepColumns ? ' over the step\'s own columns' : ''}`;
+      const env = environment();
+      const { dir, id } = await poisonedWorkspace(env, { stepColumns, edit });
+      const sdk = await sdkOver(env, dir);
+      const before = copyBytes(dir, id);
+      const original = await sdk.getArtifact('view', id);
+      sdk.updateElement = async () => { throw Object.assign(new Error('the next local edit could not be written'), { code: 'local-edit-failed', transient: false }); };
+      const mark = env.fake.mark();
+      const halt = await runSdkBuild(spec(), { sdk, apply: true, phases: ['views'] }).then(() => null, (e) => e);
+      assert.ok(halt, `${what}: the build stopped`);
+      assert.equal(halt.code, 'workspace-copy-unsent-edits', `${what}: ${halt.message}`);
+      assert.match(halt.message, new RegExp(`default view ${id} of ${TABLE}.*the local copy was kept`));
+      assert.deepEqual(env.saves, [], `${what}: nothing was saved`);
+      assert.deepEqual(env.fake.writeCounts(mark), {}, `${what}: nothing was written`);
+      assert.deepEqual(copyBytes(dir, id), before, `${what}: the copy and its record are kept byte for byte`);
+      const kept = await sdk.getArtifact('view', id);
+      assert.deepEqual(kept.columns, original.columns, `${what}: the columns are the ones the copy held`);
+      assert.equal(kept.description, original.description, `${what}: so is the description`);
+      assert.equal(kept.entityLogicalName, 'none', `${what}: the copy was not replaced`);
+    }
+  }
+});
 // Every request of the views step of a build whose views are healthy, the first build of the table and an unchanged rebuild alike: the
 // lookup of the table's default views, then per view the SDK's fetch (its etag, then the saved layer) and the save; the publish the SDK
 // makes of the saved views, with the reads around it by which it checks what it publishes. The guard reads only the workspace, so this

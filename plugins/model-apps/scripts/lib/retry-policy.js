@@ -304,7 +304,7 @@ function missingAttributeOf(error) {
 //   The entity with a name = 'contoso_task' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075
 // Measured live, the first of the two is not always the server lagging behind a correct request: the lag also reaches the READ of the view, which answers `returnedtypecode: "none"`, and the SDK's copy of the
 // view then names no table, so the save it sends really carries returnedTypeCode 0 — and a plain fetch keeps that copy once a save of it has failed, so a resend of it is refused however long the build waits.
-// The build therefore never sends such a copy and replaces it on its next fetch (sdk-build.js, guardDefaultViewCopies); it stops instead with DEFAULT_VIEW_NO_TABLE_CODE, nothing sent, and that stop is the
+// The build therefore never edits or sends such a copy and replaces it on its next fetch (sdk-build.js, guardDefaultViewCopies); it stops instead with DEFAULT_VIEW_NO_TABLE_CODE, nothing sent, and that stop is the
 // same lag. With the copy guarded, the 0x80040203 answer is left for a copy that named its table and was still refused, which a run again also rides out.
 // None of them says the request is wrong; a run again, once the cache has the table, succeeds. But the same words also describe a request that really names no table, so they are lag ONLY for a table ANY attempt of this
 // invocation created (build-model-app.js keeps one `createdTables` set across its attempts), which the caller marks on the failure it raises (`freshTable`, the logical name — markFreshTable): the first answer names no table, so the mark is what ties it to the one the step was saving; the

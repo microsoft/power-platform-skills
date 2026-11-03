@@ -824,21 +824,25 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   publishes it (a clean workspace copy is still published, below): no marker outlives the process, the
   default-view enrichment has the same exposure, and the app-builder skill's recovery guidance says to
   re-run. A default-view push refused by a concurrent edit fails the enrichment step, as any refused
-  push does. **A default view whose workspace copy names no table is never sent** (`guardDefaultViewCopies`,
+  push does. **A default view whose workspace copy names no table is never edited or sent** (`guardDefaultViewCopies`,
   `lib/sdk-build.js`; `default-view-copy-real-bundle.test.js`). Measured live: a view of a table created moments
   before, read while the table is not yet in the answering server's metadata cache, comes back with
   `returnedtypecode: "none"`; the SDK's copy records that as its table, the save then carries returnedTypeCode 0 and is
   refused (400 `0x80040203`, "Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml"), and a plain
   fetch keeps the dirty copy while the server's etag has not moved — so neither the CLI's retry nor a later run
-  recovered, whatever the server answered by then. Before the SDK fetches or saves a default view, the enrichment
-  reads the workspace's own manifest (no request): a copy that names another table, or none, is not saved, and the
-  step stops with `default-view-table-unresolved`, which is the lag a run again rides out for a table this
-  invocation created (as `0x80041102` is; the CLI's three retries bound it) and final for any other; the next
-  fetch of a dirty copy that names another table replaces it with the server's (`fetchArtifact` with
-  `overwrite: true`) only when it differs from the server's in `/columns` alone, which this step writes whole on
-  every build, so nothing is lost. A copy with any other local difference is kept and the step stops before it
-  writes anything (`workspace-copy-unsent-edits`; reset the workspace). A copy that names its table goes through
-  untouched, so a healthy build sends exactly the requests it did. The name column length a failed attempt left unset is carried across attempts the same way
+  recovered, whatever the server answered by then. The enrichment now checks each default view's copy in the
+  workspace's own manifest (no request) right after the SDK fetches it and again before each edit and save: a copy
+  that names another table, or none, is neither edited nor sent, and the step stops with
+  `default-view-table-unresolved`, which is the lag a run again rides out for a table this invocation created (as
+  `0x80041102` is; the CLI's three retries bound it) and final for any other. Because the build never edits such a
+  copy, what it leaves is clean, and the next fetch replaces it with the server's (`fetchArtifact` with
+  `overwrite: true`) — only when the copy differs from the SDK's snapshot of the server's in nothing, or in nothing
+  but the table it names (`diffArtifact`, compared exactly), so nothing can be lost. A copy that names no table and
+  holds any other unsent change — a column, its width or order, the description, whoever made it: a diff cannot
+  say whose — is never replaced: the step stops before it writes anything with `workspace-copy-unsent-edits`, the
+  copy kept byte for byte, and the message says how to keep the change (in the spec or on the server) or discard
+  it (reset the workspace). A copy that names its table goes through untouched, so a healthy build sends exactly
+  the requests it did. The name column length a failed attempt left unset is carried across attempts the same way
   (`owedLengths`, `settleOwedLengths`; see *Primary name column length* below).
   **An unchanged rebuild writes almost nothing, and no write is skipped on a guess.** An existing view
   or form is pushed only when the SDK reports that its workspace copy differs from its last-synced
