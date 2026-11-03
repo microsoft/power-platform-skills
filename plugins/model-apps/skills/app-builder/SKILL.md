@@ -786,7 +786,10 @@ dependency order (**app module → dashboards → command bars → forms → sec
 → reset enriched default views to drop parent lookups → relationships → AI row summaries → tables
 [children-first] → web resources (generated app icon + page manifest + declared) → global choices →
 solution**). Forms/charts/views/relationships are deleted **explicitly before tables** (a table
-delete does not reliably cascade cross-references; it does remove the table's own columns). Security
+delete does not reliably cascade cross-references; it does remove the table's own columns). A built
+table's only Main form is refused by Dataverse ("You must have at least one active Main form"); the table's
+delete removes it, and the run counts it as removed only when a fresh read of its id shows it gone —
+otherwise the refusal stays a failure. Security
 roles come **after forms** because a form assigned to a role names it inside its own formxml, which
 the platform counts as a dependency, and **before** relationships/tables because a role holding a
 table's privileges can block that table's delete. Command
