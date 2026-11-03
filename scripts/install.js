@@ -20,6 +20,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const https = require("https");
+const { URL } = require("url");
 
 // ── Config ────────────────────────────────────────────────────
 const REPO = "microsoft/power-platform-skills";
@@ -172,16 +173,54 @@ function run(cmd, args = [], opts = {}) {
   }
 }
 
+const MAX_REDIRECTS = 3;
+
 function httpsGet(url) {
   return new Promise((resolve, reject) => {
-    const request = (target) => {
+    let initialUrl;
+    try {
+      initialUrl = new URL(url);
+    } catch {
+      reject(new Error("Invalid HTTPS URL"));
+      return;
+    }
+    if (initialUrl.protocol !== "https:") {
+      reject(new Error("Only HTTPS URLs are allowed"));
+      return;
+    }
+
+    // Keep fetched manifests and metadata on their configured origin; bounded
+    // redirects also prevent an origin from trapping the installer in a loop.
+    const expectedOrigin = initialUrl.origin;
+    const request = (target, redirectCount = 0) => {
       https
-        .get(target, { headers: { "User-Agent": "power-platform-skills-installer" } }, (res) => {
+        .get(target.href, { headers: { "User-Agent": "power-platform-skills-installer" } }, (res) => {
           if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            return request(res.headers.location);
+            let nextUrl;
+            try {
+              nextUrl = new URL(res.headers.location, target);
+            } catch {
+              res.resume();
+              reject(new Error("Invalid redirect URL"));
+              return;
+            }
+            if (redirectCount >= MAX_REDIRECTS) {
+              res.resume();
+              reject(new Error(`Too many redirects from ${expectedOrigin}`));
+              return;
+            }
+            if (nextUrl.protocol !== "https:" || nextUrl.origin !== expectedOrigin
+              || nextUrl.username || nextUrl.password) {
+              res.resume();
+              reject(new Error(`Refusing redirect to ${nextUrl.origin}`));
+              return;
+            }
+            res.resume();
+            return request(nextUrl, redirectCount + 1);
           }
           if (res.statusCode !== 200) {
-            return reject(new Error(`HTTP ${res.statusCode} from ${target}`));
+            res.resume();
+            return reject(new Error(`HTTP ${res.statusCode} from ${target.href}`));
           }
           let data = "";
           res.on("data", (chunk) => (data += chunk));
@@ -189,7 +228,7 @@ function httpsGet(url) {
         })
         .on("error", reject);
     };
-    request(url);
+    request(initialUrl);
   });
 }
 
