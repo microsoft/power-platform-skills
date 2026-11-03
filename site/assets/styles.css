@@ -1063,28 +1063,6 @@ code {
   list-style: none;
 }
 
-@media (min-width: 48rem) {
-  .process {
-    --process-gap: var(--space-12);
-    grid-template-columns: repeat(3, 1fr);
-    gap: var(--process-gap);
-  }
-
-  /* The process line joins the three nodes and ends at the last one, rather than running on
-     past it. It goes from the first node's center to the last node's center, which is one
-     column width (minus half a node) in from the right edge. */
-  .process::before {
-    content: "";
-    position: absolute;
-    top: 1.375rem;
-    left: 1.375rem;
-    right: calc((100% - 2 * var(--process-gap)) / 3 - 1.375rem);
-    height: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--brand-gradient);
-  }
-}
-
 .process li {
   position: relative;
 }
@@ -1109,6 +1087,52 @@ code {
   margin: 0;
   color: var(--color-text-muted);
   max-width: 32ch;
+}
+
+@media (min-width: 48rem) {
+  .process {
+    --process-gap: var(--space-12);
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--process-gap);
+  }
+
+  /* Side by side, each step is centered in its column, so the line from the first node to the
+     last is centered on the page and ends at the last step instead of running on past it.
+     The heading is centered to match. */
+  .how .section-head {
+    margin-inline: auto;
+    text-align: center;
+  }
+
+  /* Centered lines read badly when the last one holds a single word, so even them out. */
+  .how .section-head p {
+    text-wrap: balance;
+  }
+
+  .process li {
+    text-align: center;
+  }
+
+  .process-node {
+    margin-inline: auto;
+  }
+
+  .process p {
+    margin-inline: auto;
+  }
+
+  /* From the middle of the first column to the middle of the last: half a column in from each
+     edge. */
+  .process::before {
+    content: "";
+    position: absolute;
+    top: 1.375rem;
+    left: calc((100% - 2 * var(--process-gap)) / 6);
+    right: calc((100% - 2 * var(--process-gap)) / 6);
+    height: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--brand-gradient);
+  }
 }
 
 /* ── Plugin catalog ───────────────────────────────────────── */
