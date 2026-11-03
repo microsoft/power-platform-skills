@@ -939,7 +939,8 @@ function computeLCS(arr1, arr2) {
  * drop this note once its renderer matches.
  * Fifth: component tabs form a vertical list beside the files, because the
  * extension's single horizontal row overflows the card once all component
- * types are listed.
+ * types are listed. The extension is getting the same layout; drop this note
+ * once its renderer matches.
  */
 function generateHtmlContent(fileContents, localSiteName, siteName, environmentName, websiteId, websiteUrl, siteVisibility, creator, createdOn, localWebsiteId) {
     const generatedDate = formatDateForDisplay(new Date());
