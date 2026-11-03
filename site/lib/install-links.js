@@ -102,6 +102,18 @@
     ];
   }
 
+  // Both commands on one line, so a single paste and a single Enter run them. Two pasted lines
+  // run as two commands, or wait in the buffer, depending on the shell.
+  // The separator is ';' rather than '&&' for two reasons:
+  //   - `copilot plugin marketplace add` exits 1 when the marketplace is already registered:
+  //       Failed to add marketplace: ... Marketplace "power-platform-skills" already registered
+  //     so '&&' would skip the install for anyone adding a second plugin.
+  //   - Windows PowerShell 5.1, the default on Windows, rejects '&&'; ';' works there, in
+  //     PowerShell 7, bash, zsh, and fish. cmd.exe needs '&' instead, which the site says.
+  function copilotCliCommand(name) {
+    return copilotCliCommands(name).join('; ');
+  }
+
   // The one-line installers from the README. PowerShell gets its own form because Windows
   // PowerShell aliases `curl` to Invoke-WebRequest, which cannot pipe a script into node.
   const INSTALL_ALL = {
@@ -134,5 +146,6 @@
     copilotAppMarketplaceUrl: copilotAppMarketplaceUrl,
     copilotAppInstallUrl: copilotAppInstallUrl,
     copilotCliCommands: copilotCliCommands,
+    copilotCliCommand: copilotCliCommand,
   };
 }));

@@ -83,6 +83,35 @@ test('Copilot CLI commands add the marketplace, then install from it', () => {
   ]);
 });
 
+test('the copied Copilot CLI command is one line that installs even when the marketplace exists', () => {
+  const command = links.copilotCliCommand('pcf');
+  assert.equal(command, 'copilot plugin marketplace add microsoft/power-platform-skills; copilot plugin install pcf@power-platform-skills');
+  assert.ok(!/[\r\n]/.test(command), 'two pasted lines do not run as one command');
+
+  // Run the line in each POSIX shell available here against a fake copilot whose
+  // "marketplace add" fails the way the real CLI does when the marketplace is registered.
+  const bin = tempDir('pps-fake-copilot-');
+  const log = path.join(bin, 'calls.log');
+  fs.writeFileSync(path.join(bin, 'copilot'), [
+    '#!/bin/sh',
+    `echo "$*" >> "${log}"`,
+    'if [ "$2" = "marketplace" ]; then echo \'Marketplace "power-platform-skills" already registered\' >&2; exit 1; fi',
+    'exit 0',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  const shells = ['sh', 'bash', 'zsh'].filter((shell) => spawnSync('which', [shell]).status === 0);
+  if (process.platform === 'win32' || shells.length === 0) return;
+  for (const shell of shells) {
+    fs.rmSync(log, { force: true });
+    const result = spawnSync(shell, ['-c', command], { env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${shell}: ${result.stderr}`);
+    assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), [
+      'plugin marketplace add microsoft/power-platform-skills',
+      'plugin install pcf@power-platform-skills',
+    ], shell);
+  }
+});
+
 test('launcher URLs accept only known apps and keep the base the caller passes', () => {
   assert.equal(links.launcherUrl('../../', 'claude-code', 'pcf'), '../../install/?app=claude-code&plugin=pcf');
   assert.equal(
@@ -282,7 +311,7 @@ test('plugin pages link each assistant to its install path', () => {
   assert.ok(hrefs.includes(links.copilotAppInstallUrl('power-automate')));
   assert.ok(hrefs.includes(links.copilotAppMarketplaceUrl()));
   // Copilot CLI has no URL handler, so its install path is a copy button with both commands.
-  assert.ok(html.includes(`data-copy="${links.copilotCliCommands('power-automate').join('\n')}"`));
+  assert.ok(html.includes(`data-copy="${links.copilotCliCommand('power-automate')}"`));
 });
 
 test('every product icon on the site sits beside its product name', () => {

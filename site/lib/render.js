@@ -241,7 +241,6 @@ function assistantPicker(scopeId, legend) {
 
 function pluginRow(plugin, root) {
   const page = `${root}plugins/${plugin.name}/`;
-  const [cliAdd, cliInstall] = links.copilotCliCommands(plugin.name);
   // Every row has the same visible button labels, so screen readers also hear the plugin name.
   const forPlugin = `<span class="sr-only"> for ${escapeHtml(plugin.title)}</span>`;
   const product = productLabel(plugin);
@@ -260,7 +259,7 @@ function pluginRow(plugin, root) {
         </div>
         <div class="plugin-actions">
           <a class="button button-primary" data-for="copilot-app" href="${escapeAttr(links.copilotAppInstallUrl(plugin.name))}">Install in Copilot app${forPlugin}</a>
-          <a class="button button-primary" data-for="copilot-cli" href="${escapeAttr(page)}#install" data-copy="${escapeAttr(`${cliAdd}\n${cliInstall}`)}" data-label="Copy install commands"><span data-button-label>Copy install commands</span>${forPlugin}</a>
+          <a class="button button-primary" data-for="copilot-cli" href="${escapeAttr(page)}#install" data-copy="${escapeAttr(links.copilotCliCommand(plugin.name))}" data-label="Copy install command"><span data-button-label>Copy install command</span>${forPlugin}</a>
           <a class="button button-primary" data-for="claude-code" href="${escapeAttr(links.launcherUrl(root, 'claude-code', plugin.name))}">Install in Claude Code${forPlugin}</a>
           <a class="text-link" href="${escapeAttr(page)}">Details<span class="sr-only"> about ${escapeHtml(plugin.title)}</span></a>
         </div>
@@ -403,7 +402,7 @@ function pluginsSection(catalog, root) {
       <a class="button button-secondary button-small" href="${escapeAttr(links.copilotAppMarketplaceUrl())}">Add the marketplace</a>
     </div>
     <div class="callout" data-for="copilot-cli">
-      <p>Copilot CLI can't be opened from a link. Each button copies two commands. Paste them into a terminal and press Enter.</p>
+      <p>Copilot CLI can't be opened from a link. Each button copies one line that adds the marketplace and installs the plugin. Paste it into a terminal and press Enter. In the Windows Command Prompt, change <code>;</code> to <code>&amp;</code> first.</p>
     </div>
     <div class="callout" data-for="claude-code">
       <p>Each button opens a terminal with the install command already typed. Press Enter to install. Clicking does nothing yet? Open Claude Code once and send any message, then try again.</p>
@@ -510,7 +509,6 @@ function renderHome(catalog) {
 // ── Plugin page ─────────────────────────────────────────────────
 
 function installPanel(plugin, root) {
-  const [cliAdd, cliInstall] = links.copilotCliCommands(plugin.name);
   return `<section class="install-panel assistant-scope" id="install" aria-labelledby="install-title">
       <h2 id="install-title">Install ${escapeHtml(plugin.title)}</h2>
       ${assistantPicker('plugin', 'Your AI assistant')}
@@ -522,9 +520,9 @@ function installPanel(plugin, root) {
         <p class="fine-print">The app asks you to confirm each step.</p>
       </div>
       <div class="install-option" data-for="copilot-cli">
-        <p>Paste these into a terminal and press Enter.</p>
-        ${codeBlock(`${cliAdd}\n${cliInstall}`, 'Copy commands')}
-        <p class="fine-print">VS Code also picks up plugins you install with Copilot CLI.</p>
+        <p>Paste this into a terminal and press Enter. It adds the marketplace, then installs the plugin.</p>
+        ${codeBlock(links.copilotCliCommand(plugin.name), 'Copy command')}
+        <p class="fine-print">In the Windows Command Prompt, change <code>;</code> to <code>&amp;</code> first. VS Code also picks up plugins you install with Copilot CLI.</p>
       </div>
       <div class="install-option" data-for="claude-code">
         <p>Opens a terminal with the install command already typed. Press Enter to install.</p>
