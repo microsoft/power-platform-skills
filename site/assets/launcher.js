@@ -42,6 +42,15 @@
   ready.hidden = false;
   document.title = `Install ${title} in Claude Code | Power Platform Skills`;
 
+  // Claude Code runs on desktop computers. Phones and tablets have no handler, and mobile Chrome
+  // refuses to open an app link without a tap anyway, so say where to open the page instead.
+  const touchOnly = typeof window.matchMedia === 'function' && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  if (touchOnly) {
+    ready.querySelector('[data-launcher-touch]').hidden = false;
+    ready.querySelector('[data-launcher-desktop]').hidden = true;
+    return;
+  }
+
   // Try once on load, like vscode.dev/redirect does. The browser asks before it opens another
   // app, and if the person dismisses that prompt or has no handler, the button and the
   // fallback steps stay on screen. The short delay lets the page paint behind the prompt.

@@ -12,6 +12,17 @@ const { isValidPluginName } = require('./install-links.js');
 const AUDIENCES = new Set(['makers', 'developers', 'both']);
 const STATUSES = new Set([null, 'preview', 'private-preview']);
 
+// The Microsoft product each plugin works with, shown as the product's official icon with its
+// full name beside it. Microsoft's icon terms require the name near the icon and allow an icon
+// only for the product it was designed for, so the label here must be that product's name.
+// Icons: https://learn.microsoft.com/power-platform/guidance/icons (see site/assets/brand/README.md)
+const PRODUCTS = {
+  'power-pages': { label: 'Power Pages', icon: 'assets/brand/power-pages.svg' },
+  'power-apps': { label: 'Power Apps', icon: 'assets/brand/power-apps.svg' },
+  'power-automate': { label: 'Power Automate', icon: 'assets/brand/power-automate.svg' },
+  dataverse: { label: 'Dataverse', icon: 'assets/brand/dataverse.svg' },
+};
+
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
@@ -73,6 +84,7 @@ function loadCatalog(repoRoot) {
     if (!goalIds.has(entry.goal)) problems.push(`${where} uses unknown goal ${JSON.stringify(entry.goal)}`);
     if (!AUDIENCES.has(entry.audience)) problems.push(`${where} has unknown audience ${JSON.stringify(entry.audience)}`);
     if (!STATUSES.has(entry.status)) problems.push(`${where} has unknown status ${JSON.stringify(entry.status)}`);
+    if (!Object.prototype.hasOwnProperty.call(PRODUCTS, entry.product)) problems.push(`${where} has unknown product ${JSON.stringify(entry.product)}`);
     for (const field of ['prompts', 'requirements', 'notes']) {
       if (!Array.isArray(entry[field]) || !entry[field].every(isNonEmptyString)) {
         problems.push(`${where} needs ${field} as a list of strings`);
@@ -130,13 +142,33 @@ function loadCatalog(repoRoot) {
     problems.push('every faq entry needs a question and an answer');
   }
 
+  // The hero replays example sessions. Each prompt must be one of the plugin's own example
+  // prompts, so the demo and the plugin page never disagree about what to ask.
+  const showcase = Array.isArray(catalog.showcase) ? catalog.showcase : [];
+  if (showcase.length < 1 || showcase.length > 6) problems.push('showcase needs 1 to 6 example sessions');
+  for (const [index, item] of showcase.entries()) {
+    const where = `showcase[${index}]`;
+    const plugin = plugins.find((candidate) => candidate.name === item.plugin);
+    if (!plugin) {
+      problems.push(`${where} names unknown plugin ${JSON.stringify(item.plugin)}`);
+      continue;
+    }
+    if (!Array.isArray(plugin.prompts) || !plugin.prompts.includes(item.prompt)) problems.push(`${where} prompt is not one of ${item.plugin}'s prompts`);
+    if (!Array.isArray(item.steps) || item.steps.length < 2 || item.steps.length > 5 || !item.steps.every(isNonEmptyString)) {
+      problems.push(`${where} needs 2 to 5 steps`);
+    }
+    if (item.waiting !== null && item.waiting !== undefined && !isNonEmptyString(item.waiting)) {
+      problems.push(`${where} waiting must be text or null`);
+    }
+  }
+
   if (problems.length > 0) {
     const error = new Error(`site/catalog.json has ${problems.length} problem(s):\n  - ${problems.join('\n  - ')}`);
     error.problems = problems;
     throw error;
   }
 
-  return { goals, plugins, faq };
+  return { goals, plugins, faq, showcase };
 }
 
-module.exports = { loadCatalog };
+module.exports = { loadCatalog, PRODUCTS };

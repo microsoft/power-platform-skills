@@ -1,8 +1,8 @@
 (function () {
   'use strict';
 
-  const STORAGE_KEY = 'power-platform-skills.assistant';
-  const COPIED_MS = 2000;
+  const root = document.documentElement;
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const announcer = document.getElementById('announcer');
 
   function announce(message) {
@@ -14,7 +14,98 @@
     }, 50);
   }
 
-  // ── Copy buttons ─────────────────────────────────────────────
+  // Storage can be blocked in private windows. Every choice then lasts only for the page.
+  function readStored(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function writeStored(key, value) {
+    try {
+      if (value === null) window.localStorage.removeItem(key);
+      else window.localStorage.setItem(key, value);
+    } catch {
+      // Nothing to do; the choice resets on the next page.
+    }
+  }
+
+  // ── Color theme ─────────────────────────────────────────────
+  // theme.js already applied the saved theme before paint. "system" removes data-theme so the
+  // stylesheet follows prefers-color-scheme again.
+  const THEME_KEY = 'power-platform-skills.theme';
+  const THEME_COLORS = { light: '#f4f7f7', dark: '#08161f' };
+  const themeSwitch = document.querySelector('[data-theme-switch]');
+
+  function applyTheme(choice) {
+    if (choice === 'light' || choice === 'dark') root.setAttribute('data-theme', choice);
+    else root.removeAttribute('data-theme');
+    // The browser chrome color follows the same choice. Each meta keeps its own media query,
+    // so pinning a theme means giving both the chosen theme's color.
+    document.querySelectorAll('meta[data-theme-color]').forEach((meta) => {
+      meta.setAttribute('content', THEME_COLORS[choice in THEME_COLORS ? choice : meta.dataset.themeColor]);
+    });
+    if (themeSwitch) {
+      themeSwitch.querySelectorAll('[data-theme-choice]').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.themeChoice === choice));
+      });
+    }
+  }
+
+  if (themeSwitch) {
+    themeSwitch.hidden = false;
+    applyTheme(root.getAttribute('data-theme') || 'system');
+    themeSwitch.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-theme-choice]');
+      if (!button) return;
+      const choice = button.dataset.themeChoice;
+      applyTheme(choice);
+      writeStored(THEME_KEY, choice === 'system' ? null : choice);
+      announce(choice === 'system' ? 'Theme matches your system' : `${choice === 'light' ? 'Light' : 'Dark'} theme`);
+    });
+  }
+
+  // ── Mobile menu ─────────────────────────────────────────────
+  const header = document.querySelector('.site-header');
+  const menuButton = document.querySelector('[data-menu-button]');
+  const nav = document.getElementById('site-nav');
+
+  function setMenu(open, { returnFocus = false } = {}) {
+    if (!header || !menuButton) return;
+    menuButton.setAttribute('aria-expanded', String(open));
+    if (open) {
+      header.setAttribute('data-menu-open', '');
+      const first = nav && nav.querySelector('a');
+      if (first) first.focus();
+    } else {
+      header.removeAttribute('data-menu-open');
+      if (returnFocus) menuButton.focus();
+    }
+  }
+
+  if (menuButton && nav) {
+    menuButton.addEventListener('click', () => {
+      setMenu(menuButton.getAttribute('aria-expanded') !== 'true');
+    });
+    nav.addEventListener('click', (event) => {
+      if (event.target.closest('a')) setMenu(false);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && menuButton.getAttribute('aria-expanded') === 'true') {
+        setMenu(false, { returnFocus: true });
+      }
+    });
+    // The desktop layout shows the links inline, so an open menu state must not linger.
+    window.matchMedia('(min-width: 64rem)').addEventListener('change', (event) => {
+      if (event.matches) setMenu(false);
+    });
+  }
+
+  // ── Copy buttons ────────────────────────────────────────────
+  const COPIED_MS = 2000;
+
   // The Clipboard API needs a secure context, which a file:// preview is not, so fall back to
   // a temporary textarea and execCommand there.
   async function copyText(text) {
@@ -68,81 +159,166 @@
 
   // ── Assistant choice ────────────────────────────────────────
   // styles.css shows the matching install options with :has(), so this only remembers the
-  // choice between pages. Storage can be blocked in private windows, which is not an error.
-  function readChoice() {
-    try {
-      return window.localStorage.getItem(STORAGE_KEY);
-    } catch {
-      return null;
-    }
-  }
-
-  function saveChoice(value) {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, value);
-    } catch {
-      // The choice simply resets on the next page.
-    }
-  }
-
-  const saved = readChoice();
+  // choice between pages.
+  const ASSISTANT_KEY = 'power-platform-skills.assistant';
+  const savedAssistant = readStored(ASSISTANT_KEY);
   document.querySelectorAll('[data-assistant-picker]').forEach((picker) => {
-    if (saved) {
+    if (savedAssistant) {
       picker.querySelectorAll('input[type="radio"]').forEach((input) => {
-        if (input.value === saved) input.checked = true;
+        if (input.value === savedAssistant) input.checked = true;
       });
     }
     picker.addEventListener('change', (event) => {
-      if (event.target.matches('input[type="radio"]')) saveChoice(event.target.value);
+      if (event.target.matches('input[type="radio"]')) writeStored(ASSISTANT_KEY, event.target.value);
     });
   });
 
-  // ── Hero prompt ─────────────────────────────────────────────
-  const hero = document.querySelector('[data-hero]');
+  // ── Hero session (the signature moment) ─────────────────────
+  // The server renders the first example finished. With motion allowed, this replays it: the
+  // request types in, the plugin answers, and each step lands in order, ending on the point
+  // where the assistant waits for approval. The whole run takes about four seconds and then
+  // stops, so it needs no pause control (WCAG 2.2.2).
+  const session = document.querySelector('[data-session]');
   const pageData = document.getElementById('page-data');
-  if (!hero || !pageData) return;
+  if (!session || !pageData) return;
 
-  const items = JSON.parse(pageData.textContent).hero || [];
-  const textEl = hero.querySelector('[data-hero-text]');
-  const linkEl = hero.querySelector('[data-hero-link]');
-  const buttons = Array.from(hero.querySelectorAll('[data-hero-index]'));
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let timer = null;
+  const scenarios = JSON.parse(pageData.textContent).scenarios || [];
+  const promptEl = session.querySelector('[data-session-prompt]');
+  const replyEl = session.querySelector('[data-session-reply]');
+  const iconEl = session.querySelector('[data-session-icon]');
+  const productEl = session.querySelector('[data-session-product]');
+  const pluginEl = session.querySelector('[data-session-plugin]');
+  const stepsEl = session.querySelector('[data-session-steps]');
+  const linkEl = session.querySelector('[data-session-link]');
+  const barEl = session.querySelector('.session-bar');
+  const tabList = document.querySelector('[data-scenario-tabs]');
+  const tabs = tabList ? Array.from(tabList.querySelectorAll('[role="tab"]')) : [];
+  const panel = document.getElementById('session-panel');
+  const doneIcon = document.getElementById('icon-done');
+  const waitingIcon = document.getElementById('icon-waiting');
 
-  function show(index, animate) {
-    const item = items[index];
-    if (!item) return;
-    window.clearTimeout(timer);
-    buttons.forEach((button) => {
-      button.setAttribute('aria-pressed', String(Number(button.dataset.heroIndex) === index));
-    });
-    linkEl.textContent = item.title;
-    linkEl.href = item.href;
-    if (!animate || reduceMotion) {
-      textEl.textContent = item.prompt;
-      return;
+  let run = 0;
+  const wait = (ms) => new Promise((resolve) => { window.setTimeout(resolve, ms); });
+
+  function stepItem(text, state) {
+    const item = document.createElement('li');
+    item.className = `step is-${state}`;
+    item.appendChild((state === 'waiting' ? waitingIcon : doneIcon).content.cloneNode(true));
+    const label = document.createElement('span');
+    label.className = 'step-text';
+    label.textContent = text;
+    item.appendChild(label);
+    if (state === 'waiting') {
+      const badge = document.createElement('span');
+      badge.className = 'step-badge';
+      badge.textContent = 'Your turn';
+      item.appendChild(badge);
     }
-    // Type at a slightly uneven pace so it reads like someone typing. A full prompt takes
-    // about two seconds, well under the five seconds after which moving content needs a
-    // pause control (WCAG 2.2.2).
-    let shown = 0;
-    const step = () => {
-      shown += 1;
-      textEl.textContent = item.prompt.slice(0, shown);
-      if (shown < item.prompt.length) timer = window.setTimeout(step, 24 + Math.random() * 36);
-    };
-    textEl.textContent = '';
-    step();
+    return item;
   }
 
-  buttons.forEach((button) => {
-    button.addEventListener('click', () => {
-      const index = Number(button.dataset.heroIndex);
-      show(index, true);
-      const item = items[index];
-      if (item) announce(`${item.prompt}. Your assistant uses the ${item.title} plugin.`);
-    });
-  });
+  function setProgress(value) {
+    if (barEl) barEl.style.setProperty('--progress', String(value));
+  }
 
-  show(0, true);
+  async function play(index, animate) {
+    const scenario = scenarios[index];
+    if (!scenario) return;
+    run += 1;
+    const current = run;
+    const stale = () => current !== run;
+
+    tabs.forEach((tab, tabIndex) => {
+      const selected = tabIndex === index;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    });
+    if (panel && tabs[index]) panel.setAttribute('aria-labelledby', tabs[index].id);
+    iconEl.src = scenario.icon;
+    productEl.textContent = scenario.product;
+    pluginEl.textContent = `${scenario.title} plugin`;
+    linkEl.href = scenario.href;
+    linkEl.textContent = `See the ${scenario.title} plugin`;
+
+    const states = scenario.steps.map((text) => [text, 'done']);
+    if (scenario.waiting) states.push([scenario.waiting, 'waiting']);
+
+    if (!animate || reduceMotion) {
+      promptEl.textContent = scenario.prompt;
+      stepsEl.replaceChildren(...states.map(([text, state]) => stepItem(text, state)));
+      replyEl.removeAttribute('data-pending');
+      session.removeAttribute('data-typing');
+      setProgress(1);
+      return;
+    }
+
+    // Every step is in place from the start, invisible, so the window keeps its final height
+    // while the steps reveal. Appending them one by one would collapse the window and shift
+    // the tabs under the pointer and the page below it.
+    const items = states.map(([text, state]) => {
+      const item = stepItem(text, state);
+      item.setAttribute('data-entering', '');
+      return item;
+    });
+    stepsEl.replaceChildren(...items);
+    replyEl.setAttribute('data-pending', '');
+    // Reserve the finished prompt's height too, so retyping it does not shrink the box.
+    const promptBox = promptEl.parentElement;
+    promptBox.style.minHeight = '';
+    promptEl.textContent = scenario.prompt;
+    promptBox.style.minHeight = `${promptBox.offsetHeight}px`;
+    promptEl.textContent = '';
+    setProgress(0);
+    session.setAttribute('data-typing', '');
+
+    const perChar = Math.min(38, Math.max(14, 1100 / scenario.prompt.length));
+    for (let shown = 1; shown <= scenario.prompt.length; shown += 1) {
+      promptEl.textContent = scenario.prompt.slice(0, shown);
+      await wait(perChar);
+      if (stale()) return;
+    }
+    session.removeAttribute('data-typing');
+    // The full prompt now holds the height itself; dropping the reservation lets a later
+    // resize reflow the box naturally.
+    promptBox.style.minHeight = '';
+    await wait(220);
+    if (stale()) return;
+    replyEl.removeAttribute('data-pending');
+
+    for (const [position, item] of items.entries()) {
+      await wait(position === 0 ? 260 : 460);
+      if (stale()) return;
+      item.removeAttribute('data-entering');
+      setProgress((position + 1) / items.length);
+    }
+  }
+
+  if (tabList && tabs.length > 1) {
+    tabList.hidden = false;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', tabs[0].id);
+    tabList.addEventListener('click', (event) => {
+      const tab = event.target.closest('[role="tab"]');
+      if (tab) play(Number(tab.dataset.scenario), true);
+    });
+    // Arrow keys move between tabs and select them, per the ARIA tabs pattern.
+    // https://www.w3.org/WAI/ARIA/apg/patterns/tabs/
+    tabList.addEventListener('keydown', (event) => {
+      const currentIndex = tabs.indexOf(document.activeElement);
+      if (currentIndex === -1) return;
+      const last = tabs.length - 1;
+      const next = {
+        ArrowRight: currentIndex === last ? 0 : currentIndex + 1,
+        ArrowLeft: currentIndex === 0 ? last : currentIndex - 1,
+        Home: 0,
+        End: last,
+      }[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      tabs[next].focus();
+      play(next, true);
+    });
+  }
+
+  play(0, true);
 }());

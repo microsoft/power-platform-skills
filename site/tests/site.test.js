@@ -166,6 +166,7 @@ function fixtureRepo({ catalog: edit = (value) => value, skills = ['make-thing']
     name,
     title: name.toUpperCase(),
     goal: 'build',
+    product: 'power-apps',
     audience: 'makers',
     status: null,
     summary: `${name} summary`,
@@ -180,6 +181,7 @@ function fixtureRepo({ catalog: edit = (value) => value, skills = ['make-thing']
     goals: [{ id: 'build', title: 'Build', summary: 'Build things.' }],
     plugins: [entry('alpha'), entry('beta', { external: 'https://github.com/example/beta' })],
     faq: [{ question: 'Q?', answer: 'A.' }],
+    showcase: [{ plugin: 'alpha', prompt: 'Ask alpha', steps: ['One', 'Two'], waiting: 'Waits' }],
   };
   writeJson(path.join(root, 'site', 'catalog.json'), edit(catalog));
   return root;
@@ -207,6 +209,10 @@ test('catalog validation reports every drift from the marketplace', () => {
     ['an in-repo plugin marked external', (c) => { c.plugins[0].external = 'https://example.com'; return c; }, /must not set external/],
     ['a goal with no plugins', (c) => { c.goals.push({ id: 'empty', title: 'E', summary: 'E.' }); return c; }, /goal empty has no plugins/],
     ['too many prompts', (c) => { c.plugins[0].prompts = ['1', '2', '3', '4', '5', '6']; return c; }, /1 to 5 example prompts/],
+    ['an unknown product', (c) => { c.plugins[0].product = 'power-bi'; return c; }, /unknown product "power-bi"/],
+    ['a showcase prompt the plugin does not list', (c) => { c.showcase[0].prompt = 'Something else'; return c; }, /not one of alpha's prompts/],
+    ['a showcase with one step', (c) => { c.showcase[0].steps = ['Only']; return c; }, /2 to 5 steps/],
+    ['no showcase', (c) => { c.showcase = []; return c; }, /1 to 6 example sessions/],
   ];
   for (const [label, edit, pattern] of cases) {
     assert.throws(() => loadCatalog(fixtureRepo({ catalog: edit })), pattern, label);
@@ -231,7 +237,11 @@ test('the build writes a page for every marketplace plugin plus the launcher and
   for (const name of MARKETPLACE_NAMES) {
     assert.ok(files.includes(`plugins/${name}/index.html`), name);
   }
-  for (const file of ['index.html', 'install/index.html', '404.html', 'assets/styles.css', 'assets/site.js', 'assets/launcher.js', 'assets/install-links.js']) {
+  for (const file of [
+    'index.html', 'install/index.html', '404.html', 'assets/styles.css', 'assets/site.js', 'assets/theme.js',
+    'assets/launcher.js', 'assets/install-links.js', 'assets/brand/power-platform.svg', 'assets/brand/favicon-32.png',
+    'assets/fonts/schibsted-grotesk-latin.woff2', 'assets/fonts/OFL-schibsted-grotesk.txt',
+  ]) {
     assert.ok(fs.existsSync(path.join(outDir, file)), file);
   }
   // The browser copy of the link builders is the module the build and tests use.
@@ -275,6 +285,23 @@ test('plugin pages link each assistant to its install path', () => {
   assert.ok(html.includes(`data-copy="${links.copilotCliCommands('power-automate').join('\n')}"`));
 });
 
+test('every product icon on the site sits beside its product name', () => {
+  const outDir = path.join(tempDir('pps-site-out-'), 'dist');
+  const { files } = build({ outDir, basePath: '/power-platform-skills/' });
+  const { PRODUCTS } = require('../lib/catalog.js');
+  const labelFor = Object.fromEntries(Object.values(PRODUCTS).map((product) => [path.basename(product.icon), product.label]));
+  for (const file of files.filter((name) => name.endsWith('.html'))) {
+    const html = readOut(outDir, file);
+    // An icon's parent element is the unit a reader sees together with it.
+    for (const match of html.matchAll(/<img[^>]*src="[^"]*brand\/([a-z-]+\.svg)"[^>]*>/g)) {
+      const icon = match[1];
+      const label = icon === 'power-platform.svg' ? 'Power Platform' : labelFor[icon];
+      const after = html.slice(match.index, match.index + 600).replace(/<[^>]+>/g, ' ');
+      assert.ok(after.includes(label), `${file}: ${icon} has no "${label}" label beside it`);
+    }
+  }
+});
+
 test('catalog text is escaped in every page', () => {
   const hostile = '<script>alert(1)</script>"\'&';
   const root = fixtureRepo({
@@ -283,6 +310,8 @@ test('catalog text is escaped in every page', () => {
       c.plugins[0].prompts = [hostile];
       c.plugins[0].title = hostile;
       c.faq[0].answer = hostile;
+      c.showcase[0].prompt = hostile;
+      c.showcase[0].steps = [hostile, hostile];
       return c;
     },
   });
@@ -331,7 +360,7 @@ test('build arguments are strict and the base path is normalized', () => {
 
 // Runs assets/launcher.js against a stub DOM. It records where the page would navigate,
 // so no test ever hands a claude-cli: link to the operating system.
-function runLauncher(search) {
+function runLauncher(search, { touchOnly = false } = {}) {
   const element = () => ({ hidden: true, textContent: '', href: '#', dataset: {} });
   const ready = element();
   const invalid = element();
@@ -341,6 +370,8 @@ function runLauncher(search) {
     '[data-launcher-shell]': element(),
     '[data-launcher-copy]': element(),
     '[data-launcher-open]': element(),
+    '[data-launcher-touch]': element(),
+    '[data-launcher-desktop]': { ...element(), hidden: false },
   };
   ready.querySelector = (selector) => parts[selector];
   const catalog = loadCatalog(REPO_ROOT);
@@ -363,6 +394,7 @@ function runLauncher(search) {
       },
     },
     setTimeout: (fn) => fn(),
+    matchMedia: (query) => ({ matches: touchOnly && query === '(hover: none) and (pointer: coarse)' }),
   };
   const source = fs.readFileSync(path.join(REPO_ROOT, 'site', 'assets', 'launcher.js'), 'utf8');
   vm.runInNewContext(source, { window, document, URLSearchParams });
@@ -379,6 +411,15 @@ test('the launcher opens Claude Code for a known plugin', () => {
   assert.equal(parts['[data-launcher-plugin]'].textContent, 'Process Intelligence');
   assert.deepEqual(navigations, [links.claudeCodeDeepLink('process-intelligence')]);
   assert.match(document.title, /Install Process Intelligence in Claude Code/);
+});
+
+test('the launcher does not try to open Claude Code on a phone or tablet', () => {
+  const { ready, parts, navigations } = runLauncher('?app=claude-code&plugin=pcf', { touchOnly: true });
+  assert.equal(ready.hidden, false);
+  assert.equal(parts['[data-launcher-open]'].href, links.claudeCodeDeepLink('pcf'));
+  assert.equal(parts['[data-launcher-touch]'].hidden, false);
+  assert.equal(parts['[data-launcher-desktop]'].hidden, true);
+  assert.deepEqual(navigations, []);
 });
 
 test('the launcher refuses anything outside its allowlist and never navigates', () => {
@@ -401,6 +442,23 @@ test('the launcher refuses anything outside its allowlist and never navigates', 
     assert.equal(ready.hidden, true, search);
     assert.deepEqual(navigations, [], search);
   }
+});
+
+// ── Pages deployment ────────────────────────────────────────────
+
+test('every Pages deploy carries the repo stats report', () => {
+  // GitHub Pages serves one artifact, so a deploy without the stats branch's microsoft/ folder
+  // takes https://microsoft.github.io/power-platform-skills/microsoft/... offline.
+  const site = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'showcase-site.yml'), 'utf8');
+  const stats = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'github-repo-stats.yml'), 'utf8');
+  const statsName = /^name: (.+)$/m.exec(stats)[1].trim();
+  assert.match(site, new RegExp(`workflow_run:\\n\\s+workflows:\\n\\s+- ${statsName}\\n`), 'site must republish after the stats workflow');
+  assert.match(site, /ref: github-repo-stats\n\s+path: repo-stats\n\s+sparse-checkout: microsoft\n/);
+  assert.match(site, /run: cp -R repo-stats\/microsoft site\/dist\/microsoft\n/);
+  assert.ok(site.indexOf('cp -R repo-stats/microsoft') < site.indexOf('upload-pages-artifact'), 'stats must be copied before the upload');
+  // The report's links are built from this prefix, so it must be the site the workflow deploys.
+  assert.match(stats, new RegExp(`ghpagesprefix: ${links.SITE_URL.replace(/\/$/, '').replace(/[.]/g, '\\.')}\\n`));
+  assert.match(stats, /databranch: github-repo-stats\n/);
 });
 
 // ── README ──────────────────────────────────────────────────────

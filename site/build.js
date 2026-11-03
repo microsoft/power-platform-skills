@@ -26,14 +26,18 @@ const REPO_ROOT = path.resolve(SITE_DIR, '..');
 // so a mistyped --out can never delete an unrelated folder.
 const MARKER = '.power-platform-skills-site';
 
-const ASSETS = [
-  ['assets/styles.css', 'assets/styles.css'],
-  ['assets/site.js', 'assets/site.js'],
-  ['assets/launcher.js', 'assets/launcher.js'],
-  ['assets/icon.svg', 'assets/icon.svg'],
-  // The launcher page runs the same link builders as the build, so the two cannot disagree.
-  ['lib/install-links.js', 'assets/install-links.js'],
-];
+// Everything under site/assets ships as-is, except Markdown notes for maintainers.
+// The launcher page also runs the same link builders as the build, so the two cannot disagree.
+const ASSETS_DIR = 'assets';
+const EXTRA_ASSETS = [['lib/install-links.js', 'assets/install-links.js']];
+
+function listAssets(dir, relative = '') {
+  return fs.readdirSync(path.join(dir, relative), { withFileTypes: true }).flatMap((entry) => {
+    const child = path.join(relative, entry.name);
+    if (entry.isDirectory()) return listAssets(dir, child);
+    return entry.name.endsWith('.md') ? [] : [child];
+  });
+}
 
 function parseArgs(argv) {
   const options = {
@@ -92,7 +96,9 @@ function build({ repoRoot = REPO_ROOT, outDir, basePath }) {
   // with "_" or ".". Actions deploys skip Jekyll already; this keeps a branch deploy safe too.
   written.push(writeFile(outDir, '.nojekyll', ''));
 
-  for (const [from, to] of ASSETS) {
+  const assetsDir = path.join(SITE_DIR, ASSETS_DIR);
+  const assets = listAssets(assetsDir).map((file) => [path.join(ASSETS_DIR, file), path.join(ASSETS_DIR, file)]);
+  for (const [from, to] of [...assets, ...EXTRA_ASSETS]) {
     written.push(writeFile(outDir, to, fs.readFileSync(path.join(SITE_DIR, from))));
   }
   return { catalog, files: written };

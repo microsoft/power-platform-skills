@@ -1,9 +1,16 @@
 name: showcase-site
 
-# Builds the plugin showcase site from site/catalog.json, marketplace.json and each plugin's
-# manifest and skills, then deploys it to GitHub Pages from main. Pull requests only test and
-# build. The path filter lists every input the build or its tests read, so a change that could
-# break the site (a renamed skill, a new marketplace plugin, a README link) runs this workflow.
+# Publishes the repository's one GitHub Pages site, which holds:
+#   - the plugin showcase built from site/, at the site root
+#   - the GitHub Repo Stats report, copied read-only from the github-repo-stats branch into
+#     microsoft/, so its existing URLs (for example microsoft/power-platform-skills/latest-report/
+#     report.html) keep working
+# Pages deploys one artifact, so every deploy must carry both; deploying the site alone would
+# take the stats report offline. The github-repo-stats branch is only read here, never written.
+#
+# Pull requests only test and build. The path filter lists every input the build or its tests
+# read, so a change that could break the site (a renamed skill, a new marketplace plugin, a README
+# link) runs this workflow.
 
 on:
     pull_request:
@@ -17,6 +24,7 @@ on:
             - "README.md"
             - "scripts/install.js"
             - ".github/workflows/showcase-site.yml"
+            - ".github/workflows/github-repo-stats.yml"
     push:
         branches:
             - main
@@ -28,6 +36,15 @@ on:
             - "README.md"
             - "scripts/install.js"
             - ".github/workflows/showcase-site.yml"
+            - ".github/workflows/github-repo-stats.yml"
+    # Republish after the daily stats run so the report stays current.
+    workflow_run:
+        workflows:
+            - github-repo-stats
+        types:
+            - completed
+        branches:
+            - main
     workflow_dispatch:
 
 permissions:
@@ -42,6 +59,8 @@ concurrency:
 jobs:
     build:
         name: build-showcase-site
+        # A failed stats run has nothing new to publish, and the live site keeps the last report.
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
         runs-on: ubuntu-latest
         timeout-minutes: 10
         steps:
@@ -60,6 +79,19 @@ jobs:
 
             - name: build
               run: node site/build.js
+
+            - name: checkout repo stats
+              if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: github-repo-stats
+                  path: repo-stats
+                  sparse-checkout: microsoft
+                  persist-credentials: false
+
+            - name: add repo stats to site
+              if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+              run: cp -R repo-stats/microsoft site/dist/microsoft
 
             - name: upload pages artifact
               if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
