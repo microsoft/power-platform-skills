@@ -7,39 +7,24 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.21.0]
 
-Bundled SDK: commit 0eef55f8c2d0.
+SDK: 0eef55f8c2d0.
 
-### Added
+- **Declared** views, charts, web resources, forms, Global Standard dashboards (`reconcile: "declared"`) preserve omitted settings/controls; business rules/process flows create/adopt-only. Existing-item binding: `adopt:<family>:<key>`. Forms/dashboards/rules/flows: `--verify`, downloads `--include-managed --managed-manifest <store>`; Maker-deleted removed roots can retire; re-declaring gets fresh ids.
+- New-app `createIdentity: "stable-v1"`: retry-stable view/chart ids; unproved changes withhold publication. `quickFind.findColumns`, `app.mainFormsOnUpdate: "exact"`, `app.pinDeclaredArtifacts`; lost pin-add recovery.
+- **Schema:** Choice values, `dateTimeBehavior`/`isSecured`/`fieldSecurityProfiles`, table flags; destructive changes: `--authorize <key>`. **Configuration:** environment variables, connection references, Custom APIs, duplicate rules, `solution.version` (`--deployment-settings`). **`app.theme`** (Preview): header/logo; `--include-capabilities` downloads theme/behaviours/flags.
+- **Pages:** upload `--draft`/`--turn-id`, navigation drafts/leases, `prepare-compiler-refresh`. **Read-only:** `--dry-run --preview-push`, `--inspect-components`, `solutions.js inspect`, `plan-app-promotion.js`. **`data-fix.js`** repairs rows.
 
-- **Declared views, charts, web resources, forms and Global Standard dashboards** (`reconcile: "declared"`) follow declared fields, preserving other settings; **rules and process flows** support create/adopt, not edits. Existing-item binding needs `adopt:<family>:<key>`.
-- **Managed forms/dashboards/rules/flows**: `--verify`, downloads with `--include-managed --managed-manifest <store>`; removed, Maker-deleted roots can retire; re-declaring gets fresh ids.
-- **`createIdentity: "stable-v1"`**: new-app view/chart ids survive retries; unproved changes withhold publication.
-- **Schema**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags; `--include-capabilities` adds behaviours/flags; destructive changes require `--authorize <key>`.
-- **Configuration**: environment variables, connection references, Custom APIs, duplicate-detection rules, `solution.version`; `--deployment-settings` supplies environment values.
-- **`app.theme`** (Preview): header/logo branding; downloads require `--include-capabilities`.
-- **`quickFind.findColumns`**, **`app.mainFormsOnUpdate: "exact"`**, **`app.pinDeclaredArtifacts`**: search columns, exact Main forms, declared pins; lost pin-add answers checked/repaired.
-- **Pages**: upload `--draft`/`--turn-id`, navigation drafts, leases, `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
-- **Read-only**: `--dry-run --preview-push`, `--inspect-components`, `solutions.js inspect`, `plan-app-promotion.js`. **`data-fix.js`** repairs rows.
+### Changed/fixed
 
-### Changed
-
-- **Reads** add `IsSecured`, all name matches, existing-table Date/Time behaviours before adding columns, and forms before page deletion.
-- **Teardown** keeps/names embedded pages, configuration and security profiles; downloads omit configuration.
-- Pages halt on unusable declared connections/APIs; edits wait on unsettled publication.
-
-### Fixed
-
-- Process-flow deletes retry "no active transaction"; unknown-outcome steps never rerun; refused access-unlinks fail; duplicate-rule component types resolve; emptied declared web resources settle.
+- Reads: `IsSecured`, all name matches, existing-table Date/Time preflights, forms before page deletion. Teardown keeps embedded pages/configuration/profiles. Pages refuse unusable declared connections/APIs; edits wait on unsettled publication.
+- New dashboard tiles repeat captions across all provisioned languages; unreadable languages prevent dashboard writes. Declared form tables/dashboards publish without `--publish`; lagging reads retry ~45s/scope plus request time.
+- Default-view cache-lag retries: invocation-created tables only, ≤4 sends. Process-flow deletes retry "no active transaction"; unknown-outcome steps never rerun; refused access-unlinks fail; duplicate-rule component types resolve; emptied declared `webResources` settle.
 
 ### Known limitations
 
-- Form/dashboard saved layers miss mid-write Maker edits; existing workflows reject edits.
-- Charts verify existence only; views/charts/security profiles do not download.
-- Some local-copy stops accept printed `overwrite:` keys; managed drafts need manual recovery ([schema](references/app-spec-schema-advanced.md)).
-- Existing-app exact Main forms, empty web resources/Quick Find and removed view columns need `--allow-destructive`.
-- Keyed commands/`forms[].genPages` refused; caption-only inspection fails.
-- Unpublished duplicate rules need publishing; unprovisioned languages fail after solution creation.
-- Lost configuration creates can duplicate; recovered-table Date/Time repairs may need rerunning.
+- Form/dashboard saved layers miss mid-write edits. Publish checks skip captions in languages absent from published reads and some saved labels. Printed `--authorize publication-risk:<scope>/<dispatch>`: start-only; accepted/uncertain recording stops without service writes. Rerun to publish; re-declare removed dashboards.
+- Managed downloads omit `securityRoles` flows: copy flow/personas from source spec. No view/chart/profile/configuration downloads; charts verify presence only. Local-copy recovery: printed `overwrite:` keys; otherwise manual ([schema](references/app-spec-schema-advanced.md)).
+- Existing-app exact Main forms, empty web resources/Quick Find and removed view columns need `--allow-destructive`. Keyed commands/`forms[].genPages` refused; caption-only inspection fails. Unpublished duplicate rules need publishing; unprovisioned labels halt after solution creation. Lost-create retries can duplicate configuration; recovered-table Date/Time repairs may need rerunning.
 
 ## [2.20.6]
 
