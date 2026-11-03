@@ -3308,12 +3308,26 @@ its OWN (live: "Work Orders" in 3082 beside "By Priority" in 1033), which no rul
 write leaves it nothing to add: each tile it creates (a create's tiles, an append, and their recoveries) is sent
 with its caption in every provisioned language, each with the declared text (`tileCaptionEdits`, through the SDK's
 root bag, since the SDK writes a new cell with its own language's label alone), and the proof compares exactly
-that. The languages are the build's `provisionedLanguages` (`readProvisionedLanguages`), read before the send and
+that, with one measured exception: the platform does not keep every caption sent. Live, in an organization of
+1033 and 3082, a view-list tile kept the 3082 caption it was sent and an iframe tile lost it, the platform adding
+none in its place; no sent caption was stored with other text (charts and web resources were not measured). So,
+for the comparison only, on the cells of the tiles this attempt created, a sent caption the row LACKS is put back
+as it was sent (`withDroppedTileCaptions`): only when the cell's base-language caption is first, with only
+`description` and `languagecode`, and its other captions are sent languages in the sent order, none twice. A
+caption that is there is never put back or set aside, so one with other text, in another language, a second one
+in a sent language or one without a description still stops the write; what this cannot see is someone deleting
+a new tile's caption in another language between the send and the proof. A recovery puts back the same captions
+(the tiles of the attempt's own declaration that no `componentId` pins and no record binds, or every tile of a
+create); with the languages unreadable it compares the row as read and refuses.
+The languages are the build's `provisionedLanguages` (`readProvisionedLanguages`), read before the send and
 never inferred from a layer read; when they cannot be read the dashboard stops before anything is sent
 (`dashboard-languages-unreadable`). A single-language organization's send is the SDK's own, byte for byte.
 Existing tiles and foreign content are not touched and are compared in every language, so a caption with text
 typed on any cell, tab or section between the send and the proof, in any language, stops the write
-(`create-completion-required`). The committed preservation stays that of the saved row as
+(`create-completion-required`). A create stopped that way leaves a row nothing binds, publishes or adds to the
+solution: the stop names its id and says to delete it and run again, which creates it anew under the same
+catalog id (adopting it as stored does not help: the next run proves the same create and stops the same way).
+The committed preservation stays that of the saved row as
 read, and a proof an earlier build of this release recorded with the empty captions kept still matches
 (`rawPreservationSha256`, `preservationMatches`). A declared form's proof holds the SDK's `readForm`
 projection of the saved row, which never went through the publication view.

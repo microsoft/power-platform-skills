@@ -322,7 +322,8 @@ const withoutAttrs = (el, names) => ({ ...el, a: (el.a || []).filter((p) => !(Ar
  * language, the control's attributes, its non-authored parameters (RecordsPerPage, ...) and any other child. The
  * tile's name itself is in the semantic projection, read by the SDK's read rule (its language, else the first label).
  * That includes the captions in the organization's other languages that a write gives a tile it creates
- * (tileCaptionEdits): they are what the write sent, so they are proved as sent.
+ * (tileCaptionEdits): they are what the write sent, so they are proved as sent (one the platform dropped is put back
+ * for that proof: withDroppedTileCaptions).
  */
 function strippedManagedCell(cell, type, languageCode) {
   const owned = new Set(OWNED_PARAMS[type] || []);
@@ -370,6 +371,72 @@ function isPlatformEmptyCaption(el) {
   return labels.length > 0 && labels.every((l) => l && l.n === 'label' && !(l.c || []).length &&
     (l.a || []).every((p) => Array.isArray(p) && EMPTY_CAPTION_ATTRS.has(p[0])) &&
     attrOf(l, 'description') === '' && /^\d+$/.test(String(attrOf(l, 'languagecode') || '')));
+}
+
+/**
+ * `bag` with the captions put back that the platform DROPPED from the cells of tiles this write created (`createdIds`,
+ * bare control ids), so the proof can compare it with what was sent. Used for that comparison only: the proof commits
+ * the hash of the row as read.
+ *
+ * Why: such a tile is sent with its caption in every provisioned language (tileCaptionEdits), and the platform does not
+ * keep all of them. Live-measured in an organization of 1033 and 3082, the saved row read straight after a create
+ * (RetrieveUnpublished): a view-list tile kept the 3082 caption sent, and an iframe tile lost it, the platform adding
+ * none of its own in its place:
+ *   list    sent   <cell …><labels><label description="Open work orders" languagecode="1033" /><label description="Open work orders" languagecode="3082" /></labels><control … classid="{E7A81278-…}">
+ *           saved  the same, byte for byte
+ *   iframe  sent   <cell …><labels><label description="Crew map" languagecode="1033" /><label description="Crew map" languagecode="3082" /></labels><control … classid="{FD2A7985-…}">
+ *           saved  <cell …><labels><label description="Crew map" languagecode="1033" /></labels><control … classid="{FD2A7985-…}">
+ * No sent caption was stored with other text. Charts and web resources were not measured. Compared as read, the dropped
+ * caption made every such create differ from what was sent: create-completion-required on every run.
+ *
+ * A caption that is absent is no content anyone wrote, so only absences are put back, and only the shape that was sent:
+ * on a cell holding one control, one of `createdIds`, with exactly one <labels> (no attribute) holding only plain
+ * <label> elements, whose FIRST label is in the SDK's language with exactly a description and a languagecode, and whose
+ * labels' languages are a part of the sent order — the SDK's language, then the other provisioned ones in `languages`
+ * order — in that order, none twice. Each language of that order the cell lacks is then put back where it was sent,
+ * as the base-language label with that languagecode: the text the write sent in every language. Any other cell is
+ * left as read. So a label present is compared exactly as before: one with other text, an unsent one (another language,
+ * a second one in a sent language, one without a description, one out of order) leaves the cell as read, and the
+ * proof refuses it. The base-language caption must be there and is the tile's name in the semantic projection, so a
+ * retyped one is refused too. What this cannot see is a maker deleting a new tile's caption in another language
+ * between the send and the proof — an absence, which shows nothing new. Existing tiles and foreign cells are never
+ * touched. With one language, or no tile created, the bag is answered as is.
+ */
+function withDroppedTileCaptions(bag, createdIds, languages, languageCode) {
+  const own = normalizeLanguageCode(languageCode);
+  const order = [own, ...(languages || []).filter((l) => l !== own)];
+  if (!bag || order.length < 2 || !createdIds || !createdIds.size) return bag;
+  const plainLabel = (x) => !!x && !x.node && x.n === 'label' && !(x.c || []).length && (x.a || []).length === 2 &&
+    (x.a || []).every((p) => Array.isArray(p) && (p[0] === 'description' || p[0] === 'languagecode'));
+  const restored = (cell) => {
+    const labelsAt = (cell.c || []).map(nodeOf).filter((x) => x && x.n === 'labels');
+    if (labelsAt.length !== 1 || (labelsAt[0].a || []).length) return cell;
+    const labelsEl = labelsAt[0];
+    const labels = labelsEl.c || [];
+    if (!labels.length || !labels.every(plainLabel)) return cell;
+    const codes = labels.map((l) => normalizeLanguageCode(attrOf(l, 'languagecode')));
+    if (codes[0] !== own || codes.length >= order.length) return cell;
+    let at = 0;
+    for (const code of codes) {
+      const k = order.indexOf(code, at);
+      if (k < 0) return cell;
+      at = k + 1;
+    }
+    const byCode = new Map(labels.map((l, i) => [codes[i], l]));
+    const base = labels[0];
+    const rebuilt = order.map((l) => byCode.get(l) || { ...base, a: base.a.map((p) => (p[0] === 'languagecode' ? ['languagecode', String(l)] : [...p])), c: [] });
+    return mapChildren(cell, (child) => (child === labelsEl ? { ...child, c: rebuilt } : child));
+  };
+  const walk = (el) => {
+    if (!el || typeof el !== 'object') return el;
+    if (el.n === 'cell') {
+      const controls = childrenNamed(el, 'control');
+      const id = controls.length === 1 ? bareId(attrOf(controls[0], 'id')) : '';
+      return id && createdIds.has(id) ? restored(el) : el;
+    }
+    return mapChildren(el, walk);
+  };
+  return walk(bag);
 }
 
 /**
@@ -714,7 +781,8 @@ async function tileCaptionLanguages(s) {
  * Its text is not predictable from what was sent, so no rule can tell it from a caption a maker types onto the new tile
  * before the proof, and the proof sets none aside. Instead the write leaves the platform nothing to add: each new tile's
  * cell is sent with a caption in every provisioned language, each with the declared caption text (the text the SDK
- * writes in its own language), after the SDK's own one, and the proof compares exactly what was sent.
+ * writes in its own language), after the SDK's own one, and the proof compares exactly what was sent — save a sent
+ * caption the platform DROPS, which the proof puts back as sent before it compares (withDroppedTileCaptions).
  *
  * The SDK has no input for a new cell's other labels (it builds the cell itself, with its one label), so the captioned
  * cells go in through the root bag: the edits replace `/bag` with the serialized layout carrying the extra labels, and
@@ -1216,6 +1284,41 @@ async function applyDashboard(s, r) {
 }
 
 /**
+ * The preservation hash of the stored row with the captions the platform dropped from the cells of the tiles this
+ * attempt created put back as they were sent (withDroppedTileCaptions), for the proof to match with the expected model;
+ * null when the attempt created no tile or the languages cannot be read — the row is then compared as read, so a
+ * dropped caption is refused, never accepted on a guess. The proof commits the row as read either way. The tiles this
+ * attempt created, which are the ones its send captioned in every language (tileCaptionEdits):
+ *   - this run's own send: those applyDashboard answers it added (`applied.createdTiles`);
+ *   - a recovered create (no base observation): every expected tile, all created with the root;
+ *   - a recovered append: the tiles of the attempt's own declaration that no componentId pins and no record of the
+ *     committed group binds — exactly the ones resolveDashboard appends.
+ * The languages are the organization's (tileCaptionLanguages: this settle's read, re-read on a recovery). A wrong tile
+ * or language set can only refuse: it puts back a label the expected model does not hold.
+ */
+async function withSentTileCaptions(s, saved, projected, expected, applied, { recovering, created, declaration, committed }) {
+  let keys;
+  if (!recovering) {
+    keys = (applied && applied.createdTiles) || [];
+  } else if (created) {
+    keys = expected.children.map((c) => c.key);
+  } else {
+    const bound = new Set(((committed && committed.records) || []).filter((r) => r.kind === TILE_KIND).map((r) => r.key));
+    const tiles = declaration && Array.isArray(declaration.tiles) ? declaration.tiles : [];
+    keys = tiles.filter((t) => t && !normalizeGuid(t.componentId) && !bound.has(`${s.key}/${t.key}`)).map((t) => `${s.key}/${t.key}`);
+  }
+  const ids = new Set(expected.children.filter((c) => keys.includes(c.key)).map((c) => bareId(c.id)));
+  if (!ids.size) return null;
+  let languages;
+  try {
+    languages = await tileCaptionLanguages(s);
+  } catch {
+    return null;
+  }
+  return preservationSha256(withDroppedTileCaptions(saved.bag, ids, languages, s.languageCode), new Map(projected.tiles.map((t) => [t.id, t.type])), s.languageCode);
+}
+
+/**
  * The all-or-error proof of the stored dashboard against `expected` alone (a recovery has no plan): every expected
  * control once, in its expected cell, section and tab with its type; for a create, the catalog seed tab and section
  * in their roles; the managed projection exactly the one sent; everything the declaration does not own exactly as
@@ -1236,12 +1339,17 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   } catch (err) {
     throw stop('dashboard-published-unreadable', `whether the saved state of dashboard "${key}" is published could not be read`, { cause: err });
   }
-  if (!art || art.dashboardType !== 'Standard' || !isGlobal(art)) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard`);
+  // A dashboard this build created and could not prove is a row nothing binds, publishes or adds to the solution, so
+  // every refusal below names it and the one remedy that works: removed, the next run resumes the create under the same
+  // catalog id and settles it. Adopting it as stored is no remedy: the next run proves the same pending create again and
+  // stops the same way, `--authorize "adopt:dashboard:<key>"` or not.
+  const created = expected.baseObservation === null;
+  const orphan = created ? `. This build created dashboard ${id} and nothing binds it: delete it (in Maker, or by its id), then run the build again to create it anew` : '';
+  if (!art || art.dashboardType !== 'Standard' || !isGlobal(art)) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard${orphan}`);
   // Everything below is proved on the saved row the publication read answered — its content, type and table from one
   // GET, the row whose hash becomes the committed savedSha256 and the publication's desired hash — never on the SDK's
   // earlier read of it: a change landing between the two GETs would otherwise be published without ever being proved.
   const saved = savedSnapshot(sdk, pub.saved, key);
-  const created = expected.baseObservation === null;
   let seedIds = [];
   if (created) {
     const { childIds } = s.catalog.reserveChildren(KIND, key, { actualRootId: id, children: SEED_CHILDREN });
@@ -1249,7 +1357,7 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   }
   const projected = projectDashboard(saved, { managed: expected.children.map((c) => ({ key: c.key, id: c.id })), seedIds, languageCode: s.languageCode });
   if (projected.invalid.some((code) => code === 'dashboard-interactive-unsupported' || code === 'dashboard-scope-unsupported')) {
-    throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard`);
+    throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard${orphan}`);
   }
   const missing = projected.missing.map((k) => (k === 'seed' ? key : k));
   const mismatch = [...projected.duplicated];
@@ -1259,8 +1367,8 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     if (associationOf(t.key, t.type, t) !== child.associationSha256) { mismatch.push(t.key); continue; }
     found.push({ child, parts: t.parts, place: { cell: t.cell, section: t.section, tab: t.tab }, type: t.type });
   }
-  if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); complete or remove it in Maker, then run again`);
-  if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); check the dashboard`);
+  if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); ${created ? 'it was not bound or published' : 'complete or remove it in Maker, then run again'}${orphan}`);
+  if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); ${created ? 'it was not bound or published' : 'check the dashboard'}${orphan}`);
   const semantic = projected.semanticSha256;
   const { committed, pending } = store.readGroup(KIND, key);
   // What is stored now is not what was sent, or anything the spec does not own differs from what the send was modelled
@@ -1275,9 +1383,13 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   // preserved layout leaves out is the EMPTY one on a tab or section (isPlatformEmptyCaption). The caption the platform
   // would add, with text of its own, to a new tile's cell in another provisioned language is not there to accept: the
   // write sent each new tile with its caption in every provisioned language (tileCaptionEdits), and the model this is
-  // compared with holds them as sent. A recovery compares with the same recorded model.
-  if (semantic !== expected.sentProjectionSha256 || !preservationMatches(projected, expected.preservationSha256)) {
-    throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published`);
+  // compared with holds them as sent. The platform keeps some of those and drops others (withDroppedTileCaptions): on
+  // the cells of the tiles this attempt created, and only for that comparison, a sent caption the row lacks is put back
+  // as it was sent — never a label that is there, so nothing the write did not send is ever certified. A recovery
+  // compares with the same recorded model, the same way.
+  const restored = await withSentTileCaptions(s, saved, projected, expected, applied, { recovering, created, declaration, committed });
+  if (semantic !== expected.sentProjectionSha256 || !(preservationMatches(projected, expected.preservationSha256) || restored === expected.preservationSha256)) {
+    throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published${orphan}`);
   }
   const preserved = projected.preservationSha256;
 

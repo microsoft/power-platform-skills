@@ -20,12 +20,30 @@ function withEmptyContainerCaptions(xml) {
 // A cell sent with a caption in that language already is read back as sent. The PUBLISHED read (a plain GET of the row) never
 // returns a caption in it.
 const PLATFORM_CAPTION = 'Platform caption';
-function withSecondLanguageCaptions(xml, lcid) {
+// A cell whose control is an IFRAME tile (helpers/dashboard-formxml.js IFRAME_CLASS).
+const IFRAME_CONTROL = /^<control\b[^>]*\bclassid="\{FD2A7985-3187-444E-908D-6624B21F69C0\}"/i;
+function withSecondLanguageCaptions(xml, lcid, { iframeBaseOnly = false } = {}) {
   if (typeof xml !== 'string') return xml;
-  return xml.replace(/(<cell\b[^>]*>)<labels>((?:<label [^>]*\/>)+)<\/labels>/g, (all, cell, labels) => {
+  return xml.replace(/(<cell\b[^>]*>)<labels>((?:<label [^>]*\/>)+)<\/labels>(?=(<control\b[^>]*>)?)/g, (all, cell, labels, control) => {
     const base = /<label description="([^"]+)" languagecode="1033" \/>/.exec(labels);
     if (!base || labels.includes(`languagecode="${lcid}"`)) return all;
+    if (iframeBaseOnly && control && IFRAME_CONTROL.test(control)) return all;
     return `${cell}<labels>${labels}<label description="${PLATFORM_CAPTION}" languagecode="${lcid}" /></labels>`;
+  });
+}
+
+// The same organization, as a write of a dashboard stores it (live-measured: a create that sent each new tile its caption
+// in 1033 and 3082): a view-list tile's cell keeps every caption sent; an IFRAME tile's cell keeps only its base-language
+// one, and the platform adds none of its own to it (withSecondLanguageCaptions with `iframeBaseOnly`). No sent caption is
+// stored with other text:
+//   sent   <cell …><labels><label description="Crew map" languagecode="1033" /><label description="Crew map" languagecode="3082" /></labels><control … classid="{FD2A7985-…}">
+//   saved  <cell …><labels><label description="Crew map" languagecode="1033" /></labels><control … classid="{FD2A7985-…}">
+function withIframeCaptionsInBaseLanguageOnly(xml) {
+  if (typeof xml !== 'string') return xml;
+  return xml.replace(/(<cell\b[^>]*><labels>)((?:<label [^>]*\/>)+)(<\/labels>)(?=(<control\b[^>]*>))/g, (all, pre, labels, post, control) => {
+    if (!IFRAME_CONTROL.test(control)) return all;
+    const kept = (labels.match(/<label [^>]*\/>/g) || []).filter((l) => /languagecode="1033"/.test(l));
+    return `${pre}${kept.join('')}${post}`;
   });
 }function withoutLanguage(xml, lcid) {
   if (typeof xml !== 'string') return xml;
@@ -39,4 +57,4 @@ function withRewritingCellCaptions(xml) {
   return xml.replace(/(<cell\b[^>]*><labels><label description=")[^"]*(")/g, '$1$2');
 }
 
-module.exports = { PLATFORM_CAPTION, withEmptyContainerCaptions, withSecondLanguageCaptions, withoutLanguage, withRewritingCellCaptions };
+module.exports = { PLATFORM_CAPTION, withEmptyContainerCaptions, withSecondLanguageCaptions, withIframeCaptionsInBaseLanguageOnly, withoutLanguage, withRewritingCellCaptions };

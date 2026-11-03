@@ -730,11 +730,19 @@ itself, and these do not count as a difference:
   add a caption of its own to the new tile. If the build cannot read the languages of the organization, it
   stops before it writes the dashboard (`dashboard-languages-unreadable`). In an organization with one
   language, the dashboard that the build writes does not change.
+- The platform does not keep all of these captions. In an organization with 1033 and 3082, an iframe tile
+  lost its 3082 caption, and a list tile kept it. The platform did not change the text of a caption that it
+  kept. Thus, on a tile that the build adds, a caption that the build sent and that is now missing does not
+  stop the build. A caption that is present must have the text that the build sent.
 - The rule about languages applies only to the publish check. It does not apply when the build proves
   that a dashboard it wrote holds what it sent. That proof compares every caption in every language. The
-  only exception is an empty caption on a tab or a section, on every tab and section of the dashboard. A
+  only exceptions are an empty caption on a tab or a section, on every tab and section of the dashboard,
+  and a missing caption that the build sent to a tile that it added. A
   caption with text that someone adds to a tab, a section or a tile before the proof, in any language,
   stops the build (`create-completion-required`).
+- If the build creates a dashboard and this proof fails, the build does not bind, publish or add the
+  dashboard to the solution. The message gives the ID of the dashboard. Delete the dashboard, then run the
+  build again. The build then creates the dashboard again.
 
 ## forms[].reconcile (optional — declared form layouts)
 

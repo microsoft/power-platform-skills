@@ -923,6 +923,109 @@ test('a single-language create and append send exactly what they sent before per
   assert.deepEqual(contentWrites(append.wire).map((e) => `${e.method} ${sha(e.body)}`), ['PATCH 282ac6081ff826e574471500e4290b0c090f5baaf6c92081588f604ee8c70c58']);
 });
 
+// The organization as measured: the write that sends each new tile its caption in both languages is stored with the
+// 3082 caption kept on a view-list tile and DROPPED on an iframe tile, the platform adding none of its own there
+// (helpers/platform-labels.js withIframeCaptionsInBaseLanguageOnly). The absence of a caption the write sent is no one's
+// content, so such a create settles; every caption that is there is still compared exactly as sent.
+const MEASURED_TWO_LANGUAGES = { ...TWO_LANGUAGES, iframeCaptionsInBaseLanguageOnly: true };
+const LIST_AND_IFRAME = [{ key: 'open', type: 'list', view: 'Open cases', name: 'Open work orders' }, { key: 'map', type: 'iframe', url: 'https://contoso.example/field-map', name: 'Crew map' }];
+const controlIds = (d, actualRootId) => catalogFor(d).reserveChildren('dashboard', 'ops', { ...(actualRootId ? { actualRootId } : {}), children: d.tiles.map((t) => ({ locator: t.key, childKind: 'dashboardControl', keyParts: [t.key, 'control'] })) }).childIds;
+const withCellLabels = (controlId, change) => (xml) => xml.replace(
+  new RegExp(`(<cell\\b[^>]*><labels>)((?:<label [^>]*\\/>)*)(<\\/labels><control\\b[^>]*\\bid="\\{${controlId}\\}")`, 'i'), (all, pre, labels, post) => pre + change(labels) + post);
+
+test('a two-language create whose iframe tile loses the second-language caption it was sent settles, binds and publishes once; a rebuild sends nothing', async () => {
+  const w = await world({ platform: MEASURED_TWO_LANGUAGES });
+  const d = declared(LIST_AND_IFRAME);
+  const ids = controlIds(d);
+  const out = await settle(w, d);
+  assert.deepEqual(out.result, { committed: true, recovered: false });
+  const xml = w.wire.saved.get(out.id).formxml;
+  assert.deepEqual(cellCaptions(xml, ids.open), [[1033, 'Open work orders'], [3082, 'Open work orders']], 'the list tile keeps both');
+  assert.deepEqual(cellCaptions(xml, ids.map), [[1033, 'Crew map']], 'the iframe tile lost the one in 3082');
+  const sent = contentWrites(w.wire).map((e) => JSON.stringify(e.body)).join('\n');
+  assert.match(sent, /Crew map\\" languagecode=\\"3082\\"/, 'it was sent');
+  assert.equal((await projectCommitted(w, out.id)).certified, true, 'the committed proof is of the row as read');
+  assert.equal((await publish(w, 'ops', out.id)).sent, true);
+  assert.equal(w.wire.publishes().length, 1);
+
+  const next = await rerun(w);
+  const before = w.wire.writes().length;
+  assert.deepEqual((await settle(next, d)).result, { noop: true });
+  assert.equal((await publish(next, 'ops', out.id)).sent, false);
+  assert.equal(w.wire.writes().length, before, 'no write and no publish');
+  assert.equal(w.wire.publishes().length, 1);
+});
+
+// What the platform drops is put back for the comparison only where it is absent, and only as it was sent; every label
+// that is there is compared exactly. So whatever someone types on either new tile between the send and the proof — on
+// the iframe tile, whose second-language caption the platform dropped, too — is refused, nothing bound or published.
+for (const [name, change, tiles] of [
+  ['an unsent caption with text in the second language', (labels) => labels + caption(3082, 'Maker second'), ['open', 'map']],
+  ['the second-language caption sent, retyped', (labels) => labels.replace(caption(3082, 'Open work orders'), caption(3082, 'Maker second')), ['open']],
+  ['a caption with text in a third language', (labels) => labels + caption(1036, 'Maker third'), ['open', 'map']],
+  ['captions in two more languages', (labels) => labels + caption(1036, 'Maker third') + caption(1041, 'Maker fourth'), ['open', 'map']],
+  ['a caption without a description', (labels) => `${labels}<label languagecode="1036" />`, ['open', 'map']],
+  ['the base-language caption retyped', (labels) => labels.replace(/description="(Open work orders|Crew map)" languagecode="1033"/, 'description="Maker base" languagecode="1033"'), ['open', 'map']],
+  ['the base-language caption deleted', (labels) => labels.replace(/<label [^>]*languagecode="1033" \/>/, ''), ['map']],
+]) {
+  for (const tile of tiles) {
+    test(`on the measured two-language platform, a ${tile} tile's caption changed between the send and the proof is refused: ${name}`, async () => {
+      const w = await world({ platform: MEASURED_TWO_LANGUAGES });
+      const d = declared(LIST_AND_IFRAME);
+      const state = changeBetweenSendAndProof(w, withCellLabels(controlIds(d)[tile], change));
+      await refusedUnbound(w, d, name);
+      assert.equal(state.injected, true, name);
+    });
+  }
+}
+
+// A recovery puts back the same dropped captions, for a create (every tile was created with the root) and for an
+// append (the tiles the attempt's own declaration added); with the languages unreadable it compares the row as read
+// and refuses, and settles once they read again.
+test('on the measured two-language platform, a create and an append whose commit was lost are recovered over the dropped caption; unreadable languages refuse first', async () => {
+  const d = declared(LIST_AND_IFRAME);
+  const w = await world({ platform: MEASURED_TWO_LANGUAGES });
+  const pending = await strandedAttempt(w, d);
+  assert.deepEqual(cellCaptions(w.wire.saved.get(pending.root.id).formxml, controlIds(d).map), [[1033, 'Crew map']]);
+  const blind = await rerun(w);
+  assert.equal(await codeOf(settle(blind, d, { provisionedLanguages: async () => null })), 'create-completion-required');
+  assert.equal(blind.store.readGroup('dashboard', 'ops').committed, null);
+  const next = await rerun(w);
+  assert.deepEqual((await settle(next, d)).result, { committed: true, recovered: true });
+  assert.equal(w.wire.publishes().length, 0);
+
+  const a = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }, { key: 'map', type: 'iframe', url: 'https://contoso.example/field-map', name: 'Crew map' }], { dashboardId: DID });
+  const { failing, deps } = failNextStoreWrite();
+  const v = await world({ platform: MEASURED_TWO_LANGUAGES });
+  v.store = openManagedContext({ workspaceDir: v.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: v.barrier, deps }).store;
+  putExisting(v.wire);
+  assert.ok(await codeOf(settle(v, a, { ensureMembership: async () => { failing.armed = true; } })), 'the commit failed');
+  assert.equal(v.store.readGroup('dashboard', 'ops').committed, null);
+  assert.deepEqual(cellCaptions(v.wire.saved.get(DID).formxml, controlIds(a, DID).map), [[1033, 'Crew map']]);
+  assert.deepEqual((await settle(await rerun(v), a)).result, { committed: true, recovered: true });
+});
+
+// A create that does not prove leaves a row this build created and nothing binds: the stop names it and the remedy that
+// works — deleted, the next run creates it anew and settles; adopted as stored, the next run stops the same way.
+test('a create that does not prove names the dashboard it left and its remedy; deleted, the next run creates it anew and settles', async () => {
+  const w = await world({ platform: MEASURED_TWO_LANGUAGES });
+  const d = declared(LIST_AND_IFRAME);
+  const id = catalogFor(d).identityFor('dashboard', 'ops').derivedId;
+  changeBetweenSendAndProof(w, withCellLabels(controlIds(d).map, (labels) => labels + caption(1036, 'Maker third')));
+  let err;
+  try { await settle(w, d); } catch (e) { err = e; }
+  assert.equal(err && err.code, 'create-completion-required');
+  const message = String(err.cause && err.cause.message);
+  assert.ok(message.includes(`This build created dashboard ${id} and nothing binds it: delete it (in Maker, or by its id), then run the build again to create it anew`), message);
+  const adopting = await rerun(w);
+  assert.equal(await codeOf(settle(adopting, d)), 'create-completion-required', 'adopting it as stored is no remedy');
+  w.wire.saved.delete(id);
+  w.wire.published.delete(id);
+  const next = await rerun(w);
+  assert.deepEqual((await settle(next, d)).result, { committed: true, recovered: true, resumed: true });
+  assert.deepEqual(cellCaptions(w.wire.saved.get(id).formxml, controlIds(d).map), [[1033, 'Crew map']]);
+});
+
 // The empty caption the platform puts on a tab or section is set aside on EVERY tab and section, an existing dashboard's
 // included: it carries no visible content. Here it appears on an adopted dashboard's existing tab between the send and the
 // proof, and the adoption settles.

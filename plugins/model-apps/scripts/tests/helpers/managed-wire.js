@@ -32,12 +32,15 @@
 //   secondLanguage: <lcid>  an organization with that language provisioned: the saved-layer read carries a caption in it, with
 //                           text of the platform's own, beside a cell's base-language one when the cell carries none in it, and
 //                           the published-layer read never carries one;
+//   iframeCaptionsInBaseLanguageOnly  with secondLanguage, as that organization was measured: a write stores an IFRAME tile's
+//                           cell with its base-language caption only, a sent one in another language dropped, and the saved
+//                           read adds none to it; every other cell keeps what was sent;
 //   rewritingReads: <n>     the first n published-layer reads of a row after a PublishXml that names it answer its cell captions
 //                           as still being rewritten (empty); the read after them is the published row.
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../../vendor/cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../../lib/sdk-http-client.js');
 const { makeTempDir } = require('./temp-dirs.js');
-const { withEmptyContainerCaptions, withSecondLanguageCaptions, withoutLanguage, withRewritingCellCaptions } = require('./platform-labels.js');
+const { withEmptyContainerCaptions, withSecondLanguageCaptions, withIframeCaptionsInBaseLanguageOnly, withoutLanguage, withRewritingCellCaptions } = require('./platform-labels.js');
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const ENTITY_SETS = { systemform: 'systemforms', workflow: 'workflows', savedquery: 'savedqueries' };
@@ -57,7 +60,9 @@ function createManagedWire({ platform = {} } = {}) {
   const json = (statusCode, body, headers = {}) => ({ statusCode, headers, body: body === undefined ? '' : JSON.stringify(body) });
   const notFound = () => json(404, { error: { code: '0x80040217', message: 'Does Not Exist' } });
   const lcid = platform.secondLanguage;
-  const savedRead = (r) => (lcid ? { ...r, formxml: withSecondLanguageCaptions(r.formxml, lcid) } : r);
+  const iframeBaseOnly = !!(lcid && platform.iframeCaptionsInBaseLanguageOnly);
+  const savedRead = (r) => (lcid ? { ...r, formxml: withSecondLanguageCaptions(r.formxml, lcid, { iframeBaseOnly }) } : r);
+  const stored = (body) => (iframeBaseOnly && body && typeof body.formxml === 'string' ? { ...body, formxml: withIframeCaptionsInBaseLanguageOnly(body.formxml) } : body);
   const publishedRead = (id, r) => {
     let out = lcid ? { ...r, formxml: withoutLanguage(r.formxml, lcid) } : r;
     const left = rewriting.get(id) || 0;
@@ -79,7 +84,7 @@ function createManagedWire({ platform = {} } = {}) {
     if (m && method === 'GET') { const id = m[1].toLowerCase(); const r = published.get(id); return r ? json(200, { ...publishedRead(id, r), '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound(); }
     if (m && method === 'PATCH') {
       const id = m[1].toLowerCase();
-      saved.set(id, { ...saved.get(id), ...body, formid: id });
+      saved.set(id, { ...saved.get(id), ...stored(body), formid: id });
       bump(id);
       return json(204, undefined, { etag: versions.get(id) });
     }
@@ -87,7 +92,7 @@ function createManagedWire({ platform = {} } = {}) {
       // A create names its own formid. A second create of an id that exists fails on the primary key and changes nothing.
       const id = String(body && body.formid).toLowerCase();
       if (saved.has(id) || published.has(id)) return json(412, { error: { code: '0x80040237', message: 'Cannot insert duplicate key.' } });
-      saved.set(id, { description: null, ...body, formid: id, ...(platform.emptyContainerCaptions ? { formxml: withEmptyContainerCaptions(body && body.formxml) } : {}) });
+      saved.set(id, { description: null, ...stored(body), formid: id, ...(platform.emptyContainerCaptions ? { formxml: withEmptyContainerCaptions(stored(body) && stored(body).formxml) } : {}) });
       bump(id);
       return json(204, undefined, { etag: versions.get(id), 'odata-entityid': `${ORIGIN}/api/data/v9.0/systemforms(${id})` });
     }
