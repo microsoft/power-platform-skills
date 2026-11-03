@@ -166,7 +166,7 @@ test('help and cancellation use stderr and stable exit codes', async t => {
   const f = await setup(t);
   assert.equal(await run(['--help'], f), 0); assert.equal(await run([], f), 2);
   assert.equal(await run(['serve', '--profile', 'sample'], { ...f, signal: AbortSignal.abort() }), 130);
-  assert.match(f.err, /Node.js 22\/24/); assert.equal(f.out, '');
+  assert.match(f.err, /Node\.js 22\+/); assert.equal(f.out, '');
 });
 
 test('claims challenge reports the policy problem without persisting it or starting sign-in', async t => {

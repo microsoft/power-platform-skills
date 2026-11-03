@@ -33,6 +33,21 @@ test('public plugin identity and lockfile match the marketplace entry', async ()
   }
 });
 
+test('Node.js engine metadata and setup guidance use an open-ended minimum', async () => {
+  const manifest = await json(path.join(root, 'package.json'));
+  const lock = await json(path.join(root, 'package-lock.json'));
+  assert.deepEqual(manifest.engines, { node: '>=22' });
+  assert.deepEqual(lock.packages[''].engines, manifest.engines);
+  for (const file of ['README.md', 'AGENTS.md', 'skills/setup/SKILL.md',
+    'references/development.md', '../../README.md']) {
+    const text = await fs.readFile(path.join(root, file), 'utf8');
+    assert.match(text, /Node\.js 22\+/);
+    assert.doesNotMatch(text, /Node\.js 22(?:\/24| or 24 LTS)/);
+  }
+  const build = await fs.readFile(path.join(root, 'scripts', 'build.mjs'), 'utf8');
+  assert.match(build, /target: 'node22'/);
+});
+
 test('plugin CI is path-filtered, read-only and runs the local build and test entrypoints', async () => {
   const manifest = await json(path.join(root, 'package.json'));
   assert.equal(manifest.scripts.test, 'node scripts/test.mjs');
@@ -62,7 +77,7 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   assert.match(workflow, /runs-on: \$\{\{ matrix\.os \}\}/);
   assert.match(workflow, /node-version: \$\{\{ matrix\.node \}\}/);
   assert.match(workflow, /os:\n\s+- ubuntu-latest\n\s+- windows-latest\n\s+- macos-latest\n/);
-  assert.match(workflow, /node:\n\s+- 22\n\s+- 24\n/);
+  assert.match(workflow, /node:\n\s+- 22\n\s+- 24\n\s+- 26\n/);
   assert.match(workflow, /timeout-minutes: 15/);
   assert.match(workflow, /working-directory: plugins\/process-intelligence/);
   assert.match(workflow, /shell: bash/);

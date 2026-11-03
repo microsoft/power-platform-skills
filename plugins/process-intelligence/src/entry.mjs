@@ -25,9 +25,9 @@ export function launch(args = process.argv.slice(2), dependencies = {}) {
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
     try {
-      if (![22, 24].includes(Number(process.versions.node.split('.')[0]))) {
+      if (!(Number(process.versions.node.split('.')[0]) >= 22)) {
         console.error(
-          'Process Intelligence requires supported Node.js 22 or 24 LTS. Install it explicitly.'
+          'Process Intelligence requires Node.js 22 or later. Install a maintained LTS release explicitly.'
         );
         process.exitCode = 1;
         return 1;
