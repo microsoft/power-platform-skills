@@ -29,9 +29,9 @@ const COPILOT_APP_URL = 'https://github.com/features/ai/github-app';
 // `short` is the visible label in tight pickers; the accessible name still starts with the
 // full name, so the visible text stays part of it (WCAG 2.5.3).
 const ASSISTANTS = [
-  { id: 'claude-code', label: 'Claude Code', prefix: '', short: 'Claude Code' },
   { id: 'copilot-app', label: 'GitHub Copilot app', prefix: 'GitHub ', short: 'Copilot app' },
   { id: 'copilot-cli', label: 'GitHub Copilot CLI', prefix: 'GitHub ', short: 'Copilot CLI' },
+  { id: 'claude-code', label: 'Claude Code', prefix: '', short: 'Claude Code' },
 ];
 
 const AUDIENCE_LABELS = {
@@ -259,9 +259,9 @@ function pluginRow(plugin, root) {
           <p class="plugin-meta"><span>For ${escapeHtml(audienceLabel(plugin).toLowerCase())}</span>${statusBadge(plugin)}</p>
         </div>
         <div class="plugin-actions">
-          <a class="button button-primary" data-for="claude-code" href="${escapeAttr(links.launcherUrl(root, 'claude-code', plugin.name))}">Install in Claude Code${forPlugin}</a>
           <a class="button button-primary" data-for="copilot-app" href="${escapeAttr(links.copilotAppInstallUrl(plugin.name))}">Install in Copilot app${forPlugin}</a>
           <a class="button button-primary" data-for="copilot-cli" href="${escapeAttr(page)}#install" data-copy="${escapeAttr(`${cliAdd}\n${cliInstall}`)}" data-label="Copy install commands"><span data-button-label>Copy install commands</span>${forPlugin}</a>
+          <a class="button button-primary" data-for="claude-code" href="${escapeAttr(links.launcherUrl(root, 'claude-code', plugin.name))}">Install in Claude Code${forPlugin}</a>
           <a class="text-link" href="${escapeAttr(page)}">Details<span class="sr-only"> about ${escapeHtml(plugin.title)}</span></a>
         </div>
       </li>`;
@@ -336,7 +336,7 @@ function heroSection(catalog, scenarios) {
       <ul class="proof-list">
         <li>${icon('badge')}<span>Built by Microsoft</span></li>
         <li>${icon('code')}<span>Free and open source</span></li>
-        <li>${icon('plug')}<span>${catalog.plugins.length} plugins for Claude Code and GitHub Copilot</span></li>
+        <li>${icon('plug')}<span>${catalog.plugins.length} plugins for GitHub Copilot and Claude Code</span></li>
       </ul>
     </div>
     ${sessionWindow(scenarios)}
@@ -402,11 +402,11 @@ function pluginsSection(catalog, root) {
       <p><strong>First time in the Copilot app?</strong> Add the Power Platform marketplace before you install a plugin. You only do this once.</p>
       <a class="button button-secondary button-small" href="${escapeAttr(links.copilotAppMarketplaceUrl())}">Add the marketplace</a>
     </div>
-    <div class="callout" data-for="claude-code">
-      <p>Each button opens a terminal with the install command already typed. Press Enter to install. Clicking does nothing yet? Open Claude Code once and send any message, then try again.</p>
-    </div>
     <div class="callout" data-for="copilot-cli">
       <p>Copilot CLI can't be opened from a link. Each button copies two commands. Paste them into a terminal and press Enter.</p>
+    </div>
+    <div class="callout" data-for="claude-code">
+      <p>Each button opens a terminal with the install command already typed. Press Enter to install. Clicking does nothing yet? Open Claude Code once and send any message, then try again.</p>
     </div>
   ${groups}
   </div>
@@ -435,8 +435,8 @@ function installEverythingSection() {
   <div class="wrap install-grid">
     <div class="install-copy">
       <h2 id="install-all-title">Install everything at once</h2>
-      <p>One command installs every plugin into Claude Code and GitHub Copilot CLI, whichever you have. It also installs the Power Platform CLI if it is missing, and turns on automatic updates.</p>
-      <p>You need <a href="https://nodejs.org/en/download">Node.js</a> and at least one of <a href="${CLAUDE_CODE_URL}">Claude Code</a> or <a href="${COPILOT_CLI_URL}">GitHub Copilot CLI</a>.</p>
+      <p>One command installs every plugin into GitHub Copilot CLI and Claude Code, whichever you have. It also installs the Power Platform CLI if it is missing, and turns on automatic updates.</p>
+      <p>You need <a href="https://nodejs.org/en/download">Node.js</a> and at least one of <a href="${COPILOT_CLI_URL}">GitHub Copilot CLI</a> or <a href="${CLAUDE_CODE_URL}">Claude Code</a>.</p>
       <p class="fine-print">The Dataverse plugin is left out by default. To include it, use the commands under Include Dataverse.</p>
     </div>
     <div class="terminal">
@@ -465,7 +465,7 @@ function faqSection(catalog) {
   <div class="wrap faq-grid">
     <div>
       <h2 id="faq-title">Questions</h2>
-      <p>Before you start, you need an AI assistant (<a href="${CLAUDE_CODE_URL}">Claude Code</a>, the <a href="${COPILOT_APP_URL}">GitHub Copilot app</a>, or <a href="${COPILOT_CLI_URL}">GitHub Copilot CLI</a>) and a Power Platform environment you can build in.</p>
+      <p>Before you start, you need an AI assistant (the <a href="${COPILOT_APP_URL}">GitHub Copilot app</a>, <a href="${COPILOT_CLI_URL}">GitHub Copilot CLI</a>, or <a href="${CLAUDE_CODE_URL}">Claude Code</a>) and a Power Platform environment you can build in.</p>
     </div>
     <div class="faq-list">
     ${items}
@@ -514,13 +514,6 @@ function installPanel(plugin, root) {
   return `<section class="install-panel assistant-scope" id="install" aria-labelledby="install-title">
       <h2 id="install-title">Install ${escapeHtml(plugin.title)}</h2>
       ${assistantPicker('plugin', 'Your AI assistant')}
-      <div class="install-option" data-for="claude-code">
-        <p>Opens a terminal with the install command already typed. Press Enter to install.</p>
-        <a class="button button-primary button-block" href="${escapeAttr(links.launcherUrl(root, 'claude-code', plugin.name))}">Install in Claude Code</a>
-        <p class="fine-print">Prefer to type it? Run this in a terminal:</p>
-        ${codeBlock(links.claudeCodeShellCommand(plugin.name), 'Copy command')}
-        <p class="fine-print">The Claude desktop app's Code tab and the Claude Code extension for VS Code use the same plugins.</p>
-      </div>
       <div class="install-option" data-for="copilot-app">
         <ol class="install-steps">
           <li><p>Add the Power Platform marketplace. You only do this once.</p><a class="button button-secondary button-block" href="${escapeAttr(links.copilotAppMarketplaceUrl())}">Add the marketplace</a></li>
@@ -532,6 +525,13 @@ function installPanel(plugin, root) {
         <p>Paste these into a terminal and press Enter.</p>
         ${codeBlock(`${cliAdd}\n${cliInstall}`, 'Copy commands')}
         <p class="fine-print">VS Code also picks up plugins you install with Copilot CLI.</p>
+      </div>
+      <div class="install-option" data-for="claude-code">
+        <p>Opens a terminal with the install command already typed. Press Enter to install.</p>
+        <a class="button button-primary button-block" href="${escapeAttr(links.launcherUrl(root, 'claude-code', plugin.name))}">Install in Claude Code</a>
+        <p class="fine-print">Prefer to type it? Run this in a terminal:</p>
+        ${codeBlock(links.claudeCodeShellCommand(plugin.name), 'Copy command')}
+        <p class="fine-print">The Claude desktop app's Code tab and the Claude Code extension for VS Code use the same plugins.</p>
       </div>
     </section>`;
 }
