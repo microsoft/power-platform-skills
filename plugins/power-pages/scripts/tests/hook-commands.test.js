@@ -118,7 +118,9 @@ for (const runner of runners) {
         const output = JSON.parse(result.stdout);
         assert.equal(output.file, hook.file);
         assert.equal(output.input, INPUT);
-        assert.equal(fs.realpathSync(output.cwd), fs.realpathSync(directory));
+        // Windows TEMP may use RUNNER~1 while PowerShell expands it to runneradmin.
+        // Native realpath resolves 8.3 aliases so this checks directory identity.
+        assert.equal(fs.realpathSync.native(output.cwd), fs.realpathSync.native(directory));
       }
     }
   });
