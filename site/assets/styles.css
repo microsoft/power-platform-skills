@@ -1004,11 +1004,12 @@ code {
   color: var(--color-text-muted);
 }
 
+/* Above the window, so only the window itself crosses into the next section. */
 .scenario-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin-top: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .scenario-tabs[hidden] {
@@ -1248,6 +1249,10 @@ code {
   --shown: block;
 }
 
+.os-option[data-os] {
+  --shown: block;
+}
+
 @supports selector(:has(*)) {
   .assistant-scope [data-for] {
     display: none;
@@ -1256,6 +1261,16 @@ code {
   .assistant-scope:has(input[value="claude-code"]:checked) [data-for="claude-code"],
   .assistant-scope:has(input[value="copilot-app"]:checked) [data-for="copilot-app"],
   .assistant-scope:has(input[value="copilot-cli"]:checked) [data-for="copilot-cli"] {
+    display: var(--shown, block);
+  }
+
+  .os-scope [data-os] {
+    display: none;
+  }
+
+  .os-scope:has(input[value="windows"]:checked) [data-os="windows"],
+  .os-scope:has(input[value="macos"]:checked) [data-os="macos"],
+  .os-scope:has(input[value="linux"]:checked) [data-os="linux"] {
     display: var(--shown, block);
   }
 }
@@ -1532,6 +1547,60 @@ code {
   outline-color: #7cc8f2;
 }
 
+/* The segmented picker, restyled for the inverted band. */
+.install-all .picker-options {
+  background: rgb(255 255 255 / 0.06);
+  border-color: rgb(255 255 255 / 0.16);
+}
+
+.install-all .picker-option > span {
+  color: var(--color-on-ink-muted);
+}
+
+.install-all .picker-option input:hover + span {
+  color: var(--color-on-ink);
+}
+
+.install-all .picker-option input:checked + span {
+  background: rgb(255 255 255 / 0.12);
+  color: var(--color-on-ink);
+  box-shadow: inset 0 0 0 1.5px #45d3bd;
+}
+
+.os-picker {
+  margin-bottom: var(--space-3);
+}
+
+.os-hint {
+  margin: 0 0 var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--color-on-ink-muted);
+}
+
+.os-steps {
+  margin: 0;
+  padding-left: 1.4rem;
+}
+
+.os-steps li {
+  margin-bottom: var(--space-4);
+  padding-left: var(--space-1);
+}
+
+.os-steps li::marker {
+  font-family: var(--font-display);
+  font-weight: 800;
+  color: #45d3bd;
+}
+
+.os-steps strong {
+  color: var(--color-on-ink);
+}
+
+.os-steps .code-block {
+  margin-top: var(--space-3);
+}
+
 .dataverse-commands {
   margin-top: var(--space-6);
   padding-top: var(--space-4);
@@ -1634,6 +1703,22 @@ code {
   margin: 0;
   font-size: var(--text-lg);
   max-width: 32em;
+}
+
+.final-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.button-ink-outline {
+  background: transparent;
+  border-color: var(--color-ink);
+  color: var(--color-ink);
+}
+
+.button-ink-outline:hover {
+  background: rgb(7 26 40 / 0.08);
 }
 
 .final-cta :focus-visible {

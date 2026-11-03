@@ -112,6 +112,34 @@ test('the copied Copilot CLI command is one line that installs even when the mar
   }
 });
 
+test('detectOs picks the computer from what each browser reports', () => {
+  const cases = [
+    ['Chrome on Windows', { userAgentData: { platform: 'Windows', mobile: false }, platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0' }, 'windows'],
+    ['Firefox on Windows', { platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Firefox/132.0' }, 'windows'],
+    ['Edge on macOS', { userAgentData: { platform: 'macOS', mobile: false }, platform: 'MacIntel', maxTouchPoints: 0, userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Edg/131.0' }, 'macos'],
+    ['Safari on macOS', { platform: 'MacIntel', maxTouchPoints: 0, userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15' }, 'macos'],
+    ['Firefox on Linux', { platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Firefox/132.0' }, 'linux'],
+    ['Chrome on ChromeOS', { userAgentData: { platform: 'Chrome OS', mobile: false }, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) Chrome/131.0' }, 'linux'],
+    ['Safari on iPad, which reports a Mac', { platform: 'MacIntel', maxTouchPoints: 5, userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/18.0 Safari/605.1.15' }, null],
+    ['Safari on iPhone', { platform: 'iPhone', maxTouchPoints: 5, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148' }, null],
+    ['Chrome on Android', { userAgentData: { platform: 'Android', mobile: true }, platform: 'Linux armv81', userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/131.0 Mobile' }, null],
+    ['an unknown browser', { platform: '', userAgent: '' }, null],
+    ['no navigator', undefined, null],
+  ];
+  for (const [label, nav, expected] of cases) {
+    assert.equal(links.detectOs(nav), expected, label);
+  }
+});
+
+test('each computer gets the install command that works there', () => {
+  assert.equal(links.installAllCommand('windows'), links.INSTALL_ALL.windows);
+  assert.equal(links.installAllCommand('macos'), links.INSTALL_ALL.unix);
+  assert.equal(links.installAllCommand('linux'), links.INSTALL_ALL.unix);
+  assert.equal(links.installAllCommand('windows', { dataverse: true }), links.INSTALL_ALL_WITH_DATAVERSE.windows);
+  assert.equal(links.installAllCommand('linux', { dataverse: true }), links.INSTALL_ALL_WITH_DATAVERSE.unix);
+  assert.throws(() => links.installAllCommand('android'), /Unknown operating system/);
+});
+
 test('launcher URLs accept only known apps and keep the base the caller passes', () => {
   assert.equal(links.launcherUrl('../../', 'claude-code', 'pcf'), '../../install/?app=claude-code&plugin=pcf');
   assert.equal(
@@ -291,6 +319,24 @@ test('every page loads only same-origin assets under a strict content security p
       }
     }
     assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)(?![^>]*type="application\/json")[^>]*>/, `${file} has an inline script`);
+  }
+});
+
+test('the home page leads with Install everything and shows steps for each computer', () => {
+  const outDir = path.join(tempDir('pps-site-out-'), 'dist');
+  build({ outDir, basePath: '/power-platform-skills/' });
+  const html = readOut(outDir, 'index.html');
+  const hero = html.slice(html.indexOf('class="hero-actions"'), html.indexOf('class="proof-list"'));
+  assert.match(hero, /button-primary[^>]*href="#install-everything">Install everything</);
+  assert.match(hero, /button-secondary[^>]*href="#plugins">Choose a plugin</);
+  assert.match(html, /nav-cta" href="#install-everything">Install everything</);
+  assert.ok(html.indexOf('id="install-everything"') < html.indexOf('id="plugins"'), 'install section should come before the catalog');
+  for (const os of links.OPERATING_SYSTEMS) {
+    const start = html.indexOf(`data-os="${os}"`);
+    assert.ok(start > -1, os);
+    const panel = html.slice(start, html.indexOf('</details>', start));
+    assert.ok(panel.includes(`data-copy="${links.installAllCommand(os).replace(/&/g, '&amp;')}"`), `${os} command`);
+    assert.ok(panel.includes(`data-copy="${links.installAllCommand(os, { dataverse: true }).replace(/&/g, '&amp;')}"`), `${os} Dataverse command`);
   }
 });
 

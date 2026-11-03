@@ -6,7 +6,8 @@
 // Design brief (see plugins/power-pages/references/design-aesthetics.md for the method):
 // - Audience and job: Power Platform makers, partners, and developers who want an AI assistant
 //   to build for them. They come to find the plugin for their goal and install it.
-// - Primary action: "Choose a plugin". Secondary: "Install everything".
+// - Primary action: "Install everything" (one command, picked for the visitor's computer).
+//   Secondary: "Choose a plugin".
 // - Principal doubt: "Will an AI agent build this correctly, and is it safe in my environment?"
 // - Proof: it is Microsoft's, open source, and the assistant asks before it acts; the hero
 //   session shows the real steps a plugin takes, including where it stops for approval.
@@ -112,7 +113,7 @@ function siteHeader(root) {
         <li><a href="${escapeAttr(root)}#questions">Questions</a></li>
         <li><a href="${REPO_URL}">GitHub</a></li>
       </ul>
-      <a class="button button-primary button-small nav-cta" href="${escapeAttr(root)}#plugins">Choose a plugin</a>
+      <a class="button button-primary button-small nav-cta" href="${escapeAttr(root)}#install-everything">Install everything</a>
       <div class="nav-theme"><span class="nav-theme-label" aria-hidden="true">Theme</span>${themeSwitch()}</div>
     </nav>
     <div class="header-tools">
@@ -149,7 +150,8 @@ function siteFooter(root) {
 function layout({ title, description, root, body, scripts = [], data = null }) {
   const pageTitle = title ? `${title} | Power Platform Skills` : 'Power Platform Skills: AI assistant plugins for Power Platform';
   const dataBlock = data ? `\n<script type="application/json" id="page-data">${jsonForScript(data)}</script>` : '';
-  const scriptTags = ['assets/site.js', ...scripts].map((src) => `\n<script src="${escapeAttr(root + src)}" defer></script>`).join('');
+  // install-links.js is shared by the build and the browser; site.js uses its detectOs().
+  const scriptTags = ['assets/install-links.js', 'assets/site.js', ...scripts].map((src) => `\n<script src="${escapeAttr(root + src)}" defer></script>`).join('');
   // The site loads nothing from other origins, so the policy only allows its own files.
   // GitHub Pages cannot send response headers, which is why this is a meta tag.
   // Fonts are self-hosted for the same reason, and so visitors' addresses go to no font CDN.
@@ -297,6 +299,7 @@ function sessionWindow(scenarios) {
   if (first.waiting) steps.push(sessionStep(first.waiting, 'waiting'));
   const tabs = scenarios.map((scenario, index) => `<button type="button" role="tab" class="scenario-tab" id="scenario-tab-${index}" aria-controls="session-panel" aria-selected="${index === 0}" tabindex="${index === 0 ? 0 : -1}" data-scenario="${index}">${escapeHtml(scenario.title)}</button>`).join('');
   return `<div class="hero-visual">
+      <div class="scenario-tabs" role="tablist" aria-label="Example requests" data-scenario-tabs hidden>${tabs}</div>
       <figure class="session" data-session>
         <div class="session-bar">
           <span>Example session in your AI assistant</span>
@@ -316,7 +319,6 @@ function sessionWindow(scenarios) {
         </div>
         <figcaption class="session-caption">An example of the steps a plugin takes. <a data-session-link href="${escapeAttr(first.href)}">See the ${escapeHtml(first.title)} plugin</a></figcaption>
       </figure>
-      <div class="scenario-tabs" role="tablist" aria-label="Example requests" data-scenario-tabs hidden>${tabs}</div>
       <template id="icon-done">${icon('check', 'icon step-icon')}</template>
       <template id="icon-waiting">${icon('waiting', 'icon step-icon')}</template>
     </div>`;
@@ -329,8 +331,8 @@ function heroSection(catalog, scenarios) {
       <h1 id="hero-title">Build on Power Platform by describing what you need</h1>
       <p class="lede">Free plugins from Microsoft teach GitHub Copilot and Claude Code to create Power Pages sites, Power Apps, and Power Automate flows, and to publish them to your environment.</p>
       <div class="hero-actions">
-        <a class="button button-primary button-large" href="#plugins">Choose a plugin</a>
-        <a class="button button-secondary button-large" href="#install-everything">Install everything</a>
+        <a class="button button-primary button-large" href="#install-everything">Install everything</a>
+        <a class="button button-secondary button-large" href="#plugins">Choose a plugin</a>
       </div>
       <ul class="proof-list">
         <li>${icon('badge')}<span>Built by Microsoft</span></li>
@@ -429,27 +431,51 @@ function controlSection() {
 </section>`;
 }
 
+// How to open a terminal on each computer, in the words a non-developer would use.
+const OS_STEPS = {
+  windows: { label: 'Windows', open: 'Open PowerShell', how: 'Press the Windows key, type PowerShell, and press Enter.' },
+  macos: { label: 'macOS', open: 'Open Terminal', how: 'Press Command and Space, type Terminal, and press Return.' },
+  linux: { label: 'Linux', open: 'Open a terminal', how: 'Use your terminal app. On Ubuntu, press Ctrl, Alt, and T.' },
+};
+
+// The visitor picks their computer with radio buttons, styled as a segmented control, and
+// styles.css shows the matching steps with :has(), so switching works without JavaScript.
+// site.js preselects the computer the browser reports (detectOs in install-links.js).
 function installEverythingSection() {
-  return `<section class="install-all" id="install-everything" aria-labelledby="install-all-title">
+  const options = links.OPERATING_SYSTEMS.map((os, index) => `
+          <label class="picker-option">
+            <input type="radio" name="install-os" value="${os}"${index === 0 ? ' checked' : ''}>
+            <span>${escapeHtml(OS_STEPS[os].label)}</span>
+          </label>`).join('');
+  const panels = links.OPERATING_SYSTEMS.map((os) => `<div class="os-option" data-os="${os}">
+        <ol class="os-steps">
+          <li><strong>${escapeHtml(OS_STEPS[os].open)}.</strong> ${escapeHtml(OS_STEPS[os].how)}</li>
+          <li><strong>Paste this command and press ${os === 'macos' ? 'Return' : 'Enter'}.</strong>
+            ${codeBlock(links.installAllCommand(os), 'Copy command')}
+          </li>
+        </ol>
+        <details class="dataverse-commands">
+          <summary>Also install the Dataverse plugin</summary>
+          <p>Use this command instead:</p>
+          ${codeBlock(links.installAllCommand(os, { dataverse: true }), 'Copy command')}
+        </details>
+      </div>`).join('\n      ');
+  return `<section class="install-all os-scope" id="install-everything" aria-labelledby="install-all-title">
   <div class="wrap install-grid">
     <div class="install-copy">
       <h2 id="install-all-title">Install everything at once</h2>
       <p>One command installs every plugin into GitHub Copilot CLI and Claude Code, whichever you have. It also installs the Power Platform CLI if it is missing, and turns on automatic updates.</p>
       <p>You need <a href="https://nodejs.org/en/download">Node.js</a> and at least one of <a href="${COPILOT_CLI_URL}">GitHub Copilot CLI</a> or <a href="${CLAUDE_CODE_URL}">Claude Code</a>.</p>
-      <p class="fine-print">The Dataverse plugin is left out by default. To include it, use the commands under Include Dataverse.</p>
+      <p class="fine-print">The Dataverse plugin is left out by default. Each system has a command that includes it.</p>
     </div>
     <div class="terminal">
-      <h3>On Windows, in PowerShell</h3>
-      ${codeBlock(links.INSTALL_ALL.windows, 'Copy command')}
-      <h3>On macOS, Linux, or the Windows Command Prompt</h3>
-      ${codeBlock(links.INSTALL_ALL.unix, 'Copy command')}
-      <details class="dataverse-commands" id="include-dataverse">
-        <summary>Include Dataverse</summary>
-        <h3>On Windows, in PowerShell</h3>
-        ${codeBlock(links.INSTALL_ALL_WITH_DATAVERSE.windows, 'Copy command')}
-        <h3>On macOS, Linux, or the Windows Command Prompt</h3>
-        ${codeBlock(links.INSTALL_ALL_WITH_DATAVERSE.unix, 'Copy command')}
-      </details>
+      <fieldset class="assistant-picker os-picker" data-os-picker>
+        <legend>Your computer</legend>
+        <div class="picker-options">${options}
+        </div>
+      </fieldset>
+      <p class="os-hint" data-os-hint hidden></p>
+      ${panels}
     </div>
   </div>
 </section>`;
@@ -478,10 +504,13 @@ function finalSection() {
   return `<section class="final-cta" aria-labelledby="final-title">
   <div class="wrap final-grid">
     <div>
-      <h2 id="final-title">Pick a plugin and ask your first question</h2>
-      <p>Start with the goal you care about most. You can add more plugins at any time.</p>
+      <h2 id="final-title">Install the plugins and ask your first question</h2>
+      <p>One command sets up every plugin. Or start with the one plugin for the goal you care about most.</p>
     </div>
-    <a class="button button-ink button-large" href="#plugins">Choose a plugin</a>
+    <div class="final-actions">
+      <a class="button button-ink button-large" href="#install-everything">Install everything</a>
+      <a class="button button-ink-outline button-large" href="#plugins">Choose a plugin</a>
+    </div>
   </div>
 </section>`;
 }
@@ -496,9 +525,9 @@ function renderHome(catalog) {
     body: [
       heroSection(catalog, scenarios),
       howSection(),
+      installEverythingSection(),
       pluginsSection(catalog, root),
       controlSection(),
-      installEverythingSection(),
       faqSection(catalog),
       finalSection(),
     ].join('\n'),
@@ -675,7 +704,7 @@ function renderLauncher(catalog) {
     description: 'Open Claude Code with a Power Platform Skills plugin ready to install.',
     root,
     body,
-    scripts: ['assets/install-links.js', 'assets/launcher.js'],
+    scripts: ['assets/launcher.js'],
     data,
   });
 }

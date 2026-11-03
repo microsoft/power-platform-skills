@@ -130,6 +130,40 @@
     unix: 'curl -fsSL ' + INSTALLER_URL + ' | node - --include-dataverse',
   };
 
+  // Computers the site has install steps for. macOS and Linux share the curl one-liner; only
+  // how you open a terminal differs.
+  const OPERATING_SYSTEMS = ['windows', 'macos', 'linux'];
+
+  function installAllCommand(os, options) {
+    const commands = options && options.dataverse ? INSTALL_ALL_WITH_DATAVERSE : INSTALL_ALL;
+    if (OPERATING_SYSTEMS.indexOf(os) === -1) throw new Error('Unknown operating system: ' + JSON.stringify(os));
+    return os === 'windows' ? commands.windows : commands.unix;
+  }
+
+  // Guesses the visitor's computer from what the browser reports, so the site can show the one
+  // install command that fits. Returns null for phones and tablets (the assistant runs on a
+  // computer) and when nothing matches; the page then asks the visitor to choose.
+  // Inputs, as browsers report them:
+  //   userAgentData.platform  "Windows" | "macOS" | "Linux" | "Chrome OS" | "Android" (Chromium only)
+  //   userAgentData.mobile    true on phones (Chromium only)
+  //   platform                "Win32" | "MacIntel" | "Linux x86_64" | "iPhone" | "iPad" (deprecated, still set)
+  //   userAgent               "... (Windows NT 10.0; Win64; x64) ..." | "... (Macintosh; Intel Mac OS X 10_15_7) ..."
+  //                           | "... (X11; Linux x86_64) ..." | "... (Linux; Android 14; ...) ..."
+  //   maxTouchPoints          iPadOS 13+ reports "MacIntel" like a Mac, but with touch points above 1
+  function detectOs(nav) {
+    const data = (nav && nav.userAgentData) || {};
+    const platform = String(data.platform || (nav && nav.platform) || '');
+    const agent = String((nav && nav.userAgent) || '');
+    if (data.mobile || /android|iphone|ipad|ipod/i.test(platform + ' ' + agent)) return null;
+    if (/^win/i.test(platform) || /windows nt/i.test(agent)) return 'windows';
+    if (/mac/i.test(platform) || /macintosh/i.test(agent)) {
+      return nav && nav.maxTouchPoints > 1 ? null : 'macos';
+    }
+    // Chrome OS runs the commands in its Linux development environment.
+    if (/linux|chrome os|cros|x11/i.test(platform + ' ' + agent)) return 'linux';
+    return null;
+  }
+
   return {
     REPO: REPO,
     MARKETPLACE: MARKETPLACE,
@@ -138,6 +172,9 @@
     LAUNCHER_APPS: LAUNCHER_APPS,
     INSTALL_ALL: INSTALL_ALL,
     INSTALL_ALL_WITH_DATAVERSE: INSTALL_ALL_WITH_DATAVERSE,
+    OPERATING_SYSTEMS: OPERATING_SYSTEMS,
+    installAllCommand: installAllCommand,
+    detectOs: detectOs,
     isValidPluginName: isValidPluginName,
     claudeCodePrompt: claudeCodePrompt,
     claudeCodeShellCommand: claudeCodeShellCommand,

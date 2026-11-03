@@ -173,6 +173,24 @@
     });
   });
 
+  // ── Install everything: pick the visitor's computer ─────────
+  // Preselects the computer the browser reports, so most visitors see one command and two
+  // steps. They can still pick another; styles.css swaps the steps with :has().
+  const osPicker = document.querySelector('[data-os-picker]');
+  const osHint = document.querySelector('[data-os-hint]');
+  const installLinks = window.PowerPlatformSkillsInstallLinks;
+  if (osPicker && osHint && installLinks) {
+    const detected = installLinks.detectOs(window.navigator);
+    const input = detected && osPicker.querySelector(`input[value="${detected}"]`);
+    if (input) {
+      input.checked = true;
+      osHint.textContent = `Showing the steps for ${input.parentElement.textContent.trim()}, based on your browser. On a different computer? Pick it above.`;
+    } else {
+      osHint.textContent = 'Run this on the computer where you use your AI assistant. Pick its system above.';
+    }
+    osHint.hidden = false;
+  }
+
   // ── Hero session (the signature moment) ─────────────────────
   // The server renders the first example finished. With motion allowed, this replays it: the
   // request types in, the plugin answers, and each step lands in order, ending on the point
