@@ -27,7 +27,7 @@ Bundled SDK: commit 0eef55f8c2d0. Full notes: [2.21.0 release notes](docs/releas
 
 ### Known limitations
 
-- Saved form/dashboard layers miss mid-write Maker edits; publish checks skip some captions; `publication-risk:` approvals are start-only (rerun to publish).
+- Saved form/dashboard layers miss mid-write Maker edits; publish checks skip some captions; `publication-risk:` approvals are start-only (then rerun without the key).
 - Managed downloads omit `securityRoles` flows and forms lacking handler libraries; views, charts, profiles, configuration are not downloaded.
 - Local-copy recovery: printed `overwrite:` keys, else manual ([schema](references/app-spec-schema-advanced.md)). Metadata lag may need reruns. Keyed commands, `forms[].genPages` refused.
 
