@@ -100,7 +100,6 @@ function loadExplainer() {
     throw new Error(`site/explainer/Descriptions.txt has ${shown.length} paragraphs; the narration has ${spoken.length}.`);
   }
   return {
-    seconds: Math.round(timeline.duration),
     transcript: spoken.map((sentences, index) => ({ spoken: sentences.join(' '), shown: shown[index] })),
   };
 }

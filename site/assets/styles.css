@@ -1708,21 +1708,11 @@ kbd {
 }
 
 .explainer-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-1) var(--space-4);
   margin-bottom: var(--space-4);
 }
 
 .explainer-head h3 {
   margin: 0;
-}
-
-.explainer-meta {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
 }
 
 /* The film is dark in both themes, so the frame is the film's own navy: no flash of white

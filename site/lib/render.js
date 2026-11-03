@@ -517,7 +517,6 @@ function explainerFigure(explainer) {
   return `<figure class="explainer">
         <figcaption class="explainer-head">
           <h3 id="explainer-title">What are plugins and skills?</h3>
-          <span class="explainer-meta">${explainer.seconds}-second video with captions</span>
         </figcaption>
         <div class="explainer-player" data-explainer>
           <video class="explainer-video" controls preload="none" width="1920" height="1080" poster="assets/video/plugins-and-skills-poster.webp" aria-labelledby="explainer-title">
