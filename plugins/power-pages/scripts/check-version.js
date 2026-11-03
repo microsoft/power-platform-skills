@@ -91,15 +91,21 @@ function readJsonFromGit(ref, relativePaths) {
   return null;
 }
 
-module.exports = { compareSemver, formatUpdateMessage, readMarketplaceName };
+/**
+ * Read this plugin's manifest: the Open Plugins file first, then its legacy
+ * .claude-plugin mirror (installs may carry either). Returns null when neither exists.
+ */
+function readPluginManifest(pluginRoot = path.resolve(__dirname, '..')) {
+  return readFirstJson(pluginRoot, PLUGIN_MANIFEST_PATHS);
+}
+
+module.exports = { compareSemver, formatUpdateMessage, readMarketplaceName, readPluginManifest };
 
 if (require.main === module) {
   try {
     const pluginRoot = path.resolve(__dirname, '..');
-    const pluginJsonPath = firstExistingPath(pluginRoot, PLUGIN_MANIFEST_PATHS);
-    if (!pluginJsonPath) process.exit(0);
-
-    const localPlugin = JSON.parse(fs.readFileSync(pluginJsonPath, 'utf8'));
+    const localPlugin = readPluginManifest(pluginRoot);
+    if (!localPlugin) process.exit(0);
     const localVersion = localPlugin.version;
     if (!localVersion) process.exit(0);
 
