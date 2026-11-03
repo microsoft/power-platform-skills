@@ -165,8 +165,10 @@ function captionSetsOf(xml) {
  * base one), sets nothing aside the other read lacks, so its publish stays unconfirmed: fail closed, as before.
  *
  * This is the PUBLICATION VIEW — the saved layer as the saved/published comparison sees it (the layer readers' savedSha256 and a managed group's
- * `publication.desiredSha256`) — and nothing else. It never certifies content: the proof that a saved row is what a build sent holds the row as read,
- * so a caption with text that this sets aside (a maker's tab caption in 3082 or 1036, say) still fails that proof.
+ * `publication.desiredSha256`) — and nothing else. It certifies no content, and no proof is made of it. A declared DASHBOARD's proof that its saved
+ * row is what the build sent (dashboard-reconcile.js proveDashboard) holds the row as read, every caption in every language, so a caption with text
+ * this sets aside (a maker's caption in 3082 or 1036, say) still fails it. That is the dashboard's proof, and no claim about forms: what a declared
+ * form's read-back compares is its own (form-layout-reconcile.js), and a Maker edit made to a form while it is being written is a known limitation.
  *
  *   comparableSavedFormXml('<form>…<labels><label description="Name" languagecode="1033" /><label description="Nombre" languagecode="3082" /></labels>…'
  *                          + '<labels><label description="Code" languagecode="1033" /></labels>…</form>',
@@ -180,26 +182,6 @@ function captionSetsOf(xml) {
 function comparableSavedFormXml(saved, published) {
   const { own, kept } = captionsKeptOf(saved, published);
   return own ? withoutCaptionsOutside(saved, own.captions, kept) : saved;
-}
-
-/**
- * The languages comparableSavedFormXml sets aside of `saved` against `published` (LCIDs as normalizeLanguageCode answers them), or an empty set when it
- * sets nothing aside. This is the PUBLICATION VIEW only — which captions the saved/published comparison cannot see. It is not a rule about which
- * captions are content: a proof that holds a saved row to what a build sent must not drop a caption because its language is in this set (see
- * dashboard-reconcile.js, isPlatformTileTranslation, for the one measured shape a dashboard's proof sets aside).
- *
- * @param {*} saved the saved read's FormXML
- * @param {string|null} published the published read's FormXML, or null when the row has no published layer
- * @returns {Set<number>}
- */
-function languagesSetAside(saved, published) {
-  const { own, kept } = captionsKeptOf(saved, published);
-  const aside = new Set();
-  for (const caption of own ? own.captions : []) {
-    const lcid = languageOf(caption);
-    if (lcid !== null && !kept.has(lcid)) aside.add(lcid);
-  }
-  return aside;
 }
 
 // THE RULE of comparableSavedFormXml: { own, kept } — the saved text's captions (captionSetsOf) and the languages compared — or { own: null } when it
@@ -225,4 +207,4 @@ function captionsKeptOf(saved, published) {
   return { own, kept };
 }
 
-module.exports = { sameFormXmlAcrossLayers, comparableSavedFormXml, languagesSetAside };
+module.exports = { sameFormXmlAcrossLayers, comparableSavedFormXml };

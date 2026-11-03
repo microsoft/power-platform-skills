@@ -854,7 +854,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         // on 1033 while the SDK is already baked at the resolved LCID — the exact split-language
         // build (translated FormXML, English columns) this threading exists to prevent.
         preResolvedLanguageCode: opts.preResolvedLanguageCode,
-        // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
+        // Injected so the pure lib stays free of transport. Consulted for an EXPLICIT language override, and by a declared
+        // dashboard write that creates a tile (each new tile is sent with its caption in every one of these languages).
         provisionedLanguages: deps.provisionedLanguages,
         warn: deps.warn,
         genpage: deps.genpage, // injectable seam for tests (lib/genpage-sdk.js's shape); else made from env
@@ -1951,7 +1952,8 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
         }
       },
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
-      // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
+      // transport; consulted for an EXPLICIT `--language-code` / spec `languageCode`, and by a declared
+      // dashboard write that creates a tile (dashboard-reconcile.js tileCaptionLanguages).
       provisionedLanguages: () => readProvisionedLanguages(env),
     };
     if (changedOnly && opts.apply) {

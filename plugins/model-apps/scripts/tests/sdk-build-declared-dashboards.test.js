@@ -67,7 +67,7 @@ async function build(wire, dir, spec, { sdkDir, ...opts } = {}) {
   let out;
   let err;
   try {
-    out = await runSdkBuild(spec, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: ORIGIN, warn: (w) => warnings.push(String(w)), phases: ['dashboards'], publicationBarrier: barrier, sendObserver, ...opts });
+    out = await runSdkBuild(spec, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: ORIGIN, warn: (w) => warnings.push(String(w)), phases: ['dashboards'], publicationBarrier: barrier, sendObserver, provisionedLanguages: async () => wire.languages(), ...opts });
   } catch (e) {
     err = e;
   }
@@ -174,8 +174,9 @@ test('a declared dashboard is created once, published once by its own id, and a 
 
 // What the platform does to a dashboard's captions on its own (helpers/managed-wire.js `platform`): on create it saves an empty
 // caption on each tab and section sent without one; in an organization with a second language the saved read carries a caption in
-// it on each cell, which the published read never returns; and straight after a publish the published read may answer the cell
-// captions still being rewritten. None of them is a change of the dashboard, so none stops its create or its publish.
+// it on each cell — on a new tile the one the write sent it in that language (dashboard-reconcile.js tileCaptionEdits) — which the
+// published read never returns; and straight after a publish the published read may answer the cell captions still being
+// rewritten. None of them is a change of the dashboard, so none stops its create or its publish.
 test('a declared dashboard settles and its publish is confirmed over the captions the platform writes: empty tab and section captions, a second language, a lagging read-back', async () => {
   await withDashboards(true, async () => {
     const noWait = { sleep: async () => {} };
@@ -207,7 +208,7 @@ test('a declared dashboard settles and its publish is confirmed over the caption
   });
 });
 
-test('in an organization of two languages a tile\u2019s base-language caption changed outside the spec is still drift — only the caption in the language the published read does not return is set aside', async () => {
+test('in an organization of two languages a tile\u2019s base-language caption changed outside the spec is still drift: the second language is set aside only when a publish is checked', async () => {
   await withDashboards(true, async () => {
     const wire = createManagedWire({ platform: { emptyContainerCaptions: true, secondLanguage: 3082 } });
     const dir = makeTempDir('declared-dash-');
@@ -561,7 +562,8 @@ test('the enabled feature through the CLI: the printed typed approval binds the 
       let err;
       try {
         await buildModelApp(spec, { apply: true, env: ORIGIN, workspaceDir: dir, appDir, retryDelayMs: 0, ...extra }, {
-          sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases: ['dashboards'] }), publicationBarrier: barrier, sendObserver, warn: () => {}, log: () => {},
+          sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases: ['dashboards'] }), publicationBarrier: barrier, sendObserver,
+      provisionedLanguages: async () => wire.languages(), warn: () => {}, log: () => {},
           verify: async (s, o) => { verified = await verifySpec(s, read, o); return verified; },
         });
       } catch (e) { err = e; }
@@ -628,6 +630,7 @@ async function cliBuild(wire, appDir, spec, extra = {}) {
   try {
     await buildModelApp(spec, { apply: true, env: ORIGIN, workspaceDir: dir, appDir, retryDelayMs: 0, ...extra }, {
       sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases: ['dashboards'] }), publicationBarrier: barrier, sendObserver,
+      provisionedLanguages: async () => wire.languages(),
       warn: (m) => messages.push(String(m)), log: (m) => messages.push(String(m)),
     });
   } catch (e) { error = e; }
@@ -964,7 +967,7 @@ async function buildWith(wire, dir, spec, { barrier = createPublicationBarrier()
   const mark = wire.log.length;
   let err;
   try {
-    await runSdkBuild(spec, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: ORIGIN, phases: ['dashboards'], publicationBarrier: barrier, sendObserver, ...opts });
+    await runSdkBuild(spec, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: ORIGIN, phases: ['dashboards'], publicationBarrier: barrier, sendObserver, provisionedLanguages: async () => wire.languages(), ...opts });
   } catch (e) { err = e; }
   return { err, barrier, calls: wire.log.slice(mark) };
 }

@@ -29,8 +29,9 @@
 // `platform` turns on what the live platform does to a systemform's captions on its own (helpers/platform-labels.js), each off by
 // default so every other test sees the rows exactly as written:
 //   emptyContainerCaptions  a POST of a systemform saves an empty caption on each tab and section it sent without one;
-//   secondLanguage: <lcid>  an organization with that language provisioned: the saved-layer read carries a caption in it beside a
-//                           cell's base-language one, and the published-layer read never carries one;
+//   secondLanguage: <lcid>  an organization with that language provisioned: the saved-layer read carries a caption in it, with
+//                           text of the platform's own, beside a cell's base-language one when the cell carries none in it, and
+//                           the published-layer read never carries one;
 //   rewritingReads: <n>     the first n published-layer reads of a row after a PublishXml that names it answer its cell captions
 //                           as still being rewritten (empty); the read after them is the published row.
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../../vendor/cds-maker-sdk.cjs');
@@ -165,6 +166,9 @@ function createManagedWire({ platform = {} } = {}) {
     saved,
     published,
     workflows,
+    // The organization's provisioned languages as readProvisionedLanguages (dataverse-auth.js) answers them: the base one, and the
+    // second one when the wire has one. A build's `provisionedLanguages` over this wire answers these.
+    languages: () => (lcid ? [1033, lcid] : [1033]),
     script(match, answer) { scripted.push({ match, answer }); },
     /** Put a systemform row; `publishedToo` makes the published layer equal to it. */
     putForm(row, { publishedToo = false } = {}) {

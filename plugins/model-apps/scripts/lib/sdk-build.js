@@ -8403,6 +8403,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           halt: declaredDashboardStop,
           resolveTile: (tile) => dashboardTileOpts(spec, tile, result),
           toComponent: dashboardComponent,
+          // A tile the settle creates is sent with its caption in every language of the organization, read with this
+          // (readProvisionedLanguages); without it such a send stops before it is made.
+          provisionedLanguages: opts.provisionedLanguages,
           retainedCreationIds: creations.idsOf(dash.name) || [],
           resolvedId,
           // The run's typed approvals: only `dashboard:<key>` (and `dashboard:<key>/<tile>` for one tile's overwrite) approve

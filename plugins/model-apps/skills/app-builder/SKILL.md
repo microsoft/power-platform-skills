@@ -179,7 +179,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
   dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
   `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are
-  kept; a new tile is added after the last row; an unfinished dashboard of the same name is not taken over
+  kept; a new tile is added after the last row; in an environment with more than one language a new tile gets
+  its caption, with the same text, in every language the environment has (if the build cannot read those
+  languages, it stops before it writes the dashboard: `dashboard-languages-unreadable`, so run it again); an
+  unfinished dashboard of the same name is not taken over
   and not deleted; a dashboard this build cannot finish is not published, including by the app publish; and
   Dataverse does not version a dashboard's saved layer, so an edit made in Maker at the instant of the write
   cannot be detected. An existing dashboard is bound only with `--authorize adopt:dashboard:<key>`

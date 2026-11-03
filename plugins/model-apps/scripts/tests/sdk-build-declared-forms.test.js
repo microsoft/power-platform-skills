@@ -1378,7 +1378,8 @@ test('both retirement passes run before any write, the halt names every key, and
       }
       return { status: 204, headers: {}, body: null };
     });
-    assert.equal((await build(org, dir, seeded, { phases: ['forms', 'dashboards'] })).err, undefined);
+    // A dashboard tile is created, so the build reads the organization's languages (one here).
+    assert.equal((await build(org, dir, seeded, { phases: ['forms', 'dashboards'], provisionedLanguages: async () => [1033] })).err, undefined);
     restoreDashboardPublish();
     const store = storeOf(org, dir);
     const order = [];

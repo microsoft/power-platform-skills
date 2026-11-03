@@ -700,13 +700,16 @@ itself, and these do not count as a difference:
   does not stop the build as drift. A caption in a language that both layers return is compared, and so is
   all other content. A form that has a second language on every label, or a published read in more than
   one language (the read of a user whose own language is not the base one), can stay unconfirmed.
-- This rule applies only to the publish check. It does not apply when the build proves that a dashboard
-  it wrote holds what it sent. That proof compares every caption in every language, with two exceptions
-  that the platform adds by itself: the empty caption above, and the caption in the second language that
-  the platform adds to the tiles that this write created. A caption with text that someone adds to a tab,
-  a section or another tile before the proof stops the create (`create-completion-required`). A
-  translation that someone adds to a tile that this write has just created, before the proof, cannot be
-  told from the platform's caption, and is accepted.
+- In an organization with more than one language, the build writes each tile that it adds to a dashboard
+  with its caption in every language of the organization, with the same text. Thus the platform does not
+  add a caption of its own to the new tile. If the build cannot read the languages of the organization, it
+  stops before it writes the dashboard (`dashboard-languages-unreadable`). In an organization with one
+  language, the dashboard that the build writes does not change.
+- The rule about languages applies only to the publish check. It does not apply when the build proves
+  that a dashboard it wrote holds what it sent. That proof compares every caption in every language. The
+  only exception is an empty caption on a tab or a section, on every tab and section of the dashboard. A
+  caption with text that someone adds to a tab, a section or a tile before the proof, in any language,
+  stops the build (`create-completion-required`).
 
 ## forms[].reconcile (optional — declared form layouts)
 

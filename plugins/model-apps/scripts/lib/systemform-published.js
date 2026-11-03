@@ -90,9 +90,10 @@ async function get(client, path, id, layer) {
  * byte for byte. A managed group's publication hash is taken of `savedCompared` (systemFormLayerSha256), so the layer
  * readers below and every caller that records a desired hash compare like with like; in an organization of one
  * language `savedCompared` is the saved row's content unchanged, and so is every hash. `savedCompared` is the
- * publication view only: a proof that a saved row holds what a build sent reads `saved`, never `savedCompared`, or a
- * caption with text someone typed in such a language would be certified as the build's (dashboard-reconcile.js
- * proveDashboard).
+ * publication view only — it decides whether a publish is live, and no certification or binding of content uses it: a
+ * declared dashboard's proof that its saved row holds what the build sent reads `saved`, every caption in every
+ * language, or a caption with text someone typed in such a language would be certified as the build's
+ * (dashboard-reconcile.js proveDashboard).
  */
 async function readSystemFormPublication(client, rawId, { rootFields = false } = {}) {
   const id = normalizeGuid(rawId);
