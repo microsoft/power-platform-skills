@@ -1340,8 +1340,8 @@ function guardDefaultViewCopies(provision, table) {
   return new Proxy(provision, {
     get(target, prop, receiver) {
       if (prop === 'fetchArtifact') return guardedFetch;
-      if (prop === 'updateElement') return async (type, id, ...rest) => { await requireTable(type, id, 'not edited'); return provision.updateElement(type, id, ...rest); };
-      if (prop === 'pushArtifact') return async (type, id, ...rest) => { await requireTable(type, id, 'not saved'); return provision.pushArtifact(type, id, ...rest); };
+      if (prop === 'updateElement') return async (type, id, ...rest) => { await requireTable(type, id, 'not edited'); return await provision.updateElement(type, id, ...rest); };
+      if (prop === 'pushArtifact') return async (type, id, ...rest) => { await requireTable(type, id, 'not saved'); return await provision.pushArtifact(type, id, ...rest); };
       return Reflect.get(target, prop, receiver);
     },
   });
