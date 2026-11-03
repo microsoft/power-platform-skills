@@ -39,7 +39,7 @@ const { verifyDeclaredBpf, declaredBpfsByKey } = require('./declared-bpf-io.js')
 const { declaredFeatureOn } = require('./declared-features.js');
 const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
-const { formOrderSpecOf, isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
+const { formOrderSpecOf, isDeclaredFormOn, isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
 const { hostsCustomControl } = require('./dashboard-tiles.js');
 const { formEmbedsOfPage, verifyFormPageEmbed } = require('./form-page-embeds.js');
@@ -728,8 +728,25 @@ async function verifySpec(spec, read, opts = {}) {
       } else if (cmp.reason === 'ahead') {
         const ahead = (served || []).find((s) => String(s.id).replace(/[{}]/g, '').toLowerCase() === cmp.aheadId);
         const aheadName = (ahead && ahead.name) || cmp.aheadId;
+        // The form served first can be one of this spec's declared forms (forms[].reconcile "declared"): formOrderSpecOf
+        // leaves it out of the order the build sets, and validation refuses it in entities[].mainFormOrder, so the spec
+        // remedy would fail. It is matched by its pinned formId or its name (a nameless form is "<entity> form", as
+        // verify names it); a served row with no name and no pinned id cannot be matched, so it gets the neutral wording.
+        const aheadNameLc = ahead && ahead.name ? String(ahead.name).toLowerCase() : null;
+        const aheadDeclared = (spec.forms || []).some((f) => isDeclaredFormOn(f) && isMainForm(f)
+          && String(f.entity || '').toLowerCase() === entityLogical
+          && ((f.formId && String(f.formId).replace(/[{}]/g, '').toLowerCase() === cmp.aheadId)
+            || (aheadNameLc !== null && String(f.name || `${f.entity} form`).toLowerCase() === aheadNameLc)));
+        const what = aheadDeclared
+          ? 'a declared form (forms[].reconcile "declared"), which is outside the form order the build sets'
+          : aheadNameLc !== null ? 'a Main form this spec does not declare' : 'a Main form outside the form order the build sets';
+        const remedy = aheadDeclared
+          ? 'Move it down in Maker (Form settings > Form order)'
+          : aheadNameLc !== null
+            ? 'Move it down in Maker (Form settings > Form order), or declare it in forms[] and list it in entities[].mainFormOrder'
+            : 'Move it down in Maker (Form settings > Form order)';
         add('form-order-served', `${entityLogical} opens with '${first}'`, false,
-          `users without a remembered form open '${aheadName}' first: a Main form this spec does not declare, whose form order is not after '${first}'. Move it down in Maker (Form settings > Form order), or declare it in forms[] and list it in entities[].mainFormOrder`);
+          `users without a remembered form open '${aheadName}' first: ${what}, whose form order is not after '${first}'. ${remedy}`);
       } else {
         add('form-order-served', `${entityLogical} opens with '${first}'`, true);
       }
