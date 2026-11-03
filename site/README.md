@@ -43,6 +43,19 @@ The brief and design thesis are at the top of `site/lib/render.js`.
 - **Hero session.** `showcase` in `catalog.json` lists the example sessions in the hero.
   Each prompt must be one of the plugin's example prompts, and each step must describe something the plugin's skill really does, in order.
 
+## Explainer video
+
+The Questions section opens with "What are plugins and skills?", a 35-second film with captions and a transcript.
+[`site/explainer`](explainer/README.md) generates the video, its captions, and its poster into `assets/video/`, and its README explains how to change and re-render it.
+The page builds the transcript from the film's `timeline.json` and `Descriptions.txt`, so it has both the narration and a description of what is on screen.
+A test fails if the transcript, the captions, and the script disagree, if the descriptions miss text the film shows, or if the film shows a Power Pages skill that no longer exists.
+
+The video never autoplays and preloads nothing, so its 3 MB download starts only when a visitor presses play.
+Until then, `assets/site.js` shows one large play button over the poster in place of the native controls.
+The film's text is sized for a desktop embed, so on a touch screen with a narrow player that button also opens the film full screen.
+
+## Check a design change
+
 To check a change, run the Power Pages design capture against a local preview:
 
 ```bash

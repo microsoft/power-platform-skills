@@ -196,6 +196,45 @@
     });
   }
 
+  // ── Explainer video ─────────────────────────────────────────
+  // Until the video first plays, one large play button sits over the poster in place of the
+  // native controls. Desktop Chrome shows a paused video as a thin control bar that is easy to
+  // miss, and on a phone that bar covers the poster's labels. Without JavaScript the native
+  // controls stay, so the video always plays. Focus moves to the video so the keyboard can
+  // pause it right away.
+  //
+  // The film's text is sized for a desktop embed and is too small to read at phone width, so
+  // on a touch screen with a narrow player the button also asks for full screen. iPhone Safari
+  // already plays full screen (the video has no playsinline) and has no requestFullscreen on a
+  // video, which the check skips; Android Chrome and iPadOS would otherwise play inline.
+  const READABLE_WIDTH = 560;
+  const wantsFullscreen = (video) => typeof video.requestFullscreen === 'function'
+    && window.matchMedia('(pointer: coarse)').matches
+    && video.getBoundingClientRect().width < READABLE_WIDTH;
+  for (const player of document.querySelectorAll('[data-explainer]')) {
+    const video = player.querySelector('video');
+    const button = player.querySelector('[data-explainer-play]');
+    if (!video || !button) continue;
+    const reveal = () => {
+      button.hidden = true;
+      video.controls = true;
+    };
+    video.controls = false;
+    button.hidden = false;
+    video.addEventListener('play', reveal, { once: true });
+    button.addEventListener('click', () => {
+      const fullscreen = wantsFullscreen(video);
+      reveal();
+      video.focus();
+      // A rejected play (for example, a failed download) leaves the native controls showing,
+      // which is the right fallback.
+      video.play().catch(() => {});
+      // play() needs only the page's earlier interaction, while requestFullscreen() uses up the
+      // click's activation, so it comes second. A refusal just leaves the film playing inline.
+      if (fullscreen) video.requestFullscreen().catch(() => {});
+    });
+  }
+
   // ── Hero session (the signature moment) ─────────────────────
   // The server renders the first example finished. With motion allowed, this replays it: the
   // request types in, the plugin answers, and each step lands in order, ending on the point

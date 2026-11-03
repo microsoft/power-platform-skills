@@ -188,6 +188,8 @@ You can also [open an issue](https://github.com/microsoft/power-platform-skills/
 
 ## Words you'll see
 
+For plugins and skills in action, watch the 35-second video [What are plugins and skills?](https://microsoft.github.io/power-platform-skills/#questions) on the plugin website.
+
 | Word | What it means |
 | --- | --- |
 | AI assistant | An AI tool that can work on your computer, such as Claude Code or GitHub Copilot. |

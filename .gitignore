@@ -54,3 +54,6 @@ Thumbs.db
 
 # Showcase site build output
 site/dist/
+# Explainer film: generated stems and masters, and the downloaded voice model
+site/explainer/build
+site/explainer/models

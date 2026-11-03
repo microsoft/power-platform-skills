@@ -311,7 +311,7 @@ test('every page loads only same-origin assets under a strict content security p
   for (const file of files.filter((name) => name.endsWith('.html'))) {
     const html = readOut(outDir, file);
     assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self';/, file);
-    for (const [, attr, value] of html.matchAll(/<(?:script|link)\b[^>]*\b(src|href)="([^"]*)"/g)) {
+    for (const [, attr, value] of html.matchAll(/<(?:script|link|video|source|track)\b[^>]*\b(src|href|poster)="([^"]*)"/g)) {
       if (attr === 'href' && file === '404.html') {
         assert.ok(value.startsWith('/power-platform-skills/'), `${file}: ${value}`);
       } else {
@@ -534,6 +534,107 @@ test('every Pages deploy carries the repo stats report', () => {
   // The report's links are built from this prefix, so it must be the site the workflow deploys.
   assert.match(stats, new RegExp(`ghpagesprefix: ${links.SITE_URL.replace(/\/$/, '').replace(/[.]/g, '\\.')}\\n`));
   assert.match(stats, /databranch: github-repo-stats\n/);
+});
+
+// ── Explainer video ─────────────────────────────────────────────
+
+const EXPLAINER_DIR = path.join(REPO_ROOT, 'site', 'explainer');
+
+// The spoken words of a WebVTT file: a "WEBVTT" header block, then blank-line-separated cues,
+// each a "start --> end" timing line followed by one or more lines of text.
+// https://www.w3.org/TR/webvtt1/#file-structure
+function vttText(vtt) {
+  return vtt.trim().split(/\r?\n\r?\n/).slice(1)
+    .map((cue) => cue.split(/\r?\n/).filter((line) => !line.includes('-->')).join(' '))
+    .join(' ');
+}
+
+function questionsSection(html) {
+  const start = html.indexOf('id="questions"');
+  return html.slice(start, html.indexOf('</section>', start));
+}
+
+test('the explainer video plays only on request, with captions on, from this site', () => {
+  const outDir = path.join(tempDir('pps-site-out-'), 'dist');
+  build({ outDir, basePath: '/power-platform-skills/' });
+  const faq = questionsSection(readOut(outDir, 'index.html'));
+  const video = /<video\b[^>]*>/.exec(faq);
+  assert.ok(video, 'no video in the Questions section');
+  // Native controls are the no-JavaScript fallback; site.js swaps in the play button.
+  assert.match(video[0], /\bcontrols\b/);
+  // A 3 MB file must not download, or start, until the visitor asks for it.
+  assert.match(video[0], /\bpreload="none"/);
+  assert.doesNotMatch(video[0], /\b(?:autoplay|loop)\b/);
+  assert.match(faq, /<track kind="captions" src="[^"]+" srclang="en" label="English" default>/);
+  assert.match(faq, /<button type="button" class="explainer-play" data-explainer-play hidden>/);
+  const files = [...faq.matchAll(/\b(?:src|poster)="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(files.sort(), [
+    'assets/video/plugins-and-skills-poster.webp',
+    'assets/video/plugins-and-skills.mp4',
+    'assets/video/plugins-and-skills.vtt',
+  ]);
+  for (const file of files) {
+    assert.ok(fs.existsSync(path.join(outDir, file)), `${file} is not in the build`);
+  }
+});
+
+test('the transcript, the captions, and the film script say the same words', () => {
+  const timeline = JSON.parse(fs.readFileSync(path.join(EXPLAINER_DIR, 'timeline.json'), 'utf8'));
+  const script = timeline.sentences.map((sentence) => sentence.text).join(' ');
+  const narration = fs.readFileSync(path.join(EXPLAINER_DIR, 'Narration.txt'), 'utf8').trim().split(/\s+/).join(' ');
+  assert.equal(script, narration, 'timeline.json is out of date: run site/explainer/source/voice.py');
+  const vtt = fs.readFileSync(path.join(REPO_ROOT, 'site', 'assets', 'video', 'plugins-and-skills.vtt'), 'utf8');
+  assert.equal(vttText(vtt), script, 'captions are out of date: run site/explainer/source/captions.py');
+
+  const outDir = path.join(tempDir('pps-site-out-'), 'dist');
+  build({ outDir, basePath: '/power-platform-skills/' });
+  const faq = questionsSection(readOut(outDir, 'index.html'));
+  const transcript = /<details class="transcript">([\s\S]*?)<\/details>/.exec(faq);
+  assert.ok(transcript, 'no transcript');
+  const spoken = [...transcript[1].matchAll(/<p>(.*?)<\/p>/g)].map((match) => match[1]);
+  const shown = [...transcript[1].matchAll(/<p class="transcript-visual"><strong>On screen:<\/strong> (.*?)<\/p>/g)];
+  const paragraphCount = Math.max(...timeline.sentences.map((sentence) => sentence.paragraph));
+  assert.equal(spoken.length, paragraphCount);
+  assert.equal(shown.length, paragraphCount, 'every part of the narration needs its on-screen description');
+  assert.equal(spoken.join(' '), render.escapeHtml(script));
+});
+
+test('the transcript describes all the text the film shows', () => {
+  // Every on-screen string in film.py that the narration never says aloud must appear in
+  // Descriptions.txt, so a visitor who cannot see the video gets the same examples (WCAG 1.2.3).
+  const film = fs.readFileSync(path.join(EXPLAINER_DIR, 'source', 'film.py'), 'utf8');
+  const descriptions = fs.readFileSync(path.join(EXPLAINER_DIR, 'Descriptions.txt'), 'utf8').split(/\s+/).join(' ');
+  const strings = (name) => {
+    const line = new RegExp(`^${name} = (.+)$`, 'm').exec(film);
+    assert.ok(line, `${name} not found in film.py`);
+    return [...line[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  };
+  const shown = [
+    ...strings('CREATE_STEPS'), ...strings('DEPLOY_STEPS'), ...strings('REPLY_STEPS'),
+    ...strings('REQUEST'), ...strings('COMMAND'),
+  ];
+  const skills = /^SKILLS = \[([\s\S]*?)^\]/m.exec(film)[1];
+  for (const [, name, label] of skills.matchAll(/\("([^"]+)", "([^"]+)"\)/g)) shown.push(name, label);
+  // Literal text drawn on a frame (put_text), on a sprite (d.text((x, y), "...")), or as a badge.
+  for (const literal of film.matchAll(/(?:put_text\(frame, |label = |\.text\(\([^"\n]*?\), )"([^"]+)"/g)) shown.push(literal[1]);
+  // Skill card names and titles: draw_card(frame, rect, "/create-site", "Create a Power Pages site", ...).
+  for (const [, name, title] of film.matchAll(/, "(\/[a-z-]+)", "([^"]+)"/g)) shown.push(name, title);
+  assert.ok(shown.length > 40, `only ${shown.length} on-screen strings found; has film.py changed shape?`);
+  for (const text of shown) {
+    assert.ok(descriptions.includes(text), `Descriptions.txt does not mention "${text}"`);
+  }
+});
+
+test('every skill the explainer film shows is a real Power Pages skill', () => {
+  // film.py lists them as SKILLS = [("/create-site", "Start a new site"), ...].
+  const film = fs.readFileSync(path.join(EXPLAINER_DIR, 'source', 'film.py'), 'utf8');
+  const block = /^SKILLS = \[([\s\S]*?)^\]/m.exec(film);
+  assert.ok(block, 'SKILLS list not found in film.py');
+  const names = [...block[1].matchAll(/\("\/([a-z0-9-]+)"/g)].map((match) => match[1]);
+  assert.equal(names.length, 5);
+  for (const name of names) {
+    assert.ok(fs.existsSync(path.join(REPO_ROOT, 'plugins', 'power-pages', 'skills', name, 'SKILL.md')), `the film shows /${name}, which Power Pages no longer has`);
+  }
 });
 
 // ── README ──────────────────────────────────────────────────────

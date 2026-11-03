@@ -1,0 +1,9 @@
+Your AI assistant knows a lot about code. A plugin teaches it how to build on Power Platform.
+
+You install a plugin once, and it adds a set of skills.
+
+Each skill is one job, written down step by step. Creating a Power Pages site is one skill. Deploying it is another.
+
+When you describe what you need, your assistant picks the right skill and follows its steps. It asks before it runs commands or changes files.
+
+So, plugins are what you install, and skills are the jobs inside them. You just ask.

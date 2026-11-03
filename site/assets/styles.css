@@ -1695,6 +1695,125 @@ kbd {
   max-width: 30em;
 }
 
+.faq-answers {
+  display: grid;
+  gap: var(--space-8);
+  align-content: start;
+  min-width: 0;
+}
+
+/* The explainer video answers the first question, so it leads the answers column. */
+.explainer {
+  margin: 0;
+}
+
+.explainer-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.explainer-head h3 {
+  margin: 0;
+}
+
+.explainer-meta {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* The film is dark in both themes, so the frame is the film's own navy: no flash of white
+   before the poster loads, and a hairline border keeps its edge on the dark page. */
+.explainer-player {
+  position: relative;
+  /* The play button's text scales with the player's width (cqi), not the viewport's. */
+  container-type: inline-size;
+}
+
+.explainer-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: #08161f;
+  box-shadow: var(--shadow-lg);
+}
+
+/* The play button sits in the poster's empty lower-left corner, under "What you install", so
+   it covers none of the poster's labels at any width. It scales with the video (a share of its
+   width) for the same reason. The film is dark in both themes, so the button uses the film's
+   own teal and ink rather than theme tokens. */
+.explainer-play {
+  position: absolute;
+  left: 9.5%;
+  bottom: 4.5%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.5em 1.05em 0.5em 0.8em;
+  font: 700 clamp(0.75rem, 0.45rem + 1.6cqi, 1.0625rem) / 1 var(--font-body);
+  color: #04211e;
+  background: #45d3bd;
+  border: 0;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 0 0 0 rgb(69 211 189 / 0.45), 0 10px 24px -8px rgb(0 0 0 / 0.6);
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-out), box-shadow var(--duration-base) var(--ease-out);
+}
+
+.explainer-play[hidden] {
+  display: none;
+}
+
+.explainer-play:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 6px rgb(69 211 189 / 0.25), 0 12px 28px -8px rgb(0 0 0 / 0.6);
+}
+
+.explainer-play:focus-visible {
+  outline: 3px solid #e7f3f2;
+  outline-offset: 3px;
+}
+
+.explainer-play-icon {
+  width: 1.15em;
+  height: 1.15em;
+  fill: currentColor;
+}
+
+.transcript {
+  margin-top: var(--space-4);
+}
+
+.transcript summary {
+  display: inline-block;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-link);
+  padding-block: var(--space-2);
+}
+
+.transcript p {
+  color: var(--color-text-muted);
+  max-width: 44em;
+}
+
+/* What is on screen, set apart from the narration it follows. */
+.transcript-visual {
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--color-border);
+  font-size: var(--text-sm);
+}
+
+.transcript-visual strong {
+  color: var(--color-text);
+}
+
 .faq-list details {
   border-top: 1px solid var(--color-border);
 }
