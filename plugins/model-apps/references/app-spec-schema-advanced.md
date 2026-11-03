@@ -678,13 +678,23 @@ next build confirms it with a fresh read of the published layers, never by sendi
 form's table, also when the spec no longer declares the form); that run
 publishes nothing more on that table, and the build after it goes on as usual. When no read can confirm
 it (the publish carried only layers that were already live), the table stays blocked in every build, and
-the build stops and prints the approval that releases it: `--authorize publication-risk:table:<table>`
-(`publication-risk:dashboard:<id>` for a dashboard). Check what is live first. Pass the key exactly as
-printed: `--allow-destructive` and any other key never give it. Accepting it is a
-decision to take the risk, not a proof. The build records it as it starts, before it writes anything,
-whichever step printed the approval (also when the spec no longer declares the form or dashboard, or the
-run does not build forms or dashboards); that build then stops (`publication-risk-accepted`), and the next
-one publishes the table again after the usual checks.
+the build stops and prints the approval that releases it:
+`--authorize publication-risk:table:<table>/<dispatch>` (`publication-risk:dashboard:<id>/<dispatch>` for a
+dashboard). `<dispatch>` names that one lost publish, so the key accepts only it: a key copied from an
+earlier stop does not accept a later lost publish of the same table, and a key with no `<dispatch>` is
+refused. Check what is live first. Pass the key exactly as printed: `--allow-destructive` and any other key
+never give it. Accepting it is a decision to take the risk, not a proof. The build takes it only as it
+starts, before it writes anything, whichever step printed the approval (also when the spec no longer
+declares the form or dashboard, or the run does not build forms or dashboards); that build then stops
+(`publication-risk-accepted`). A key that matches no lost publish at that point is reported as not used, and
+it accepts nothing later in that run. If the build cannot tell whether it recorded the acceptance (the
+record was written but its answer was lost), it stops before it writes anything
+(`publication-risk-record-unconfirmed`); run it again, without the key, and it reads the record afresh.
+After the acceptance the publish is owed again, and the next build publishes it after the usual checks: a
+form's table, also when the spec no longer declares the form (with `--publish`, the publish phase can
+publish the table again), or a declared dashboard. A dashboard the spec no longer declares is not paid: the
+build stops `publication-withheld` ("publish is owed") until you declare the dashboard again with
+`reconcile: "declared"`, and that build publishes it.
 
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by
@@ -747,11 +757,13 @@ are only added.
   this build did not create is bound only with `--authorize "adopt:form:<key>"`; the first binding
   needs it, later builds do not. `--authorize "overwrite:form:<key>"` approves replacing changes made
   elsewhere. A local copy that differs from the server's stops the build (`workspace-copy-unsent-edits`).
-- **Publishing.** A table is published once, after all its form work, and only when every declared
-  change on it succeeded. A table publish puts live every saved change on that table, not only this
-  form's, so the build withholds it while another managed change on the table is not proved. A saved
+- **Publishing.** The forms step publishes a table once, after all its form work, and only when every
+  declared change on it succeeded. A table publish puts live every saved change on that table, not only this
+  form's (new columns included, so a build without `--publish` does not leave that table's changes
+  unpublished), so the build withholds it while another managed change on the table is not proved. A saved
   form that is definitely unpublished is published without a rewrite. `--publish` does not turn this off:
-  without it the table is published in the forms step, as the reconcile of any existing form is.
+  without it the table is published in the forms step, as the reconcile of any existing form is; with it,
+  the publish phase can publish the table again later in the same build.
 - **Concurrent edits.** Dataverse does not provide a working conditional-write guard for a form's saved
   layer, so a conditional write cannot reject a stale edit of it. The build re-reads the saved form just
   before it writes and stops when it changed since the build read it. An edit made in Maker in the
@@ -786,7 +798,7 @@ are only added.
   the record afresh. A form
   whose last publish is unconfirmed is not released this way,
   because that publish may still complete: it stays blocked until a read confirms it or the maker accepts
-  `publication-risk:table:<table>` (see "An unconfirmed publish" above). A form the spec still declares is
+  `publication-risk:table:<table>/<dispatch>` (see "An unconfirmed publish" above). A form the spec still declares is
   not released either: its missing form stops the build (`form-layout-bound-row-missing`). A form you
   declare under that key after it was released is a new one: the build creates it under a new id, never
   the id of the deleted form, unless you approve adopting a form found by name (`adopt:form:<key>`).
@@ -837,8 +849,9 @@ existing one is reused and its tiles are never edited.
   builds do not. `--authorize overwrite:dashboard:<key>` approves replacing a description changed
   elsewhere, and `overwrite:dashboard:<key>/<tile>` one tile changed elsewhere. A local copy that differs
   from the server's stops the build (`workspace-copy-unsent-edits`).
-- **Publishing.** The dashboard is published by itself, once, after its write, and only when the write
-  is proved, with or without `--publish`. A dashboard this build cannot finish is not published, not even by the app's publish: an
+- **Publishing.** The dashboards step publishes the dashboard by itself, once, after its write, and only
+  when the write is proved, with or without `--publish` (with it, the app's publish later in the build can
+  publish it again). A dashboard this build cannot finish is not published, not even by the app's publish: an
   app that would hold it is not written in that run.
 - **Concurrent edits.** Dataverse does not version a dashboard's saved layer: a dashboard is a form row,
   and a plain read answers the published row's version, so a conditional write cannot reject a stale
@@ -868,7 +881,7 @@ existing one is reused and its tiles are never edited.
 - **A removed declaration.** When the spec no longer declares a dashboard whose last change is not
   settled, the build reads it before it builds any other dashboard:
   - A publish that is not confirmed is confirmed when a fresh read proves it live. It is never published
-    again. One it cannot confirm stops the build with `publication-risk:dashboard:<id>`.
+    again. One it cannot confirm stops the build with `publication-risk:dashboard:<id>/<dispatch>`.
   - A publish that is still owed (saved, never sent) is not paid by a build that does not declare the
     dashboard. That build keeps the dashboard out of every app write and publish, and it ends incomplete.
     Declare the dashboard again with `reconcile: "declared"` to publish it.

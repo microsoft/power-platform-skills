@@ -225,11 +225,16 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
   change is still waiting to be proved keeps the build incomplete. A retirement a build reports it could not
   confirm also ends that build incomplete; tell the maker to run the build again, which reads the record afresh.
-- **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
-  `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
-  check what is live on that table; pass the key exactly as printed only when they accept the risk, whichever
-  step printed it. That run records it before it writes anything and stops (`publication-risk-accepted`); the
-  next build publishes after the usual checks. `--allow-destructive` never gives it.
+- **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>/<dispatch>`
+  (or `publication-risk:dashboard:<id>/<dispatch>`) lost the answer to a publish that may still complete.
+  Tell the maker to check what is live on that table; pass the key exactly as printed, from the latest stop,
+  only when they accept the risk, whichever step printed it. The key names that one lost publish: an older
+  key does not accept a later one, and a key that matches nothing is reported as not used. That run records
+  it before it writes anything and stops (`publication-risk-accepted`); the next build publishes after the
+  usual checks. A dashboard the spec no longer declares stays owed (`publication-withheld`) until its
+  declaration is restored. A run that cannot tell whether it recorded the key stops before any write
+  (`publication-risk-record-unconfirmed`): run the build again without the key. `--allow-destructive` never
+  gives it.
 - **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
   **new** app; never add it to an existing or downloaded spec. Tell the maker: declared views and charts
   get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;
@@ -1138,7 +1143,9 @@ child view id. Each step emits `[n/total]`.
   app's sitemap and finalizing the sitemap after generative pages publish the app, and repairing a
   lookup column still labelled with an old default publishes its table (an unpublished edit
   to a live artifact is invisible). A fresh build without `--publish` still leaves new
-  tables/columns/relationships staged-but-unpublished in the solution.
+  tables/columns/relationships staged-but-unpublished in the solution, except on a table a declared form
+  (`reconcile: "declared"`) is published on: that table publish puts live every saved change on the table,
+  its new columns included (a declared dashboard is likewise published after its write).
 - **Idempotent — but not full desired-state convergence.** Existing
   solution/tables/columns/relationships/views/charts/forms/commands/dashboards are detected and
   **reused**, so re-runs and existing-table envs work without collisions. **The caveat for EDITS:** a
