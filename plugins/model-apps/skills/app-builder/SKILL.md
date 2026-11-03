@@ -94,8 +94,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
   **ON**, so set it to `false` only when the user explicitly wants the classic header.
 - **App theme and header logo (Preview, 2.21.0)** — `app.theme`. Add it **only when the maker explicitly asks
-  for branding** (brand colours, a header colour, a logo) or says yes when you offer it at the personas step
-  (authoring-flow Level (a0)); an ordinary app gets **no** `app.theme`, and you never
+  for branding** (brand colours, a header colour, a logo) or says yes to the branding question you ask of every new app
+  at the personas step (authoring-flow Level (a0)); an ordinary app gets **no** `app.theme` without one of those, and you never
   invent a palette, a font or a logo. Offer the choices: a `basePaletteColor` (or explicit `palette` slots), the
   `appHeader` colours, a `font` only if they name one, and a `logo` that is an **existing image web resource**
   (or one you also declare in `webResources[]`), never a URL. Say before the build that the theme is published
