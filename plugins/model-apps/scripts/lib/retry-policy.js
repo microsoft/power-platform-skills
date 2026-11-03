@@ -302,8 +302,8 @@ function missingAttributeOf(error) {
 //   HTTP 400 from https://<org>/api/data/v9.0/savedqueries(<id>)?$select=savedqueryid: Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml          (code 0x80040203)
 // and the reads that follow it say the table is not in the cache yet (code 0x80041102):
 //   The entity with a name = 'contoso_task' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075
-// Neither says the request is wrong; a run again, once the cache has the table, succeeds. But the same words also describe a request that really names no table, so they are lag ONLY for a table THIS attempt of the
-// build created, which the caller marks on the failure it raises (`freshTable`, the logical name — markFreshTable): the first answer names no table, so the mark is what ties it to the one the step was saving; the
+// Neither says the request is wrong; a run again, once the cache has the table, succeeds. But the same words also describe a request that really names no table, so they are lag ONLY for a table ANY attempt of this
+// invocation created (build-model-app.js keeps one `createdTables` set across its attempts), which the caller marks on the failure it raises (`freshTable`, the logical name — markFreshTable): the first answer names no table, so the mark is what ties it to the one the step was saving; the
 // second names its table, and it must be the marked one. Anything else stays final.
 const SAVED_QUERY_NO_TABLE_CODE = '0x80040203';
 const SAVED_QUERY_NO_TABLE = /Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml/i;
@@ -311,7 +311,7 @@ const METADATA_CACHE_CODE = '0x80041102';
 // Group 1 is the table's logical name.
 const TABLE_NOT_IN_CACHE = /The entity with a name = '([^']+)' with namemapping = 'Logical' was not found in the MetadataCache/i;
 
-// Mark a failure raised while the build saved something of a table it created in this attempt, so that the lag above is told from a real error. The mark is not enumerable: it rides along for the retry decision and never into
+// Mark a failure raised while the build saved something of a table any attempt of this invocation created, so that the lag above is told from a real error. The mark is not enumerable: it rides along for the retry decision and never into
 // a serialized error or the journal. Returns the error it was given.
 function markFreshTable(error, tableLogical) {
   if (isObject(error) && typeof tableLogical === 'string' && tableLogical) {
@@ -338,7 +338,7 @@ function isFreshTableLag(error, fresh) {
 }
 
 // Whether the answer this error carries is a condition the service names by its code as one a run again can ride out — see TRANSIENT_SERVICE_CODES — a SQL deadlock victim (isDeadlockVictimAnswer), the lag of a column the
-// spec creates (`declares`), or the lag of a table the build created in this attempt (`fresh`, the table the caller marked).
+// spec creates (`declares`), or the lag of a table any attempt of this invocation created (`fresh`, the table the caller marked).
 function isTransientServiceAnswer(error, declares, fresh) {
   const code = serviceCodeOf(error);
   if (code === null) return false;
