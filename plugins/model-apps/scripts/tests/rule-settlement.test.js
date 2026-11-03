@@ -10,7 +10,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
-const { createWorkflowWire, ORIGIN } = require('./helpers/workflow-wire.js');
+const { createWorkflowWire, stepNames, ORIGIN } = require('./helpers/workflow-wire.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { openManagedBindings, classifyPersisted, CODES, DECLARATION_MAX_BYTES } = require('../lib/managed-bindings.js');
@@ -176,6 +176,76 @@ test('a Draft rule is created Draft and never activated', async () => {
   assert.ifError(out.error);
   assert.deepEqual(writeLines(wire, out.from), ['POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson']);
   assert.equal(wire.row(out.result.id).statecode, 0);
+});
+
+// The platform renames every WFOM step on save (helpers/workflow-wire.js `renumberSteps`), so a rule reads back with step
+// names it was never sent. The names are not part of what a rule is: it is proved, committed and settled as sent, while a
+// real change of a condition or an action is still drift.
+const MULTI = {
+  name: 'Hide fax for A', entity: 'account', reconcile: 'declared',
+  conditions: [
+    { key: 'by-name', field: 'name', operator: 'Equals', value: 'A' },
+    { key: 'by-city', field: 'address1_city', operator: 'Equals', value: 'Oslo' },
+  ],
+  actions: [
+    { key: 'hide-fax', type: 'SetVisibility', field: 'fax', visible: false },
+    { key: 'need-phone', type: 'SetBusinessRequired', field: 'telephone1', required: true },
+    { key: 'lock-name', type: 'LockUnlock', field: 'name', lock: true },
+  ],
+};
+const MULTI_KEY = `account/${MULTI.name}`;
+
+test('a rule the platform stores under step names it was never sent is proved, committed and settled; the next run is a no-op', async () => {
+  for (const renumberSteps of [true, false]) {
+    const wire = createWorkflowWire({ renumberSteps });
+    const dir = makeTempDir('rule-settle-');
+    const out = await settle(wire, dir, MULTI);
+    assert.ifError(out.error);
+    assert.equal(out.result.committed, true);
+    assert.deepEqual(writeLines(wire, out.from), [
+      'POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson',
+      'PATCH workflows(<id>)',
+    ], 'one create and its own activation: nothing undone, nothing resent');
+    assert.deepEqual(wire.deleted, []);
+    assert.equal(wire.row(out.result.id).statecode, 1);
+    const sent = stepNames(writesSince(wire, out.from)[0].body.WfomJson);
+    const kept = stepNames(wire.row(out.result.id).wfom);
+    assert.equal(kept.length, sent.length);
+    if (renumberSteps) {
+      assert.notDeepEqual(kept, sent, 'the double stores names the build did not send');
+      assert.ok(kept.every((n) => /^Step_[1-5]$/.test(n)), JSON.stringify(kept));
+    } else {
+      assert.deepEqual(kept, sent, 'control: the names as sent');
+    }
+    const { committed, pending } = out.p.store.readGroup('rule', MULTI_KEY);
+    assert.equal(pending, null);
+    assert.deepEqual(committed.records.map((r) => [r.id, r.origin]), [[out.result.id, 'created']]);
+    const again = await settle(wire, dir, MULTI);
+    assert.ifError(again.error);
+    assert.equal(again.result.noop, true);
+    assert.deepEqual(writesSince(wire, again.from), []);
+  }
+});
+
+test('under the platform\'s step renaming, a maker change of an action or a condition is still rule-drift with nothing sent', async () => {
+  const edits = {
+    action: (root) => { root.trueBranch[1].required = false; },
+    condition: (root) => { root.clauses[1].value = 'Bergen'; },
+    'an extra action': (root) => { const copy = { ...root.trueBranch[0], id: 'maker-copy' }; delete copy.bag; root.trueBranch.push(copy); },
+  };
+  for (const [what, edit] of Object.entries(edits)) {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('rule-settle-');
+    const first = await settle(wire, dir, MULTI);
+    assert.ifError(first.error);
+    const id = first.result.id;
+    await makerEdit(wire, id, edit);
+    const before = wire.row(id).wfom;
+    const out = await settle(wire, dir, { ...MULTI, actions: [{ ...MULTI.actions[0], visible: true }, ...MULTI.actions.slice(1)] }, { opts: SWITCH });
+    assert.equal(out.error && out.error.code, 'rule-drift', what);
+    assert.deepEqual(writesSince(wire, out.from), [], what);
+    assert.equal(wire.row(id).wfom, before, what);
+  }
 });
 
 test('by default an edit of a managed rule is refused before any request (workflow-edit-refused)', async () => {

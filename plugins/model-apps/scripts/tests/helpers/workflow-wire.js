@@ -21,12 +21,19 @@
 // `script(match, answer)` makes the next request that `match`es answer `answer` instead: `{ statusCode, body }`, or
 // `{ error, code }` for a transport failure after the send (a lost answer). The request is still recorded, and is
 // applied unless `answer.unapplied` — so a 503 or a lost answer can be one the service did carry out.
+//
+// `renumberSteps` (the default) stores a rule's WFOM as the platform keeps it: the platform renames every step on save,
+// so the `name` of each step under a `steps.list` is `Step_<its 1-based position among its siblings>`, whatever the
+// sender called it. Recorded (one condition, one action), sent -> read back:
+//   WorkflowStep "Step_0" > ConditionStep "Step_1" > ConditionBranchStep "Step_2" > SetVisibilityStep "Step_3"   (sent)
+//   WorkflowStep "Step_0" > ConditionStep "Step_1" > ConditionBranchStep "Step_1" > SetVisibilityStep "Step_1"   (read back)
+// `renumberSteps: false` keeps the sent names: the double the earlier tests ran on, which could not see the renaming.
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const ZERO = '00000000-0000-0000-0000-000000000000';
 const ENTITY_SETS = { workflow: 'workflows', processstage: 'processstages' };
 const GUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
-function createWorkflowWire({ enforceIfMatch = true } = {}) {
+function createWorkflowWire({ enforceIfMatch = true, renumberSteps = true } = {}) {
   const rows = new Map();
   const log = [];
   const scripted = [];
@@ -43,6 +50,7 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
     processtriggerscope: e.processtriggerscope == null ? 2 : e.processtriggerscope,
     processtriggerformid: e.processtriggerformid == null ? null : e.processtriggerformid,
   });
+  const stored = (wfom) => (renumberSteps ? renumberedSteps(wfom) : wfom);
   const conditionalFails = (r, headers) => {
     const held = headerValue(headers, 'if-match');
     return enforceIfMatch && held && held !== '*' && held !== etagOf(r);
@@ -60,13 +68,13 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
       const id = String(body.Entity.workflowid).toLowerCase();
       if (m[2] === 'Create') {
         if (rows.has(id)) return json(412, { error: { code: '0x80040237', message: 'Cannot insert duplicate key.' } });
-        rows.set(id, { kind: 'rule', workflowid: id, category: 2, type: 1, name: body.Entity.name, description: body.Entity.description, primaryentity: body.Entity.primaryentity, ...scopeOf(body.Entity), wfom: body.WfomJson, statecode: 0, statuscode: 1, version: 1 });
+        rows.set(id, { kind: 'rule', workflowid: id, category: 2, type: 1, name: body.Entity.name, description: body.Entity.description, primaryentity: body.Entity.primaryentity, ...scopeOf(body.Entity), wfom: stored(body.WfomJson), statecode: 0, statuscode: 1, version: 1 });
         return json(200, { workflowid: id }, { etag: 'W/"1"' });
       }
       const r = rows.get(id);
       if (!r) return notFound();
       if (conditionalFails(r, headers)) return stale();
-      r.wfom = body.WfomJson;
+      r.wfom = stored(body.WfomJson);
       if (body.Entity.description !== undefined) r.description = body.Entity.description;
       if (body.Entity.name !== undefined) r.name = body.Entity.name;
       Object.assign(r, scopeOf(body.Entity));
@@ -175,9 +183,37 @@ function rowFilter(filter) {
   return (row) => terms.every(([field, value]) => String(row[field] == null ? '' : row[field]).toLowerCase() === value);
 }
 
+// The WFOM document with its steps renamed as the platform renames them on save (see `renumberSteps`). A body this
+// double cannot parse is stored as sent, so a test that sends a malformed document still sees its own bytes.
+function renumberedSteps(wfom) {
+  let doc;
+  try { doc = JSON.parse(wfom); } catch { return wfom; }
+  const walk = (step) => {
+    const list = step && step.steps && step.steps.list;
+    if (!Array.isArray(list)) return;
+    list.forEach((child, i) => {
+      if (child && typeof child === 'object') { child.name = `Step_${i + 1}`; walk(child); }
+    });
+  };
+  walk(doc);
+  return JSON.stringify(doc);
+}
+
+// Every step name of a WFOM document, depth first in document order, e.g. ['Step_1', 'Step_1', 'Step_1'] for a stored
+// one-condition, one-action rule: what a test compares to show the stored names are not the ones sent.
+function stepNames(wfom) {
+  const out = [];
+  const walk = (step) => {
+    const list = step && step.steps && step.steps.list;
+    if (Array.isArray(list)) for (const child of list) if (child && typeof child === 'object') { out.push(child.name); walk(child); }
+  };
+  walk(JSON.parse(wfom));
+  return out;
+}
+
 function headerValue(headers, name) {
   for (const [k, v] of Object.entries(headers || {})) if (k.toLowerCase() === name) return v;
   return undefined;
 }
 
-module.exports = { createWorkflowWire, ORIGIN, ZERO };
+module.exports = { createWorkflowWire, stepNames, ORIGIN, ZERO };

@@ -20,7 +20,7 @@ const { createAttemptSendObserver } = require('../lib/managed-feature-contract.j
 const { createDeferredWorkflowGate } = require('../lib/deferred-workflow-gate.js');
 const { DECLARED_FEATURES } = require('../lib/declared-features.js');
 const { RETRY } = require('../lib/retry-policy.js');
-const { createWorkflowWire, ORIGIN } = require('./helpers/workflow-wire.js');
+const { createWorkflowWire, stepNames, ORIGIN } = require('./helpers/workflow-wire.js');
 const { sdkOver, clientOver } = require('./helpers/managed-wire.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const fs = require('node:fs');
@@ -656,6 +656,45 @@ test('the explicit managed download names a rule whose last attempt is not settl
     assert.equal(plain.emitted[0].ok, true, JSON.stringify(plain.emitted) + plain.said);
     assert.equal('managedRules' in plain.emitted[0].payload, false);
     assert.deepEqual(plain.calls.filter((c) => /^workflows\(/i.test(c.path)), [], 'no rule is read');
+  });
+});
+
+// --- the platform's step renaming -------------------------------------------------------------------------------------------
+
+// The platform renames every WFOM step on save (helpers/workflow-wire.js `renumberSteps`): a rule of every action shape, a
+// recommendation's apply-action included, reads back under step names the build never sent. Build, rebuild, verify and the managed
+// download all hold it to what it is, not to those names.
+test('a rule of every action shape the platform stores under renamed steps is built once, verified, and restored by the managed download', async () => {
+  await withRules(true, async () => {
+    const rich = {
+      ...RULE, name: 'Closed ticket rules', conditionLogic: 'OR',
+      conditions: [RULE.conditions[0], { key: 'owned-by-ops', field: 'new_owner', operator: 'Equals', value: 'ops' }],
+      actions: [
+        RULE.actions[0],
+        { key: 'lock-owner', type: 'LockUnlock', field: 'new_owner', lock: true },
+        { key: 'need-subject', type: 'SetBusinessRequired', field: 'new_subject', required: true },
+        { key: 'default-owner', type: 'SetDefaultValue', field: 'new_owner', value: 'ops' },
+        { key: 'say', type: 'ShowErrorMessage', field: 'new_notes', errorMessage: 'Closed tickets need notes' },
+        { key: 'rec', type: 'Recommendation', field: 'new_owner', recommendationTitle: 'Assign', messageText: 'Assign to ops', applyActions: [{ key: 'to-ops', field: 'new_owner', value: 'ops' }] },
+      ],
+    };
+    const key = `new_ticket/${rich.name}`;
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    const first = await build(wire, dir, specWith([rich]));
+    assert.equal(first.err, undefined, chainText(first.err));
+    const id = storeOf(dir).readGroup('rule', key).committed.root.id;
+    const create = first.writes.find((c) => /CreateProcessWithWfomJson$/.test(c.path));
+    assert.notDeepEqual(stepNames(wire.row(id).wfom), stepNames(create.body.WfomJson), 'stored under names the build did not send');
+    assert.equal(wire.row(id).statecode, 1);
+    const again = await build(wire, dir, specWith([rich]));
+    assert.equal(again.err, undefined, chainText(again.err));
+    assert.deepEqual(again.writes.filter((c) => /^workflows/i.test(c.path)), [], 'the rebuild is a no-op');
+    const { read } = await verifyReader(wire);
+    assert.deepEqual(ruleChecks(await verifySpec(specWith([rich]), read, { managedManifest: manifestOf(dir) })).map((c) => [c.present, c.detail]), [[true, '']]);
+    const restored = await download(wire, makeTempDir('declared-rule-'), ['--include-managed', '--managed-manifest', storeFileOf(dir)]);
+    assert.deepEqual(restored.emitted[0].payload.managedRules, { restored: [key], stale: [] }, restored.said);
+    assert.deepEqual(restored.written.businessRules, [rich]);
   });
 });
 

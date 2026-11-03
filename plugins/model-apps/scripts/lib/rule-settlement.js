@@ -252,9 +252,19 @@ function ruleShapeErrors(rule, { checkField } = {}) {
 }
 
 // Never compared: per-read random ids, parser bags, display metadata the platform derives from the column, label
-// containers whose ids are random, the random recommendation step metadata, and the nested apply-actions (each is
-// a node of its own).
-const VOLATILE = new Set(['id', 'kind', 'bag', 'fieldDisplayName', 'stepLabels', 'recommendationActionStepMeta', 'applyActions']);
+// containers whose ids are random, the random recommendation step metadata, the nested apply-actions (each is a node
+// of its own), and step names.
+//
+// A step name is the WFOM step's `name`, which the platform renames on save. The SDK numbers the steps it sends from
+// one counter across the whole tree; the platform stores each step as `Step_<its 1-based position among its
+// siblings>`. Measured on a rule with one condition and one action (WfomJson, sent -> read back):
+//   WorkflowStep "Step_0" > ConditionStep "Step_1" > ConditionBranchStep "Step_2" > SetVisibilityStep "Step_3"
+//   WorkflowStep "Step_0" > ConditionStep "Step_1" > ConditionBranchStep "Step_1" > SetVisibilityStep "Step_1"
+// so the action reads back `stepName: 'Step_1'` where the build sent 'Step_3', and a compared name would make every
+// created rule fail its own proof. Nothing is lost by dropping it: no declaration states a step name, the platform
+// derives it from the node's position, and the position of every node is already compared (the projection's lists
+// keep their order).
+const VOLATILE = new Set(['id', 'kind', 'bag', 'fieldDisplayName', 'stepLabels', 'stepName', 'recommendationActionStepMeta', 'applyActions']);
 
 function semOf(list, node) {
   const out = {};
