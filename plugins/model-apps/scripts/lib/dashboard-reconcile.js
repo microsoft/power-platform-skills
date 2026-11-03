@@ -389,39 +389,35 @@ function isPlatformEmptyCaption(el) {
  * No sent caption was stored with other text. Charts and web resources were not measured. Compared as read, the dropped
  * caption made every such create differ from what was sent: create-completion-required on every run.
  *
- * A caption that is absent is no content anyone wrote, so only absences are put back, and only the shape that was sent:
- * on a cell holding one control, one of `createdIds`, with exactly one <labels> (no attribute) holding only plain
- * <label> elements, whose FIRST label is in the SDK's language with exactly a description and a languagecode, and whose
- * labels' languages are a part of the sent order — the SDK's language, then the other provisioned ones in `languages`
- * order — in that order, none twice. Each language of that order the cell lacks is then put back where it was sent,
- * as the base-language label with that languagecode: the text the write sent in every language. Any other cell is
- * left as read. So a label present is compared exactly as before: one with other text, an unsent one (another language,
- * a second one in a sent language, one without a description, one out of order) leaves the cell as read, and the
- * proof refuses it. The base-language caption must be there and is the tile's name in the semantic projection, so a
- * retyped one is refused too. What this cannot see is a maker deleting a new tile's caption in another language
- * between the send and the proof — an absence, which shows nothing new. Existing tiles and foreign cells are never
- * touched. With one language, or no tile created, the bag is answered as is.
+ * A caption that is absent is no content anyone wrote, so only absences are put back, and only on a cell whose
+ * captions are still in the shape that was sent (createdCaptionProblem: one plain <labels>, plain labels, the
+ * base-language one first, no language twice) and whose languages are a part of the sent order — the SDK's language,
+ * then the other provisioned ones in `languages` order — in that order. Each language of that order the cell lacks is
+ * then put back where it was sent, as the base-language label with that languagecode: the text the write sent in every
+ * language. A created cell that is not such a candidate is NOT left as read for the hash to judge: the answer is null,
+ * and the proof does not accept the restored layout at all. A label present is compared exactly as before: one with
+ * other text, an unsent one (another language, a second one in a sent language, one without a description, one out of
+ * order) is refused. What this cannot see is a maker deleting a new tile's caption in another language between the
+ * send and the proof — an absence, which shows nothing new. Existing tiles and foreign cells are never touched. With
+ * one language, or no tile created, the bag is answered as is.
  */
 function withDroppedTileCaptions(bag, createdIds, languages, languageCode) {
   const own = normalizeLanguageCode(languageCode);
   const order = [own, ...(languages || []).filter((l) => l !== own)];
   if (!bag || order.length < 2 || !createdIds || !createdIds.size) return bag;
-  const plainLabel = (x) => !!x && !x.node && x.n === 'label' && !(x.c || []).length && (x.a || []).length === 2 &&
-    (x.a || []).every((p) => Array.isArray(p) && (p[0] === 'description' || p[0] === 'languagecode'));
+  let invalid = false;
   const restored = (cell) => {
-    const labelsAt = (cell.c || []).map(nodeOf).filter((x) => x && x.n === 'labels');
-    if (labelsAt.length !== 1 || (labelsAt[0].a || []).length) return cell;
-    const labelsEl = labelsAt[0];
-    const labels = labelsEl.c || [];
-    if (!labels.length || !labels.every(plainLabel)) return cell;
+    if (createdCaptionProblem(cell, own)) { invalid = true; return cell; }
+    const labelsEl = childrenNamed(cell, 'labels')[0];
+    const labels = labelsEl.c;
     const codes = labels.map((l) => normalizeLanguageCode(attrOf(l, 'languagecode')));
-    if (codes[0] !== own || codes.length >= order.length) return cell;
     let at = 0;
     for (const code of codes) {
       const k = order.indexOf(code, at);
-      if (k < 0) return cell;
+      if (k < 0) { invalid = true; return cell; }
       at = k + 1;
     }
+    if (codes.length === order.length) return cell;
     const byCode = new Map(labels.map((l, i) => [codes[i], l]));
     const base = labels[0];
     const rebuilt = order.map((l) => byCode.get(l) || { ...base, a: base.a.map((p) => (p[0] === 'languagecode' ? ['languagecode', String(l)] : [...p])), c: [] });
@@ -436,7 +432,58 @@ function withDroppedTileCaptions(bag, createdIds, languages, languageCode) {
     }
     return mapChildren(el, walk);
   };
-  return walk(bag);
+  const out = walk(bag);
+  return invalid ? null : out;
+}
+
+/**
+ * Why the cell of a tile this attempt created does not carry its captions in the shape the write sent them, or null.
+ * The write sends (tileCaptionEdits; the SDK's own label alone in a one-language organization):
+ *   <labels><label description="<declared caption>" languagecode="<SDK language>" />[<label … languagecode="<other>" /> …]</labels>
+ * so the cell must hold exactly one <labels>, with no attribute, holding only <label> elements, each with no child and
+ * exactly one `description` and one `languagecode` (numeric) and nothing else, no language twice, and FIRST the label
+ * in the SDK's language (`own`).
+ *
+ * Why this is checked on its own, before EITHER preservation hash: preservation takes the SDK-language label out of a
+ * managed cell WHOLE, attributes and all (strippedManagedCell), and the semantic projection reads the tile's name from
+ * the first label when that one is missing — so, with that label deleted while a sent caption in another language with
+ * the same text stays, or with an attribute added to it, both hashes still matched and the row was certified and
+ * published. With the base label present, plain and first, the semantic projection reads the name from IT, so the
+ * semantic hash proves its text is the one sent; every other label is in the preserved layout and compared exactly.
+ * The SDK's fallback name (read from another label) is never taken as proof that the base caption is there.
+ */
+function createdCaptionProblem(cell, own) {
+  const labelsAt = childrenNamed(cell, 'labels');
+  if (labelsAt.length !== 1) return labelsAt.length ? 'more than one caption list' : 'no caption';
+  const labelsEl = labelsAt[0];
+  if ((labelsEl.a || []).length) return 'an attribute on its caption list';
+  const labels = labelsEl.c || [];
+  const plain = (x) => !!x && !x.node && x.n === 'label' && !(x.c || []).length && (x.a || []).length === 2 &&
+    (x.a || []).every(Array.isArray) && attrOf(x, 'description') != null && /^\d+$/.test(String(attrOf(x, 'languagecode') || ''));
+  if (!labels.length) return 'no caption';
+  if (!labels.every(plain)) return 'a caption not in the shape sent';
+  const codes = labels.map((l) => normalizeLanguageCode(attrOf(l, 'languagecode')));
+  if (new Set(codes).size !== codes.length) return 'a language captioned twice';
+  if (codes[0] !== own) return 'no caption in the base language first';
+  return null;
+}
+
+/** The bare control ids, in `bag`, of the created tiles (`createdIds`) whose cell fails createdCaptionProblem. */
+function createdCaptionProblems(bag, createdIds, languageCode) {
+  const own = normalizeLanguageCode(languageCode);
+  const bad = [];
+  const walk = (el) => {
+    if (!el || typeof el !== 'object') return;
+    if (el.n === 'cell') {
+      const controls = childrenNamed(el, 'control');
+      const id = controls.length === 1 ? bareId(attrOf(controls[0], 'id')) : '';
+      if (id && createdIds.has(id) && createdCaptionProblem(el, own)) bad.push(id);
+      return;
+    }
+    for (const ch of el.c || []) walk(nodeOf(ch));
+  };
+  walk(bag);
+  return bad;
 }
 
 /**
@@ -1284,19 +1331,14 @@ async function applyDashboard(s, r) {
 }
 
 /**
- * The preservation hash of the stored row with the captions the platform dropped from the cells of the tiles this
- * attempt created put back as they were sent (withDroppedTileCaptions), for the proof to match with the expected model;
- * null when the attempt created no tile or the languages cannot be read — the row is then compared as read, so a
- * dropped caption is refused, never accepted on a guess. The proof commits the row as read either way. The tiles this
- * attempt created, which are the ones its send captioned in every language (tileCaptionEdits):
+ * The bare control ids of the tiles this attempt created, which are the ones its send captioned in every language
+ * (tileCaptionEdits):
  *   - this run's own send: those applyDashboard answers it added (`applied.createdTiles`);
  *   - a recovered create (no base observation): every expected tile, all created with the root;
  *   - a recovered append: the tiles of the attempt's own declaration that no componentId pins and no record of the
  *     committed group binds — exactly the ones resolveDashboard appends.
- * The languages are the organization's (tileCaptionLanguages: this settle's read, re-read on a recovery). A wrong tile
- * or language set can only refuse: it puts back a label the expected model does not hold.
  */
-async function withSentTileCaptions(s, saved, projected, expected, applied, { recovering, created, declaration, committed }) {
+function createdTileIds(s, expected, applied, { recovering, created, declaration, committed }) {
   let keys;
   if (!recovering) {
     keys = (applied && applied.createdTiles) || [];
@@ -1307,15 +1349,30 @@ async function withSentTileCaptions(s, saved, projected, expected, applied, { re
     const tiles = declaration && Array.isArray(declaration.tiles) ? declaration.tiles : [];
     keys = tiles.filter((t) => t && !normalizeGuid(t.componentId) && !bound.has(`${s.key}/${t.key}`)).map((t) => `${s.key}/${t.key}`);
   }
-  const ids = new Set(expected.children.filter((c) => keys.includes(c.key)).map((c) => bareId(c.id)));
+  return new Set(expected.children.filter((c) => keys.includes(c.key)).map((c) => bareId(c.id)));
+}
+
+/**
+ * The preservation hash of the stored row with the captions the platform dropped from the cells of the tiles this
+ * attempt created (`ids`, createdTileIds) put back as they were sent (withDroppedTileCaptions), for the proof to match
+ * with the expected model; null when no tile was created or a created cell is no candidate for that — the restored
+ * layout is then not accepted, so a dropped caption is refused, never accepted on a guess. The proof commits the row
+ * as read either way. The languages are the organization's (tileCaptionLanguages: this settle's read, re-read on a
+ * recovery); called only when the row as read does not already match. When they cannot be read, the proof cannot be
+ * made either way: that is `dashboard-languages-unreadable`, a read to retry — nothing about the row is known to be
+ * wrong, so it is not reported as a content mismatch. A wrong tile or language set can only refuse: it puts back a
+ * label the expected model does not hold.
+ */
+async function withSentTileCaptions(s, saved, projected, ids) {
   if (!ids.size) return null;
   let languages;
   try {
     languages = await tileCaptionLanguages(s);
-  } catch {
-    return null;
+  } catch (err) {
+    throw stop('dashboard-languages-unreadable', `the languages of the environment could not be read, so dashboard "${s.key}" could not be proved; it was left as it is and was not bound or published. Run the build again`, { cause: err });
   }
-  return preservationSha256(withDroppedTileCaptions(saved.bag, ids, languages, s.languageCode), new Map(projected.tiles.map((t) => [t.id, t.type])), s.languageCode);
+  const bag = withDroppedTileCaptions(saved.bag, ids, languages, s.languageCode);
+  return bag ? preservationSha256(bag, new Map(projected.tiles.map((t) => [t.id, t.type])), s.languageCode) : null;
 }
 
 /**
@@ -1340,11 +1397,26 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     throw stop('dashboard-published-unreadable', `whether the saved state of dashboard "${key}" is published could not be read`, { cause: err });
   }
   // A dashboard this build created and could not prove is a row nothing binds, publishes or adds to the solution, so
-  // every refusal below names it and the one remedy that works: removed, the next run resumes the create under the same
-  // catalog id and settles it. Adopting it as stored is no remedy: the next run proves the same pending create again and
-  // stops the same way, `--authorize "adopt:dashboard:<key>"` or not.
+  // every refusal below names it. The remedy depends on whose row it is. Only this build's own answer to its create —
+  // this run's (`applied.createdRoot`) or one the pending attempt durably recorded before a run stopped — says the row
+  // under the catalog id is this build's: then removing it is the one remedy that works (the next run resumes the
+  // create under the same id and settles it; adopting it as stored is no remedy: the next run proves the same pending
+  // create again and stops the same way, `--authorize "adopt:dashboard:<key>"` or not). A PLANNED create
+  // (`expected.baseObservation === null`) is no such receipt, nor is the catalog id or a read of the row: someone else
+  // may have created a row under that id while this build's own create was not applied, and advice to delete it would
+  // delete their work. Then the stop names the row and asks for it to be inspected, never deleted.
   const created = expected.baseObservation === null;
-  const orphan = created ? `. This build created dashboard ${id} and nothing binds it: delete it (in Maker, or by its id), then run the build again to create it anew` : '';
+  const { committed, pending } = store.readGroup(KIND, key);
+  const attempt = recovering ? (pending && (!token || pending.token === token) ? pending : null) : null;
+  // The root create is acknowledged only by this run's own answer to its create, never by a read. A recovered
+  // attempt counts it only when the attempt itself durably recorded that acknowledgement before the run stopped.
+  const rootCreateAcknowledged = recovering
+    ? created && !!attempt && (attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot === true))
+    : !!(applied && applied.createdRoot);
+  const orphan = !created ? ''
+    : rootCreateAcknowledged
+      ? `. This build created dashboard ${id} and nothing binds it: delete it (in Maker, or by its id), then run the build again to create it anew`
+      : `. Dashboard ${id} is the one this build planned to create, and nothing binds it, but the build cannot tell who created the row stored under that id: inspect it in Maker, as it may be someone else's work`;
   if (!art || art.dashboardType !== 'Standard' || !isGlobal(art)) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard${orphan}`);
   // Everything below is proved on the saved row the publication read answered — its content, type and table from one
   // GET, the row whose hash becomes the committed savedSha256 and the publication's desired hash — never on the SDK's
@@ -1370,7 +1442,6 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); ${created ? 'it was not bound or published' : 'complete or remove it in Maker, then run again'}${orphan}`);
   if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); ${created ? 'it was not bound or published' : 'check the dashboard'}${orphan}`);
   const semantic = projected.semanticSha256;
-  const { committed, pending } = store.readGroup(KIND, key);
   // What is stored now is not what was sent, or anything the spec does not own differs from what the send was modelled
   // to leave (expected.preservationSha256, intendedDashboard): an attribute of an appended cell or of the seed, a label,
   // a foreign cell, a row. Binding or publishing it would claim content this build never wrote — after a crash,
@@ -1385,20 +1456,23 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   // write sent each new tile with its caption in every provisioned language (tileCaptionEdits), and the model this is
   // compared with holds them as sent. The platform keeps some of those and drops others (withDroppedTileCaptions): on
   // the cells of the tiles this attempt created, and only for that comparison, a sent caption the row lacks is put back
-  // as it was sent — never a label that is there, so nothing the write did not send is ever certified. A recovery
+  // as it was sent — never a label that is there, so nothing the write did not send is ever certified. First, though,
+  // every created cell must hold its captions in the shape sent, its base-language caption present and first
+  // (createdCaptionProblem), before EITHER hash is accepted: both set that caption aside, so neither can see it go. The
+  // languages are read for the restored comparison only, when the row as read does not already match. A recovery
   // compares with the same recorded model, the same way.
-  const restored = await withSentTileCaptions(s, saved, projected, expected, applied, { recovering, created, declaration, committed });
-  if (semantic !== expected.sentProjectionSha256 || !(preservationMatches(projected, expected.preservationSha256) || restored === expected.preservationSha256)) {
+  const createdIds = createdTileIds(s, expected, applied, { recovering, created, declaration, committed });
+  const unshaped = createdCaptionProblems(saved.bag, createdIds, s.languageCode);
+  const sentKeys = (ids) => expected.children.filter((c) => ids.includes(bareId(c.id))).map((c) => c.key).join(', ');
+  if (unshaped.length) {
+    throw stop('create-completion-required', `the stored dashboard "${key}" does not hold the captions this build sent on its new tiles (${sentKeys(unshaped)}): the caption in the base language is missing or changed, or another one was added; it was not bound or published${orphan}`);
+  }
+  if (semantic !== expected.sentProjectionSha256 || !(preservationMatches(projected, expected.preservationSha256) ||
+    (await withSentTileCaptions(s, saved, projected, createdIds)) === expected.preservationSha256)) {
     throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published${orphan}`);
   }
   const preserved = projected.preservationSha256;
 
-  const attempt = recovering ? (pending && (!token || pending.token === token) ? pending : null) : null;
-  // The root create is acknowledged only by this run's own answer to its create, never by a read. A recovered
-  // attempt counts it only when the attempt itself durably recorded that acknowledgement before the run stopped.
-  const rootCreateAcknowledged = recovering
-    ? created && !!attempt && (attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot === true))
-    : !!(applied && applied.createdRoot);
   const prior = (kind, k) => (committed ? committed.records.find((x) => x.kind === kind && x.key === k) : null);
   // A record this group does not hold yet claims `created` only when this attempt's root create is acknowledged (the
   // store allows `created` on nothing else): tiles appended to a dashboard that already existed are `adopted`, the

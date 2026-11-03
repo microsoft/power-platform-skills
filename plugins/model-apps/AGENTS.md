@@ -3312,21 +3312,31 @@ that, with one measured exception: the platform does not keep every caption sent
 1033 and 3082, a view-list tile kept the 3082 caption it was sent and an iframe tile lost it, the platform adding
 none in its place; no sent caption was stored with other text (charts and web resources were not measured). So,
 for the comparison only, on the cells of the tiles this attempt created, a sent caption the row LACKS is put back
-as it was sent (`withDroppedTileCaptions`): only when the cell's base-language caption is first, with only
-`description` and `languagecode`, and its other captions are sent languages in the sent order, none twice. A
+as it was sent (`withDroppedTileCaptions`). Before EITHER the row as read or the restored row is accepted, every
+created tile's cell must hold its captions in the shape sent (`createdCaptionProblem`): one `<labels>` with no
+attribute, plain labels with only `description` and `languagecode`, no language twice, and the base-language
+caption present and FIRST — whose text the semantic hash then proves, since the tile's name is read from it. This
+is checked on its own because both hashes set that label aside whole, and the SDK reads a tile's name from its
+first label when the base one is missing: without the check a deleted base caption, or one given an attribute,
+was certified. The fallback name is never proof that the base caption exists. A created cell whose other captions
+are not sent languages in the sent order makes the restored row unusable, not a cell compared as read. A
 caption that is there is never put back or set aside, so one with other text, in another language, a second one
 in a sent language or one without a description still stops the write; what this cannot see is someone deleting
 a new tile's caption in another language between the send and the proof. A recovery puts back the same captions
 (the tiles of the attempt's own declaration that no `componentId` pins and no record binds, or every tile of a
-create); with the languages unreadable it compares the row as read and refuses.
+create). The languages are read only when the row as read does not match; when they cannot be read then, the stop
+is `dashboard-languages-unreadable` (run again; the row is left as it is), not a content mismatch.
 The languages are the build's `provisionedLanguages` (`readProvisionedLanguages`), read before the send and
 never inferred from a layer read; when they cannot be read the dashboard stops before anything is sent
 (`dashboard-languages-unreadable`). A single-language organization's send is the SDK's own, byte for byte.
 Existing tiles and foreign content are not touched and are compared in every language, so a caption with text
 typed on any cell, tab or section between the send and the proof, in any language, stops the write
 (`create-completion-required`). A create stopped that way leaves a row nothing binds, publishes or adds to the
-solution: the stop names its id and says to delete it and run again, which creates it anew under the same
-catalog id (adopting it as stored does not help: the next run proves the same create and stops the same way).
+solution, and the stop names its id. Only when this build's own create was acknowledged (this run's answer, or
+one the pending attempt durably recorded) does it say to delete the row and run again, which creates it anew
+under the same catalog id (adopting it as stored does not help: the next run proves the same create and stops the
+same way). A create that was planned but not acknowledged is no receipt — someone else may have created a row under
+that id — so the stop only asks for the row to be inspected.
 The committed preservation stays that of the saved row as
 read, and a proof an earlier build of this release recorded with the empty captions kept still matches
 (`rawPreservationSha256`, `preservationMatches`). A declared form's proof holds the SDK's `readForm`

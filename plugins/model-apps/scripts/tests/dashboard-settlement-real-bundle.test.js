@@ -966,7 +966,9 @@ for (const [name, change, tiles] of [
   ['captions in two more languages', (labels) => labels + caption(1036, 'Maker third') + caption(1041, 'Maker fourth'), ['open', 'map']],
   ['a caption without a description', (labels) => `${labels}<label languagecode="1036" />`, ['open', 'map']],
   ['the base-language caption retyped', (labels) => labels.replace(/description="(Open work orders|Crew map)" languagecode="1033"/, 'description="Maker base" languagecode="1033"'), ['open', 'map']],
-  ['the base-language caption deleted', (labels) => labels.replace(/<label [^>]*languagecode="1033" \/>/, ''), ['map']],
+  // On the list tile the sent 3082 caption, with the same text, stays: the tile's name still reads the same from it.
+  ['the base-language caption deleted', (labels) => labels.replace(/<label [^>]*languagecode="1033" \/>/, ''), ['open', 'map']],
+  ['an attribute added to the base-language caption', (labels) => labels.replace('languagecode="1033"', 'languagecode="1033" maker="yes"'), ['open', 'map']],
 ]) {
   for (const tile of tiles) {
     test(`on the measured two-language platform, a ${tile} tile's caption changed between the send and the proof is refused: ${name}`, async () => {
@@ -975,26 +977,92 @@ for (const [name, change, tiles] of [
       const state = changeBetweenSendAndProof(w, withCellLabels(controlIds(d)[tile], change));
       await refusedUnbound(w, d, name);
       assert.equal(state.injected, true, name);
+      await w.sdk.publishArtifact('dashboard', catalogFor(d).identityFor('dashboard', 'ops').derivedId).catch(() => {});
+      assert.equal(w.wire.publishes().length, 0, 'no path publishes it');
     });
   }
 }
 
+// A lost create answer is recovered by the same proof: a created tile whose base-language caption is gone while its
+// sent 3082 caption (the same text) stays is not bound, nothing is sent again and nothing is published.
+test('a create whose answer was lost is not recovered when a new tile lost its base-language caption since', async () => {
+  const w = await world({ platform: MEASURED_TWO_LANGUAGES });
+  const d = declared(LIST_AND_IFRAME);
+  w.wire.script((e) => e.method === 'POST' && e.path === 'systemforms', { error: new Error('lost create answer after apply') });
+  assert.ok(await codeOf(settle(w, d)));
+  const pending = w.store.readGroup('dashboard', 'ops').pending;
+  const row = w.wire.saved.get(pending.root.id);
+  const previous = row.formxml;
+  row.formxml = withCellLabels(controlIds(d).open, (l) => l.replace(caption(1033, 'Open work orders'), ''))(previous);
+  assert.notEqual(row.formxml, previous);
+  const writes = contentWrites(w.wire).length;
+  const next = await rerun(w);
+  assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed, null);
+  assert.equal(contentWrites(w.wire).length, writes, 'nothing is sent again');
+  assert.equal(w.wire.publishes().length, 0);
+});
+
+// Someone else's row stored under the planned id while this build's own create was not applied: the build's plan is no
+// receipt for that row, so the stop names it and asks for it to be inspected — never that it be deleted.
+test('a create that was not applied, with a competing row under its id, is named for inspection, never for deletion', async () => {
+  const w = await world({ platform: MEASURED_TWO_LANGUAGES });
+  const d = declared(LIST_AND_IFRAME);
+  const id = catalogFor(d).identityFor('dashboard', 'ops').derivedId;
+  let planted = false;
+  w.wire.script((e) => {
+    if (e.method !== 'POST' || e.path !== 'systemforms') return false;
+    w.wire.putForm({ ...e.body, formxml: e.body.formxml.replace('description="Open work orders"', 'description="Another maker"') }, { publishedToo: true });
+    planted = true;
+    return true;
+  }, { error: new Error('create outcome lost; the competing row was not created by this request'), unapplied: true });
+  assert.ok(await codeOf(settle(w, d)));
+  assert.equal(planted, true);
+  const pending = w.store.readGroup('dashboard', 'ops').pending;
+  assert.notEqual(pending.acknowledgedRoot, true);
+  const writes = contentWrites(w.wire).length;
+  let err;
+  try { await settle(await rerun(w), d, { approvals: {} }); } catch (e) { err = e; }
+  assert.ok(err);
+  const message = String(err.cause && err.cause.message);
+  assert.doesNotMatch(message, /delete it/, message);
+  assert.ok(message.includes(`Dashboard ${id} is the one this build planned to create`) && message.includes('cannot tell who created'), message);
+  assert.equal(contentWrites(w.wire).length, writes);
+  assert.ok(w.wire.saved.get(id).formxml.includes('Another maker'), 'the competing row is left as it is');
+});
+
 // A recovery puts back the same dropped captions, for a create (every tile was created with the root) and for an
-// append (the tiles the attempt's own declaration added); with the languages unreadable it compares the row as read
-// and refuses, and settles once they read again.
-test('on the measured two-language platform, a create and an append whose commit was lost are recovered over the dropped caption; unreadable languages refuse first', async () => {
+// append (the tiles the attempt's own declaration added). With the languages unreadable it cannot be proved either
+// way: that is a read to retry (`dashboard-languages-unreadable`), the row is left as it is and nobody is told to
+// delete it; the next run whose read works recovers the same row with no write.
+test('on the measured two-language platform, a create and an append whose commit was lost are recovered over the dropped caption; unreadable languages ask for a retry first', async () => {
   const d = declared(LIST_AND_IFRAME);
   const w = await world({ platform: MEASURED_TWO_LANGUAGES });
   const pending = await strandedAttempt(w, d);
-  assert.deepEqual(cellCaptions(w.wire.saved.get(pending.root.id).formxml, controlIds(d).map), [[1033, 'Crew map']]);
+  const stored = w.wire.saved.get(pending.root.id).formxml;
+  assert.deepEqual(cellCaptions(stored, controlIds(d).map), [[1033, 'Crew map']]);
+  const writes = contentWrites(w.wire).length;
   const blind = await rerun(w);
-  assert.equal(await codeOf(settle(blind, d, { provisionedLanguages: async () => null })), 'create-completion-required');
+  let err;
+  try { await settle(blind, d, { provisionedLanguages: async () => null }); } catch (e) { err = e; }
+  assert.equal(err && err.code, 'dashboard-languages-unreadable');
+  const message = String(err.cause && err.cause.message);
+  assert.match(message, /Run the build again/, message);
+  assert.doesNotMatch(message, /delete it/, message);
   assert.equal(blind.store.readGroup('dashboard', 'ops').committed, null);
   const next = await rerun(w);
   assert.deepEqual((await settle(next, d)).result, { committed: true, recovered: true });
+  assert.equal(contentWrites(w.wire).length, writes, 'no write');
+  assert.equal(w.wire.saved.get(pending.root.id).formxml, stored);
   assert.equal(w.wire.publishes().length, 0);
 
+  const kept = await world({ platform: TWO_LANGUAGES });
+  await strandedAttempt(kept, d);
+  assert.deepEqual((await settle(await rerun(kept), d, { provisionedLanguages: async () => null })).result, { committed: true, recovered: true },
+    'a row that kept every caption sent is proved as read: no language read is needed');
+
   const a = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }, { key: 'map', type: 'iframe', url: 'https://contoso.example/field-map', name: 'Crew map' }], { dashboardId: DID });
+
   const { failing, deps } = failNextStoreWrite();
   const v = await world({ platform: MEASURED_TWO_LANGUAGES });
   v.store = openManagedContext({ workspaceDir: v.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: v.barrier, deps }).store;

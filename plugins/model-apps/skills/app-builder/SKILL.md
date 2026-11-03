@@ -184,12 +184,14 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   kept; a new tile is added after the last row; in an environment with more than one language a new tile gets
   its caption, with the same text, in every language the environment has (if the build cannot read those
   languages, it stops before it writes the dashboard: `dashboard-languages-unreadable`, so run it again; the
-  platform keeps some of those captions and drops others, an iframe tile's for one, and a dropped one is no
-  change); an
+  platform keeps some of those captions and drops others, an iframe tile's for one, and a dropped one other
+  than the base-language caption is no change); an
   unfinished dashboard of the same name is not taken over
   and not deleted; a dashboard this build cannot finish is not published, including by the app publish; a
-  dashboard the build created and could not prove is named by id in the stop: delete it and run the build
-  again, which creates it anew; and
+  dashboard the build created and could not prove is named by id in the stop: when the build knows it created it,
+  delete it and run the build again, which creates it anew; when the stop says the build cannot tell who created
+  it, have the maker inspect it and do not delete it; `dashboard-languages-unreadable` after a lost answer means
+  run the build again; and
   Dataverse does not version a dashboard's saved layer, so an edit made in Maker at the instant of the write
   cannot be detected. An existing dashboard is bound only with `--authorize adopt:dashboard:<key>`
   (`overwrite:dashboard:<key>` or `overwrite:dashboard:<key>/<tile>` for changes made elsewhere,
