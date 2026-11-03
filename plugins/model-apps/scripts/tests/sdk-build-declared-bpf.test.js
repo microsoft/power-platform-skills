@@ -13,8 +13,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runSdkBuild } = require('../lib/sdk-build.js');
-const { validateAppSpec } = require('../lib/app-spec.js');
+const { runSdkBuild, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { validateAppSpec, BPF_ROLE_ACCESS } = require('../lib/app-spec.js');
+const { JOB_NAME } = require('../lib/persona-restore.js');
+const { withRoles, CHILD_BU, ORG_OWNED } = require('./helpers/role-wire.js');
 const { openManagedBindings, attemptProvenUnsent } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
@@ -526,14 +528,15 @@ test('verify lists a reader that cannot read a flow as unverified, and a flow th
 
 // download-model-app.js main with its side effects replaced: the download's SDK is a real one over the wire, and runDownload answers
 // the spec a download of this app hydrates, which holds no process flow (a plain download reconstructs none), or `plain` if given.
-async function download(wire, out, argv, { plain, personas, ...extra } = {}) {
+async function download(wire, out, argv, { plain, personas, appId, ...extra } = {}) {
   const { sdk } = await sdkOver(wire);
   const dl = Object.create(sdk);
-  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
+  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP, ...(appId ? { appmoduleid: appId } : {}) }] : sdk.queryRecords(table, o));
   const downloaded = specWith([]);
   delete downloaded.businessProcessFlows;
   if (plain) downloaded.businessProcessFlows = plain;
-  // A download writes no personas[]; `personas` stands in for a spec that has them, the control of a flow that names one.
+  // A plain download writes no personas[]; `personas` stands in for a spec that has them, the control of a flow that names one.
+  // `appId` is the app's id in the app read, which the persona proof needs to read the roles the app is associated with.
   if (personas) downloaded.personas = personas;
   const emitted = [];
   const said = [];
@@ -600,7 +603,7 @@ test('the explicit managed download names a flow whose last attempt is not settl
   });
 });
 
-test('the explicit managed download leaves out a flow whose securityRoles name personas, which a download never writes, and says what to copy', async () => {
+test('the explicit managed download leaves out a flow whose securityRoles name personas it cannot prove from their roles, and says what to copy', async () => {
   await withBpf(true, async () => {
     const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
     const AGENT = { persona: 'Agent', jobs: [{ name: 'Resolve tickets', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
@@ -613,7 +616,9 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     const out = makeTempDir('declared-bpf-');
     const left = await download(wire, out, flags);
     assert.equal(left.emitted[0].ok, true, JSON.stringify(left.emitted) + left.said);
-    const reason = 'its securityRoles name persona \'Dispatcher\', persona \'Agent\', and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from';
+    // This wire holds no role and no business unit: the proof reads, finds nothing to prove from, and makes no persona up.
+    const unproved = (p) => `persona '${p}', which the download could not prove from its role: the root business unit could not be read`;
+    const reason = `its securityRoles name ${unproved('Dispatcher')}; ${unproved('Agent')}; copy this flow and the personas it names from the spec it was built from`;
     assert.deepEqual(left.emitted[0].payload.managedBpfs, { restored: [], stale: [{ key: GROUP, reason }] });
     assert.match(left.said, /WARNING: managed business process flow new_ticket\/Ticket process was not restored: its securityRoles name persona 'Dispatcher'/);
     assert.equal(left.written.businessProcessFlows, undefined, 'never restored without its roles');
@@ -629,7 +634,7 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     assert.deepEqual(fragments.items, [{ family: 'bpf', key: GROUP, reason, needs: [{ persona: 'Dispatcher' }, { persona: 'Agent' }], paste: { businessProcessFlows: [roled] } }]);
     // Only the persona it lacks is named; with every one there, the same flow is restored whole, roles included.
     const one = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [{ ...DISPATCHER, persona: ' dispatcher ' }] });
-    assert.match(one.emitted[0].payload.managedBpfs.stale[0].reason, /^its securityRoles name persona 'Agent', and a download/);
+    assert.match(one.emitted[0].payload.managedBpfs.stale[0].reason, /^its securityRoles name persona 'Agent', which the download could not prove from its role: /);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(one.emitted[0].payload.managedFragments.file), 'utf8')).items[0].needs, [{ persona: 'Agent' }]);
     // Into the same folder: nothing is left out, so the payload says nothing of fragments and the earlier list is removed.
     const both = await download(wire, out, flags, { personas: [DISPATCHER, AGENT] });
@@ -637,6 +642,120 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     assert.deepEqual(both.written.businessProcessFlows, [roled]);
     assert.equal('managedFragments' in both.emitted[0].payload, false);
     assert.equal(fs.existsSync(fragmentsFile), false, 'a list from an earlier download does not outlive it');
+  });
+});
+
+// --- personas proved from their roles ---------------------------------------------------------------------------------------
+
+const APP_ID = '00000000-0000-0000-0000-00000000a333';
+const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
+const ROLED = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
+
+// A flow built with a persona, and the persona's role as a build leaves it: made by the real SDK from the persona
+// (createPersonaRole), with the flow's grants on its backing table (addEntityPrivilegesToRole), in the solution, and associated
+// with the app unless the persona opts out. `grants`, `member` and `associated` leave one of those undone. `also` are more flows
+// built with it whose backing tables the role is NOT granted on.
+async function rolesBuilt({ persona = DISPATCHER, grants = true, member = true, associated = persona.appAccess !== false, also = [] } = {}) {
+  const wire = createWorkflowWire();
+  const roles = withRoles(wire, { solution: SOLUTION, appId: APP_ID });
+  roles.table('new_ticket');
+  const appRead = roles.table('appmodule', ORG_OWNED).read;
+  const dir = makeTempDir('declared-bpf-');
+  assert.equal((await build(wire, dir, { ...specWith([ROLED, ...also]), personas: [persona] })).err, undefined);
+  const backingOf = (flow) => wire.row(storeOf(dir).readGroup('bpf', `new_ticket/${flow.name}`).committed.root.id).uniquename;
+  const backing = backingOf(ROLED);
+  assert.ok(backing, 'the built flow names its backing table');
+  for (const flow of [ROLED, ...also]) roles.table(backingOf(flow), ORG_OWNED);
+  const { sdk } = await sdkOver(wire);
+  const { roleId } = await sdk.createPersonaRole(personaRoleSpecFor(persona));
+  if (grants) await sdk.addEntityPrivilegesToRole(roleId, [{ entity: backing, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
+  if (member) roles.members.add(roleId);
+  if (associated) roles.appRoles.add(roleId);
+  return { wire, roles, backing, roleId, appRead, role: roles.roles.get(roleId), flags: ['--include-managed', '--managed-manifest', storeFileOf(dir)] };
+}
+
+test('the explicit managed download writes a persona a restored flow names from its role, when a rebuild provably leaves that role as it is', async () => {
+  await withBpf(true, async () => {
+    for (const persona of [DISPATCHER, { ...DISPATCHER, appAccess: false }]) {
+      const r = await rolesBuilt({ persona });
+      const before = r.roles.heldOf(r.roleId);
+      const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+      assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+      assert.deepEqual(got.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [], personas: [{ name: 'Dispatcher', flows: [GROUP] }] });
+      const privileges = [
+        { entity: r.backing, access: ['create', 'read', 'write', 'delete'], scope: 'organization' },
+        { entity: 'new_ticket', access: ['read', 'write'], scope: 'user' },
+      ].sort((a, b) => (a.entity < b.entity ? -1 : 1));
+      const written = { persona: 'Dispatcher', ...(persona.appAccess === false ? { appAccess: false } : {}), jobs: [{ name: JOB_NAME, privileges }] };
+      assert.deepEqual(got.written.personas, [written]);
+      assert.deepEqual(got.written.businessProcessFlows, [ROLED], 'the flow is restored with its roles');
+      assert.equal('managedFragments' in got.emitted[0].payload, false);
+      assert.match(got.said, /NOTE: persona 'Dispatcher' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build\./);
+      assert.deepEqual(got.calls.filter((c) => c.method !== 'GET'), [], 'the download writes nothing to the environment');
+      // A rebuild from what was written, as its security phase makes it with the real SDK: the same role, converged onto exactly
+      // what it held (before the flow grants are added again, too), and the flow grants then change nothing.
+      const { sdk } = await sdkOver(r.wire);
+      const again = await sdk.createPersonaRole(personaRoleSpecFor(got.written.personas[0]));
+      assert.equal(again.roleId, r.roleId);
+      assert.deepEqual(r.roles.heldOf(r.roleId), before, 'ReplacePrivilegesRole leaves the role as it was');
+      await sdk.addEntityPrivilegesToRole(r.roleId, [{ entity: r.backing, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
+      assert.deepEqual(r.roles.heldOf(r.roleId), before);
+    }
+  });
+});
+
+test('a persona the managed download wrote for one flow is proved again for the next flow that names it', async () => {
+  await withBpf(true, async () => {
+    // Groups are restored in key order, so 'Zeta process' comes after 'Ticket process' and finds the persona already written.
+    const ZETA = { ...ROLED, name: 'Zeta process' };
+    const r = await rolesBuilt({ also: [ZETA] });
+    const before = r.roles.heldOf(r.roleId);
+    const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+    assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+    const { managedBpfs } = got.emitted[0].payload;
+    assert.deepEqual(managedBpfs.restored, [GROUP]);
+    assert.deepEqual(managedBpfs.personas, [{ name: 'Dispatcher', flows: [GROUP] }], 'written for the first flow only');
+    assert.equal(managedBpfs.stale.length, 1);
+    assert.equal(managedBpfs.stale[0].key, 'new_ticket/Zeta process');
+    assert.match(managedBpfs.stale[0].reason, /^its securityRoles name persona 'Dispatcher', which the download could not prove from its role: its role does not hold prvCreate\w+, prvRead\w+, prvWrite\w+ and 1 more at organization scope on the flow's backing table '\w+', which a build would grant; copy this flow/);
+    assert.deepEqual(got.written.businessProcessFlows, [ROLED]);
+    assert.equal(got.written.personas.length, 1);
+    assert.deepEqual(got.calls.filter((c) => c.method !== 'GET'), []);
+    assert.deepEqual(r.roles.heldOf(r.roleId), before);
+  });
+});
+
+test('the explicit managed download writes no persona it cannot prove from its role, and leaves the flow out with what to copy', async () => {
+  await withBpf(true, async () => {
+    const cases = [
+      ['a privilege no table carries', {}, (r) => r.role.held.set(r.roles.plainPrivilege('prvExportToExcel'), 8), /its role holds 1 privilege\(s\) no table carries \(prvExportToExcel\); a persona declares table privileges only, so a build would remove them$/],
+      ['its role in a child business unit only', {}, (r) => { r.role._businessunitid_value = CHILD_BU; }, /no role named 'Dispatcher' is in the root business unit$/],
+      ['a role a build did not make', {}, (r) => { r.role.description = 'Made by hand'; }, /a role named 'Dispatcher' in the root business unit is managed or was not made by a build, and a build refuses to change it$/],
+      ['a managed role', {}, (r) => { r.role.ismanaged = true; }, /is managed or was not made by a build/],
+      ['a second role made by a build', {}, (r) => r.roles.addRole({ name: 'Dispatcher' }), /more than one role made by a build is named 'Dispatcher' in the root business unit$/],
+      ['no flow grants', { grants: false }, () => {}, /its role does not hold prvCreate\w+, prvRead\w+, prvWrite\w+ and 1 more at organization scope on the flow's backing table '\w+', which a build would grant$/],
+      ['the app associated without its read', {}, (r) => r.role.held.delete(r.appRead), /a persona read from its role would not rebuild it exactly \(a build would add prvReadAppmodule at Global\)$/],
+      ['outside the solution', { member: false }, () => {}, /its role is not in solution 'BP', so a build would add it$/],
+    ];
+    for (const [label, opts, change, why] of cases) {
+      const r = await rolesBuilt(opts);
+      await change(r);
+      const before = r.roles.heldOf(r.roleId);
+      const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+      assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted) + got.said);
+      const { managedBpfs } = got.emitted[0].payload;
+      assert.deepEqual(managedBpfs.restored, [], label);
+      assert.equal('personas' in managedBpfs, false, label);
+      const { reason } = managedBpfs.stale[0];
+      assert.match(reason, /^its securityRoles name persona 'Dispatcher', which the download could not prove from its role: /, label);
+      assert.match(reason.replace(/; copy this flow and the personas it names from the spec it was built from$/, ''), why, label);
+      assert.equal(got.written.personas, undefined, label);
+      assert.equal(got.written.businessProcessFlows, undefined, label);
+      assert.deepEqual(got.emitted[0].payload.managedFragments.keys, [{ family: 'bpf', key: GROUP }], label);
+      assert.doesNotMatch(got.said, /NOTE: persona/, label);
+      assert.deepEqual(got.calls.filter((c) => c.method !== 'GET'), [], label);
+      assert.deepEqual(r.roles.heldOf(r.roleId), before, label);
+    }
   });
 });
 

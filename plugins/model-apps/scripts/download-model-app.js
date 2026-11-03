@@ -28,6 +28,8 @@
 // (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>; each flow: adopt:bpf:<table>/<name>).
 // A declared form's handler library the spec does not declare is downloaded with the form, as an `external` web resource, when it is
 // this publisher's own unmanaged script (lib/declared-form-io.js libraryEntry; `managedForms.libraries`).
+// A persona a declared flow's securityRoles name that the downloaded spec lacks is read from its role and written into personas[] only
+// when a rebuild provably leaves that role exactly as it is (lib/persona-restore.js; `managedBpfs.personas`).
 // A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
 // `<out>/.maker-workspace/managed-fragments.json` (`managedFragments` in the result; lib/managed-fragments.js). The download writes
@@ -3903,6 +3905,7 @@ async function main(deps = {}) {
       for (const s of managedDashboards.stale) io.stderr.write(`WARNING: managed dashboard ${s.key} was not restored: ${s.reason}. Its dashboard is downloaded as every dashboard is without --include-managed.\n`);
       for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
       for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
+      for (const p of managedBpfs.personas || []) io.stderr.write(`NOTE: persona '${p.name}' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build.\n`);
     }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {

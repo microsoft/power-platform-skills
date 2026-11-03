@@ -2276,7 +2276,7 @@ Administrator role only, so without a persona role users who have no maker-level
 `personas[]` produces a working access model so the app opens for real users.
 
 An app that **already exists** keeps the roles associated with it: a spec with no `personas[]` leaves
-them as they are, which is how an extension of such an app is written (a download carries none). Do
+them as they are, which is how an extension of such an app is written (a plain download carries none). Do
 not list an existing role as a persona to silence the lint — a persona's role is converged to exactly
 the privileges declared, and a role the build did not author is refused. Give an existing role access
 to a table the spec adds with `roleGrants[]` (below). Opening the app and using a table are two
@@ -2291,6 +2291,18 @@ The model is **deterministic**: you DECLARE the access each job requires — the
 privileges from a job's text. It **unions** every job's declared access into the persona's one role
 (max scope wins per entity+access) and applies it with replace semantics (a rebuild that drops a
 privilege removes it — the role converges to the spec).
+
+**A persona written by a managed download.** A download with `--include-managed --managed-manifest
+<store file>` that restores a declared business process flow whose `securityRoles` name a persona the
+downloaded spec lacks writes that persona from its role, but only when a rebuild provably leaves the
+role exactly as it is: one role of that name in the root business unit, made by a build and unmanaged,
+in the app's solution, holding only table privileges that compile back to exactly what it holds, the
+flow's grants included. The persona has one job, `Privileges read from the environment`, and
+`appAccess: false` when the app is not associated with the role. From then on the spec **owns** that
+role like any other persona: a privilege someone adds to the role outside the spec is removed by the
+next build, and the download says so in a `NOTE`. When any of this cannot be proved, no persona is
+written and the flow is left out instead, with the reason (see the business process flows' notes in
+`app-spec-schema-advanced.md`).
 
 ```jsonc
 "personas": [

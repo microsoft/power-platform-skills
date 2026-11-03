@@ -227,9 +227,12 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   it is re-adopted). A download brings it back declared, keys included, only with `--include-managed
   --managed-manifest <store file>` (otherwise it is left out); the first build that binds it from the downloaded folder
   needs `adopt:bpf:<table>/<name>`, because that folder has no store. Changing only who may run a managed flow
-  (`securityRoles`) writes nothing to the flow; the build records it. A managed download does NOT restore a flow
-  that has `securityRoles`: a download writes no `personas[]`, so it leaves that flow out with a warning naming the
-  personas (nothing is lost; the store and the maker's own spec keep it) and writes the flow ready to paste in
+  (`securityRoles`) writes nothing to the flow; the build records it. A managed download restores a flow that has
+  `securityRoles` only when it can prove each persona the flow names from the role a build made for it, and then
+  writes that persona into `personas[]` (a NOTE names it). Tell the maker that persona now owns its role: a
+  privilege added to that role outside the spec is removed by the next build. When a persona cannot be proved,
+  the download leaves the flow out with a warning naming the personas and why (nothing is lost; the store and the
+  maker's own spec keep it) and writes the flow ready to paste in
   `.maker-workspace/managed-fragments.json`. Tell the maker to paste that flow and copy the
   personas it names from the spec it was built from. If the download stops with `managed-fragments-path-taken`,
   a file it did not write holds that name: ask the maker to move it, never delete it yourself. A

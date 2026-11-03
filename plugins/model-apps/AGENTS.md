@@ -3203,11 +3203,23 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   attempt, below, included). A declaration that changes
   nothing of the workflow but differs from the group's `originalDeclaration` (its `securityRoles`, say) is the
   plan's `declaration` mode: no workflow request, and a commit that records it, so the store keeps the current
-  intent; an identical one is a no-op with no store write. Nothing is published. The managed download still
-  leaves a flow with `securityRoles` out (`personasNotIn`): a download writes no `personas[]`, and a persona
-  owns its role and is converged onto exactly what it declares, so one is never reconstructed from the
-  environment, and the flow is never restored without its roles; the stale reason names the missing personas,
-  and the flow goes to the fragments file (`noteBpfFragment`) when it validates with a stub persona per name.
+  intent; an identical one is a no-op with no store write. Nothing is published. The managed download restores
+  a flow with `securityRoles` only when every persona it names is in the downloaded spec or is PROVED from its
+  role (`lib/persona-restore.js` `createPersonaProver`, read-only, memoised per run). A persona owns its role
+  and is converged onto exactly what it declares (ReplacePrivilegesRole), so a persona is written only when a
+  rebuild provably leaves the role as it is, all gates fail closed: exactly one role of the name in the ROOT
+  business unit (`resolveRoleBusinessUnit` + `roleBuClause`), carrying `SDK_ROLE_MARKER` with
+  `ismanaged === false` (any unmarked or managed row of the name refuses, as the SDK's own lookup does); a
+  member of the app's solution (component type 20); `appAccess` from the app association
+  (`appRoleIdsFor`); every held privilege (`roleprivileges`, paged, `depthFromMask`) mapped to a table and an
+  access through one `EntityDefinitions?$select=LogicalName,Privileges` read (a privilege no table carries is
+  refused); the candidate (one job, `JOB_NAME`, grouped by table and scope) put through
+  `personaRoleSpecFor` and `compileRolePrivileges` (`lib/role-privileges.js`, the SDK's compile) equals the
+  held set both ways; and the role already holds `BPF_ROLE_ACCESS` at Global on the flow's backing table
+  (`flowGrantsMissing`, also checked for a persona written for an earlier flow). A persona that fails leaves
+  the flow out, its reason naming each persona and why; the flow goes to the fragments file
+  (`noteBpfFragment`) when it validates with a stub persona per missing name. A written persona is in
+  `managedBpfs.personas: [{ name, flows }]` and a NOTE says a build owns its role from then on.
   **Verify and download** (`lib/declared-bpf-io.js`): verify reads each bound declared flow fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredBpf`) and runs `verifyDeclaredBpf`
   (`managed-bpf` check): the helper's one read-only `projectBpf`, certified only when it is a shape the

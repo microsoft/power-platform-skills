@@ -1110,12 +1110,13 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
 - **The backing table.** `securityRoles` are granted on the table name Dataverse stored for the flow,
   as the build read it, never on a name derived from the display name. A change of a managed flow's
   `securityRoles` alone (or of any setting the flow already holds) sends no workflow write; the build
-  records the flow's new declaration. A managed download does not restore a flow with `securityRoles`:
-  a download writes no `personas[]` (a persona's role is converged onto exactly what it declares, so one
-  is never guessed from the environment), and the flow is never restored without its roles. It is left
-  out with a warning naming the personas, and its declaration is written ready to paste in
-  `.maker-workspace/managed-fragments.json` (see the declared forms' Download note); copy those personas
-  from the spec it was built from.
+  records the flow's new declaration. A managed download restores a flow with `securityRoles` only with
+  its roles. A persona the downloaded spec lacks is written into `personas[]` from its role only when a
+  rebuild provably leaves that role exactly as it is (a persona's role is converged onto exactly what it
+  declares, so one is never guessed): see "A persona written by a managed download" under `personas[]`
+  in app-spec-schema.md. Otherwise the flow is left out with a warning naming each persona and why, and
+  its declaration is written ready to paste in `.maker-workspace/managed-fragments.json` (see the
+  declared forms' Download note); copy those personas from the spec it was built from.
 - **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
   an earlier build sent to it is still waiting to be proved, the build ends incomplete
   (`managed-not-settled`) and does not touch that flow: put its entry back and build again. Until then
