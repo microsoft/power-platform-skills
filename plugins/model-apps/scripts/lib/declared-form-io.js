@@ -134,8 +134,10 @@ async function readLiveForm(sdk, formId) {
  *     or sub-grid child the download did not carry would make the whole spec unwritable, so that one form is left out instead.
  * Every other group — unread, stale, not valid here, or still pending or unusable in the store — is answered in `stale` with its
  * reason, never silently dropped. Answers { restored: [key], stale: [{ key, reason }] }; a store file that cannot be used throws.
+ * `fragments`, when given, is an array a stale form is pushed onto (noteFormFragment) when its declaration is proved and left out
+ * only for the handler libraries it names; the caller writes them to the fragments file (lib/managed-fragments.js).
  */
-async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
+async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate, fragments }) {
   const { groups, pending, invalid } = readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName });
   const restored = [];
   const stale = [
@@ -160,7 +162,9 @@ async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName
     const check = validate({ ...spec, forms: [...spec.forms, h.form] });
     if (!check || !check.ok) {
       const errors = ((check && check.errors) || []).slice(0, 3).map((x) => (typeof x === 'string' ? x : (x && x.message) || JSON.stringify(x)));
-      stale.push({ key, reason: `its declaration does not validate in the downloaded spec (${errors.join('; ') || 'invalid'})` });
+      const reason = `its declaration does not validate in the downloaded spec (${errors.join('; ') || 'invalid'})`;
+      stale.push({ key, reason });
+      noteFormFragment(fragments, { key, reason, spec, form: h.form, validate });
       continue;
     }
     spec.forms.push(h.form);
@@ -168,6 +172,36 @@ async function restoreManagedForms({ sdk, spec, file, environment, appUniqueName
   }
   stale.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   return { restored, stale };
+}
+
+// The handler libraries a form's events name that `spec.webResources` does not declare, in event order, each once. Matched
+// as the spec validator matches them (app-spec.js: the library name, case-insensitively).
+function librariesNotIn(spec, form) {
+  const declared = new Set((Array.isArray(spec.webResources) ? spec.webResources : []).map((w) => String((w && w.name) || '').toLowerCase()));
+  const out = [];
+  const seen = new Set();
+  for (const ev of (Array.isArray(form && form.events) ? form.events : [])) {
+    const name = ev && typeof ev.library === 'string' ? ev.library : '';
+    const folded = name.toLowerCase();
+    if (!name || declared.has(folded) || seen.has(folded)) continue;
+    seen.add(folded);
+    out.push(name);
+  }
+  return out;
+}
+
+// A proved form left out only for its handler libraries goes to the fragments file (lib/managed-fragments.js), ready to paste.
+// "Only" is checked, not assumed: the spec must validate with the form and a stub for each missing library. The stubs are never
+// written. Without a collector (a caller that keeps no fragments) nothing is noted.
+function noteFormFragment(fragments, { key, reason, spec, form, validate }) {
+  if (!Array.isArray(fragments)) return;
+  const missing = librariesNotIn(spec, form);
+  if (!missing.length) return;
+  const { stubWebResource } = require('./managed-fragments.js');
+  const webResources = [...(Array.isArray(spec.webResources) ? spec.webResources : []), ...missing.map(stubWebResource)];
+  const check = validate({ ...spec, webResources, forms: [...spec.forms, form] });
+  if (!check || !check.ok) return;
+  fragments.push({ family: 'form', key, reason, needs: missing.map((name) => ({ webResource: name })), paste: { forms: [form] } });
 }
 
 module.exports = { readVerifyManifest, readManagedFormFile, readLiveForm, restoreManagedForms, committedUnits };

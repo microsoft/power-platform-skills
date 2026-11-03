@@ -815,11 +815,23 @@ are only added.
   that is pending, gone or not valid is left out and named. A declared form with an event handler
   (`events`) is not valid in the downloaded spec, because a download brings back only icon and logo web
   resources, not the handler's library: it is left out and named in `managedForms.stale` ("onload handler
-  references undeclared web resource"), while the forms without a handler are restored. To keep it, add
-  the library to `webResources[]` and the form's declaration to `forms[]` by hand. The download transfers no binding: the
+  references undeclared web resource"), while the forms without a handler are restored. Its declaration is
+  written ready to paste in the build folder's `.maker-workspace/managed-fragments.json` (see below), with
+  the library it needs: add both to the spec. The download transfers no binding: the
   downloaded folder has no store, so the first build that binds a form there needs
   `--authorize "adopt:form:<key>"`. A rebuild that finds the form already as declared writes nothing and
   may leave it unbound.
+- **The fragments file.** A managed download writes each declared form or process flow it proved but left
+  out only for what it could not bring (a handler library, a persona) to
+  `<out>/.maker-workspace/managed-fragments.json`, and names the file in a warning and in the result
+  (`managedFragments: { file, keys }`). Each item has the store `key`, the `reason` it was left out, what it
+  `needs` (`{ "webResource": "<name>" }` or `{ "persona": "<name>" }`) and a `paste` object
+  (`{ "forms": [ ... ] }` or `{ "businessProcessFlows": [ ... ] }`): add the entry to the same array in
+  `app-spec.json` with what it needs, from the spec it was built from. An item left out for anything else
+  (pending, changed, not valid) is not written there, because nothing proved it. The download writes that
+  name only when it is missing or holds a file a download wrote, and removes its own file when nothing is
+  left out. Any other file, folder or link there stops the download before it writes anything
+  (`code: "managed-fragments-path-taken"`): move or delete it and run again.
 - **A removed form that was deleted.** When the spec no longer declares a form and the form was deleted in
   the environment, the next build reads it by its id in both its saved and its published layer. When both
   say it does not exist, the build stops managing it, including a publish of its table it still owed: it
@@ -1096,7 +1108,9 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   records the flow's new declaration. A managed download does not restore a flow with `securityRoles`:
   a download writes no `personas[]` (a persona's role is converged onto exactly what it declares, so one
   is never guessed from the environment), and the flow is never restored without its roles. It is left
-  out with a warning naming the personas; copy the flow and those personas from the spec it was built from.
+  out with a warning naming the personas, and its declaration is written ready to paste in
+  `.maker-workspace/managed-fragments.json` (see the declared forms' Download note); copy those personas
+  from the spec it was built from.
 - **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
   an earlier build sent to it is still waiting to be proved, the build ends incomplete
   (`managed-not-settled`) and does not touch that flow: put its entry back and build again. Until then

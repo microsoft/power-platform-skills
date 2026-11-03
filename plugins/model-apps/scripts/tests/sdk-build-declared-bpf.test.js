@@ -610,20 +610,104 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [DISPATCHER, AGENT] })).err, undefined);
     assert.deepEqual(storeOf(dir).readGroup('bpf', GROUP).committed.originalDeclaration.securityRoles, roled.securityRoles, 'the store keeps the roles');
     const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
-    const left = await download(wire, makeTempDir('declared-bpf-'), flags);
+    const out = makeTempDir('declared-bpf-');
+    const left = await download(wire, out, flags);
     assert.equal(left.emitted[0].ok, true, JSON.stringify(left.emitted) + left.said);
-    assert.deepEqual(left.emitted[0].payload.managedBpfs, { restored: [], stale: [{ key: GROUP, reason: 'its securityRoles name persona \'Dispatcher\', persona \'Agent\', and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from' }] });
+    const reason = 'its securityRoles name persona \'Dispatcher\', persona \'Agent\', and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from';
+    assert.deepEqual(left.emitted[0].payload.managedBpfs, { restored: [], stale: [{ key: GROUP, reason }] });
     assert.match(left.said, /WARNING: managed business process flow new_ticket\/Ticket process was not restored: its securityRoles name persona 'Dispatcher'/);
     assert.equal(left.written.businessProcessFlows, undefined, 'never restored without its roles');
     assert.equal(left.written.personas, undefined, 'and no persona is made up');
+    // The proved flow is written ready to paste, with the personas it still needs, in the download's own fragments file.
+    const fragmentsFile = path.join(out, '.maker-workspace', 'managed-fragments.json');
+    assert.deepEqual(left.emitted[0].payload.managedFragments, { file: fragmentsFile, keys: [{ family: 'bpf', key: GROUP }] });
+    assert.match(left.said, /WARNING: 1 managed item\(s\) left out only for what the download could not bring are written ready to paste in .*managed-fragments\.json/);
+    const fragments = JSON.parse(fs.readFileSync(fragmentsFile, 'utf8'));
+    assert.equal(fragments.kind, 'model-apps.managed-download-fragments');
+    assert.equal(fragments.formatVersion, 1);
+    assert.equal(fragments.app, APP);
+    assert.deepEqual(fragments.items, [{ family: 'bpf', key: GROUP, reason, needs: [{ persona: 'Dispatcher' }, { persona: 'Agent' }], paste: { businessProcessFlows: [roled] } }]);
     // Only the persona it lacks is named; with every one there, the same flow is restored whole, roles included.
     const one = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [{ ...DISPATCHER, persona: ' dispatcher ' }] });
     assert.match(one.emitted[0].payload.managedBpfs.stale[0].reason, /^its securityRoles name persona 'Agent', and a download/);
-    const both = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [DISPATCHER, AGENT] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(one.emitted[0].payload.managedFragments.file), 'utf8')).items[0].needs, [{ persona: 'Agent' }]);
+    // Into the same folder: nothing is left out, so the payload says nothing of fragments and the earlier list is removed.
+    const both = await download(wire, out, flags, { personas: [DISPATCHER, AGENT] });
     assert.deepEqual(both.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] });
     assert.deepEqual(both.written.businessProcessFlows, [roled]);
+    assert.equal('managedFragments' in both.emitted[0].payload, false);
+    assert.equal(fs.existsSync(fragmentsFile), false, 'a list from an earlier download does not outlive it');
   });
 });
+
+test('the managed download never writes over, through or instead of a fragments file it did not write: it refuses before anything is written', async () => {
+  await withBpf(true, async () => {
+    const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
+    const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [DISPATCHER] })).err, undefined);
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    const refusedAt = async (out, prepare) => {
+      prepare(path.join(out, '.maker-workspace'));
+      const before = snapshotTree(out);
+      const r = await download(wire, out, flags);
+      assert.equal(r.emitted.length, 1);
+      assert.equal(r.emitted[0].ok, false, JSON.stringify(r.emitted));
+      assert.equal(r.emitted[0].payload.code, 'managed-fragments-path-taken');
+      assert.match(r.emitted[0].payload.error, /managed-fragments\.json exists and was not written by a download \(.+\); move or delete it and run again\. Nothing was written\./);
+      assert.deepEqual(snapshotTree(out), before, 'the app folder is exactly as it was');
+      assert.equal(r.calls.length, 0, 'nothing is read either');
+      return r;
+    };
+    // A maker's JSON file at the name, and one that is not JSON at all.
+    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(ws); fs.writeFileSync(path.join(ws, 'managed-fragments.json'), '{"mine":true}\n'); });
+    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(ws); fs.writeFileSync(path.join(ws, 'managed-fragments.json'), 'notes'); });
+    // A folder at the name.
+    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(path.join(ws, 'managed-fragments.json'), { recursive: true }); });
+    // A junction at .maker-workspace would put the file outside the app folder.
+    const elsewhere = makeTempDir('declared-bpf-');
+    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.symlinkSync(elsewhere, ws, 'junction'); });
+    assert.deepEqual(fs.readdirSync(elsewhere), [], 'nothing is written where the junction points');
+    // A hard link to a file elsewhere, even one holding a fragments file: writing it would change the other name.
+    const outside = path.join(makeTempDir('declared-bpf-'), 'other.json');
+    fs.writeFileSync(outside, `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, items: [] })}\n`);
+    const outsideBytes = fs.readFileSync(outside, 'utf8');
+    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(ws); fs.linkSync(outside, path.join(ws, 'managed-fragments.json')); });
+    assert.equal(fs.readFileSync(outside, 'utf8'), outsideBytes);
+    // A file a download wrote is replaced with the new list.
+    const own = makeTempDir('declared-bpf-');
+    fs.mkdirSync(path.join(own, '.maker-workspace'));
+    fs.writeFileSync(path.join(own, '.maker-workspace', 'managed-fragments.json'), `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, app: APP, items: [{ family: 'bpf', key: 'old/Old' }] })}\n`);
+    const replaced = await download(wire, own, flags);
+    assert.equal(replaced.emitted[0].ok, true, JSON.stringify(replaced.emitted));
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(own, '.maker-workspace', 'managed-fragments.json'), 'utf8')).items.map((i) => i.key), [GROUP]);
+    // Without --include-managed the name is never looked at: a plain download writes and refuses exactly as before.
+    const plainOut = makeTempDir('declared-bpf-');
+    fs.mkdirSync(path.join(plainOut, '.maker-workspace'));
+    fs.writeFileSync(path.join(plainOut, '.maker-workspace', 'managed-fragments.json'), 'notes');
+    const plain = await download(wire, plainOut, []);
+    assert.equal(plain.emitted[0].ok, true, JSON.stringify(plain.emitted));
+    assert.equal('managedFragments' in plain.emitted[0].payload, false);
+    assert.equal(fs.readFileSync(path.join(plainOut, '.maker-workspace', 'managed-fragments.json'), 'utf8'), 'notes');
+  });
+});
+
+// Every name under `dir`, with each file's bytes, without following links: what a refusal must leave as it was.
+function snapshotTree(dir) {
+  const out = {};
+  const walk = (d, rel) => {
+    for (const name of fs.readdirSync(d).sort()) {
+      const full = path.join(d, name);
+      const st = fs.lstatSync(full);
+      const key = rel ? `${rel}/${name}` : name;
+      if (st.isSymbolicLink()) out[key] = `link:${fs.readlinkSync(full)}`;
+      else if (st.isDirectory()) { out[key] = 'dir'; walk(full, key); } else out[key] = fs.readFileSync(full, 'base64');
+    }
+  };
+  walk(dir, '');
+  return out;
+}
 
 // --- the CLI -----------------------------------------------------------------------------------------------------------------
 

@@ -169,7 +169,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
   not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
   file>` (one with an event handler is left out and named in `managedForms.stale`, as its handler's web
-  resource is not downloaded: add both back by hand); it carries no binding, so the first build that binds each form from the downloaded folder needs
+  resource is not downloaded; its declaration is written ready to paste in `.maker-workspace/managed-fragments.json`
+  with the library it needs, so tell the maker to add both from the spec it was built from); it carries no binding, so the first build that binds each form from the downloaded folder needs
   `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
   `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below). A
@@ -227,8 +228,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   needs `adopt:bpf:<table>/<name>`, because that folder has no store. Changing only who may run a managed flow
   (`securityRoles`) writes nothing to the flow; the build records it. A managed download does NOT restore a flow
   that has `securityRoles`: a download writes no `personas[]`, so it leaves that flow out with a warning naming the
-  personas (nothing is lost; the store and the maker's own spec keep it). Tell the maker to copy that flow and the
-  personas it names from the spec it was built from. A
+  personas (nothing is lost; the store and the maker's own spec keep it) and writes the flow ready to paste in
+  `.maker-workspace/managed-fragments.json`. Tell the maker to paste that flow and copy the
+  personas it names from the spec it was built from. If the download stops with `managed-fragments-path-taken`,
+  a file it did not write holds that name: ask the maker to move it, never delete it yourself. A
   declared rule or flow removed from the spec whose row was deleted is no longer managed once the build reads it gone
   by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
   change is still waiting to be proved keeps the build incomplete. A retirement a build reports it could not

@@ -2923,7 +2923,15 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
   pending, unreadable or invalid one is left out and named. A form with `events` is always invalid there:
   the download writes only icon and logo web resources, so its handler library is undeclared and the form
-  is named in `managedForms.stale`; forms without a handler are restored. The restored form is the group's
+  is named in `managedForms.stale`; forms without a handler are restored. A form left out only for its
+  handler libraries (the spec validates with the form and a stub `js` entry per missing library) is written
+  to the fragments file, `<out>/.maker-workspace/managed-fragments.json` (`lib/managed-fragments.js`,
+  `managedFragments` in the result), with `needs: [{ webResource }]` and a `paste` entry; a flow left out
+  only for its personas likewise (a stub persona per name). The stubs are never written. The file is the
+  download's only when it is missing or parses as its own `kind`: anything else there, or a link at it or at
+  `.maker-workspace`, is refused (`managed-fragments-path-taken`) before `runDownload` writes anything, and
+  asked again before the spec is written (an absent name is created exclusively, an own file replaced, and
+  removed when nothing is left out). The restored form is the group's
   `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
   downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.
@@ -3191,7 +3199,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   intent; an identical one is a no-op with no store write. Nothing is published. The managed download still
   leaves a flow with `securityRoles` out (`personasNotIn`): a download writes no `personas[]`, and a persona
   owns its role and is converged onto exactly what it declares, so one is never reconstructed from the
-  environment, and the flow is never restored without its roles; the stale reason names the missing personas.
+  environment, and the flow is never restored without its roles; the stale reason names the missing personas,
+  and the flow goes to the fragments file (`noteBpfFragment`) when it validates with a stub persona per name.
   **Verify and download** (`lib/declared-bpf-io.js`): verify reads each bound declared flow fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredBpf`) and runs `verifyDeclaredBpf`
   (`managed-bpf` check): the helper's one read-only `projectBpf`, certified only when it is a shape the

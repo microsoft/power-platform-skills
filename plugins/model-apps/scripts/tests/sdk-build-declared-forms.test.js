@@ -847,6 +847,44 @@ async function download(org, out, argv, extra = {}) {
 }
 const storeFileOf = (org, dir) => path.join(dir, storeFileName(environmentFingerprint(org.origin), APP, SOLUTION));
 
+// A declared form with an onload handler, and the script library it calls, built together.
+const LIBRARY = 'contoso_/scripts/item.js';
+const LIBRARY_SOURCE = 'var Item = { onLoad: function () {} };\n';
+function handledSpec() {
+  const s = makeSpec({ form: { events: [{ event: 'onload', library: LIBRARY, function: 'Item.onLoad' }] } });
+  s.webResources = [{ name: LIBRARY, displayName: 'Item script', type: 'js', content: LIBRARY_SOURCE }];
+  return s;
+}
+
+test('the explicit managed download writes a proved form it left out only for its handler library to the fragments file, ready to paste', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const built = handledSpec();
+    assert.equal((await build(org, dir, built, { phases: ['web-resources', 'forms'] })).err, undefined);
+    const out = newDir();
+    const r = await download(org, out, ['--include-managed', '--managed-manifest', storeFileOf(org, dir)]);
+    assert.equal(r.emitted[0].ok, true, JSON.stringify(r.emitted) + r.said);
+    const { stale } = r.emitted[0].payload.managedForms;
+    assert.deepEqual(stale.map((s) => s.key), [KEY]);
+    assert.match(stale[0].reason, new RegExp(`onload handler references undeclared web resource '${LIBRARY}'`));
+    assert.deepEqual(r.written.forms, []);
+    const file = path.join(out, '.maker-workspace', 'managed-fragments.json');
+    assert.deepEqual(r.emitted[0].payload.managedFragments, { file, keys: [{ family: 'form', key: KEY }] });
+    const fragments = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(fragments.items, [{ family: 'form', key: KEY, reason: stale[0].reason, needs: [{ webResource: LIBRARY }], paste: { forms: built.forms } }]);
+    // Pasted with the library it needs, the downloaded spec validates.
+    const pasted = { ...r.written, webResources: [...(r.written.webResources || []), built.webResources[0]], forms: fragments.items[0].paste.forms };
+    assert.equal(validateAppSpec(pasted, { profile: 'plan', reconstructed: true }).ok, true);
+    // A form left out for anything else gets no fragment: nothing proved it.
+    const refusing = await download(org, newDir(), ['--include-managed', '--managed-manifest', storeFileOf(org, dir)], {
+      validateAppSpec: (s, o) => ((s.forms || []).length ? { ok: false, errors: ['forms: not in this download'], warnings: [] } : validateAppSpec(s, o)),
+    });
+    assert.equal(refusing.emitted[0].ok, true);
+    assert.equal('managedFragments' in refusing.emitted[0].payload, false);
+  });
+});
+
 test('the explicit managed download restores a proved declared form from the named binding store, and names any it cannot restore', async () => {
   await withForms(true, async () => {
     const org = createFakeBuildOrg({ entities: ENTITIES });

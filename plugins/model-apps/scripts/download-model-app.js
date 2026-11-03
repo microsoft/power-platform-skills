@@ -26,6 +26,11 @@
 // flows (businessProcessFlows[].reconcile "declared"), which it leaves out too, into businessProcessFlows[] (`managedBpfs`). The download writes
 // no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>
 // (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>; each flow: adopt:bpf:<table>/<name>).
+// A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
+// calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
+// `<out>/.maker-workspace/managed-fragments.json` (`managedFragments` in the result; lib/managed-fragments.js). The download writes
+// that name only when it is missing or holds a file a download wrote: anything else there stops it before it writes anything
+// (`code: 'managed-fragments-path-taken'`).
 // Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
@@ -62,6 +67,7 @@ const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
+const { assertFragmentsPathFree, settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -3771,6 +3777,17 @@ async function main(deps = {}) {
     });
     return;
   }
+  // The managed download may write its fragments file (lib/managed-fragments.js) into <out>/.maker-workspace. That name is the
+  // download's, but the folder is the maker's: a file there that a download did not write (or a link at it) is refused HERE,
+  // before the pages and the spec are written, so the refusal leaves the app folder exactly as it was. It is asked again at the end.
+  if (includeManaged) {
+    try {
+      assertFragmentsPathFree(outDir);
+    } catch (e) {
+      io.emitResult(false, { ok: false, code: (e && e.code) || 'managed-fragments-path-taken', error: (e && e.message) || String(e) });
+      return;
+    }
+  }
   // AB#6686427 — prove the ambient Azure CLI identity can actually reach this org BEFORE any read.
   // Every read below is best-effort by design (a tenant without a setting definition, or a caller
   // without access to one artifact class, must still produce a usable spec), so an auth failure does
@@ -3854,6 +3871,8 @@ async function main(deps = {}) {
     let managedDashboards = null;
     let managedRules = null;
     let managedBpfs = null;
+    // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
+    const fragments = [];
     if (includeManaged) {
       const source = {
         sdk,
@@ -3863,6 +3882,7 @@ async function main(deps = {}) {
         appUniqueName: appUnique,
         solutionUniqueName: spec.solution && spec.solution.uniqueName,
         validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
+        fragments,
       };
       try {
         managedForms = await restoreManagedForms(source);
@@ -3895,6 +3915,19 @@ async function main(deps = {}) {
         + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
       );
     }
+    // The fragments file is settled before the spec: a refusal or a failed write here leaves app-spec.json as it was.
+    let managedFragments = null;
+    if (includeManaged) {
+      try {
+        managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
+      } catch (e) {
+        finish(false, { ok: false, code: (e && e.code) || 'managed-fragments-unwritable', error: (e && e.message) || String(e) });
+        return;
+      }
+      if (managedFragments) {
+        io.stderr.write(`WARNING: ${managedFragments.keys.length} managed item(s) left out only for what the download could not bring are written ready to paste in ${managedFragments.file}: add each "paste" entry to app-spec.json together with what its "needs" lists (from the spec it was built from), then build.\n`);
+      }
+    }
     writeFileSafe(specPath, JSON.stringify(spec, null, 2));
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
@@ -3912,7 +3945,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedFragments ? { managedFragments } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

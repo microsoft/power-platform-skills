@@ -101,9 +101,11 @@ function verifyDeclaredBpf({ flow, group, art }) {
  *   - the downloaded spec still validates with it (`validate`, the download's own validator).
  * Every other group (unread, changed since, not valid here, or still pending or unusable in the store) is answered in `stale` with
  * its reason, never silently dropped. Answers { restored: [key], stale: [{ key, reason }] }; a store file that cannot be used
- * throws `managed-manifest-unusable`.
+ * throws `managed-manifest-unusable`. `fragments`, when given, is an array a stale flow is pushed onto (noteBpfFragment) when its
+ * declaration is proved and left out only for the personas it names; the caller writes them to the fragments file
+ * (lib/managed-fragments.js).
  */
-async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
+async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate, fragments }) {
   const { groups, pending, invalid } = readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName }, 'bpf');
   const restored = [];
   const stale = [
@@ -141,7 +143,9 @@ async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName,
     // not restored without its roles either (that would drop authored intent), so it is left out with what to copy.
     const missing = personasNotIn(spec, declaration);
     if (missing.length) {
-      stale.push({ key, reason: `its securityRoles name ${missing.map((p) => `persona '${p}'`).join(', ')}, and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from` });
+      const reason = `its securityRoles name ${missing.map((p) => `persona '${p}'`).join(', ')}, and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from`;
+      stale.push({ key, reason });
+      noteBpfFragment(fragments, { key, reason, spec, declaration, next, missing, validate });
       continue;
     }
     const check = validate({ ...spec, businessProcessFlows: next });
@@ -158,6 +162,18 @@ async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName,
 
 function sortByKey(list) {
   return list.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+// A proved flow left out only for the personas its securityRoles name goes to the fragments file (lib/managed-fragments.js),
+// ready to paste. "Only" is checked, not assumed: the spec must validate with the flow (`next`, the flows it would hold) and a
+// stub for each missing persona. The stubs are never written. Without a collector nothing is noted.
+function noteBpfFragment(fragments, { key, reason, spec, declaration, next, missing, validate }) {
+  if (!Array.isArray(fragments)) return;
+  const { stubPersona } = require('./managed-fragments.js');
+  const personas = [...(Array.isArray(spec.personas) ? spec.personas : []), ...missing.map((p) => stubPersona(String(p).trim(), declaration.entity))];
+  const check = validate({ ...spec, personas, businessProcessFlows: next });
+  if (!check || !check.ok) return;
+  fragments.push({ family: 'bpf', key, reason, needs: missing.map((p) => ({ persona: String(p).trim() })), paste: { businessProcessFlows: [declaration] } });
 }
 
 // The personas a flow declaration's securityRoles name that `spec.personas` does not declare, in declaration order,
