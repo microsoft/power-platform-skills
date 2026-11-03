@@ -71,9 +71,9 @@
       ] }
   ],
   "views": [
-    { "entity": "new_project", "type": "main", "name": "Active Projects",
+    { "entity": "new_project", "name": "Active Projects",
       "columns": ["new_name", "new_stage", "new_startdate", "new_budget"], "activeOnly": true },
-    { "entity": "new_workitem", "type": "main", "name": "Open Work Items",
+    { "entity": "new_workitem", "name": "Open Work Items",
       "columns": ["new_title", "new_status", "new_priority", "new_projectid", "new_duedate"], "activeOnly": true }
   ],
   "charts": [

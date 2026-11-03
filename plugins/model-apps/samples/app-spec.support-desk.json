@@ -72,7 +72,6 @@
   "views": [
     {
       "entity": "new_customer",
-      "type": "main",
       "name": "Active Customers",
       "columns": ["new_name", "new_segment", "new_accountmanager"],
       "sort": [{ "attr": "new_name", "dir": "asc" }],
@@ -80,7 +79,6 @@
     },
     {
       "entity": "new_ticket",
-      "type": "main",
       "name": "Active Tickets",
       "columns": ["new_name", "new_priority", "new_status", "new_duedate"],
       "sort": [{ "attr": "new_duedate", "dir": "asc" }],
@@ -88,7 +86,6 @@
     },
     {
       "entity": "new_comment",
-      "type": "main",
       "name": "Active Comments",
       "columns": ["new_name", "new_author", "new_postedon"],
       "sort": [{ "attr": "new_postedon", "dir": "desc" }],

@@ -82,7 +82,6 @@
   "views": [
     {
       "entity": "new_order",
-      "type": "main",
       "name": "Active Orders",
       "columns": [
         "new_name",

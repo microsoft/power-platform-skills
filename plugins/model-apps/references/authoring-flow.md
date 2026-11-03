@@ -908,7 +908,7 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
   "entities": [ { "schemaName", "displayName", "pluralName", "primaryAttribute", "columns" } ],
   "relationships": [ { "type", "referenced", "referencing", "lookup" } ],
   "forms": [ { "entity", "type", "name", "layout", "subgrids?" } ],
-  "views": [ { "entity", "type", "name", "columns", "sort", "activeOnly" } ],
+  "views": [ { "entity", "name", "columns", "sort", "activeOnly" } ],
   "charts": [ { "entity", "name", "groupBy", "measure", "chartType" } ],
   "pages": [ { "key", "name", "purpose", "dataSources", "source": { "kind": "tsx", "codeFile": "..." } } ],
   "design?": { "accent", "density", "cornerRadius", "darkMode", "layout" },

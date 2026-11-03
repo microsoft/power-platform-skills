@@ -962,6 +962,11 @@ why they need naming here at all.
   build then failed at the platform, mid-run, and left behind a view row that could not be read or
   deleted, so every later build failed the same way. It is now rejected up
   front, naming the view and the offending entry.
+- **A view takes only these keys:** `entity`, `name`, `description`, `columns`, `sort`, `filters`, `activeOnly`, and — on a view
+  with `"reconcile": "declared"` — `key`, `viewId`, `linkEntities`. A filter item takes `attr`, `op`, `value`, `values` and
+  `relatedEntity`. Any other key is **ignored by the build**, so validation warns about it and names the key it most likely meant
+  (`filter` → `filters`, `column` → `attr`, `operator` → `op`); a view written with `filter` would otherwise be built without its
+  filter. A view has no `type`: it is always a public view of its table, so leave it out. These are warnings, never errors.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
