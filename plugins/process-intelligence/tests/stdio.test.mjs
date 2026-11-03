@@ -199,14 +199,42 @@ test('actual bundle warm username drift blocks further MCP traffic without persi
   assert.equal(await readFile(f.state.file('sample'), 'utf8'), before);
   assert.equal(stderr, '');
 });
-test('actual bundle keeps its early unsupported-Node guard without accessing private settings', async t => {
-  const f = await fixture(t), entry = pathToFileURL(path.join(f.plugin, 'server', 'mcp.mjs')).href;
-  const result = spawnSync(process.execPath, ['-e',
-    `Object.defineProperty(process.versions,'node',{value:'20.0.0'});import(${JSON.stringify(entry)}).then(m=>m.launch(['serve']))`],
-  { env: { ...f.env, PM_BRIDGE_PROFILE: '' }, cwd: f.temp, encoding: 'utf8', timeout: 10000 });
-  assert.equal(result.status, 1, result.stderr); assert.equal(result.stdout, '');
-  assert.match(result.stderr, /requires supported Node.js 22 or 24/);
-  await assert.rejects(access(f.configDir), { code: 'ENOENT' });
+test('source and actual bundle enforce a Node.js minimum without a major allowlist', async t => {
+  const f = await fixture(t);
+  const before = await readFile(f.state.file('sample'), 'utf8');
+  // Version overrides test the guard, not compatibility with those runtimes.
+  // Native-runtime CI separately exercises the complete suite and packaged MCP.
+  // Source imports resolve the dependency tree before the guard runs; give that
+  // setup a larger bounded budget than the single-file installed bundle.
+  for (const [entry, timeout] of [
+    [path.join(root, 'src', 'entry.mjs'), 30000],
+    [path.join(f.plugin, 'server', 'mcp.mjs'), 10000]
+  ]) {
+    for (const [version, accepted] of [
+      ['18.20.0', false], ['20.0.0', false], ['21.999.999', false],
+      ['22.0.0', true], ['22.99.0', true], ['23.0.0', true], ['24.0.0', true],
+      ['25.0.0', true], ['26.0.0', true], ['27.0.0', true], ['30.0.0', true]
+    ]) {
+      await t.test(`${path.basename(entry)} with version ${version}`, async () => {
+        const url = pathToFileURL(entry).href;
+        const args = accepted ? ['--help'] : ['serve'];
+        const code = `Object.defineProperty(process.versions,'node',{value:${JSON.stringify(version)}});
+          import(${JSON.stringify(url)}).then(m=>m.launch(${JSON.stringify(args)}));`;
+        const result = spawnSync(process.execPath, ['-e', code], {
+          env: { ...f.env, PM_BRIDGE_PROFILE: '' }, cwd: f.temp,
+          encoding: 'utf8', timeout
+        });
+        assert.ifError(result.error);
+        assert.equal(result.status, accepted ? 0 : 1, result.stderr);
+        assert.equal(result.stdout, '');
+        assert.match(result.stderr, accepted
+          ? /Process Intelligence Azure CLI bridge \(Node\.js 22\+\)/
+          : /Process Intelligence requires Node\.js 22 or later\./);
+        assert.equal(await readFile(f.state.file('sample'), 'utf8'), before);
+        await assert.rejects(access(f.configDir), { code: 'ENOENT' });
+      });
+    }
+  }
 });
 test('actual bundle and manifest reject removed clouds before auth, fetch or profile mutation', async t => {
   const f = await fixture(t), entry = path.join(f.plugin, 'server', 'mcp.mjs');

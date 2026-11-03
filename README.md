@@ -158,7 +158,7 @@ cohorts, rework and object-centric executions through guided MCP workflows.
 `/setup` and `/report-issue` handle connection setup and support drafts.
 See the [skill catalog](plugins/process-intelligence/README.md#skills).
 
-**Stack**: Node.js 22 or 24 LTS, Azure CLI, self-contained MCP bundle
+**Stack**: Node.js 22+ (maintained LTS recommended), Azure CLI, self-contained MCP bundle
 
 GCC, GCC High, DoD and Mooncake are not supported yet.
 

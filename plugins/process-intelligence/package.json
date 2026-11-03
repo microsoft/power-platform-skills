@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": { "node": "^22.0.0 || ^24.0.0" },
+  "engines": { "node": ">=22" },
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node scripts/test.mjs"

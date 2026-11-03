@@ -4824,7 +4824,7 @@
       "format": "esm"
     },
     "package.json": {
-      "bytes": 399,
+      "bytes": 385,
       "imports": [],
       "format": "esm",
       "with": {
@@ -4983,7 +4983,7 @@
       "format": "esm"
     },
     "src/cli.mjs": {
-      "bytes": 9787,
+      "bytes": 9785,
       "imports": [
         {
           "path": "src/errors.mjs",
@@ -5800,7 +5800,7 @@
           "bytesInOutput": 2162
         },
         "package.json": {
-          "bytesInOutput": 394
+          "bytesInOutput": 380
         },
         "src/bridge.mjs": {
           "bytesInOutput": 10995
@@ -5812,10 +5812,10 @@
           "bytesInOutput": 10553
         },
         "src/cli.mjs": {
-          "bytesInOutput": 8946
+          "bytesInOutput": 8944
         }
       },
-      "bytes": 1286978
+      "bytes": 1286962
     }
   }
 }
