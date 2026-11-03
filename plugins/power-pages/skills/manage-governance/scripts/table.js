@@ -36,6 +36,16 @@ function markdownCell(value) {
     .replace(/\|/g, '\\|');
 }
 
+// Names in prose must remain a single literal line, e.g. "*Site*\n[link](url)".
+// Escape HTML entities as well as Markdown syntax so neither can introduce markup.
+function markdownText(value) {
+  return String(value == null ? '' : value)
+    .replace(/\r\n|[\r\n\u2028\u2029]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/&/g, '&amp;')
+    .replace(/[\\`*_{}\[\]()<>#!|~]/g, '\\$&');
+}
+
 function renderMarkdownTable(headers, rows) {
   const row = (cells) => '| ' + cells.map(markdownCell).join(' | ') + ' |';
   return [
@@ -45,4 +55,4 @@ function renderMarkdownTable(headers, rows) {
   ].join('\n');
 }
 
-module.exports = { pad, border, renderMarkdownTable };
+module.exports = { pad, border, renderMarkdownTable, markdownText };

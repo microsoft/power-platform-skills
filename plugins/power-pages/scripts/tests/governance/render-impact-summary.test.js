@@ -8,7 +8,9 @@ const {
   scopeLine,
   cascadeLines,
   actionCell,
+  effectLine,
 } = require('../../../skills/manage-governance/scripts/render-impact-summary');
+const { markdownText } = require('../../../skills/manage-governance/scripts/table');
 const mapping = require('../../../skills/manage-governance/references/governance-mapping.json');
 
 function findPolicy(name) {
@@ -21,7 +23,7 @@ test('renderImpactSummary emits the required consent-gate rows in order', () => 
     direction: 'disable',
     scope: 'all',
     policyValue: 'None',
-    env: { displayName: 'Sachin-Jun-2nd', envId: '202c4f04-2eb7-eef3-a26d-14c77c8c13c5' },
+    env: { displayName: 'Test environment', envId: 'env-1' },
     sites: [
       { name: 'Site 1', url: 'https://a', portalId: '3e13', currentState: 'Enabled' },
       { name: 'Site 2', url: 'https://b', portalId: 'ea51', currentState: 'Enabled' },
@@ -31,12 +33,65 @@ test('renderImpactSummary emits the required consent-gate rows in order', () => 
   // Must start at Action: with no lead-in (SKILL.md forbids any heading first).
   // The Action row is direction-colored: red 🔴 for a disable operation.
   assert.match(l[0], /^\*\*Action:\*\*\s+🔴 Disable OpenID Connect sign-in$/);
-  assert.match(out, /^\*\*Environment:\*\*\s+Sachin-Jun-2nd\s+\(202c4f04-2eb7-eef3-a26d-14c77c8c13c5\)$/m);
+  assert.match(out, /^\*\*Environment:\*\*\s+Test environment\s+\(env-1\)$/m);
   assert.match(out, /^\*\*Scope:\*\*\s+Every site in this environment$/m);
   assert.match(out, /^\*\*Sites in environment:\*\*$/m);
-  assert.match(out, /^\*\*Effect:\*\*\s+OpenID Connect sign-in will be disabled on all sites in Sachin-Jun-2nd\.$/m);
+  assert.match(out, /^\*\*Effect:\*\*\s+OpenID Connect sign-in will be disabled on all sites in Test environment\.$/m);
   // The API-mapping companion line: env-wide disable -> None (no ToBeAdded list).
   assert.match(out, /^\*\*Policy value:\*\*\s+None$/m);
+});
+
+test('shared Markdown prose helper preserves names as single-line literal text', () => {
+  const cases = [
+    [null, ''],
+    ['Test environment', 'Test environment'],
+    ['*Site*_[link](url)`code`', '\\*Site\\*\\_\\[link\\]\\(url\\)\\`code\\`'],
+    ['A\\|B', 'A\\\\\\|B'],
+    ['A\r\nB\rC\nD\u2028E\u2029F', 'A B C D E F'],
+    ['<b>&#42; &amp;</b>', '\\<b\\>&amp;\\#42; &amp;amp;\\</b\\>'],
+    ['A\tB\u001bC', 'A B C'],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(markdownText(input), expected);
+  }
+});
+
+for (const direction of ['enable', 'disable']) {
+  for (const scope of ['all', 'specific']) {
+    test(`impact prose escapes names for ${direction}/${scope} without replacement-string expansion`, () => {
+      const envName = '*Environment*\r\n> [link](url) $&';
+      const siteName = '`Site`\\|A\n# Heading $&';
+      const escapedEnv = '\\*Environment\\* \\> \\[link\\]\\(url\\) $&amp;';
+      const escapedSite = '\\`Site\\`\\\\\\|A \\# Heading $&amp;';
+      const req = {
+        policy: 'EnableProtocolOpenIdConnect',
+        direction,
+        scope,
+        env: { displayName: envName, envId: 'env-1' },
+        sites: [{ name: siteName, portalId: 'site-1', currentState: 'Disabled' }],
+      };
+      const out = renderImpactSummary(req);
+      const envLine = out.split('\n').find((line) => line.startsWith('**Environment:**'));
+      const scopeOutput = out.split('\n').find((line) => line.startsWith('**Scope:**'));
+      const effect = out.split('\n').find((line) => line.startsWith('**Effect:**'));
+      assert.equal(envLine, `**Environment:** ${escapedEnv}  (env-1)`);
+      assert.equal(scopeOutput, scope === 'specific'
+        ? `**Scope:** Only ${escapedSite}`
+        : '**Scope:** Every site in this environment');
+      assert.ok(effect.includes(scope === 'specific' ? escapedSite : escapedEnv));
+      assert.doesNotMatch(out, /^> \[link\]|^# Heading/m);
+      assert.doesNotMatch(effect, /\{EnvDisplay\}|\{SiteNameList\}/);
+      assert.equal(req.env.displayName, envName, 'input names are not modified');
+      assert.equal(req.sites[0].name, siteName);
+    });
+  }
+}
+
+test('fallback Effect sentence also escapes the environment name', () => {
+  assert.equal(
+    effectLine({}, findPolicy('EnableProtocolOpenIdConnect'), 'disable', 'all', '*Env*\n<b>', []),
+    'OpenID Connect sign-in will be disabled in \\*Env\\* \\<b\\>.',
+  );
 });
 
 test('Policy value line derives Include + ToBeAdded ids for a specific-site enable', () => {
@@ -97,8 +152,8 @@ test('the Sites table renders as a GitHub-flavored Markdown table with single-li
     sites: [
       {
         name: 'Portal_1',
-        url: 'https://site-3axiv.powerappsportals.com',
-        portalId: 'd1df518c-8e39-4bd5-8410-eb1c0c28e56c',
+        url: 'https://site-1.example.com',
+        portalId: 'site-1',
         currentState: 'Enabled',
       },
     ],
@@ -117,7 +172,7 @@ test('the Sites table renders as a GitHub-flavored Markdown table with single-li
   // marker — renders on ONE physical line as a single pipe row.
   assert.match(
     out,
-    /^\| Portal_1 \| https:\/\/site-3axiv\.powerappsportals\.com \| d1df518c-8e39-4bd5-8410-eb1c0c28e56c \| 🟢 Enabled \| 🔴 Disabled ← CHANGED \|$/m,
+    /^\| Portal_1 \| https:\/\/site-1\.example\.com \| site-1 \| 🟢 Enabled \| 🔴 Disabled ← CHANGED \|$/m,
     'the site row is a single Markdown line with every cell inline'
   );
 });

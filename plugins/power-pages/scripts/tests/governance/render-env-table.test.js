@@ -10,9 +10,9 @@ const {
 } = require('../../../skills/manage-governance/scripts/render-env-table');
 
 const SAMPLE = [
-  { displayName: 'Automation_runtimeenv', envId: '00476f13-5245-e3c1-a4a4-2fb76ad3ac49' },
-  { displayName: 'Sachin_july_20', envId: '1cf29f7b-04db-e4a6-aeda-74d99b256f85' },
-  { displayName: 'Sachin-preprod-July', envId: '2a0887a0-6366-ef59-9992-118cfcd2fa2b' },
+  { displayName: 'Test environment 1', envId: '00000000-0000-4000-8000-000000000001' },
+  { displayName: 'Test environment 2', envId: '00000000-0000-4000-8000-000000000002' },
+  { displayName: 'Test environment 3', envId: '00000000-0000-4000-8000-000000000003' },
 ];
 
 function lines(str) {
@@ -31,21 +31,21 @@ test('renders a bordered box with header and one row per env', () => {
 });
 
 test('every rendered line has identical visible width (aligned columns)', () => {
-  const out = renderEnvTable(SAMPLE, { currentEnvId: '2a0887a0-6366-ef59-9992-118cfcd2fa2b' });
+  const out = renderEnvTable(SAMPLE, { currentEnvId: SAMPLE[2].envId });
   const widths = new Set(lines(out).map((s) => s.length));
   assert.equal(widths.size, 1, 'all lines must share one width');
 });
 
 test('output is ASCII-only (no wide glyphs that break alignment)', () => {
-  const out = renderEnvTable(SAMPLE, { currentEnvId: '2a0887a0-6366-ef59-9992-118cfcd2fa2b' });
+  const out = renderEnvTable(SAMPLE, { currentEnvId: SAMPLE[2].envId });
   // eslint-disable-next-line no-control-regex
   assert.ok(/^[\x00-\x7F\n]*$/.test(out), 'table must contain only ASCII characters');
 });
 
 test('flags the current selection row with the marker and tag', () => {
-  const current = '2a0887a0-6366-ef59-9992-118cfcd2fa2b';
+  const current = SAMPLE[2].envId;
   const out = renderEnvTable(SAMPLE, { currentEnvId: current });
-  const row = lines(out).find((s) => s.includes('Sachin-preprod-July'));
+  const row = lines(out).find((s) => s.includes(SAMPLE[2].displayName));
   assert.ok(row.includes(CURRENT_MARK), 'current row shows the marker');
   assert.ok(row.includes(CURRENT_TAG), 'current row shows the CURRENT SELECTION tag');
 });
@@ -56,10 +56,10 @@ test('no current selection → no marker/tag anywhere', () => {
 });
 
 test('exactly one row is tagged as current', () => {
-  const out = renderEnvTable(SAMPLE, { currentEnvId: '1cf29f7b-04db-e4a6-aeda-74d99b256f85' });
+  const out = renderEnvTable(SAMPLE, { currentEnvId: SAMPLE[1].envId });
   const tagged = lines(out).filter((s) => s.includes(CURRENT_TAG));
   assert.equal(tagged.length, 1);
-  assert.ok(tagged[0].includes('Sachin_july_20'));
+  assert.ok(tagged[0].includes(SAMPLE[1].displayName));
 });
 
 test('row numbers are 1-based and sequential', () => {
@@ -94,7 +94,7 @@ test('markdown: emits header + separator + one row per env', () => {
   assert.equal(l.length, 5);
   assert.equal(l[0], '| # | Selected | Environment Name | Environment ID |');
   assert.equal(l[1], '|---|---|---|---|');
-  assert.ok(l[2].includes('Automation_runtimeenv'));
+  assert.ok(l[2].includes(SAMPLE[0].displayName));
 });
 
 test('markdown: row numbers are 1-based and sequential', () => {
@@ -107,11 +107,11 @@ test('markdown: row numbers are 1-based and sequential', () => {
 
 test('markdown: flags exactly the current selection row in the Selected column', () => {
   const out = renderEnvMarkdown(SAMPLE, {
-    currentEnvId: '2a0887a0-6366-ef59-9992-118cfcd2fa2b',
+    currentEnvId: SAMPLE[2].envId,
   });
   const tagged = lines(out).filter((s) => s.includes('selected earlier'));
   assert.equal(tagged.length, 1);
-  assert.ok(tagged[0].includes('Sachin-preprod-July'));
+  assert.ok(tagged[0].includes(SAMPLE[2].displayName));
 });
 
 test('markdown: no current selection → no "selected earlier" marker', () => {

@@ -501,22 +501,22 @@ test('renderAvailablePortalsMarkdown shows a clean table (no info line) when ALL
 // return. See SKILL.md Phase 4.3.1 / 4.4.4 / 4.2.3 / 4.2.5.
 
 test('resolvePortalStates: Include -> only listed sites Enabled (rest Disabled)', () => {
-  // getDetails body shape observed live: IncludedSites array, ExcludedSites null.
+  // Keep the API response shape with synthetic site IDs.
   const details = {
     IncludedSites: [
-      '096b20ff-2e33-4a10-bcf7-6903a7aa09f5',
-      '214d497a-d8a8-4a28-90ac-4fd1c2fd4437',
+      'site-3',
+      'site-4',
     ],
     ExcludedSites: null,
   };
   const portals = [
-    '096b20ff-2e33-4a10-bcf7-6903a7aa09f5', // listed -> Enabled
-    'd1df518c-8e39-4bd5-8410-eb1c0c28e56c', // not listed -> Disabled
+    'site-3', // listed -> Enabled
+    'site-1', // not listed -> Disabled
   ];
   const states = resolvePortalStates('Include', details, portals);
   assert.deepEqual(states, [
-    { portalId: '096b20ff-2e33-4a10-bcf7-6903a7aa09f5', state: 'Enabled' },
-    { portalId: 'd1df518c-8e39-4bd5-8410-eb1c0c28e56c', state: 'Disabled' },
+    { portalId: 'site-3', state: 'Enabled' },
+    { portalId: 'site-1', state: 'Disabled' },
   ]);
 });
 
@@ -555,25 +555,25 @@ test('resolvePortalStates: unknown env value -> Unknown (fail visible, never gue
   assert.deepEqual(states, [{ portalId: 'p1', state: 'Unknown' }]);
 });
 
-test('resolvePortalStates: reproduces the live OIDC read for Sachin-preprod-July', () => {
+test('resolvePortalStates: reproduces a five-site OIDC Include read with synthetic IDs', () => {
   // Regression guard for the exact case that motivated this path: env=Include,
   // details.IncludedSites=[Portal_3,4,5]. A per-portal get-portal loop returned
   // Enabled for 3/4/5 and Disabled for 1/2 — this must match without any
   // per-portal call.
   const details = {
     IncludedSites: [
-      '096b20ff-2e33-4a10-bcf7-6903a7aa09f5', // Portal_3
-      '214d497a-d8a8-4a28-90ac-4fd1c2fd4437', // Portal_4
-      '76dbce65-52dd-4a9e-8b8c-2753e57c6214', // Portal_5
+      'site-3',
+      'site-4',
+      'site-5',
     ],
     ExcludedSites: null,
   };
   const portals = [
-    'd1df518c-8e39-4bd5-8410-eb1c0c28e56c', // Portal_1
-    'bf8ead09-df94-488a-b78c-d4065899e1a4', // Portal_2
-    '096b20ff-2e33-4a10-bcf7-6903a7aa09f5', // Portal_3
-    '214d497a-d8a8-4a28-90ac-4fd1c2fd4437', // Portal_4
-    '76dbce65-52dd-4a9e-8b8c-2753e57c6214', // Portal_5
+    'site-1',
+    'site-2',
+    'site-3',
+    'site-4',
+    'site-5',
   ];
   const states = resolvePortalStates('Include', details, portals).map((s) => s.state);
   assert.deepEqual(states, ['Disabled', 'Disabled', 'Enabled', 'Enabled', 'Enabled']);

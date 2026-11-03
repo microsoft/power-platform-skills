@@ -147,6 +147,10 @@ before approval. Never claim replacement semantics from `ToBeAdded` alone.
 
 ### Deterministic summary
 
+The renderer normalizes environment and site names to single-line literal
+Markdown text before inserting them into Environment, Scope, and Effect prose.
+Pass the original names to the helper; do not pre-escape them.
+
 Pipe the resolved request to the renderer:
 
 ```bash

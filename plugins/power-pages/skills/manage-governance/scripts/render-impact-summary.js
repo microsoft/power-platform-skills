@@ -19,7 +19,7 @@ const path = require('path');
 // Reuse the committed ANSI helper so the state cells can be colorized in a real
 // terminal, but stay plain (emoji-only) for chat surfaces that strip ANSI.
 const { green, red } = require('./colors');
-const { renderMarkdownTable } = require('./table');
+const { renderMarkdownTable, markdownText } = require('./table');
 
 const MAPPING_PATH = path.join(__dirname, '..', 'references', 'governance-mapping.json');
 
@@ -76,7 +76,7 @@ function plainStateCell(state) {
 // All / Include / None / Exclude terms to the user").
 function scopeLine(scope, siteNames) {
   if (scope === 'specific') {
-    const list = siteNames.length ? siteNames.join(', ') : '(no sites listed)';
+    const list = siteNames.length ? siteNames.map(markdownText).join(', ') : '(no sites listed)';
     return `Only ${list}`;
   }
   return 'Every site in this environment';
@@ -92,12 +92,13 @@ function effectLine(mapping, policy, direction, scope, envDisplay, siteNames) {
   );
   if (!tmpl) {
     // Fall back to a bare sentence rather than throwing — the gate must render.
-    return `${policy.subject} will be ${direction === 'disable' ? 'disabled' : 'enabled'} in ${envDisplay}.`;
+    return `${policy.subject} will be ${direction === 'disable' ? 'disabled' : 'enabled'} in ${markdownText(envDisplay)}.`;
   }
   return tmpl.template
-    .replace('{Subject}', policy.subject)
-    .replace('{EnvDisplay}', envDisplay)
-    .replace('{SiteNameList}', siteNames.join(', '));
+    // Function replacements preserve literal "$&" / "$`" in display names.
+    .replace('{Subject}', () => policy.subject)
+    .replace('{EnvDisplay}', () => markdownText(envDisplay))
+    .replace('{SiteNameList}', () => siteNames.map(markdownText).join(', '));
 }
 
 // The sign-out Side-effect line, only when the resulting policyValue is one of
@@ -264,7 +265,9 @@ function renderImpactSummary(req, opts = {}) {
   const scope = req.scope === 'specific' ? 'specific' : 'all';
   const env = req.env || {};
   const envDisplay = env.displayName || '(unnamed env)';
-  const envLine = env.envId ? `${envDisplay}  (${env.envId})` : envDisplay;
+  const envLine = env.envId
+    ? `${markdownText(envDisplay)}  (${markdownText(env.envId)})`
+    : markdownText(envDisplay);
   const sites = Array.isArray(req.sites) ? req.sites : [];
   const siteNames = sites.map((s) => (s && s.name) || '(unnamed)');
 
@@ -358,7 +361,7 @@ Input JSON shape:
     "direction": "disable",
     "scope": "all" | "specific",
     "policyValue": "None",
-    "env": { "displayName": "Sachin-Jun-2nd", "envId": "202c4f04-..." },
+    "env": { "displayName": "Test environment", "envId": "env-1" },
     "sites": [
       { "name": "Site 1", "url": "https://...", "portalId": "3e13...", "currentState": "Enabled" }
     ]
