@@ -949,8 +949,9 @@ ASSERTIONS.set('author: a new app with a chart or view of a table outside its na
 });
 
 // Declared reconciliation (2.21.0, references/app-spec-schema-advanced.md). A new app authors every view and chart it
-// declares, so each one is reconcile: "declared"; nothing else may carry reconcile, and a command `key` is refused in this
-// version. A declared chart on a new table cannot store a title, and a declared view named like the table's stock
+// declares, so each one is reconcile: "declared". The evals graded here ask for no declared form, dashboard, business rule or
+// process flow (those are opt-in at the maker's request; fixtures 21–24 cover them), so in them nothing else may carry
+// reconcile; a command `key` is refused in this version. A declared chart on a new table cannot store a title, and a declared view named like the table's stock
 // "Active/Inactive <plural>" view would be an adoption on the very first build.
 function declaredProblems(spec) {
   const problems = [];

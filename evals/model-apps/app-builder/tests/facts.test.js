@@ -849,6 +849,28 @@ test('2.21.0 authoring expectations pass on their fixtures and fail when the spe
   assert.strictEqual(grade(13, (s) => { s.fieldSecurityProfiles[0].permissions.pop(); }), 'fail');
 });
 
+// Fixture 11's prompt asks for a High Priority view filtered on Priority 5. The view builder reads `filters[]` entries of
+// `{ attr, op, value }` (plugins/model-apps/scripts/lib/sdk-build.js, the saved-query builder) and ignores any other spelling:
+// the fixture once wrote `filter[].column/operator`, and its view then showed every active shipment. So the fixture must carry
+// exactly the read shape, and the check must tell it from the old spelling, a wrong value and a missing filter.
+test('fixture 11 filters its High Priority view on Priority 5 in the shape the view builder reads', () => {
+  const spec = loadFixtures(path.join(__dirname, '..', 'fixtures')).find((f) => f.id === 11).spec;
+  const filtersPriorityFive = (s) => {
+    const view = (s.views || []).find((v) => v.name === 'High Priority');
+    return !!view && Array.isArray(view.filters)
+      && view.filters.some((f) => f && f.attr === 'cnt_priority' && f.op === 'eq' && f.value === 5);
+  };
+  const mutated = (mutate) => {
+    const s = structuredClone(spec);
+    mutate(s.views.find((v) => v.name === 'High Priority'));
+    return filtersPriorityFive(s);
+  };
+  assert.strictEqual(filtersPriorityFive(spec), true, 'the fixture filters Priority to 5');
+  assert.strictEqual(mutated((v) => { v.filter = [{ column: 'cnt_priority', operator: 'eq', value: 5 }]; delete v.filters; }), false, 'the old filter[].column/operator spelling');
+  assert.strictEqual(mutated((v) => { v.filters[0].value = 1; }), false, 'a wrong value');
+  assert.strictEqual(mutated((v) => { delete v.filters; }), false, 'no filter');
+});
+
 const grade2210 = (id, mutate) => {
   const ev = evalsManifest.evals.find((e) => e.id === id);
   const spec = structuredClone(loadFixtures(path.join(__dirname, '..', 'fixtures')).find((f) => f.id === id).spec);
