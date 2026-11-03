@@ -68,6 +68,7 @@ const POLICY = {
   'build-lease-invalid': { kinds: ['never'] },
   // The managed binding store (lib/managed-bindings.js) exists and cannot be trusted: a run again reads the same file. Held through the real engine and CLI openers.
   'managed-binding-store-unreadable': { kinds: ['never'], via: 'create-stable-identities.test.js' },
+  'publication-risk-accepted': { kinds: ['never'], via: 'sdk-build-declared-forms.test.js' },
   'app-header-unpublished': { kinds: ['never'] },
   'app-copy-unpushed-edits': { kinds: ['never'] },
   'sitemap-removal-unapproved': { kinds: ['never'] },

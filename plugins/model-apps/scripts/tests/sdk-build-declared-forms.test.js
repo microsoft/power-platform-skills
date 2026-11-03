@@ -396,6 +396,115 @@ test('the CLI prints the remedy and typed approval from the refusal, records onl
   });
 });
 
+// One CLI invocation (buildModelApp) over `dir`, with the transport the CLI builds, running only `phases`.
+async function cliRun(org, dir, spec, extra = {}, phases = ['forms']) {
+  const barrier = createPublicationBarrier();
+  const sendObserver = createAttemptSendObserver();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, sendObserver) });
+  await sdk.initWorkspace();
+  const said = [];
+  const mark = org.calls.length;
+  let err;
+  let out;
+  try {
+    out = await buildModelApp(spec, { apply: true, env: org.origin, workspaceDir: dir, appDir: dir, retryDelayMs: 0, ...extra }, { sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases }), publicationBarrier: barrier, sendObserver, warn: (w) => said.push(String(w)), log: (w) => said.push(String(w)) });
+  } catch (e) { err = e; }
+  const calls = org.calls.slice(mark);
+  return { err, out, said: said.join('\n'), writes: calls.filter((c) => c.method !== 'GET'), tablePublishes: org.tablePublishes(mark) };
+}
+
+// The printed approval is accepted wherever the stop comes from: with the form still declared (the forms phase), with its
+// declaration removed (nothing in the forms phase stops on it), and on the app-shell path (the app write is withheld).
+for (const { name, removed, phases, publish = false } of [
+  { name: 'its declaration removed, the forms phase', removed: true, phases: ['forms'] },
+  { name: 'its declaration removed, the app write withheld', removed: true, phases: ['forms', 'app-shell'] },
+  { name: 'still declared, the app write withheld', removed: false, phases: ['forms', 'app-shell'] },
+  { name: 'still declared, --publish: the app write withheld before the publish phase', removed: false, phases: ['forms', 'app-shell', 'publish'], publish: true },
+  { name: 'its declaration removed, --publish: the app write withheld before the publish phase', removed: true, phases: ['forms', 'app-shell', 'publish'], publish: true },
+]) {
+  test(`publication risk (${name}): the exact printed approval is accepted before any write, that run stays stopped, and the next run publishes`, async () => {
+    await withForms(true, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      const restore = losePublish(org, { applied: false });
+      assert.ok((await cliRun(org, dir, makeSpec(), { publish }, phases)).err);
+      restore();
+      const spec = makeSpec();
+      if (removed) spec.forms = [];
+      const token = storeOf(org, dir).readGroup('form', KEY).committed.publication.dispatchToken;
+      // Without the approval, or with another one, --allow-destructive or --approve all, nothing is accepted.
+      for (const extra of [{}, { allowDestructive: true, approve: 'all', publicationRisk: new Set(['publication-risk:table:contoso_other']) }]) {
+        const denied = await cliRun(org, dir, spec, { publish, ...extra }, phases);
+        assert.doesNotMatch(denied.said, /accepted the risk/);
+        assert.deepEqual(denied.tablePublishes, []);
+        assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.dispatchToken, token);
+      }
+      const accepted = await cliRun(org, dir, spec, { publish, publicationRisk: new Set(['publication-risk:table:contoso_item']) }, phases);
+      assert.ok(accepted.err, 'acceptance is a risk decision, not a proof: the run stays stopped');
+      assert.equal(accepted.err.code, 'publication-risk-accepted');
+      assert.ok(accepted.said.includes(`accepted the risk of dispatch ${token} (publication-risk:table:contoso_item)`), accepted.said);
+      assert.deepEqual(accepted.writes, [], 'the accepting run sends nothing');
+      assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'owed');
+      const next = await cliRun(org, dir, spec, { publish }, phases);
+      assert.doesNotMatch(next.said, /accepted the risk|publication-risk:table:contoso_item/);
+      // With --publish the publish phase publishes the spec's tables as well, so that run publishes the table more than once.
+      if (publish) assert.ok(next.tablePublishes.length >= 1 && next.tablePublishes.every((t) => t.length === 1 && t[0] === 'contoso_item'), JSON.stringify(next.tablePublishes));
+      else assert.deepEqual(next.tablePublishes, [['contoso_item']], 'the next run publishes the table');
+      assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'confirmed');
+    });
+  });
+}
+
+// A maker added a control for contoso_code to the deployed form (its saved and published layers alike), which the spec does not
+// place on it.
+function addForeignControl(org, name) {
+  const cell = '<row><cell id="{0b0b0b0b-1111-4222-8333-444444444444}" showlabel="true" visible="true"><labels><label description="Code" languagecode="1033" /></labels><control id="contoso_code" classid="{4273EDBD-AC1D-40D3-9FB2-095C621B552D}" datafieldname="contoso_code" disabled="false" /></cell></row>';
+  const rows = org.fake.rows('systemforms').filter((row) => row.data.name === name);
+  assert.equal(rows.length, 1);
+  for (const row of rows) {
+    row.data.formxml = row.data.formxml.replace('</row></rows></section>', `</row>${cell}</rows></section>`);
+    if (row.publishedData) row.publishedData.formxml = row.data.formxml;
+  }
+}
+const nameOnly = (declared) => makeSpec({ declared, form: { tabs: [{ name: 'general', label: 'General', sections: [{ name: 'main', label: 'Main', fields: ['contoso_name'] }] }] } });
+
+test('a control a maker added to a declared form is not refused as a destructive removal: the build keeps it and goes on', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = nameOnly(true);
+    const first = await cliRun(org, dir, spec);
+    assert.equal(first.err, undefined, chainText(first.err));
+    assert.equal(first.out && first.out.ok === false, false, JSON.stringify(first.out && first.out.errors));
+    addForeignControl(org, 'Declared Item');
+    const next = await cliRun(org, dir, spec);
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.equal(next.out && next.out.ok === false, false, JSON.stringify(next.out && next.out.errors));
+    assert.doesNotMatch(next.said, /destructive/);
+    const row = org.fake.rows('systemforms').find((r) => r.data.name === 'Declared Item');
+    assert.match(row.data.formxml, /datafieldname="contoso_code"/, 'the foreign control is kept');
+  });
+});
+
+test('control: the same control on a plain explicit form is still refused before any write, and a run given --authorize is told that it approves none of it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = nameOnly(false);
+    const first = await cliRun(org, dir, spec);
+    assert.equal(first.err, undefined, chainText(first.err));
+    addForeignControl(org, 'Declared Item');
+    for (const extra of [{}, { authorizedAdoption: new Set([`form:${KEY}`]) }]) {
+      const refused = await cliRun(org, dir, spec, extra);
+      assert.equal(refused.out && refused.out.ok, false);
+      const text = refused.out.errors.join('\n');
+      assert.match(text, /refusing 1 destructive operation\(s\) without --allow-destructive/);
+      assert.match(text, /form "Declared Item" \(contoso_item\) — removes field\(s\): contoso_code/);
+      assert.equal(/the --authorize keys given approve none of them/.test(text), !!extra.authorizedAdoption, text);
+      assert.deepEqual(refused.writes, []);
+    }
+  });
+});
 // --- the round trip: the typed form approval, verify and the explicit managed download ----------------------------------------
 
 test('--authorize adopt|overwrite:form:<key> is read in any case; an untyped key names the single declared form; an ambiguous or undeclared one is refused', async () => {

@@ -617,7 +617,7 @@ const dropDashboard = (spec) => ({ ...spec, dashboards: [], appShell: { areas: [
 const rename = (wire, id, name) => { for (const layer of [wire.saved, wire.published]) layer.get(id).name = name; };
 
 // The CLI front door (build-model-app.js buildModelApp) over the wire, with the build workspace in `appDir`/.maker-workspace.
-async function cliBuild(wire, appDir, spec, extra = {}) {
+async function cliBuild(wire, appDir, spec, extra = {}, phases = ['dashboards']) {
   const dir = path.join(appDir, '.maker-workspace');
   fs.mkdirSync(dir, { recursive: true });
   const barrier = createPublicationBarrier();
@@ -629,7 +629,7 @@ async function cliBuild(wire, appDir, spec, extra = {}) {
   let error;
   try {
     await buildModelApp(spec, { apply: true, env: ORIGIN, workspaceDir: dir, appDir, retryDelayMs: 0, ...extra }, {
-      sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases: ['dashboards'] }), publicationBarrier: barrier, sendObserver,
+      sdk, provisionSdk: sdk, runBuild: (s, o) => runSdkBuild(s, { ...o, phases }), publicationBarrier: barrier, sendObserver,
       provisionedLanguages: async () => wire.languages(),
       warn: (m) => messages.push(String(m)), log: (m) => messages.push(String(m)),
     });
@@ -960,6 +960,42 @@ test('publication risk through the CLI: an unchanged all-carried dashboard stays
     assert.equal(next.calls.filter((c) => c.path === 'PublishXml').length, 0);
   });
 });
+// The printed approval is accepted in a run that never reaches the dashboards phase too: there the store's quarantine
+// withholds the app write, and that stop carries no dispatch as data.
+for (const removed of [false, true]) {
+  test(`publication risk through the CLI (${removed ? 'its declaration removed' : 'still declared'}, a run without the dashboards phase): the exact typed approval is accepted before any write, and that run stops`, async () => {
+    await withDashboards(true, async () => {
+      const wire = wireWithIdReads();
+      const appDir = makeTempDir('declared-dash-');
+      const spec = makeSpec();
+      wire.script((e) => e.method === 'POST' && e.path === 'PublishXml', { error: new Error('lost answer'), unapplied: true });
+      const first = await cliBuild(wire, appDir, spec);
+      assert.ok(first.error);
+      const g = committedGroup(first.dir);
+      const token = g.publication.dispatchToken;
+      const later = removed ? dropDashboard(spec) : clone(spec);
+      const approval = `publication-risk:dashboard:${g.root.id}`;
+      for (const extra of [{}, { approve: 'all', allowDestructive: true }]) {
+        const denied = await cliBuild(wire, appDir, later, extra, ['app-shell']);
+        assert.ok(denied.error, 'the store withholds the app write');
+        assert.ok(!denied.messages.some((m) => /accepted the risk/.test(m)), denied.messages.join('\n'));
+        assert.equal(committedGroup(first.dir).publication.dispatchToken, token);
+      }
+      const parsed = authorizationKeys(['--authorize', approval], later);
+      assert.equal(parsed.error, null);
+      const granted = await cliBuild(wire, appDir, later, { publicationRisk: parsed.publicationRisk }, ['app-shell']);
+      assert.equal(granted.error && granted.error.code, 'publication-risk-accepted', chainText(granted.error));
+      assert.ok(granted.messages.some((m) => m.includes(`accepted the risk of dispatch ${token} (${approval})`)), granted.messages.join('\n'));
+      assert.deepEqual(granted.calls.filter((c) => c.method !== 'GET'), [], 'the accepting run sends nothing');
+      assert.equal(committedGroup(first.dir).publication.state, 'owed');
+      if (!removed) {
+        const next = await cliBuild(wire, appDir, spec);
+        assert.equal(next.error, undefined, chainText(next.error));
+        assert.equal(committedGroup(first.dir).publication.state, 'confirmed');
+      }
+    });
+  });
+}
 // One invocation with the caller's barrier (shared by the SDK's send boundary and the build), as build() makes its own.
 async function buildWith(wire, dir, spec, { barrier = createPublicationBarrier(), ...opts } = {}) {
   const sendObserver = createAttemptSendObserver();
