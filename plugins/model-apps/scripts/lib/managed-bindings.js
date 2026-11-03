@@ -782,15 +782,21 @@ function validateEffect(e, where) {
 // scope, under which typed approval, and the groups it released. Kept as an audit trail, newest last, at most
 // RISK_ACCEPTANCES_KEPT; it grants nothing by itself.
 const RISK_ACCEPTANCES_KEPT = 32;
-const publicationRiskApproval = (scope) => `publication-risk:${scopeKey(scope)}`;
+// The typed approval names the scope AND the one dispatch it was printed for, e.g.
+//   publication-risk:table:new_ticket/0f8fad5b-d9cb-469f-a165-70867728950e
+//   publication-risk:dashboard:00000000-0000-0000-0000-000000000000/0f8fad5b-d9cb-469f-a165-70867728950e
+// A scope alone cannot tell a decision about one lost publish from a decision about the next one of the same scope, so a key
+// copied from an earlier stop must never release a later dispatch: the dispatch is part of what the maker approves.
+// '/' splits them: a table name and a dashboard id never hold one, and a dispatch token is a UUID.
+const publicationRiskApproval = (scope, dispatchToken) => `publication-risk:${scopeKey(scope)}/${dispatchToken}`;
 // The way out of an unconfirmed publish, named wherever one blocks a change: a fresh read that shows a layer the publish
 // changed settles it on its own (confirmUncertainPublication); when none can (the publish carried only layers that
-// were already live), the maker checks what is live and accepts the risk with the scope's typed approval.
-const publicationRemedy = (scope, dispatchToken) => `it settles when a fresh read shows a layer that publish changed; if none can, check what is live on ${scopeKey(scope)} and accept the risk with the approval "${publicationRiskApproval(scope)}" for dispatch ${dispatchToken} (acceptUncertainPublication)`;
+// were already live), the maker checks what is live and accepts the risk with that dispatch's typed approval.
+const publicationRemedy = (scope, dispatchToken) => `it settles when a fresh read shows a layer that publish changed; if none can, check what is live on ${scopeKey(scope)} and accept the risk of dispatch ${dispatchToken} with the approval "${publicationRiskApproval(scope, dispatchToken)}" (acceptUncertainPublication)`;
 // The fields every refusal over an unconfirmed publish carries, so a caller offers the maker that dispatch's decision
-// from data, never by parsing a token out of the message: the blocked dispatch, the scope's typed approval
+// from data, never by parsing a token out of the message: the blocked dispatch, its own typed approval
 // (acceptUncertainPublication takes both) and the remedy text.
-const blockedPublication = (scope, dispatchToken) => ({ dispatchToken, approval: publicationRiskApproval(scope), remedy: publicationRemedy(scope, dispatchToken) });
+const blockedPublication = (scope, dispatchToken) => ({ dispatchToken, approval: publicationRiskApproval(scope, dispatchToken), remedy: publicationRemedy(scope, dispatchToken) });
 function validateRiskAcceptances(list, where) {
   if (!Array.isArray(list) || list.length > RISK_ACCEPTANCES_KEPT) throw invalid(where, `is not a list of at most ${RISK_ACCEPTANCES_KEPT} acceptances`);
   list.forEach((x, i) => {
@@ -798,7 +804,7 @@ function validateRiskAcceptances(list, where) {
     closedKeys(x, ['scope', 'dispatchToken', 'approval', 'groups'], w);
     validateScope(x.scope, `${w}.scope`);
     tokenField(x.dispatchToken, `${w}.dispatchToken`);
-    if (x.approval !== publicationRiskApproval(x.scope)) throw invalid(w, 'does not carry the approval for its scope');
+    if (x.approval !== publicationRiskApproval(x.scope, x.dispatchToken)) throw invalid(w, 'does not carry the approval for its scope and dispatch');
     if (!Array.isArray(x.groups) || !x.groups.length) throw invalid(w, 'names no group');
     x.groups.forEach((g, j) => {
       closedKeys(g, ['family', 'key', 'generation'], `${w}.groups[${j}]`);
@@ -1819,9 +1825,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     },
     /**
      * The maker's way out of a publish no read can settle (a carry-only dispatch over layers that were already live,
-     * or any dispatch whose witness never shows): `approval` must be exactly publicationRiskApproval(scope),
-     * `publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, and stands for "I checked what is live on
-     * this scope and accept that the lost publish may still complete". It is the feature's typed approval, never
+     * or any dispatch whose witness never shows): `approval` must be exactly publicationRiskApproval(scope, dispatchToken),
+     * `publication-risk:table:<table>/<dispatch>` or `publication-risk:dashboard:<id>/<dispatch>`, and stands for "I checked what
+     * is live on this scope and accept that THIS lost publish may still complete"; a key for another dispatch is refused. It is the feature's typed approval, never
      * inferred. Under the lease, every group still uncertain under `dispatchToken` on `scope` is released in one write:
      * dispatched debt is owed again (a later publish pays it after the usual layer checks), and a carried group gets
      * back the publication it had. Nothing is sent and no desired hash changes; the acceptance is recorded in the
@@ -1831,31 +1837,45 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * store can hold one beside an uncertain publish) is left exactly as it is: its phase, expected proof, saved
      * observation, effects and hold. Retiring a sending or saved attempt is refused, and recovering it is refused while
      * the publish is uncertain, so requiring either first would leave no way out; normal recovery settles it afterwards.
-     * Answers { released: [{ family, key }] }.
+     * Answers { released: [{ family, key }] }. Every error it throws carries `refusedBeforeWrite`: true when it was refused before
+     * the replacement was attempted (the checks above, the lease not taken, the store full), so nothing was recorded; false when
+     * the replacement was attempted and its answer or read-back failed, so the acceptance MAY be durable — a caller must not
+     * treat that as "nothing recorded".
      */
     acceptUncertainPublication({ scope, dispatchToken, approval } = {}) {
-      validateScope(scope, 'the scope');
-      tokenField(dispatchToken, 'the dispatch token');
-      if (approval !== publicationRiskApproval(scope)) throw storeError(CODES.notSettled, `accepting an unproved publish of ${scopeKey(scope)} needs its typed approval (${publicationRiskApproval(scope)})`);
-      const released = [];
-      mutate((env, disk) => {
-        const open = env.groups.filter((g) => g.publication && g.publication.dispatchToken === dispatchToken && UNCERTAIN.has(g.publication.state));
-        if (!open.length) throw storeError(CODES.notSettled, `no publish of ${scopeKey(scope)} is unconfirmed under that dispatch token`);
-        for (const g of open) {
-          if (scopeKey(g.publication.scope) !== scopeKey(scope)) throw storeError(CODES.notSettled, `the dispatch also covers ${g.family} "${g.key}" in another scope`);
-        }
-        for (const g of open) {
-          const p = g.publication;
-          const cf = p.carriedFrom;
-          delete p.carriedFrom;
-          if (cf) { p.state = cf.state; p.dispatchToken = cf.dispatchToken; } else { p.state = 'owed'; p.dispatchToken = null; }
-          released.push({ family: g.family, key: g.key });
-        }
-        const list = Array.isArray(env.publicationRiskAcceptances) ? env.publicationRiskAcceptances : [];
-        list.push({ scope: { ...scope }, dispatchToken, approval, groups: open.map((g) => ({ family: g.family, key: g.key, generation: g.generation })) });
-        env.publicationRiskAcceptances = list.slice(-RISK_ACCEPTANCES_KEPT);
-      });
-      return { released };
+      let changed = false;
+      try {
+        validateScope(scope, 'the scope');
+        tokenField(dispatchToken, 'the dispatch token');
+        if (approval !== publicationRiskApproval(scope, dispatchToken)) throw storeError(CODES.notSettled, `accepting the unproved publish ${dispatchToken} of ${scopeKey(scope)} needs its own typed approval (${publicationRiskApproval(scope, dispatchToken)})`);
+        const released = [];
+        mutate((env, disk) => {
+          const open = env.groups.filter((g) => g.publication && g.publication.dispatchToken === dispatchToken && UNCERTAIN.has(g.publication.state));
+          if (!open.length) throw storeError(CODES.notSettled, `no publish of ${scopeKey(scope)} is unconfirmed under that dispatch token`);
+          for (const g of open) {
+            if (scopeKey(g.publication.scope) !== scopeKey(scope)) throw storeError(CODES.notSettled, `the dispatch also covers ${g.family} "${g.key}" in another scope`);
+          }
+          for (const g of open) {
+            const p = g.publication;
+            const cf = p.carriedFrom;
+            delete p.carriedFrom;
+            if (cf) { p.state = cf.state; p.dispatchToken = cf.dispatchToken; } else { p.state = 'owed'; p.dispatchToken = null; }
+            released.push({ family: g.family, key: g.key });
+          }
+          const list = Array.isArray(env.publicationRiskAcceptances) ? env.publicationRiskAcceptances : [];
+          list.push({ scope: { ...scope }, dispatchToken, approval, groups: open.map((g) => ({ family: g.family, key: g.key, generation: g.generation })) });
+          env.publicationRiskAcceptances = list.slice(-RISK_ACCEPTANCES_KEPT);
+          changed = true;
+        });
+        return { released };
+      } catch (e) {
+        // The change callback runs under the lease, after every check of its own; mutate's own pre-write refusals (the store
+        // full, a group made invalid) come after it but still before the disk is touched. Anything else after the callback (a
+        // write that failed or did not read back, a lease release that threw) may have left the replacement on disk.
+        const before = !changed || Boolean(e && (e.code === CODES.storeFull || e.code === CODES.groupInvalid));
+        if (e && typeof e === 'object') Object.defineProperty(e, 'refusedBeforeWrite', { value: before, enumerable: false, configurable: true });
+        throw e;
+      }
     },
     /**
      * Retire the attempt `token` when its record proves no protected mutation started: phase `prepared`, never marked

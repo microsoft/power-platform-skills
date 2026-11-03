@@ -3890,7 +3890,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // goes on as it would have. A group still declared (its bound form missing is form-layout-bound-row-missing, repaired
   // explicitly), one with a pending attempt, or one whose publish may have been sent (dispatching, unconfirmed, or owed
   // under a dispatch token) is never read here: such a publish could still land, so it is settled or accepted as a risk
-  // (publication-risk:<scopeKey>), never retired. Nothing is read when the store holds no such group, so every other
+  // (publication-risk:<scopeKey>/<dispatch>), never retired. Nothing is read when the store holds no such group, so every other
   // build sends what it always sent. With the forms flag off nothing is declared and nothing runs here: a kill switch
   // must not retire a group the spec still declares.
   //
@@ -7396,7 +7396,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // would. The publisher confirms it read-only first (publishManagedScope -> confirmUncertainPublication), never sends it
     // again, and the scope stays quarantined for this run (openManagedContext's block is never cleared), so the next run
     // is the clean one. One it cannot confirm stops here with the dispatch as data, which the CLI offers to the maker as
-    // the typed publication-risk:<scopeKey> approval (build-model-app.js offerPublicationRisk).
+    // the typed publication-risk:<scopeKey>/<dispatch> approval (build-model-app.js offerPublicationRisk).
     // The form tables are those of the declared forms AND those of every stored form group, so a table whose declared form
     // the spec no longer declares (or a spec that declares no form at all) still has its earlier owed or uncertain publish
     // settled here: omitting a declaration never skips that check.

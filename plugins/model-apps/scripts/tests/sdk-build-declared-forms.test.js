@@ -1,7 +1,7 @@
 'use strict';
 // Declared form layouts (forms[].reconcile: "declared") wired into the build: the spec gate, the forms phase's dispatch to the
 // managed form helper (lib/form-layout-reconcile.js reconcileDeclaredForm), the halt it is given, the per-table publish the
-// managed publisher owes, and the CLI's typed `publication-risk:<scopeKey>` acceptance after a publish whose answer was lost.
+// managed publisher owes, and the CLI's typed `publication-risk:<scopeKey>/<dispatch>` acceptance after a publish whose answer was lost.
 // Everything runs through the real engine (lib/sdk-build.js runSdkBuild), the real vendored SDK and the fake Dataverse org,
 // with the CLI's transport shape (helpers/gated-fake-client.js: the publication barrier with the send observer inside it).
 // The build path is behind lib/declared-features.js; each test that needs it switches it on and back.
@@ -333,8 +333,8 @@ test('a lost publish answer the org never applied blocks the table in every late
       const blocked = (() => { for (let e = r.err; e; e = e.cause) if (e.approval) return e; return null; })();
       assert.ok(blocked, `run ${n}: the refusal carries its data`);
       assert.equal(blocked.code, 'managed-publication-unconfirmed');
-      assert.equal(blocked.approval, 'publication-risk:table:contoso_item');
       assert.match(blocked.dispatchToken, /\S/);
+      assert.equal(blocked.approval, riskKey(blocked.dispatchToken), 'the approval names the scope and that dispatch');
       assert.match(blocked.remedy, /\S/);
       assert.deepEqual(r.tablePublishes, [], `run ${n} sends no publish`);
     }
@@ -343,15 +343,25 @@ test('a lost publish answer the org never applied blocks the table in every late
 
 // --- the CLI: publication-risk ------------------------------------------------------------------------------------------------
 
+// The typed approval a stop prints for one lost publish: its scope and that dispatch's token.
+const riskKey = (token, table = 'contoso_item') => `publication-risk:table:${table}/${token}`;
+const DISPATCH = '0f8fad5b-d9cb-469f-a165-70867728950e';
+
 test('--authorize publication-risk is its own typed key: never implied by an untyped key or another family', () => {
   const spec = makeSpec();
-  const typed = authorizationKeys(['--authorize', 'publication-risk:table:Contoso_Item'], spec);
+  // The scope is matched in any case; the dispatch is kept exactly as printed.
+  const typed = authorizationKeys(['--authorize', `publication-risk:table:Contoso_Item/${DISPATCH}`], spec);
   assert.equal(typed.error, null);
-  assert.deepEqual([...typed.publicationRisk], ['publication-risk:table:contoso_item']);
+  assert.deepEqual([...typed.publicationRisk], [riskKey(DISPATCH)]);
   for (const other of ['contoso_item', 'publication-risk', 'overwrite:view:contoso_item']) {
     assert.equal(authorizationKeys(['--authorize', other], spec).publicationRisk.size, 0, other);
   }
-  assert.match(String(authorizationKeys(['--authorize', 'publication-risk:table:not a table'], spec).error), /is not publication-risk:table:<table>/);
+  // A key that names no dispatch is refused: a decision about the scope alone could reach a publish the maker never saw.
+  for (const bad of ['publication-risk:table:contoso_item', 'publication-risk:table:contoso_item/', `publication-risk:table:not a table/${DISPATCH}`, `publication-risk:table:contoso_item/a b`]) {
+    const parsed = authorizationKeys(['--authorize', bad], spec);
+    assert.match(String(parsed.error), /is not publication-risk:table:<table>\/<dispatch>/, bad);
+    assert.equal(parsed.publicationRisk.size, 0, bad);
+  }
 });
 
 test('the CLI prints the remedy and typed approval from the refusal, records only that exact approval, stays stopped, and the next run publishes', async () => {
@@ -377,17 +387,18 @@ test('the CLI prints the remedy and typed approval from the refusal, records onl
     restore();
     const unapproved = await cli();
     assert.ok(unapproved.err);
-    const token = /dispatch (\S+?)\)/.exec(unapproved.said);
+    const token = (/dispatch (\S+?)\)/.exec(unapproved.said) || [])[1];
     assert.ok(token, unapproved.said);
-    assert.match(unapproved.said, /run the build again with --authorize publication-risk:table:contoso_item/);
+    assert.equal(token, storeOf(org, dir).readGroup('form', KEY).committed.publication.dispatchToken);
+    assert.ok(unapproved.said.includes(`run the build again with --authorize ${riskKey(token)}`), unapproved.said);
     assert.doesNotMatch(unapproved.said, /accepted the risk/);
-    // Another key, or --allow-destructive, records nothing.
-    const wrong = await cli({ allowDestructive: true, publicationRisk: new Set(['publication-risk:table:contoso_other']) });
+    // Another scope, another dispatch of this scope, or --allow-destructive, records nothing.
+    const wrong = await cli({ allowDestructive: true, publicationRisk: new Set([riskKey(token, 'contoso_other'), riskKey(DISPATCH)]) });
     assert.doesNotMatch(wrong.said, /accepted the risk/);
     assert.deepEqual(wrong.tablePublishes, []);
-    const accepted = await cli({ publicationRisk: new Set(['publication-risk:table:contoso_item']) });
+    const accepted = await cli({ publicationRisk: new Set([riskKey(token)]) });
     assert.ok(accepted.err, 'acceptance is a risk decision, not a proof: the run stays stopped');
-    assert.match(accepted.said, /accepted the risk of dispatch \S+ \(publication-risk:table:contoso_item\)/);
+    assert.ok(accepted.said.includes(`accepted the risk of dispatch ${token} (${riskKey(token)})`), accepted.said);
     assert.deepEqual(accepted.tablePublishes, []);
     const next = await cli();
     assert.equal(next.err, undefined, chainText(next.err));
@@ -433,16 +444,16 @@ for (const { name, removed, phases, publish = false } of [
       if (removed) spec.forms = [];
       const token = storeOf(org, dir).readGroup('form', KEY).committed.publication.dispatchToken;
       // Without the approval, or with another one, --allow-destructive or --approve all, nothing is accepted.
-      for (const extra of [{}, { allowDestructive: true, approve: 'all', publicationRisk: new Set(['publication-risk:table:contoso_other']) }]) {
+      for (const extra of [{}, { allowDestructive: true, approve: 'all', publicationRisk: new Set([riskKey(token, 'contoso_other'), riskKey(DISPATCH)]) }]) {
         const denied = await cliRun(org, dir, spec, { publish, ...extra }, phases);
         assert.doesNotMatch(denied.said, /accepted the risk/);
         assert.deepEqual(denied.tablePublishes, []);
         assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.dispatchToken, token);
       }
-      const accepted = await cliRun(org, dir, spec, { publish, publicationRisk: new Set(['publication-risk:table:contoso_item']) }, phases);
+      const accepted = await cliRun(org, dir, spec, { publish, publicationRisk: new Set([riskKey(token)]) }, phases);
       assert.ok(accepted.err, 'acceptance is a risk decision, not a proof: the run stays stopped');
       assert.equal(accepted.err.code, 'publication-risk-accepted');
-      assert.ok(accepted.said.includes(`accepted the risk of dispatch ${token} (publication-risk:table:contoso_item)`), accepted.said);
+      assert.ok(accepted.said.includes(`accepted the risk of dispatch ${token} (${riskKey(token)})`), accepted.said);
       assert.deepEqual(accepted.writes, [], 'the accepting run sends nothing');
       assert.equal(storeOf(org, dir).readGroup('form', KEY).committed.publication.state, 'owed');
       const next = await cliRun(org, dir, spec, { publish }, phases);
@@ -454,6 +465,160 @@ for (const { name, removed, phases, publish = false } of [
     });
   });
 }
+
+// --- publication-risk: a key is bound to the dispatch it was printed for, and is taken only as a run starts -----------------
+
+const riskGrants = (org, dir) => storeOf(org, dir).snapshot().envelope.publicationRiskAcceptances || [];
+const riskPub = (org, dir) => storeOf(org, dir).readGroup('form', KEY).committed.publication;
+
+// A first run whose table publish loses its answer and that the org never applied: the form's publish is unconfirmed under D1.
+async function lostDispatch() {
+  const org = createFakeBuildOrg({ entities: { ...ENTITIES, contoso_other: { attributes: { contoso_name: 'String', contoso_code: 'String' } } } });
+  const dir = newDir();
+  const restore = losePublish(org, { applied: false });
+  const initial = await cliRun(org, dir, makeSpec());
+  restore();
+  assert.ok(initial.err, chainText(initial.err));
+  const token = riskPub(org, dir).dispatchToken;
+  assert.ok(token);
+  return { org, dir, token };
+}
+
+// Another publisher's authoritative not-started answer for `token`, then its own new dispatch of the same table, lost too.
+function replaceDispatch(org, dir, token) {
+  const s = storeOf(org, dir);
+  s.notePublishOutcome({ token, outcome: 'definite-no-start' });
+  const next = require('node:crypto').randomUUID();
+  s.markPublishDispatch({ groups: [{ family: 'form', key: KEY }], scope: { type: 'table', table: 'contoso_item' }, token: next });
+  s.notePublishOutcome({ token: next, outcome: 'unconfirmed' });
+  return next;
+}
+
+// One CLI invocation that counts the attempts that entered the engine and may be handed its store.
+async function cliCounting(org, dir, spec, extra = {}, store = null) {
+  const barrier = createPublicationBarrier();
+  const sendObserver = createAttemptSendObserver();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, sendObserver) });
+  await sdk.initWorkspace();
+  const said = [];
+  const mark = org.calls.length;
+  let err;
+  let phasesEntered = 0;
+  try {
+    await buildModelApp(spec, { apply: true, env: org.origin, workspaceDir: dir, appDir: dir, retryDelayMs: 0, ...extra }, {
+      sdk, provisionSdk: sdk, publicationBarrier: barrier, sendObserver, warn: (w) => said.push(String(w)), log: (w) => said.push(String(w)),
+      ...(store ? { bindingGroups: { store } } : {}),
+      runBuild: (s, o) => { phasesEntered += 1; return runSdkBuild(s, { ...o, phases: ['forms'] }); },
+    });
+  } catch (e) { err = e; }
+  return { err, phasesEntered, said: said.join('\n'), writes: org.calls.slice(mark).filter((c) => c.method !== 'GET') };
+}
+
+test('publication risk: the key printed for one dispatch never accepts a later dispatch of the same table, and is reported unused', async () => {
+  await withForms(true, async () => {
+    const { org, dir, token } = await lostDispatch();
+    const shown = await cliRun(org, dir, makeSpec());
+    assert.ok(shown.said.includes(`--authorize ${riskKey(token)}`), shown.said);
+    const parsed = authorizationKeys(['--authorize', riskKey(token)], makeSpec());
+    assert.equal(parsed.error, null);
+    const next = replaceDispatch(org, dir, token);
+    const text = fs.readFileSync(storeOf(org, dir).file, 'utf8');
+    const spec = makeSpec();
+    spec.forms = [];
+    const result = await cliRun(org, dir, spec, { publicationRisk: parsed.publicationRisk });
+    assert.notEqual(result.err && result.err.code, 'publication-risk-accepted', chainText(result.err));
+    assert.deepEqual(riskGrants(org, dir), [], 'a decision about the earlier dispatch is not a decision about its successor');
+    assert.equal(fs.readFileSync(storeOf(org, dir).file, 'utf8'), text, 'nothing is recorded');
+    assert.equal(riskPub(org, dir).dispatchToken, next);
+    assert.ok(result.said.includes(`--authorize ${riskKey(token)} was not used`), result.said);
+    assert.deepEqual(result.writes, []);
+  });
+});
+
+test('publication risk: a key given while nothing is blocked is reported unused and accepts no publish this run loses later', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const restore = losePublish(org, { applied: false });
+    const result = await cliRun(org, dir, makeSpec(), { publicationRisk: new Set([riskKey(DISPATCH), 'publication-risk:table:contoso_item']) });
+    restore();
+    assert.ok(result.err, 'the lost publish stops the run');
+    assert.deepEqual(riskGrants(org, dir), [], 'a key supplied before the dispatch existed accepts nothing');
+    assert.ok(['dispatching', 'unconfirmed'].includes(riskPub(org, dir).state), riskPub(org, dir).state);
+    assert.ok(result.said.includes(`--authorize ${riskKey(DISPATCH)} was not used`), result.said);
+    assert.doesNotMatch(result.said, /accepted the risk/);
+    // The stop prints the approval of the dispatch it lost, for the next run.
+    assert.ok(result.said.includes(`--authorize ${riskKey(riskPub(org, dir).dispatchToken)}`), result.said);
+  });
+});
+
+test('publication risk: a dispatch replaced between the start snapshot and the acceptance is refused before any write, and the run goes on as before', async () => {
+  await withForms(true, async () => {
+    const { org, dir, token } = await lostDispatch();
+    const store = storeOf(org, dir);
+    const accept = store.acceptUncertainPublication;
+    let newer;
+    store.acceptUncertainPublication = (args) => {
+      if (!newer) newer = replaceDispatch(org, dir, token);
+      return accept(args);
+    };
+    const spec = makeSpec();
+    spec.forms = [];
+    const result = await cliCounting(org, dir, spec, { publicationRisk: new Set([riskKey(token)]) }, store);
+    assert.ok(newer);
+    assert.deepEqual(riskGrants(org, dir), []);
+    assert.equal(riskPub(org, dir).dispatchToken, newer);
+    assert.match(result.said, /was not recorded: the store refused it before writing anything/);
+    assert.notEqual(result.err && result.err.code, 'publication-risk-record-unconfirmed', chainText(result.err));
+  });
+});
+
+test('publication risk: an acceptance whose store replacement lost its answer halts before any phase and sends nothing; the next run reads it afresh', async () => {
+  await withForms(true, async () => {
+    const { org, dir, token } = await lostDispatch();
+    let fault = true;
+    const atomic = require('../lib/apply-snapshot-store.js');
+    const store = openManagedBindings({
+      workspaceDir: dir, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION,
+      deps: { writeFileAtomic(file, text) {
+        atomic.writeFileAtomic(file, text);
+        if (fault && (JSON.parse(text).publicationRiskAcceptances || []).some((x) => x.dispatchToken === token)) {
+          fault = false;
+          throw Object.assign(new Error('answer lost after the replacement'), { code: 'EIO' });
+        }
+      } },
+    });
+    // A second declared form on another table: a run that went on would write it.
+    const spec = makeSpec();
+    spec.entities.push({ ...structuredClone(spec.entities[0]), schemaName: 'contoso_other' });
+    spec.forms.unshift({ ...structuredClone(spec.forms[0]), entity: 'contoso_other', name: 'Other Item' });
+    const result = await cliCounting(org, dir, spec, { publicationRisk: new Set([riskKey(token)]) }, store);
+    assert.equal(fault, false, 'the replacement was written and its answer lost');
+    assert.ok(riskGrants(org, dir).some((x) => x.dispatchToken === token), 'the decision is durable');
+    assert.equal(result.err && result.err.code, 'publication-risk-record-unconfirmed', chainText(result.err));
+    assert.equal(result.err.stopsServiceWrites, true);
+    assert.equal(result.phasesEntered, 0, 'no phase is entered');
+    assert.deepEqual(result.writes, [], 'nothing is sent');
+    assert.doesNotMatch(String(result.err.message), /stays blocked/);
+    assert.match(String(result.err.message), /may or may not be recorded/);
+    // The next run, given no key, reads the store afresh: the publish is owed again, and it pays it.
+    const next = await cliRun(org, dir, makeSpec());
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.deepEqual(next.tablePublishes, [['contoso_item']]);
+    assert.equal(riskPub(org, dir).state, 'confirmed');
+  });
+});
+
+test('publication risk: a completed build reports a typed key that matched no blocked dispatch, and records nothing', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const result = await cliRun(org, dir, makeSpec(), { publicationRisk: new Set([riskKey(DISPATCH, 'contoso_other')]) });
+    assert.equal(result.err, undefined, chainText(result.err));
+    assert.deepEqual(riskGrants(org, dir), []);
+    assert.ok(result.said.includes(`--authorize ${riskKey(DISPATCH, 'contoso_other')} was not used`), result.said);
+  });
+});
 
 // A maker added a control for contoso_code to the deployed form (its saved and published layers alike), which the spec does not
 // place on it.

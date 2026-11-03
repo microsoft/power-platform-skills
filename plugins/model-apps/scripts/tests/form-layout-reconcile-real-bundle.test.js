@@ -1102,7 +1102,7 @@ test('the publish of a declared form table answers the client\'s answer unchange
   // The refusal names its dispatch, the typed approval that would accept the risk and the remedy, as data.
   assert.ok(held.error.dispatchToken, 'a dispatch token');
   assert.equal(held.error.dispatchToken, groupOf(failed.ctx, failed.spec.forms[0]).committed.publication.dispatchToken);
-  assert.equal(held.error.approval, 'publication-risk:table:new_ticket');
+  assert.equal(held.error.approval, `publication-risk:table:new_ticket/${held.error.dispatchToken}`);
   assert.equal(typeof held.error.remedy, 'string');
 
   // The transport throws after the request went out (an answer that never came): the same, with that error as the cause.

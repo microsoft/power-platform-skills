@@ -49,7 +49,7 @@ const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return null;
 const fileText = (store) => fs.readFileSync(store.file, 'utf8');
 // A refusal over an unconfirmed publish names that dispatch as data: its token, the scope's typed approval and the remedy.
 const blockedShape = (fn) => { try { fn(); } catch (e) { return [e.code, e.dispatchToken, e.approval, e.remedy]; } return null; };
-const blockedBy = (dispatchToken, scope = TABLE) => [CODES.publicationUncertain, dispatchToken, publicationRiskApproval(scope), publicationRemedy(scope, dispatchToken)];
+const blockedBy = (dispatchToken, scope = TABLE) => [CODES.publicationUncertain, dispatchToken, publicationRiskApproval(scope, dispatchToken), publicationRemedy(scope, dispatchToken)];
 
 // Settle a form group whose children are `kids` ([[key, id]]), from whatever the group is now.
 function settleForm(store, kids, { acknowledged = true, publication = owedTable() } = {}) {
@@ -1863,7 +1863,7 @@ test('absent root: retirement refuses with nothing written while an attempt, a w
   assert.deepEqual(blockedShape(() => retireNow(ps, pargs)), blockedBy('dispatch-1'), 'unconfirmed');
   assert.equal(fileText(ps), pubBefore);
   // The way out of that one is the publish's own: accept its risk (or confirm it); the debt is owed again, then retirable.
-  ps.acceptUncertainPublication({ scope: TABLE, dispatchToken: 'dispatch-1', approval: publicationRiskApproval(TABLE) });
+  ps.acceptUncertainPublication({ scope: TABLE, dispatchToken: 'dispatch-1', approval: publicationRiskApproval(TABLE, 'dispatch-1') });
   retireNow(ps, pargs);
   const final = JSON.parse(fileText(ps));
   assert.deepEqual([final.groups.length, final.publicationRiskAcceptances.length, final.retiredGroups[0].publication], [0, 1, 'owed']);

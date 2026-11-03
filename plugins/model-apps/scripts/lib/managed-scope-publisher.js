@@ -24,7 +24,7 @@
 // whose answer is lost therefore fences its table across runs: the next build sends neither a change of a managed group on
 // that table nor another publish of it. Only a fresh read that shows a layer the send changed settles it; a publish that
 // changed nothing visible (every carried layer was already live) stays blocked until the maker accepts that risk with the
-// scope's typed approval. A routed table with no committed group on it has nothing to journal: its pending attempts fence it.
+// dispatch's typed approval. A routed table with no committed group on it has nothing to journal: its pending attempts fence it.
 
 const { publishManagedScope } = require('./managed-feature-contract.js');
 const { classifyPersisted } = require('./managed-bindings.js');

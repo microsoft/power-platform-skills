@@ -465,76 +465,96 @@ function formatNewRemovalDetail(op) {
 // A managed publish whose answer was lost, and that no fresh read can settle (it carried only layers that were already live),
 // blocks its scope across runs until the maker accepts the risk (managed-bindings.js acceptUncertainPublication). Every refusal
 // over it carries the blocked dispatch as DATA (managed-bindings.js blockedPublication): { dispatchToken, approval:
-// 'publication-risk:<scopeKey>', remedy } — on the error itself when the publish protocol or the store threw it, on a cause
-// when a feature's or the table publisher's halt wraps it (err.cause, err.cause.cause, …). So the dispatch is read from those
-// properties and never parsed out of a message. Answers { scope, dispatchToken, approval, remedy } or null.
+// 'publication-risk:<scopeKey>/<dispatchToken>', remedy } — on the error itself when the publish protocol or the store threw it,
+// on a cause when a feature's or the table publisher's halt wraps it (err.cause, err.cause.cause, …). So the dispatch is read
+// from those properties and never parsed out of a message. Answers { scope, dispatchToken, approval, remedy } or null.
 function blockedPublicationOf(err) {
   const seen = new Set();
   for (let e = err, depth = 0; e && typeof e === 'object' && depth < 8 && !seen.has(e); e = e.cause, depth += 1) {
     seen.add(e);
     if (typeof e.dispatchToken !== 'string' || !e.dispatchToken || typeof e.remedy !== 'string' || typeof e.approval !== 'string') continue;
-    // publication-risk:table:new_ticket | publication-risk:dashboard:00000000-0000-0000-0000-000000000000
-    const m = /^publication-risk:(table|dashboard):(.+)$/.exec(e.approval);
+    // publication-risk:table:new_ticket/<dispatch> | publication-risk:dashboard:00000000-0000-0000-0000-000000000000/<dispatch>
+    const m = /^publication-risk:(table|dashboard):([^/]+)\//.exec(e.approval);
     if (!m) continue;
     const scope = m[1] === 'table' ? { type: 'table', table: m[2] } : { type: 'dashboard', id: m[2] };
-    // Only a scope whose own approval spells exactly what the refusal named: the round trip is the store's spelling.
-    if (publicationRiskApproval(scope) !== e.approval) continue;
+    // Only an approval that spells exactly this scope AND the dispatch the refusal carries: the round trip is the store's
+    // spelling, so a refusal can never offer one dispatch's decision for another.
+    if (publicationRiskApproval(scope, e.dispatchToken) !== e.approval) continue;
     return { scope, dispatchToken: e.dispatchToken, approval: e.approval, remedy: e.remedy };
   }
   return null;
 }
 
-// What a halt over such a publish offers the maker. It prints the remedy and the typed approval the refusal names, exactly
-// as the refusal carries them. Only when this run was given that very approval (`--authorize publication-risk:<scopeKey>`,
-// authorizationKeys: never implied by --allow-destructive, an untyped key or another family's approval) does it record the
-// acceptance, with the scope and dispatch token this run's refusal displayed — never a token from an earlier run's display.
-// Acceptance is a risk decision, not a proof: nothing is sent, and this run stays stopped (its barrier's quarantine is in
-// memory); the next run finds the publication owed again and pays it after the usual layer checks. A store that cannot
-// record it says so, and the scope stays blocked. Never throws: the halt is what this run reports.
-function offerPublicationRisk(err, { accepted, store, say } = {}) {
+const scopeLabel = (scope) => (scope.type === 'table' ? `table ${scope.table}` : `dashboard ${scope.id}`);
+
+// What a halt over such a publish offers the maker: the remedy and the typed approval the refusal names, exactly as the
+// refusal carries them, for the NEXT run. It records nothing. The approval names the dispatch it is printed for, and a run
+// accepts it only as it starts, against the publishes its store holds unconfirmed then (acceptPublicationRiskAtStart). A key
+// this run was given that matched none of those grants nothing later in the run: a dispatch made during the run has a token
+// no earlier stop printed, so recording it here could only act on a decision the maker never saw. Never throws: the halt is
+// what this run reports.
+function offerPublicationRisk(err, { say } = {}) {
   const blocked = blockedPublicationOf(err);
   if (!blocked || typeof say !== 'function') return null;
-  say(`a managed publish of ${blocked.approval.slice('publication-risk:'.length)} was sent and could not be confirmed (dispatch ${blocked.dispatchToken}): ${blocked.remedy}. Check what is live there; to accept that the lost publish may still complete, run the build again with ${authorizeFlag(blocked.approval)}`);
-  if (!(accepted instanceof Set) || !accepted.has(blocked.approval)) return null;
-  return recordPublicationRisk(store, blocked, say);
+  say(`a managed publish of ${scopeLabel(blocked.scope)} was sent and could not be confirmed (dispatch ${blocked.dispatchToken}): ${blocked.remedy}. Check what is live there; to accept that this lost publish may still complete, run the build again with ${authorizeFlag(blocked.approval)}`);
+  return blocked;
 }
 
 // Record the maker's typed acceptance of one blocked dispatch ({ scope, dispatchToken, approval }) and say what it did.
-// Answers what the store answered ({ released }), or null when nothing was recorded (no store, or the store refused).
+// Answers what the store answered ({ released }), or null when the store refused it before writing anything (the
+// dispatch settled or changed under the lease, the store busy or full), so nothing was recorded and the scope stays
+// blocked. Any other failure (the replacement was attempted and its answer or read-back failed: refusedBeforeWrite is
+// not true) leaves the acceptance perhaps durable and perhaps not; the run must not go on as if nothing were recorded,
+// nor say the scope stayed blocked, so it ends the invocation with a halt that sends nothing more and is never retried.
+// The next build reads the store afresh and finds the dispatch either accepted or still blocked.
 function recordPublicationRisk(store, blocked, say) {
-  if (!store || typeof store.acceptUncertainPublication !== 'function') {
-    say(`--authorize ${blocked.approval} was given, but this run has no managed binding store to record it in; nothing was accepted`);
-    return null;
-  }
+  const detail = (e) => String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 300);
   try {
     const out = store.acceptUncertainPublication({ scope: blocked.scope, dispatchToken: blocked.dispatchToken, approval: blocked.approval });
     say(`accepted the risk of dispatch ${blocked.dispatchToken} (${blocked.approval}); ${(out && out.released ? out.released.length : 0)} managed group(s) owe their publish again. This run stays stopped: run the build again to publish it after the usual checks`);
     return out;
   } catch (e) {
-    say(`--authorize ${blocked.approval} could not be recorded (${String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 300)}); the scope stays blocked`);
-    return null;
+    if (e && e.refusedBeforeWrite === true) {
+      say(`--authorize ${blocked.approval} was not recorded: the store refused it before writing anything (${detail(e)}); dispatch ${blocked.dispatchToken} stays blocked`);
+      return null;
+    }
+    const halt = new BuildHalt(`the build could not confirm whether it recorded the accepted risk of dispatch ${blocked.dispatchToken} (${blocked.approval}): the store's replacement was attempted and its answer was lost (${detail(e)}), so the acceptance may or may not be recorded. The build stopped before writing anything to the environment and sends nothing more in this run. Run the build again: it reads the store afresh and finds that publish either accepted (owed again, and published after the usual checks) or still unconfirmed, with the same approval to give.`, {
+      phase: 'preflight', code: 'publication-risk-record-unconfirmed', recoverable: true, retry: RETRY.NEVER, cause: e,
+    });
+    // Nothing of this invocation may be sent after it (this is the first attempt, before any phase), so the final cleanup sends nothing.
+    Object.defineProperty(halt, 'stopsServiceWrites', { value: true, enumerable: false, configurable: true });
+    throw halt;
   }
 }
 
-// The same decision, taken as the run starts: every publish the store already holds as sent and unconfirmed
-// ('dispatching' or 'unconfirmed') on a scope whose exact typed approval this run was given is accepted right after the
-// store opens, before any phase and any service write. Waiting for a phase to stop on it is not enough: the stop does not
-// always carry the dispatch as data. With --publish a declared form's table is confirmed only in the publish phase, so
-// the app write, which the store's quarantine withholds, stops the build first; a removed declaration, or a run without
-// the phase that would confirm it, stops the same way. The scope, dispatch token and approval are the store's own data
-// (the same the printed remedy was made from), never parsed out of an earlier run's text. Only a key the CLI parsed into
-// `publicationRisk` (authorizationKeys) counts: --allow-destructive, --approve all and every other key never do. A store
-// that refuses (the dispatch already settled, or it also covers another scope) is said, and the run goes on as it would
-// have. Answers the dispatches it recorded.
+// The maker's decision, taken as the run starts and only then: every publish the store holds as sent and unconfirmed
+// ('dispatching' or 'unconfirmed') whose exact typed approval (its scope AND its dispatch token) this run was given is
+// accepted right after the store opens, before any phase and any service write. Waiting for a phase to stop on it is not
+// enough: the stop does not always carry the dispatch as data. With --publish a declared form's table is confirmed only in
+// the publish phase, so the app write, which the store's quarantine withholds, stops the build first; a removed
+// declaration, or a run without the phase that would confirm it, stops the same way. The scope, dispatch token and approval
+// are the store's own data (the same the printed remedy was made from), never parsed out of an earlier run's text. Only a
+// key the CLI parsed into `publicationRisk` (authorizationKeys) counts: --allow-destructive, --approve all and every other key
+// never do. A key for an earlier dispatch of the same scope, one already settled, or one for a dispatch that does not
+// exist matches nothing here and grants nothing for the rest of the run (offerPublicationRisk only prints); it is reported
+// as unused. A store that refuses before writing is said, and the run goes on as it would have; one whose write cannot be
+// confirmed halts (recordPublicationRisk). Answers the dispatches it recorded.
 function acceptPublicationRiskAtStart(store, accepted, say) {
-  if (!(accepted instanceof Set) || !accepted.size || !store || typeof store.snapshot !== 'function') return [];
+  if (!(accepted instanceof Set) || !accepted.size) return [];
   const due = new Map();
-  for (const unit of store.snapshot().units()) {
-    const pub = !unit.invalid && unit.group && unit.group.publication;
-    if (!pub || (pub.state !== 'dispatching' && pub.state !== 'unconfirmed') || !pub.scope || typeof pub.dispatchToken !== 'string' || !pub.dispatchToken) continue;
-    const approval = publicationRiskApproval(pub.scope);
-    if (!accepted.has(approval)) continue;
-    due.set(`${approval} ${pub.dispatchToken}`, { scope: { ...pub.scope }, dispatchToken: pub.dispatchToken, approval });
+  const readable = store && typeof store.snapshot === 'function' && typeof store.acceptUncertainPublication === 'function';
+  if (readable) {
+    for (const unit of store.snapshot().units()) {
+      const pub = !unit.invalid && unit.group && unit.group.publication;
+      if (!pub || (pub.state !== 'dispatching' && pub.state !== 'unconfirmed') || !pub.scope || typeof pub.dispatchToken !== 'string' || !pub.dispatchToken) continue;
+      const approval = publicationRiskApproval(pub.scope, pub.dispatchToken);
+      if (!accepted.has(approval)) continue;
+      due.set(approval, { scope: { ...pub.scope }, dispatchToken: pub.dispatchToken, approval });
+    }
+  }
+  for (const key of accepted) {
+    if (due.has(key)) continue;
+    say(`--authorize ${key} was not used: ${readable ? 'no publish this run\'s managed binding store holds unconfirmed is that dispatch (it may have settled, or the key was printed for another one)' : 'this run has no managed binding store to accept it in'}; it grants nothing in this run`);
   }
   const recorded = [];
   for (const blocked of due.values()) if (recordPublicationRisk(store, blocked, say)) recorded.push(blocked);
@@ -552,8 +572,8 @@ function acceptPublicationRiskAtStart(store, accepted, say) {
 // first attempt had an earlier one end on a transient failure, and what that attempt sent stays sent, so from the second
 // attempt on the halt is said again with that told apart. Its code, phase, findings and signal are the halt's own, so nothing
 // that reads them changes, and it is never retried, like the halt it says again (only the retirement halt,
-// managed-not-settled, and the start-of-run publication-risk-accepted halt, both RETRY.NEVER, carry the signal); on the first
-// attempt the halt is returned as it is.
+// managed-not-settled, and the start-of-run publication-risk-accepted and publication-risk-record-unconfirmed halts, all
+// RETRY.NEVER, carry the signal); on the first attempt the halt is returned as it is.
 function stoppedAfterEarlierAttempts(err, attempt, owedPublishes, owedLengths, warn) {
   const say = (message) => { if (typeof warn === 'function') warn(message); };
   const nameOf = (t) => (Array.isArray(t[2]) && t[2].length ? t[2].join(', ') : `${t[0]} ${t[1]}`);
@@ -877,14 +897,15 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
     const declinedBefore = declinedCount();
     try {
       if (!bindingGroups) bindingGroups = openBuildBindingGroups(spec, { apply: opts.apply, env: opts.env, workspaceDir: opts.workspaceDir, appDir: opts.appDir, barrier: publicationBarrier });
-      // A typed publication-risk approval is taken once, as the store opens and before the first phase
-      // (acceptPublicationRiskAtStart). A run that records one stops here, as the run that records it from a halt does:
-      // the store's quarantine of that scope was installed when it opened, so this run could only be withheld by it.
+      // A typed publication-risk approval is taken once, as the store opens and before the first phase, and never later in
+      // the run (acceptPublicationRiskAtStart). A run that records one stops here: the store's quarantine of that scope was
+      // installed when it opened, so this run could only be withheld by it. One whose recording cannot be confirmed halts
+      // inside it, before any phase, and sends nothing.
       if (!riskCheckedAtStart) {
         riskCheckedAtStart = true;
         const accepted = acceptPublicationRiskAtStart(bindingGroups && bindingGroups.store, opts.publicationRisk, deps.warn || log);
         if (accepted.length) {
-          const halt = new BuildHalt(`the build recorded the accepted risk of ${accepted.length} unconfirmed managed publish(es) (${accepted.map((a) => a.approval).join(', ')}) and stopped before writing anything. Run the build again, without the approval, to publish them after the usual checks.`, {
+          const halt = new BuildHalt(`the build recorded the accepted risk of ${accepted.length} unconfirmed managed publish(es) (${accepted.map((a) => a.approval).join(', ')}) and stopped before writing anything. Their publish is owed again: run the build again, without the approval, to publish them after the usual checks (a dashboard whose declaration the spec no longer holds stays owed, and its stop says so, until the declaration is restored).`, {
             phase: 'preflight', code: 'publication-risk-accepted', recoverable: true, retry: RETRY.NEVER,
           });
           // Nothing of this invocation may be sent after it, the settlement of an earlier attempt included (there is none:
@@ -1005,7 +1026,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight') && !(err && err.owedPaid);
       // A halt that ends the invocation before any service write (`stopsServiceWrites`: a dashboard or form retirement
       // the build could not confirm, sdk-build.js haltOnUnconfirmedRetirements, or a publication risk accepted as the run
-      // started, acceptPublicationRiskAtStart) sends nothing here either: neither the
+      // started, or whose recording could not be confirmed, acceptPublicationRiskAtStart) sends nothing here either: neither the
       // publish an EARLIER attempt of this run deferred, nor the name column length it owed. The store that attempt and
       // this one read can no longer be trusted, so this run stops sending. What is left is said instead, and stays
       // recoverable: the next build reconciles the same views and forms and publishes their tables again (publishReconciled,
@@ -1021,9 +1042,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       if (typeof deps.warn === 'function') for (const w of publicationBarrier.withheld()) deps.warn(describeWithheld(w));
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
       if (!writesStopped) await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
-      // A managed publish no fresh read can settle: say what the maker may decide, and record the decision only when this
-      // run was given that exact typed approval (offerPublicationRisk). The halt stands either way.
-      offerPublicationRisk(halted, { accepted: opts.publicationRisk, store: bindingGroups && bindingGroups.store, say: deps.warn || log });
+      // A managed publish no fresh read can settle: say what the maker may decide, for the next run (offerPublicationRisk). Nothing
+      // is recorded here: an approval is accepted only as a run starts (acceptPublicationRiskAtStart). The halt stands.
+      offerPublicationRisk(halted, { say: deps.warn || log });
       if (journal) journal.close({ status: 'halt', phase: halted && halted.phase, code: halted && halted.code, recoverable: !!(halted && halted.recoverable), message: String((halted && halted.message) || halted), ...counts });
       throw halted;
     }
@@ -1311,12 +1332,13 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 // opts.authorizedWebResourceOverwrite): its name may hold '/', so `contoso_case/script` can be both a view's id and a web resource's
 // name, and no view, chart or untyped key ever approves a web resource.
 // and to the maker's acceptance of ONE managed publish whose answer was lost and that no fresh read can settle:
-//   publication-risk:table:<table>      accepting that the lost publish of the table may still complete (managed-bindings.js
-//   publication-risk:dashboard:<id>     acceptUncertainPublication); the same for a dashboard
-// It is recorded as the run's store opens, before any write, for each unconfirmed publication the store still holds under
-// exactly this approval, with that publication's own dispatch token (acceptPublicationRiskAtStart), or when a refusal of the
-// same run names it (offerPublicationRisk); that run still stops, and the next run publishes after the usual checks. No other key
-// implies it.
+//   publication-risk:table:<table>/<dispatch>    accepting that the lost publish <dispatch> of the table may still complete
+//   publication-risk:dashboard:<id>/<dispatch>  (managed-bindings.js acceptUncertainPublication); the same for a dashboard
+// The dispatch is part of the key, exactly as the stop printed it, so a key printed for one lost publish never accepts a later
+// one of the same scope. It is recorded only as the run's store opens, before any write, for the unconfirmed publication the
+// store then holds under exactly that scope and dispatch (acceptPublicationRiskAtStart); that run still stops, and the next run
+// publishes after the usual checks. A key that matches none is reported unused and grants nothing later in the run (a stop of
+// the same run only prints the key for the next one, offerPublicationRisk). No other key implies it.
 // It is deliberately not implied by --allow-destructive: that flag approves the form and sitemap removals the build lists, and a
 // consent to delete security or to convert stored dates must name the column it is for. The build's refusal of such a change names
 // the exact key, so the maker reads what will happen, then runs the build again with it. A key is refused unless the spec declares
@@ -1439,19 +1461,22 @@ function authorizationKeys(argv, spec) {
     form: { verbs: ['adopt', 'overwrite'], id: (text) => (/^[A-Za-z0-9_]+\/[A-Za-z]+\/.+$/.test(text) ? lower(text) : null), needs: 'a form with reconcile: "declared"' },
   };
   const approve = (verb, family, id) => (verb === 'adopt' ? adopt : overwrite).add(approvalKey(family, id));
-  // publication-risk:table:<table> | publication-risk:dashboard:<id> — the maker accepts the risk of a managed publish whose
+  // publication-risk:table:<table>/<dispatch> | publication-risk:dashboard:<id>/<dispatch> — the maker accepts the risk of the managed publish whose
   // answer was lost and that no fresh read can settle (managed-bindings.js acceptUncertainPublication). Kept in a Set of its
   // own, in the store's spelling (publicationRiskApproval), and never implied by any other key: the build accepts only the
-  // approval the store's own unconfirmed publications carry (acceptPublicationRiskAtStart) or a refusal of this very run names,
-  // each with its own scope and dispatch token (offerPublicationRisk).
+  // approval an unconfirmed publication the store holds as the run starts carries, with its own scope and dispatch token
+  // (acceptPublicationRiskAtStart). The scope is matched in any case, as the build names tables and dashboards; the dispatch
+  // token is taken exactly as the stop printed it (a UUID; no white space, no '/'). A key with no dispatch is refused: a
+  // decision about a scope alone could reach a publish of it the maker never saw.
   const publicationRisk = new Set();
   for (const key of configuration.unclaimed) {
     const risk = /^publication-risk:(table|dashboard):(.+)$/.exec(String(key));
     if (risk) {
-      const scope = risk[1] === 'table' ? { type: 'table', table: lower(risk[2]) } : { type: 'dashboard', id: lower(risk[2]).replace(/^\{|\}$/g, '') };
-      const ok = scope.type === 'table' ? /^[a-z0-9_]+$/.test(scope.table) : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(scope.id);
-      if (ok) publicationRisk.add(publicationRiskApproval(scope));
-      else problems.push(`'${key}' is not publication-risk:table:<table> or publication-risk:dashboard:<dashboard id>`);
+      const parts = /^([^/]+)\/([^\s/]{1,128})$/.exec(risk[2]);
+      const scope = !parts ? null : risk[1] === 'table' ? { type: 'table', table: lower(parts[1]) } : { type: 'dashboard', id: lower(parts[1]).replace(/^\{|\}$/g, '') };
+      const ok = !!scope && (scope.type === 'table' ? /^[a-z0-9_]+$/.test(scope.table) : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(scope.id));
+      if (ok) publicationRisk.add(publicationRiskApproval(scope, parts[2]));
+      else problems.push(`'${key}' is not publication-risk:table:<table>/<dispatch> or publication-risk:dashboard:<dashboard id>/<dispatch> (give the whole approval the stop printed: it names the lost publish it accepts)`);
       continue;
     }
     // adopt:webresource:new_/scripts/case.js | overwrite:webresource:new_casebanner — a declared web resource, by its whole name (any case).
@@ -1564,7 +1589,7 @@ function authorizationKeys(argv, spec) {
     }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, adopt:form:<table>/<form type>/<name>, overwrite:form:<table>/<form type>/<name>, adopt:dashboard:<key>, overwrite:dashboard:<key>, overwrite:dashboard:<key>/<tile>, adopt:rule:<table>/<name>, adopt:bpf:<table>/<name>, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name>, publication-risk:table:<table> or publication-risk:dashboard:<dashboard id>)`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, adopt:form:<table>/<form type>/<name>, overwrite:form:<table>/<form type>/<name>, adopt:dashboard:<key>, overwrite:dashboard:<key>, overwrite:dashboard:<key>/<tile>, adopt:rule:<table>/<name>, adopt:bpf:<table>/<name>, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name>, publication-risk:table:<table>/<dispatch> or publication-risk:dashboard:<dashboard id>/<dispatch>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);

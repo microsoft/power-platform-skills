@@ -1473,9 +1473,9 @@ test('carry: a lost answer to a scope publish that only carried the dashboard st
   assert.equal(w.wire.writes().length, writes, 'nothing sent');
   // What the wiring shows the maker comes from these fields, never from the message: on the settle's halt they are on
   // its cause; the publication adapter's own refusal carries them itself.
-  const approval = `publication-risk:dashboard:${DID}`;
-  assert.equal(refused.cause.approval, approval);
   assert.ok(refused.cause.dispatchToken && refused.cause.remedy);
+  const approval = `publication-risk:dashboard:${DID}/${refused.cause.dispatchToken}`;
+  assert.equal(refused.cause.approval, approval);
   const direct = await failureOf(publish(await rerun(w), 'ops', DID));
   assert.equal(direct && direct.code, 'managed-publication-unconfirmed');
   assert.deepEqual([direct.approval, direct.dispatchToken, direct.remedy], [approval, refused.cause.dispatchToken, refused.cause.remedy]);

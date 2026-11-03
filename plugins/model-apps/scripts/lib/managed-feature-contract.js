@@ -894,7 +894,7 @@ function publishAnswerFailure(answer, dispatched, scopeKey) {
  * Every `managed-publication-unconfirmed` refusal that names a durable dispatch — a group passed in `groups` whose
  * publish is already uncertain, a covered group of such a dispatch, or this call's own send left unconfirmed — carries
  * that dispatch as data, `{ dispatchToken, approval, remedy }` (managed-bindings blockedPublication: the remedy is
- * publicationRemedy(scope, dispatchToken), the approval publicationRiskApproval(scope)), as runManagedFeature's
+ * publicationRemedy(scope, dispatchToken), the approval publicationRiskApproval(scope, dispatchToken)), as runManagedFeature's
  * refusal over an earlier publish and the store's own refusals do. A send with no managed group on the scope journals
  * nothing and blocks only its run, so its refusal names no dispatch; nor does a scope blocked only by a workflow effect.
  * Answers { sent, withheld, confirmed: [{ family, key }] }: confirmed lists every group this call confirmed, a read-only
@@ -911,7 +911,7 @@ function publishAnswerFailure(answer, dispatched, scopeKey) {
  * over it, and only a fresh read that shows a layer the send CHANGED (debt, or a carried group whose published layer
  * differed from its saved one before the send) settles it (confirmUncertainPublication). A carry-only send over layers
  * that were already live has no such witness: it stays blocked, in every run, until the maker accepts the risk with
- * the scope's typed approval (store.acceptUncertainPublication, publicationRiskApproval). Nothing releases it by time.
+ * that dispatch's typed approval (store.acceptUncertainPublication, publicationRiskApproval). Nothing releases it by time.
  *
  * `carry: true` is a PLAIN publish of the scope that the barrier routed here (lib/managed-scope-publisher.js): the build
  * saved something on a table a managed group publishes in and wants that table published. It is sent even when no debt

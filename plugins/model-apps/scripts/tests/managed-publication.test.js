@@ -2070,7 +2070,7 @@ const caught = async (p) => { try { await p; } catch (e) { return e; } return nu
 const pubOf = (store, key = 'account/main') => store.readGroup('form', key).committed.publication;
 // Every refusal over an unconfirmed publish names that dispatch as data: its token, the scope's typed approval and the remedy.
 const shapeOf = (e) => [e.code, e.dispatchToken, e.approval, e.remedy];
-const blockedBy = (token, scope = ACCOUNT) => [PUBLICATION_UNCONFIRMED, token, publicationRiskApproval(scope), publicationRemedy(scope, token)];
+const blockedBy = (token, scope = ACCOUNT) => [PUBLICATION_UNCONFIRMED, token, publicationRiskApproval(scope, token), publicationRemedy(scope, token)];
 const editMain = (s, p, formxml) => runManagedFeature({ ...ports(s.wire, p.sdk, { key: 'account/main', id: MAIN, formxml }), client: p.sdk.dataverse, store: p.store, barrier: p.barrier });
 // The table publish's answer is lost: the service answers 503 and does not apply it (a delayed completion is driven by
 // the test that needs one).
@@ -2125,14 +2125,19 @@ test('carry: a lost table publish that pays no debt and re-ships only live layer
 
   // The way out: the maker's typed acceptance for this scope and this dispatch, recorded in the store.
   const bytes = fs.readFileSync(d.store.file, 'utf8');
-  const accept = (args) => codeOf(Promise.resolve().then(() => d.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: pub.dispatchToken, approval: publicationRiskApproval(ACCOUNT), ...args })));
-  assert.equal(await accept({ approval: 'publication-risk:table:contact' }), CODES.notSettled);
+  const accept = (args) => codeOf(Promise.resolve().then(() => d.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: pub.dispatchToken, approval: publicationRiskApproval(ACCOUNT, pub.dispatchToken), ...args })));
+  assert.equal(await accept({ approval: `publication-risk:table:contact/${pub.dispatchToken}` }), CODES.notSettled);
+  // The approval names the dispatch it was printed for: the scope alone, or this scope with another dispatch, accepts nothing.
+  assert.equal(await accept({ approval: 'publication-risk:table:account' }), CODES.notSettled);
+  assert.equal(await accept({ approval: publicationRiskApproval(ACCOUNT, 'another-dispatch') }), CODES.notSettled);
   assert.equal(await accept({ approval: undefined }), CODES.notSettled);
   assert.equal(await accept({ dispatchToken: 'another-dispatch' }), CODES.notSettled);
   assert.equal(fs.readFileSync(d.store.file, 'utf8'), bytes, 'a refused acceptance writes nothing');
-  assert.deepEqual(d.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: pub.dispatchToken, approval: publicationRiskApproval(ACCOUNT) }), { released: [MAIN_G] });
+  // Each refusal says it came before the write, so a caller may say nothing was recorded.
+  assert.throws(() => d.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: 'another-dispatch', approval: publicationRiskApproval(ACCOUNT, 'another-dispatch') }), (e) => e.code === CODES.notSettled && e.refusedBeforeWrite === true);
+  assert.deepEqual(d.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: pub.dispatchToken, approval: publicationRiskApproval(ACCOUNT, pub.dispatchToken) }), { released: [MAIN_G] });
   assert.deepEqual(pubOf(d.store), settled, 'the publication it had before the send is back, and the desired hash never changed');
-  assert.deepEqual(JSON.parse(fs.readFileSync(d.store.file, 'utf8')).publicationRiskAcceptances.map((x) => [x.approval, x.dispatchToken]), [[publicationRiskApproval(ACCOUNT), pub.dispatchToken]]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(d.store.file, 'utf8')).publicationRiskAcceptances.map((x) => [x.approval, x.dispatchToken]), [[publicationRiskApproval(ACCOUNT, pub.dispatchToken), pub.dispatchToken]]);
 
   // The run after: the edit is made once.
   const e = await nextRun(s);
@@ -2175,8 +2180,8 @@ test('acceptance: a pending attempt (prepared, sending or saved) beside an unpro
     if (phase !== 'prepared') assert.equal(await codeOf(Promise.resolve().then(() => n.store.retireUnsentAttempt({ token, baseGeneration: committed.generation }))), CODES.pending, phase);
     // The approval, dispatch token and scope checks are unchanged, and a refusal writes nothing.
     const bytes = fs.readFileSync(n.store.file, 'utf8');
-    const accept = (args) => n.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: 'older-lost-carry', approval: publicationRiskApproval(ACCOUNT), ...args });
-    for (const args of [{ approval: 'publication-risk:table:contact' }, { dispatchToken: 'another-dispatch' }, { scope: { type: 'table', table: 'contact' } }]) {
+    const accept = (args) => n.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: 'older-lost-carry', approval: publicationRiskApproval(ACCOUNT, 'older-lost-carry'), ...args });
+    for (const args of [{ approval: 'publication-risk:table:contact/older-lost-carry' }, { approval: 'publication-risk:table:account' }, { dispatchToken: 'another-dispatch' }, { scope: { type: 'table', table: 'contact' } }]) {
       assert.equal(await codeOf(Promise.resolve().then(() => accept(args))), CODES.notSettled, `${phase}: ${JSON.stringify(args)}`);
       assert.equal(fs.readFileSync(n.store.file, 'utf8'), bytes);
     }

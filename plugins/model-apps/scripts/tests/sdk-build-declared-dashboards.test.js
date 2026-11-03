@@ -336,7 +336,7 @@ test('a lost dashboard publish the org never applied blocks the dashboard in lat
       assert.ok(r.err, `run ${n} stops`);
       const blocked = (() => { for (let e = r.err; e; e = e.cause) if (e.approval) return e; return null; })();
       assert.ok(blocked, `run ${n}: the refusal carries its data\n${chainText(r.err)}`);
-      assert.equal(blocked.approval, `publication-risk:dashboard:${id}`);
+      assert.equal(blocked.approval, `publication-risk:dashboard:${id}/${blocked.dispatchToken}`, 'the approval names the scope and that dispatch');
       assert.match(blocked.dispatchToken, /\S/);
       assert.match(blocked.remedy, /\S/);
       assert.deepEqual(r.publishes, [], `run ${n} sends no publish`);
@@ -726,10 +726,10 @@ test('removed declaration: an unapplied stored publish halts with its structured
     for (let e = halt.err; e; e = e.cause) if (e.dispatchToken) { cause = e; break; }
     assert.ok(cause, chainText(halt.err));
     assert.equal(cause.dispatchToken, token);
-    assert.equal(cause.approval, `publication-risk:dashboard:${g.root.id}`);
+    assert.equal(cause.approval, `publication-risk:dashboard:${g.root.id}/${token}`);
     assert.equal(typeof cause.remedy, 'string');
     assert.equal(serviceWrites(halt.calls).length, 0);
-    const parsed = authorizationKeys(['--authorize', `publication-risk:dashboard:${g.root.id}`], removed);
+    const parsed = authorizationKeys(['--authorize', `publication-risk:dashboard:${g.root.id}/${token}`], removed);
     assert.equal(parsed.error, null);
     const decision = await cliBuild(wire, appDir, removed, { publicationRisk: parsed.publicationRisk });
     assert.ok(decision.error, 'the deciding invocation still stops');
@@ -910,8 +910,8 @@ test('publication risk through the CLI: --approve all does not accept it; the ex
     const denied = await cliBuild(wire, appDir, spec, { approve: 'all', allowDestructive: true });
     assert.ok(denied.error);
     assert.equal(committedGroup(first.dir).publication.dispatchToken, token);
-    assert.ok(denied.messages.some((m) => m.includes(`publication-risk:dashboard:${g.root.id}`)), denied.messages.join('\n'));
-    const parsed = authorizationKeys(['--authorize', `publication-risk:dashboard:${g.root.id}`], spec);
+    assert.ok(denied.messages.some((m) => m.includes(`publication-risk:dashboard:${g.root.id}/${token}`)), denied.messages.join('\n'));
+    const parsed = authorizationKeys(['--authorize', `publication-risk:dashboard:${g.root.id}/${token}`], spec);
     assert.equal(parsed.error, null);
     const granted = await cliBuild(wire, appDir, spec, { publicationRisk: parsed.publicationRisk });
     assert.ok(granted.error, 'the accepting invocation still stops');
@@ -950,7 +950,7 @@ test('publication risk through the CLI: an unchanged all-carried dashboard stays
     const denied = await cliBuild(wire, appDir, spec);
     assert.ok(denied.error);
     assert.equal(committedGroup(first.dir).publication.state, 'unconfirmed');
-    const parsed = authorizationKeys(['--authorize', `publication-risk:dashboard:${g.root.id}`], spec);
+    const parsed = authorizationKeys(['--authorize', `publication-risk:dashboard:${g.root.id}/${committedGroup(first.dir).publication.dispatchToken}`], spec);
     const accepted = await cliBuild(wire, appDir, spec, { publicationRisk: parsed.publicationRisk });
     assert.ok(accepted.error);
     assert.equal(committedGroup(first.dir).publication.state, 'confirmed');
@@ -974,7 +974,7 @@ test('publication risk through the CLI (its declaration removed): the printed ty
     const g = committedGroup(first.dir);
     const token = g.publication.dispatchToken;
     const later = dropDashboard(spec);
-    const approval = `publication-risk:dashboard:${g.root.id}`;
+    const approval = `publication-risk:dashboard:${g.root.id}/${token}`;
     // The app shell's icon is found, not created: this fake answers no id for a created web resource.
     const icon = () => wire.script((e) => e.method === 'GET' && /^webresources(?:et)?$/i.test(e.path) && e.url.includes('contoso_dash_icon'), {
       statusCode: 200, body: { value: [{ webresourceid: '66666666-6666-4666-8666-666666666666', name: 'contoso_dash_icon', webresourcetype: 11 }] },
@@ -1135,7 +1135,7 @@ for (const kind of ['uncertain', 'owed', 'pending']) {
           let cause = null;
           for (let e = r.err; e; e = e.cause) if (e.dispatchToken) { cause = e; break; }
           assert.ok(cause, chainText(r.err));
-          assert.equal(cause.approval, `publication-risk:dashboard:${w.id}`);
+          assert.equal(cause.approval, `publication-risk:dashboard:${w.id}/${cause.dispatchToken}`);
         } else {
           assert.match(chainText(r.err), /managed-dashboard-unsettled/);
         }
