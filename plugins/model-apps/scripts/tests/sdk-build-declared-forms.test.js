@@ -711,6 +711,7 @@ async function verifyReader(org) {
   const formReads = [];
   return {
     formReads,
+    cli,
     read: {
       findTable: async () => ({ logicalName: 'contoso_item' }),
       findColumns: async () => [{ logicalName: 'contoso_name' }, { logicalName: 'contoso_code' }],
@@ -764,6 +765,56 @@ test('verify lists a bound form whose publication is not confirmed as unverified
     const blind = await verifySpec(makeSpec(), plain, { managedManifest: manifestOf(org, dir) });
     assert.deepEqual(managedChecks(blind), []);
     assert.ok(blind.unverified.includes(`managed:form ${KEY} (this reader cannot read a form by id)`), JSON.stringify(blind.unverified));
+  });
+});
+
+// The default-form and Main Form Set checks a table's forms carry, by kind: what verify expects of the forms the build orders.
+const ORDER_KINDS = new Set(['form-default', 'form-default-unique', 'form-order', 'form-order-served']);
+const orderChecks = (r) => r.checks.filter((c) => ORDER_KINDS.has(c.kind)).map((c) => [c.kind, c.name, c.present]);
+// A table the spec owns (not `existing`, named with the publisher prefix): there the build's implicit first-Main-form default applies.
+const ownTableSpec = (opts) => { const s = makeSpec(opts); s.entities[0].existing = false; return s; };
+const plainItem = () => ({ entity: 'contoso_item', name: 'Plain Item', formType: 'Main', tabs: [{ name: 'general', label: 'General', sections: [{ name: 'main', label: 'Main', fields: ['contoso_name'] }] }] });
+
+test('verify expects no default flag or form order of a declared form, as the build sets neither on it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = ownTableSpec();
+    assert.equal((await build(org, dir, spec)).err, undefined);
+    const { read, cli } = await verifyReader(org);
+    const r = await verifySpec(spec, { ...read, formRow: (e, id) => cli.formRow(e, id) }, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(orderChecks(r), [], 'a declared form carries no default-form or form-order expectation');
+    assert.deepEqual(r.missing.filter((m) => /^form/.test(m.kind)), [], JSON.stringify(r.missing));
+    assert.equal(managedChecks(r)[0].present, true);
+  });
+});
+
+test('verify still holds a plain Main form beside a declared one to the default and the order the build gave it', async () => {
+  await withForms(true, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = ownTableSpec();
+    spec.forms.push(plainItem());
+    assert.equal((await build(org, dir, spec)).err, undefined);
+    const { read, cli } = await verifyReader(org);
+    const r = await verifySpec(spec, { ...read, formRow: (e, id) => cli.formRow(e, id) }, { managedManifest: manifestOf(org, dir) });
+    assert.deepEqual(orderChecks(r), [
+      ['form-default', 'contoso_item.Plain Item', true],
+      ['form-order', 'contoso_item: Plain Item', true],
+    ]);
+  });
+  // With the feature off the same form is plain, and is the table's implicit default as it always was.
+  await withForms(false, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = ownTableSpec({ declared: false });
+    assert.equal((await build(org, dir, spec)).err, undefined);
+    const { read, cli } = await verifyReader(org);
+    const r = await verifySpec(spec, { ...read, formRow: (e, id) => cli.formRow(e, id) }, {});
+    assert.deepEqual(orderChecks(r), [
+      ['form-default', 'contoso_item.Declared Item', true],
+      ['form-order', 'contoso_item: Declared Item', true],
+    ]);
   });
 });
 

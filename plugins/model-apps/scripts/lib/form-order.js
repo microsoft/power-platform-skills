@@ -28,7 +28,21 @@
 //      https://learn.microsoft.com/power-apps/developer/model-driven-apps/form-xml-schema (FormDisplayConditionsType)
 //      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievefilteredforms
 
+const { declaredFeatureOn } = require('./declared-features.js');
+
 const lower = (s) => String(s === undefined || s === null ? '' : s).toLowerCase();
+
+// A form the build manages whole (forms[].reconcile "declared", lib/form-layout-reconcile.js), while its feature flag is on
+// (lib/declared-features.js). With the flag off validation refuses `reconcile` on a form, so every form is plain.
+const isDeclaredFormOn = (f) => declaredFeatureOn('forms') && !!f && f.reconcile === 'declared';
+// The forms the default-form promotion and the Main Form Set order apply to, for the build that writes them and for verify that
+// expects them. A declared form is left out: both would write onto the form's own row (isdefault, formxml DisplayConditions) after
+// its layout was proved, which the next build would read as a drift of the saved layer, so the build never sets either on it and
+// verify must never expect it. Validation refuses the fields that would ask for either on a declared form (app-spec.js
+// validateDeclaredForms), so leaving it out drops nothing the spec asked for. One rule here, so the build and verify cannot disagree.
+const formOrderForms = (spec) => ((spec && spec.forms) || []).filter((f) => !isDeclaredFormOn(f));
+// The spec to give the default-form and form-order functions below: without its declared forms (the same object when it has none).
+const formOrderSpecOf = (spec) => (((spec && spec.forms) || []).some(isDeclaredFormOn) ? { ...spec, forms: formOrderForms(spec) } : spec);
 
 /** A `forms[]` entry that is a Main form (`formType` omitted means Main). */
 const isMainForm = (f) => !!f && typeof f === 'object' && (f.formType === undefined || f.formType === 'Main');
@@ -176,6 +190,9 @@ function compareServedOrder(planned, served) {
 }
 
 module.exports = {
+  isDeclaredFormOn,
+  formOrderForms,
+  formOrderSpecOf,
   isMainForm,
   isOwnCustomTable,
   declaredMainForms,

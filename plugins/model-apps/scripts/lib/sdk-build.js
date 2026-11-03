@@ -63,6 +63,9 @@ const { PHASES } = require('./stages.js');
 const { pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, unconfirmedDeployedText } = require('./page-binding-targets.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
+  isDeclaredFormOn,
+  formOrderForms,
+  formOrderSpecOf,
   isMainForm,
   isOwnCustomTable,
   declaredMainForms,
@@ -182,13 +185,8 @@ const { createConfigurationRuntime } = require('./configuration-build.js');
 // (lib/declared-features.js). With it off, no form is declared here — validation refuses `reconcile` on a form — so every form
 // takes the build's own path and every spec sends the requests it always sent.
 const { declaredFeatureOn } = require('./declared-features.js');
-const isDeclaredFormOn = (f) => declaredFeatureOn('forms') && !!f && f.reconcile === 'declared';
-// The forms the build's default-form promotion and Main Form Set order may write. A declared form is left out: both write onto
-// the form's own row (isdefault, formxml DisplayConditions) after its layout was proved, which the next build would read as a
-// drift of the saved layer. Validation refuses the fields that would ask for either on a declared form (app-spec.js
-// validateDeclaredForms), so leaving it out drops no request.
-const formOrderForms = (spec) => (spec.forms || []).filter((f) => !isDeclaredFormOn(f));
-const formOrderSpecOf = (spec) => ((spec.forms || []).some(isDeclaredFormOn) ? { ...spec, forms: formOrderForms(spec) } : spec);
+// isDeclaredFormOn, and the forms the build's default-form promotion and Main Form Set order may write (formOrderForms and
+// formOrderSpecOf: the spec without its declared forms), come from lib/form-order.js: verify reads the same rule.
 const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent } = require('./form-layout-reconcile.js');
 // Declared dashboards (dashboards[].reconcile "declared", lib/dashboard-reconcile.js) the same way: only while their flag is on. With it
 // off, validation refuses `reconcile` on a dashboard, and every dashboard takes the build's own create-or-reuse path below.

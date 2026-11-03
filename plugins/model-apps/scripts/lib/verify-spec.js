@@ -39,7 +39,7 @@ const { verifyDeclaredBpf, declaredBpfsByKey } = require('./declared-bpf-io.js')
 const { declaredFeatureOn } = require('./declared-features.js');
 const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
-const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
+const { formOrderSpecOf, isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
 const { hostsCustomControl } = require('./dashboard-tiles.js');
 const { formEmbedsOfPage, verifyFormPageEmbed } = require('./form-page-embeds.js');
@@ -210,8 +210,12 @@ async function verifySpec(spec, read, opts = {}) {
   // `unverified`; the plan joins them in report order.)
 
   const selectedDefaultForms = new Map();
+  // The spec's Main forms the build promotes and orders, per table. A declared form (forms[].reconcile "declared") is not one of
+  // them: the build sets neither its default flag nor its order (lib/form-order.js formOrderSpecOf, the rule the build applies),
+  // so no default-form, sibling or form-order check expects either of it; its own managed check holds its layout.
+  const orderSpec = formOrderSpecOf(spec);
   const declaredMainFormsByEntity = new Map();
-  for (const f of spec.forms || []) {
+  for (const f of orderSpec.forms || []) {
     if (!isMainForm(f)) continue;
     const entity = String(f.entity || '').toLowerCase();
     if (!entity) continue;
@@ -224,7 +228,7 @@ async function verifySpec(spec, read, opts = {}) {
   // promotes would make `--verify` permanently unsatisfiable for any spec that puts a Main form on
   // `account`, `contact`, or an `existing: true` table without choosing its default.
   for (const entity of declaredMainFormsByEntity.keys()) {
-    const chosen = selectDefaultForm(spec, entity);
+    const chosen = selectDefaultForm(orderSpec, entity);
     if (chosen) selectedDefaultForms.set(entity, chosen.form);
   }
 
@@ -608,7 +612,7 @@ async function verifySpec(spec, read, opts = {}) {
     } catch { id = null; }
     add('form', name, id);
     const entityLogical = String(f.entity || '').toLowerCase();
-    if (id && declaredMainFormsByEntity.has(entityLogical) && (f.formType || 'Main') === 'Main') {
+    if (id && (declaredMainFormsByEntity.get(entityLogical) || []).includes(f)) {
       resolvedMainFormsByIndex[formIndex] = { entityLogical, form: f, name, id };
     }
     if (id && selectedDefaultForms.get(entityLogical) === f && canReadDefault) {
@@ -676,7 +680,7 @@ async function verifySpec(spec, read, opts = {}) {
   if (useCombinedFormRead || typeof read.formTopology === 'function') {
     plan.each([...declaredMainFormsByEntity], async ({ add, environmentSkipped }, declaredMain) => {
     for (const [entityLogical, declared] of declaredMain) {
-      if (!plannedMainFormSequence(spec, entityLogical)) continue;
+      if (!plannedMainFormSequence(orderSpec, entityLogical)) continue;
       const resolvedMainFormsByEntity = await resolvedMainForms();
       const resolved = resolvedMainFormsByEntity.get(entityLogical) || [];
       const idOf = new Map(resolved.map((r) => [r.form, r.id]));
@@ -693,7 +697,7 @@ async function verifySpec(spec, read, opts = {}) {
           break;
         }
       }
-      const sequence = plannedMainFormSequence(spec, entityLogical, current);
+      const sequence = plannedMainFormSequence(orderSpec, entityLogical, current);
       const label = `${entityLogical}: ${sequence.map((f) => nameOf.get(f)).join(' > ')}`;
       if (readError) {
         add('form-order', label, false, `could not read the deployed form order (${readError})`);
