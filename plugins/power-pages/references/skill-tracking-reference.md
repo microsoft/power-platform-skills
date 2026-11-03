@@ -74,6 +74,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | migrate-bootstrap | MigrateBootstrap | Site/AI/Skills/MigrateBootstrap |
 | migrate-webapi-selectall | MigrateWebapiSelectall | Site/AI/Skills/MigrateWebapiSelectall |
 | author-webpage-content | AuthorWebpageContent | Site/AI/Skills/AuthorWebpageContent |
+| manage-governance (temporarily disabled) | ManageGovernance | Site/AI/Skills/ManageGovernance |
 
 ## YAML Format
 
