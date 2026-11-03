@@ -276,7 +276,11 @@ test('owed publication whose saved layer has drifted is not published: nothing i
   commitOwedForm(s, '<form v="2"/>');
   // Someone else's change is saved on the form: publishing the table would put it live under this debt.
   s.wire.saved.get(MAIN).formxml = '<form foreign="1"/>';
-  assert.equal(await codeOf(publishForms(s.sdk, s.store, s.barrier, [{ family: 'form', key: 'account/main' }])), 'create-completion-required');
+  const drift = await publishForms(s.sdk, s.store, s.barrier, [{ family: 'form', key: 'account/main' }]).then(() => null, (e) => e);
+  assert.equal(drift && drift.code, 'create-completion-required');
+  // The stop says what it found (a saved change the build did not make, not published) and what the maker does about it.
+  assert.match(drift.message, /managed form "account\/main" has a saved change this build did not make and that is not published/);
+  assert.match(drift.message, /the publish of its table account was not sent: it would put that change live\. In the maker, publish that change if it should be kept, or undo it there and save, then run the build again/);
   assert.equal(s.wire.publishes().length, 0);
   assert.equal(s.wire.published.get(MAIN).formxml, '<form v="1"/>', 'the foreign change was not published');
   assert.equal(s.store.readGroup('form', 'account/main').committed.publication.state, 'owed');
@@ -292,6 +296,17 @@ test('owed publication whose saved layer has drifted is not published: nothing i
   assert.equal(c.wire.published.get(MAIN).formxml, '<form v="2"/>');
 });
 
+test('a drifted saved layer someone else already published is not called unpublished, and the stop names the next build as the way on', async () => {
+  const s = await setup();
+  s.wire.putForm({ formid: MAIN, name: 'Main', objecttypecode: 'account', type: 2, formxml: '<form foreign="1"/>' }, { publishedToo: true });
+  commitOwedForm(s, '<form v="2"/>');
+  const drift = await publishForms(s.sdk, s.store, s.barrier, [{ family: 'form', key: 'account/main' }]).then(() => null, (e) => e);
+  assert.equal(drift && drift.code, 'create-completion-required');
+  assert.doesNotMatch(drift.message, /not published|In the maker/);
+  assert.match(drift.message, /has a saved change this build did not make \(its saved layer is not the one its managed group proved\)/);
+  assert.match(drift.message, /Run the build again: it reads the saved layer afresh and names any change it would overwrite/);
+  assert.equal(s.wire.publishes().length, 0);
+});
 const formRow = (id, formxml, table = 'account') => ({ formid: id, name: 'Main', objecttypecode: table, type: 2, formxml });
 // A form an earlier run committed on `account`: `publishedXml` is live, `savedXml` is saved, and the group's publication
 // is `state` — 'owed' (desired = the saved layer it committed) or 'not-needed' (saved equalled published at the commit).
@@ -2382,7 +2397,30 @@ test('publication refusals: a send answered but not read back names its own disp
   assert.deepEqual(waits, [...PUBLICATION_SETTLE_DELAYS_MS], 'the read-back is made again after each settle delay, and no more');
   assert.equal(a.wire.publishes('account').length, 1, 'a read-back that never shows the send is never answered with a second publish');
   assert.deepEqual(shapeOf(unshown), blockedBy(pubOf(a.store).dispatchToken));
-  // The read-back itself fails.
+  // The saved layer is still the one the publish shipped, which is also what a platform that reads the two layers apart
+  // shows: the stop names that case and what the maker checks, and the next run's fresh read names it again.
+  assert.match(unshown.message, /does not show what it shipped: managed form "account\/main" its saved layer is still the one the publish shipped, yet the published layer reads differently: either the publish did not put it live, or the platform reads this artifact's saved and published layers apart/);
+  assert.match(unshown.message, /In the maker, compare what is published with the spec: if it matches, accept the risk with the publication-risk approval this build prints/);
+  const labelsOf = async (s) => {
+    const n = await nextRun(s);
+    const labels = [];
+    const r = await confirmUncertainPublication({ store: n.store, barrier: { blockScope: (scope, label) => labels.push(label) }, scope: ACCOUNT, client: n.sdk.dataverse });
+    assert.deepEqual(r.confirmed, []);
+    return labels.join('\n');
+  };
+  assert.match(await labelsOf(a), /a fresh read did not prove it ended: its saved layer is still the one the publish shipped, yet the published layer reads differently.*; .*publication-risk:table:account\//);
+  // Control: something saved over the form after the publish, so its saved layer is not what was shipped any more. It
+  // stays unconfirmed as before, and neither stop says the layers read apart.
+  const m = await setup();
+  committedForm(m, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  m.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 204, unapplied: true });
+  const moved = await caught(publishManagedScope({
+    store: m.store, barrier: m.barrier, scope: ACCOUNT, groups: [MAIN_G], client: m.sdk.dataverse, path: 'managed forms of account', settle: { sleep: async () => {} },
+    publish: async () => { const r = await publishTablesXml(m.sdk.dataverse, ['account']); m.wire.saved.get(MAIN).formxml = '<form v="3"/>'; return r; },
+  }));
+  assert.equal(moved && moved.code, PUBLICATION_UNCONFIRMED);
+  assert.equal(moved.message, 'the publish was sent and the published layer does not show what it shipped');
+  assert.doesNotMatch(await labelsOf(m), /still the one the publish shipped|read apart/);  // The read-back itself fails.
   const b = await setup();
   committedForm(b, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
   let reads = 0;

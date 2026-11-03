@@ -48,6 +48,19 @@ const WORKFLOW_EDIT_REFUSED = 'workflow-edit-refused';
 const WORKFLOW_EFFECT_FULFILLED = 'workflow-effect-fulfilled';
 // A publication that may have been sent and is not yet proved live (lib/managed-bindings.js UNCERTAIN).
 const UNCERTAIN_PUBLICATION = new Set(['dispatching', 'unconfirmed']);
+// What a publish that no read shows is, when the saved layer is still exactly what it shipped. Two causes read alike and
+// no read tells them apart, so it stays unconfirmed (fail closed) and only the words name the case. One is a publish that
+// did not put the layer live. The other was measured live on a form the build adopted, in an organization with a second
+// language (3082) beside its base one (1033): after the publish the saved read (RetrieveUnpublished) and the published
+// read answered the SAME @odata.etag, and still read a sub-grid's caption apart in the base language — the build's own
+// PATCH had sent `Issues`, the published read showed it, and the saved read showed the other sub-grid's `Inspections`:
+//   saved      <cell id="…"><labels><label description="Inspections" languagecode="1033" /><label description="Inspections" languagecode="3082" /></labels><control … TargetEntityType "…issue" …
+//   published  <cell id="…"><labels><label description="Issues" languagecode="1033" /></labels><control … TargetEntityType "…issue" …
+// A rewrite of the saved layer with the published text did not change that read. A base-language caption is never set
+// aside (lib/formxml-layers.js): it may be a maker's unpublished edit, and a saved read that misreports one caption
+// cannot prove what is live either. So the maker is told to compare and, when it matches, to accept the risk; the debt is
+// then owed again, and a later publish of it can stop the same way.
+const LAYERS_READ_APART = 'its saved layer is still the one the publish shipped, yet the published layer reads differently: either the publish did not put it live, or the platform reads this artifact\'s saved and published layers apart (seen on an adopted form whose sub-grid caption in the base language reads one way saved and another published), and no read can tell which. In the maker, compare what is published with the spec: if it matches, accept the risk with the publication-risk approval this build prints; a later publish of it can stop the same way while its two layers read apart';
 
 function codedError(code, message, extra) {
   return Object.assign(new Error(message), { code }, extra || {});
@@ -777,6 +790,7 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
   const unconfirmed = [];
   for (const [token, list] of dispatches) {
     let code = null;
+    let apart = false;
     const proofs = [];
     if (corrupt.length) code = CODES.groupInvalid;
     else if (typeof token !== 'string' || !token) code = PUBLICATION_UNCONFIRMED;
@@ -793,7 +807,7 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
       let read;
       try { read = await reader(client, o.group); } catch { code = PUBLICATION_UNVERIFIED; break; }
       if (!read || typeof read.publishedSha256 !== 'string') { code = PUBLICATION_UNVERIFIED; break; }
-      if (read.publishedSha256 !== shipped) { code = PUBLICATION_UNCONFIRMED; break; }
+      if (read.publishedSha256 !== shipped) { code = PUBLICATION_UNCONFIRMED; apart = read.savedSha256 === shipped; break; }
       proofs.push({ family: o.family, key: o.key, publishedSha256: read.publishedSha256, generation: o.group.generation });
     }
     if (!code) {
@@ -809,7 +823,8 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
     }
     unconfirmed.push(...list.map(({ family, key }) => ({ family, key, code })));
     const remedy = typeof token === 'string' && token ? `; ${publicationRemedy(scope, token)}` : '';
-    gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it ended${remedy})`);
+    const found = apart ? `: ${LAYERS_READ_APART}` : '';
+    gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it ended${found}${remedy})`);
   }
   return { confirmed, unconfirmed };
 }
@@ -1022,7 +1037,15 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     // A saved layer on the scope is not one the store proved: publishing would put someone else's change live.
     // Nothing is sent, the debt stays owed, and the scope is withheld for the run.
     gate.blockScope(scope, `${names(drifted)} (its saved layer is not the one the store proved)`);
-    throw codedError(CODES.completion, `${names(drifted)} has a saved layer that is not the one its managed group proved; the publish of its ${want.replace(':', ' ')} was not sent`);
+    // Say what was found and the way out, not only the store's view of it. The usual case is a change a maker saved in the
+    // form designer and has not published: its saved layer differs from the published one, and only the maker can decide
+    // whether it goes live. A saved layer that equals the published one but not the proved one was published by someone
+    // else already; the next build reads it afresh and names what it would overwrite.
+    const unpublished = drifted.some((o) => o.savedSha256 !== o.publishedSha256);
+    const remedy = unpublished
+      ? 'In the maker, publish that change if it should be kept, or undo it there and save, then run the build again'
+      : 'Run the build again: it reads the saved layer afresh and names any change it would overwrite';
+    throw codedError(CODES.completion, `${names(drifted)} has a saved change this build did not make${unpublished ? ' and that is not published' : ''} (its saved layer is not the one its managed group proved), so the publish of its ${want.replace(':', ' ')} was not sent: it would put that change live. ${remedy}`);
   }
   if (!gate.allowScope(scope, path)) return { sent: false, withheld: true, confirmed: confirmedSoFar() };
 
@@ -1138,7 +1161,12 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     if (after.some((o) => !shipped(o))) {
       gate.blockScope(scope, `${label} (its publish was sent and the published layer does not show it)`);
       note('unconfirmed');
-      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what it shipped', journaled());
+      const unshown = after.filter((o) => !shipped(o));
+      const stillSaved = unshown.every((o) => {
+        const sent = carriedReads.find((c) => c.family === o.family && c.key === o.key);
+        return o.savedSha256 === (sent ? sent.savedSha256 : o.group.publication.desiredSha256);
+      });
+      throw codedError(PUBLICATION_UNCONFIRMED, `the publish was sent and the published layer does not show what it shipped${stillSaved ? `: ${names(unshown)} ${LAYERS_READ_APART}` : ''}`, journaled());
     }
     // One atomic write settles the whole send, so no run can see some of it confirmed and not the rest. `answered`:
     // this invocation dispatched the publish and it answered success, which a later run can never claim.
