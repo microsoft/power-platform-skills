@@ -166,7 +166,7 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 // service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
 const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSecurity } = require('./field-security.js');
 const { declaredTableFlags } = require('./schema-feature-contract.js');
-const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause, markFreshTable } = require('./retry-policy.js');
+const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause, markFreshTable, unsentDefaultView } = require('./retry-policy.js');
 const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
 const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approvalKey } = require('./reconcile-common.js');
 const { createPassthroughCreates } = require('./creates-passthrough.js');
@@ -1252,6 +1252,85 @@ function enrichesDefaultViews(spec, entity) {
   // table really is mine" is exactly the call an author can make and this code cannot.
   if (entity.existing === true && entity.enrichDefaultViews !== true) return false;
   return entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
+}
+
+// The SDK's `enrichDefaultViews(table, columns)` saves each default view of `table` that the server lists
+// (`savedqueries?$filter=returnedtypecode eq '<table>' and querytype eq 0`) by fetchArtifact → updateElement('/columns') →
+// pushArtifact, and the save names the table from the workspace copy: the view adapter records
+//   entityLogicalName: <the row's returnedtypecode> ?? <the fetchxml's <entity name>>
+// and the update PATCH sends `returnedtypecode: <that>` back. Live-captured: a view of a table created moments before, read
+// while the table is not yet in the metadata cache of the server that answers, comes back from RetrieveUnpublished as
+//   { "savedqueryid": "<id>", "returnedtypecode": "none", "fetchxml": "<fetch …><entity name=\"<table>\">…", … }
+// "none" is not null, so the copy records `entityLogicalName: "none"`, and the PATCH is refused:
+//   400 { "error": { "code": "0x80040203", "message": "Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml" } }
+// The copy is then dirty (the new columns were never saved), and a plain fetchArtifact KEEPS a dirty copy while the server's
+// etag has not moved (the SDK's applyFetchedArtifactUnlocked; the etag does not move, because nothing was saved): every later
+// attempt and every later run read the view again, got the right table back, and still sent the copy that names none. So the
+// copy, not the server, was the reason no retry and no re-run recovered.
+//
+// This returns `provision` seen through a guard for one call of enrichDefaultViews on `table` (the SDK calls its own
+// fetchArtifact and pushArtifact through `this`, so the guard sees exactly the views that call saves):
+//   - before the SDK fetches a default view, a DIRTY copy that names another table (or none) is fetched with { overwrite: true },
+//     the SDK's own way to replace a copy with the server's. Only when the copy differs from the server's in `/columns` alone:
+//     that is the one thing this step writes, and it writes the whole array again on every build, so nothing is lost. A copy
+//     with any other local difference is an edit nobody sent (a run's or a maker's — a diff cannot say whose); it is kept, and
+//     the step stops before it writes anything (`workspace-copy-unsent-edits`, as a declared view's copy does).
+//   - before the SDK saves a default view, a copy that names another table (or none) is not sent: the save would carry
+//     returnedTypeCode 0. The step stops with DEFAULT_VIEW_NO_TABLE_CODE (retry-policy.js, unsentDefaultView); for a table this invocation created that is the lag
+//     the build runs again for (lib/retry-policy.js), and the next attempt's fetch reads the view again and replaces the copy
+//     (above). For any other table it is final, and the next run does the same.
+// A copy that names this table — every copy of a healthy build — goes through untouched: the guard reads only the workspace's
+// own manifest (listArtifacts: no request), so a healthy build sends exactly what it sent before. An SDK without the
+// workspace calls the guard needs (a test double) is returned as it is.
+function guardDefaultViewCopies(provision, table) {
+  if (!provision || ['listArtifacts', 'diffArtifact', 'fetchArtifact', 'pushArtifact'].some((m) => typeof provision[m] !== 'function')) return provision;
+  const want = String(table).toLowerCase();
+  const sameId = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+  // The manifest entry of the view's copy ({ type, id, name, entityLogicalName, isDirty }), or undefined when there is none.
+  // This table's own entries are read first, so a healthy copy costs one filtered read of the manifest.
+  const copyOf = async (id) => {
+    const own = await provision.listArtifacts('view', { entityLogicalName: want });
+    const found = (own || []).find((a) => a && sameId(a.id, id));
+    if (found) return found;
+    return ((await provision.listArtifacts('view')) || []).find((a) => a && sameId(a.id, id));
+  };
+  const namesTable = (entry) => typeof entry.entityLogicalName === 'string' && entry.entityLogicalName.toLowerCase() === want;
+  // diffArtifact compares the copy with the SDK's snapshot of the server's: { changes: [{ pointer: '/columns/2/width', type, … }] }.
+  // An answer without a list of changes proves nothing, so it is not "columns only".
+  const columnsOnly = async (id) => {
+    let diff;
+    try {
+      diff = await provision.diffArtifact('view', id);
+    } catch {
+      return false;
+    }
+    const changes = diff && Array.isArray(diff.changes) ? diff.changes : null;
+    return Boolean(changes) && changes.every((c) => c && typeof c.pointer === 'string' && (c.pointer === '/columns' || c.pointer.startsWith('/columns/')));
+  };
+  const guardedFetch = async (type, id, options) => {
+    if (type !== 'view' || (options && options.overwrite)) return provision.fetchArtifact(type, id, options);
+    const entry = await copyOf(id);
+    if (!entry || !entry.isDirty || namesTable(entry)) return provision.fetchArtifact(type, id, options);
+    if (await columnsOnly(id)) return provision.fetchArtifact(type, id, { ...(options || {}), overwrite: true });
+    throw refusal(`the local copy of the default view ${id} of ${want} in the workspace names no table of its own and differs from the server's beyond its columns (an edit an earlier run did not send, or one made by hand), so it was not replaced and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}`, { code: 'workspace-copy-unsent-edits' });
+  };
+  const guardedPush = async (type, id) => {
+    if (type === 'view') {
+      const entry = await copyOf(id);
+      if (entry && !namesTable(entry)) {
+        const named = typeof entry.entityLogicalName === 'string' && entry.entityLogicalName ? `"${entry.entityLogicalName}"` : 'no table';
+        throw unsentDefaultView(`the server answered the default view ${id} of ${want} with returnedtypecode ${named}, so it was not saved and nothing was sent: the save would carry returnedTypeCode 0, which Dataverse refuses (0x80040203). The next attempt or run reads the view again`, want);
+      }
+    }
+    return provision.pushArtifact(type, id);
+  };
+  return new Proxy(provision, {
+    get(target, prop, receiver) {
+      if (prop === 'fetchArtifact') return guardedFetch;
+      if (prop === 'pushArtifact') return guardedPush;
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 }
 
 // Resolve the id of an EXISTING deployed form to reconcile, disambiguating by TYPE (form names are unique
@@ -6889,16 +6968,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const cols = defaultViewColumns(spec, e);
       // Only a table this BUILD created — by an acknowledged create, in this attempt or an earlier one of the same invocation (`createdTables`); a table found, or found after a create whose answer was lost, is not — is
       // marked: a view saved moments after the table was created can be refused because the server that validates it does not have the table yet, which a run again rides out (retry-policy.js, markFreshTable). For
-      // any other table the same answer is a real refusal.
+      // any other table the same answer is a real refusal. The views are saved through guardDefaultViewCopies (above): measured live, the
+      // lag also reaches the READ of the view, whose copy then names no table, and the guard keeps that copy from being sent and replaces
+      // it on the next fetch — a resend of the same copy would be refused however long the build waited.
       const createdHere = createdTables.has(logical);
       const marked = (err) => (createdHere ? markFreshTable(err, logical) : err);
+      const viewSdk = guardDefaultViewCopies(provision, logical);
       await runner.run('views', `enrich default views for ${logical}`, async () => {
         if (!deferDefaultViewPublish) {
           const held = !owed.barrier.allow(logical, `default views of ${logical}`);
           const enrichOpts = held ? { excludeViewIds: authorViewIds, publish: false } : { excludeViewIds: authorViewIds };
           let updated;
           try {
-            ({ updated } = await provision.enrichDefaultViews(logical, cols, enrichOpts));
+            ({ updated } = await viewSdk.enrichDefaultViews(logical, cols, enrichOpts));
           } catch (err) {
             throw marked(err);
           }
@@ -6907,7 +6989,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return updated;
         }
         try {
-          const record = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds, publish: false });
+          const record = await viewSdk.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds, publish: false });
           recordOwed(logical, record);
           // A view whose push was REFUSED — the SDK answers a concurrent edit's 412 by value, not with a
           // throw — saved nothing, so it fails the step as any other refused push does, rather than leave
