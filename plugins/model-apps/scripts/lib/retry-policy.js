@@ -353,6 +353,21 @@ function isFreshTableReadLag(error) {
   return Boolean(fresh) && chain.some((e) => isFreshTableLag(e, fresh));
 }
 
+// The service's answer behind that lag, as one line for the maker — the status, the code and the platform's words, e.g.
+//   HTTP 400 0x80041102: The entity with a name = 'contoso_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075
+// — or null when the chain carries no such lag. A stop that wraps the read in words of its own (a declared flow's or rule's create-identity-unverified) keeps the answer only in its cause chain, which the
+// CLI does not print (dataverse-auth.js emitResult prints the message), so the stop quotes it from here. The words are the service's and are printed through the same redaction as any other output.
+function freshTableLagAnswer(error) {
+  const chain = causeChain(error);
+  const fresh = freshTableOf(chain);
+  const lag = fresh ? chain.find((e) => isFreshTableLag(e, fresh)) : null;
+  if (!lag) return null;
+  const answered = answeredErrorOf(lag) || {};
+  const status = chain.flatMap(statusesOf)[0];
+  const code = answered.code ? `${answered.code}: ` : '';
+  return `${status ? `HTTP ${status} ` : ''}${code}${String(answered.message || lag.message || '').replace(/\s+/g, ' ').trim()}`;
+}
+
 // Whether the error is the plugin's own stop before a default view of the freshly created table `fresh` that names no table was sent (DEFAULT_VIEW_NO_TABLE_CODE, see above): the code AND the table it names.
 function isUnsentFreshTableView(error, fresh) {
   return Boolean(fresh) && typedCode(error) === DEFAULT_VIEW_NO_TABLE_CODE && typeof error.table === 'string' && error.table.toLowerCase() === fresh;
@@ -445,7 +460,7 @@ function throttleAskOf(error) {
 }
 
 module.exports = {
-  RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf, markFreshTable, isFreshTableReadLag,
+  RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf, markFreshTable, isFreshTableReadLag, freshTableLagAnswer,
   // The code of the build's stop before a default view whose copy names no table, and the error it stops with (sdk-build.js, guardDefaultViewCopies).
   DEFAULT_VIEW_NO_TABLE_CODE, unsentDefaultView,
   // Also the reader of an answer's code for lib/entity-provision.js, which recognises an "already exists" refusal by it (isAlreadyExists).

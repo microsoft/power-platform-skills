@@ -167,7 +167,7 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 // service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
 const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSecurity } = require('./field-security.js');
 const { declaredTableFlags } = require('./schema-feature-contract.js');
-const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause, markFreshTable, isFreshTableReadLag, unsentDefaultView } = require('./retry-policy.js');
+const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause, markFreshTable, isFreshTableReadLag, freshTableLagAnswer, unsentDefaultView } = require('./retry-policy.js');
 const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
 const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approvalKey } = require('./reconcile-common.js');
 const { createPassthroughCreates } = require('./creates-passthrough.js');
@@ -3853,13 +3853,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const approvalNamed = items.some((i) => !i.ordered && /--authorize \S|--allow-destructive/.test(i.text));
     // The one stop a run again may clear by itself: an identity read of a table this invocation created that met the
     // table's metadata-cache lag (retry-policy.js isFreshTableReadLag, #796; the settlement marks it, nothing was sent).
-    // The build's bounded retry rides it out by resolving again from the start; every other stop stays RETRY.NEVER.
+    // The settlement has already read it again in place for as long as the build's one retry allowance lasted, so the stop
+    // quotes the service's answer (freshTableLagAnswer): wrapped in the settlement's own words it would otherwise reach the
+    // maker only through the cause chain, which the CLI does not print. Every other stop stays RETRY.NEVER.
     const freshLag = isFreshTableReadLag(cause);
     const next = approvalNamed ? 'Fix the cause (or give the approval named above) and run the build again'
       : items.some((i) => i.ordered) ? 'Follow the steps above, then run the build again'
         : 'Do what the message above says, then run the build again';
+    const lagAnswer = freshLag ? freshTableLagAnswer(cause) : null;
     const tail = freshLag
-      ? 'the table was created moments ago and is not readable yet, so the build runs again within its retries; if they run out, run the build again.'
+      ? `The table was created moments ago and is still not readable${lagAnswer ? ` (the service answered ${lagAnswer})` : ''}; run the build again in a minute.`
       : `${next}; it is not retried automatically.`;
     const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${tail}`, { phase, code: stopCode, recoverable: false, retry: freshLag ? RETRY.SERVICE : RETRY.NEVER, cause });
     Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });

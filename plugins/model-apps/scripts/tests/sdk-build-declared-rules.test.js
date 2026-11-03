@@ -211,6 +211,54 @@ test('a declared rule is created Draft under its catalog id, proved, then activa
   });
 });
 
+// #796, as for a declared process flow (sdk-build-declared-bpf.test.js): through the whole CLI assembly, its attempt told the table was created by
+// this invocation, a lag on the rule's identity read is read again in place within the build's one retry allowance, and once that is spent the
+// build stops with the service's own answer in the words the CLI prints (dataverse-auth.js emitResult: redactOutput(err.message)).
+test('a declared rule\'s identity read on a table this invocation created is read again in place; past the build\'s retries the printed stop quotes the service\'s answer (#796)', async () => {
+  const { redactOutput } = require('../lib/output-redaction.js');
+  const MESSAGE = "The entity with a name = 'new_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 1 and timestamp 1";
+  const nameRead = (e) => e.method === 'GET' && e.path === 'workflows';
+  await withRules(true, async () => {
+    const cli = async (lags) => {
+      const wire = createWorkflowWire();
+      for (let i = 0; i < lags; i += 1) wire.script(nameRead, { statusCode: 400, body: { error: { code: '0x80041102', message: MESSAGE } } });
+      const appDir = makeTempDir('declared-rule-');
+      const dir = path.join(appDir, '.maker-workspace');
+      fs.mkdirSync(dir);
+      const barrier = createPublicationBarrier();
+      const sendObserver = createAttemptSendObserver();
+      const workflowEffectGate = createDeferredWorkflowGate();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: ORIGIN, httpClient: clientOver(wire, { barrier, observer: sendObserver, workflowEffectGate }) });
+      await sdk.initWorkspace();
+      const events = [];
+      let attempts = 0;
+      let err;
+      try {
+        await buildModelApp(specWith([RULE]), { apply: true, env: ORIGIN, workspaceDir: dir, appDir, retryDelayMs: 0 }, {
+          sdk, provisionSdk: sdk, publicationBarrier: barrier, sendObserver, workflowEffectGate, warn: () => {}, log: () => {},
+          journal: { path: 'x', record: (e) => events.push(e), close: () => {} },
+          runBuild: (s, o) => { attempts += 1; o.createdTables.add('new_ticket'); return runSdkBuild(s, { ...o, phases: ['business-rules'] }); },
+        });
+      } catch (e) { err = e; }
+      return { err, attempts, retries: events.filter((e) => e.status === 'retry').length, workflowWrites: wire.log.filter((c) => c.method !== 'GET' && /^workflows/i.test(c.path)) };
+    };
+    const recovered = await cli(2);
+    assert.equal(recovered.err, undefined, chainText(recovered.err));
+    assert.equal(recovered.attempts, 1, 'one attempt: the read was made again where it failed');
+    assert.equal(recovered.retries, 2);
+    assert.equal(recovered.workflowWrites.filter((c) => /CreateProcessWithWfomJson/.test(c.path)).length, 1, 'created once');
+    const spent = await cli(4);
+    assert.ok(spent.err, 'the lag outlasts the three retries');
+    assert.equal(spent.attempts, 1);
+    assert.equal(spent.retries, 3);
+    assert.deepEqual(spent.workflowWrites, [], 'nothing is sent for the rule');
+    const printed = redactOutput(spent.err.message);
+    assert.match(printed, /HTTP 400/, printed);
+    assert.ok(printed.includes('0x80041102'), printed);
+    assert.ok(printed.includes(MESSAGE), printed);
+  });
+});
+
 test('a declared rule found unbound halts through the build halt with the typed adoption it needs; nothing is written until it is given', async () => {
   await withRules(true, async () => {
     const wire = createWorkflowWire();
