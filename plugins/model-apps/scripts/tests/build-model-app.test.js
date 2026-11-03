@@ -533,7 +533,7 @@ const NO_TABLE_WORDS = 'Saved Query cannot have returnedTypeCode of 0 and a non 
 const notInCache = (table) => `The entity with a name = '${table}' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075`;
 // A build against a stateful organization: a create acknowledges a table once and `findTables` finds it from then on (as the real one does), so the build's second attempt REUSES the table — it is not "created"
 // again. `existing` names tables that were there before the build started. The default-view enrichment fails as `answers(table, n)` says, n counting that table's tries across all attempts.
-// With `lookups(kind, table, n)` (#796), the SDK's lookup of a view or chart by name fails as it says, n counting that artifact's lookups across all attempts, and the organization keeps what the build creates, so a later
+// With `lookups(kind, table, n, name)` (#796), the SDK's lookup of a view or chart by name fails as it says, n counting that artifact's lookups across all attempts, and the organization keeps what the build creates, so a later
 // attempt's lookup finds a view or chart an earlier one made (as the real one does) and nothing is created twice. `formLookups(table, n)` does the same for the build's lookup of a spec-named form. `spec` replaces the
 // support-desk sample.
 const freshTableBuild = async ({ answers = () => null, lookups = null, formLookups = null, existing = [], publish = false, retryDelayMs = 0, spec = desk }) => {
@@ -579,7 +579,7 @@ const freshTableBuild = async ({ answers = () => null, lookups = null, formLooku
       const table = String(identity.entity).toLowerCase();
       const key = `${kind}|${table}|${identity.name}`;
       lookupTries[key] = (lookupTries[key] || 0) + 1;
-      const failure = lookups ? lookups(kind, table, lookupTries[key]) : null;
+      const failure = lookups ? lookups(kind, table, lookupTries[key], identity.name) : null;
       if (failure) throw failure;
       return made.get(key) || null;
     };
@@ -666,35 +666,38 @@ test('isTransientHalt: the lag of a created table is read only where the build m
 });
 
 // #796: a READ of a table the build has only just created meets the same metadata-cache lag — live, the lookup of a view by name on a new table answered 400 `0x80041102` and the build stopped, to be run again by hand.
-// The read is retried only through the build's own bounded loop, and only for a table an attempt of this invocation created; a lookup that answered is never replayed as a create.
-test('transient auto-retry (#796): a view or chart looked up on a table the build just created is read again in the next attempts, and the build completes with each created once', async () => {
+// The read is made again where it failed, only for a table this invocation created, and each time from the invocation's one retry allowance (build-model-app.js retryFreshRead), so nothing already sent is sent again;
+// a lookup that answered is never replayed as a create.
+test('transient auto-retry (#796): a view or chart looked up on a table the build just created is read again in place, and the build completes with each created once', async () => {
   const table = 'new_ticket';
+  const lagged = { view: 'Active Tickets', chart: 'Tickets by Priority' };
   for (const kind of ['view', 'chart']) {
     const { result, halt, events, creates, calls, lookupTries } = await freshTableBuild({
-      lookups: (k, t, n) => (k === kind && t === table && n <= 2 ? lagAnswer(notInCache(table), '0x80041102') : null),
+      lookups: (k, t, n, name) => (k === kind && t === table && name === lagged[kind] && n <= 2 ? lagAnswer(notInCache(table), '0x80041102') : null),
     });
     assert.strictEqual(halt, null, `${kind}: no halt (${halt && halt.message})`);
     assert.strictEqual(result.ok, true, kind);
     assert.strictEqual(events.filter((e) => e.status === 'retry').length, 2, `${kind}: two retries were journaled`);
-    assert.strictEqual(creates(table), 1, `${kind}: the table was created once; the later attempts reused it`);
-    const first = Object.entries(lookupTries).find(([k]) => k.startsWith(`${kind}|${table}|`));
-    assert.strictEqual(first[1], 3, `${kind}: the third lookup answered`);
-    // Each view and chart of the sample is created exactly once across the three attempts: a later attempt finds what an earlier one made.
+    assert.strictEqual(creates(table), 1, `${kind}: the table was created once`);
+    assert.strictEqual(lookupTries[`${kind}|${table}|${lagged[kind]}`], 3, `${kind}: the third lookup answered`);
+    // Each view and chart of the sample is created exactly once, and nothing else was looked up again.
     assert.strictEqual(calls.filter((c) => c[0] === 'createArtifact' && c[1] === 'view').length, 3, `${kind}: three views, each created once`);
     assert.strictEqual(calls.filter((c) => c[0] === 'createArtifact' && c[1] === 'chart').length, 2, `${kind}: two charts, each created once`);
+    assert.ok(Object.entries(lookupTries).every(([k, n]) => k === `${kind}|${table}|${lagged[kind]}` || !/^(view|chart)\|/.test(k) || n === 1), `${kind}: every other view and chart looked up once`);
   }
 });
 
-test('transient auto-retry (#796): a lookup on a just-created table that never answers exhausts the build\'s three retries and surfaces the platform\'s answer', async () => {
+test('transient auto-retry (#796): a lookup on a just-created table that never answers spends the invocation\'s three retries, not three for each lookup, and surfaces the platform\'s answer', async () => {
   const table = 'new_ticket';
   for (const kind of ['view', 'chart']) {
     const { halt, events, creates, lookupTries } = await freshTableBuild({ lookups: (k, t) => (k === kind && t === table ? lagAnswer(notInCache(table), '0x80041102') : null) });
     assert.ok(halt, `${kind}: the build halted`);
     assert.match(String(halt.message) + String(halt.cause && halt.cause.message), /not found in the MetadataCache/, kind);
     assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, `${kind}: three retries, then the halt`);
+    // Every lookup of the kind on the table is lagged (one view; two charts, which may be read side by side): one read each, and the three retries between them.
     const tried = Object.entries(lookupTries).filter(([k]) => k.startsWith(`${kind}|${table}|`)).map(([, n]) => n);
-    assert.strictEqual(Math.max(...tried), 4, `${kind}: four lookups in all: the first run and the three retries`);
-    assert.strictEqual(creates(table), 1, `${kind}: one create across all four attempts`);
+    assert.strictEqual(tried.reduce((a, b) => a + b, 0), tried.length + 3, `${kind}: ${tried.length} lookups and three retries in all`);
+    assert.strictEqual(creates(table), 1, `${kind}: one create`);
   }
 });
 
@@ -729,13 +732,13 @@ test('transient auto-retry (#796): with no lag, each view and chart is looked up
 });
 
 // A declared view (views[].reconcile "declared") keeps a failed lookup as an "unknown" finding, which settles as a stop. On a table the build just created, the finding's own read failure is the lag above,
-// so the step throws that failure instead and the build's retry reads again; on any other table, or for any other failure, the finding settles as before and the build stops with it.
+// so the view is planned again in place within the build's retries (and, once they are spent, the step throws that failure); on any other table, or for any other failure, the finding settles as before and the build stops with it.
 const declaredDesk = () => {
   const spec = jclone(desk);
   spec.views.find((v) => v.entity === 'new_ticket').reconcile = 'declared';
   return spec;
 };
-test('transient auto-retry (#796): a declared view whose lookup meets the lag of a just-created table is planned again in the next attempts; any other unread lookup still stops the build', async () => {
+test('transient auto-retry (#796): a declared view whose lookup meets the lag of a just-created table is planned again in place; any other unread lookup still stops the build', async () => {
   const table = 'new_ticket';
   const lag = () => lagAnswer(notInCache(table), '0x80041102');
   const ok = await freshTableBuild({ spec: declaredDesk(), lookups: (k, t, n) => (k === 'view' && t === table && n <= 2 ? lag() : null) });
@@ -758,25 +761,58 @@ test('transient auto-retry (#796): a declared view whose lookup meets the lag of
   }
 });
 
-// A form looked up by name on a new table meets the same lag; the build has always read that as "no form yet", which is right on the attempt that created the table (no form of the spec can be on it yet) and wrong on
-// a LATER attempt, whose table an earlier attempt created and may already have given the form: there the miss would create a second form of the same name. The later attempt therefore retries the read.
-test('transient auto-retry (#796): a form lookup that meets the lag on a later attempt is read again rather than create the form twice; on the attempt that created the table it is still "no form yet"', async () => {
+// A form looked up by name on a new table meets the same lag. A failed lookup is never "no form": the platform makes a stock "Information" Main form with every table, and an earlier attempt may have
+// made the spec's form, so either miss would create a second form of the same name. On a table this invocation created the read is made again in place, whichever attempt meets it; on a table that was
+// there before, the build stops with the service's answer and creates nothing.
+test('transient auto-retry (#796): a form lookup that meets the lag on a table the build created is read again rather than create the form twice; on a table that was there before it stops the build', async () => {
   const table = 'new_ticket';
   const lag = () => lagAnswer(notInCache(table), '0x80041102');
+  const forms = (r) => r.calls.filter((c) => c[0] === 'createArtifact' && c[1] === 'form').length;
   // The app is looked up after the forms: its first lookup fails as the service can (a 503), so the build runs a second attempt, whose first form lookup on the table meets the lag.
   const appOnce = (k, t, n) => (k === 'app' && n === 1 ? lagAnswer('The service is unavailable.', null, 503) : null);
   const later = await freshTableBuild({ lookups: appOnce, formLookups: (t, n) => (t === table && n === 2 ? lag() : null) });
   assert.strictEqual(later.halt, null, later.halt && later.halt.message);
   assert.strictEqual(later.events.filter((e) => e.status === 'retry').length, 2, 'the 503, then the lag');
   assert.strictEqual(later.formTries[`form|${table}|Ticket`], 3, 'the third lookup found the form the first attempt made');
-  assert.strictEqual(later.calls.filter((c) => c[0] === 'createArtifact' && c[1] === 'form').length, 3, 'three forms, each created once');
+  assert.strictEqual(forms(later), 3, 'three forms, each created once');
   const first = await freshTableBuild({ lookups: () => null, formLookups: (t, n) => (t === table && n === 1 ? lag() : null) });
   assert.strictEqual(first.halt, null, first.halt && first.halt.message);
-  assert.strictEqual(first.events.filter((e) => e.status === 'retry').length, 0, 'the attempt that created the table reads the lag as no form yet');
-  assert.strictEqual(first.calls.filter((c) => c[0] === 'createArtifact' && c[1] === 'form').length, 3);
+  assert.strictEqual(first.events.filter((e) => e.status === 'retry').length, 1, 'the attempt that created the table reads it again too');
+  assert.strictEqual(first.formTries[`form|${table}|Ticket`], 2);
+  assert.strictEqual(forms(first), 3);
   const existing = await freshTableBuild({ existing: [table], lookups: appOnce, formLookups: (t, n) => (t === table && n === 2 ? lag() : null) });
-  assert.strictEqual(existing.halt, null, existing.halt && existing.halt.message);
-  assert.strictEqual(existing.events.filter((e) => e.status === 'retry').length, 1, 'a table the build did not create keeps the lag as no form yet');
+  assert.ok(existing.halt, 'a table the build did not create: the lag is not read as "no form", and the build stops');
+  assert.match(String(existing.halt.message) + String(existing.halt.cause && existing.halt.cause.message), /not found in the MetadataCache/);
+  assert.strictEqual(existing.events.filter((e) => e.status === 'retry').length, 1, 'only the 503 was retried');
+  assert.strictEqual(existing.formTries[`form|${table}|Ticket`], 2, 'read once in each attempt');
+  assert.strictEqual(forms(existing), 3, 'the forms of the first attempt, and none in the second');
+});
+
+// The preflight gate (discoverOpDiffState) reads each explicit-layout form to see what a prune would remove. Its lookup's MetadataCache answer proves "no form" only when the table itself reads absent:
+// on a table that is there it is the lag, and skipping the form would skip the gate's check of what the build then removes from it.
+test('discoverOpDiffState (#796): a form lookup that meets the MetadataCache answer is "not deployed" only when its table reads absent', async () => {
+  const spec = { solution: { uniqueName: 'Desk' }, app: { name: 'Desk' }, entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+    forms: [{ entity: 'new_ticket', name: 'Ticket', layout: 'explicit', tabs: [{ label: 'General', sections: [{ label: 'A', fields: ['new_name'] }] }] }] };
+  const env = (tablePresent) => {
+    const probes = [];
+    return {
+      probes,
+      provision: {
+        queryRecords: async (set) => {
+          if (set !== 'systemform') return [];
+          throw Object.assign(new Error("The entity with a name = 'new_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache"), { statusCode: 400 });
+        },
+        // The table probe, `/EntityDefinitions(LogicalName='new_ticket')?$select=LogicalName,EntitySetName`: 200 with the table, or 404.
+        dataverse: { get: async (url) => { probes.push(url); return tablePresent ? { status: 200, body: { LogicalName: 'new_ticket', EntitySetName: 'new_tickets' } } : { status: 404 }; } },
+      },
+    };
+  };
+  const absent = env(false);
+  const out = await discoverOpDiffState(spec, absent.provision);
+  assert.deepStrictEqual(out.forms, [], 'the table reads absent: no form to check');
+  assert.strictEqual(absent.probes.length, 1);
+  const present = env(true);
+  await assert.rejects(() => discoverOpDiffState(spec, present.provision), /not found in the MetadataCache/, 'the table is there: the gate stops rather than skip the form');
 });
 
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {

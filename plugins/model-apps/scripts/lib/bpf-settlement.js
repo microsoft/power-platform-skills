@@ -54,7 +54,7 @@ const { CODES, rootCreateAcknowledged } = require('./managed-bindings.js');
 const { createWorkflowDriver, createCopyGuard, answeredRefusal, coded, completionBytesFor, completionWithin, HASH_BOUND, NAME_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
-const { markFreshTable } = require('./retry-policy.js');
+const { markFreshTable, isFreshTableReadLag } = require('./retry-policy.js');
 const sdkBuild = () => require('./sdk-build.js');
 
 const FAMILY = 'bpf';
@@ -520,7 +520,7 @@ function wholeBodyErrors(flow, view) {
  *   what security-role grants and the app's components must use.
  */
 async function settleDeclaredBpf(input) {
-  const { flow, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-process-flows', barrier, httpClient = null, instanceUrl = null, sendObserver = null, freshTable = null } = input || {};
+  const { flow, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-process-flows', barrier, httpClient = null, instanceUrl = null, sendObserver = null, freshTable = null, retryFreshRead = null } = input || {};
   const ensureMembership = (input && input.ensureMembership) || (async () => {});
   if (!isDeclaredBpf(flow)) throw coded(CODES.notSettled, 'settleDeclaredBpf takes a flow with reconcile: "declared"');
   if (!store || typeof store.snapshot !== 'function') throw coded(CODES.notSettled, 'settleDeclaredBpf needs the managed binding store');
@@ -909,15 +909,20 @@ async function settleDeclaredBpf(input) {
     const { id } = identityFor('bpf', key, { catalog });
     let sameName;
     let atId;
-    try {
-      sameName = await sdk.queryRecords('workflow', { select: ['workflowid'], filter: sdkBuild().bpfFilter(flow.name, table), paginate: true });
-      atId = await readVersion(id);
-    } catch (err) {
-      // On a table this invocation created (`freshTable`, the caller's), the read can meet the table's metadata-cache lag
-      // (retry-policy.js isFreshTableLag): the mark lets the build's bounded retry ride it out. Nothing was sent, and the
-      // rerun resolves again from the start, so it never replays a create. Any other failure stays final.
-      if (freshTable) markFreshTable(err, freshTable);
-      throw coded('create-identity-unverified', `${label}: whether the flow already exists could not be read, so it is neither created nor adopted`, { cause: err });
+    for (;;) {
+      try {
+        sameName = await sdk.queryRecords('workflow', { select: ['workflowid'], filter: sdkBuild().bpfFilter(flow.name, table), paginate: true });
+        atId = await readVersion(id);
+        break;
+      } catch (err) {
+        // On a table this invocation created (`freshTable`, the caller's), the read can meet the table's metadata-cache lag
+        // (retry-policy.js isFreshTableLag): it is read again here, as long as the build's one retry allowance lasts
+        // (`retryFreshRead`, build-model-app.js), and nothing was sent before it. Once that is spent, or for any other failure,
+        // the failure is final and carries the service's answer.
+        if (freshTable) markFreshTable(err, freshTable);
+        if (freshTable && typeof retryFreshRead === 'function' && isFreshTableReadLag(err) && (await retryFreshRead(err, freshTable)) === true) continue;
+        throw coded('create-identity-unverified', `${label}: whether the flow already exists could not be read, so it is neither created nor adopted`, { cause: err });
+      }
     }
     if (!Array.isArray(sameName)) throw coded('create-identity-unverified', `${label}: the read of its name answered no list`);
     const ids = sameName.map((r) => normalizeGuid(r.workflowid));

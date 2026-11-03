@@ -50,7 +50,7 @@ const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leavesOutcomeOpen, coded, completionBytesFor, completionWithin, HASH_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
-const { markFreshTable } = require('./retry-policy.js');
+const { markFreshTable, isFreshTableReadLag } = require('./retry-policy.js');
 const sdkBuild = () => require('./sdk-build.js');
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -630,7 +630,7 @@ function isAvailabilityRefusal(err) {
  * @returns {{ committed?: true, recovered?: boolean, noop?: true, skipped?: 'unavailable', id?: string, cause?: Error }}
  */
 async function settleDeclaredRule(input) {
-  const { rule, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-rules', barrier, httpClient = null, instanceUrl = null, sendObserver = null, freshTable = null } = input || {};
+  const { rule, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-rules', barrier, httpClient = null, instanceUrl = null, sendObserver = null, freshTable = null, retryFreshRead = null } = input || {};
   const ensureMembership = (input && input.ensureMembership) || (async () => {});
   if (!isDeclaredRule(rule)) throw coded(CODES.notSettled, 'settleDeclaredRule takes a rule with reconcile: "declared"');
   if (!store || typeof store.snapshot !== 'function') throw coded(CODES.notSettled, 'settleDeclaredRule needs the managed binding store');
@@ -894,14 +894,18 @@ async function settleDeclaredRule(input) {
     const { id } = identityFor('businessRule', key, { catalog });
     let sameName;
     let atId;
-    try {
-      sameName = await sdk.queryRecords('workflow', { select: ['workflowid'], filter: sdkBuild().businessRuleFilter(rule.name, table), paginate: true });
-      atId = await readVersion(id);
-    } catch (err) {
-      // As for a process flow (bpf-settlement.js resolveNew): the metadata-cache lag of a table this invocation created is
-      // marked for the build's bounded retry; nothing was sent, and any other failure stays final.
-      if (freshTable) markFreshTable(err, freshTable);
-      throw coded('create-identity-unverified', `${label}: whether the rule already exists could not be read, so it is neither created nor adopted`, { cause: err });
+    for (;;) {
+      try {
+        sameName = await sdk.queryRecords('workflow', { select: ['workflowid'], filter: sdkBuild().businessRuleFilter(rule.name, table), paginate: true });
+        atId = await readVersion(id);
+        break;
+      } catch (err) {
+        // As for a process flow (bpf-settlement.js resolveNew): the metadata-cache lag of a table this invocation created is
+        // read again here while the build's one retry allowance lasts; nothing was sent, and any other failure stays final.
+        if (freshTable) markFreshTable(err, freshTable);
+        if (freshTable && typeof retryFreshRead === 'function' && isFreshTableReadLag(err) && (await retryFreshRead(err, freshTable)) === true) continue;
+        throw coded('create-identity-unverified', `${label}: whether the rule already exists could not be read, so it is neither created nor adopted`, { cause: err });
+      }
     }
     if (!Array.isArray(sameName)) throw coded('create-identity-unverified', `${label}: the read of its name answered no list`);
     const ids = sameName.map((r) => normalizeGuid(r.workflowid));

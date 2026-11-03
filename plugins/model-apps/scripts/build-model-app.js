@@ -21,7 +21,7 @@ const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
-const { resolveAuthoringLanguage, BuildHalt } = require('./lib/entity-provision.js');
+const { resolveAuthoringLanguage, BuildHalt, findExistingTable } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
 const { createPublicationBarrier, describeWithheld } = require('./lib/publication-barrier.js');
 const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
@@ -300,7 +300,10 @@ async function discoverOpDiffState(spec, provision) {
     // Resolve by (entity, name, TYPE) — NOT name alone. A table routinely has same-named Main / Quick View
     // / Card forms, so a name-only lookup matched multiple rows and the SDK's AmbiguousArtifactError halted
     // this preflight (fail-closed), blocking the edit. Type-scoped resolution targets the requested form.
-    const id = await resolveExistingFormId(provision, def);
+    // The lookup's MetadataCache answer is also the lag of a table created moments ago (#796), so it says "no form" only when the
+    // table itself reads absent; a table that is there keeps the failure, and the gate stops rather than miss a form it would check.
+    const tableAbsent = async () => (await findExistingTable(provision, def.entityLogicalName)) === null;
+    const id = await resolveExistingFormId(provision, def, { tableNotInCache: tableAbsent });
     if (!id) continue; // not deployed yet → nothing to prune
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
     forms.push({ formId: id, label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
@@ -883,6 +886,21 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // metadata-cache lag on a table's default views is the lag of a table just created (retry-policy.js, markFreshTable): the server's answers, and the build's own stop before a default view whose copy
   // names no table is sent (sdk-build.js, guardDefaultViewCopies), which that lag causes when it reaches the view's read. The retry loop below bounds the invocation, so the set adds no retries of its own.
   const createdTables = new Set();
+  // The ONE retry allowance of this invocation (`maxRetries`), spent by the whole-build retry below and by a read of a table this
+  // invocation created that met the table's metadata-cache lag (#796). Such a read is read again where it failed (sdk-build.js
+  // readFresh), not by running the whole build again: a whole-build retry resends every save and publish an earlier attempt already
+  // made. Each wait takes one retry from the same count, with the same backoff, so a lag never earns retries of its own; once the count
+  // is spent the read fails as it did, and the build stops with the service's answer.
+  let retriesUsed = 0;
+  const retryFreshRead = async (err, table) => {
+    if (retriesUsed >= maxRetries) return false;
+    retriesUsed += 1;
+    const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(retriesUsed);
+    if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `table ${table} not readable yet (retry ${retriesUsed}/${maxRetries}) — reading again in ${delay}ms`, detail: String((err && err.message) || err) });
+    log(`\n⟳ table ${table} was created moments ago and is not readable yet — reading it again (retry ${retriesUsed}/${maxRetries}) after ${delay}ms…`);
+    await sleep(delay);
+    return true;
+  };
   // The managed binding store (sdk-build.js openBuildBindingGroups: the one opener, read-only discovery), opened once for the whole
   // invocation on its first attempt and handed to every attempt as `bindingGroups`, so no attempt opens a second writer. Its debt is
   // installed on the barrier every attempt shares. Opened inside the attempt so that a store the build cannot trust halts like any
@@ -925,6 +943,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         provisionSdk: deps.provisionSdk,
         owedLengths,
         createdTables,
+        ...(opts.apply ? { retryFreshRead } : {}),
         apply: opts.apply,
         sampleData: opts.sampleData,
         publish: opts.publish,
@@ -995,8 +1014,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       const refused = transient && ask.throttled && declinedCount() > declinedBefore ? throttle.declined() : null;
       if (refused) {
         halted = budgetHalt(Math.max(ask.askedMs, refused.askedMs), refused.waitMs);
-      } else if (attempt <= maxRetries && transient) {
-        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
+      } else if (retriesUsed < maxRetries && transient) {
+        retriesUsed += 1;
+        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(retriesUsed);
         // What the service asked of the next send, carried across the layers (retry-policy.js, throttleAskOf): when the page backend's sends ran out it handed over the moment before which nothing may be
         // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
         const asked = ask.notBefore > 0 ? Math.ceil(Math.min(ask.askedMs || Infinity, Math.max(0, ask.notBefore - now())) / 1000) * 1000 : 0;
@@ -1006,9 +1026,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
           halted = budgetHalt(ask.askedMs || asked, delay);
         } else {
           if (ask.throttled) throttle.spend(delay);
-          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
+          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${retriesUsed}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
           const askNote = asked > 0 ? ` (the service asked to wait ${Math.ceil((ask.askedMs || asked) / 1000)} s)` : '';
-          log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms${askNote}…`);
+          log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${retriesUsed}/${maxRetries}) after ${delay}ms${askNote}…`);
           await sleep(delay);
           continue;
         }

@@ -1360,7 +1360,7 @@ function guardDefaultViewCopies(provision, table) {
 //     matches ONLY the Main form; same-named Quick View / Card siblings never block it. >1 match (two forms
 //     share entity+type+name) throws an ACTIONABLE error telling the author to pin forms[].formId — we
 //     refuse to guess rather than reconcile an arbitrary form (fail-closed).
-async function resolveExistingFormId(provision, def, { lagIsMiss = () => true } = {}) {
+async function resolveExistingFormId(provision, def, { tableNotInCache = 'absent' } = {}) {
   if (def.formId) {
     if (!FORM_GUID_RE.test(String(def.formId))) throw refusal(`form "${def.name}": formId '${def.formId}' is not a valid GUID`);
     const rows = await provision.queryRecords('systemform', { select: ['formid', 'objecttypecode', 'type', 'name'], filter: `formid eq ${def.formId}`, top: 1 });
@@ -1405,13 +1405,17 @@ async function resolveExistingFormId(provision, def, { lagIsMiss = () => true } 
     // which swallowed it. This must NOT swallow a transient/real failure: re-throw anything else so the
     // fail-closed preflight still refuses to write when it truly can't verify safety.
     // Dataverse error shape: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors#parse-errors-from-the-response
-    // A caller may say the miss is NOT safe (`lagIsMiss(err)` answers false, #796): the build's form step on a table an earlier
-    // attempt of the same invocation created, where that attempt may already have made this form; a null there would create a
-    // second one. Such a caller gets the failure back (the build marks it, so its bounded retry reads again once the cache has
-    // the table). Every other caller keeps the null.
+    // But the same answer (code 0x80041102) is also the platform's metadata-cache LAG on a table that exists and was created moments
+    // ago (#796), so the answer alone never proves the table, and with it the form, absent. `tableNotInCache` says what the caller makes
+    // of it:
+    //   'absent' (the default): null, as above — for a caller that only reads and writes nothing on a miss (verify, teardown);
+    //   'fail': the failure as it came — the build's form step, where a null would create a second form of the same name;
+    //   a function: the caller's own proof that the table is absent (`await tableNotInCache(err)` answers true) — the preflight,
+    //     which must not skip its removal gate for a form that is there; anything but a proof of absence keeps the failure.
     if (err && /not found in the MetadataCache/i.test(String(err.message || ''))) {
-      if (lagIsMiss(err) === false) throw err;
-      return null;
+      if (tableNotInCache === 'absent') return null;
+      if (typeof tableNotInCache === 'function' && (await tableNotInCache(err)) === true) return null;
+      throw err;
     }
     throw err;
   }
@@ -3014,7 +3018,9 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
   // `--preview-push`, at no extra read.
   const artifactPresent = async (kind, def) => {
     if (kind === 'form') {
-      const id = await resolveExistingFormId(provision, def);
+      // The table was read present before this is asked, so a MetadataCache answer here is the table's lag, not its absence (#796):
+      // it is thrown, and the item is `unknown` with the service's words rather than a confident `create`.
+      const id = await resolveExistingFormId(provision, def, { tableNotInCache: 'fail' });
       return id ? { id } : false;
     }
     if ((kind === 'view' || kind === 'chart') && typeof provision.findArtifact === 'function') {
@@ -3115,8 +3121,8 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         // a confident `+ create` for every view and form on it — and the apply never gets that far:
         // findExistingTable raises BuildHalt for exactly this state, outside any runner.run, so the
         // build aborts in `data-model`. The form arm is the worst of the three, because
-        // resolveExistingFormId deliberately swallows the MetadataCache 400 and returns null, which
-        // `!!` then flattens into a confident "absent".
+        // resolveExistingFormId by default swallows the MetadataCache 400 and returns null, which
+        // would then flatten into a confident "absent" (artifactPresent asks it not to).
         if (t.found === null) { item.state = 'unknown'; item.stateWhy = t.why; continue; }
         const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
         item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
@@ -4660,34 +4666,51 @@ async function runSdkBuildPhases(spec, opts, owed) {
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
   // The tables this BUILD created: the caller's set when it retries the whole build (build-model-app.js), so an attempt that finds a table an earlier one created still knows it is that build's; else this run's own.
   const createdTables = opts.createdTables instanceof Set ? opts.createdTables : new Set();
-  // The tables an EARLIER attempt of this invocation created (taken before this attempt's data model adds its own): only on such a
-  // table can a spec-named form already exist that a lookup lost to the metadata-cache lag would miss (formLookupLag, #796).
-  const createdByEarlierAttempt = new Set(createdTables);
   // #796: a READ of a table this invocation created can meet the table's metadata-cache lag for a while after the create, e.g.
   //   HTTP 400 {"error":{"code":"0x80041102","message":"The entity with a name = 'contoso_task' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075"}}
-  // Such a read's failure is marked with its table (markFreshTable) so the build's bounded retry (build-model-app.js, the same budget
-  // as the default-view lag) rides it out, by running the whole build again: only the read is wrapped, never a create, save or
-  // publish, so nothing is replayed in place. A table the build did not create keeps the failure final (its answer is not lag),
-  // and an answer naming another table, or any other code, stays final too (retry-policy.js isFreshTableLag decides, by table).
+  // Such a read's failure is marked with its table (markFreshTable) and the read is made again WHERE IT FAILED, through the caller's
+  // `retryFreshRead(err, table)` (build-model-app.js), which waits and answers true while the invocation's one retry allowance lasts
+  // (the same count, and backoff, as the whole-build retry), and false once it is spent. Only the read is repeated: re-running the whole
+  // build instead would resend every save and publish this attempt had already made. A table the build did not create keeps the failure
+  // final (its answer is not lag), and so does an answer naming another table, or any other code (retry-policy.js isFreshTableLag
+  // decides, by table). With no `retryFreshRead` (a caller that runs one attempt) the marked failure is thrown as it is.
+  const retryFreshRead = typeof opts.retryFreshRead === 'function' ? opts.retryFreshRead : null;
   const freshMark = (err, table) => {
     const logical = typeof table === 'string' ? table.toLowerCase() : '';
     return logical && createdTables.has(logical) ? markFreshTable(err, logical) : err;
   };
+  const readAgain = async (err, table) => Boolean(retryFreshRead) && isFreshTableReadLag(err) && (await retryFreshRead(err, String(table).toLowerCase())) === true;
   const readFresh = async (table, read) => {
-    try {
-      return await read();
-    } catch (err) {
-      throw freshMark(err, table);
+    for (;;) {
+      try {
+        return await read();
+      } catch (err) {
+        const marked = freshMark(err, table);
+        if (!(await readAgain(marked, table))) throw marked;
+      }
     }
   };
   // A planner keeps a failed read by value, as an `unknown` finding whose (non-enumerable) cause is the read's own failure
-  // (reconcile-common.js readFailure). When that failure is the lag of a table this invocation created, the step throws it
-  // instead of settling the finding: settled, it would be a final stop the retry cannot see past. The plan sent nothing, so
-  // nothing is replayed; any other unknown settles exactly as before.
-  const throwFreshLag = (table, r) => {
+  // (reconcile-common.js readFailure); a plan holding one sends nothing when applied. `planFresh` plans again, in place, while that
+  // failure is the lag of a table this invocation created and the allowance lasts; once it is spent the plan is returned as it is, and
+  // `throwFreshLag` throws that failure after the (empty) apply instead of settling the finding — settled, it would be a final stop
+  // that hides the service's answer. Any other unknown settles exactly as before.
+  const freshLagOf = (table, r) => {
     for (const u of (r && r.unknown) || []) {
-      if (u && u.cause && isFreshTableReadLag(freshMark(u.cause, table))) throw u.cause;
+      if (u && u.cause && isFreshTableReadLag(freshMark(u.cause, table))) return u.cause;
     }
+    return null;
+  };
+  const planFresh = async (table, plan) => {
+    for (;;) {
+      const p = await plan();
+      const lag = freshLagOf(table, p);
+      if (!lag || !(await readAgain(lag, table))) return p;
+    }
+  };
+  const throwFreshLag = (table, r) => {
+    const lag = freshLagOf(table, r);
+    if (lag) throw lag;
   };
   if (has('data-model')) {
     dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, createdTables, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive, publicationBarrier: owed.barrier, localizedLabelsChecked: checkLabelLanguagesEarly });
@@ -6886,10 +6909,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // table must keep one main form), so reconciling onto it would attach the spec's subgrids +
       // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
       // instead handled by making our form the entity's default (see promoteDefaultForm below).
-      // #796: on a table an earlier attempt of this invocation created, a lookup lost to the metadata-cache lag is not "no form"
-      // (that attempt may have made it): it is thrown, marked, so the build's bounded retry reads again rather than create a twin.
-      const lagIsMiss = () => !createdByEarlierAttempt.has(String(def.entityLogicalName).toLowerCase());
-      const existingId = await readFresh(def.entityLogicalName, () => resolveExistingFormId(provision, def, { lagIsMiss }));
+      // #796: a lookup that FAILED is never "no form": only an answer with no row is. The stock Main form the platform makes with
+      // every table is named "Information", and an earlier attempt may have made the spec's form, so taking a failure for a miss
+      // creates a second form of the same name. On a table this invocation created, the metadata-cache lag is read again in place
+      // (readFresh); any other failure — the same answer for a table that was there before, another table's, another code — stops
+      // the step with the service's answer, and nothing is created.
+      const existingId = await readFresh(def.entityLogicalName, () => resolveExistingFormId(provision, def, { tableNotInCache: 'fail' }));
       if (existingId) return await reconcileForm(existingId, def);
     } else if (type === 'view') {
       if (meta && meta.declared) {
@@ -6897,7 +6922,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // edited by its helper; it never falls through to the create below, which would bypass the port.
         const planArgs = { view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName };
         const stableKey = declaredViewKey(meta.specView);
-        const planView = () => planStable(stableKey, () => planViewReconcile(planArgs, stableCtx));
+        const planView = () => planStable(stableKey, () => planFresh(def.entityLogicalName, () => planViewReconcile(planArgs, stableCtx)));
         if (stable && stable.settle && stable.protects('view', stableKey)) {
           // With a store: settled as one managed group (lib/creates-stable-build.js settle), whose membership is made before
           // the commit, and whose table publish is paid through the managed coverage protocol.
@@ -6995,8 +7020,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const name = e.schemaName.toLowerCase();
       await runner.run('views', `Quick Find for ${name}`, async () => {
         const planArgs = { entity: name, quickFind: e.quickFind, sdk: provision };
-        const firstPlan = await planQuickFind(planArgs, featureCtx);
-        const plan = await refuseUnsentCopy('view', 'Quick Find view', approvalKey('quickfind', name), firstPlan.viewId, firstPlan, () => planQuickFind(planArgs, featureCtx));
+        const planQf = () => planFresh(name, () => planQuickFind(planArgs, featureCtx));
+        const firstPlan = await planQf();
+        const plan = await refuseUnsentCopy('view', 'Quick Find view', approvalKey('quickfind', name), firstPlan.viewId, firstPlan, planQf);
         const r = await applyQuickFind(plan, { sdk: provision }, featureCtx);
         throwFreshLag(name, r);
         settleFeatureResult('views', `Quick Find on ${name}`, r);
@@ -7101,7 +7127,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         return runner.run('charts', `chart "${def.name}"`, async () => {
           const planArgs = { chart: c, sdk: provision, chartArtifact: def };
           const stableKey = declaredChartKey(c);
-          const planChart = () => planStable(stableKey, () => planChartReconcile(planArgs, stableCtx));
+          const planChart = () => planStable(stableKey, () => planFresh(def.entityLogicalName, () => planChartReconcile(planArgs, stableCtx)));
           if (stable && stable.settle && stable.protects('chart', stableKey)) {
             // As for a declared view: one managed group, membership before the commit.
             const out = await stable.settle({
@@ -7315,7 +7341,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           sdk: provision,
           hosts: declaredHostsOf(f, def, { quickViewFormIdOf: (target, name) => quickViewIds[`${String(target).toLowerCase()}|${name}`] || '' }),
           events: f.events || [],
-          resolveExisting: () => resolveExistingFormId(provision, def),
+          // A failed lookup is never "no form" (#796, as for the build's own form step): the lag of a table this invocation
+          // created is read again in place, and any other failure refuses the form with the service's answer, creating nothing.
+          resolveExisting: () => readFresh(table, () => resolveExistingFormId(provision, def, { tableNotInCache: 'fail' })),
         }, {
           store: bindingGroups && bindingGroups.store,
           barrier: owed.barrier,
@@ -7915,8 +7943,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
             instanceUrl: opts.env,
             sendObserver: opts.sendObserver || null,
             // #796: the rule's table when this invocation created it, so an identity read that meets the table's metadata-cache lag
-            // is retried by the build's bounded loop (managedStop) rather than stopping it.
+            // is read again in place within the build's one retry allowance (`retryFreshRead`) rather than stopping it.
             freshTable: createdTables.has(String(rule.entity).toLowerCase()) ? String(rule.entity).toLowerCase() : null,
+            retryFreshRead,
           });
         } catch (err) {
           // Every stop of a declared rule is final for this run — a refusal (workflow-edit-refused, rule-drift, …) or a held
@@ -8224,8 +8253,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
             instanceUrl: opts.env,
             sendObserver: opts.sendObserver || null,
             // #796: as for a declared rule, the flow's table when this invocation created it (an identity read that meets its
-            // metadata-cache lag is retried by the build's bounded loop).
+            // metadata-cache lag is read again in place within the build's one retry allowance).
             freshTable: createdTables.has(String(flow.entity).toLowerCase()) ? String(flow.entity).toLowerCase() : null,
+            retryFreshRead,
           });
         } catch (err) {
           // Every stop of a declared flow is final for this run (bpf-structure-refused, workflow-edit-refused, bpf-drift, a held

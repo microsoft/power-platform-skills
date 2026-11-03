@@ -344,9 +344,9 @@ function isFreshTableLag(error, fresh) {
 }
 
 // Whether anywhere along its chain the error carries the lag above for the table it was marked with (markFreshTable): what a READ of a table this invocation created meets in the same window — a view or chart
-// looked up by name, a process flow's or a rule's identity read, a form looked up by name (#796). Such a read is retried only through the build's own bounded loop (build-model-app.js), never in place, and the
-// classification is the one above: there is no second list of words. A read whose error the reader keeps by value (a planner's "could not be read" finding) is checked through this, so the stop it raises is
-// told from a real refusal by the same rule.
+// looked up by name, a process flow's or a rule's identity read, a form looked up by name (#796). The build reads such a read again IN PLACE, drawing on the one retry allowance of the invocation
+// (build-model-app.js, retryFreshRead), so nothing it already saved or published is sent again. The classification is the one above: there is no second list of words. A read whose error the reader keeps by
+// value (a planner's "could not be read" finding) is checked through this, so the stop it raises is told from a real refusal by the same rule.
 function isFreshTableReadLag(error) {
   const chain = causeChain(error);
   const fresh = freshTableOf(chain);
