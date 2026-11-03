@@ -113,6 +113,19 @@ function planFacts(spec) {
   return { byPhase, phases: Object.keys(byPhase), labels: items.map((i) => `${i.phase}\t${i.label}`) };
 }
 
+// compileViewIntent reads filters, linkEntities (and each join's filters), columns and sort as arrays and throws a TypeError on any other
+// shape (`linkEntities: {}` -> "(v.linkEntities || []).forEach is not a function"). The author gate (validateAppSpec) already reports each
+// of those precisely (`views[0].linkEntities must be an array`), and the build refuses such a spec, so a view the compiler cannot read has
+// no conditions. Letting the TypeError escape would replace that diagnostic and every other grade of the fixture with one generic failure.
+// Only a TypeError is treated this way; any other failure of the compiler is a real fault and still surfaces.
+function compileDeclaredView(v, resolveValue) {
+  try { return compileViewIntent(v, { resolveValue }); }
+  catch (e) {
+    if (e instanceof TypeError) return { intent: null };
+    throw e;
+  }
+}
+
 // The conditions the build gives a view from its filters[], each `{ attribute, operator, value }` plus `scope` (the join alias) on one that
 // constrains a joined table. The build compiles a view one of two ways and the facts must follow it: a declared view (`reconcile:
 // "declared"`) goes through compileViewIntent, which scopes a condition to its join (`relatedEntity`); every other view goes through viewDef,
@@ -124,7 +137,7 @@ function viewConditions(spec, v, d) {
   // The build resolves a choice label to its value with resolveFilterValue, which sdk-build does not export; a one-condition view built by
   // viewDef on the condition's own table runs exactly that rule.
   const resolveValue = (table, attr, value) => viewDef(spec, { entity: table, name: 'x', activeOnly: false, filters: [{ attr, op: 'eq', value }] }).filters.conditions[0].value;
-  const { intent } = compileViewIntent(v, { resolveValue });
+  const { intent } = compileDeclaredView(v, resolveValue);
   // A declared view that does not compile is refused by the build: no view, so no filter.
   if (!intent) return [];
   return authored(intent.filters.conditions).map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value, ...(c.entityname ? { scope: c.entityname } : {}) }));

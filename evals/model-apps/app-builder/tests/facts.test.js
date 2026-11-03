@@ -923,6 +923,26 @@ test('view-filter grading: a declared view is graded as the declared compiler bu
   assert.strictEqual((await gradeViewFilter((v) => { join(v); v.filters[0].relatedEntity = 'nope'; })).status, 'fail', 'a declared view that does not compile builds no filter');
 });
 
+test('a declared view with a malformed join collection is graded invalid by the validator, with every other grade kept, and never throws in the facts', async () => {
+  const { gradeFixture } = require('../run-app-builder.js');
+  const base = fixtureFor(11);
+  const cases = [
+    ['linkEntities is an object', (v) => { v.reconcile = 'declared'; v.linkEntities = {}; }, /views\[0\]\.linkEntities must be an array/],
+    ['a join\'s filters is an object', (v) => { v.reconcile = 'declared'; v.linkEntities = [{ name: 'contact', from: 'contactid', to: 'ownerid', alias: 'c', filters: {} }]; }, /views\[0\]\.linkEntities\[0\]\.filters must be an array/],
+  ];
+  for (const [name, mutate, diagnostic] of cases) {
+    const spec = structuredClone(base.spec);
+    mutate(spec.views.find((v) => v.name === 'High Priority'));
+    const { results } = await gradeFixture({ ...base, spec }, evalsManifest.evals.find((e) => e.id === 11), evalsManifest);
+    assert.ok(!results.some((r) => r.text === 'stage facts computed without error'), `${name}: the facts are computed`);
+    assert.ok(results.length > 20, `${name}: the other assertions still run (${results.length})`);
+    const gate = results.find((r) => r.text === 'author: validateAppSpec(plan profile) passes with no errors');
+    assert.strictEqual(gate.result.status, 'fail', name);
+    assert.match(gate.result.reason, diagnostic, `${name}: the validator's own diagnostic is the reason`);
+    assert.strictEqual(results.find((r) => r.text === 'data: schema-facts provision exactly the expected tables').result.status, 'pass', `${name}: an unrelated grade is unchanged`);
+  }
+});
+
 test('view grading by name and the other stage assertions are unchanged by the view-filter facts', async () => {
   const fixture = fixtureFor(11);
   const facts = await stageFacts(fixture.spec, { fixture });
