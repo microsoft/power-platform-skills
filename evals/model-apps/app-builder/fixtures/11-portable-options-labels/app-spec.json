@@ -19,7 +19,7 @@
       ] }
   ],
   "forms": [{ "entity": "cnt_shipment", "name": "Information", "layout": "auto" }],
-  "views": [{ "entity": "cnt_shipment", "name": "High Priority", "columns": ["cnt_name", "cnt_priority", "cnt_stage"], "filter": [{ "column": "cnt_priority", "operator": "eq", "value": 5 }] }],
+  "views": [{ "entity": "cnt_shipment", "name": "High Priority", "columns": ["cnt_name", "cnt_priority", "cnt_stage"], "filters": [{ "attr": "cnt_priority", "op": "eq", "value": 5 }] }],
   "sampleData": { "cnt_shipment": [{ "cnt_name": "SH-001", "cnt_priority": 5, "cnt_stage": "Held", "cnt_lane": "Rail", "cnt_region": 10 }] },
   "appShell": { "areas": [{ "label": "Logistics", "groups": [{ "label": "Work", "subAreas": [{ "entity": "cnt_shipment", "title": "Shipments" }] }] }] }
 }

@@ -670,9 +670,12 @@ resource at a time, at the maker's request, never an `external` one, and never e
 downloaded or older spec. A declared web resource sets `minimumPluginVersion` to `"2.21.0"` or newer
 (validation warns otherwise). When a rebuild would change one that already exists, the build stops
 before writing and names `--authorize adopt:webresource:<web resource name>` with the components that depend on
-it: show them and get a yes. Declared process flows, dashboards, business rules and form layouts are
-not reconciled in this release — never write `reconcile` on them; the build keeps its existing
-behaviour for each.
+it: show them and get a yes. Declared form layouts, Global Standard dashboards, business rules and business
+process flows are opt-in the same way (`minimumPluginVersion: "2.21.0"`): write `reconcile: "declared"` on one
+only when the maker asks for it — a form's layout or a dashboard's tiles to follow the spec on every rebuild, or
+a rule or flow the build manages whole (created and adopted, never edited in place). The app-builder skill's
+bullets for each kind say what to tell the maker and which approval binds one that already exists. Without
+`reconcile`, the build keeps its existing behaviour for each.
 
 #### Confirm Level (b)
 
