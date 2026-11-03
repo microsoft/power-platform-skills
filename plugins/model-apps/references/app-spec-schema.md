@@ -966,7 +966,9 @@ why they need naming here at all.
   with `"reconcile": "declared"` — `key`, `viewId`, `linkEntities`. A filter item takes `attr`, `op`, `value`, `values` and
   `relatedEntity`. Any other key is **ignored by the build**, so validation warns about it and names the key it most likely meant
   (`filter` → `filters`, `column` → `attr`, `operator` → `op`); a view written with `filter` would otherwise be built without its
-  filter. A view has no `type`: it is always a public view of its table, so leave it out. These are warnings, never errors.
+  filter. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is still
+  accepted without a warning. These are warnings, never errors — but `lint-app-spec.js --strict` fails on them, so a view with a
+  misspelled key stops a `--strict` pipeline instead of building without its filter.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).

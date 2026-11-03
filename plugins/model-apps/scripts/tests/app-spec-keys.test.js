@@ -928,11 +928,12 @@ test('#799: a filter item written with `column` and `operator` warns and names `
   assert.ok(operator && /did you mean 'op'\?/.test(operator), `got ${JSON.stringify(warnings)}`);
 });
 
-test('#799: a view key that is one edit from a supported one is matched, and `type` is said to be ignored', () => {
+test('#799: a view key that is one edit from a supported one is matched; `type`, which older docs showed, is still accepted silently', () => {
   const warnings = viewWarnings([{ entity: 'contoso_order', name: 'Mine', column: ['contoso_name'], activeonly: false, type: 'main' }]);
   assert.ok(warnings.some((x) => /unknown key 'column'.*did you mean 'columns'\?/.test(x)), JSON.stringify(warnings));
   assert.ok(warnings.some((x) => /unknown key 'activeonly'.*did you mean 'activeOnly'\?/.test(x)), JSON.stringify(warnings));
-  assert.ok(warnings.some((x) => /unknown key 'type'.*ignored/.test(x)), JSON.stringify(warnings));
+  assert.deepStrictEqual(warnings.filter((x) => /'type'/.test(x)), [], 'a spec written from the older docs must not start to warn');
+  assert.deepStrictEqual(viewWarnings([{ entity: 'contoso_order', name: 'Mine', type: 'main' }]), []);
 });
 
 test('#799: every key the build reads on a view and its filters stays warning-free', () => {
