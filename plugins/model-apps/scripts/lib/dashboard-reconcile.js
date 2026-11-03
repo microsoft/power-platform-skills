@@ -322,7 +322,7 @@ const withoutAttrs = (el, names) => ({ ...el, a: (el.a || []).filter((p) => !(Ar
  * language, the control's attributes, its non-authored parameters (RecordsPerPage, ...) and any other child. The
  * tile's name itself is in the semantic projection, read by the SDK's read rule (its language, else the first label).
  * That includes the captions in the organization's other languages that a write gives a tile it creates
- * (withTileCaptionLanguages): they are what the write sent, so they are proved as sent.
+ * (tileCaptionEdits): they are what the write sent, so they are proved as sent.
  */
 function strippedManagedCell(cell, type, languageCode) {
   const owned = new Set(OWNED_PARAMS[type] || []);
