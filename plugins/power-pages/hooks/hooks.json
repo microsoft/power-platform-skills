@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-skill-pretool-telemetry.js'));\"",
+            "command": "node -e 'process.on(process.argv[3],()=>{process.exitCode=0});const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root){console.error(process.argv[4]);process.exit(0)}require(require(process.argv[1]).resolve(root,process.argv[2]))' node:path hooks/run-skill-pretool-telemetry.js exit 'PLUGIN_ROOT is not set'",
             "timeout": 30
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-skill-posttool-validation.js'));\"",
+            "command": "node -e 'const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root){console.error(process.argv[3]);process.exit(0)}require(require(process.argv[1]).resolve(root,process.argv[2]))' node:path hooks/run-skill-posttool-validation.js 'PLUGIN_ROOT is not set'",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root){console.error('PLUGIN_ROOT is not set'); process.exit(0);} require(path.resolve(root,'hooks','run-user-prompt-telemetry.js'));\"",
+            "command": "node -e 'process.on(process.argv[3],()=>{process.exitCode=0});const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root){console.error(process.argv[4]);process.exit(0)}require(require(process.argv[1]).resolve(root,process.argv[2]))' node:path hooks/run-user-prompt-telemetry.js exit 'PLUGIN_ROOT is not set'",
             "timeout": 30
           }
         ]
