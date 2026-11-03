@@ -1,8 +1,0 @@
-{
-  "offers": [
-    { "family": "theme", "step": "personas-and-jobs", "answer": "no" },
-    { "family": "configuration", "step": "personas-and-jobs", "answer": "no" },
-    { "family": "declared-process", "step": "personas-and-jobs", "answer": "no" },
-    { "family": "declared-layouts", "step": "forms-and-dashboards", "answer": "no" }
-  ]
-}

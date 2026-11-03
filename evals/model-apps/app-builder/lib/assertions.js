@@ -1170,85 +1170,73 @@ ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stop
   return missing.length ? fail(`the createIdentity guidance does not say ${missing.join(', ')}`) : PASS;
 });
 
-// Optional capabilities the authoring flow OFFERS (references/authoring-flow.md). None is on by default: the flow asks once, at
-// the step where the capability matters, and the spec carries one only after a yes. The suite grades fixture specs, not
-// conversations, so the offer is graded from the offer record in the fixture's evidence.json:
-//   "offers": [{ "family": "theme", "step": "personas-and-jobs", "answer": "no" }]
-// answer: "yes" (offered, accepted), "no" (offered, declined), "asked" (the maker asked first, so no offer was needed).
-const OFFER_STEPS = {
-  theme: 'personas-and-jobs',
-  configuration: 'personas-and-jobs',
-  'declared-process': 'personas-and-jobs',
-  'declared-layouts': 'forms-and-dashboards',
+// Optional capabilities are OFF unless the maker asks for them (or says yes when /app-builder offers one; references/authoring-flow.md,
+// Level (a0) and (b)). This suite grades the spec, not the conversation, so what it pins is the spec-level opt-in, in both directions,
+// on EVERY fixture: the spec carries an app theme, a configuration item, or a declared form, dashboard, business rule or process flow
+// only when the prompt asks for it (no expectation = none is allowed), and what the prompt asks for is authored with the identity and
+// shape its own `expect` states. Whether the offer itself is made needs a transcript of a conversation (EVAL_GUIDE.md, "Optional
+// capabilities").
+//   expect.appTheme       as the theme assertion reads it (set = a theme is asked for)
+//   expect.configuration  as the configuration assertion reads it (a non-empty list, or solutionVersion, is an ask)
+//   expect.declared       { forms: [{ entity, name }], dashboards: [{ name, tiles: [type...] }],
+//                           businessRules: [{ entity, name, scope }], businessProcessFlows: [{ entity, name, stages: [name...] }] }
+// Each list is exactly the artifacts that carry reconcile: "declared". The identity is written by hand from the prompt's ask, so
+// deleting the artifact, dropping its reconcile, or adding one nobody asked for each fail.
+const lc = (v) => String(v === undefined ? '' : v).toLowerCase();
+const DECLARED_KINDS = {
+  forms: { id: (x) => `${lc(x.entity)}/${lc(x.name)}`, shape: [] },
+  dashboards: { id: (x) => lc(x.name), shape: [['tiles', (x) => (Array.isArray(x.tiles) ? x.tiles.map((t) => lc(t && t.type)) : [])]] },
+  businessRules: { id: (x) => `${lc(x.entity)}/${lc(x.name)}`, shape: [['scope', (x) => lc(x.scope)]] },
+  businessProcessFlows: { id: (x) => `${lc(x.entity)}/${lc(x.name)}`, shape: [['stages', (x) => (Array.isArray(x.stages) ? x.stages.map((s) => lc(s && s.name)) : [])]] },
 };
-const OFFER_ANSWERS = ['yes', 'no', 'asked'];
-// Offers made, from the record, keyed by family; reports a malformed record so a typo cannot pass as "no offer".
-function readOfferRecord(recorded) {
-  const byFamily = new Map();
-  for (const [i, offer] of recorded.entries()) {
-    if (!Object.prototype.hasOwnProperty.call(OFFER_STEPS, offer.family)) return { problem: `offers[${i}] names the unknown family '${offer.family}'` };
-    if (offer.step !== OFFER_STEPS[offer.family]) return { problem: `offers[${i}] offers ${offer.family} at '${offer.step}', expected '${OFFER_STEPS[offer.family]}'` };
-    if (!OFFER_ANSWERS.includes(offer.answer)) return { problem: `offers[${i}] answers '${offer.answer}', expected one of ${OFFER_ANSWERS.join(', ')}` };
-    if (byFamily.has(offer.family)) return { problem: `${offer.family} is offered twice` };
-    byFamily.set(offer.family, offer.answer);
+const CONFIGURATION_LISTS = ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules'];
+const nonEmptyList = (list) => Array.isArray(list) && list.length > 0;
+ASSERTIONS.set('author: an optional capability is in the spec only when the prompt asks for it, and each one it asks for is authored as expected', ({ spec, eval: ev }) => {
+  const expect = (ev && ev.expect) || {};
+  const theme = spec.app && spec.app.theme;
+  if (theme !== undefined && !expect.appTheme) return fail('app.theme is declared, but the prompt asks for no branding');
+  if (theme === undefined && expect.appTheme) return fail('the prompt asks for branding, but app.theme is not declared');
+  const config = expect.configuration && typeof expect.configuration === 'object' ? expect.configuration : {};
+  for (const field of CONFIGURATION_LISTS) {
+    const have = nonEmptyList(spec[field]);
+    const want = nonEmptyList(config[field]);
+    if (have && !want) return fail(`${field} is declared, but the prompt asks for no such configuration item`);
+    if (!have && want) return fail(`the prompt asks for ${field} [${config[field]}], but the spec declares none`);
   }
-  return { byFamily };
-}
-ASSERTIONS.set('offers: an optional capability is in the spec only after the maker accepted its offer or asked for it', ({ facts }) => {
-  const { recorded, used } = facts.offers;
-  if (recorded === null) return fail('the fixture records no offers (evidence.json "offers")');
-  const { byFamily, problem } = readOfferRecord(recorded);
-  if (problem) return fail(problem);
-  for (const family of used) {
-    const answer = byFamily.get(family);
-    if (answer === undefined) return fail(`the spec uses ${family}, but no offer for it is recorded`);
-    if (answer === 'no') return fail(`the spec uses ${family}, but the maker declined it`);
+  const version = spec.solution && spec.solution.version;
+  if (version !== undefined && !config.solutionVersion) return fail(`solution.version ${version} is declared, but the prompt asks for no version`);
+  if (version === undefined && config.solutionVersion) return fail(`the prompt asks for solution.version ${config.solutionVersion}, but the spec omits it`);
+  const declaredExpect = expect.declared && typeof expect.declared === 'object' ? expect.declared : {};
+  for (const kind of Object.keys(declaredExpect)) if (!DECLARED_KINDS[kind]) return fail(`expect.declared names the unknown kind '${kind}'`);
+  let anyDeclared = false;
+  for (const [kind, { id, shape }] of Object.entries(DECLARED_KINDS)) {
+    const got = (Array.isArray(spec[kind]) ? spec[kind] : []).filter((x) => x && typeof x === 'object' && x.reconcile === 'declared');
+    const want = Array.isArray(declaredExpect[kind]) ? declaredExpect[kind] : [];
+    const gotIds = got.map(id).sort();
+    const wantIds = want.map(id).sort();
+    if (!eq(gotIds, wantIds)) {
+      const extra = gotIds.filter((x) => !wantIds.includes(x));
+      const missing = wantIds.filter((x) => !gotIds.includes(x));
+      return fail(`${kind} declared [${gotIds}], expected [${wantIds}]${extra.length ? `; unasked: ${extra}` : ''}${missing.length ? `; missing (deleted, or without reconcile "declared"): ${missing}` : ''}`);
+    }
+    for (const wanted of want) {
+      const item = got.find((x) => id(x) === id(wanted));
+      for (const [field, read] of shape) {
+        if (wanted[field] !== undefined && !eq(read(item), Array.isArray(wanted[field]) ? wanted[field].map(lc) : lc(wanted[field]))) return fail(`${kind} '${wanted.name}' ${field} is [${read(item)}], expected [${wanted[field]}]`);
+      }
+    }
+    if (got.length) anyDeclared = true;
   }
+  if (anyDeclared && !versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
   return PASS;
 });
 
-// expect.offers maps a family to the answer the prompt implies ("asked" when the prompt itself asks for the capability, "no" when
-// the maker turns the offer down). It is written from the prompt, so a record that drifts from it fails even if the spec agrees.
-ASSERTIONS.set('offers: each capability the prompt settles is recorded with the answer the prompt implies', ({ facts, eval: ev }) => {
-  const want = ev.expect && ev.expect.offers;
-  if (!want || typeof want !== 'object') return fail('no independent offer expectations');
-  const { recorded } = facts.offers;
-  if (recorded === null) return fail('the fixture records no offers (evidence.json "offers")');
-  const { byFamily, problem } = readOfferRecord(recorded);
-  if (problem) return fail(problem);
-  for (const [family, answer] of Object.entries(want)) {
-    const got = byFamily.get(family);
-    if (got !== answer) return fail(`${family} is ${got === undefined ? 'never offered' : `recorded '${got}'`}, expected '${answer}'`);
-  }
-  return PASS;
-});
-
-// The flow's own text is what makes the offers, so it is graded too: each offer sits in the section of its step, and says it is a
-// question and never a default. `facts.authoringFlow` lets a unit test grade a drifted copy without editing the real file.
-const AUTHORING_FLOW = path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'references', 'authoring-flow.md');
-ASSERTIONS.set('offers: the authoring flow offers each optional capability at its step, as a question and never as a default', ({ facts }) => {
-  let flow = facts && typeof facts.authoringFlow === 'string' ? facts.authoringFlow : null;
-  if (flow === null) {
-    try { flow = require('node:fs').readFileSync(AUTHORING_FLOW, 'utf8'); } catch (e) { return fail(`the authoring flow cannot be read: ${e.message}`); }
-  }
-  flow = flow.replace(/\r\n/g, '\n');
-  // A "### " heading ends a level; the "#### " subsections inside it do not match "\n### ".
-  const level = (heading) => {
-    const start = flow.indexOf(`\n${heading}`);
-    if (start < 0) return null;
-    const end = flow.indexOf('\n### ', start + 1);
-    return flow.slice(start, end < 0 ? undefined : end);
-  };
-  const checks = [
-    ['### Level (a0)', [[/app\.theme/, 'the app theme'], [/environment variables/, 'configuration items'], [/business rule/, 'a declared business rule'], [/business process flow/, 'a declared business process flow']]],
-    ['### Level (b)', [[/reconcile: "declared"/, 'declared layouts']]],
-  ];
-  for (const [heading, needs] of checks) {
-    const section = level(heading);
-    if (section === null) return fail(`the authoring flow has no '${heading}' section`);
-    if (!/never as a default/i.test(section)) return fail(`${heading} does not say an offer is never a default`);
-    const missing = needs.filter(([re]) => !re.test(section)).map(([, what]) => what);
-    if (missing.length) return fail(`${heading} does not offer ${missing.join(', ')}`);
+// A maker who says no to business rules and process flows gets none of ANY kind: the declared-capability check above sees only
+// `reconcile: "declared"`, and a plain rule or flow is authored without it. expect.noBusinessLogic is written from the prompt.
+ASSERTIONS.set('author: a maker who declines business rules and process flows gets no rule and no flow of any kind', ({ spec, eval: ev }) => {
+  if (!ev.expect || ev.expect.noBusinessLogic !== true) return fail('no independent expectation that the prompt declines business rules and process flows');
+  for (const kind of ['businessRules', 'businessProcessFlows']) {
+    if (nonEmptyList(spec[kind])) return fail(`${kind} is declared (${spec[kind].map((x) => (x && x.name) || '?').join(', ')}), but the prompt declines them`);
   }
   return PASS;
 });

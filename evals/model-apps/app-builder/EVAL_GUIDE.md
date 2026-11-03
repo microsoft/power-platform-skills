@@ -12,6 +12,7 @@
 | Stage | Oracle | Plugin primitive |
 |---|---|---|
 | **author** | `validateAppSpec(plan profile)` passes · no lint errors · artifact names are table/type-scoped · ASCII page-quote warnings stay visible without changing approved names. Other advisories remain non-fatal. | `app-spec.js`, `spec-lint.js` |
+| **author** (optional capabilities) | Off unless the prompt asks for them, on every fixture: `app.theme`, a configuration item (`environmentVariables`, `connectionReferences`, `customApis`, `duplicateDetectionRules`, `solution.version`) and a declared form, dashboard, business rule or process flow (`reconcile: "declared"`) are present only when `expect` says the prompt asked. What it asked for must be authored with the identity and shape `expect` states (`expect.declared`), so a deleted artifact, a dropped `reconcile` or an extra one fails. A prompt that declines rules and flows (`expect.noBusinessLogic`) gets no plain rule or flow either. See "Optional capabilities". | `app-spec.js`, `assertions.js` |
 | **plan** | Every planned item targets a known engine phase | `sdk-build.js` `planFor` + `PHASES` |
 | **data** | Normalized data-model facts match the `expect.tables/relationships` block | `schema-facts.js` `schemaFacts` |
 | **ui** | View/chart names match `expect.views/charts` · a filter the prompt names (`expect.viewFilters`, `{ entity, view, attr, op, value }`, written from the prompt) is among the view's compiled conditions, so a spelling the build ignores (`filter`, `column`, `operator`) fails · explicit tab/section names, topology, percentage widths, display flags, field state and spans match authored input · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
@@ -23,7 +24,6 @@
 | **teardown** | The reverse-of-build delete plan is dependency-safe (solution last · web resources after tables · every table, business rule and process flow has a step) | `sdk-teardown.js` `planTeardown` |
 | **round-trip** | The compared hydration subset preserves solution identity, table names, page keys/names/models, authored direct-entry behavior and ordered sitemap target references. Fixture 8 also reads PAC page/config files, unescapes names and diagnoses an omitted invalid model. | `hydrate-spec.js` `hydrateSpec` · `download-model-app.js` `parseDownloadedPages` / `assignPageKeys` · `genpage-sdk.js` `unescapePacName` |
 | **changed-only** | Real source-byte hashes and an eligible serialized snapshot produce exactly the expected `fast`, `full` or `noop` verdict, changed phases, page identities and full-build reasons. | `content-hash.js`, `apply-snapshot.js`, `classify-changes.js` |
-| **offers** | An optional capability (app theme, configuration items, declared business rules or flows, declared form or dashboard layouts) is in the spec only after the maker accepted its offer or asked for it, and each is recorded with the answer the prompt implies (`expect.offers`) · the authoring flow text offers each one at its step, as a question and never as a default. Graded from a recorded offer (see *Offer records*), not from a conversation. | `app-spec.js` spec keys · `references/authoring-flow.md` |
 
 These are **bounded helper-level oracles**, not proof that download followed by rebuild is lossless.
 Most readers are synthetic; views, charts, forms and commands are not structurally reconstructed by
@@ -38,29 +38,30 @@ does nothing. A business rule with a mis-shaped condition tree deploys, activate
 BPF step with no bound field is refused only at push time, on a live environment. Counting artifacts
 would stay green through both, so the assertions grade the **bindings** the pure def builders emit.
 
+### Optional capabilities
+
+`/app-builder` offers branding, configuration items, declared rules and flows, and declared form and dashboard layouts
+as questions (`references/authoring-flow.md`, Levels (a0) and (b)), and writes none of them by default. What these evals
+grade is the **spec**, in both directions, on every fixture:
+
+- A capability nobody asked for fails. With no expectation, a spec that carries `app.theme`, a configuration item or a
+  declared form, dashboard, rule or flow fails, so adding one to an ordinary fixture is caught.
+- A capability the prompt asked for must be there, with an identity and shape written by hand in `expect` from the
+  prompt (`appTheme`, `configuration`, `declared`). Deleting it, dropping `reconcile: "declared"`, renaming it or changing
+  its shape fails.
+- A prompt that declines rules and flows (`expect.noBusinessLogic: true`) fails on any rule or flow, declared or not.
+
+Whether the agent makes the offer is **not** graded. That is a property of a conversation, and no offline harness records
+one; a hand-written record of an offer would only certify itself. Grading the offer needs a harness that captures a
+transcript of a real `/app-builder` run. That is a follow-up.
+
 ## Fixtures
 
-Each fixture lives in `fixtures/<id>-<slug>/` and contains `app-spec.json`.  
+Each fixture lives in `fixtures/<id>-<slug>/` and contains `app-spec.json`.
 Naming is numeric-prefix; `fixture-loader.js` matches `^(\d+)(?:-(.+))?$`.
 Optional `evidence.json` selects fixture evidence, `baseline-app-spec.json` supplies the prior spec,
 and `entity-edit-app-spec.json` supplies fixture 9's schema-only edit. FormXML file references are
 confined to the fixture directory, including when the fixtures root is a junction or symlink.
-
-### Offer records
-
-`/app-builder` OFFERS four optional capabilities and never turns one on by default: `theme` (`app.theme`), `configuration`
-(environment variables, connection references, Custom APIs, duplicate-detection rules), `declared-process` (a declared business rule
-or process flow) and `declared-layouts` (a declared form layout or Global Standard dashboard). The suite grades specs, not
-conversations, so a fixture records what its conversation did in `evidence.json`:
-
-```json
-"offers": [{ "family": "theme", "step": "personas-and-jobs", "answer": "no" }]
-```
-
-`step` is the authoring-flow step that makes the offer (`personas-and-jobs` for the first three, `forms-and-dashboards` for
-`declared-layouts`). `answer` is `yes` (offered, accepted), `no` (offered, declined) or `asked` (the maker asked first, so no offer
-was needed). A spec that uses a family the record does not show as `yes` or `asked` fails. A family may be recorded once.
-The record is hand-authored beside the prompt, like the spec; it proves the grader, not that a model made the offer.
 
 | # | Slug | What it tests |
 |---|---|---|
@@ -88,7 +89,7 @@ The record is hand-authored beside the prompt, like the spec; it proves the grad
 | 22 | `22-declared-dashboard` | A "keep this dashboard's tiles the way the spec says" ask declares a global Standard dashboard with `reconcile: "declared"`, a `key` on it and on each tile (a two-column list, a chart, a tall iframe), and the app shell places it. The runner checks the plan, the sitemap target and its teardown; the declared-dashboard unit tests check that a keyed tile edit writes only that tile, an added tile goes after the last row, a tile made in Maker is kept, and a rebuild sends no write. |
 | 23 | `23-declared-business-rule` | A "keep these business rules the way the spec says" ask declares two business rules with `reconcile: "declared"`, a `key` on each rule, condition and action: one on the table (a required resolution and a locked field when closed), one on every form (`scope: "AllForms"`, an error message from a two-condition test). The runner checks that each compiles and binds only the spec's columns, and its teardown; the declared-rule unit tests check the Draft-first create, the conditional activation, that a rebuild sends no write, the typed adoption, verify and the managed download. |
 | 24 | `24-declared-bpf` | A "keep this process flow the way the spec says" ask declares one linear business process flow with `reconcile: "declared"`, a `key` on each stage and step (three stages, required and optional steps), a description, an order and an Active status. The runner checks that it compiles on its own table and binds only the spec's columns, and its teardown; the declared-flow unit tests check that every stage and step id is fixed before the Draft-first create, the conditional activation, that a rebuild sends no write, that an edit, omission or reorder is refused with no write, the typed adoption, verify and the managed download.
-| 25 | `25-offers-declined` | An ordinary new app whose maker says no to every optional extra when offered: no `app.theme`, no configuration items, no declared rule, flow, form or dashboard. Its record shows all four families offered at their steps and declined; the offers assertions fail if the spec carries any of them, and they grade the authoring-flow text that makes the offers. The positive counterparts are fixtures 18, 19, 21, 22, 23 and 24, whose records show the maker asking first (`asked`); the unit tests cover `yes`, a declined or never-offered family that appears in the spec, and a record that names an unknown family or the wrong step. |
+| 25 | `25-no-optional-extras` | A new-app ask that says no to branding, outside services, per-environment settings, business rules, process flows and fixed layouts gets none of them: no `app.theme`, no configuration item, no declared form, dashboard, rule or flow, and no plain business rule or process flow either (`expect.noBusinessLogic`). The forms stay `layout: "auto"`. |
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`), not its display name (`"Overview"`). The v2 validator requires keys, and the linter accepts valid key references; `key === name` is neither required nor used by this fixture.
 
 ## `evals.json`
@@ -186,7 +187,7 @@ exit 1; malformed fixtures and argument errors return exit 2.
 The live smoke (`plugins/model-apps/scripts/smoke-eval.js`) grades actual Dataverse provisioning.
 These offline evals complement it; they do not certify live deployment, SDK serialization or runtime UI behavior.
 
-Nor do they grade the *skill's* judgment: each fixture is a hand-authored App Spec, so the suite tests the deterministic engine (spec → plan → facts), not whether `/app-builder` authors a good spec from a user's intent. The one exception is narrow: the offers assertions grade the authoring-flow text, and a hand-recorded offer beside each fixture (see *Offer records*), so a spec that carries an optional capability nobody accepted fails. A transcript harness would replace the hand-recorded offer with the offer the model actually made in a scripted conversation (with the maker's reply fixed), at the step where it should be made, and would fail a run that skipped an offer or turned a capability on without a yes. Whether a prompt reaches `/app-builder` at all is graded by the agent-in-the-loop routing eval in `evals/model-apps/routing/`.
+Nor do they grade the *skill's* judgment: each fixture is a hand-authored App Spec, so the suite tests the deterministic engine (spec → plan → facts), not whether `/app-builder` authors a good spec from a user's intent. Whether a prompt reaches `/app-builder` at all is graded by the agent-in-the-loop routing eval in `evals/model-apps/routing/`.
 
 ## Cross-links
 
