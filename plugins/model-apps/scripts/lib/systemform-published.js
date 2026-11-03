@@ -141,14 +141,67 @@ function systemFormRootLayerSha256(layer) {
 // What a never-published row's published layer reads as: a hash no layer has, so it equals no desired or saved hash.
 const NEVER_PUBLISHED_SHA256 = intentSha256({ neverPublished: true });
 
+// The most cells a caption diagnostic names (form-caption-diagnostics.js MAX_CAPTION_DIFFERENCES), repeated here so
+// that the check of its answer does not depend on the module it checks.
+const CAPTION_DIFFERENCES_MAX = 8;
+
+// A caption diagnostic answer as plain data, copied field by field, or null for anything else: one to
+// CAPTION_DIFFERENCES_MAX entries, each a normalized GUID cell id and a whole-number language code, no pair twice, and a
+// non-negative whole omitted count. Nothing of the answer is spread or kept by reference.
+function usableCaptionDifferences(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { entries, omittedCount } = value;
+  if (!Array.isArray(entries) || entries.length < 1 || entries.length > CAPTION_DIFFERENCES_MAX) return null;
+  if (!Number.isSafeInteger(omittedCount) || omittedCount < 0) return null;
+  const seen = new Set();
+  const out = [];
+  for (const e of entries) {
+    if (!e || typeof e !== 'object') return null;
+    const cellId = e.cellId;
+    const languageCode = e.languageCode;
+    if (typeof cellId !== 'string' || normalizeGuid(cellId) !== cellId) return null;
+    if (!Number.isSafeInteger(languageCode) || languageCode < 1000 || languageCode > 99999) return null;
+    const k = `${cellId}\u0000${languageCode}`;
+    if (seen.has(k)) return null;
+    seen.add(k);
+    out.push({ cellId, languageCode });
+  }
+  return { entries: out, omittedCount };
+}
+
+// The caption diagnostic of an ADOPTED managed form whose layers differ (form-caption-diagnostics.js), or null. A form
+// the build created is not diagnosed: its captions are the build's own. Only XML text is passed to the helper.
+function adoptedFormCaptionDifferences(group, read) {
+  if (read.state !== 'differs' || !read.published) return null;
+  const root = group && group.root;
+  const records = group && Array.isArray(group.records) ? group.records : [];
+  const rootRecord = root ? records.find((r) => r && r.kind === root.kind && r.key === root.key) : null;
+  if (!rootRecord || rootRecord.origin !== 'adopted') return null;
+  const { cellCaptionDifferences } = require('./form-caption-diagnostics.js');
+  return usableCaptionDifferences(cellCaptionDifferences(String(read.savedCompared.formxml), String(read.published.formxml)));
+}
+
 /**
  * The layer reader of a managed systemform group (lib/managed-layer-readers.js): both layers of the group's root row, as
  * { savedSha256, publishedSha256 } hashed by systemFormLayerSha256. Throws `managed-publication-unverified` as
  * readSystemFormPublication does.
+ *
+ * For an adopted form whose layers differ, the answer may also carry `captionDifferences` ({ entries: [{ cellId,
+ * languageCode }], omittedCount }): the cells whose caption reads differently in the two layers, for the message of a
+ * stop. It is a diagnostic, never a proof: no caller decides anything by it, and nothing writes it to the store. It is
+ * computed only AFTER the two hashes, in its own guard: a helper that throws, is missing or answers anything unusable
+ * leaves the answer exactly the two hashes, so a diagnostic can never change a hash, a read failure or a stop.
  */
 async function readSystemFormLayers(client, group) {
   const r = await readSystemFormPublication(client, group && group.root && group.root.id);
-  return { savedSha256: systemFormLayerSha256(r.savedCompared), publishedSha256: r.published ? systemFormLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
+  const out = { savedSha256: systemFormLayerSha256(r.savedCompared), publishedSha256: r.published ? systemFormLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
+  try {
+    const captionDifferences = adoptedFormCaptionDifferences(group, r);
+    if (captionDifferences) out.captionDifferences = captionDifferences;
+  } catch {
+    // A diagnostic only: its failure is dropped whole, and the answer stays the two hashes.
+  }
+  return out;
 }
 
 /**

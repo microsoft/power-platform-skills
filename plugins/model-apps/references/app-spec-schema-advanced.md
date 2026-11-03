@@ -707,7 +707,11 @@ saved layer and another way in the published layer (seen on an adopted form whos
 base language did). No read can then confirm a publish of that form's table: the stop says that the saved
 layer is still the one the publish shipped, yet the published layer reads differently. Compare what is
 published with the spec in Maker; if it matches, pass the `publication-risk` key the build prints. A later
-publish of that table can stop the same way, and each needs its own key.
+publish of that table can stop the same way, and each needs its own key. For a form the build adopted, the
+stop can also name the cells and languages whose caption reads differently in the two layers (for example
+"Caption difference at cell <id> (language 1033)"), never the caption text. Start the comparison in Maker
+there. This does not show whether the difference is an unpublished edit or how the platform reads the layer,
+so the stop and its key stay the same. A form the build created and a dashboard get no such list.
 
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by

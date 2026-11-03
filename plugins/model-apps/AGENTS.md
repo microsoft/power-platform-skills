@@ -2901,6 +2901,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   form wire (`tests/helpers/managed-wire.js`) answers a version that moves with the saved layer, which
   the service does not do: a test through it proves the SDK's re-read and refusal path, and a test whose
   double answers a version conflict proves the build's handling of that refusal, never a service guard.
+  **Caption diagnostic** (`lib/form-caption-diagnostics.js`): when an ADOPTED form's two layers differ,
+  `readSystemFormLayers` (`lib/systemform-published.js`) also offers both form XMLs to `cellCaptionDifferences`,
+  AFTER computing the two hashes and inside its own guard. A cell is compared only when its id, tab, section and
+  direct controls match on both sides, and a language only when it has exactly one label on each side; anything
+  ambiguous or unread answers nothing. A usable answer (at most 8 cell/language pairs, copied field by field) is
+  appended to the unconfirmed-publication stop (`publishManagedScope`, `confirmUncertainPublication`) as cell ids
+  and language codes, never caption text. It is a diagnostic, not a proof: it changes no hash, no decision and no
+  store record, and a helper that throws, is missing or answers anything else leaves the stop exactly as before.
+  It cannot tell an unpublished edit from the platform's read projection (the saved layer has no version), so the
+  stop still needs the printed `publication-risk` approval. Created forms and dashboards get no diagnostic.
   **Verify and download** (`lib/declared-form-io.js`): verify reads each bound declared form fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredForm`, never `readGroup`) and runs
   `verifyDeclaredForm` against the declaration and the store's recorded children (`managed-form` check);

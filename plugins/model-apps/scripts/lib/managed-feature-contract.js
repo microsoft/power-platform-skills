@@ -62,6 +62,26 @@ const UNCERTAIN_PUBLICATION = new Set(['dispatching', 'unconfirmed']);
 // then owed again, and a later publish of it can stop the same way.
 const LAYERS_READ_APART = 'its saved layer is still the one the publish shipped, yet the published layer reads differently: either the publish did not put it live, or the platform reads this artifact\'s saved and published layers apart (seen on an adopted form whose sub-grid caption in the base language reads one way saved and another published), and no read can tell which. In the maker, compare what is published with the spec: if it matches, accept the risk with the publication-risk approval this build prints; a later publish of it can stop the same way while its two layers read apart';
 
+// The words a LAYERS_READ_APART stop appends for the reads (`[{ family, key, captionDifferences }]`) whose reader named
+// the cells and languages whose captions differ (systemform-published.js readSystemFormLayers), e.g.
+//   . managed form "account/main": Caption difference at cell 0f3c… (language 1033). This observation does not show …
+// or '' — always '' when nothing usable can be said. The stop's message, code, remedy and data are built before this
+// and never depend on it: a formatter that throws, is missing or answers anything but non-empty text adds nothing.
+function captionDifferencesNote(reads, names) {
+  try {
+    const { formatCaptionDifferences } = require('./form-caption-diagnostics.js');
+    const parts = [];
+    for (const r of reads) {
+      if (r.captionDifferences === undefined) continue;
+      const text = formatCaptionDifferences(r.captionDifferences);
+      if (typeof text === 'string' && text && text.length <= 2048) parts.push(`${names([r])}: ${text}`);
+    }
+    return parts.length ? `. ${parts.join(' ')}` : '';
+  } catch {
+    return '';
+  }
+}
+
 function codedError(code, message, extra) {
   return Object.assign(new Error(message), { code }, extra || {});
 }
@@ -791,6 +811,7 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
   for (const [token, list] of dispatches) {
     let code = null;
     let apart = false;
+    const apartReads = [];
     const proofs = [];
     if (corrupt.length) code = CODES.groupInvalid;
     else if (typeof token !== 'string' || !token) code = PUBLICATION_UNCONFIRMED;
@@ -807,7 +828,12 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
       let read;
       try { read = await reader(client, o.group); } catch { code = PUBLICATION_UNVERIFIED; break; }
       if (!read || typeof read.publishedSha256 !== 'string') { code = PUBLICATION_UNVERIFIED; break; }
-      if (read.publishedSha256 !== shipped) { code = PUBLICATION_UNCONFIRMED; apart = read.savedSha256 === shipped; break; }
+      if (read.publishedSha256 !== shipped) {
+        code = PUBLICATION_UNCONFIRMED;
+        apart = read.savedSha256 === shipped;
+        if (apart && read.captionDifferences !== undefined) apartReads.push({ family: o.family, key: o.key, captionDifferences: read.captionDifferences });
+        break;
+      }
       proofs.push({ family: o.family, key: o.key, publishedSha256: read.publishedSha256, generation: o.group.generation });
     }
     if (!code) {
@@ -824,7 +850,8 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
     unconfirmed.push(...list.map(({ family, key }) => ({ family, key, code })));
     const remedy = typeof token === 'string' && token ? `; ${publicationRemedy(scope, token)}` : '';
     const found = apart ? `: ${LAYERS_READ_APART}` : '';
-    gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it ended${found}${remedy})`);
+    const note = apart ? captionDifferencesNote(apartReads, (l) => l.map((g) => `managed ${g.family} "${g.key}"`).join(', ')) : '';
+    gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it ended${found}${remedy}${note})`);
   }
   return { confirmed, unconfirmed };
 }
@@ -1013,7 +1040,10 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
       const savedEqual = typeof desired === 'string' && read.savedSha256 === desired;
       // Owed debt ships only its own saved layer. Anything else may stay as it is live, or be what it last desired.
       const safe = o.group.publication.state === 'owed' ? savedEqual : savedEqual || read.savedSha256 === read.publishedSha256;
-      out.push({ ...o, savedSha256: read.savedSha256, publishedSha256: read.publishedSha256, equal: read.publishedSha256 === desired, safe });
+      // A reader's caption diagnostic (systemform-published.js readSystemFormLayers) rides beside the hashes for the
+      // message of a stop only: no decision below reads it, and every store write projects its own fields.
+      const diagnostic = read.captionDifferences !== undefined ? { captionDifferences: read.captionDifferences } : {};
+      out.push({ ...o, savedSha256: read.savedSha256, publishedSha256: read.publishedSha256, equal: read.publishedSha256 === desired, safe, ...diagnostic });
     }
     return out;
   };
@@ -1166,7 +1196,8 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
         const sent = carriedReads.find((c) => c.family === o.family && c.key === o.key);
         return o.savedSha256 === (sent ? sent.savedSha256 : o.group.publication.desiredSha256);
       });
-      throw codedError(PUBLICATION_UNCONFIRMED, `the publish was sent and the published layer does not show what it shipped${stillSaved ? `: ${names(unshown)} ${LAYERS_READ_APART}` : ''}`, journaled());
+      const message = `the publish was sent and the published layer does not show what it shipped${stillSaved ? `: ${names(unshown)} ${LAYERS_READ_APART}` : ''}`;
+      throw codedError(PUBLICATION_UNCONFIRMED, stillSaved ? message + captionDifferencesNote(unshown, names) : message, journaled());
     }
     // One atomic write settles the whole send, so no run can see some of it confirmed and not the rest. `answered`:
     // this invocation dispatched the publish and it answered success, which a later run can never claim.
