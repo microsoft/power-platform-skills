@@ -12,7 +12,7 @@ function main(argv) {
     selectRelease, resolveProjectRelease, selectProjectRelease, summarizeRelease,
   } = require('./lib/mobile-release');
   const values = {};
-  const flags = new Set(['--project-root', '--release', '--host-version', '--template-version', '--default', '--platform', '--base-version', '--base-fingerprint', '--base-runtime-version', '--requirements-only', '--diagnostic-artifacts']);
+  const flags = new Set(['--project-root', '--release', '--host-version', '--template-version', '--default', '--platform', '--base-version', '--base-fingerprint', '--base-runtime-version', '--requirements-only']);
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (!flags.has(flag) || Object.hasOwn(values, flag)) fail('Unknown or duplicate release resolver argument.');
@@ -23,17 +23,6 @@ function main(argv) {
       if (!value || value.startsWith('--')) fail('A release resolver argument is missing its value.');
       values[flag] = value;
     }
-  }
-  if (values['--diagnostic-artifacts']) {
-    if (['--release', '--host-version', '--template-version', '--default', '--platform', '--base-version', '--base-fingerprint', '--base-runtime-version', '--requirements-only'].some((flag) => values[flag])) {
-      fail('Diagnostic artifacts cannot select a published release, requirements-only bypass, or deployment base. Tenant/store deployment is prohibited.');
-    }
-    const { loadDiagnosticArtifacts, resolveDiagnosticProject, summary } = require('./lib/mobile-diagnostic-artifacts');
-    const selection = values['--project-root']
-      ? resolveDiagnosticProject(values['--project-root'], values['--diagnostic-artifacts'])
-      : loadDiagnosticArtifacts(values['--diagnostic-artifacts']);
-    process.stdout.write(`${JSON.stringify(summary(selection), null, 2)}\n`);
-    return;
   }
   if ([values['--release'], values['--host-version'], values['--default']].filter(Boolean).length > 1) {
     fail('Choose one host version selection, not multiple selectors.');

@@ -67,16 +67,12 @@ connector wiring.
     establish either. Do not substitute a Git branch or bundled snapshot.
     See [the lifecycle contract](shared/references/mobile-release-lifecycle.md).
 
-    An explicitly requested offline-capable Android test may instead select immutable
-    local archives with `--diagnostic-artifacts "<manifest.json>"`, following
-    that contract's separate inspection/acquisition/install approvals. It verifies
-    package/lock hashes and actual selected APK metadata, not release readiness.
-    No catalogue/default is created; iOS remains unvalidated and diagnostic
-    tenant/store deployment is prohibited.
-    The current `diagnostic-57-v1` contract preserves existing offline profiles
-    and validates the selected SDK's host/RN peers and native metadata. The old
-    online-only protocol is rejected; package inspection is not an offline sync
-    or database-upgrade test.
+    The former local diagnostic artifact mode is retired. Missing published
+    packages block creation/adoption; there is no Git, bundled-template or local
+    archive fallback. Existing offline profiles and data remain app-owned.
+    Versioned offline SDK contracts are checked against the published host,
+    template lock and installed native artifact hashes. This is not an offline
+    synchronization or database-upgrade test.
 
 3. Open the template folder in VS Code and run the skill from Copilot Chat:
 

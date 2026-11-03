@@ -177,15 +177,11 @@ No unbounded redispatch: repeated setup failures consume the same attempt budget
 
 ### 0.preflight Read project context
 
-For an explicitly selected `--diagnostic-artifacts '<manifest.json>'`, follow
-the [local diagnostic lifecycle](../../shared/references/mobile-release-lifecycle.md)
-and carry the option into resolver/validator calls. Use `mobile-template-lifecycle.js
-plan` read-only to compare the app's required counter with this known APK's
-actual supported counters. Report both values on mismatch; offer an approved
-`/check-updates` migration or a separately verified matching player, never a
-counter rewrite. No automatic device discovery, offline conversion, first-party
-package patch, or tenant/store deployment. APK metadata is not a device test;
-iOS remains untested. Existing no-fix/consent and telemetry behavior is unchanged.
+Compare the app's required native counter with the selected Player's actual
+supported counters when that evidence is available. Report both on mismatch;
+offer an approved `/check-updates` migration or a verified matching Player,
+never a counter rewrite or first-party package patch. Package metadata alone
+does not prove device execution or offline synchronization.
 
 Follow the shared instructions before diagnosing logs:
 

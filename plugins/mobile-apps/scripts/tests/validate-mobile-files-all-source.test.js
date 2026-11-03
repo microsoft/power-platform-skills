@@ -48,27 +48,25 @@ test('all-source flag is explicit and does not require individual files', () => 
   assert.deepStrictEqual(parsed.targets, []);
 });
 
-test('diagnostic manifest paths fail early when missing, directories or symlinks', (t) => {
+test('retired diagnostic manifest paths fail before filesystem or package validation', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-diagnostic-path-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, 'project');
   fs.mkdirSync(project);
   const manifest = path.join(root, 'diagnostic-artifacts.json');
   fs.writeFileSync(manifest, '{}');
-  const link = path.join(root, 'linked-manifest.json');
-  fs.symlinkSync(manifest, link, 'file');
-  for (const selected of [path.join(root, 'missing.json'), root, link]) {
+  for (const selected of [path.join(root, 'missing.json'), root, manifest]) {
     const result = spawnSync(process.execPath, [
       path.resolve(__dirname, '../validate-mobile-files.js'), '--project-root', project,
       '--all-source', '--diagnostic-artifacts', selected,
     ], { cwd: project, encoding: 'utf8' });
     assert.strictEqual(result.status, 2, result.stderr);
-    assert.match(result.stderr, /diagnostic-artifacts.*regular file/);
+    assert.match(result.stderr, /diagnostic-artifacts.*retired/);
     assert.doesNotMatch(result.stdout, /Mobile validation passed/);
   }
 });
 
-test('diagnostic manifest path validation permits a regular file outside the project', (t) => {
+test('retired diagnostic manifests do not become an implicit published selection', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-external-diagnostic-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, 'project');
@@ -79,7 +77,8 @@ test('diagnostic manifest path validation permits a regular file outside the pro
     path.resolve(__dirname, '../validate-mobile-files.js'), '--project-root', project,
     '--all-source', '--diagnostic-artifacts', manifest,
   ], { cwd: project, encoding: 'utf8' });
-  assert.strictEqual(result.status, 0, result.stderr);
+  assert.strictEqual(result.status, 2, result.stderr);
+  assert.match(result.stderr, /retired/);
 });
 
 test('all-source rejects explicit validation targets', () => {

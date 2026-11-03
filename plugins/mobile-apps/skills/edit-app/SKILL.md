@@ -275,14 +275,6 @@ Immediately run the edit documentation protocol's `temp` command and bind its re
 `directory`, `progress`, `progressHtml`, and `sync` paths as `<edit-temp-dir>` values before any
 inferred-plan sync or progress write below.
 
-An explicitly approved `--diagnostic-artifacts '<manifest.json>'` selection
-follows the [local diagnostic lifecycle](../../shared/references/mobile-release-lifecycle.md).
-Carry it into resolution, package validation and native helpers; preserve the
-existing impact/approval gates. Source-only edits remain available independently.
-Diagnostic native work uses the verified Android artifact and selected offline
-contract, never an iOS execution claim, implicit offline-profile conversion,
-tenant mutation or deployment. Preserve existing offline source, profiles and data.
-
 Read [release lifecycle](../../shared/references/mobile-release-lifecycle.md).
 Resolve the existing app, not the newest bundled template:
 

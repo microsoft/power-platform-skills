@@ -147,12 +147,13 @@ function main(input) {
   }
 
   const projectRoot = path.dirname(path.resolve(filePath));
+  if (toolInput.diagnostic_artifacts !== undefined) {
+    fail('Diagnostic artifact mode is retired. Resolve the app against its published host and template packages.');
+  }
   const explicit = toolInput.validation_mode === 'explicit-mobile-workflow';
   let baseline;
   if (explicit) {
-    const release = toolInput.diagnostic_artifacts
-      ? require('../scripts/lib/mobile-diagnostic-artifacts').resolveDiagnosticProject(projectRoot, toolInput.diagnostic_artifacts).projectBaseline
-      : resolveProjectRelease(projectRoot);
+    const release = resolveProjectRelease(projectRoot);
     baseline = packageDeps(release.managedDependencies);
   }
   const installed = inspectInstalledPackages(projectRoot);

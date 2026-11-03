@@ -265,12 +265,12 @@ test('all existing workflow telemetry checkpoint IDs remain unchanged', () => {
   }
 });
 
-test('explicit local diagnostics are consistently scoped without promoting production defaults', () => {
-  for (const skill of ['create-mobile-app', 'check-updates', 'edit-app', 'add-native', 'deploy', 'debug-app', 'report-issue']) {
-    assert.match(read(`skills/${skill}/SKILL.md`), /--diagnostic-artifacts/, skill);
+test('production workflows use published packages without advertising retired diagnostic acquisition', () => {
+  for (const skill of ['create-mobile-app', 'check-updates', 'edit-app', 'add-native', 'debug-app', 'report-issue']) {
+    assert.doesNotMatch(read(`skills/${skill}/SKILL.md`), /--diagnostic-artifacts/, skill);
   }
   for (const helper of nativeHelpers) {
-    assert.match(read(`skills/add-native/${helper}/SKILL.md`), /--diagnostic-artifacts/, helper);
+    assert.doesNotMatch(read(`skills/add-native/${helper}/SKILL.md`), /--diagnostic-artifacts/, helper);
   }
   for (const file of [
     'AGENTS.md', 'README.md', 'shared/shared-instructions.md', 'shared/version-check.md',
@@ -281,34 +281,26 @@ test('explicit local diagnostics are consistently scoped without promoting produ
   }
   assert.equal(fs.existsSync(path.join(pluginRoot, 'shared/mobile-releases.json')), false);
   const lifecycle = read('shared/references/mobile-release-lifecycle.md');
-  assert.match(lifecycle, /source manifest[\s\S]{0,120}not evidence of a matching binary/);
-  assert.match(lifecycle, /actual APK/);
-  assert.match(lifecycle, /--dry-run --diagnostic-artifacts/);
-  assert.match(lifecycle, /run `--no-install` separately/);
+  assert.match(lifecycle, /source manifest[\s\S]{0,120}not evidence of a[\s\S]{0,10}matching binary/);
+  assert.match(lifecycle, /`--no-install` separately/);
   assert.doesNotMatch(lifecycle, /stage-diagnostic/);
-  assert.match(lifecycle, /reference is intentionally uninstalled/);
-  assert.match(lifecycle, /absolute paths stay internal/);
-  assert.match(lifecycle, /Do not discard `diagnostic` fields/);
-  assert.match(lifecycle, /Managed baseline semver ranges may be[\s\S]{0,80}exact verified reference resolutions/);
-  assert.match(read('skills/check-updates/SKILL.md'), /Diagnostic replay requires a standalone npm app/);
-  assert.match(read('skills/check-updates/SKILL.md'), /This mode ends after Step 2/);
-  assert.match(read('skills/check-updates/SKILL.md'), /Do not continue to[\s\S]{0,30}Steps 3-4/);
-  assert.match(read('skills/check-updates/SKILL.md'), /skip the[\s\S]{0,40}`npm outdated` discovery/);
-  assert.match(lifecycle, /Do not disable offline automatically|Do not delete profiles,/);
-  assert.match(lifecycle, /diagnostic-57-v1/);
-  assert.match(lifecycle, /exact stable `sourceVersion` \(including `1\.x`\)/);
-  assert.match(lifecycle, /same checks run against the resulting installation/);
-  assert.match(lifecycle, /database upgrades need separate device tests/);
-  assert.match(lifecycle, /new host and template package major/);
+  assert.match(lifecycle, /diagnostic artifact mode is retired/);
+  assert.doesNotMatch(lifecycle, /--diagnostic-artifacts|diagnostic-57-v1/);
+  const workflow = fs.readFileSync(path.resolve(pluginRoot, '../../.github/workflows/mobile-apps-script-tests.yml'), 'utf8');
+  assert.match(workflow, /node --check plugins\/mobile-apps\/scripts\/lib\/mobile-package-artifacts\.js/);
+  assert.doesNotMatch(workflow, /mobile-diagnostic-artifacts/);
+  assert.match(lifecycle, /Do not delete profiles,/);
+  assert.match(lifecycle, /native artifact hashes/);
+  assert.match(lifecycle, /database upgrades[\s\S]{0,10}need separate device tests/);
   assert.match(read('skills/deploy/SKILL.md'), /Reject any `--diagnostic-artifacts`[\s\S]{0,100}before building or pushing/);
-  assert.match(read('skills/debug-app/SKILL.md'), /actual supported counters/);
+  assert.match(read('skills/debug-app/SKILL.md'), /actual[\s\S]{0,10}supported counters/);
 });
 
 test('upgrade rehearsals preserve source config context and require reviewed override resolutions', () => {
   const skill = read('skills/check-updates/SKILL.md');
   const lifecycle = read('shared/references/mobile-release-lifecycle.md');
   for (const source of [skill, lifecycle]) {
-    assert.match(source, /source dependencies from its unchanged (?:source )?lock/);
+    assert.match(source, /source dependencies from its\s+unchanged (?:source )?lock/);
     assert.match(source, /target-reference `NODE_PATH`/);
     assert.match(source, /source dependency context/);
     assert.match(source, /(?:Package override conflicts are blocking|override is a blocking preview)/);
@@ -333,5 +325,5 @@ test('upgrade skills reuse the verified external host CLI rather than duplicatin
   assert.match(skill, /same verified reference host CLI/);
   assert.match(skill, /never[\s\S]{0,90}delete the app's lock or `node_modules`/);
   assert.doesNotMatch(skill, /Install the \*\*exact reviewed target host\*\* only in the disposable copy/);
-  assert.match(lifecycle, /Published and[\s\S]{0,70}diagnostic migrations share the host-owned strict npm installer/);
+  assert.match(lifecycle, /Published migrations use the host-owned strict npm installer/);
 });

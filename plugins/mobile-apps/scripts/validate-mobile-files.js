@@ -15,7 +15,7 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...] [--diagnostic-artifacts <manifest.json>]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
     '--all-source validates every .ts/.tsx file under app/ and src/, plus root .ts/.tsx files.',
@@ -54,11 +54,9 @@ function parseArgs(argv) {
     } else if (arg === '--all-source') {
       parsed.allSource = true;
     } else if (arg === '--diagnostic-artifacts') {
-      if (parsed.diagnosticArtifacts || !argv[index + 1] || argv[index + 1].startsWith('--')) {
-        parsed.errors.push('Supply one explicit --diagnostic-artifacts manifest path.');
-      } else {
-        parsed.diagnosticArtifacts = path.resolve(argv[++index]);
-      }
+      parsed.errors.push('BLOCKED: --diagnostic-artifacts is retired. Use published host/template packages.');
+      parsed.blocked = true;
+      if (argv[index + 1] && !argv[index + 1].startsWith('--')) index++;
     } else if (arg === '--approved-js-dependency') {
       const approvedDependency = parseApprovedJsDependency(argv[index + 1]);
       if (approvedDependency) {
@@ -110,7 +108,7 @@ function collectSourceTargets(projectRoot) {
   return targets.sort();
 }
 
-function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies, diagnosticArtifacts) {
+function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies) {
   const validatorPath = path.join(PLUGIN_ROOT, 'hooks', validatorName);
   const payload = JSON.stringify({
     cwd: projectRoot,
@@ -121,7 +119,6 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
       filePath,
       validation_mode: 'explicit-mobile-workflow',
       approved_js_dependencies: approvedJsDependencies,
-      ...(diagnosticArtifacts ? { diagnostic_artifacts: diagnosticArtifacts } : {}),
     },
   });
 
@@ -141,7 +138,7 @@ function main(argv) {
   const {
     allSource,
     approvedJsDependencies,
-    diagnosticArtifacts,
+    blocked: invalidSelection,
     errors,
     help,
     projectRoot: projectRootArg,
@@ -153,7 +150,7 @@ function main(argv) {
   }
   if (errors.length > 0) {
     process.stderr.write(`${errors.join('\n')}\n\n${usage()}\n`);
-    return 1;
+    return invalidSelection ? 2 : 1;
   }
   if (
     !projectRootArg
@@ -170,19 +167,6 @@ function main(argv) {
     return 1;
   }
   const projectRoot = fs.realpathSync(requestedProjectRoot);
-  if (diagnosticArtifacts) {
-    let stat;
-    try {
-      stat = fs.lstatSync(diagnosticArtifacts);
-    } catch (error) {
-      process.stderr.write(`BLOCKED: --diagnostic-artifacts must point to an existing readable regular file (${error.code || 'filesystem error'}).\n`);
-      return 2;
-    }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      process.stderr.write('BLOCKED: --diagnostic-artifacts must point to a regular file, not a directory or symbolic link.\n');
-      return 2;
-    }
-  }
   const validationTargets = allSource ? collectSourceTargets(projectRoot) : targets;
 
   const files = new Set();
@@ -234,7 +218,6 @@ function main(argv) {
         content,
         projectRoot,
         approvedJsDependencies,
-        diagnosticArtifacts,
       );
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);

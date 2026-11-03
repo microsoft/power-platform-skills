@@ -4,12 +4,10 @@ Tooling prerequisites only. Runtime compatibility comes from the app-matched
 [verified release context](references/mobile-release-lifecycle.md), not this
 file or the newest bundled template.
 
-The lifecycle's explicit `--diagnostic-artifacts` workflow is a separate
-offline-capable Android artifact selection. Published package inspection uses npm and
-`tar`; the diagnostic opt-in additionally needs `unzip` and an explicitly selected
-SDK `aapt2` on `PATH`. Neither path discovers devices or
-build native code. Keep normal tooling tiers unchanged, record iOS as untested,
-and never use this selection for deployment.
+Published package inspection uses npm and `tar`; it does not discover devices
+or build native code. The former local diagnostic artifact mode is retired.
+Keep normal tooling tiers unchanged and report binary/device availability
+separately from package compatibility.
 
 ## Guiding principle — **scope-aware checks, not blanket gates**
 

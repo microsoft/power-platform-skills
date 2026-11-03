@@ -253,9 +253,9 @@ function main(argv) {
   const [action, ...args] = argv;
   const values = {};
   const allowed = action === 'destination' ? ['--destination'] : action === 'acquire'
-    ? ['--destination', '--release', '--host-version', '--template-version', '--diagnostic-artifacts']
-    : ['--project-root', '--release', '--host-version', '--diagnostic-artifacts'];
-  if (!['acquire', 'plan', 'destination'].includes(action)) throw new Error('Use acquire, plan or destination with explicit arguments; the producer host CLI owns diagnostic migration writes');
+    ? ['--destination', '--release', '--host-version', '--template-version']
+    : ['--project-root', '--release', '--host-version'];
+  if (!['acquire', 'plan', 'destination'].includes(action)) throw new Error('Use acquire, plan or destination with explicit arguments; the published host CLI owns migration writes');
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index];
     if (!allowed.includes(key) || values[key] !== undefined || !args[index + 1]
@@ -266,14 +266,9 @@ function main(argv) {
     if (!values['--destination']) throw new Error('Required: --destination for read-only creation inspection');
     return inspectDestination(values['--destination']);
   }
-  if (!values[allowed[0]] || ['--release', '--host-version', '--template-version', '--diagnostic-artifacts']
+  if (!values[allowed[0]] || ['--release', '--host-version', '--template-version']
     .filter((key) => values[key]).length !== 1) {
-    throw new Error(`Required: ${allowed[0]} and one exact host/template version or --diagnostic-artifacts`);
-  }
-  if (values['--diagnostic-artifacts']) {
-    const { acquireDiagnosticTemplate, planDiagnosticUpdate } = require('./lib/mobile-diagnostic-artifacts');
-    const helper = action === 'acquire' ? acquireDiagnosticTemplate : planDiagnosticUpdate;
-    return helper(path.resolve(values[allowed[0]]), values['--diagnostic-artifacts']);
+    throw new Error(`Required: ${allowed[0]} and one exact host/template version`);
   }
   if (action === 'plan') return planUpdate(path.resolve(values['--project-root']), values['--host-version'] || values['--release']);
   return values['--host-version']
@@ -285,10 +280,7 @@ if (require.main === module) {
   try {
     process.stdout.write(`${JSON.stringify(main(process.argv.slice(2)), null, 2)}\n`);
   } catch (error) {
-    const message = process.argv.includes('--diagnostic-artifacts') && error.code !== 'MOBILE_RELEASE_BLOCKED'
-      ? 'Local diagnostic action failed. Check the explicit arguments, artifact availability, and new/empty destination locally (raw errors withheld).'
-      : error.message;
-    process.stderr.write(`BLOCKED: ${message}\n`);
+    process.stderr.write(`BLOCKED: ${error.message}\n`);
     process.exitCode = 2;
   }
 }

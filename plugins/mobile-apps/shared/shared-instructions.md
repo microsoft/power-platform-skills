@@ -134,15 +134,11 @@ newest bundled template as an old app's native allowlist. This is an explicit
 workflow gate, not a telemetry/write hook. Source-only edits can continue when
 release evidence is unavailable without claiming native validation.
 
-Only an explicitly requested local diagnostic may substitute the lifecycle
-reference's `--diagnostic-artifacts` selection for published release resolution.
-Carry that same explicit manifest through resolve/plan/changed-file validation
-and nested skills; label the sanitized context `local-diagnostic-only`.
-It verifies Android artifacts, including the offline runtime contract when
-selected; it does not establish iOS execution or offline-sync success. Preserve
-app-owned offline configuration and every normal approval and telemetry
-checkpoint. It is not a default or a tenant/store deployment path. Never send the
-manifest, its local paths, archive names, raw CLI output or APK to telemetry.
+Local diagnostic artifact selection is retired. Use the finalized published
+host/template contract and preserve app-owned offline configuration, normal
+approvals and telemetry checkpoints. Package inspection does not establish
+device execution or offline-sync success. Never send local paths, raw CLI
+output or package/native binaries to telemetry.
 
 ---
 

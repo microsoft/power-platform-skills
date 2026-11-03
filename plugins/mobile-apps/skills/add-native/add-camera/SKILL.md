@@ -122,10 +122,6 @@ NODE
 
 If the check fails, STOP. Print the error verbatim. Do not run `npx expo install`. Do not edit `app.config.js`. Tell the user which requested modules the template lacks; they need template support, not an app-local native-package install.
 
-If the parent explicitly selected local diagnostic artifacts, append the same
-`--diagnostic-artifacts '<manifest.json>'` to resolution and package validation.
-Keep the lifecycle reference's Android-artifact/no-deployment limits and preserve offline configuration.
-
 Each requested module must match the resolved native inventory and installed docs/types. Do not require unrelated capture packages for scanner-only or upload-only work. Package inclusion does not establish OS declarations or device grants. Barcode/QR uses expo-camera; there is no controls barcode subpath.
 
 ### Step 2a — Reconcile requested artifacts

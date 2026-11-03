@@ -47,21 +47,9 @@ an existing-app edit request to a new folder. Missing generated markers alone do
 not prove freshness: if the template is customized or its state is unclear, ask
 before proceeding. Only a request for a new app requires a fresh template folder.
 
-Only when the user explicitly supplies `--diagnostic-artifacts '<manifest.json>'`
-for a local test, follow the lifecycle's separate artifact inspection/acquisition
-path in place of published selection. Keep new/empty destination checks,
-acquisition/install approvals, customer instructions and telemetry checkpoints.
-Limit artifact validation to the selected Android APK; preserve verified offline
-capability without claiming an offline sync test. Do not claim the normal dual-platform
-creation target is verified, offer offline setup, initialize/deploy a tenant app,
-or promote the test selection to the default. Carry the option into project
-resolution and package validation. No automatic local-artifact fallback exists.
-End this local creation path after approved scaffold installation and validation;
-do not continue the tenant initialization/data-mutation phases below. Report a
-diagnostic scaffold, not a completed deployed dual-platform app.
-If the selected package is `upgrade-inspection-only`, stop before acquisition:
-it supports existing-app diagnostic upgrade inspection, not creation. Never
-reconstruct a template or copy its reference staging source/lock to bypass this.
+The former local diagnostic artifact mode is retired. Only a finalized published
+template package may scaffold a new app; missing publication is a blocker, not
+permission to reconstruct a template or copy a bundled snapshot.
 
 For a new/empty target, offer **Acquire reviewed template** or **Cancel**. After explicit approval, run `mobile-template-lifecycle.js acquire --template-version "<exact-template-version>" --destination '<working_dir>'`. It verifies the immutable package and metadata before using the package's creation CLI. Separately approve dependency installation with the shipped lockfile (`npm ci`); use existing registry authentication, never print/provision credentials here. Do not fall back to `degit` or copy a bundled template on failure.
 

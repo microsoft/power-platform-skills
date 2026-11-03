@@ -12,34 +12,13 @@ model: opus
 
 Resolve `<working_dir>` from `--working-dir <path>` or use the current directory. Require `package.json` and `node_modules/`, then run on every invocation. Read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md). If the user names one package, scope discovery to it; a native/runtime package still belongs to Step 2's coupled release, not an independent bump. Explain the coupled changes and ask permission; naming a package does not approve them. Otherwise run Steps 2-4 in order.
 
-An explicitly supplied `--diagnostic-artifacts '<manifest.json>'` selects the
-lifecycle reference's immutable local **offline-capable Android test**, not a
-published release. Keep Step 1's plugin/version check and all approvals and
-checkpoints. In Step 2 use `mobile-template-lifecycle.js plan --project-root
-'<working_dir>' --diagnostic-artifacts '<manifest.json>'` instead of published
-package selection. The packed migration identifies the old source;
-ordinary invocations never fall back to diagnostic archives. Review the
-returned manifest hash, major transition, known APK's supported counters, and
-untested iOS limitation. Use only the verified target-host CLI for migration
-writes after isolated-preview approval; it binds the bundle's local archives.
-Do not pre-stage package edits or copy template source/lock into the app. Never run acquisition
-over the app, silently install packages, disable offline, or deploy this test.
-Carry the explicit diagnostic option into final resolve and package validation.
-Validate the selected offline SDK's package-owned peer/runtime contract; never
-force older apps to a hardcoded SDK version. Snapshot app-owned offline profiles,
-settings and source with the approved preview, and confirm they remain unchanged
-after success or rollback. Do not infer offline synchronization, cold-launch or
-database-migration success from an APK metadata check.
-Diagnostic replay requires a standalone npm app. Its Expo validation means the
-producer's immutable-graph, local configuration and TypeScript checks, not a
-floating remote `expo install --check`, `--fix` or doctor recommendation. Accept
-managed-range pins only at the verified reference resolutions; preserve custom
-values and block incompatible results rather than rewriting them silently.
-This mode ends after Step 2 is verified, declined or blocked. Do not continue to
-Steps 3-4 or offer generic dependency updates inside the diagnostic invocation:
-they can replace the APK-verified graph. Preserve real checkpoint/span outcomes;
-do not emit successful completion for maintenance steps that did not run. A
-read-only advisory audit may be offered separately, without package mutations.
+The former local diagnostic artifact mode is retired. Never substitute local
+archives or a bundled template when a finalized publication is missing.
+Snapshot app-owned offline profiles, settings, source and data with the approved
+preview, and verify preservation after success or rollback. Validate the selected
+SDK's package-owned peer/runtime contract; never force older apps to a hardcoded
+SDK version or disable offline to make validation pass. Package checks do not
+certify offline synchronization, cold launch or database migration.
 If the user asks only to prepare instructions/artifacts for a **later manual**
 upgrade, do not invoke this workflow on their app or make a rehearsal copy.
 
@@ -73,10 +52,6 @@ First check for an existing `.tmp/dependency-maintenance/outdated.json` or recov
 snapshot. If present, stop for review/resume rather than overwriting another
 attempt. Scope all paths and commands to `<working_dir>`.
 
-For `--diagnostic-artifacts`, still review prior recovery state but skip the
-`npm outdated` discovery below and proceed to Step 2. Do not create a discovery
-file merely for skipped maintenance steps, or delete another attempt's files.
-
 ```bash
 mkdir -p .tmp/dependency-maintenance
 npm outdated --json --depth=0 > .tmp/dependency-maintenance/outdated.json
@@ -108,18 +83,13 @@ For a patch/minor update with unchanged native requirements, no new Player or ba
 
 The published planning boundary rejects native transitions without a host major
 and an unambiguous template migration. Package producers own version preparation;
-use actual published versions, never predicted majors. Diagnostic planning still
-requires a new host and template package major for its controlled private prerelease
-targets. Use their actual packed versions, never their source-version provenance.
-A previously verified `0.x` source-version inspection-only bundle reports the
-required future production major without pretending to be that release. Neither
-form satisfies production admission or becomes a default.
+use actual published versions, never predicted majors or private test identities.
 
 Interpret the decision:
 
 | Decision | Action |
 |---|---|
-| `current` | Equal supported targets are valid; no install/migration is needed. Published mode continues with JS maintenance; diagnostic mode ends without changing its verified graph. |
+| `current` | Equal supported targets are valid; no install/migration is needed. Continue with individually approved JS maintenance. |
 | `host-repair` | Rehearse the exact host/managed dependency repair. Do not require or fabricate template advancement. |
 | `template-upgrade` | Rehearse every migration edge, even if `hostInstallRequired` is false. |
 | Downgrade, unknown state, or runtime change without migration | Stop; never backfill metadata or use unsupported `--from-version`/`--json` flags. |
@@ -133,7 +103,7 @@ Interpret the decision:
    reviewed install policy before resolving inherited TypeScript configuration.
    A missing source configuration is a preparation blocker; do not substitute
    target-reference `NODE_PATH` resolution for the source dependency context.
-4. Obtain the **exact reviewed target host** in a separate private tooling installation, not by installing it into the old app's dependency graph. Use `mobile-template-lifecycle.js acquire --destination '<reference_dir>' --host-version "<exact-host-version>"` with a new/empty directory. It installs the exact host with lifecycle scripts disabled and checks its npm lock integrity and contained upgrade CLI. Review any required lifecycle scripts separately before approving their execution. This tooling folder is not a scaffolded app; do not run app admission against it or copy its lock over the customer app. Diagnostic mode uses its already-verified reference instead. Read the installed host's actual `bin["upgrade-template"]` path and supported help; invoke that CLI with `--project '<preview_dir>' --dry-run` to preview one edge. The host owns the app's dependency edits and installation, including the section/spec recorded in the target's `managedDependencies`; an exact installed version does not authorize rewriting a reviewed range. Do not install a new host with incompatible peers into the old dependency set before previewing the coupled migration. Classify output: conflicts block application and need a reviewed resolution; other command failures block investigation. A nonzero preview is never automatically a clean plan.
+4. Obtain the **exact reviewed target host** in a separate private tooling installation, not by installing it into the old app's dependency graph. Use `mobile-template-lifecycle.js acquire --destination '<reference_dir>' --host-version "<exact-host-version>"` with a new/empty directory. It installs the exact host with lifecycle scripts disabled and checks its npm lock integrity and contained upgrade CLI. Review any required lifecycle scripts separately before approving their execution. This tooling folder is not a scaffolded app; do not run app admission against it or copy its lock over the customer app. Read the installed host's actual `bin["upgrade-template"]` path and supported help; invoke that CLI with `--project '<preview_dir>' --dry-run` to preview one edge. The host owns the app's dependency edits and installation, including the section/spec recorded in the target's `managedDependencies`; an exact installed version does not authorize rewriting a reviewed range. Do not install a new host with incompatible peers into the old dependency set before previewing the coupled migration. Classify output: conflicts block application and need a reviewed resolution; other command failures block investigation. A nonzero preview is never automatically a clean plan.
    Package override conflicts are blocking even when source patches apply. Show
    the retained override and proposed direct dependency, obtain approval for the
    exact resolution, and rerun the preview. Never silently remove customer pins
@@ -173,7 +143,7 @@ For each approved package update:
 
 1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
 2. Install with `--ignore-scripts`; use `--package-lock=false` when the project had no npm lockfile.
-3. For this published-release maintenance path, run `npm install --ignore-scripts`, `npx --no-install expo install --check`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file (including `package.json`, passing approved exact JS dependency exceptions). Re-resolve the native release and reject lock/native closure drift. This section never runs with `--diagnostic-artifacts`. Never run `npx expo install --fix`.
+3. Run `npm install --ignore-scripts`, `npx --no-install expo install --check`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file (including `package.json`, passing approved exact JS dependency exceptions). Re-resolve the native release and reject lock/native closure drift. Never run `npx expo install --fix`.
 4. If any command fails, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Otherwise delete the snapshot and continue.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.

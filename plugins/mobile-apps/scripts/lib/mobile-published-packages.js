@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { runCliSync, CliLaunchError } = require('./process-runner');
+const { unpack, verifyInstalledOfflineSdk } = require('./mobile-package-artifacts');
 const {
   exactVersion, declarationSpec, dependencySections, isRuntimePackage, readProjectRequirements, validateRelease,
   readProject, readPlatformContext, validateProjectAgainstRelease, summarizeRelease, validHostIntegrity,
@@ -122,7 +123,6 @@ function createSource(options = {}) {
         requireValue(`${algorithm}-${createHash(algorithm).update(bytes).digest('base64')}` === integrity
           && `sha512-${createHash('sha512').update(bytes).digest('base64')}` === packed[0].integrity,
         'Downloaded package bytes do not match the published integrity.');
-        const { unpack } = require('./mobile-diagnostic-artifacts');
         const root = unpack(archive, directory, execute);
         const pkg = readJson(path.join(root, 'package.json'), 'packed package manifest');
         requireValue(pkg.name === name && pkg.version === version && pkg.private !== true && !pkg.powerAppsDiagnostic,
@@ -308,13 +308,16 @@ function projectContract(projectRoot, project, options = {}) {
   requireValue(contract.templateVersion === requirements.templateVersion
     && same(contract.nativeRuntimeVersions, requirements.nativeRuntimeVersions),
   'Installed host and recorded template/native state differ. Run check-updates to preview the host migration; do not rewrite the app metadata.');
-  assertInstalledProfile(projectRoot, source.read(HOST, requirements.hostVersion).profile);
+  const host = source.read(HOST, requirements.hostVersion);
+  assertInstalledProfile(projectRoot, host.profile, host.pkg, project.lock,
+    source.read(TEMPLATE, contract.template.version).lock);
   return contract;
 }
 
-function assertInstalledProfile(projectRoot, profile) {
+function assertInstalledProfile(projectRoot, profile, host, lock, referenceLock) {
   const installed = readJson(path.join(projectRoot, 'node_modules', HOST, 'compatibility/current.json'), 'installed host compatibility profile');
   requireValue(same(installed, profile), 'Installed host compatibility metadata differs from its published package.');
+  verifyInstalledOfflineSdk(projectRoot, profile, host, lock, referenceLock);
 }
 
 function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
@@ -361,7 +364,7 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
   const hostInstallRequired = sourceRequirements.hostVersion !== hostVersion;
   if (!migrationRequired && !hostInstallRequired) {
     const project = readProject(projectRoot, readPlatformContext());
-    assertInstalledProfile(projectRoot, host.profile);
+    assertInstalledProfile(projectRoot, host.profile, host.pkg, project.lock, template.lock);
     validateProjectAgainstRelease(project, contractFromPackages(host, template, project));
   }
   return {

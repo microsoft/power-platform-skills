@@ -33,10 +33,6 @@ test -f app.config.js && test -f power.config.json && test -f package.json && te
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
 ```
 
-If the parent explicitly selected local diagnostic artifacts, append the same
-`--diagnostic-artifacts '<manifest.json>'` to resolution and package validation.
-Keep the lifecycle reference's Android-artifact/no-deployment limits and preserve offline configuration.
-
 Unknown/missing records block native mutation. Do not install packages, edit
 native config, or run local native builds. Match the installed public README,
 exports, and types to the resolved inventory before generating any wrapper.
