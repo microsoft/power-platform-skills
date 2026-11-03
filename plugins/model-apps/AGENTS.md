@@ -3064,7 +3064,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   recorded id through the isolated reader (`readerFor(...).declaredRule`) and runs `verifyDeclaredRule`
   (`managed-rule` check): the helper's one read-only `projectRule`, certified only when the hash of that
   projection and the rule's status equals the proof's `savedSha256` (the projection holds every node in
-  order, so the body and the state are both covered), plus the helper's own `editsOf` over the group's
+  order, so the body and the state are both covered; a step's WFOM `name` is not in it, because the platform
+  renames every step on save to `Step_<its position among its siblings>`, whatever the SDK sent), plus the helper's own `editsOf` over the group's
   declaration state finding nothing for the spec's rule, and the same table and name (a build never renames
   or moves a managed rule). `editsOf` rather than the stored `originalDeclaration` is compared because an
   omitted node, description or condition logic is not a change for the build either. A group with no
@@ -3113,8 +3114,11 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   row it holds, and a removed flow whose row is proved gone is retired as a rule's is (a failed `declaration`-mode
   attempt, below, included). A declaration that changes
   nothing of the workflow but differs from the group's `originalDeclaration` (its `securityRoles`, say) is the
-  plan's `declaration` mode: no workflow request, and a commit that records it, so the managed download restores
-  the current intent; an identical one is a no-op with no store write. Nothing is published.
+  plan's `declaration` mode: no workflow request, and a commit that records it, so the store keeps the current
+  intent; an identical one is a no-op with no store write. Nothing is published. The managed download still
+  leaves a flow with `securityRoles` out (`personasNotIn`): a download writes no `personas[]`, and a persona
+  owns its role and is converged onto exactly what it declares, so one is never reconstructed from the
+  environment, and the flow is never restored without its roles; the stale reason names the missing personas.
   **Verify and download** (`lib/declared-bpf-io.js`): verify reads each bound declared flow fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredBpf`) and runs `verifyDeclaredBpf`
   (`managed-bpf` check): the helper's one read-only `projectBpf`, certified only when it is a shape the

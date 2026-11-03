@@ -216,7 +216,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   it is re-adopted). A download brings it back declared, keys included, only with `--include-managed
   --managed-manifest <store file>` (otherwise it is left out); the first build that binds it from the downloaded folder
   needs `adopt:bpf:<table>/<name>`, because that folder has no store. Changing only who may run a managed flow
-  (`securityRoles`) writes nothing to the flow; the build records it, and a managed download brings it back. A
+  (`securityRoles`) writes nothing to the flow; the build records it. A managed download does NOT restore a flow
+  that has `securityRoles`: a download writes no `personas[]`, so it leaves that flow out with a warning naming the
+  personas (nothing is lost; the store and the maker's own spec keep it). Tell the maker to copy that flow and the
+  personas it names from the spec it was built from. A
   declared rule or flow removed from the spec whose row was deleted is no longer managed once the build reads it gone
   by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
   change is still waiting to be proved keeps the build incomplete. A retirement a build reports it could not

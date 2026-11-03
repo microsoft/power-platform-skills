@@ -95,7 +95,9 @@ function verifyDeclaredBpf({ flow, group, art }) {
  * restored declaration is appended, or REPLACES an entry for the same table and name if one is there. A group is restored only when
  *   - the store keeps its original declaration, and it is a declared flow,
  *   - a fresh read of its bound flow through `sdk` (the download's own throwaway SDK) answers,
- *   - that read certifies the group's last proof (bpfProofIssues answers none), and
+ *   - that read certifies the group's last proof (bpfProofIssues answers none),
+ *   - every persona its securityRoles name is declared in the downloaded spec, which a download never writes, so a flow with
+ *     securityRoles is always left out (personasNotIn), and
  *   - the downloaded spec still validates with it (`validate`, the download's own validator).
  * Every other group (unread, changed since, not valid here, or still pending or unusable in the store) is answered in `stale` with
  * its reason, never silently dropped. Answers { restored: [key], stale: [{ key, reason }] }; a store file that cannot be used
@@ -133,6 +135,15 @@ async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName,
     const flows = Array.isArray(spec.businessProcessFlows) ? spec.businessProcessFlows : [];
     const at = flows.findIndex((f) => f && lc(f.entity) === lc(declaration.entity) && lc(f.name) === lc(declaration.name));
     const next = at >= 0 ? flows.map((f, i) => (i === at ? declaration : f)) : [...flows, declaration];
+    // A flow's securityRoles name personas of the spec it was built from, and a download writes no personas[]: a persona
+    // owns its role and the build converges that role onto exactly the privileges declared (ReplacePrivilegesRole), so a
+    // persona guessed from the environment would strip every privilege the guess missed on the next build. The flow is
+    // not restored without its roles either (that would drop authored intent), so it is left out with what to copy.
+    const missing = personasNotIn(spec, declaration);
+    if (missing.length) {
+      stale.push({ key, reason: `its securityRoles name ${missing.map((p) => `persona '${p}'`).join(', ')}, and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from` });
+      continue;
+    }
     const check = validate({ ...spec, businessProcessFlows: next });
     if (!check || !check.ok) {
       const errors = ((check && check.errors) || []).slice(0, 3).map((x) => (typeof x === 'string' ? x : (x && x.message) || JSON.stringify(x)));
@@ -147,6 +158,16 @@ async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName,
 
 function sortByKey(list) {
   return list.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+// The personas a flow declaration's securityRoles name that `spec.personas` does not declare, in declaration order,
+// matched as the spec validator matches them (app-spec.js: the trimmed persona name, case-insensitively).
+function personasNotIn(spec, declaration) {
+  const named = declaration.securityRoles && Array.isArray(declaration.securityRoles.personas) ? declaration.securityRoles.personas : [];
+  if (!named.length) return [];
+  const { canonicalPersonaName } = require('./app-spec.js');
+  const declared = new Set((Array.isArray(spec.personas) ? spec.personas : []).map((p) => String(canonicalPersonaName(p) || '').toLowerCase()));
+  return named.filter((p) => !declared.has(String(p).trim().toLowerCase()));
 }
 
 // The declared flows the spec holds, by the key a committed flow group is stored under (bpf-settlement.js bpfKey:

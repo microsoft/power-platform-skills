@@ -526,13 +526,15 @@ test('verify lists a reader that cannot read a flow as unverified, and a flow th
 
 // download-model-app.js main with its side effects replaced: the download's SDK is a real one over the wire, and runDownload answers
 // the spec a download of this app hydrates, which holds no process flow (a plain download reconstructs none), or `plain` if given.
-async function download(wire, out, argv, { plain, ...extra } = {}) {
+async function download(wire, out, argv, { plain, personas, ...extra } = {}) {
   const { sdk } = await sdkOver(wire);
   const dl = Object.create(sdk);
   dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
   const downloaded = specWith([]);
   delete downloaded.businessProcessFlows;
   if (plain) downloaded.businessProcessFlows = plain;
+  // A download writes no personas[]; `personas` stands in for a spec that has them, the control of a flow that names one.
+  if (personas) downloaded.personas = personas;
   const emitted = [];
   const said = [];
   const mark = wire.log.length;
@@ -595,6 +597,31 @@ test('the explicit managed download names a flow whose last attempt is not settl
     assert.equal(plain.emitted[0].ok, true, JSON.stringify(plain.emitted) + plain.said);
     assert.equal('managedBpfs' in plain.emitted[0].payload, false);
     assert.deepEqual(plain.calls.filter((c) => /^workflows\(/i.test(c.path)), [], 'no flow is read');
+  });
+});
+
+test('the explicit managed download leaves out a flow whose securityRoles name personas, which a download never writes, and says what to copy', async () => {
+  await withBpf(true, async () => {
+    const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
+    const AGENT = { persona: 'Agent', jobs: [{ name: 'Resolve tickets', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
+    const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher', 'Agent'] } };
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [DISPATCHER, AGENT] })).err, undefined);
+    assert.deepEqual(storeOf(dir).readGroup('bpf', GROUP).committed.originalDeclaration.securityRoles, roled.securityRoles, 'the store keeps the roles');
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    const left = await download(wire, makeTempDir('declared-bpf-'), flags);
+    assert.equal(left.emitted[0].ok, true, JSON.stringify(left.emitted) + left.said);
+    assert.deepEqual(left.emitted[0].payload.managedBpfs, { restored: [], stale: [{ key: GROUP, reason: 'its securityRoles name persona \'Dispatcher\', persona \'Agent\', and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from' }] });
+    assert.match(left.said, /WARNING: managed business process flow new_ticket\/Ticket process was not restored: its securityRoles name persona 'Dispatcher'/);
+    assert.equal(left.written.businessProcessFlows, undefined, 'never restored without its roles');
+    assert.equal(left.written.personas, undefined, 'and no persona is made up');
+    // Only the persona it lacks is named; with every one there, the same flow is restored whole, roles included.
+    const one = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [{ ...DISPATCHER, persona: ' dispatcher ' }] });
+    assert.match(one.emitted[0].payload.managedBpfs.stale[0].reason, /^its securityRoles name persona 'Agent', and a download/);
+    const both = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [DISPATCHER, AGENT] });
+    assert.deepEqual(both.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] });
+    assert.deepEqual(both.written.businessProcessFlows, [roled]);
   });
 });
 
