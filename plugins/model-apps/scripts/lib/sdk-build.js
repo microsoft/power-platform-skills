@@ -4545,8 +4545,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
+  // The tables this BUILD created: the caller's set when it retries the whole build (build-model-app.js), so an attempt that finds a table an earlier one created still knows it is that build's; else this run's own.
+  const createdTables = opts.createdTables instanceof Set ? opts.createdTables : new Set();
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive, publicationBarrier: owed.barrier });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, createdTables, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive, publicationBarrier: owed.barrier });
     Object.assign(result.created.entities, dataModel.entities);
   }
   // The field security profiles, after the columns are secured and before any sample data (provisionFieldSecurityProfiles). A spec
@@ -6887,9 +6889,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (!enrichesDefaultViews(spec, e)) continue;
       const logical = e.schemaName.toLowerCase();
       const cols = defaultViewColumns(spec, e);
-      // Only a table THIS attempt created has a `metadataId` (the create's answer; a table found, or found after a create whose answer was lost, has none): a view saved moments after the table was created can be
-      // refused because the server that validates it does not have the table yet, which a run again rides out (retry-policy.js, markFreshTable). For any other table the same answer is a real refusal.
-      const createdHere = Boolean(result.created.entities[e.schemaName] && result.created.entities[e.schemaName].metadataId);
+      // Only a table this BUILD created — by an acknowledged create, in this attempt or an earlier one of the same invocation (`createdTables`); a table found, or found after a create whose answer was lost, is not — is
+      // marked: a view saved moments after the table was created can be refused because the server that validates it does not have the table yet, which a run again rides out (retry-policy.js, markFreshTable). For
+      // any other table the same answer is a real refusal.
+      const createdHere = createdTables.has(logical);
       const marked = (err) => (createdHere ? markFreshTable(err, logical) : err);
       await runner.run('views', `enrich default views for ${logical}`, async () => {
         if (!deferDefaultViewPublish) {

@@ -531,13 +531,29 @@ test('transient auto-retry: a declared column that never appears exhausts the re
 // a table the build did not create in this attempt, and for any other answer.
 const NO_TABLE_WORDS = 'Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml';
 const notInCache = (table) => `The entity with a name = '${table}' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075`;
-// A build whose table creates answer with the id of the table they made (what the real create answers), and whose default-view enrichment fails as `answers(table, n)` says, n counting that table's tries.
-const freshTableBuild = async ({ answers, created = true, publish = false, retryDelayMs = 0 }) => {
+// A build against a stateful organization: a create acknowledges a table once and `findTables` finds it from then on (as the real one does), so the build's second attempt REUSES the table — it is not "created"
+// again. `existing` names tables that were there before the build started. The default-view enrichment fails as `answers(table, n)` says, n counting that table's tries across all attempts.
+const freshTableBuild = async ({ answers, existing = [], publish = false, retryDelayMs = 0 }) => {
   const { sdk, calls } = mockSdk();
-  if (created) {
-    const create = sdk.createTable;
-    sdk.createTable = async (o) => ({ ...(await create(o)), metadataId: `id-${o.schemaName.toLowerCase()}` });
-  }
+  const tables = new Map(existing.map((logical) => [logical, { logicalName: logical, entitySetName: `${logical}s` }]));
+  const create = sdk.createTable;
+  sdk.createTable = async (o) => {
+    const made = { ...(await create(o)), metadataId: `id-${o.schemaName.toLowerCase()}` };
+    tables.set(made.logicalName, { logicalName: made.logicalName, entitySetName: made.entitySetName });
+    return made;
+  };
+  sdk.findTables = async (schemaName) => [...tables.values()].filter((t) => t.logicalName === String(schemaName).toLowerCase());
+  // The raw reads a build makes of a table that exists: its probe (`/EntityDefinitions(LogicalName='x')?$select=LogicalName,EntitySetName`) and its Date and Time behaviours, which a table with none answers with an empty list.
+  sdk.dataverse = {
+    get: async (url) => {
+      const probed = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=LogicalName,EntitySetName/.exec(url);
+      if (probed) {
+        const found = tables.get(probed[1]);
+        return found ? { status: 200, body: { LogicalName: found.logicalName, EntitySetName: found.entitySetName } } : { status: 404 };
+      }
+      return { status: 200, body: { value: [] } };
+    },
+  };
   const tries = {};
   const enrich = sdk.enrichDefaultViews;
   sdk.enrichDefaultViews = async (logical, ...rest) => {
@@ -553,37 +569,46 @@ const freshTableBuild = async ({ answers, created = true, publish = false, retry
   try {
     result = await buildModelApp(desk, { apply: true, env: 'https://x', ...(publish ? { publish: true } : {}), retryDelayMs }, { sdk, journal });
   } catch (err) { halt = err; }
-  return { result, halt, events, tries, calls };
+  const creates = (logical) => calls.filter((c) => c[0] === 'createTable' && String(c[1].schemaName).toLowerCase() === logical).length;
+  return { result, halt, events, tries, calls, creates };
 };
 const noTable = (code = '0x80040203') => lagAnswer(NO_TABLE_WORDS, code);
 
-test('transient auto-retry: the default views of a table the build just created are saved again after the table is refused, then the build completes', async () => {
+test('transient auto-retry: the default views of a table the build just created are saved again in the next attempts, which find the table and reuse it, then the build completes', async () => {
   for (const publish of [false, true]) {
     const first = desk.entities[0].schemaName.toLowerCase();
-    const { result, halt, events, tries } = await freshTableBuild({ publish, answers: (logical, n) => (logical === first && n <= 2 ? (n === 1 ? noTable() : lagAnswer(notInCache(first), '0x80041102')) : null) });
+    const { result, halt, events, tries, creates } = await freshTableBuild({ publish, answers: (logical, n) => (logical === first && n <= 2 ? (n === 1 ? noTable() : lagAnswer(notInCache(first), '0x80041102')) : null) });
     assert.strictEqual(halt, null, `publish=${publish}: no halt (${halt && halt.message})`);
     assert.strictEqual(result.ok, true, `publish=${publish}`);
+    assert.strictEqual(creates(first), 1, `publish=${publish}: the table was created once; the later attempts reused it`);
     assert.strictEqual(events.filter((e) => e.status === 'retry').length, 2, `publish=${publish}: two retries were journaled`);
     assert.strictEqual(tries[first], 3, `publish=${publish}: the third try saved the views`);
   }
 });
 
-test('transient auto-retry: a table that never resolves exhausts the retries and surfaces the original answer', async () => {
-  const { halt, events } = await freshTableBuild({ answers: () => noTable() });
-  assert.ok(halt, 'the build halted');
-  assert.match(String(halt.message) + String(halt.cause && halt.cause.message), /returnedTypeCode of 0/);
-  assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
+test('transient auto-retry: a table that never resolves exhausts the whole build\'s three retries, sends no more than four saves, and surfaces the platform\'s answer', async () => {
+  const first = desk.entities[0].schemaName.toLowerCase();
+  for (const answer of [() => noTable(), () => lagAnswer(notInCache(first), '0x80041102')]) {
+    const { halt, events, tries, creates } = await freshTableBuild({ answers: (logical) => (logical === first ? answer() : null) });
+    assert.ok(halt, 'the build halted');
+    assert.match(String(halt.message) + String(halt.cause && halt.cause.message), /returnedTypeCode of 0|not found in the MetadataCache/);
+    assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
+    // The retries are the build's own (build-model-app.js): the saves of the table's default views are one per attempt, never one per attempt per inner wait.
+    assert.strictEqual(tries[first], 4, 'four saves of the first default view in all: the first run and the three retries');
+    assert.strictEqual(creates(first), 1, 'one create across all four attempts');
+  }
 });
 
 test('transient auto-retry: the same answers for a table the build did not create, or for any other table or answer, halt at once', async () => {
   const first = desk.entities[0].schemaName.toLowerCase();
   const final = async (label, options) => {
-    const { halt, events } = await freshTableBuild(options);
+    const { halt, events, tries } = await freshTableBuild(options);
     assert.ok(halt, `${label}: the build halted`);
     assert.strictEqual(events.filter((e) => e.status === 'retry').length, 0, `${label}: no retry`);
+    assert.strictEqual(tries[first], 1, `${label}: one save only`);
   };
-  await final('a table found, not created', { created: false, answers: (logical) => (logical === first ? noTable() : null) });
-  await final('the cache answer for a table not created', { created: false, answers: (logical) => (logical === first ? lagAnswer(notInCache(first), '0x80041102') : null) });
+  await final('a table that was there before the build', { existing: [first], answers: (logical) => (logical === first ? noTable() : null) });
+  await final('the cache answer for a table that was there before the build', { existing: [first], answers: (logical) => (logical === first ? lagAnswer(notInCache(first), '0x80041102') : null) });
   await final('the cache answer names another table', { answers: (logical) => (logical === first ? lagAnswer(notInCache('new_elsewhere'), '0x80041102') : null) });
   await final('the words under no code', { answers: (logical) => (logical === first ? noTable(null) : null) });
   await final('the words under another code', { answers: (logical) => (logical === first ? noTable('0x80040220') : null) });

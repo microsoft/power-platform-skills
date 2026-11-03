@@ -2679,7 +2679,7 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
 // `owed` is the Map provisionDataModel keeps (see there): this attempt's tables whose length is to be set, and those an earlier attempt
 // left unset. `carriedIn` is the set of the second kind as the phase found them; `waitingKeys` collects the alternate keys that wait for
 // a length step, for createWaitingKeys to make once the steps have run.
-async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier, createdTables }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
   // `lookupLabels` records the label each spec lookup column carries once this phase is done
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
@@ -2813,6 +2813,8 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           const t = await createNewTable(sdk, createOpts, { warn, askedLength });
           result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
           createdTable = t;
+          // Recorded the moment the create is acknowledged, before anything later in the phase can halt: the caller's set outlives this attempt, and a later attempt of the same build finds the table and reuses it.
+          if (createdTables instanceof Set) createdTables.add(logical);
         } catch (err) {
           // The SDK says of this refusal that the table WAS created. What its cause carries — a 409 from the update, a word in the platform's reason —
           // is no sign that the table's name is taken, so it is never taken for an already-exists answer and "rediscovered".

@@ -818,6 +818,10 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // at the end of its own data-model phase; what a halt carries replaces it, being everything that is still owed. A halt that carries
   // no list (one thrown before the engine, or by a stand-in for it) leaves it as it was.
   let owedLengths = [];
+  // The tables an attempt of THIS invocation created, by the acknowledged answer of the create (entity-provision.js, provisionDataModelSteps). The set itself is handed to every attempt and lives as long as
+  // the invocation, because the retry runs the whole build again: the next attempt finds the table and reuses it, and only this set remembers that this build made it. It decides whether the platform's
+  // metadata-cache lag on a table's default views is the lag of a table just created (retry-policy.js, markFreshTable). The retry loop below bounds the invocation, so the set adds no retries of its own.
+  const createdTables = new Set();
   // The managed binding store (sdk-build.js openBuildBindingGroups: the one opener, read-only discovery), opened once for the whole
   // invocation on its first attempt and handed to every attempt as `bindingGroups`, so no attempt opens a second writer. Its debt is
   // installed on the barrier every attempt shares. Opened inside the attempt so that a store the build cannot trust halts like any
@@ -841,6 +845,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         owedLengths,
+        createdTables,
         apply: opts.apply,
         sampleData: opts.sampleData,
         publish: opts.publish,
