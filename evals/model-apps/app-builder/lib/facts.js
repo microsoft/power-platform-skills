@@ -19,7 +19,7 @@ const { TIMELINE_CLASS_ID, wantsTimeline } = pluginLib('form-timeline.js');
 const { decodeXmlEntities } = pluginLib('sitemap-pages.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
-const { isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
+const { formOrderSpecOf, isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
 // Round-trip (edit/download) + teardown oracles: both plugin primitives are PURE — planTeardown does
 // no I/O, and hydrateSpec takes an injected `read`, so we can grade the compared hydration subset
 // and the reverse-of-build teardown plan offline. This does not execute a rebuild. See EVAL_GUIDE.md.
@@ -629,8 +629,11 @@ function makeAllPresentReader(spec, formEvidence = null) {
 }
 
 function requiredVerifyChecks(spec, reader) {
-  const mains = [...new Set((spec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
-  const ordered = mains.filter((entity) => plannedMainFormSequence(spec, entity));
+  // Verify expects a form order only of the Main forms the build orders, which leaves out a declared form (the shared rule,
+  // formOrderSpecOf in lib/form-order.js), so a table whose only Main form is declared owes no form-order check.
+  const orderSpec = formOrderSpecOf(spec);
+  const mains = [...new Set((orderSpec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
+  const ordered = mains.filter((entity) => plannedMainFormSequence(orderSpec, entity));
   const pages = (spec.pages || []).filter((p) => {
     const source = normalizePageSource(p);
     return source && source.kind === 'tsx' && source.codeFile;
