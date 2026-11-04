@@ -81,9 +81,12 @@ power-platform-skills/
 └── README.md                 # Repository overview, written for makers as well as developers
 ```
 
-The README's first half is for people who are not developers: plain words, outcomes before
-technology, and install steps before internals. Keep repository internals in the developer half
-or in `docs/`. The README's install links are checked against `site/lib/install-links.js`, so a new
+The README is for people who use the plugins, and its first half is for people who are not
+developers: plain words, outcomes before technology, and install steps before internals. Material
+for people who work on the plugins (local loading, repository layout) goes in
+`docs/development.md`, which the README links from Contributing. The README's Telemetry section is
+the short user-facing summary; field-level detail belongs in `shared/telemetry/README.md` and each
+plugin's README. The README's install links are checked against `site/lib/install-links.js`, so a new
 marketplace plugin also needs a `site/catalog.json` entry and README install links.
 
 **Keep large binaries off `main`.** Every marketplace install clones `main`, and every update

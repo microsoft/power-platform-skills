@@ -2,7 +2,44 @@
 
 This page is for people who work on the plugins in this repository.
 To install and use the plugins, start with the [README](../README.md).
-To load a plugin from a local checkout, see [Local Development](../README.md#local-development).
+
+## Local Development
+
+To develop and test plugins locally, follow these steps:
+
+1. Clone this repository
+1. Launch GitHub Copilot CLI or Claude Code with the plugin path:
+
+    GitHub Copilot CLI:
+
+    ```bash
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
+    ```
+
+    Claude Code:
+
+    ```bash
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
+    claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
+    ```
+
+For Process Intelligence, first follow its [setup instructions](../plugins/process-intelligence/README.md#installation),
+including the explicit profile and absolute plugin root needed to avoid duplicate workspace MCP loads.
 
 ## Repository Structure
 

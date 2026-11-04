@@ -202,8 +202,6 @@ For plugins and skills in action, watch the 35-second video [What are plugins an
 | Azure CLI | Microsoft's command-line tool for Azure. Some plugins use it to sign in. |
 | MCP server | A small program that gives your assistant extra tools, such as access to a service. |
 
-The rest of this page is reference material for developers.
-
 ## Available Plugins
 
 ### [Power Pages](plugins/power-pages/README.md) (`plugins/power-pages`)
@@ -363,46 +361,6 @@ claude --dangerously-skip-permissions
 
 See the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions) for the full reference.
 
-## Local Development
-
-To develop and test plugins locally, follow these steps:
-
-1. Clone this repository
-1. Launch GitHub Copilot CLI or Claude Code with the plugin path:
-
-    GitHub Copilot CLI:
-
-    ```bash
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/code-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-automate
-    copilot --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
-    ```
-
-    Claude Code:
-
-    ```bash
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
-    claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
-    claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
-    claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
-    ```
-
-For Process Intelligence, first follow its [setup instructions](plugins/process-intelligence/README.md#installation),
-including the explicit profile and absolute plugin root needed to avoid duplicate workspace MCP loads.
-
-For the repository layout and how the marketplace files fit together, see [docs/development.md](docs/development.md).
-
 ## Documentation
 
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
@@ -414,7 +372,8 @@ For the repository layout and how the marketplace files fit together, see [docs/
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guide.
+To work on the plugins, see [CONTRIBUTING.md](CONTRIBUTING.md) and the [developer guide](docs/development.md).
+The developer guide covers loading a plugin from a local checkout and how the repository fits together.
 
 ## License
 
@@ -430,6 +389,15 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 ## Telemetry
 
-Power Pages, Mobile Apps, Model Apps, and Power Automate ship 1DS telemetry code, but their committed configurations and event schemas differ. All four are enabled and default-on. Power Pages events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Power Pages also records approved create-site/localization choices, canonical locales, public localization package names and versions, stable validation failure codes, and localization completion data. It never records site names, free-text requirements, paths, prompts, raw errors, evidence URLs, or private-use locale subtags. Mobile Apps excludes those identity fields and records its documented invocation, project-instance, checkpoint, and App Insights selection fields. Model Apps events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID. Power Automate records the same identity fields as Power Pages from its skill hooks, and its bundled MCP server and CLI additionally record a per-invocation outcome (success or failure), duration, and, on failure, the error's class name and code — never the error message. Power Automate provisions public-cloud ingestion only, so events outside public cloud stay in the local mirror.
+Some plugins send usage data to Microsoft to help improve them: Power Pages, Model-driven apps, PCF, Mobile apps, Power Apps Mobile extensions, and Power Automate.
+It is on by default.
 
-For an enabled plugin, users opt out of transmission via `/<plugin>:telemetry off` (for example, `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. The local diagnostic mirror is still written after this transmission-only opt-out. Each adopting plugin also honors `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` for automation and CI. The environment variable has highest precedence and disables transmission regardless of the saved command choice. See the [shared telemetry guide](shared/telemetry/README.md) for the full field list, current plugin states, geo-routing behavior, kill-switch semantics, and local-mirror behavior.
+- **What's sent:** which skill ran, the plugin version, your AI assistant, and your operating system, and for some skills whether they succeeded and how long they took.
+  When you're signed in to Power Platform, it can also include your organization and tenant IDs, and for some plugins your Microsoft Entra user ID.
+- **What's never sent:** what you type, file paths, site or app names, error messages, or usernames.
+- **To turn it off** for a plugin, ask your assistant to "turn off telemetry", or run the plugin's telemetry skill, such as `/power-pages:telemetry off`.
+  In scripts and CI, set the plugin's environment variable instead, such as `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1`.
+  Turning it off stops sending; the plugin still keeps a local log, so you can see what would have been sent.
+
+Each plugin's README lists exactly what it sends, and the [telemetry guide](shared/telemetry/README.md) has the full details.
+See also the [Microsoft Privacy Statement](https://www.microsoft.com/privacy/privacystatement).
