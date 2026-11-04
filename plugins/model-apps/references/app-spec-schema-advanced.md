@@ -815,7 +815,8 @@ are only added.
   that is pending, gone or not valid is left out and named. A declared form with an event handler
   (`events`) comes back with each handler library the spec does not declare, added to `webResources[]` as
   `external: true` and named in `managedForms.libraries` (`[{ name, forms }]`) and in a note. A library is
-  downloaded only when it is this app's own: exactly one web resource of that name, unmanaged, a script,
+  downloaded only when it is this app's own: exactly one web resource of that name (on a lookup that read
+  every row; one cut short proves nothing), unmanaged, a script,
   with content, and named under the solution publisher's prefix, read and verified by the download. A
   rebuild reuses an `external` library where it exists without writing or comparing its content, creates
   it from the downloaded content where it is missing, and a teardown never deletes it. When a library

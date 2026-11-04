@@ -2925,7 +2925,7 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   the spec does not declare (`librariesNotIn`), read by name through the download's SDK (`libraryEntry`, cached
   per run) and added as `{ name, displayName?, type: 'js', contentBase64, external: true }` together with the
   form, all or none (`managedForms.libraries: [{ name, forms }]`, only when one was added, and a NOTE line).
-  The gates: exactly one row, `ismanaged === false` (absent is unknown), `webresourcetype === 3`, content,
+  The gates: exactly one row on a complete answer (a lookup the server says continues is refused), `ismanaged === false` (absent is unknown), `webresourcetype === 3`, content,
   and a name under the publisher prefix `runDownload` answers as `publisher: { prefix, resolved }` (internal,
   not printed; `resolved` false refuses). `external` is what keeps a rebuild from writing or comparing the
   library's content (`sdk-build.js` web-resources reuse) and a teardown from deleting it. A refused library

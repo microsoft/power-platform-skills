@@ -917,6 +917,9 @@ test('the explicit managed download refuses a handler library it cannot prove is
       ['no publisher', () => null, /publisher prefix was not verified/],
       ['not found', () => org.intercept(byName, () => ({ status: 200, headers: {}, body: { value: [] } })), /it was not found$/],
       ['two rows', () => org.intercept(byName, () => ({ status: 200, headers: {}, body: { value: [{ ...kept, content: kept.publishedContent }, { ...kept, content: kept.publishedContent }] } })), /more than one web resource answers its name$/],
+      // One matching row on a page the server says continues is not one row: the lookup reads `top: 2`, so a next link means
+      // more rows answer the name than were read.
+      ['cut short', () => org.intercept(byName, () => ({ status: 200, headers: {}, body: { value: [{ ...kept, content: kept.publishedContent }], '@odata.nextLink': `${org.origin}/api/data/v9.2/webresourceset?page=2` } })), /its lookup was cut short, so it is not known to be the only web resource of its name$/],
       ['read refused', () => org.intercept(byName, () => ({ status: 403, headers: {}, body: { error: { code: '0x80040220', message: 'no read privilege' } } })), /it could not be read \(.*\)$/],
     ];
     for (const [label, arrange, why] of cases) {

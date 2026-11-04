@@ -15,6 +15,7 @@ const path = require('node:path');
 const { discoverManagedStore, managedManifestView, readManagedManifest, isStoreEnvironment, storeFileName, CODES } = require('./managed-bindings.js');
 const { environmentFingerprint } = require('./page-ownership-records.js');
 const { hydrateDeclaredForm } = require('./form-layout-reconcile.js');
+const { hasMoreOf } = require('./query-completeness.js');
 
 const FORM = 'form';
 // lib/dashboard-reconcile.js KIND; kept as a literal so verify's manifest read does not load the dashboard helper.
@@ -247,7 +248,12 @@ async function readLibrary(sdk, publisher, name) {
   } catch (e) {
     return { why: `it could not be read (${(e && e.message) || e})` };
   }
-  const found = (Array.isArray(rows) ? rows : []).filter((r) => r && typeof r.name === 'string' && r.name.toLowerCase() === String(name).toLowerCase());
+  // One row read is proof of one row only on a complete answer. With `top: 2` the SDK reports `hasMore: true` when the
+  // server names a next link (query-completeness.js), so more rows answer this name than were read; judge that on the
+  // array the SDK returned, before any filter makes a copy that no longer carries the report.
+  if (!Array.isArray(rows)) return { why: 'its lookup did not answer a list of rows' };
+  if (hasMoreOf(rows) === true) return { why: 'its lookup was cut short, so it is not known to be the only web resource of its name' };
+  const found = rows.filter((r) => r && typeof r.name === 'string' && r.name.toLowerCase() === String(name).toLowerCase());
   if (!found.length) return { why: 'it was not found' };
   if (found.length > 1) return { why: 'more than one web resource answers its name' };
   const row = found[0];
