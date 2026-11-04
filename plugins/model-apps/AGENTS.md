@@ -3332,7 +3332,15 @@ resumed under the same ids; otherwise `create-completion-required`, `create-owne
 row's exact `adopt:` token in the message) or `managed-pending-intent-changed`. The original plan's rule
 state stays owed and is never sent again, so a rerun after a failed or lost initial publication does not
 publish, and a bound rule is never published. A pending EDIT is not recovered (its plan depends on the base
-it read) and stays `create-identity-unverified`. Tests: `tests/configuration-protected.test.js`,
+it read) and stays `create-identity-unverified`. A bound environment variable's value clear (a settings
+`Value` of `null`, a DELETE of its value row) is refused in the preflight with
+`configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` reads the
+store the build hands over (`opts.protectedConfiguration.store`, local only) through `optInObligations`: a
+declared item it holds, committed or pending, stops with `create-identity-opt-in-required`. Verify
+(`verify-model-app.js` `readerFor`, shared with the build's `--verify`) passes `protectedVerifyPort` over the
+workspace's `managedManifestView` as an exact port: `verifyKind` reads each protected item at its bound id
+(`locateExactly`) and reports the typed code (`configuration-row-not-found`, `create-identity-unverified`;
+`managed-settlement-pending` is unverified), never a name lookup. Tests: `tests/configuration-protected.test.js`,
 `tests/configuration-create-bindings.test.js`.
 **Stable create ids** (`createIdentity: "stable-v1"`, `minimumPluginVersion: "2.21.0"`; new apps only).
 The only place the engine reads the field is one gated `require` of `lib/creates-stable-build.js` in

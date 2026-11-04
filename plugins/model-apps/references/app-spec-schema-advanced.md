@@ -1241,6 +1241,33 @@ the field builds exactly as before.
   the build with `configuration-row-not-found` and is never replaced by a namesake.
 - **The binding store comes from the build.** Under the field, a build that cannot open the binding
   store for configuration stops before any request is sent (`create-identity-unverified`).
+- **Opting in does not migrate an existing app.** Setting `configurationIdentity: "stable-v1"` does not
+  migrate an existing app. A namesake created earlier at another id stops the first protected create
+  with `create-identity-conflict`, even if it is the only match; nothing is created or bound, and no
+  approval token selects a namesake. Keep the app without the field, or move it to the reserved ids
+  outside the plugin. An app that already has protected bindings cannot go back: see "Removing the
+  field" below.
+- **An uncertain lookup is not absence.** If the namesake lookup a first create needs cannot be read
+  completely (a failed read, a page that cannot be continued), the build stops with
+  `create-identity-unverified` and creates or binds nothing for that item. Restore access or reliable
+  reads and build again.
+- **No deletion.** Under the field, clearing an environment variable's value (a deployment-settings
+  `Value` of `null`, which deletes its value row), removing a Custom API child, or an unexpected delete
+  in a protected change stops with `configuration-protected-removal-unsupported` before anything is sent, authorized or not
+  (a removed duplicate-rule condition is a rule edit: `configuration-edit-unsupported`). Make the
+  change outside the plugin, with the maker portal or the Web API. Supported changes keep their
+  `--authorize` tokens, and builds without the field are unchanged. Deleting a bound row outside the
+  plugin does not release its binding: the next build stops with `configuration-row-not-found`. Never
+  delete or reset the binding store to clear a stop.
+- **Removing the field.** Removing `configurationIdentity` from an App Spec whose binding store still
+  holds a declared protected item (bound, or a create still being settled) stops the build before any
+  request with `create-identity-opt-in-required`: those items would otherwise be found by name again,
+  where a namesake could stand in for the bound row. Put the field back.
+- **Verify reads the bound ids.** Under the field, `verify-model-app` checks each declared protected
+  item at the id its binding holds, read-only, never by name: a bound row that is gone fails with
+  `configuration-row-not-found` even when a namesake exists, an item with no binding (or no readable
+  binding store) fails with `create-identity-unverified`, and an item whose create is still being
+  settled is reported unverified. Keep the build workspace with the binding store where verify runs.
 - **Checked before anything is sent.** Every declared protected item is read and judged before the
   build's first service change, the solution version included. An edit the plugin does not make stops
   the whole build there, with nothing sent (`configuration-edit-unsupported`).
