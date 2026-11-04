@@ -333,8 +333,13 @@ yes or asks for it; a "no" or silence adds nothing to the spec:
   pending change of the app.
 - **Outside services and per-environment values** — when the app calls an outside service or a value
   differs per environment (a base URL, a key, a connector, an action a page calls), offer configuration
-  items: environment variables, connection references, Custom APIs, duplicate-detection rules; the values
-  stay out of the spec.
+  items: environment variables and connection references; the values stay out of the spec.
+- **Duplicate records** — when the jobs identify duplicate records (the same customer or contact entered
+  twice, one record per email address), offer a duplicate-detection rule on that table, even when the app
+  uses no outside service.
+- **A reusable server-side operation** — when the app needs an operation that several surfaces, flows or
+  pages call, or that must run on the server (a calculation, a multi-step change), offer a Custom API, even
+  when nothing outside Dataverse is involved.
 - **Rules and processes** — when the jobs include a validation or a guided process (a required field once a
   record closes, stages a record moves through), offer a declared business rule or business process flow:
   the build manages the whole rule or flow, creates it or adopts one that exists, and never edits one in
