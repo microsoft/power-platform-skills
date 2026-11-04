@@ -33,8 +33,10 @@
 // A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
 // `<out>/.maker-workspace/managed-fragments.json` (`managedFragments` in the result; lib/managed-fragments.js). The download writes
-// that name only when it is missing or holds a file a download wrote: anything else there stops it before it writes anything
-// (`code: 'managed-fragments-path-taken'`).
+// that name only when it is missing or holds a file a download wrote: anything else there stops it, when there is something to
+// write there, before it publishes anything (`code: 'managed-fragments-path-taken'`); with nothing to write, it is left alone. So
+// that such a stop (or a failed write of the file) leaves the folder as it was, the managed download writes the page tree to a
+// staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
 // Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
@@ -59,7 +61,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
+const crypto = require('node:crypto');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -71,7 +74,7 @@ const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
-const { assertFragmentsPathFree, settleFragments } = require('./lib/managed-fragments.js');
+const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -3002,6 +3005,35 @@ function writePageTree(pagesRoot, pages) {
   }
 }
 
+// The checks writePageTree makes before it removes anything, made on their own: the managed download asks them before it settles its
+// fragments file, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written.
+function assertPageTreeReplaceable(pagesRoot) {
+  try {
+    fs.lstatSync(pagesRoot);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return;
+    throw e;
+  }
+  assertSafeOutputDir(pagesRoot);
+  assertNoPlantedPageLinks(pagesRoot);
+}
+
+// A fresh staging folder for the managed download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
+// under a hidden name unique to this process and call. `mkdir` without `recursive` fails on a name that exists, so a folder that is
+// already there (another run's, or the maker's) is never reused or removed: another name is tried.
+function makePageStage(outDir) {
+  const root = assertSafeOutputDir(outDir, { create: true });
+  for (let attempt = 0; ; attempt += 1) {
+    const dir = path.join(root, `.download-pages.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+    try {
+      fs.mkdirSync(dir);
+      return dir;
+    } catch (e) {
+      if (!(e && e.code === 'EEXIST') || attempt >= 4) throw e;
+    }
+  }
+}
+
 // Reads every page the sitemap names, by id — so nothing outside this app is read — a few at a time, and answers
 // { ok: true, pages: [{ pageId, files }] } in the sitemap's order, or { ok: false, errors } naming each page that could not be read. A page that
 // cannot be read is a page the spec would drop: the caller refuses to write one rather than report it as an app without that page. That includes
@@ -3015,7 +3047,28 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities }) {
+// `stagePages` (the managed download, main): the page tree is written to a staging folder inside <out> (makePageStage) and read
+// back from there exactly as a download writes it — the same files, the same reverse-resolved page.tsx — and the folder is removed.
+// The real pages/ folder is not touched: the result's `stagedPages` publishes it later (`check` makes writePageTree's checks without
+// writing, `publish` writes the tree with writePageTree). main publishes it only after everything that can still stop the download
+// has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option the download is exactly as before.
+async function runDownload(options = {}) {
+  if (!options.stagePages) return downloadApp(options);
+  const stage = { dir: null, pages: null };
+  try {
+    const result = await downloadApp({ ...options, stage });
+    if (!result.ok || !stage.pages) return result;
+    const pagesRoot = path.join(path.resolve(options.outDir), 'pages');
+    const pages = stage.pages;
+    return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
+  } finally {
+    // Best-effort: the pages are in memory by now. A folder that stays is named, so the maker can delete it.
+    const left = stage.dir ? removeTreeWithRetry(stage.dir) : null;
+    if (left) process.stderr.write(`WARNING: the download's staging folder ${stage.dir} could not be removed (${left}): delete it.\n`);
+  }
+}
+
+async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -3185,12 +3238,19 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
 
     const read = await readSitemapPages(genpage, sitemapIds, concurrency);
     if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
-    writePageTree(pagesRoot, read.pages);
+    // Staged (see runDownload): the tree is written, read back and reverse-resolved under the staging folder, which stands in for
+    // <out> so each page's codeFile (relative to it) is the one a direct download gives.
+    if (stage) stage.dir = makePageStage(outDir);
+    const treeRoot = stage ? path.join(stage.dir, 'pages') : pagesRoot;
+    const writeRoot = stage ? stage.dir : outDir;
+    writePageTree(treeRoot, read.pages);
 
     const unreadableConfigs = [];
     const unkeptModels = [];
     const unkeptBindings = [];
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    pages = parseDownloadedPages(treeRoot, writeRoot, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    // A read error names the file it read; name the one the maker will find.
+    if (stage) for (const u of unreadableConfigs) u.reason = String(u.reason).split(stage.dir).join(path.resolve(outDir));
     // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
     // update leaves the model the page already has as it is (the SDK writes only what a spec names), and a page the rebuild creates
     // gets none.
@@ -3240,12 +3300,19 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     // place the lexer reads by guess is turned back, and only if the build would take the page written that way (see
     // reverseResolveNavIdsReport); the ids it leaves are reported below.
     for (const p of pages) {
-      const abs = path.join(outDir, p.codeFile);
+      const abs = path.join(writeRoot, p.codeFile);
       assertPlainFileTarget(abs);                         // FAIL on a planted link (no swallow, no write)
       const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
       const rev = reverseResolveNavIdsReport(src, idToKey); // structural — nav pageId literals only
       if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
       for (const left of rev.left) navIdsLeft.push({ page: p.name, ...left });
+    }
+    // The staged tree as it now is on disk, read back whole, for runDownload to publish: the bytes writePageTree will write again.
+    if (stage) {
+      stage.pages = read.pages.map(({ pageId, files }) => ({
+        pageId,
+        files: Object.fromEntries(Object.keys(files).map((name) => [name, fs.readFileSync(path.join(treeRoot, pageId, name), 'utf8')])),
+      }));
     }
     // Every page id of this app still in a downloaded page is reported, whether a call the checker recognised holds it or not (see
     // knownIdsLeft in pageref-resolver.js). One in a navigation call is a hardcoded page id to the build, which refuses one, so say so now
@@ -3783,17 +3850,6 @@ async function main(deps = {}) {
     });
     return;
   }
-  // The managed download may write its fragments file (lib/managed-fragments.js) into <out>/.maker-workspace. That name is the
-  // download's, but the folder is the maker's: a file there that a download did not write (or a link at it) is refused HERE,
-  // before the pages and the spec are written, so the refusal leaves the app folder exactly as it was. It is asked again at the end.
-  if (includeManaged) {
-    try {
-      assertFragmentsPathFree(outDir);
-    } catch (e) {
-      io.emitResult(false, { ok: false, code: (e && e.code) || 'managed-fragments-path-taken', error: (e && e.message) || String(e) });
-      return;
-    }
-  }
   // AB#6686427 — prove the ambient Azure CLI identity can actually reach this org BEFORE any read.
   // Every read below is best-effort by design (a tenant without a setting definition, or a caller
   // without access to one artifact class, must still produce a usable spec), so an auth failure does
@@ -3836,7 +3892,8 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities });
+    // The managed download stages its page tree (runDownload `stagePages`): it is published below, after everything that can still stop it.
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, ...(includeManaged ? { stagePages: true } : {}) });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
@@ -3924,11 +3981,14 @@ async function main(deps = {}) {
         + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
       );
     }
-    // The fragments file is settled before the spec: a refusal or a failed write here leaves app-spec.json as it was.
+    // The fragments file is settled before anything is published: the staged page tree, the spec and the baseline are written only
+    // after it, so a refusal or a failed write here leaves every one of them as it was. The page tree's own checks come first, so a
+    // tree that cannot be replaced stops the download before the fragments file is written.
     let managedFragments = null;
     if (includeManaged) {
+      if (result.stagedPages) result.stagedPages.check();
       try {
-        managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
+        managedFragments = settleFragments(outDir, { app: appUnique, items: fragments, onWarning: (s) => io.stderr.write(`WARNING: ${s}\n`) });
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-fragments-unwritable', error: (e && e.message) || String(e) });
         return;
@@ -3936,6 +3996,7 @@ async function main(deps = {}) {
       if (managedFragments) {
         io.stderr.write(`WARNING: ${managedFragments.keys.length} managed item(s) left out only for what the download could not bring are written ready to paste in ${managedFragments.file}: add each "paste" entry to app-spec.json together with what its "needs" lists (from the spec it was built from), then build.\n`);
       }
+      if (result.stagedPages) result.stagedPages.publish();
     }
     writeFileSafe(specPath, JSON.stringify(spec, null, 2));
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build

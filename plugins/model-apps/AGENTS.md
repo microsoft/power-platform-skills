@@ -2935,10 +2935,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   to the fragments file, `<out>/.maker-workspace/managed-fragments.json` (`lib/managed-fragments.js`,
   `managedFragments` in the result), with `needs: [{ webResource }]` and a `paste` entry; a flow left out
   only for its personas likewise (a stub persona per name). The stubs are never written. The file is the
-  download's only when it is missing or parses as its own `kind`: anything else there, or a link at it or at
-  `.maker-workspace`, is refused (`managed-fragments-path-taken`) before `runDownload` writes anything, and
-  asked again before the spec is written (an absent name is created exclusively, an own file replaced, and
-  removed when nothing is left out). The restored form is the group's
+  download's only when it is missing or parses as its own `kind`. It is settled after the restore and the
+  validation and before anything is published: `main` passes `runDownload` `stagePages`, which writes the page
+  tree to a hidden staging folder inside `<out>`, reads it back and answers `stagedPages` (`check`, `publish`);
+  the tree, the spec and the baseline are written only after the fragments file, so a refusal or a failed write
+  leaves every output as it was. With nothing due, an own file is removed and anything else at the name is left
+  alone; with items due, anything else there, or a link at it or at `.maker-workspace`, is refused
+  (`managed-fragments-path-taken`). An absent name is created exclusively; an own file is proved writable
+  (a read-only one is `managed-fragments-unwritable`), moved aside, checked there to be the inspected file
+  (file id, one name, bytes), and the new file is created exclusively at the vacant name, so a file that changed
+  or arrived after the look is put back or kept, never replaced. The restored form is the group's
   `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
   downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.

@@ -759,7 +759,7 @@ test('the explicit managed download writes no persona it cannot prove from its r
   });
 });
 
-test('the managed download never writes over, through or instead of a fragments file it did not write: it refuses before anything is written', async () => {
+test('the managed download never writes over, through or instead of a fragments file it did not write: with something to write there it refuses, and nothing is written', async () => {
   await withBpf(true, async () => {
     const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
     const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
@@ -776,7 +776,6 @@ test('the managed download never writes over, through or instead of a fragments 
       assert.equal(r.emitted[0].payload.code, 'managed-fragments-path-taken');
       assert.match(r.emitted[0].payload.error, /managed-fragments\.json exists and was not written by a download \(.+\); move or delete it and run again\. Nothing was written\./);
       assert.deepEqual(snapshotTree(out), before, 'the app folder is exactly as it was');
-      assert.equal(r.calls.length, 0, 'nothing is read either');
       return r;
     };
     // A maker's JSON file at the name, and one that is not JSON at all.
@@ -810,6 +809,161 @@ test('the managed download never writes over, through or instead of a fragments 
     assert.equal('managedFragments' in plain.emitted[0].payload, false);
     assert.equal(fs.readFileSync(path.join(plainOut, '.maker-workspace', 'managed-fragments.json'), 'utf8'), 'notes');
   });
+});
+
+test('a fragments name the download did not write never stops a managed download that has nothing to write there, and is left as it is', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    for (const [label, prepare] of [
+      ['a maker\'s file', (f) => fs.writeFileSync(f, 'maker notes')],
+      ['a folder', (f) => { fs.mkdirSync(f); fs.writeFileSync(path.join(f, 'inside.txt'), 'kept'); }],
+    ]) {
+      const out = makeTempDir('declared-bpf-');
+      const f = path.join(out, '.maker-workspace', 'managed-fragments.json');
+      fs.mkdirSync(path.dirname(f));
+      prepare(f);
+      const before = snapshotTree(path.join(out, '.maker-workspace'));
+      const got = await download(wire, out, flags);
+      assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted));
+      assert.deepEqual(got.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] }, label);
+      assert.equal('managedFragments' in got.emitted[0].payload, false, label);
+      const after = snapshotTree(path.join(out, '.maker-workspace'));
+      for (const name of Object.keys(before)) assert.equal(after[name], before[name], `${label}: ${name} is as it was`);
+    }
+  });
+});
+
+test('a fragments write that fails leaves every output that was there as it was: the page tree, the spec and the baseline are published only after it', async () => {
+  await withBpf(true, async () => {
+    const { runDownload } = require('../download-model-app.js');
+    const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+    const { fakeGenpage } = require('./helpers/fake-genpage.js');
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, { ...specWith([ROLED]), personas: [DISPATCHER] })).err, undefined);
+    const out = makeTempDir('declared-bpf-');
+    const pid = '00000000-0000-4000-8000-00000000bbbb';
+    const pageFile = path.join(out, 'pages', pid, 'page.tsx');
+    fs.mkdirSync(path.dirname(pageFile), { recursive: true });
+    fs.writeFileSync(pageFile, 'MAKER EDIT THAT MUST SURVIVE FAILURE');
+    const oldSpec = JSON.stringify({ ...specWith([]), pages: [{ key: 'old', name: 'Page', pageId: pid }] });
+    fs.writeFileSync(path.join(out, 'app-spec.json'), oldSpec);
+    const f = path.join(out, '.maker-workspace', 'managed-fragments.json');
+    fs.mkdirSync(path.dirname(f));
+    fs.writeFileSync(f, JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, items: [] }));
+    fs.chmodSync(f, 0o444);
+    const xml = `<SiteMap><Area><Group><SubArea GenPageId="${pid}" Title="Page"/><SubArea Entity="new_ticket"/></Group></Area></SiteMap>`;
+    const layer = '00000000-0000-4000-8000-00000000cccc';
+    const pageSdk = currentReadSdk({
+      fetchArtifact: async () => ({ name: 'BP App', uniqueName: APP, siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Records', subAreas: [{ type: 'GenPage', genPageId: pid, title: 'Page' }, { type: 'Entity', entity: 'new_ticket' }] }] }] } }),
+      queryRecords: async (logical) => {
+        if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: layer, uniquename: APP }];
+        if (logical === 'appmodulecomponent') return [{ objectid: '00000000-0000-4000-8000-00000000dddd', componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: xml }];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Ticket', primaryNameAttribute: 'new_subject' }),
+    }, { appId: APP_ID, layerId: layer, sitemapXml: xml });
+    const source = 'export default function Page(){return null;}';
+    const genpage = fakeGenpage({ pages: [{ pageId: pid, name: 'Page', source }] });
+    let staged;
+    const run = () => download(wire, out, ['--include-managed', '--managed-manifest', storeFileOf(dir)], {
+      // The real page download, over a page backend; the restore input is the flow this wire built.
+      runDownload: async (args) => {
+        const real = await runDownload({ ...args, sdk: pageSdk, genpage });
+        assert.equal(real.ok, true, JSON.stringify(real));
+        staged = args.stagePages;
+        return { ...real, spec: specWith([]) };
+      },
+    });
+    const stagingLeft = () => fs.readdirSync(out).filter((n) => n.startsWith('.download-pages.'));
+    try {
+      const failed = await run();
+      assert.equal(failed.emitted[0].ok, false);
+      assert.equal(failed.emitted[0].payload.code, 'managed-fragments-unwritable');
+      assert.equal(fs.readFileSync(pageFile, 'utf8'), 'MAKER EDIT THAT MUST SURVIVE FAILURE');
+      assert.equal(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8'), oldSpec);
+      assert.match(failed.emitted[0].payload.error, /Nothing was written\.$/);
+      assert.deepEqual(fs.readdirSync(path.dirname(f)), ['managed-fragments.json'], 'no baseline, no leftover name');
+      assert.deepEqual(stagingLeft(), [], 'the staging folder is removed');
+      assert.equal(staged, true, 'the managed download stages its pages');
+    } finally { fs.chmodSync(f, 0o666); }
+    // Once the file can be written, the same download publishes everything, the page tree included.
+    const done = await run();
+    assert.equal(done.emitted[0].ok, true, JSON.stringify(done.emitted) + done.said);
+    assert.deepEqual(done.emitted[0].payload.managedFragments.keys, [{ family: 'bpf', key: GROUP }]);
+    assert.equal(fs.readFileSync(pageFile, 'utf8'), source);
+    assert.notEqual(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8'), oldSpec);
+    assert.deepEqual(stagingLeft(), []);
+  });
+});
+
+test('replacing or removing its own fragments file, the download checks at the moment of the change that it is still the file it inspected, and never clobbers another', () => {
+  const { settleFragments } = require('../lib/managed-fragments.js');
+  const own = `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, items: [] })}\n`;
+  const ITEMS = [{ family: 'bpf', key: GROUP }];
+  const settle = (out, items, hooks) => {
+    const saved = Object.fromEntries(Object.keys(hooks).map((k) => [k, fs[k]]));
+    for (const [k, hook] of Object.entries(hooks)) fs[k] = function (...args) { hook(...args); return saved[k].apply(this, args); };
+    try { return { result: settleFragments(out, { app: APP, items }) }; } catch (error) { return { error }; } finally { Object.assign(fs, saved); }
+  };
+  const ownAt = () => {
+    const out = makeTempDir('declared-bpf-');
+    const file = path.join(out, '.maker-workspace', 'managed-fragments.json');
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, own);
+    return { out, file };
+  };
+  // A foreign file that takes the name once the own file is moved aside (at the open of the new file's temporary sibling) is kept.
+  {
+    const { out, file } = ownAt();
+    let swapped = false;
+    const got = settle(out, ITEMS, { openSync: (p) => {
+      if (!swapped && typeof p === 'string' && path.basename(p).startsWith('.managed-fragments.json.')) { swapped = true; fs.writeFileSync(file, 'FOREIGN MAKER NOTES'); }
+    } });
+    assert.equal(swapped, true);
+    assert.equal(got.error && got.error.code, 'managed-fragments-path-taken');
+    assert.equal(fs.readFileSync(file, 'utf8'), 'FOREIGN MAKER NOTES');
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ['managed-fragments.json'], 'nothing is left beside it');
+  }
+  // A file changed after the look, in place or as a new file with the same bytes, is put back as it is, and the change is refused;
+  // with nothing due it is left alone.
+  for (const items of [ITEMS, []]) {
+    for (const [how, change] of [
+      ['changed in place', (file) => fs.writeFileSync(file, 'FOREIGN MAKER NOTES')],
+      ['a new file with the same bytes', (file) => { fs.unlinkSync(file); fs.writeFileSync(file, own); }],
+    ]) {
+      const label = `${how}, ${items.length} due`;
+      const { out, file } = ownAt();
+      const expected = how === 'changed in place' ? 'FOREIGN MAKER NOTES' : own;
+      let swapped = false;
+      const got = settle(out, items, { renameSync: (from) => {
+        if (!swapped && path.resolve(String(from)) === path.resolve(file)) { swapped = true; change(file); }
+      } });
+      assert.equal(swapped, true, label);
+      if (items.length) {
+        assert.equal(got.error && got.error.code, 'managed-fragments-path-taken', label);
+        assert.match(got.error.message, /\(it changed while the download ran\)/, label);
+      } else {
+        assert.equal(got.error, undefined, label);
+        assert.equal(got.result, null, label);
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), expected, label);
+      assert.deepEqual(fs.readdirSync(path.dirname(file)), ['managed-fragments.json'], label);
+    }
+  }
+  // Unchanged, it is replaced, and removed when nothing is due, with no other name left behind.
+  {
+    const { out, file } = ownAt();
+    assert.deepEqual(settle(out, ITEMS, {}).result.keys, ITEMS);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items.map((i) => i.key), [GROUP]);
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ['managed-fragments.json']);
+    assert.equal(settle(out, [], {}).result, null);
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), []);
+  }
 });
 
 // Every name under `dir`, with each file's bytes, without following links: what a refusal must leave as it was.

@@ -835,8 +835,11 @@ are only added.
   `app-spec.json` with what it needs, from the spec it was built from. An item left out for anything else
   (pending, changed, not valid) is not written there, because nothing proved it. The download writes that
   name only when it is missing or holds a file a download wrote, and removes its own file when nothing is
-  left out. Any other file, folder or link there stops the download before it writes anything
-  (`code: "managed-fragments-path-taken"`): move or delete it and run again.
+  left out. Any other file, folder or link there is left alone; when there is something to write there, it
+  stops the download before it writes anything (`code: "managed-fragments-path-taken"`): move or delete it
+  and run again. A file the download wrote that is read-only, or that cannot be written, stops it too
+  (`code: "managed-fragments-unwritable"`), also before it writes anything: the pages, the spec and the
+  baseline are written only after this file.
 - **A removed form that was deleted.** When the spec no longer declares a form and the form was deleted in
   the environment, the next build reads it by its id in both its saved and its published layer. When both
   say it does not exist, the build stops managing it, including a publish of its table it still owed: it
