@@ -230,10 +230,18 @@ test('a configuration unit that is merely malformed is isolated, and a sibling i
     'a root with no id': (d) => { delete d.attempts[0].root.id; },
     'a send window count of the wrong type': (d) => { d.attempts[0].sendWindow = { possible: '0', notStarted: 0, epoch: 1 }; },
     'a reservation with no used count': (d) => { delete d.attempts[0].completionReserve.used; },
+    // A scope type is untrusted: one that is not a string is malformed, never a property key to look up, and an object
+    // that cannot even be turned into one must not escape the unit as a raw TypeError.
+    'a scope type that is an object no key can be made of': (d) => { d.attempts[0].knownScopes = [{ type: { toString: null } }]; },
+    'a scope with no type': (d) => { d.attempts[0].knownScopes = [{ table: 'account' }]; },
+    'a scope type that is a number': (d) => { d.attempts[0].knownScopes = [{ type: 1, table: 'account' }]; },
+    'a scope type that is a plain object': (d) => { d.attempts[0].knownScopes = [{ type: {}, table: 'account' }]; },
+    'a publication scope type no key can be made of': (d) => { d.attempts[0].publication = { scope: { type: { toString: null } }, state: 'owed' }; },
   };
   for (const [name, corrupt] of Object.entries(malformed)) {
     const { dir, store } = rowStore();
     rewrite(store, corrupt);
+    assert.equal(codeOf(() => store.refresh()), null, `${name}: a refresh reads the rest of the store`);
     const again = open(dir);
     assert.equal(codeOf(() => again.readGroup('customApi', 'contoso_other')), CODES.groupInvalid, name);
     assert.equal(typeof prepareForm(again, 'account/main', FORM, 'account'), 'string', `${name}: a form is still written`);

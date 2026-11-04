@@ -1060,7 +1060,12 @@ function checkRowExtensions(x, unit, where) {
     if (isObj(obj) && typeof obj.proofSchema === 'string' && obj.proofSchema !== ROW_PROOF_SCHEMA) throw newer(w, `names the proof schema ${obj.proofSchema}`);
   };
   // A scope of a type this build knows is held to that type's vocabulary; a type it does not know is a malformed scope.
-  const scope = (s, w) => { if (isObj(s) && Object.prototype.hasOwnProperty.call(SCOPE_KEYS, s.type)) closed(s, SCOPE_KEYS[s.type], w); };
+  // Only a string type is looked up: a persisted type is untrusted, and using any other value as a property key would
+  // coerce it (an object such as { "toString": null } throws a raw TypeError there, before the per-unit catch). A
+  // missing or mistyped type is left to validateScope, which isolates the unit.
+  const scope = (s, w) => {
+    if (isObj(s) && typeof s.type === 'string' && Object.prototype.hasOwnProperty.call(SCOPE_KEYS, s.type)) closed(s, SCOPE_KEYS[s.type], w);
+  };
   // A configuration family is never published, so its publication is null; one that is not is held to the vocabulary
   // anyway, because a field this build does not know there is still what a newer plugin writes.
   const publication = (pub, w, keys) => {
