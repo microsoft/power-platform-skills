@@ -124,16 +124,25 @@ function pruneRetention(dir) {
   }
   if (entries.length <= RETENTION)
     return;
-  const sorted = entries.map((f) => ({ f, mtime: safeMtime(join(dir, f)) })).sort((a, b) => a.mtime - b.mtime);
-  const drop = sorted.slice(0, sorted.length - RETENTION);
+  const dropCount = entries.length - RETENTION;
+  let drop;
+  if (entries.every(isTimestampBackupFilename)) {
+    drop = entries.sort().slice(0, dropCount).map((f) => ({ f, mode: "filename" }));
+  } else {
+    const sorted = entries.map((f) => ({ f, mtime: safeMtime(join(dir, f)) })).sort((a, b) => a.mtime - b.mtime);
+    drop = sorted.slice(0, dropCount).map((d) => ({ f: d.f, mode: "mtime" }));
+  }
   for (const d of drop) {
     try {
       unlinkSync(join(dir, d.f));
-      logger.debug(`Backup pruned (FIFO): ${d.f}`);
+      logger.debug(`Backup pruned (${d.mode}): ${d.f}`);
     } catch (err) {
       logger.warn(`Backup prune failed for ${d.f}: ${err instanceof Error ? err.message : err}`);
     }
   }
+}
+function isTimestampBackupFilename(filename) {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/.test(filename);
 }
 function safeMtime(p) {
   try {
@@ -146,7 +155,7 @@ function listBackups(envId, flowId) {
   const dir = flowDir(envId, flowId);
   if (!existsSync(dir))
     return [];
-  const files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort((a, b) => b.localeCompare(a));
+  const files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort((a, b) => a < b ? 1 : a > b ? -1 : 0);
   return files.map((filename) => {
     const path7 = join(dir, filename);
     let capturedAt = "";
