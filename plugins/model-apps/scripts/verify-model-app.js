@@ -241,9 +241,15 @@ function readerFor(sdk, appUnique, opts) {
     // The configuration kinds (lib/configuration-artifacts.js verifyConfiguration), read through this reader's SDK: each declared item's
     // definition, its binding when the build was given one (--deployment-settings), a required variable's value, a Custom API's
     // implementation, a rule's publication and the solution's version. Reads only.
-    configuration: async (spec, bindings) => {
+    // Under `configurationIdentity: "stable-v1"` the workspace's binding store (`managedManifest`, readVerifyManifest) names the one
+    // row each item is checked at (lib/configuration-protected.js protectedVerifyPort): never a name lookup, never a write.
+    configuration: async (spec, bindings, managedManifest) => {
       const C = require('./lib/configuration-artifacts.js');
-      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName: spec && spec.solution && spec.solution.uniqueName }));
+      const solutionUniqueName = spec && spec.solution && spec.solution.uniqueName;
+      const creates = spec && spec.configurationIdentity === 'stable-v1'
+        ? require('./lib/configuration-protected.js').protectedVerifyPort({ spec, manifest: managedManifest, dataverse: sdk.dataverse, solution: solutionUniqueName, bindings })
+        : undefined;
+      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName, creates }));
     },
     findTable: async (logical) => {
       const l = String(logical).toLowerCase();

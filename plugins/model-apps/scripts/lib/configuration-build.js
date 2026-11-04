@@ -130,12 +130,22 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   return {
     ctx,
     // The protected configuration's whole-plan, read-only preflight (lib/configuration-protected.js), run by the build
-    // before its first write — the solution, its version, a table, a variable. A no-op without the opt-in (nothing is
-    // loaded or read). Under it, an item the binding store cannot locate exactly, or an edit the protected path cannot
+    // before its first write — the solution, its version, a table, a variable. Without the opt-in it reads only the binding
+    // store the build handed over, if any (nothing is sent). Under it, an item the binding store cannot locate exactly, or an edit the protected path cannot
     // make, stops the build here with nothing sent; every such stop is RETRY.NEVER, as the same plan stops again.
     async preflight() {
-      if (!protectedOptIn) return { halts: [] };
       const fail = (code, message) => new BuildHalt(message, { phase: 'preflight', code, recoverable: false, retry: RETRY.NEVER });
+      if (!protectedOptIn) {
+        // Removing the opt-in is not a migration: a declared item the build's binding store still holds (committed, or an
+        // attempt pending) would go back to name lookup, where a namesake could stand in for its bound row. A local store
+        // read only, and only when the build handed its store over; an App Spec that never opted in has nothing there.
+        const store = opts.protectedConfiguration && opts.protectedConfiguration.store;
+        if (!store) return { halts: [] };
+        const { halts } = require('./configuration-protected.js').optInObligations({ spec, store });
+        if (!halts.length) return { halts };
+        const others = halts.slice(1).map((h) => `${h.kind} ${h.key}`);
+        throw fail(halts[0].code, `${halts[0].kind} ${halts[0].key}: ${halts[0].message}${others.length ? ` Also held: ${others.join(', ')}.` : ''}`);
+      }
       if (!hookup) {
         throw fail('create-identity-unverified', 'configurationIdentity "stable-v1" needs the binding store for protected configuration, and it is not available to this build. No service changes were sent by this build.');
       }

@@ -2,15 +2,18 @@
 // Protected configuration (`configurationIdentity: "stable-v1"`): the build side of exact ids and a binding store for the
 // declared environment variables, connection references, Custom APIs and duplicate detection rules.
 //
-// This module is loaded only when the App Spec sets the opt-in (configuration-build.js), so a build without it loads none
-// of the protected modules. It answers two things, both through the configuration create driver
+// This module is loaded only when the App Spec sets the opt-in, or when the build hands over its binding store without it
+// (configuration-build.js), so a build with neither loads none of the protected modules. It answers four things, the first
+// two through the configuration create driver
 // (configuration-create-bindings.js) and the managed create lifecycle (managed-create-context.js):
 //   preflight   a whole-plan, read-only pass run before the build changes ANYTHING (the solution, its version, a table):
 //               every declared item is located by its binding, never by name, and an edit the protected path cannot
 //               make is refused here, so an unsupported edit never leaves the build half applied;
 //   port        the create port configuration-artifacts.js uses under the opt-in (configurationAcceptsPort): exact-id
 //               resolution from the binding store, the mandatory complete namesake query, then one create set run
-//               through the send-once gate, observed and settled into the store.
+//               through the send-once gate, observed and settled into the store;
+//   verify      the same exact location over the workspace's binding store as verify reads it, read-only;
+//   opt-out     a build without the opt-in whose binding store still holds a declared item stops before any request.
 //
 // The supported shapes are deliberately narrow. A duplicate rule is created with its conditions, completes its initial
 // publication or state, and is then only verified: any later field, condition or state change is refused. A Custom API
@@ -19,12 +22,16 @@
 // to a child's fixed fields or any other combination is refused.
 
 const B = require('./configuration-create-bindings.js');
+const A = require('./configuration-artifacts.js');
 const { normalizeGuid } = require('./reconcile-common.js');
 
 const IDENTITY = 'stable-v1';
 const EDIT_CODE = 'configuration-edit-unsupported';
 const UNVERIFIED_CODE = 'create-identity-unverified';
 const CONFLICT_CODE = 'create-identity-conflict';
+const OPT_IN_CODE = 'create-identity-opt-in-required';
+// The store's own code for a group whose attempt is not settled yet.
+const PENDING_CODE = require('./managed-bindings.js').CODES.pending;
 
 const RULE_EDIT_MESSAGE = 'This protected duplicate rule can be created with its conditions and initial state, then verified. '
   + 'Later field, condition or state edits are not supported. No service changes were sent by this build. '
@@ -361,13 +368,91 @@ function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {})
   };
 }
 
+/**
+ * The obligations a build WITHOUT the opt-in still owes the binding store (`create-identity-opt-in-required`): every
+ * declared item of the protected kinds whose group in the store is committed, pending or unusable. Removing
+ * `configurationIdentity` does not move a protected item back to name lookup — a namesake could then stand in for its
+ * bound row — so the build stops before any request and asks for the opt-in back. A local store read only: nothing is
+ * sent. An item the store holds nothing for is not an obligation, so an App Spec that never opted in builds as before.
+ * Answers { halts: [{ kind, key, code, message }] }.
+ */
+function optInObligations({ spec, store }) {
+  if (configurationIdentityOf(spec) || !store || typeof store.readGroup !== 'function') return { halts: [] };
+  const halts = [];
+  for (const { kind, key } of declaredItems(spec)) {
+    let held;
+    try {
+      const group = store.readGroup(kind, A.portKeyOf(kind, key));
+      held = !!(group.committed || group.pending);
+    } catch {
+      // A group the store cannot use is state this build cannot rule out: still an obligation.
+      held = true;
+    }
+    if (held) {
+      halts.push({ kind, key, code: OPT_IN_CODE, message: `the binding store holds protected configuration for ${kind} "${key}", and configurationIdentity "stable-v1" was removed. `
+        + 'Removing it does not move a protected item back to name lookup: restore configurationIdentity "stable-v1". No service changes were sent by this build.' });
+    }
+  }
+  return { halts };
+}
+
+// Verify's read-only view of the binding store: the workspace's managedManifestView (declared-form-io.js readVerifyManifest),
+// answered in the shape locateItem reads (readGroup). A pending attempt has no token here: verify never recovers one.
+// No view at all, an unusable store or an unusable group proves nothing, so it is create-identity-unverified, never "unbound".
+function manifestStore(manifest) {
+  const view = manifest && Array.isArray(manifest.groups) ? manifest : null;
+  return {
+    readGroup(family, key) {
+      if (!view) throw stop(UNVERIFIED_CODE, 'no binding store was read for this verify; a protected item is never verified by name', { kind: family, key });
+      if ((view.invalid || []).some((u) => u && (u.family === 'store' || (u.family === family && u.key === key)))) {
+        throw stop(UNVERIFIED_CODE, `the binding store's record of ${family} "${key}" is not usable`, { kind: family, key });
+      }
+      const pending = (view.pending || []).some((p) => p && p.family === family && p.key === key);
+      const group = view.groups.find((g) => g && g.family === family && g.key === key);
+      return { committed: group ? { records: group.records, generation: group.generation } : null, pending: pending ? { token: null } : null };
+    },
+  };
+}
+
+/**
+ * Verify's port for the protected kinds (verify-model-app.js, under the opt-in): the same exact location the build uses
+ * (locateItem), over the workspace's binding store as verify reads it (`manifest`), and READ-ONLY — it never sends, settles
+ * or recovers anything. resolve({ kind, key }) answers { state: 'present', id } for a committed binding whose rows all
+ * read present at their exact ids; anything else throws, typed, and verify reports that code for the item:
+ *   configuration-row-not-found   a bound row is gone (a namesake elsewhere never stands in);
+ *   managed-settlement-pending    an attempt is still pending: nothing is proved yet (verify-spec.js lists it unverified);
+ *   create-identity-unverified    no committed binding, no usable store, or a read that did not complete.
+ */
+function protectedVerifyPort({ spec, manifest, dataverse, solution, bindings }) {
+  const store = manifestStore(manifest);
+  let envPromise = null;
+  const env = () => (envPromise = envPromise || environmentOf({ spec, store, dataverse, solution, bindings }));
+  return {
+    exact: true,
+    protects: (kind) => KINDS.has(kind),
+    async resolve({ kind, key }) {
+      const item = await locateItem(await env(), kind, key);
+      if (item.state === 'bound') return { state: 'present', id: item.planned.plan.rows[0].id };
+      if (item.state === 'pending') throw stop(PENDING_CODE, `the ${kind} "${item.planned.key}" has an attempt still pending; it is not verified until a build settles it`, { kind, key: item.planned.key });
+      throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" has no committed binding in this workspace's binding store; it is never verified by name`, { kind, key: item.planned.key });
+    },
+    // configuration-artifacts.js takes a port by its `run`; verify never creates, so this one refuses unsent.
+    async run({ kind, key }) {
+      throw stop(UNVERIFIED_CODE, `verify sends nothing: the ${kind} "${key}" is not created here`, { kind, key });
+    },
+  };
+}
+
 module.exports = {
   EDIT_CODE,
+  OPT_IN_CODE,
   RULE_EDIT_MESSAGE,
   API_EDIT_MESSAGE,
   configurationIdentityOf,
   editVerdict,
+  optInObligations,
   preflightProtectedConfiguration,
   protectedConfigurationPort,
+  protectedVerifyPort,
   createProtectedConfiguration,
 };

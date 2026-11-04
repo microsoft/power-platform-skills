@@ -13,7 +13,8 @@ const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
 const { createDeferredManagedCreateGate } = require('../lib/managed-create-transport.js');
 const { createManagedCreateContext } = require('../lib/managed-create-context.js');
-const { openManagedBindings } = require('../lib/managed-bindings.js');
+const { openManagedBindings, managedManifestView } = require('../lib/managed-bindings.js');
+const { readerFor } = require('../verify-model-app.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
@@ -150,6 +151,24 @@ test('every later edit of a protected duplicate rule stops in preflight with not
   ]) {
     const h = await harness();
     await created(h);
+    const out = await pass(h, configSpec(over));
+    assert.equal(out.halt && out.halt.code, 'configuration-edit-unsupported', `${label}: ${out.halt && out.halt.message}`);
+    assert.equal(out.halt.phase, 'preflight');
+    assert.ok(out.halt.message.includes(P.RULE_EDIT_MESSAGE), label);
+    assert.deepEqual(out.sent, [], `${label}: nothing sent`);
+  }
+});
+
+test('first conditions, a removed condition, or an added condition with a field change of a protected rule stop in preflight', async () => {
+  const TWO = [...RULE.conditions, { key: 'l', column: 'lastname', match: 'exact' }];
+  for (const [label, base, over] of [
+    ['an added condition and a field', rule({}), rule({ name: 'Same email address', conditions: TWO })],
+    // A rule created unpublished without conditions is still only verified: its first conditions are an edit too.
+    ['first conditions and a name', rule({ status: 'unpublished', conditions: [] }), rule({ status: 'unpublished', name: 'Same email address' })],
+    ['a removed condition', rule({ conditions: TWO }), rule({})],
+  ]) {
+    const h = await harness();
+    await created(h, configSpec(base));
     const out = await pass(h, configSpec(over));
     assert.equal(out.halt && out.halt.code, 'configuration-edit-unsupported', `${label}: ${out.halt && out.halt.message}`);
     assert.equal(out.halt.phase, 'preflight');
@@ -376,4 +395,115 @@ test('without the opt-in the hookup is ignored: no preflight read, and the plain
   const out = await pass(h, plain);
   assert.equal(out.halt, null, out.halt && out.halt.message);
   assert.ok(!h.store.readGroup('customApi', 'contoso_calc').committed, 'nothing is bound without the opt-in');
+});
+// The first protected create of an item: its namesake query must be read whole and find nothing, else nothing is created.
+const variableOnly = () => configSpec({ customApis: [], duplicateDetectionRules: [] });
+const VARIABLE_ROW = { schemaname: 'contoso_ApiBase', displayname: 'contoso_ApiBase', type: 100000000, defaultvalue: 'https://api.contoso.com' };
+async function insertRow(org, set, row) {
+  const res = await org.request({ url: `${org.origin}/api/data/v9.2/${set}`, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(row) });
+  assert.ok(res.statusCode < 300, `${set}: ${res.statusCode}`);
+  return /\(([0-9a-f-]{36})\)/i.exec(res.headers['odata-entityid'])[1];
+}
+
+test('a namesake at another id before the first protected create stops it as a conflict: nothing is created or bound', async () => {
+  const h = await harness();
+  const foreign = await insertRow(h.org, 'environmentvariabledefinitions', VARIABLE_ROW);
+  const out = await pass(h, variableOnly());
+  assert.equal(out.halt && out.halt.code, 'configuration-incomplete', out.halt && out.halt.message);
+  assert.deepEqual(out.step.halt.items, [{ kind: 'environmentVariable', key: 'contoso_ApiBase', code: 'create-identity-conflict' }]);
+  assert.deepEqual(out.sent, [], 'nothing is sent');
+  assert.deepEqual(h.org.rows('environmentvariabledefinitions').map((r) => r.environmentvariabledefinitionid), [foreign], 'the namesake is not adopted, and nothing is created beside it');
+  const group = h.store.readGroup('environmentVariable', 'contoso_apibase');
+  assert.equal(group.committed, null);
+  assert.equal(group.pending, null);
+});
+
+test('a namesake query that cannot be read whole stops the first protected create unverified: nothing is created', async () => {
+  // The SDK's own name lookup (`$top=2`) answers as usual; the create's complete namesake query answers a first page whose
+  // continuation fails, so it cannot prove there is no namesake on a later page.
+  const h = await harness({ intercept: ({ method, path }) => {
+    if (method !== 'GET' || !path.startsWith('/environmentvariabledefinitions?') || /\$top=/.test(path)) return undefined;
+    if (/\$skiptoken=/.test(path)) return { statusCode: 503, body: { error: { code: '0x80040216', message: 'busy' } } };
+    return { statusCode: 200, body: { value: [], '@odata.nextLink': 'https://contoso.crm.dynamics.com/api/data/v9.0/environmentvariabledefinitions?$select=environmentvariabledefinitionid,schemaname&$skiptoken=1' } };
+  } });
+  const out = await pass(h, variableOnly());
+  assert.equal(out.halt && out.halt.code, 'configuration-incomplete', out.halt && out.halt.message);
+  assert.deepEqual(out.step.halt.items, [{ kind: 'environmentVariable', key: 'contoso_ApiBase', code: 'create-identity-unverified' }]);
+  assert.ok(h.org.requests.some((r) => /\$skiptoken=/.test(r.path)), 'the continuation was followed');
+  assert.deepEqual(out.sent, [], 'nothing is sent');
+  assert.deepEqual(h.org.rows('environmentvariabledefinitions'), []);
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_apibase').committed, null);
+});
+
+test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {
+  const { configurationIdentity, ...plain } = configSpec();
+  assert.equal(configurationIdentity, 'stable-v1');
+  // Committed bindings.
+  const h = await harness();
+  await created(h);
+  const mark = h.org.requests.length;
+  const out = await pass(h, plain);
+  assert.equal(out.halt && out.halt.code, 'create-identity-opt-in-required', out.halt && out.halt.message);
+  assert.equal(out.halt.phase, 'preflight');
+  assert.equal(out.halt.retry, RETRY.NEVER);
+  assert.match(out.halt.message, /configurationIdentity "stable-v1"/);
+  assert.match(out.halt.message, /No service changes were sent by this build/);
+  assert.deepEqual(h.org.requests.slice(mark), [], 'not even a read');
+  // A pending attempt is an obligation too.
+  const p = await harness({ intercept: ({ method, path }) => (method === 'POST' && /PublishDuplicateRule$/.test(path) ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'publish failed' } } } : undefined) });
+  assert.ok((await pass(p, configSpec())).halt);
+  assert.ok(p.store.readGroup('duplicateRule', 'email').pending);
+  const pmark = p.org.requests.length;
+  const pending = await pass(p, plain);
+  assert.equal(pending.halt && pending.halt.code, 'create-identity-opt-in-required', pending.halt && pending.halt.message);
+  assert.deepEqual(p.org.requests.slice(pmark), []);
+  // An item the store holds nothing for is not held back: a spec that declares only another item builds as before.
+  const other = await pass(h, { ...plain, environmentVariables: [{ schemaName: 'contoso_Other', type: 'string', defaultValue: 'x' }], customApis: [], duplicateDetectionRules: [] });
+  assert.equal(other.halt, null, other.halt && `${other.halt.code}: ${other.halt.message}`);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Verify under the opt-in, as verify-model-app.js reads it: the workspace's binding store, read-only (managedManifestView, as
+// readVerifyManifest answers it), names the one row each protected item is checked at.
+
+const viewOf = (h) => managedManifestView(h.store.snapshot());
+const definitions = (checks) => Object.fromEntries(checks.filter((c) => c.name === 'definition').map((c) => [`${c.kind} ${c.key}`, c.ok ? 'ok' : c.code]));
+const writesSince = (h, mark) => h.org.requests.slice(mark).filter((r) => r.method !== 'GET');
+
+test('verify under the opt-in reads every protected item at the id its binding holds, and a namesake never stands in for a deleted one', async () => {
+  const h = await harness();
+  await created(h);
+  const read = readerFor(h.sdk, 'contoso_configured');
+  let mark = h.org.requests.length;
+  assert.deepEqual(definitions(await read.configuration(configSpec(), undefined, viewOf(h))),
+    { 'environmentVariable contoso_ApiBase': 'ok', 'customApi contoso_Calc': 'ok', 'duplicateRule email': 'ok' });
+  assert.deepEqual(writesSince(h, mark), [], 'verify sends nothing');
+  // The bound variable is deleted outside the plugin, and an identical one made at another id.
+  const id = committed(h, 'environmentVariable', 'contoso_apibase').records.find((r) => r.kind === 'environmentVariable').id;
+  const res = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/environmentvariabledefinitions(${id})`, method: 'DELETE', headers: {} });
+  assert.ok(res.statusCode < 300);
+  await insertRow(h.org, 'environmentvariabledefinitions', VARIABLE_ROW);
+  mark = h.org.requests.length;
+  const { configurationIdentity, ...plain } = configSpec();
+  assert.equal(configurationIdentity, 'stable-v1');
+  assert.equal(definitions(await read.configuration(plain))['environmentVariable contoso_ApiBase'], 'ok', 'name lookup takes the namesake');
+  const checks = await read.configuration(configSpec(), undefined, viewOf(h));
+  assert.deepEqual(definitions(checks), { 'environmentVariable contoso_ApiBase': B.NOT_FOUND_CODE, 'customApi contoso_Calc': 'ok', 'duplicateRule email': 'ok' });
+  assert.deepEqual(writesSince(h, mark), [], 'verify sends nothing');
+});
+
+test('verify under the opt-in never falls back to a name: no binding store, no binding or an unusable one fails, a pending one is named', async () => {
+  const h = await harness();
+  await created(h);
+  const read = readerFor(h.sdk, 'contoso_configured');
+  const all = (code) => ({ 'environmentVariable contoso_ApiBase': code, 'customApi contoso_Calc': code, 'duplicateRule email': code });
+  assert.deepEqual(definitions(await read.configuration(configSpec(), undefined, undefined)), all('create-identity-unverified'), 'no binding store was read');
+  assert.deepEqual(definitions(await read.configuration(configSpec(), undefined, managedManifestView(null))), all('create-identity-unverified'), 'no binding is held');
+  const unusable = managedManifestView(null);
+  unusable.invalid.push({ family: 'store', key: 'managed-bindings', reason: 'unreadable', code: 'managed-binding-store-unreadable' });
+  assert.deepEqual(definitions(await read.configuration(configSpec(), undefined, unusable)), all('create-identity-unverified'), 'an unusable store proves nothing');
+  const pending = viewOf(h);
+  pending.groups = pending.groups.filter((g) => g.family !== 'customApi');
+  pending.pending.push({ family: 'customApi', key: 'contoso_calc', code: 'managed-settlement-pending' });
+  assert.equal(definitions(await read.configuration(configSpec(), undefined, pending))['customApi contoso_Calc'], 'managed-settlement-pending');
 });

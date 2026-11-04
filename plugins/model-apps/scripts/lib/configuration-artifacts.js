@@ -2784,15 +2784,33 @@ async function readConfigurationForDownload(sdk, entries) {
 // Verify. Checks: {kind, key, name, ok, code?, fields?}; `name` is 'definition', 'binding', 'value',
 // 'implementation', 'publication' or 'version'. A check never carries a value.
 
+// A typed stop's code as an exact port raised it: the lower-case codes of the binding store and the create identity
+// (`configuration-row-not-found`, `managed-settlement-pending`, `create-identity-unverified`) as well as the SDK's own.
+const TYPED_CODE = /^[a-z][a-z0-9-]{2,63}$/;
+const typedCodeOf = (error) => (error && typeof error.code === 'string' && TYPED_CODE.test(error.code) ? error.code : codeOf(error));
+
+// The row an exact port's binding names, read at that id; any other answer of the port is not a row to verify.
+async function locateExactly(ctx, port, kind, key) {
+  const resolved = await port.resolve({ kind, key: portKeyOf(kind, key) });
+  if (!resolved || resolved.state !== 'present' || typeof resolved.id !== 'string' || !resolved.id) throw identityStop('create-identity-unverified');
+  return { id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved' };
+}
+
 async function verifyKind(ctx, kindPlan, entries, checks, onFound) {
   for (const entry of entries) {
     const { kind } = kindPlan;
     const key = kindPlan.key(entry);
+    // Under an exact port (protected configuration) verify asks only it: the row its binding holds, read at that id, or a
+    // typed reason there is none (lib/configuration-protected.js protectedVerifyPort). Never a name, and the reason is
+    // reported as the port gave it — a gone bound row is configuration-row-not-found, not a missing name.
+    const exactPort = exactPortOf(ctx, kind);
     let found;
     try {
-      found = await locate({ ...ctx, managed: ctx.managed && { lookup: ctx.managed.lookup } }, kind, key, kindPlan.identity(entry));
+      found = exactPort
+        ? await locateExactly(ctx, exactPort, kind, key)
+        : await locate({ ...ctx, managed: ctx.managed && { lookup: ctx.managed.lookup } }, kind, key, kindPlan.identity(entry));
     } catch (error) {
-      checks.push({ kind, key, name: 'definition', ok: false, code: codeOf(error) });
+      checks.push({ kind, key, name: 'definition', ok: false, code: exactPort ? typedCodeOf(error) : codeOf(error) });
       continue;
     }
     if (!found) { checks.push({ kind, key, name: 'definition', ok: false, code: 'NOT_FOUND' }); continue; }

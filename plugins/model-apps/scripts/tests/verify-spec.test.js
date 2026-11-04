@@ -3771,6 +3771,22 @@ test('verifySpec: configuration items pass, drift with code and fields, and an u
   assert.strictEqual(r.ok, false, 'a drift fails the verify');
 });
 
+test('verifySpec: the configuration getter is handed the workspace binding store, and a protected item still being settled is unverified', async () => {
+  let seen;
+  const managedManifest = { revision: 1, groups: [], pending: [{ family: 'customApi', key: 'contoso_calc', code: 'managed-settlement-pending' }], invalid: [] };
+  const read = otherReadsNull({ configuration: async (s, b, m) => { seen = m; return [
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'definition', ok: false, code: 'configuration-row-not-found' },
+    { kind: 'customApi', key: 'contoso_Calc', name: 'definition', ok: false, code: 'managed-settlement-pending' },
+  ]; } });
+  const r = await verifySpec({ ...CONFIG_SPEC, configurationIdentity: 'stable-v1' }, read, { managedManifest });
+  assert.strictEqual(seen, managedManifest);
+  assert.deepStrictEqual(configChecks(r), [
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: definition', present: false, detail: 'configuration-row-not-found' },
+  ]);
+  assert.ok(r.unverified.includes('configuration:customApi contoso_Calc: definition (managed-settlement-pending)'), r.unverified.join('\n'));
+  assert.strictEqual(r.ok, false);
+});
+
 test('verifySpec: a reader without the configuration getter reports the configuration items as unverified, not as passing', async () => {
   const r = await verifySpec(CONFIG_SPEC, otherReadsNull({}), {});
   assert.deepStrictEqual(configChecks(r), []);
