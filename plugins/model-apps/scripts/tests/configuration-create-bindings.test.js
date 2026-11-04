@@ -391,6 +391,9 @@ test('a bound Custom API edit as the real SDK sends it: the root PATCH on its ow
     assert.deepEqual(named.map((n) => n && n.rows.map((r) => r.id)), [[root], [added.id]], `${kind}: each constituent is its planned row`);
     assert.equal(B.classifyConstituent([{ token: 't', planned: p }], { ...parts[1], url: parts[1].url.replace(/\?.*$/, '') }), null, 'a child POST without its selected key');
     assert.equal(B.classifyConstituent([{ token: 't', planned: fresh }], parts[1]), null, 'a child POST under a root the plan creates');
+    const created = planned('customApi', 'contoso_Calc', { spec: api({ isPrivate, requestParameters: declared.requestParameters, responseProperties: declared.responseProperties, [list]: [...declared[list], add] }) });
+    assert.equal(rowOf(created, kind) && created.rows.find((r) => r.id === added.id).mode, 'create');
+    assert.equal(B.classifyConstituent([{ token: 't', planned: created }], parts[1]), null, 'the same child POST when the plan creates its root');
   }
 
   // The root with a child's labels: the change set's child PATCH is refused; it is admitted only on its own.
