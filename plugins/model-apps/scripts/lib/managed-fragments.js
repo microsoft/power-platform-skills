@@ -42,6 +42,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { assertSafeOutputDir } = require('./safe-fs.js');
+const { redactFileData } = require('./output-redaction.js');
 
 const FRAGMENTS_KIND = 'model-apps.managed-download-fragments';
 const FRAGMENTS_FORMAT = 1;
@@ -96,7 +97,9 @@ function createExclusive(file, text) {
     if (!named.isFile() || named.ino !== opened.ino) {
       throw codeError('managed-fragments-unwritable', `the managed fragments file could not be made at ${file}: a link or another file took the name while it was made, so nothing was written to it (if it was a link, an empty file may have been made where it points). No other output was written.`);
     }
-    fs.writeFileSync(fd, text, 'utf8');
+    // Through redactFileData like every guarded writer (lib/safe-fs.js writeFileSafe, which this file wrote through before): a
+    // declaration holds no token, but the file is written raw through its descriptor, so the guard is applied here.
+    fs.writeFileSync(fd, redactFileData(text));
     fs.fsyncSync(fd);
   } catch (e) {
     if (e && e.code === 'managed-fragments-unwritable') throw e;
