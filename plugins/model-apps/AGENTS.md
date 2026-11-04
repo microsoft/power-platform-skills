@@ -3310,6 +3310,30 @@ retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js` ("
 `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after" / "after
 retirement" / "two retirements" in `tests/sdk-build-declared-{forms,dashboards,rules,bpf}.test.js`.
 
+**Protected configuration** (`configurationIdentity: "stable-v1"`, `minimumPluginVersion: "2.23.0"`, a lint
+warning below it). Declared environment variables, connection references, Custom APIs (with their children)
+and duplicate rules (with their conditions) get exact ids (`lib/configuration-create-bindings.js` plans,
+observes and classifies them) and are bound in the managed binding store. `lib/configuration-protected.js`
+is the one hookup: `createProtectedConfiguration({ store, gate, ctx, apiBase })` answers `preflight` (the
+whole-plan, read-only check `configuration-build.js` runs before the build's first service change, the
+solution version included) and `port` (the exact-id port `configuration-artifacts.js` uses through
+`exactPortOf` instead of the managed-artifacts manifest and the adoption policy). Without a hookup the
+opt-in stops before any request (`create-identity-unverified`); the build supplies it with the managed
+create gate and context. Edits: a duplicate rule is created with its conditions, completes its initial
+publication/state, and is then only verified (any later field, condition or state change, the
+`CompoundUpdateDuplicateDetectionRule` shapes and an `If-Match: *` field PATCH included, is
+`configuration-edit-unsupported`); a Custom API takes one request alone (the root, one child create or
+one child's labels), the root PATCH with new children, or two or more new children only, each with the
+row's exact `If-Match` (a multi-request edit goes through one checked `$batch` change set, classified part
+by part); one child removal is `configuration-protected-removal-unsupported`, anything else
+`configuration-edit-unsupported`. A pending create is decided from its own persisted expectation
+(`recoverPending` over `managed-create-context.js` `classify`): complete -> settled; proved unsent ->
+resumed under the same ids; otherwise `create-completion-required`, `create-ownership-required` (with each
+row's exact `adopt:` token in the message) or `managed-pending-intent-changed`. The original plan's rule
+state stays owed and is never sent again, so a rerun after a failed or lost initial publication does not
+publish, and a bound rule is never published. A pending EDIT is not recovered (its plan depends on the base
+it read) and stays `create-identity-unverified`. Tests: `tests/configuration-protected.test.js`,
+`tests/configuration-create-bindings.test.js`.
 **Stable create ids** (`createIdentity: "stable-v1"`, `minimumPluginVersion: "2.21.0"`; new apps only).
 The only place the engine reads the field is one gated `require` of `lib/creates-stable-build.js` in
 `lib/sdk-build.js` (pinned by `creates-port.test.js`: a spec without it loads none of the stable modules

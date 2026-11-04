@@ -1219,3 +1219,61 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   `build-locked` while a build of the app runs in the same workspace; run it again once the build ends.
 - **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
   a file it cannot read, is reported as unverified, never as a pass.
+
+## configurationIdentity (optional — exact ids for protected configuration)
+
+Set `minimumPluginVersion: "2.23.0"` with it (a lower or missing floor is a lint warning: older plugins
+ignore the field, keep no binding store for configuration and find these items by name). The only value
+is `"stable-v1"`; any other value is a validation error (`create-identity-invalid`), and a spec without
+the field builds exactly as before.
+
+```jsonc
+{ "minimumPluginVersion": "2.23.0", "configurationIdentity": "stable-v1",
+  "environmentVariables": [ /* … */ ], "connectionReferences": [ /* … */ ],
+  "customApis": [ /* … */ ], "duplicateDetectionRules": [ /* … */ ] }
+```
+
+- **What it covers.** The declared environment variables, connection references, Custom APIs (with
+  their request parameters and response properties) and duplicate detection rules (with their
+  conditions). Each is created at an id the spec fixes and recorded in the build's binding store
+  (`managed-bindings.<hash>.json`, the same file as `createIdentity`; keep it with the build workspace).
+  A later build finds each row by that id, never by name: a bound row deleted outside the plugin stops
+  the build with `configuration-row-not-found` and is never replaced by a namesake.
+- **The binding store comes from the build.** Under the field, a build that cannot open the binding
+  store for configuration stops before any request is sent (`create-identity-unverified`).
+- **Checked before anything is sent.** Every declared protected item is read and judged before the
+  build's first service change, the solution version included. An edit the plugin does not make stops
+  the whole build there, with nothing sent (`configuration-edit-unsupported`).
+- **Duplicate rules: create only.** A protected duplicate rule is created with its conditions, completes
+  its initial publication/state, and is then only verified; later edits are outside the plugin. A
+  later change of its fields, conditions or state stops with: "This protected duplicate rule can be
+  created with its conditions and initial state, then verified. Later field, condition or state edits
+  are not supported. No service changes were sent by this build. Make this edit outside the plugin,
+  keeping the binding store and exact ids." A rule unpublished outside the plugin is not published
+  again: the build stops.
+- **Custom APIs.**
+
+  | Change to a bound Custom API | Result |
+  |---|---|
+  | One request on its own: the root's editable fields, one new child, or one child's labels | made |
+  | The root's editable fields together with one or more new children | made, as one change set |
+  | Two or more new children, nothing else | made, as one change set |
+  | Removing one child | stops: `configuration-protected-removal-unsupported` |
+  | Anything else (two label edits, labels with any other change, a removal with any other change, a child's fixed field) | stops: `configuration-edit-unsupported` |
+
+  The refusal reads: "This protected Custom API change is not a supported single request or create-only
+  changeset. No service changes were sent by this build. Separate supported non-removing single-request
+  edits across builds, or make the change outside the plugin. Removals require maintenance outside the
+  plugin." Every write names the row's exact id and its current version (`If-Match`). A change of
+  `isPrivate` still needs `--authorize`.
+- **Environment variables and connection references** are edited as before, at their exact ids.
+- **A create that did not finish.** The next build decides it from what the first one recorded before
+  sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
+  a create that is missing a row, its solution membership or the rule's initial state stops with
+  `create-completion-required` — complete it under the same ids, then build again. An initial
+  publication that failed or whose answer was lost is never sent again by the build: publish the rule
+  under the same id yourself. Rows that no answer proved this build's own are bound only after you check
+  them and approve each one exactly: the stop (`create-ownership-required`) lists the tokens, such as
+  `adopt:duplicateRule:<key>` and one per child. A declaration changed since the create was prepared
+  stops with `managed-pending-intent-changed`: put the original declaration back, finish the create,
+  then make the change. A row that differs from what was sent stops with `create-identity-conflict`.
