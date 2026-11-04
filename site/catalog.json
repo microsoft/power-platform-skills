@@ -393,7 +393,7 @@
         "Compare this month's cases with last month's"
       ],
       "requirements": [
-        "Node.js 22 or 24 LTS",
+        "Node.js 22 or later, ideally a maintained LTS release",
         "Azure CLI 2.54 or later",
         "A Power Automate Process Mining account and environment you can use"
       ],
