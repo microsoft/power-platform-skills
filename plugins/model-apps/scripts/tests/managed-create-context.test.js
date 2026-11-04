@@ -227,6 +227,12 @@ test('a private input is proved by this process\'s own answer and a matching rea
   assert.equal(ctxOf(cross.dir, [`adopt:environmentVariable:${EV_KEY}`, valueToken]).classify(cross.token, read('masked'), at).code, CODES.completion, 'approval never certifies a masked value');
   const [adopted] = ctxOf(cross.dir, [`adopt:environmentVariable:${EV_KEY}`, valueToken]).settle([{ token: cross.token, observation: read('match'), declarationSha256: H('e') }]);
   assert.equal(adopted.verdict.action, 'commit');
+  // A receipt from an earlier process proves the row was created, not that its private value is today's: a later
+  // process that reads the value matching still needs the maker's approval of it.
+  const earlier = await run();
+  assert.equal(earlier.ctx.settle([{ token: earlier.token, observation: read('masked') }])[0].verdict.code, CODES.completion);
+  const later = ctxOf(earlier.dir).classify(earlier.token, read('match'), at);
+  assert.deepEqual([later.code, later.approvals], [CODES.ownership, [valueToken]]);
 });
 
 test('approval tokens are percent-encoded, so a / or : in a key never makes two rows share one', () => {
