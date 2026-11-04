@@ -142,6 +142,14 @@ function loadCatalog(repoRoot) {
     problems.push('every faq entry needs a question and an answer');
   }
 
+  // The transcript under the explainer video: each paragraph of narration ("spoken"), then what
+  // is on screen while it is spoken ("shown"), for anyone who cannot see or play the video.
+  const video = catalog.video && typeof catalog.video === 'object' ? catalog.video : {};
+  const transcript = Array.isArray(video.transcript) ? video.transcript : [];
+  if (transcript.length === 0 || !transcript.every((item) => isNonEmptyString(item.spoken) && isNonEmptyString(item.shown))) {
+    problems.push('video.transcript needs at least one paragraph, each with spoken and shown text');
+  }
+
   // The hero replays example sessions. Each prompt must be one of the plugin's own example
   // prompts, so the demo and the plugin page never disagree about what to ask.
   const showcase = Array.isArray(catalog.showcase) ? catalog.showcase : [];
@@ -168,7 +176,7 @@ function loadCatalog(repoRoot) {
     throw error;
   }
 
-  return { goals, plugins, faq, showcase };
+  return { goals, plugins, faq, showcase, video: { transcript } };
 }
 
 module.exports = { loadCatalog, PRODUCTS };

@@ -95,29 +95,6 @@ function writeFile(outDir, relative, contents) {
   return relative.split(path.sep).join('/');
 }
 
-// The transcript under the explainer video: each paragraph of narration, then what is on screen
-// while it is spoken. The film shows examples the narration never says aloud (skill names,
-// steps, the permission prompt), and the descriptions carry them for anyone who cannot see the
-// video. timeline.json is the script the film and its captions are generated from
-// (site/explainer), so the spoken part cannot drift. Descriptions.txt has one paragraph, split
-// by a blank line, per narration paragraph.
-function loadExplainer() {
-  const dir = path.join(SITE_DIR, 'explainer');
-  const timeline = JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8'));
-  const spoken = [];
-  for (const sentence of timeline.sentences) {
-    (spoken[sentence.paragraph - 1] ||= []).push(sentence.text);
-  }
-  const shown = fs.readFileSync(path.join(dir, 'Descriptions.txt'), 'utf8')
-    .split(/\r?\n\s*\r?\n/).map((paragraph) => paragraph.trim().split(/\s+/).join(' ')).filter(Boolean);
-  if (shown.length !== spoken.length) {
-    throw new Error(`site/explainer/Descriptions.txt has ${shown.length} paragraphs; the narration has ${spoken.length}.`);
-  }
-  return {
-    transcript: spoken.map((sentences, index) => ({ spoken: sentences.join(' '), shown: shown[index] })),
-  };
-}
-
 // mediaDir defaults to none, so a build in a test never depends on what happens to be in
 // site/media; the command line passes site/media.
 function build({ repoRoot = REPO_ROOT, outDir, basePath, mediaDir = null, requireMedia = false }) {
@@ -125,7 +102,7 @@ function build({ repoRoot = REPO_ROOT, outDir, basePath, mediaDir = null, requir
   prepareOutDir(outDir);
 
   const written = [];
-  written.push(writeFile(outDir, 'index.html', render.renderHome(catalog, loadExplainer())));
+  written.push(writeFile(outDir, 'index.html', render.renderHome(catalog)));
   for (const plugin of catalog.plugins) {
     written.push(writeFile(outDir, path.join('plugins', plugin.name, 'index.html'), render.renderPlugin(plugin, catalog)));
   }
@@ -163,4 +140,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, loadExplainer, parseArgs, MARKER };
+module.exports = { build, parseArgs, MARKER };

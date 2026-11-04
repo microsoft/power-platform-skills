@@ -570,6 +570,30 @@
       "answer": "Most plugins include a report-issue skill that drafts a bug report for you. You can also open an issue on GitHub."
     }
   ],
+  "video": {
+    "transcript": [
+      {
+        "spoken": "Your AI assistant knows a lot about code. A plugin teaches it how to build on Power Platform.",
+        "shown": "An AI assistant window opens, titled \"Your AI assistant\". Its Plugins list is empty and reads \"No plugins yet\", and the message box says \"Describe what you need\". A Power Pages plugin card flies in and settles into the list."
+      },
+      {
+        "spoken": "You install a plugin once, and it adds a set of skills.",
+        "shown": "Under \"Skills in this plugin\", five skills unfold from the plugin, each with what it does: /create-site, Start a new site. /edit-site, Change pages. /setup-datamodel, Add tables. /setup-auth, Add sign-in. /deploy-site, Upload the site."
+      },
+      {
+        "spoken": "Each skill is one job, written down step by step. Creating a Power Pages site is one skill. Deploying it is another.",
+        "shown": "/create-site opens into a card titled \"Create a Power Pages site\" with four steps: Ask what the site is for. Show you a plan to approve. Build the site. Ask before deploying it. A badge reads \"One skill, one job\". A second card, /deploy-site, titled \"Deploy the site\", slides in front with three steps: Check your sign-in and environment. Build the site. Upload it to Power Pages."
+      },
+      {
+        "spoken": "When you describe what you need, your assistant picks the right skill and follows its steps. It asks before it runs commands or changes files.",
+        "shown": "The cards fold back into the list of skills, which moves into the window's sidebar. Someone types \"Create a Power Pages site for a job board\" and sends it. A line links the request to /create-site, and the reply reads \"Using /create-site\" as three steps get checked off: Asked what the site is for. Showed you a plan to approve. Built the site. Then the assistant stops and asks \"Allow this command?\" for npm run build, with Deny and Allow buttons and a \"Your turn\" badge. Allow is pressed and changes to \"Allowed\"."
+      },
+      {
+        "spoken": "So, plugins are what you install, and skills are the jobs inside them. You just ask.",
+        "shown": "The window fades. The plugin card sits on the left above \"Plugin: What you install\", and the five skills line up on the right above \"Skills: The jobs inside it\". The film ends on \"You just ask.\" over a message box that says \"Describe what you need\", with \"Power Platform Skills\" and microsoft.github.io/power-platform-skills."
+      }
+    ]
+  },
   "showcase": [
     {
       "plugin": "power-pages",

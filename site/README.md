@@ -49,10 +49,15 @@ The brief and design thesis are at the top of `site/lib/render.js`.
 ## Explainer video
 
 The Questions section opens with "What are plugins and skills?", a 35-second film with captions and a transcript.
-[`site/explainer`](explainer/README.md) generates the video, its captions, and its poster, and its README explains how to change and re-render it.
-The captions are committed in `assets/video/`; the video and poster come from the `site-media` branch.
-The page builds the transcript from the film's `timeline.json` and `Descriptions.txt`, so it has both the narration and a description of what is on screen.
-A test fails if the transcript, the captions, and the script disagree, if the descriptions miss text the film shows, or if the film shows a Power Pages skill that no longer exists.
+Only the finished film is kept, not the tools that made it:
+
+- The video and its poster are on the `site-media` branch (see [Site media](#site-media)).
+- The captions are `assets/video/plugins-and-skills.vtt`.
+- The transcript is `video.transcript` in `catalog.json`: each part of the narration (`spoken`) and what is on screen while it plays (`shown`), for anyone who cannot see or play the video.
+
+A test fails if the transcript and the captions disagree, or if the transcript names a Power Pages skill that no longer exists.
+If a skill the video shows is renamed or removed, the video needs replacing.
+[`assets/video/README.md`](assets/video/README.md) says how the film was made and what is illustrative.
 
 The video never autoplays and preloads nothing, so its 3 MB download starts only when a visitor presses play.
 Until then, `assets/site.js` shows one large play button over the poster in place of the native controls.
@@ -77,7 +82,14 @@ That branch is never merged.
 Files on `site-media` are named by their hash, so a new version sits next to the old one.
 To publish one:
 
-1. Run the film's publish step, which writes the new files to `site/media/video/` and updates `site/media.json` (see [`explainer/README.md`](explainer/README.md)).
+1. Name each new file after the first 12 characters of its SHA-256 hash, such as `video/plugins-and-skills-51f78cf58fab.mp4`, and update its entry in `site/media.json`.
+   This prints a file's hash and size on any system:
+
+   ```bash
+   node -e "const d = require('fs').readFileSync(process.argv[1]); console.log(require('crypto').createHash('sha256').update(d).digest('hex'), d.length)" <file>
+   ```
+
+   For a new video, also update the captions and `video.transcript` in `catalog.json` to match it.
 2. Commit the new files to `site-media` and push it, from the repository root:
 
    ```bash
@@ -85,11 +97,11 @@ To publish one:
    git worktree add --detach ../site-media-worktree origin/site-media
    ```
 
-   Copy the new files from `site/media/video/` to `../site-media-worktree/video/`, then:
+   Copy the new files to `../site-media-worktree/video/`, then:
 
    ```bash
    git -C ../site-media-worktree add video
-   git -C ../site-media-worktree commit -m "Add the re-rendered explainer video"
+   git -C ../site-media-worktree commit -m "Add the new explainer video"
    git -C ../site-media-worktree push origin HEAD:site-media
    git worktree remove ../site-media-worktree
    ```

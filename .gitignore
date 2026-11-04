@@ -56,6 +56,3 @@ Thumbs.db
 site/dist/
 # The site's video and poster, fetched from the site-media branch (see site/lib/media.js)
 site/media
-# Explainer film: generated stems and masters, and the downloaded voice model
-site/explainer/build
-site/explainer/models
