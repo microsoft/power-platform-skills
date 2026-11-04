@@ -913,9 +913,13 @@ test('a fragments write that fails leaves every output that was there as it was:
     const { runDownload } = require('../download-model-app.js');
     const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
     const { fakeGenpage } = require('./helpers/fake-genpage.js');
+    // Its own flow, persona and app id, so this test stands without the persona-proof tests (and their constants) above.
+    const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
+    const dispatcher = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
+    const appId = '00000000-0000-0000-0000-00000000a333';
     const wire = createWorkflowWire();
     const dir = makeTempDir('declared-bpf-');
-    assert.equal((await build(wire, dir, { ...specWith([ROLED]), personas: [DISPATCHER] })).err, undefined);
+    assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [dispatcher] })).err, undefined);
     const out = makeTempDir('declared-bpf-');
     const pid = '00000000-0000-4000-8000-00000000bbbb';
     const pageFile = path.join(out, 'pages', pid, 'page.tsx');
@@ -932,13 +936,13 @@ test('a fragments write that fails leaves every output that was there as it was:
     const pageSdk = currentReadSdk({
       fetchArtifact: async () => ({ name: 'BP App', uniqueName: APP, siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Records', subAreas: [{ type: 'GenPage', genPageId: pid, title: 'Page' }, { type: 'Entity', entity: 'new_ticket' }] }] }] } }),
       queryRecords: async (logical) => {
-        if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: layer, uniquename: APP }];
+        if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: layer, uniquename: APP }];
         if (logical === 'appmodulecomponent') return [{ objectid: '00000000-0000-4000-8000-00000000dddd', componenttype: 62 }];
         if (logical === 'sitemap') return [{ sitemapxml: xml }];
         return [];
       },
       fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Ticket', primaryNameAttribute: 'new_subject' }),
-    }, { appId: APP_ID, layerId: layer, sitemapXml: xml });
+    }, { appId, layerId: layer, sitemapXml: xml });
     const source = 'export default function Page(){return null;}';
     const genpage = fakeGenpage({ pages: [{ pageId: pid, name: 'Page', source }] });
     let staged;
