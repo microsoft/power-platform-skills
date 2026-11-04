@@ -196,6 +196,49 @@ test('a create whose answer is lost is not sent again: a read at the reserved id
   assert.equal(out.membership.length, 1);
 });
 
+// #796: the identity read of a flow on a table the build has only just created can meet the table's metadata-cache lag, live:
+//   GET workflows?$filter=… -> HTTP 400 {"error":{"code":"0x80041102","message":"The entity with a name = 'account' with namemapping = 'Logical' was not found in the MetadataCache…"}}
+// With the caller's `freshTable`, that read's failure is marked so the stop is one the build's bounded retry may ride out (retryPolicyFor: SERVICE); nothing is sent, and the next settlement creates the flow once.
+// Without it, for another table's answer and for any other answer, the stop stays final.
+const notInCache = (table) => `The entity with a name = '${table}' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075`;
+const nameRead = (e) => e.method === 'GET' && e.path === 'workflows';
+const answer400 = (code, message) => ({ statusCode: 400, body: { error: { code, message } } });
+
+test('an identity read that meets the metadata-cache lag of a table the build just created stops as the retry may ride out, sends nothing, and the next settlement creates once', async () => {
+  const { retryPolicyFor, isFreshTableReadLag } = require('../lib/retry-policy.js');
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-settle-');
+  wire.script(nameRead, answer400('0x80041102', notInCache('account')));
+  const first = await settle(wire, dir, FLOW, { freshTable: 'account' });
+  assert.equal(first.error && first.error.cause && first.error.cause.code, 'create-identity-unverified');
+  assert.equal(retryPolicyFor(first.error.cause), RETRY.SERVICE, 'the lag of a table this invocation created');
+  assert.equal(isFreshTableReadLag(first.error.cause), true);
+  assert.deepEqual(writesSince(wire, first.from), [], 'nothing is sent');
+  const again = await settle(wire, dir, FLOW, { freshTable: 'account' });
+  assert.ifError(again.error);
+  assert.deepEqual(writeLines(wire, again.from).filter((l) => l === 'POST workflows'), ['POST workflows'], 'one create');
+  assert.equal(wire.rows.size, 1);
+});
+
+test('an identity read that fails for a table the build did not create, for another table, or with any other answer stays final', async () => {
+  const { retryPolicyFor, isFreshTableReadLag } = require('../lib/retry-policy.js');
+  for (const [label, answer, freshTable] of [
+    ['no freshTable', answer400('0x80041102', notInCache('account')), undefined],
+    ['the answer names another table', answer400('0x80041102', notInCache('contoso_other')), 'account'],
+    ['an unrelated 400', answer400('0x80040265', 'The value of the attribute is not valid'), 'account'],
+    ['the cache words under another code', answer400('0x80040220', notInCache('account')), 'account'],
+  ]) {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('bpf-settle-');
+    wire.script(nameRead, answer);
+    const out = await settle(wire, dir, FLOW, freshTable ? { freshTable } : {});
+    assert.equal(out.error && out.error.cause && out.error.cause.code, 'create-identity-unverified', label);
+    assert.equal(retryPolicyFor(out.error.cause), RETRY.NEVER, label);
+    assert.equal(isFreshTableReadLag(out.error.cause), false, label);
+    assert.deepEqual(writesSince(wire, out.from), [], `${label}: nothing is sent`);
+  }
+});
+
 test('a create the service stored with another stage id is never bound, acknowledged or not, and nothing is sent after it', async () => {
   for (const lost of [false, true]) {
     const wire = createWorkflowWire();
@@ -482,10 +525,12 @@ test('a local copy with an edit no run sent stops every path before any request 
   await p.sdk.updateElement('bpf', id, '/stages/0/name', 'Edited by hand');
   const [file] = flowCopy(dir, id);
   const bytes = fs.readFileSync(file);
-  for (const [flow, extra] of [[FLOW, {}], [GROWN, { opts: SWITCH }], [{ ...FLOW, status: 'Draft' }, { opts: SWITCH }], [FLOW, {}]]) {
+  for (const [flow, extra] of [[FLOW, {}], [GROWN, { opts: SWITCH }], [{ ...FLOW, status: 'Draft' }, { opts: SWITCH }], [FLOW, {}], [FLOW, { freshTable: 'account' }]]) {
     const out = await settle(wire, dir, flow, extra);
     assert.equal(out.error && out.error.code, 'create-completion-required');
     assert.equal(causeCategory(out.error), 'workspace-copy-unsent-edits');
+    // A table the build just created changes nothing here (#796): the stop is the local copy's, never the lag's.
+    assert.equal(require('../lib/retry-policy.js').isFreshTableReadLag(out.error), false);
     assert.deepEqual(wire.log.slice(out.from), [], 'no request at all');
     assert.deepEqual(fs.readFileSync(file), bytes, 'the local copy is kept');
   }

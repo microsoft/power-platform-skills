@@ -255,6 +255,77 @@ test('a one-way change is made when it is authorized for that column', async () 
   await run(m, specOf([{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' }]), { authorizedDestructive: ['dateTimeBehavior:new_ticket.new_due'] });
   assert.deepEqual(m.calls.find((c) => c[0] === 'updateColumn').slice(1), ['new_ticket', 'new_due', { dateTimeBehavior: 'DateOnly' }]);
 });
+
+// A table the first lookup misses, whose create is then answered "already exists" (the create of an earlier, lost answer, or another writer's),
+// is found by a second lookup. Its columns are read then, as a table the first lookup found has them read, so its Date and Time columns are
+// guarded, and an authorized declared repair made, BEFORE the build adds a column to it — in the same build, not the next one.
+//   POST EntityDefinitions -> HTTP 400 {"error":{"code":"0x8009050d","message":"Entities already exist: new_ticket."}}
+function foundAfterCreate({ dates = NULL_TABLE.dates, readBack, columns = NULL_TABLE.tables.new_ticket, columnsRead } = {}) {
+  let probes = 0;
+  const server = metadataServer({ tables: { new_ticket: columns }, dates, readBack });
+  const m = mockSdk({
+    dataverseGet: (p) => {
+      if (/\?\$select=LogicalName,EntitySetName/.test(p) && (probes += 1) === 1) return { status: 404, body: {} };
+      if (columnsRead && /\/Attributes\?\$select=LogicalName,RequiredLevel$/.test(p)) return columnsRead(p);
+      return server(p);
+    },
+  });
+  m.sdk.createTable = async (o) => {
+    m.calls.push(['createTable', o]);
+    throw Object.assign(new Error('HTTP 400: Entities already exist: new_ticket.'), { statusCode: 400, cause: { error: { code: '0x8009050d', message: 'Entities already exist: new_ticket.' } } });
+  };
+  // The platform's answer to the create of a column the table has (ALREADY_EXISTS_CODES.column).
+  m.sdk.createColumn = async (l, o) => {
+    m.calls.push(['createColumn', l, o]);
+    if (columns.includes(o.schemaName.toLowerCase())) {
+      throw Object.assign(new Error(`HTTP 400: An attribute with the specified name ${o.schemaName} already exists for entity ${l}.`), { statusCode: 400, cause: { error: { code: '0x80047013' } } });
+    }
+    return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` };
+  };
+  m.provision.dataverse.post = async (p, body) => { m.calls.push(['post', p, body]); return { status: 204, body: {} }; };
+  return m;
+}
+const DUE_AND_NOTE = [{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'UserLocal' }, { schemaName: 'new_note', type: 'Text' }];
+const writesOf = (m) => m.calls.filter((c) => ['updateColumn', 'createColumn'].includes(c[0])).map((c) => `${c[0]} ${c[0] === 'updateColumn' ? c[2] : c[2].schemaName}`);
+
+test('a table found after its create was answered "already exists" has its declared Date and Time repair made and read back before a column is added, in the same build', async () => {
+  for (const preflight of [true, false]) {
+    const m = foundAfterCreate({ readBack: dateRow('new_due', 'UserLocal') });
+    await run(m, specOf(DUE_AND_NOTE), { dateBehaviorPreflight: preflight });
+    assert.equal(m.calls.filter((c) => c[0] === 'createTable').length, 1, `preflight ${preflight}`);
+    assert.deepEqual(writesOf(m), ['updateColumn new_due', 'createColumn new_note'], `preflight ${preflight}: the repair, then only the new column`);
+    assert.deepEqual(m.calls.find((c) => c[0] === 'updateColumn').slice(1), ['new_ticket', 'new_due', { dateTimeBehavior: 'UserLocal' }]);
+    assert.equal(dateGets(m).length, 2, `preflight ${preflight}: the collection read and the one column read-back`);
+  }
+});
+
+test('a table found after its create keeps every rule of a table the first lookup found: no consent, no repair; unreadable columns, the old path', async () => {
+  // A one-way change without its consent is refused before any column is sent, as for a table the first lookup found.
+  const refused = foundAfterCreate({ dates: { value: [dateRow('new_due', 'UserLocal')] } });
+  const err = await halted(run(refused, specOf([{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' }, { schemaName: 'new_note', type: 'Text' }]), { dateBehaviorPreflight: true }));
+  assert.equal(err.code, 'DESTRUCTIVE_NOT_AUTHORIZED');
+  assert.deepEqual(writesOf(refused), []);
+  // With it, the change is made before the new column.
+  const consented = foundAfterCreate({ dates: { value: [dateRow('new_due', 'UserLocal')] }, readBack: dateRow('new_due', 'DateOnly') });
+  await run(consented, specOf([{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' }, { schemaName: 'new_note', type: 'Text' }]),
+    { dateBehaviorPreflight: true, authorizedDestructive: ['dateTimeBehavior:new_ticket.new_due'] });
+  assert.deepEqual(writesOf(consented), ['updateColumn new_due', 'createColumn new_note']);
+  // Columns that cannot be read leave the build where it was: every declared column looks new, and the preflight stops on the column with
+  // no behaviour before anything is sent.
+  const unread = foundAfterCreate({ readBack: dateRow('new_due', 'UserLocal'), columnsRead: () => ({ status: 503, body: {} }) });
+  const err2 = await halted(run(unread, specOf(DUE_AND_NOTE), { dateBehaviorPreflight: true }));
+  assert.equal(err2.code, 'DATETIME_BEHAVIOR_MISSING');
+  assert.deepEqual(writesOf(unread), []);
+});
+
+test('an existing column declared secured on a table found after its create is still secured', async () => {
+  const m = foundAfterCreate({ columns: ['new_ticketid', 'new_name', 'new_salary'], dates: { value: [] } });
+  m.provision.dataverse.get = ((get) => async (p) => (/\$select=LogicalName,IsSecured$/.test(p) ? { status: 200, body: securedRowsOf(false) } : get(p)))(m.provision.dataverse.get);
+  await run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }, { schemaName: 'new_note', type: 'Text' }]));
+  assert.deepEqual(m.calls.filter((c) => c[0] === 'updateColumn').map((c) => c.slice(1)), [['new_ticket', 'new_salary', { isSecured: true }]]);
+  assert.deepEqual(writesOf(m).filter((w) => w.startsWith('createColumn')), ['createColumn new_note'], 'the column the table has is not sent');
+});
+const securedRowsOf = (salary) => ({ value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_salary', IsSecured: salary }] });
 // ------------------------------------------------------------------------------------------------ column security
 
 const SECURE_TABLE = { tables: { new_ticket: ['new_ticketid', 'new_name', 'new_salary'] } };

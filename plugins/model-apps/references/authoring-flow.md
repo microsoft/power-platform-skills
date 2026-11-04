@@ -323,6 +323,28 @@ That mapping is what the design document renders as a traceability table, and an
 flagged by the lint gate — so a job with no surface is a **visible** design gap rather than a
 silent one.
 
+**Offer each optional capability that applies — once, as a question, never as a default.** Ask even when
+the maker has not mentioned it (they may not know it exists), and skip an offer only for a capability the
+maker already asked for: an explicit request counts as acceptance. Each one stays off unless the maker says
+yes or asks for it; a "no" or silence adds nothing to the spec:
+
+- **Branding** — for every new app, ask whether it should be branded (brand colours, a header colour, a
+  logo). If yes, add `app.theme` — Preview, published with the app, and an app publication publishes every
+  pending change of the app.
+- **Outside services and per-environment values** — when the app calls an outside service or a value
+  differs per environment (a base URL, a key, a connector, an action a page calls), offer configuration
+  items: environment variables and connection references; the values stay out of the spec.
+- **Duplicate records** — when the jobs identify duplicate records (the same customer or contact entered
+  twice, one record per email address), offer a duplicate-detection rule on that table, even when the app
+  uses no outside service.
+- **A reusable server-side operation** — when the app needs an operation that several surfaces, flows or
+  pages call, or that must run on the server (a calculation, a multi-step change), offer a Custom API, even
+  when nothing outside Dataverse is involved.
+- **Rules and processes** — when the jobs include a validation or a guided process (a required field once a
+  record closes, stages a record moves through), offer a declared business rule or business process flow:
+  the build manages the whole rule or flow, creates it or adopts one that exists, and never edits one in
+  place; binding an existing one needs an `--authorize adopt:` approval.
+
 ### Level (a) — Data model
 
 Propose the `entities` block (including `columns` and `primaryAttribute`) and
@@ -432,6 +454,13 @@ single turn (they are closely related — the user should see charts and sample
 data alongside the forms they reference). **This level is design-only: do not
 author page `.tsx` here** — propose page intents and defer code generation to
 Phase 1.5.
+
+**Offer declared layouts, once, as a question — never as a default.** Whenever you propose forms or
+dashboards, ask whether the maker wants the layout of any of them to stay as the spec says on every
+rebuild; if yes, write `reconcile: "declared"` on that one form or Global Standard dashboard. The parts the
+spec does not declare stay the maker's, and binding one that already exists needs an `--authorize adopt:`
+approval. Without a yes and without an explicit request, write nothing declared; forms stay
+`layout: "auto"`. A maker who already asked for a fixed layout is not asked again: their request is the yes.
 
 #### Forms
 
@@ -908,7 +937,7 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
   "entities": [ { "schemaName", "displayName", "pluralName", "primaryAttribute", "columns" } ],
   "relationships": [ { "type", "referenced", "referencing", "lookup" } ],
   "forms": [ { "entity", "type", "name", "layout", "subgrids?" } ],
-  "views": [ { "entity", "type", "name", "columns", "sort", "activeOnly" } ],
+  "views": [ { "entity", "name", "columns", "sort", "activeOnly" } ],
   "charts": [ { "entity", "name", "groupBy", "measure", "chartType" } ],
   "pages": [ { "key", "name", "purpose", "dataSources", "source": { "kind": "tsx", "codeFile": "..." } } ],
   "design?": { "accent", "density", "cornerRadius", "darkMode", "layout" },

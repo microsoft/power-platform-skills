@@ -2152,3 +2152,107 @@ test('incarnation identity: a lineage selected by its identity under another key
   assert.equal(fileText(s), text, 'nothing written');
   assert.equal(typeof prepareAt(open(dir), list[0].rootId, { incarnation: { identity: FORM, epoch: 2, rootId: list[0].rootId } }, ALIAS), 'string');
 });
+
+// --- A new dashboard's durable create receipt (noteDashboardCreateDraft / Dispatch / Answer) and the created root's
+// create evidence (`localCreateDraft`), which the next run's recovery of a retained workspace copy relies on.
+const RECEIPT = { rootId: DASH, draftSha256: H('7'), bodySha256: H('8') };
+function receiptedCreate(store, key = 'ops') {
+  const token = store.prepareAttempt({ family: 'dashboard', key, baseGeneration: null, root: { kind: 'dashboard', key, id: DASH }, knownScopes: [DASH_SCOPE], declarationSha256: H('e'), publication: { scope: DASH_SCOPE, state: 'owed' } });
+  const { epoch } = store.markSending(token, expected(DASH, [], 'dashboard-v1'), { observed: true });
+  return { token, epoch };
+}
+function acknowledgedCreate(store, key = 'ops') {
+  const { token, epoch } = receiptedCreate(store, key);
+  store.noteDashboardCreateDraft(token, { sendEpoch: epoch, ...RECEIPT });
+  const { dispatchToken } = store.noteDashboardCreateDispatch(token, { sendEpoch: epoch, bodySha256: RECEIPT.bodySha256 });
+  store.noteAttemptDispatch(token, epoch);
+  store.noteDashboardCreateAnswer(token, { sendEpoch: epoch, dispatchToken, bodySha256: RECEIPT.bodySha256 });
+  return { token, epoch };
+}
+const commitDashboard = (store, token, key, baseGeneration = null, root = rec('dashboard', key, DASH)) => store.commitGroup({ token, baseGeneration, records: [root], proof: PROOF, consumerState: { declaration: {}, tiles: {}, seedIds: [] }, publication: { scope: DASH_SCOPE, state: 'owed', desiredSha256: H('5'), dispatchToken: null } });
+const rootOf = (store, key = 'ops') => store.readGroup('dashboard', key).committed.records.find((r) => r.kind === 'dashboard');
+
+test('dashboard create receipt: recorded once, immutable, its dispatch and answer correlated, every refusal writing nothing', () => {
+  const store = open(makeTempDir('mb-dash-receipt-'));
+  const { token, epoch } = receiptedCreate(store);
+  store.noteDashboardCreateDraft(token, { sendEpoch: epoch, ...RECEIPT });
+  store.noteDashboardCreateDraft(token, { sendEpoch: epoch, ...RECEIPT });
+  const before = fileText(store);
+  assert.equal(codeOf(() => store.noteDashboardCreateDraft(token, { sendEpoch: epoch, ...RECEIPT, bodySha256: H('9') })), CODES.completion, 'another body is not sent under it');
+  assert.equal(codeOf(() => store.noteDashboardCreateDraft(token, { sendEpoch: epoch + 1, ...RECEIPT })), CODES.pending, 'another epoch');
+  assert.equal(codeOf(() => store.noteDashboardCreateDraft(token, { sendEpoch: epoch, ...RECEIPT, rootId: FORM })), CODES.notSettled, 'another root');
+  assert.equal(codeOf(() => store.noteDashboardCreateDispatch(token, { sendEpoch: epoch, bodySha256: H('9') })), CODES.completion, 'another body is not dispatched');
+  assert.equal(fileText(store), before, 'the refusals wrote nothing');
+  const { dispatchToken } = store.noteDashboardCreateDispatch(token, { sendEpoch: epoch, bodySha256: RECEIPT.bodySha256 });
+  assert.equal(store.noteDashboardCreateDispatch(token, { sendEpoch: epoch, bodySha256: RECEIPT.bodySha256 }).dispatchToken, dispatchToken, 'a re-send keeps its dispatch');
+  assert.equal(codeOf(() => store.noteDashboardCreateAnswer(token, { sendEpoch: epoch, dispatchToken: 'another', bodySha256: RECEIPT.bodySha256 })), CODES.notSettled, 'an answer to another dispatch');
+  assert.equal(store.readGroup('dashboard', 'ops').pending.dashboardCreate.acknowledged, false);
+  assert.equal(codeOf(() => store.noteSaved(token, { proof: null, acknowledgedRoot: true })), CODES.notSettled, 'an SDK result never acknowledges a receipted create');
+  store.noteDashboardCreateAnswer(token, { sendEpoch: epoch, dispatchToken, bodySha256: RECEIPT.bodySha256 });
+  assert.equal(store.readGroup('dashboard', 'ops').pending.dashboardCreate.acknowledged, true);
+  store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+
+  // An edit of an existing root keeps no create receipt.
+  const edit = open(makeTempDir('mb-dash-receipt-edit-'));
+  const g = settleDashboard(edit, 'ops');
+  const t2 = edit.prepareAttempt({ family: 'dashboard', key: 'ops', baseGeneration: g.generation, root: g.root, knownScopes: [DASH_SCOPE], declarationSha256: H('e') });
+  const { epoch: e2 } = edit.markSending(t2, expected(DASH, [], 'dashboard-v1'), { observed: true });
+  assert.equal(codeOf(() => edit.noteDashboardCreateDraft(t2, { sendEpoch: e2, ...RECEIPT })), CODES.notSettled);
+});
+
+test('dashboard create receipt: a proven-unsent continuation moves it to the new epoch with its hashes kept; an acknowledged one never continues', () => {
+  const store = open(makeTempDir('mb-dash-receipt-epoch-'));
+  const { token, epoch } = receiptedCreate(store);
+  store.noteDashboardCreateDraft(token, { sendEpoch: epoch, ...RECEIPT });
+  store.noteDashboardCreateDispatch(token, { sendEpoch: epoch, bodySha256: RECEIPT.bodySha256 });
+  store.noteAttemptDispatch(token, epoch);
+  store.noteAttemptNotStarted(token, epoch);
+  const next = store.markSending(token, expected(DASH, [], 'dashboard-v1'), { claim: 'continue', observed: true });
+  assert.equal(next.epoch, epoch + 1);
+  const d = store.readGroup('dashboard', 'ops').pending.dashboardCreate;
+  assert.deepEqual(d, { formatVersion: 1, rootId: DASH, sendEpoch: epoch + 1, draftSha256: RECEIPT.draftSha256, bodySha256: RECEIPT.bodySha256, dispatchToken: null, acknowledged: false });
+
+  const acked = open(makeTempDir('mb-dash-receipt-acked-'));
+  const { token: t2 } = acknowledgedCreate(acked);
+  const before = fileText(acked);
+  assert.equal(codeOf(() => acked.markSending(t2, expected(DASH, [], 'dashboard-v1'), { claim: 'continue', observed: true })), CODES.pending);
+  assert.equal(fileText(acked), before);
+});
+
+test('created dashboard root: the store mints its create evidence from the acknowledged receipt, keeps it for later generations of that root, refuses one a caller makes up, and drops it with a retirement', () => {
+  const store = open(makeTempDir('mb-dash-marker-'));
+  const { token } = acknowledgedCreate(store);
+  store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+  const g1 = commitDashboard(store, token, 'ops');
+  const marker = { formatVersion: 1, rootId: DASH, attemptToken: token, draftSha256: RECEIPT.draftSha256, bodySha256: RECEIPT.bodySha256 };
+  assert.deepEqual(rootOf(store).localCreateDraft, marker);
+
+  const edit = () => {
+    const { committed } = store.readGroup('dashboard', 'ops');
+    const t = store.prepareAttempt({ family: 'dashboard', key: 'ops', baseGeneration: committed.generation, root: committed.root, knownScopes: [DASH_SCOPE], declarationSha256: H('e') });
+    store.markSending(t, expected(DASH, [], 'dashboard-v1'));
+    store.noteSaved(t, { proof: null, acknowledgedRoot: false });
+    return { t, base: committed.generation };
+  };
+  let { t, base } = edit();
+  const before = fileText(store);
+  assert.equal(codeOf(() => commitDashboard(store, t, 'ops', base, rec('dashboard', 'ops', DASH, { localCreateDraft: { ...marker, draftSha256: H('9') } }))), CODES.groupInvalid, 'made-up evidence');
+  assert.equal(fileText(store), before, 'nothing written');
+  const g2 = commitDashboard(store, t, 'ops', base, rec('dashboard', 'ops', DASH, { localCreateDraft: marker }));
+  assert.notEqual(g2.generation, g1.generation);
+  assert.deepEqual(rootOf(store).localCreateDraft, marker, 'the record read back and handed in again keeps it');
+  ({ t, base } = edit());
+  commitDashboard(store, t, 'ops', base);
+  assert.deepEqual(rootOf(store).localCreateDraft, marker, 'a later generation of the same root keeps it');
+
+  // A created root with no receipt (no observed send) has none.
+  const plain = open(makeTempDir('mb-dash-marker-plain-'));
+  settleDashboard(plain, 'ops');
+  assert.equal(rootOf(plain).localCreateDraft, undefined);
+
+  // Retired with its root: nothing in the store keeps it, so no later incarnation of the key can inherit it.
+  const g = store.readGroup('dashboard', 'ops').committed;
+  retireNow(store, { family: 'dashboard', key: 'ops', generation: g.generation, rootId: DASH, evidence: absent(DASH) });
+  assert.equal(store.readGroup('dashboard', 'ops').committed, null);
+  assert.equal(fileText(store).includes('localCreateDraft'), false);
+});

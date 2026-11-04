@@ -28,6 +28,7 @@ const {
   emptyResult,
   operation,
   refusal,
+  readFailure,
   isAuthorized,
   pushIfChanged,
   commitPublication,
@@ -122,8 +123,9 @@ async function planQuickFind({ entity, quickFind, sdk }, ctx = {}) {
   let listed;
   try {
     listed = await sdk.fetchArtifactList('view', { entityLogicalName: entity });
-  } catch {
-    plan.unknown.push(refusal(key, 'quick-find-views-unreadable', 'the table\'s views could not be listed, so its Quick Find view could not be found'));
+  } catch (err) {
+    // The read's own failure is kept with the finding (sdk-build.js tells the lag of a table it just created by it).
+    plan.unknown.push(readFailure(key, 'quick-find-views-unreadable', 'the table\'s views could not be listed, so its Quick Find view could not be found', err));
     return plan;
   }
   const mine = (listed || []).filter((v) => v && String(v.entityLogicalName || entity).toLowerCase() === entity.toLowerCase());
@@ -148,8 +150,8 @@ async function planQuickFind({ entity, quickFind, sdk }, ctx = {}) {
   try {
     await sdk.fetchArtifact('view', plan.viewId);
     view = await sdk.getArtifact('view', plan.viewId);
-  } catch {
-    plan.unknown.push(refusal(key, 'quick-find-view-unreadable', 'the Quick Find view could not be read'));
+  } catch (err) {
+    plan.unknown.push(readFailure(key, 'quick-find-view-unreadable', 'the Quick Find view could not be read', err));
     return plan;
   }
   if (!view || !Array.isArray(view.findColumns)) {

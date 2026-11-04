@@ -42,7 +42,8 @@
     "ui: every compiled form places each field exactly once",
     "ui: every compiled form places exactly the fields it intends to carry",
     "round-trip: a lookup's shadow columns are never recovered as spec columns (#574)",
-    "round-trip: a download recovers no column the spec never authored"
+    "round-trip: a download recovers no column the spec never authored",
+    "author: an optional capability is in the spec only when the prompt asks for it, and each one it asks for is authored as expected"
   ],
   "evals": [
     {
@@ -297,9 +298,11 @@
       "spec": "app-spec.json",
       "prompt": "Shipments carry a Region from a shared choice whose numbers an integration depends on (North 1, South 2, Export 10), a bilingual Priority whose numbers must not change between environments (Low 1, High 5), and a Stage whose Held option must stay 100000005. The High Priority view filters on Priority 5.",
       "expect": { "tables": ["cnt_shipment"], "relationships": [], "views": ["High Priority"], "charts": [], "pages": [],
+        "viewFilters": [{ "entity": "cnt_shipment", "view": "High Priority", "attr": "cnt_priority", "op": "eq", "value": 5 }],
         "optionValues": { "cnt_region": { "1": "North", "2": "South", "10": "Export" }, "cnt_shipment.cnt_priority": { "1": "Low", "5": "High" }, "cnt_shipment.cnt_stage": { "100000005": "Held" } } },
       "expectations": [
-        "author: option values the maker depends on are written as { value, label } and the spec asks for 2.21.0"
+        "author: option values the maker depends on are written as { value, label } and the spec asks for 2.21.0",
+        "ui: a view filter the prompt names is built from filters[] attr/op/value"
       ]
     },
     {
@@ -520,7 +523,10 @@
           "Sites by Region"
         ],
         "charts": [],
-        "pages": []
+        "pages": [],
+        "declared": {
+          "forms": { "tables": ["cnt_site"] }
+        }
       },
       "expectations": [
         "ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)",
@@ -543,7 +549,10 @@
         "charts": [
           "Work Orders by Status"
         ],
-        "pages": []
+        "pages": [],
+        "declared": {
+          "dashboards": { "minCount": 1 }
+        }
       },
       "expectations": []
     },
@@ -561,7 +570,10 @@
           "Open Requests"
         ],
         "charts": [],
-        "pages": []
+        "pages": [],
+        "declared": {
+          "businessRules": { "tables": ["cnt_request"], "minCount": 2 }
+        }
       },
       "expectations": []
     },
@@ -579,9 +591,36 @@
           "Open Claims"
         ],
         "charts": [],
-        "pages": []
+        "pages": [],
+        "declared": {
+          "businessProcessFlows": { "tables": ["cnt_claim"] }
+        }
       },
       "expectations": []
+    },
+    {
+      "id": 25,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A new Parts Counter app: parts with a stock level and a price, and a list of all parts. No branding, no outside services or per-environment settings, no business rules or process flows, and no fixed form or dashboard layouts.",
+      "expect": {
+        "tables": [
+          "cnt_part"
+        ],
+        "relationships": [],
+        "views": [
+          "All Parts"
+        ],
+        "charts": [],
+        "pages": [],
+        "configuration": {},
+        "noBusinessLogic": true
+      },
+      "expectations": [
+        "author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec",
+        "author: a theme is declared only on an explicit branding ask, with the asked colours, no unasked font, and a declared image web resource as the logo, never a URL",
+        "author: a maker who declines business rules and process flows gets no rule and no flow of any kind"
+      ]
     }
   ]
 }

@@ -142,6 +142,12 @@ function localizedLabelLcidsInSpec(spec) {
   return [...byLcid.entries()].sort(([a], [b]) => a - b).map(([lcid, where]) => ({ lcid, where }));
 }
 
+// Whether the entity carries any localized label: the one fact that decides whether an inconclusive existence probe of its table may be
+// settled by the broad, label-bearing table list (findExistingTable). Every caller that probes a table the build may go on to create asks it here.
+function entityHasLocalizedLabels(entity) {
+  return localizedLabelLcidsInSpec({ entities: [entity] }).length > 0;
+}
+
 // Halt when a LOCALIZED label names a language the organization has not provisioned. AB#6686428.
 //
 // This is NOT a validation nicety — it is the difference between the feature working and the feature
@@ -2679,7 +2685,7 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
 // `owed` is the Map provisionDataModel keeps (see there): this attempt's tables whose length is to be set, and those an earlier attempt
 // left unset. `carriedIn` is the set of the second kind as the phase found them; `waitingKeys` collects the alternate keys that wait for
 // a length step, for createWaitingKeys to make once the steps have run.
-async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier, createdTables }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier, createdTables, localizedLabelsChecked = false }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
   // `lookupLabels` records the label each spec lookup column carries once this phase is done
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
@@ -2695,8 +2701,10 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
 
   // Before any write: refuse a localized label naming a language this org has not provisioned.
   // Dataverse would accept it and silently keep only the provisioned label (live-measured), so this
-  // must run ahead of the first createTable rather than as a post-hoc verify.
-  await checkLocalizedLabelLanguages(spec, provisionedLanguages);
+  // must run ahead of the first createTable rather than as a post-hoc verify. A caller that also creates the
+  // publisher and the solution checks earlier still, before those (runSdkBuildPhases, provisionEntities), and
+  // says so with `localizedLabelsChecked`, so the language list is read once.
+  if (!localizedLabelsChecked) await checkLocalizedLabelLanguages(spec, provisionedLanguages);
 
   const globalChoiceIds = result.globalChoiceIds;
   // The declared tables (lower-case logical names) this run found already in the environment, as opposed
@@ -2735,7 +2743,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // Whether THIS entity carries any localized label. It decides whether an inconclusive existence
     // probe may be resolved by the broad `findTables` read — safe for a plain-label entity, poisoning
     // for a localized one. See findExistingTable.
-    const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
+    const entityIsLocalized = entityHasLocalizedLabels(e);
     const hits = await findExistingTable(provision, e.schemaName, {
       hasLocalizedLabels: entityIsLocalized, includeKeys: !!(e.alternateKeys && e.alternateKeys.length),
     });
@@ -2830,6 +2838,15 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           unprovenTables.add(logical);
         }
       }, { recoverable: true });
+      // A table found only after its create was answered "already exists" has its columns read now, as one the first lookup found does:
+      // the Date and Time guard below picks the declared repairs from them, so an authorized repair is made (and a refused one stops the
+      // build) BEFORE a column is added, in this build, and a column the table has is not sent again. The read is the same narrow one, and
+      // an unreadable answer leaves every declared column looking new, as before. A table that declares no column has nothing the read
+      // decides, so it is not read.
+      if (foundAfterCreate && buildable.length) {
+        existingColRows = await findExistingColumns(provision, logical, warn);
+        existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
+      }
     }
     // The primary name column's length, when the spec asks for one: one narrated step in every case (the plan counts it). For a
     // table this build created the step is queued here and runs at the end of the phase (provisionDataModel) — a label-bearing
@@ -3041,7 +3058,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // already existed (reconcileColumnSecurity). A secured column is secured in this phase, before any sample row is written. Never on a
     // Customer column (validation refuses it: updateColumn refuses every change to one), and the required and capability updates above
     // never carry it. A Lookup column is reconciled after the relationships that create it.
-    const securityTargets = existingTable ? new Set([...existingCols, ...skippedExisting]) : skippedExisting;
+    const securityTargets = (existingTable || foundAfterCreate) ? new Set([...existingCols, ...skippedExisting]) : skippedExisting;
     await reconcileColumnSecurity({ sdk, provision, runner, name: e.schemaName, logical, columns: buildable.filter((c) => c.type !== 'Customer'), targets: securityTargets, authorizedDestructive });
     for (const c of requiredDeclared) {
       if (existingTable && existingCols.has(c.schemaName.toLowerCase())) continue;
@@ -3764,4 +3781,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, ALREADY_EXISTS_CODES, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };
+module.exports = { makeRunner, entityHasLocalizedLabels, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, ALREADY_EXISTS_CODES, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };

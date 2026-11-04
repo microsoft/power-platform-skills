@@ -3638,6 +3638,24 @@ test('resolveExistingFormId treats a "not found in the MetadataCache" 400 (brand
   assert.strictEqual(await resolveExistingFormId(provision, { entityLogicalName: 'ftx_widget', name: 'Information', formType: 'Main' }), null);
 });
 
+test('resolveExistingFormId (#796): the same answer is also the lag of a table created moments ago, so a caller that would create on a miss gets the failure back', async () => {
+  // Live, a table that exists answered the form lookup with
+  //   HTTP 400 {"error":{"code":"0x80041102","message":"The entity with a name = 'contoso_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075"}}
+  // and the build read that as "no form" and created a second form of the same name.
+  const lag = () => Object.assign(new Error("The entity with a name = 'contoso_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache"), { statusCode: 400, code: '0x80041102' });
+  const def = { entityLogicalName: 'contoso_ticket', name: 'Information', formType: 'Main' };
+  const lagging = { queryRecords: async () => { throw lag(); } };
+  await assert.rejects(() => resolveExistingFormId(lagging, def, { tableNotInCache: 'fail' }), /not found in the MetadataCache/);
+  const proofs = [];
+  await assert.rejects(() => resolveExistingFormId(lagging, def, { tableNotInCache: async (err) => { proofs.push(err.code); return false; } }), /not found in the MetadataCache/, 'the table is not proved absent');
+  assert.strictEqual(await resolveExistingFormId(lagging, def, { tableNotInCache: async (err) => { proofs.push(err.code); return true; } }), null, 'the table is proved absent');
+  assert.deepStrictEqual(proofs, ['0x80041102', '0x80041102']);
+  assert.strictEqual(await resolveExistingFormId(lagging, def), null, 'a read-only caller keeps "not found"');
+  // A successful read with no row is "not found" for every caller, and any other failure stays a failure.
+  assert.strictEqual(await resolveExistingFormId({ queryRecords: async () => [] }, def, { tableNotInCache: 'fail' }), null);
+  await assert.rejects(() => resolveExistingFormId({ queryRecords: async () => { throw Object.assign(new Error('503 Service Unavailable'), { statusCode: 503 }); } }, def, { tableNotInCache: async () => true }), /503/);
+});
+
 test('resolveExistingFormId RE-THROWS a non-metadata error (a transient failure must still fail closed)', async () => {
   const provision = { queryRecords: async () => { const e = new Error('429 Too Many Requests'); e.statusCode = 429; throw e; } };
   await assert.rejects(

@@ -96,14 +96,17 @@ function verifyDeclaredBpf({ flow, group, art }) {
  *   - the store keeps its original declaration, and it is a declared flow,
  *   - a fresh read of its bound flow through `sdk` (the download's own throwaway SDK) answers,
  *   - that read certifies the group's last proof (bpfProofIssues answers none),
- *   - every persona its securityRoles name is declared in the downloaded spec, which a download never writes, so a flow with
- *     securityRoles is always left out (personasNotIn), and
+ *   - every persona its securityRoles name is declared in the downloaded spec, or is read from its role and proved to rebuild
+ *     that role exactly with the flow's grants already on it (lib/persona-restore.js; then it is added to `spec.personas`), and
  *   - the downloaded spec still validates with it (`validate`, the download's own validator).
  * Every other group (unread, changed since, not valid here, or still pending or unusable in the store) is answered in `stale` with
- * its reason, never silently dropped. Answers { restored: [key], stale: [{ key, reason }] }; a store file that cannot be used
- * throws `managed-manifest-unusable`.
+ * its reason, never silently dropped. Answers { restored: [key], stale: [{ key, reason }], personas?: [{ name, flows: [key] }] },
+ * `personas` only when one was written; a store file that cannot be used
+ * throws `managed-manifest-unusable`. `fragments`, when given, is an array a stale flow is pushed onto (noteBpfFragment) when its
+ * declaration is proved and left out only for the personas it names; the caller writes them to the fragments file
+ * (lib/managed-fragments.js).
  */
-async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
+async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate, fragments }) {
   const { groups, pending, invalid } = readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName }, 'bpf');
   const restored = [];
   const stale = [
@@ -112,6 +115,9 @@ async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName,
   ];
   if (!groups.size) return { restored, stale: sortByKey(stale) };
   const base = validate(spec);
+  // The personas this download writes, by lower-cased name -> { name, flows }, and the prover that reads them (made at first need).
+  const written = new Map();
+  let prover = null;
   for (const key of [...groups.keys()].sort()) {
     const group = groups.get(key);
     const id = bareId(group.root && group.root.id);
@@ -135,29 +141,76 @@ async function restoreManagedBpfs({ sdk, spec, file, environment, appUniqueName,
     const flows = Array.isArray(spec.businessProcessFlows) ? spec.businessProcessFlows : [];
     const at = flows.findIndex((f) => f && lc(f.entity) === lc(declaration.entity) && lc(f.name) === lc(declaration.name));
     const next = at >= 0 ? flows.map((f, i) => (i === at ? declaration : f)) : [...flows, declaration];
-    // A flow's securityRoles name personas of the spec it was built from, and a download writes no personas[]: a persona
-    // owns its role and the build converges that role onto exactly the privileges declared (ReplacePrivilegesRole), so a
-    // persona guessed from the environment would strip every privilege the guess missed on the next build. The flow is
-    // not restored without its roles either (that would drop authored intent), so it is left out with what to copy.
+    // A flow's securityRoles name personas of the spec it was built from, and a persona is not a reference: the build OWNS
+    // its role and converges it onto exactly the privileges declared (ReplacePrivilegesRole). So a persona the downloaded
+    // spec lacks is written only when it is read from its role and PROVED to rebuild that role exactly, and the flow's grants
+    // are already on it (lib/persona-restore.js). A persona this download wrote for an earlier flow needs this flow's grants
+    // proved too. The flow is not restored without its roles either (that would drop authored intent): when any persona is
+    // not proved, it is left out with what to copy.
     const missing = personasNotIn(spec, declaration);
-    if (missing.length) {
-      stale.push({ key, reason: `its securityRoles name ${missing.map((p) => `persona '${p}'`).join(', ')}, and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from` });
-      continue;
+    const own = personasWrittenFor(declaration, written);
+    const add = [];
+    if (missing.length || own.length) {
+      prover = prover || require('./persona-restore.js').createPersonaProver({ sdk, appUniqueName, solutionUniqueName });
+      // The flow is proved above, so its projection is readable; a throw here still only leaves the grants unproved.
+      let backing = '';
+      try { backing = settlement().projectBpf(art).uniqueName; } catch { /* flowGrantsMissing refuses an unknown table */ }
+      const failed = [];
+      // A name listed twice (in any case) is proved and written once: two entries would be a duplicate persona.
+      const seen = new Set();
+      for (const name of [...missing, ...own]) {
+        if (seen.has(lc(String(name).trim()))) continue;
+        seen.add(lc(String(name).trim()));
+        const proof = await prover.prove(name);
+        const why = proof.ok ? await prover.flowGrantsMissing(proof, backing) : proof.why;
+        if (why) failed.push(`persona '${name}', which the download could not prove from its role: ${why}`);
+        else if (missing.includes(name) && !add.some((p) => lc(p.name) === lc(proof.name))) add.push(proof);
+      }
+      if (failed.length) {
+        const reason = `its securityRoles name ${failed.join('; ')}; copy this flow and the personas it names from the spec it was built from`;
+        stale.push({ key, reason });
+        noteBpfFragment(fragments, { key, reason, spec, declaration, next, missing, validate });
+        continue;
+      }
     }
-    const check = validate({ ...spec, businessProcessFlows: next });
+    const personas = add.length ? [...(Array.isArray(spec.personas) ? spec.personas : []), ...add.map((p) => p.persona)] : null;
+    const check = validate({ ...spec, ...(personas ? { personas } : {}), businessProcessFlows: next });
     if (!check || !check.ok) {
       const errors = ((check && check.errors) || []).slice(0, 3).map((x) => (typeof x === 'string' ? x : (x && x.message) || JSON.stringify(x)));
       stale.push({ key, reason: `its declaration does not validate in the downloaded spec (${errors.join('; ') || 'invalid'})` });
       continue;
     }
     spec.businessProcessFlows = next;
+    if (personas) spec.personas = personas;
+    for (const p of add) written.set(lc(p.name), { name: p.name, flows: [key] });
+    for (const name of new Set(own.map((n) => lc(String(n).trim())))) written.get(name).flows.push(key);
     restored.push(key);
   }
-  return { restored, stale: sortByKey(stale) };
+  const personas = [...written.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return { restored, stale: sortByKey(stale), ...(personas.length ? { personas } : {}) };
+}
+
+// The personas a flow declaration's securityRoles name that this download wrote for an earlier flow (`written`, by lower-cased
+// trimmed name), in declaration order.
+function personasWrittenFor(declaration, written) {
+  const named = declaration.securityRoles && Array.isArray(declaration.securityRoles.personas) ? declaration.securityRoles.personas : [];
+  return named.filter((p) => written.has(lc(String(p).trim())));
 }
 
 function sortByKey(list) {
   return list.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+// A proved flow left out only for the personas its securityRoles name goes to the fragments file (lib/managed-fragments.js),
+// ready to paste. "Only" is checked, not assumed: the spec must validate with the flow (`next`, the flows it would hold) and a
+// stub for each missing persona. The stubs are never written. Without a collector nothing is noted.
+function noteBpfFragment(fragments, { key, reason, spec, declaration, next, missing, validate }) {
+  if (!Array.isArray(fragments)) return;
+  const { stubPersona } = require('./managed-fragments.js');
+  const personas = [...(Array.isArray(spec.personas) ? spec.personas : []), ...missing.map((p) => stubPersona(String(p).trim(), declaration.entity))];
+  const check = validate({ ...spec, personas, businessProcessFlows: next });
+  if (!check || !check.ok) return;
+  fragments.push({ family: 'bpf', key, reason, needs: missing.map((p) => ({ persona: String(p).trim() })), paste: { businessProcessFlows: [declaration] } });
 }
 
 // The personas a flow declaration's securityRoles name that `spec.personas` does not declare, in declaration order,

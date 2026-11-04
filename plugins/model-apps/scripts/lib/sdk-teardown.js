@@ -71,6 +71,7 @@ const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { savedPageRows, currentLayerRow } = require('./app-components.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
+const { readSystemFormRootPresence } = require('./systemform-published.js');
 const { unreadableAnswer } = require('./collection-answers.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-sdk.js');
@@ -165,6 +166,20 @@ async function deleteFlowResendingLostTransaction(sdk, item) {
       await new Promise((r) => setTimeout(r, 1000 * 2 ** resend));
     }
   }
+}
+
+// The refusal of a form delete that would leave its table with no active Main form: HTTP 400, whose body is
+//   {"error":{"code":"0x8004F661","message":"This operation can’t be completed. You must have at least one active Main form."}}
+// (the apostrophe is U+2019; the SDK words the error `HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/systemforms(<formid>): <message>` and keeps the body in `cause`).
+// The code is the platform's FallbackFormDeactivation:
+//   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+// A table the build created holds only its default Main form, which the build owns, so the explicit delete of that form is refused; the table's own delete, a few steps later,
+// removes the form with it. The refusal is recognised by its status and its CODE only, never by its words: the message is localized, and a validation rule or plug-in can quote
+// the same words under another code, which is another failure. A body with no code, or another code — including the related FallbackFormDeletion (0x8004F654), which is out of scope —
+// stays the failure it is. serviceCodeOf returns the code lower-cased.
+const LAST_MAIN_FORM_CODE = '0x8004f661';
+function isLastMainFormRefusal(err) {
+  return httpStatus(err) === 400 && serviceCodeOf(err) === LAST_MAIN_FORM_CODE;
 }
 
 // Marks an error FAIL-CLOSED: what the step could not prove is itself the failure, so deleteStep passes it on before any of its shortcuts. Those read
@@ -1051,7 +1066,13 @@ const KIND_HANDLERS = {
       // A main form the build promoted to default can't be deleted until a stock form is restored
       // as the active default (reverse of Gap 2's promote) — otherwise Dataverse blocks the delete.
       if (item.isMain) await restoreStockMainForm(sdk, item.entity, item.id);
-      await sdk.deleteRemoteArtifact('form', item.id);
+      try {
+        await sdk.deleteRemoteArtifact('form', item.id);
+      } catch (err) {
+        // Tagged, not swallowed: the error still reaches the step as the failure it is, and runTeardownSteps decides whether the table's delete settles it.
+        if (isLastMainFormRefusal(err)) err.lastMainFormRefusal = { id: item.id, entity: item.entity };
+        throw err;
+      }
     },
   },
   chart: {
@@ -1906,9 +1927,42 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   // that step, which comes before every step it can hold (the plan's `heldBy`: web resources, global choices and relationships to
   // themselves all follow the tables). What the platform would refuse while such a table exists is not sent.
   const keptTables = new Map();
+  // A form whose delete the platform refused because it is the last active Main form of its table (isLastMainFormRefusal) is not yet a failure: the table's own delete,
+  // which comes later, removes the form with it. Each is recorded with the error entry it provisionally adds, and settled once the tables step is over
+  // (settleDeferredForms): the entry stands unless this run deleted the form's table AND a fresh read of the form's exact id shows it gone.
+  const deferredForms = [];
+  // The tables this run deleted, or found already gone: lower-cased logical names.
+  const tablesGone = new Set();
+  const settleDeferredForms = async () => {
+    let cleared = false;
+    for (const d of deferredForms.splice(0)) {
+      let removed = false;
+      if (tablesGone.has(d.entity)) {
+        try {
+          // Both layers of the row, each answered 404 with the missing-row code (lib/systemform-published.js); any other answer, or a read that cannot be made, proves nothing.
+          removed = (await readSystemFormRootPresence(sdk.dataverse, d.id)) === 'absent';
+        } catch {
+          removed = false;
+        }
+      }
+      if (removed) {
+        const at = result.errors.indexOf(d.entry);
+        if (at >= 0) result.errors.splice(at, 1);
+        (result.deleted.form = result.deleted.form || []).push(d.id);
+        cleared = true;
+        emit({ phase: d.step.phase, status: 'ok', label: `${d.step.label} (1 deleted — removed with its table ${d.entity})`, n: d.n, total });
+      } else {
+        emit({ phase: d.step.phase, status: 'error', label: d.step.label, n: d.n, total, detail: d.entry.message });
+      }
+    }
+    if (cleared && !result.errors.length) result.ok = true;
+  };
+  // The tables step ends with the last table of the plan; a plan with none settles at the step after the form.
+  const stepsBeforeTablesEnd = plan.reduce((last, p, i) => (p.kind === 'table' ? i + 1 : last), 0);
   let n = 0;
   for (const step of plan) {
     const myN = (n += 1);
+    if (deferredForms.length && myN > stepsBeforeTablesEnd) await settleDeferredForms();
     // The barrier for the batched default-view resets: nothing past the resets may run before they are
     // published (the relationship deletes that follow them are what the resets unblock).
     if (step.kind !== 'resetDefaultViews') await settleDeferredResetPublishes(sdk, deferredResetPublishes);
@@ -1995,6 +2049,7 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         continue;
       }
       const { deletedIds, absentIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' || step.kind === 'app' ? deferredResetPublishes : undefined);
+      if (step.kind === 'table' && (deletedIds.length || absentIds.length)) tablesGone.add(String(step.target.logical).toLowerCase());
       // A removal that looked for its artifact itself and found none is a step that found nothing — the line and the counts a resolver that finds none gets — and not a deletion.
       if (!deletedIds.length && !skipped.length && absentIds.length) {
         result.skipped.push(step.label);
@@ -2037,8 +2092,14 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
     } catch (err) {
       result.ok = false;
       const message = errMsg(err);
-      result.errors.push({ step: step.label, message });
-      emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
+      const entry = { step: step.label, message };
+      result.errors.push(entry);
+      // The last Main form of a table: reported once the tables step has decided (settleDeferredForms), not as a failure now.
+      if (step.kind === 'form' && err && err.lastMainFormRefusal) {
+        deferredForms.push({ step, n: myN, id: err.lastMainFormRefusal.id, entity: String(err.lastMainFormRefusal.entity).toLowerCase(), entry });
+      } else {
+        emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
+      }
       if (step.kind === 'genpage') pagesFailed = true;
       if (step.kind === 'businessRules') {
         // Whichever read or delete failed, the rule may still have an activated copy, and that copy
@@ -2067,6 +2128,7 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
       }
     }
   }
+  if (deferredForms.length) await settleDeferredForms();
   return result;
 }
 

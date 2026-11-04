@@ -13,8 +13,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runSdkBuild } = require('../lib/sdk-build.js');
-const { validateAppSpec } = require('../lib/app-spec.js');
+const { runSdkBuild, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { validateAppSpec, BPF_ROLE_ACCESS } = require('../lib/app-spec.js');
+const { JOB_NAME } = require('../lib/persona-restore.js');
+const { withRoles, CHILD_BU, ORG_OWNED } = require('./helpers/role-wire.js');
 const { openManagedBindings, attemptProvenUnsent } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
@@ -204,6 +206,78 @@ test('a declared flow is created Draft under its catalog ids, proved, then activ
     assert.deepEqual(again.writes.filter((c) => /^workflows/i.test(c.path)), [], 'the same declaration again is a no-op');
     assert.equal(again.out.created.businessProcessFlows[KEY], id);
     assert.equal(again.out.created.bpfBackingTables[KEY], first.out.created.bpfBackingTables[KEY]);
+  });
+});
+
+// #796: the flow's identity read on a table this invocation created can meet the table's metadata-cache lag (HTTP 400 0x80041102 "…was not found in the MetadataCache…"). The build's stop is then one its bounded
+// retry may ride out (build-model-app.js isTransientHalt); with the table not created by this invocation the same answer stays final. Nothing is sent either way, and the next build creates the flow once.
+test('a declared flow whose identity read meets the lag of a table this invocation created stops as a retry may ride out, and the next attempt creates it once (#796)', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const lag = { statusCode: 400, body: { error: { code: '0x80041102', message: "The entity with a name = 'new_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 1 and timestamp 1" } } };
+  const nameRead = (e) => e.method === 'GET' && e.path === 'workflows';
+  await withBpf(true, async () => {
+    for (const fresh of [true, false]) {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-bpf-');
+      const createdTables = fresh ? new Set(['new_ticket']) : new Set();
+      wire.script(nameRead, lag);
+      const first = await build(wire, dir, specWith([FLOW]), { createdTables });
+      assert.ok(first.err, `fresh=${fresh}: the run stops`);
+      assert.deepEqual(first.writes.filter((c) => /^workflows/i.test(c.path)), [], `fresh=${fresh}: nothing is sent for the flow`);
+      assert.equal(isTransientHalt(first.err, { spec: specWith([FLOW]) }), fresh, `fresh=${fresh}: ${chainText(first.err)}`);
+      if (!fresh) continue;
+      const again = await build(wire, dir, specWith([FLOW]), { createdTables });
+      assert.equal(again.err, undefined, chainText(again.err));
+      assert.deepEqual(again.writes.filter((c) => /^workflows/i.test(c.path)).map((c) => c.method), ['POST', 'PATCH'], 'created once, then activated');
+    }
+  });
+});
+
+// The whole CLI assembly (build-model-app.js buildModelApp) over the same wire, its attempt told the table was created by this invocation:
+// a lag on the flow's identity read is read again in place within the build's one retry allowance, and once that is spent the build stops
+// with the service's own answer in the words the CLI prints (dataverse-auth.js emitResult: redactOutput(err.message)), not only in its cause chain.
+test('a declared flow\'s identity read on a table this invocation created is read again in place; past the build\'s retries the printed stop quotes the service\'s answer (#796)', async () => {
+  const { redactOutput } = require('../lib/output-redaction.js');
+  const MESSAGE = "The entity with a name = 'new_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 1 and timestamp 1";
+  const nameRead = (e) => e.method === 'GET' && e.path === 'workflows';
+  await withBpf(true, async () => {
+    const cli = async (lags) => {
+      const wire = createWorkflowWire();
+      for (let i = 0; i < lags; i += 1) wire.script(nameRead, { statusCode: 400, body: { error: { code: '0x80041102', message: MESSAGE } } });
+      const appDir = makeTempDir('declared-bpf-');
+      const dir = path.join(appDir, '.maker-workspace');
+      fs.mkdirSync(dir);
+      const barrier = createPublicationBarrier();
+      const sendObserver = createAttemptSendObserver();
+      const workflowEffectGate = createDeferredWorkflowGate();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: ORIGIN, httpClient: clientOver(wire, { barrier, observer: sendObserver, workflowEffectGate }) });
+      await sdk.initWorkspace();
+      const events = [];
+      let attempts = 0;
+      let err;
+      try {
+        await buildModelApp(specWith([FLOW]), { apply: true, env: ORIGIN, workspaceDir: dir, appDir, retryDelayMs: 0 }, {
+          sdk, provisionSdk: sdk, publicationBarrier: barrier, sendObserver, workflowEffectGate, warn: () => {}, log: () => {},
+          journal: { path: 'x', record: (e) => events.push(e), close: () => {} },
+          runBuild: (s, o) => { attempts += 1; o.createdTables.add('new_ticket'); return runSdkBuild(s, { ...o, phases: ['business-process-flows'] }); },
+        });
+      } catch (e) { err = e; }
+      return { err, attempts, retries: events.filter((e) => e.status === 'retry').length, workflowWrites: wire.log.filter((c) => c.method !== 'GET' && /^workflows/i.test(c.path)) };
+    };
+    const recovered = await cli(2);
+    assert.equal(recovered.err, undefined, chainText(recovered.err));
+    assert.equal(recovered.attempts, 1, 'one attempt: the read was made again where it failed');
+    assert.equal(recovered.retries, 2);
+    assert.deepEqual(recovered.workflowWrites.map((c) => c.method), ['POST', 'PATCH'], 'created once, then activated');
+    const spent = await cli(4);
+    assert.ok(spent.err, 'the lag outlasts the three retries');
+    assert.equal(spent.attempts, 1);
+    assert.equal(spent.retries, 3);
+    assert.deepEqual(spent.workflowWrites, [], 'nothing is sent for the flow');
+    const printed = redactOutput(spent.err.message);
+    assert.match(printed, /HTTP 400/, printed);
+    assert.ok(printed.includes('0x80041102'), printed);
+    assert.ok(printed.includes(MESSAGE), printed);
   });
 });
 
@@ -526,14 +600,15 @@ test('verify lists a reader that cannot read a flow as unverified, and a flow th
 
 // download-model-app.js main with its side effects replaced: the download's SDK is a real one over the wire, and runDownload answers
 // the spec a download of this app hydrates, which holds no process flow (a plain download reconstructs none), or `plain` if given.
-async function download(wire, out, argv, { plain, personas, ...extra } = {}) {
+async function download(wire, out, argv, { plain, personas, appId, ...extra } = {}) {
   const { sdk } = await sdkOver(wire);
   const dl = Object.create(sdk);
-  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
+  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP, ...(appId ? { appmoduleid: appId } : {}) }] : sdk.queryRecords(table, o));
   const downloaded = specWith([]);
   delete downloaded.businessProcessFlows;
   if (plain) downloaded.businessProcessFlows = plain;
-  // A download writes no personas[]; `personas` stands in for a spec that has them, the control of a flow that names one.
+  // A plain download writes no personas[]; `personas` stands in for a spec that has them, the control of a flow that names one.
+  // `appId` is the app's id in the app read, which the persona proof needs to read the roles the app is associated with.
   if (personas) downloaded.personas = personas;
   const emitted = [];
   const said = [];
@@ -600,7 +675,7 @@ test('the explicit managed download names a flow whose last attempt is not settl
   });
 });
 
-test('the explicit managed download leaves out a flow whose securityRoles name personas, which a download never writes, and says what to copy', async () => {
+test('the explicit managed download leaves out a flow whose securityRoles name personas it cannot prove from their roles, and says what to copy', async () => {
   await withBpf(true, async () => {
     const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
     const AGENT = { persona: 'Agent', jobs: [{ name: 'Resolve tickets', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
@@ -610,20 +685,614 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [DISPATCHER, AGENT] })).err, undefined);
     assert.deepEqual(storeOf(dir).readGroup('bpf', GROUP).committed.originalDeclaration.securityRoles, roled.securityRoles, 'the store keeps the roles');
     const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
-    const left = await download(wire, makeTempDir('declared-bpf-'), flags);
+    const out = makeTempDir('declared-bpf-');
+    const left = await download(wire, out, flags);
     assert.equal(left.emitted[0].ok, true, JSON.stringify(left.emitted) + left.said);
-    assert.deepEqual(left.emitted[0].payload.managedBpfs, { restored: [], stale: [{ key: GROUP, reason: 'its securityRoles name persona \'Dispatcher\', persona \'Agent\', and a download writes no personas[]; copy this flow and the personas it names from the spec it was built from' }] });
+    // This wire holds no role and no business unit: the proof reads, finds nothing to prove from, and makes no persona up.
+    const unproved = (p) => `persona '${p}', which the download could not prove from its role: the root business unit could not be read`;
+    const reason = `its securityRoles name ${unproved('Dispatcher')}; ${unproved('Agent')}; copy this flow and the personas it names from the spec it was built from`;
+    assert.deepEqual(left.emitted[0].payload.managedBpfs, { restored: [], stale: [{ key: GROUP, reason }] });
     assert.match(left.said, /WARNING: managed business process flow new_ticket\/Ticket process was not restored: its securityRoles name persona 'Dispatcher'/);
     assert.equal(left.written.businessProcessFlows, undefined, 'never restored without its roles');
     assert.equal(left.written.personas, undefined, 'and no persona is made up');
+    // The proved flow is written ready to paste, with the personas it still needs, in the download's own fragments file.
+    // A new file, named for this download: the result and the warning name it.
+    const fragmentsFile = left.emitted[0].payload.managedFragments.file;
+    assert.equal(path.dirname(fragmentsFile), path.join(out, '.maker-workspace'));
+    assert.match(path.basename(fragmentsFile), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/);
+    assert.deepEqual(left.emitted[0].payload.managedFragments, { file: fragmentsFile, keys: [{ family: 'bpf', key: GROUP }] });
+    assert.ok(left.said.includes(`WARNING: 1 managed item(s) left out only for what the download could not bring are written ready to paste in ${fragmentsFile}:`), left.said);
+    const fragments = JSON.parse(fs.readFileSync(fragmentsFile, 'utf8'));
+    assert.equal(fragments.kind, 'model-apps.managed-download-fragments');
+    assert.equal(fragments.formatVersion, 1);
+    assert.equal(fragments.app, APP);
+    assert.deepEqual(fragments.items, [{ family: 'bpf', key: GROUP, reason, needs: [{ persona: 'Dispatcher' }, { persona: 'Agent' }], paste: { businessProcessFlows: [roled] } }]);
     // Only the persona it lacks is named; with every one there, the same flow is restored whole, roles included.
     const one = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [{ ...DISPATCHER, persona: ' dispatcher ' }] });
-    assert.match(one.emitted[0].payload.managedBpfs.stale[0].reason, /^its securityRoles name persona 'Agent', and a download/);
-    const both = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [DISPATCHER, AGENT] });
+    assert.match(one.emitted[0].payload.managedBpfs.stale[0].reason, /^its securityRoles name persona 'Agent', which the download could not prove from its role: /);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(one.emitted[0].payload.managedFragments.file), 'utf8')).items[0].needs, [{ persona: 'Agent' }]);
+    // Into the same folder: nothing is left out, so the payload says nothing of fragments, nothing is written, and the file the
+    // earlier download wrote is kept as it was (the download never removes a file there).
+    const earlier = fs.readFileSync(fragmentsFile);
+    const both = await download(wire, out, flags, { personas: [DISPATCHER, AGENT] });
     assert.deepEqual(both.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] });
     assert.deepEqual(both.written.businessProcessFlows, [roled]);
+    assert.equal('managedFragments' in both.emitted[0].payload, false);
+    assert.deepEqual(fs.readFileSync(fragmentsFile), earlier, 'the earlier download\'s file is kept, byte for byte');
+    assert.deepEqual(fs.readdirSync(path.join(out, '.maker-workspace')).filter((n) => n.startsWith('managed-fragments')), [path.basename(fragmentsFile)]);
   });
 });
+
+// --- personas proved from their roles ---------------------------------------------------------------------------------------
+
+const APP_ID = '00000000-0000-0000-0000-00000000a333';
+const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
+const ROLED = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
+
+// A flow built with a persona, and the persona's role as a build leaves it: made by the real SDK from the persona
+// (createPersonaRole), with the flow's grants on its backing table (addEntityPrivilegesToRole), in the solution, and associated
+// with the app unless the persona opts out. `grants`, `member` and `associated` leave one of those undone. `also` are more flows
+// built with it whose backing tables the role is NOT granted on.
+async function rolesBuilt({ persona = DISPATCHER, grants = true, member = true, associated = persona.appAccess !== false, also = [] } = {}) {
+  const wire = createWorkflowWire();
+  const roles = withRoles(wire, { solution: SOLUTION, appId: APP_ID });
+  roles.table('new_ticket');
+  const appRead = roles.table('appmodule', ORG_OWNED).read;
+  const dir = makeTempDir('declared-bpf-');
+  assert.equal((await build(wire, dir, { ...specWith([ROLED, ...also]), personas: [persona] })).err, undefined);
+  const backingOf = (flow) => wire.row(storeOf(dir).readGroup('bpf', `new_ticket/${flow.name}`).committed.root.id).uniquename;
+  const backing = backingOf(ROLED);
+  assert.ok(backing, 'the built flow names its backing table');
+  for (const flow of [ROLED, ...also]) roles.table(backingOf(flow), ORG_OWNED);
+  const { sdk } = await sdkOver(wire);
+  const { roleId } = await sdk.createPersonaRole(personaRoleSpecFor(persona));
+  if (grants) await sdk.addEntityPrivilegesToRole(roleId, [{ entity: backing, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
+  if (member) roles.members.add(roleId);
+  if (associated) roles.appRoles.add(roleId);
+  return { wire, roles, backing, roleId, appRead, role: roles.roles.get(roleId), flags: ['--include-managed', '--managed-manifest', storeFileOf(dir)] };
+}
+
+// Answers the GETs `match` picks with `answer(req, prior)` in place of the wire's own (`prior` is the wire's own, to edit).
+function answerGets(r, match, answer) {
+  const prior = r.wire.request;
+  r.wire.request = async (req) => (req.method === 'GET' && match(req) ? answer(req, prior) : prior(req));
+}
+const json = (body) => ({ statusCode: 200, headers: {}, body: JSON.stringify(body) });
+const isAssociation = (req) => /appmoduleroles_association/.test(req.url);
+const isTables = (req) => /\/EntityDefinitions\?/.test(req.url);
+const associationPage2 = `${ORIGIN}/api/data/v9.2/appmodules(${APP_ID})/appmoduleroles_association?$select=roleid&page=2`;
+
+test('the explicit managed download writes a persona a restored flow names from its role, when a rebuild provably leaves that role as it is', async () => {
+  await withBpf(true, async () => {
+    for (const persona of [DISPATCHER, { ...DISPATCHER, appAccess: false }]) {
+      const r = await rolesBuilt({ persona });
+      const before = r.roles.heldOf(r.roleId);
+      const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+      assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+      assert.deepEqual(got.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [], personas: [{ name: 'Dispatcher', flows: [GROUP] }] });
+      const privileges = [
+        { entity: r.backing, access: ['create', 'read', 'write', 'delete'], scope: 'organization' },
+        { entity: 'new_ticket', access: ['read', 'write'], scope: 'user' },
+      ].sort((a, b) => (a.entity < b.entity ? -1 : 1));
+      const written = { persona: 'Dispatcher', ...(persona.appAccess === false ? { appAccess: false } : {}), jobs: [{ name: JOB_NAME, privileges }] };
+      assert.deepEqual(got.written.personas, [written]);
+      assert.deepEqual(got.written.businessProcessFlows, [ROLED], 'the flow is restored with its roles');
+      assert.equal('managedFragments' in got.emitted[0].payload, false);
+      assert.match(got.said, /NOTE: persona 'Dispatcher' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build\./);
+      assert.deepEqual(got.calls.filter((c) => c.method !== 'GET'), [], 'the download writes nothing to the environment');
+      // A rebuild from what was written, as its security phase makes it with the real SDK: the same role, converged onto exactly
+      // what it held (before the flow grants are added again, too), and the flow grants then change nothing.
+      const { sdk } = await sdkOver(r.wire);
+      const again = await sdk.createPersonaRole(personaRoleSpecFor(got.written.personas[0]));
+      assert.equal(again.roleId, r.roleId);
+      assert.deepEqual(r.roles.heldOf(r.roleId), before, 'ReplacePrivilegesRole leaves the role as it was');
+      await sdk.addEntityPrivilegesToRole(r.roleId, [{ entity: r.backing, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
+      assert.deepEqual(r.roles.heldOf(r.roleId), before);
+    }
+  });
+});
+
+test('a persona the managed download wrote for one flow is proved again for the next flow that names it', async () => {
+  await withBpf(true, async () => {
+    // Groups are restored in key order, so 'Zeta process' comes after 'Ticket process' and finds the persona already written.
+    const ZETA = { ...ROLED, name: 'Zeta process' };
+    const r = await rolesBuilt({ also: [ZETA] });
+    const before = r.roles.heldOf(r.roleId);
+    const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+    assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+    const { managedBpfs } = got.emitted[0].payload;
+    assert.deepEqual(managedBpfs.restored, [GROUP]);
+    assert.deepEqual(managedBpfs.personas, [{ name: 'Dispatcher', flows: [GROUP] }], 'written for the first flow only');
+    assert.equal(managedBpfs.stale.length, 1);
+    assert.equal(managedBpfs.stale[0].key, 'new_ticket/Zeta process');
+    assert.match(managedBpfs.stale[0].reason, /^its securityRoles name persona 'Dispatcher', which the download could not prove from its role: its role does not hold prvCreate\w+, prvRead\w+, prvWrite\w+ and 1 more at organization scope on the flow's backing table '\w+', which a build would grant; copy this flow/);
+    assert.deepEqual(got.written.businessProcessFlows, [ROLED]);
+    assert.equal(got.written.personas.length, 1);
+    assert.deepEqual(got.calls.filter((c) => c.method !== 'GET'), []);
+    assert.deepEqual(r.roles.heldOf(r.roleId), before);
+  });
+});
+
+test('the persona proof reads every page of the app association: a role the server answers on a later page is associated, never appAccess false', async () => {
+  await withBpf(true, async () => {
+    const r = await rolesBuilt();
+    const before = r.roles.heldOf(r.roleId);
+    const pages = [];
+    answerGets(r, isAssociation, (req) => {
+      pages.push(req.url);
+      return /page=2/.test(req.url)
+        ? json({ value: [{ roleid: r.roleId }] })
+        : json({ value: [{ roleid: '00000000-0000-4000-8000-00000000eeee' }], '@odata.nextLink': associationPage2 });
+    });
+    const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+    assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+    assert.equal(pages.length, 2, 'the next link is followed');
+    assert.deepEqual(got.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [], personas: [{ name: 'Dispatcher', flows: [GROUP] }] });
+    assert.equal('appAccess' in got.written.personas[0], false, 'associated: the default, which keeps the association');
+    assert.equal(got.written.personas[0].jobs[0].privileges.some((p) => p.entity === 'appmodule'), false, 'the appmodule read is the build\'s own, not a job privilege');
+    const { sdk } = await sdkOver(r.wire);
+    assert.equal((await sdk.createPersonaRole(personaRoleSpecFor(got.written.personas[0]))).roleId, r.roleId);
+    assert.deepEqual(r.roles.heldOf(r.roleId), before, 'a rebuild leaves the role as it was');
+  });
+});
+
+test('a flow whose securityRoles name two personas is restored only when both are proved', async () => {
+  await withBpf(true, async () => {
+    const r = await rolesBuilt();
+    const two = { ...ROLED, securityRoles: { personas: ['Dispatcher', 'Agent'] } };
+    const dir = path.dirname(r.flags[2]);
+    assert.equal((await build(r.wire, dir, { ...specWith([two]), personas: [DISPATCHER, { ...DISPATCHER, persona: 'Agent' }] })).err, undefined);
+    const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+    assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+    assert.deepEqual(got.emitted[0].payload.managedBpfs.restored, []);
+    assert.equal(got.written.personas, undefined, 'none of them, not the one that was proved');
+    assert.equal(got.written.businessProcessFlows, undefined);
+    assert.deepEqual(got.emitted[0].payload.managedFragments.keys, [{ family: 'bpf', key: GROUP }]);
+  });
+});
+
+test('the explicit managed download writes no persona it cannot prove from its role, and leaves the flow out with what to copy', async () => {
+  await withBpf(true, async () => {
+    const cases = [
+      ['a privilege no table carries', {}, (r) => r.role.held.set(r.roles.plainPrivilege('prvExportToExcel'), 8), /its role holds 1 privilege\(s\) no table carries \(prvExportToExcel\); a persona declares table privileges only, so a build would remove them$/],
+      ['its role in a child business unit only', {}, (r) => { r.role._businessunitid_value = CHILD_BU; }, /no role named 'Dispatcher' is in the root business unit$/],
+      ['a role a build did not make', {}, (r) => { r.role.description = 'Made by hand'; }, /a role named 'Dispatcher' in the root business unit is managed or was not made by a build, and a build refuses to change it$/],
+      ['a managed role', {}, (r) => { r.role.ismanaged = true; }, /is managed or was not made by a build/],
+      ['a second role made by a build', {}, (r) => r.roles.addRole({ name: 'Dispatcher' }), /more than one role made by a build is named 'Dispatcher' in the root business unit$/],
+      ['no flow grants', { grants: false }, () => {}, /its role does not hold prvCreate\w+, prvRead\w+, prvWrite\w+ and 1 more at organization scope on the flow's backing table '\w+', which a build would grant$/],
+      ['the app associated without its read', {}, (r) => r.role.held.delete(r.appRead), /a persona read from its role would not rebuild it exactly \(a build would add prvReadAppmodule at Global\)$/],
+      ['outside the solution', { member: false }, () => {}, /its role is not in solution 'BP', so a build would add it$/],
+      // Whether the app is associated is written as `appAccess`, so only a complete, well-formed association read decides it.
+      ['an app association answered without its list', {}, (r) => answerGets(r, isAssociation, () => json({ unexpected: 'no list' })), /whether the app is associated with its role could not be read \(the association rows: no readable result set\)$/],
+      ['an app association row that names no role', {}, (r) => answerGets(r, isAssociation, () => json({ value: [{ roleid: r.roleId }, { name: 'no id' }] })), /whether the app is associated with its role could not be read \(an association row names no role\)$/],
+      ['an app association page after the first refused', {}, (r) => answerGets(r, isAssociation, (req) => (/page=2/.test(req.url)
+        ? { statusCode: 403, headers: {}, body: JSON.stringify({ error: { code: '0x80040220', message: 'no read privilege' } }) }
+        : json({ value: [{ roleid: r.roleId }], '@odata.nextLink': associationPage2 }))), /whether the app is associated with its role could not be read \(the association rows: HTTP 403 /],
+      // A second marked role of the name, and a lookup the server cuts to one row with a next link: one row read is not one role.
+      ['a role lookup cut short', {}, (r) => {
+        r.roles.addRole({ name: 'Dispatcher' });
+        answerGets(r, (req) => /\/roles$/.test(new URL(req.url).pathname), async (req, prior) => {
+          const answer = await prior(req);
+          const body = JSON.parse(answer.body);
+          body.value = body.value.slice(0, 1);
+          body['@odata.nextLink'] = `${ORIGIN}/api/data/v9.2/roles?page=2`;
+          return { ...answer, body: JSON.stringify(body) };
+        });
+      }, /its role lookup was cut short, so it is not known to be the only role named 'Dispatcher' in the root business unit$/],
+      ['table metadata the server says continues', {}, (r) => answerGets(r, isTables, async (req, prior) => {
+        const answer = await prior(req);
+        const body = JSON.parse(answer.body);
+        body['@odata.nextLink'] = `${ORIGIN}/api/data/v9.2/EntityDefinitions?page=2`;
+        return { ...answer, body: JSON.stringify(body) };
+      }), /which table each privilege of its role belongs to could not be read \(the answer says more tables exist\)$/],
+      ['table metadata refused', {}, (r) => answerGets(r, isTables, () => ({ statusCode: 403, headers: {}, body: JSON.stringify({ error: { code: '0x80040220', message: 'no metadata access' } }) })), /which table each privilege of its role belongs to could not be read \(HTTP 403\)$/],
+    ];
+    for (const [label, opts, change, why] of cases) {
+      const r = await rolesBuilt(opts);
+      await change(r);
+      const before = r.roles.heldOf(r.roleId);
+      const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+      assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted) + got.said);
+      const { managedBpfs } = got.emitted[0].payload;
+      assert.deepEqual(managedBpfs.restored, [], label);
+      assert.equal('personas' in managedBpfs, false, label);
+      const { reason } = managedBpfs.stale[0];
+      assert.match(reason, /^its securityRoles name persona 'Dispatcher', which the download could not prove from its role: /, label);
+      assert.match(reason.replace(/; copy this flow and the personas it names from the spec it was built from$/, ''), why, label);
+      assert.equal(got.written.personas, undefined, label);
+      assert.equal(got.written.businessProcessFlows, undefined, label);
+      assert.deepEqual(got.emitted[0].payload.managedFragments.keys, [{ family: 'bpf', key: GROUP }], label);
+      assert.doesNotMatch(got.said, /NOTE: persona/, label);
+      assert.deepEqual(got.calls.filter((c) => c.method !== 'GET'), [], label);
+      assert.deepEqual(r.roles.heldOf(r.roleId), before, label);
+    }
+  });
+});
+
+test('the managed download writes its fragments to a new file it creates, and never writes over, through or instead of a file that is there', async () => {
+  await withBpf(true, async () => {
+    const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
+    const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [DISPATCHER] })).err, undefined);
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    const OWN = `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, app: APP, items: [{ family: 'bpf', key: 'old/Old' }] })}\n`;
+    // Whatever is in .maker-workspace before the download is there after it, byte for byte; the one new fragments file is added.
+    const writtenBeside = async (label, prepare) => {
+      const out = makeTempDir('declared-bpf-');
+      const ws = path.join(out, '.maker-workspace');
+      fs.mkdirSync(ws);
+      prepare(ws);
+      const before = snapshotTree(ws);
+      const got = await download(wire, out, flags);
+      assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted) + got.said);
+      const { file, keys } = got.emitted[0].payload.managedFragments;
+      assert.deepEqual(keys, [{ family: 'bpf', key: GROUP }], label);
+      assert.equal(path.dirname(file), ws, label);
+      assert.match(path.basename(file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/, label);
+      assert.equal(path.basename(file) in before, false, `${label}: a name that was free`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items.map((i) => i.key), [GROUP], label);
+      assert.ok(got.said.includes(`are written ready to paste in ${file}:`), label);
+      const after = snapshotTree(ws);
+      for (const name of Object.keys(before)) assert.equal(after[name], before[name], `${label}: ${name} is as it was`);
+      assert.deepEqual(Object.keys(after).filter((n) => n.startsWith('managed-fragments') && !(n in before)), [path.basename(file)], label);
+      return { out, ws, file };
+    };
+    // A maker's file at the name earlier versions used, one that is not JSON, a folder there, and a file a download wrote: all kept.
+    await writtenBeside('a maker\'s JSON file', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), '{"mine":true}\n'));
+    await writtenBeside('a maker\'s notes', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), 'notes'));
+    await writtenBeside('a folder', (ws) => { fs.mkdirSync(path.join(ws, 'managed-fragments.json')); fs.writeFileSync(path.join(ws, 'managed-fragments.json', 'inside.txt'), 'kept'); });
+    await writtenBeside('an earlier download\'s file', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), OWN));
+    // Files named the way this download names its own, a maker's and an earlier download's: kept, and the new one is another name.
+    await writtenBeside('files of the new kind', (ws) => {
+      fs.writeFileSync(path.join(ws, 'managed-fragments-20260101T000000Z-000000.json'), 'maker notes');
+      fs.writeFileSync(path.join(ws, 'managed-fragments-20260102T000000Z-abcdef.json'), OWN);
+    });
+    // A hard link to a file elsewhere: nothing is written through it.
+    const outside = path.join(makeTempDir('declared-bpf-'), 'other.json');
+    fs.writeFileSync(outside, OWN);
+    await writtenBeside('a hard link', (ws) => fs.linkSync(outside, path.join(ws, 'managed-fragments.json')));
+    assert.equal(fs.readFileSync(outside, 'utf8'), OWN);
+    // Two downloads into one folder write two files; the first is kept as it was.
+    const first = await writtenBeside('a first download', () => {});
+    const firstBytes = fs.readFileSync(first.file);
+    const second = await download(wire, first.out, flags);
+    assert.equal(second.emitted[0].ok, true, JSON.stringify(second.emitted));
+    assert.notEqual(second.emitted[0].payload.managedFragments.file, first.file);
+    assert.deepEqual(fs.readFileSync(first.file), firstBytes);
+    assert.deepEqual(fs.readFileSync(second.emitted[0].payload.managedFragments.file), firstBytes, 'the same app writes the same bytes');
+    // <out> given through a junction (a directory symlink off Windows) in a parent folder: the result and the warning name the
+    // file under <out> as it was given, and the file lands in the real folder.
+    {
+      const real = makeTempDir('declared-bpf-');
+      const via = path.join(makeTempDir('declared-bpf-'), 'via');
+      fs.symlinkSync(real, via, process.platform === 'win32' ? 'junction' : 'dir');
+      const given = path.join(via, 'app');
+      fs.mkdirSync(path.join(real, 'app'));
+      const got = await download(wire, given, flags);
+      assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+      const { file } = got.emitted[0].payload.managedFragments;
+      assert.equal(path.dirname(file), path.join(given, '.maker-workspace'));
+      assert.ok(got.said.includes(`are written ready to paste in ${file}:`), got.said);
+      assert.equal(fs.lstatSync(path.join(real, 'app', '.maker-workspace', path.basename(file))).isFile(), true);
+    }
+    // A junction or a file at .maker-workspace would put the file outside the app folder or where a folder is not: refused, and
+    // the app folder is exactly as it was.
+    const elsewhere = makeTempDir('declared-bpf-');
+    for (const [label, prepare] of [
+      ['a junction', (ws) => fs.symlinkSync(elsewhere, ws, 'junction')],
+      ['a file', (ws) => fs.writeFileSync(ws, 'maker notes')],
+    ]) {
+      const out = makeTempDir('declared-bpf-');
+      prepare(path.join(out, '.maker-workspace'));
+      const before = snapshotTree(out);
+      const r = await download(wire, out, flags);
+      assert.equal(r.emitted[0].ok, false, label + JSON.stringify(r.emitted));
+      assert.equal(r.emitted[0].payload.code, 'managed-fragments-unwritable', label);
+      assert.match(r.emitted[0].payload.error, /No other output was written\.$/, label);
+      assert.deepEqual(snapshotTree(out), before, `${label}: the app folder is exactly as it was`);
+    }
+    assert.deepEqual(fs.readdirSync(elsewhere), [], 'nothing is written where the junction points');
+    // Without --include-managed nothing is looked at: a plain download writes and refuses exactly as before.
+    const plainOut = makeTempDir('declared-bpf-');
+    fs.mkdirSync(path.join(plainOut, '.maker-workspace'));
+    fs.writeFileSync(path.join(plainOut, '.maker-workspace', 'managed-fragments.json'), 'notes');
+    const plain = await download(wire, plainOut, []);
+    assert.equal(plain.emitted[0].ok, true, JSON.stringify(plain.emitted));
+    assert.equal('managedFragments' in plain.emitted[0].payload, false);
+    assert.equal(fs.readFileSync(path.join(plainOut, '.maker-workspace', 'managed-fragments.json'), 'utf8'), 'notes');
+  });
+});
+
+test('a managed download with nothing to write as fragments writes nothing there and removes nothing', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    const OWN = `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, app: APP, items: [] })}\n`;
+    for (const [label, prepare] of [
+      ['a maker\'s file', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), 'maker notes')],
+      ['a folder', (ws) => { fs.mkdirSync(path.join(ws, 'managed-fragments.json')); fs.writeFileSync(path.join(ws, 'managed-fragments.json', 'inside.txt'), 'kept'); }],
+      ['an earlier download\'s files', (ws) => {
+        fs.writeFileSync(path.join(ws, 'managed-fragments.json'), OWN);
+        fs.writeFileSync(path.join(ws, 'managed-fragments-20260101T000000Z-abcdef.json'), OWN);
+      }],
+    ]) {
+      const out = makeTempDir('declared-bpf-');
+      const ws = path.join(out, '.maker-workspace');
+      fs.mkdirSync(ws);
+      prepare(ws);
+      const before = snapshotTree(ws);
+      const got = await download(wire, out, flags);
+      assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted));
+      assert.deepEqual(got.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] }, label);
+      assert.equal('managedFragments' in got.emitted[0].payload, false, label);
+      const after = snapshotTree(ws);
+      for (const name of Object.keys(before)) assert.equal(after[name], before[name], `${label}: ${name} is as it was`);
+      assert.deepEqual(Object.keys(after).filter((n) => n.startsWith('managed-fragments') && !(n in before)), [], `${label}: nothing new`);
+    }
+  });
+});
+
+test('a fragments file that cannot be written leaves every output that was there as it was: the page tree, the spec and the baseline are published only after it', async () => {
+  await withBpf(true, async () => {
+    const { runDownload } = require('../download-model-app.js');
+    const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+    const { fakeGenpage } = require('./helpers/fake-genpage.js');
+    // Its own flow, persona and app id, so this test stands without the persona-proof tests (and their constants) above.
+    const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
+    const dispatcher = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
+    const appId = '00000000-0000-0000-0000-00000000a333';
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [dispatcher] })).err, undefined);
+    const out = makeTempDir('declared-bpf-');
+    const pid = '00000000-0000-4000-8000-00000000bbbb';
+    const pageFile = path.join(out, 'pages', pid, 'page.tsx');
+    fs.mkdirSync(path.dirname(pageFile), { recursive: true });
+    fs.writeFileSync(pageFile, 'MAKER EDIT THAT MUST SURVIVE FAILURE');
+    const oldSpec = JSON.stringify({ ...specWith([]), pages: [{ key: 'old', name: 'Page', pageId: pid }] });
+    fs.writeFileSync(path.join(out, 'app-spec.json'), oldSpec);
+    // A file where the fragments folder goes: no new file can be made in it.
+    const ws = path.join(out, '.maker-workspace');
+    fs.writeFileSync(ws, 'maker notes');
+    const xml = `<SiteMap><Area><Group><SubArea GenPageId="${pid}" Title="Page"/><SubArea Entity="new_ticket"/></Group></Area></SiteMap>`;
+    const layer = '00000000-0000-4000-8000-00000000cccc';
+    const pageSdk = currentReadSdk({
+      fetchArtifact: async () => ({ name: 'BP App', uniqueName: APP, siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Records', subAreas: [{ type: 'GenPage', genPageId: pid, title: 'Page' }, { type: 'Entity', entity: 'new_ticket' }] }] }] } }),
+      queryRecords: async (logical) => {
+        if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: layer, uniquename: APP }];
+        if (logical === 'appmodulecomponent') return [{ objectid: '00000000-0000-4000-8000-00000000dddd', componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: xml }];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Ticket', primaryNameAttribute: 'new_subject' }),
+    }, { appId, layerId: layer, sitemapXml: xml });
+    const source = 'export default function Page(){return null;}';
+    const genpage = fakeGenpage({ pages: [{ pageId: pid, name: 'Page', source }] });
+    let staged;
+    const run = () => download(wire, out, ['--include-managed', '--managed-manifest', storeFileOf(dir)], {
+      // The real page download, over a page backend; the restore input is the flow this wire built.
+      runDownload: async (args) => {
+        const real = await runDownload({ ...args, sdk: pageSdk, genpage });
+        assert.equal(real.ok, true, JSON.stringify(real));
+        staged = args.stagePages;
+        return { ...real, spec: specWith([]) };
+      },
+    });
+    const stagingLeft = () => fs.readdirSync(out).filter((n) => n.startsWith('.download-pages.'));
+    {
+      const before = snapshotTree(out);
+      const failed = await run();
+      assert.equal(failed.emitted[0].ok, false);
+      assert.equal(failed.emitted[0].payload.code, 'managed-fragments-unwritable');
+      assert.equal(fs.readFileSync(pageFile, 'utf8'), 'MAKER EDIT THAT MUST SURVIVE FAILURE');
+      assert.equal(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8'), oldSpec);
+      assert.match(failed.emitted[0].payload.error, /No other output was written\.$/);
+      assert.deepEqual(stagingLeft(), [], 'the staging folder is removed');
+      assert.equal(staged, true, 'the managed download stages its pages');
+      assert.deepEqual(snapshotTree(out), before, 'no baseline, no fragments, no leftover name: the app folder is exactly as it was');
+    }
+    fs.unlinkSync(ws);
+    // Once the file can be written, the same download publishes everything, the page tree included.
+    const done = await run();
+    assert.equal(done.emitted[0].ok, true, JSON.stringify(done.emitted) + done.said);
+    assert.deepEqual(done.emitted[0].payload.managedFragments.keys, [{ family: 'bpf', key: GROUP }]);
+    assert.equal(fs.readFileSync(pageFile, 'utf8'), source);
+    assert.notEqual(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8'), oldSpec);
+    assert.deepEqual(stagingLeft(), []);
+  });
+});
+
+
+test('the fragments file is made by an exclusive create under a new name: a name that is taken, even at the last moment, is left as it is and another is used', () => {
+  const { settleFragments } = require('../lib/managed-fragments.js');
+  const ITEMS = [{ family: 'bpf', key: GROUP }];
+  const at = new Date('2026-11-03T17:14:12.667Z');
+  const nameOf = (suffix) => `managed-fragments-20261103T171412Z-${suffix}.json`;
+  const sequence = (...values) => () => values.shift() || 'ffffff';
+  const workspace = () => {
+    const out = makeTempDir('declared-bpf-');
+    const ws = path.join(out, '.maker-workspace');
+    fs.mkdirSync(ws);
+    return { out, ws };
+  };
+  const hooked = (name, hook, fn) => {
+    const saved = fs[name];
+    fs[name] = function (...args) { return hook(saved, this, args); };
+    try { return fn(); } finally { fs[name] = saved; }
+  };
+  // Nothing due: nothing is made, not even the folder.
+  {
+    const out = makeTempDir('declared-bpf-');
+    assert.equal(settleFragments(out, { app: APP, items: [] }), null);
+    assert.deepEqual(fs.readdirSync(out), []);
+  }
+  // A name that is taken (a maker's file, a folder) is passed over and kept.
+  {
+    const { out, ws } = workspace();
+    fs.writeFileSync(path.join(ws, nameOf('aaaaaa')), 'MAKER NOTES');
+    fs.mkdirSync(path.join(ws, nameOf('bbbbbb')));
+    const got = settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb', 'cccccc') });
+    assert.equal(got.file, path.join(ws, nameOf('cccccc')));
+    assert.equal(fs.readFileSync(path.join(ws, nameOf('aaaaaa')), 'utf8'), 'MAKER NOTES');
+    assert.deepEqual(fs.readdirSync(path.join(ws, nameOf('bbbbbb'))), []);
+    assert.deepEqual(fs.readdirSync(ws).sort(), [nameOf('aaaaaa'), nameOf('bbbbbb'), nameOf('cccccc')]);
+  }
+  // A file that takes the chosen name after it was chosen, just before the create: kept, and the next name is used.
+  {
+    const { out, ws } = workspace();
+    let raced = 0;
+    const got = hooked('openSync', (open, self, args) => {
+      if (args[1] === 'wx' && !raced) { raced += 1; fs.writeFileSync(args[0], 'ARRIVED AT THE LAST MOMENT'); }
+      return open.apply(self, args);
+    }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb') }));
+    assert.equal(raced, 1);
+    assert.equal(got.file, path.join(ws, nameOf('bbbbbb')));
+    assert.equal(fs.readFileSync(path.join(ws, nameOf('aaaaaa')), 'utf8'), 'ARRIVED AT THE LAST MOMENT');
+  }
+  // A link at the name, even one pointing nowhere, is not followed: nothing is made where it points.
+  {
+    const { out, ws } = workspace();
+    const target = path.join(makeTempDir('declared-bpf-'), 'not-there.json');
+    let linked = true;
+    try { fs.symlinkSync(target, path.join(ws, nameOf('aaaaaa')), 'file'); } catch (e) { if (e.code !== 'EPERM') throw e; linked = false; }
+    if (linked) {
+      const got = settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb') });
+      assert.equal(got.file, path.join(ws, nameOf('bbbbbb')));
+      assert.equal(fs.existsSync(target), false, 'nothing is made through the link');
+      assert.equal(fs.readlinkSync(path.join(ws, nameOf('aaaaaa'))), target);
+    }
+  }
+  // A link put at the chosen name just before the create (it would have to guess the name): on POSIX the create refuses it and
+  // the next name is used; on Windows the create follows it, and the download sees that and writes nothing, through it or at all.
+  {
+    const { out, ws } = workspace();
+    const target = path.join(makeTempDir('declared-bpf-'), 'not-there.json');
+    const at0 = path.join(ws, nameOf('aaaaaa'));
+    let linked = true;
+    try { fs.symlinkSync(target, path.join(ws, 'probe'), 'file'); fs.unlinkSync(path.join(ws, 'probe')); } catch (e) { if (e.code !== 'EPERM') throw e; linked = false; }
+    if (linked) {
+      let got;
+      let error;
+      try {
+        got = hooked('openSync', (open, self, args) => {
+          // By name: the create is given the folder's real path, which differs from `ws` when the temp folder holds an 8.3
+          // short name (C:\Users\RUNNER~1 on a CI runner).
+          if (args[1] === 'wx' && path.basename(args[0]) === nameOf('aaaaaa')) fs.symlinkSync(target, at0, 'file');
+          return open.apply(self, args);
+        }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb') }));
+      } catch (e) { error = e; }
+      assert.equal(fs.readlinkSync(at0), target, 'the link is left as it is');
+      if (error) {
+        assert.equal(error.code, 'managed-fragments-unwritable');
+        assert.match(error.message, /took the name while it was made, so nothing was written to it/);
+        assert.equal(fs.readFileSync(target, 'utf8'), '', 'nothing is written through the link');
+        assert.deepEqual(fs.readdirSync(ws), [nameOf('aaaaaa')]);
+      } else {
+        assert.equal(got.file, path.join(ws, nameOf('bbbbbb')));
+        assert.equal(fs.existsSync(target), false);
+      }
+    }
+  }
+  // Every name tried taken: refused, and nothing is written.
+  {
+    const { out, ws } = workspace();
+    fs.writeFileSync(path.join(ws, nameOf('aaaaaa')), 'MAKER NOTES');
+    assert.throws(() => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: () => 'aaaaaa' }),
+      (e) => e.code === 'managed-fragments-unwritable' && /every name tried \(8\) was taken/.test(e.message));
+    assert.deepEqual(fs.readdirSync(ws), [nameOf('aaaaaa')]);
+    assert.equal(fs.readFileSync(path.join(ws, nameOf('aaaaaa')), 'utf8'), 'MAKER NOTES');
+  }
+  // A write that fails after the create: refused, and the half-written file, its own, is named and left for the maker.
+  {
+    const { out, ws } = workspace();
+    assert.throws(() => hooked('writeFileSync', (write, self, args) => {
+      if (typeof args[0] === 'number') throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+      return write.apply(self, args);
+    }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: () => 'aaaaaa' })),
+    (e) => e.code === 'managed-fragments-unwritable' && e.message.includes(`A partial file was left at ${path.join(ws, nameOf('aaaaaa'))}; delete it.`));
+    assert.deepEqual(fs.readdirSync(ws), [nameOf('aaaaaa')]);
+  }
+  // The path is reported as the caller gave <out>, not as the folder it really is: here <out> reaches its folder through a
+  // directory junction (a directory symlink off Windows) in a parent, like an 8.3 short name or a mapped folder would. The file
+  // really lands in the target.
+  {
+    const real = makeTempDir('declared-bpf-');
+    const via = path.join(makeTempDir('declared-bpf-'), 'via');
+    fs.symlinkSync(real, via, process.platform === 'win32' ? 'junction' : 'dir');
+    const given = path.join(via, 'app');
+    fs.mkdirSync(path.join(real, 'app'));
+    const got = settleFragments(given, { app: APP, items: ITEMS, now: () => at, suffix: () => 'aaaaaa' });
+    assert.equal(got.file, path.join(given, '.maker-workspace', nameOf('aaaaaa')));
+    assert.equal(fs.lstatSync(path.join(real, 'app', '.maker-workspace', nameOf('aaaaaa'))).isFile(), true, 'it lands in the real folder');
+    assert.deepEqual(fs.readdirSync(path.join(real, 'app', '.maker-workspace')), [nameOf('aaaaaa')]);
+  }
+  // The real clock and random suffix: a UTC time to the second and six hex digits.
+  {
+    const { out, ws } = workspace();
+    const got = settleFragments(out, { app: APP, items: ITEMS });
+    assert.equal(path.dirname(got.file), ws);
+    assert.match(path.basename(got.file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/);
+  }
+});
+
+test('the fragments file is written in the folder that was checked: a parent junction retargeted after the check, to a folder whose .maker-workspace is a junction elsewhere, does not move the write there', () => {
+  const { settleFragments } = require('../lib/managed-fragments.js');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const name = 'managed-fragments-20261103T182124Z-aaaaaa.json';
+  const checked = makeTempDir('declared-bpf-');
+  const other = makeTempDir('declared-bpf-');
+  const outside = makeTempDir('declared-bpf-');
+  const via = path.join(makeTempDir('declared-bpf-'), 'via');
+  const checkedWorkspace = path.join(checked, 'app', '.maker-workspace');
+  fs.mkdirSync(checkedWorkspace, { recursive: true });
+  fs.mkdirSync(path.join(other, 'app'));
+  fs.symlinkSync(outside, path.join(other, 'app', '.maker-workspace'), linkType);
+  fs.symlinkSync(checked, via, linkType);
+  const given = path.join(via, 'app');
+  const givenWorkspace = path.join(given, '.maker-workspace');
+  // assertSafeOutputDir answers the real path last, after its link checks: retarget `via` right then, once.
+  const realpath = fs.realpathSync.native;
+  let raced = 0;
+  let got;
+  let error;
+  fs.realpathSync.native = function (file, ...args) {
+    const resolved = realpath.call(this, file, ...args);
+    if (path.resolve(String(file)) === givenWorkspace && !raced) {
+      raced += 1;
+      fs.rmSync(via, { recursive: true, force: true });
+      fs.symlinkSync(other, via, linkType);
+    }
+    return resolved;
+  };
+  try {
+    got = settleFragments(given, { app: APP, items: [{ family: 'bpf', key: GROUP }], now: () => new Date('2026-11-03T18:21:24Z'), suffix: () => 'aaaaaa' });
+  } catch (e) { error = e; } finally { fs.realpathSync.native = realpath; }
+  assert.equal(raced, 1, 'the retarget ran after the check');
+  assert.deepEqual(fs.readdirSync(outside), [], 'nothing is written through the junction nobody checked');
+  assert.equal(error, undefined);
+  assert.deepEqual(fs.readdirSync(checkedWorkspace), [name], 'it lands in the folder that was checked');
+  assert.equal(got.file, path.join(givenWorkspace, name), 'and is reported as the caller gave <out>');
+});
+
+// Every name under `dir`, with each file's bytes, without following links: what a refusal must leave as it was.
+function snapshotTree(dir) {
+  const out = {};
+  const walk = (d, rel) => {
+    for (const name of fs.readdirSync(d).sort()) {
+      const full = path.join(d, name);
+      const st = fs.lstatSync(full);
+      const key = rel ? `${rel}/${name}` : name;
+      if (st.isSymbolicLink()) out[key] = `link:${fs.readlinkSync(full)}`;
+      else if (st.isDirectory()) { out[key] = 'dir'; walk(full, key); } else out[key] = fs.readFileSync(full, 'base64');
+    }
+  };
+  walk(dir, '');
+  return out;
+}
 
 // --- the CLI -----------------------------------------------------------------------------------------------------------------
 

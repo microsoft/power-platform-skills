@@ -207,7 +207,6 @@
   "views": [
     {
       "entity": "new_case",
-      "type": "main",
       "name": "Open Cases",
       "description": "Cases that have not been resolved.",
       "columns": [

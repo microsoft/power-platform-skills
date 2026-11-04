@@ -4,41 +4,30 @@
 // published layer per systemform row (helpers/managed-wire.js). Each test counts what reaches the wire: the content
 // writes (POST/PATCH systemforms) and the PublishXml requests, by dashboard id.
 const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver, clientOver } = require('./helpers/managed-wire.js');
+const { canonicalJson } = require('../lib/reconcile-common.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const X = require('./helpers/dashboard-formxml.js');
 const { openManagedContext } = require('../lib/managed-bindings.js');
 const { writeFileAtomic } = require('../lib/apply-snapshot-store.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
-const { createIntentCatalog } = require('../lib/creates-catalog.js');
-const { environmentFingerprint } = require('../lib/page-ownership-records.js');
-const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
-const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, preservationMatches, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
+const { publishDeclaredDashboard, projectDashboard, preservationMatches, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
 const { createAttemptSendObserver, publishManagedScope } = require('../lib/managed-feature-contract.js');
 const { LAYER_READERS } = require('../lib/managed-layer-readers.js');
+const { ENV, APP, SOL, OPEN, ALL, catalogFor, declared, settle, makerRun, treeBytes, scopedSettle } = require('./helpers/dashboard-maker-run.js');
 // The $select of the publication read of a systemform's saved layer (systemform-published.js), with and without its
 // root fields; the SDK's own fetch selects more, so a probe that injects between the two reads can tell them apart.
 const PUBLICATION_SELECTS = new Set(['formid,name,description,formxml', 'formid,name,description,formxml,type,objecttypecode']);
 
-const ENV = 'https://contoso.crm.dynamics.com';
-const APP = 'contoso_app';
-const SOL = 'contoso_solution';
-const FP = environmentFingerprint(ENV);
-const OPEN = '66666666-0000-4000-8000-000000000001';
-const ALL = '66666666-0000-4000-8000-000000000002';
-const MINE = '66666666-0000-4000-8000-000000000003';
 const DID = '55555555-0000-4000-8000-000000000001';
 const OTHER = '55555555-0000-4000-8000-000000000009';
 const C_OPEN = 'c1c1c1c1-0000-4000-8000-000000000001';
 const C_FOREIGN = 'c1c1c1c1-0000-4000-8000-000000000002';
-const spec = { views: [{ entity: 'incident', name: 'Open cases' }, { entity: 'incident', name: 'All cases' }, { entity: 'incident', name: 'My cases' }] };
-const built = { created: { views: { 'incident|Open cases': OPEN, 'incident|All cases': ALL, 'incident|My cases': MINE }, charts: {} } };
-const resolveTile = (tile) => dashboardTileOpts(spec, tile, built);
-
-const halt = (phase, label, code, { cause } = {}) => Object.assign(new Error(`${label}: ${code}`), { phase, code, cause, retry: 'never' });
 const codeOf = async (p) => { try { await p; } catch (e) { return e.code; } return null; };
 const contentWrites = (wire) => wire.writes().filter((e) => /^systemforms/i.test(e.path));
 // The binding store's next file write fails once, when `failing.armed` is set: a crash at that persistence boundary.
@@ -52,9 +41,6 @@ function failNextStoreWrite() {
   };
   return { failing, deps };
 }
-const catalogFor = (d) => createIntentCatalog([{ catalogKind: 'dashboard', key: dashboardKey(d), scope: { kind: 'solution', solution: SOL }, declaration: { scopeType: 'Standard', name: d.name } }]);
-const declared = (tiles, extra = {}) => ({ name: 'Ops', reconcile: 'declared', tiles, ...extra });
-
 // The build-wide send observer is installed on the client every send goes through (the build installs it once for the
 // run); `observer: false` is a run without it.
 async function world({ observer = true, platform } = {}) {
@@ -76,14 +62,6 @@ async function rerun(w, { observer = true } = {}) {
   return { ...w, barrier, sdk, store, observer: obs };
 }
 
-// The maker's typed adoption approval of `dashboard:ops` is given unless a test passes its own `approvals`.
-const ADOPT = { adopt: new Set(['dashboard:ops']) };
-const settle = (w, dashboard, extra = {}) => settleDeclaredDashboard({
-  dashboard, catalog: catalogFor(dashboard), sdk: w.sdk, store: w.store, barrier: w.barrier, halt, resolveTile, toComponent: dashboardComponent,
-  ensureMembership: async () => undefined, ctx: { appUniqueName: APP, environmentFingerprint: FP }, approvals: ADOPT,
-  provisionedLanguages: async () => w.wire.languages(),
-  ...(w.observer ? { sendObserver: w.observer } : {}), ...extra,
-});
 const publish = (w, key, id) => publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk: w.sdk, key, id });
 
 // A maker's dashboard: one bound-able list tile and one foreign custom control, published.
@@ -495,6 +473,192 @@ test('a create whose answer was lost: the next run binds it only with the typed 
   assert.equal(w.wire.log.filter(isCreate).length, creates, 'no later run sends a create');
   assert.deepEqual(approved.store.readGroup('dashboard', 'ops').committed.records.map((r) => r.origin), ['adopted', 'adopted']);
 });
+
+// --- A create acknowledged by its durable receipt before the SDK recorded it (the retained workspace copy) ----------------
+
+const errorOf = async (p) => { try { await p; } catch (e) { return e; } return null; };
+const categoryOfErr = (e) => e && ((e.cause && e.cause.category) || e.category);
+const causeChain = (e) => { const chain = []; for (let c = e; c && chain.length < 8; c = c.cause) chain.push(c); return chain; };
+const sha256Hex = (text) => require('node:crypto').createHash('sha256').update(text, 'utf8').digest('hex');
+// The receipt calls a store makes, recorded as they are made (the store handle's own methods, called through).
+function recordReceipts(store) {
+  const calls = { draft: [], dispatch: [], answer: [] };
+  for (const [name, list] of [['noteDashboardCreateDraft', calls.draft], ['noteDashboardCreateDispatch', calls.dispatch], ['noteDashboardCreateAnswer', calls.answer]]) {
+    const original = store[name].bind(store);
+    store[name] = (token, args) => { list.push(args); return original(token, args); };
+  }
+  return calls;
+}
+
+for (const secondLanguage of [null, 1036]) {
+  test(`a new declared dashboard's create receipt holds the exact body the POST sent and the draft its copy was assembled to${secondLanguage ? ', with its captions in a second language' : ''}`, async () => {
+    const w = await world(secondLanguage ? { platform: { secondLanguage } } : undefined);
+    const calls = recordReceipts(w.store);
+    const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }, { key: 'all', type: 'list', view: 'All cases' }]);
+    const id = catalogFor(d).identityFor('dashboard', 'ops').derivedId;
+    const out = await settle(w, d);
+    assert.equal(out.result.committed, true);
+    const posts = w.wire.log.filter(isCreate);
+    assert.equal(posts.length, 1);
+    assert.equal(calls.draft.length, 1, 'one receipt, recorded before the POST');
+    assert.equal(calls.draft[0].bodySha256, sha256Hex(canonicalJson(posts[0].body)), 'the body hash is the hash of the body sent');
+    assert.equal(calls.dispatch.length, 1);
+    assert.equal(calls.answer.length, 1, 'the success acknowledged it');
+    if (secondLanguage) assert.match(posts[0].body.formxml, new RegExp(`languagecode="${secondLanguage}"`), 'the tiles were sent with their second-language captions');
+    const root = w.store.readGroup('dashboard', 'ops').committed.records.find((r) => r.kind === 'dashboard');
+    assert.equal(root.origin, 'created');
+    assert.deepEqual(root.localCreateDraft, { formatVersion: 1, rootId: id, attemptToken: root.localCreateDraft.attemptToken, draftSha256: calls.draft[0].draftSha256, bodySha256: calls.draft[0].bodySha256 });
+  });
+}
+
+test('a create whose assembled copy is not the draft that was modelled is not sent, and keeps no receipt', async () => {
+  const w = await world();
+  const calls = recordReceipts(w.store);
+  const updateElement = w.sdk.updateElement.bind(w.sdk);
+  w.sdk.updateElement = async (kind, id, pointer, value) => updateElement(kind, id, pointer, pointer === '/bag' ? { ...value, a: [...(value.a || []), ['extra', '1']] } : value);
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  assert.equal(await codeOf(settle(w, d)), 'create-local-draft-changed');
+  assert.equal(w.wire.log.filter(isCreate).length, 0, 'nothing sent');
+  assert.equal(calls.draft.length, 0, 'no receipt');
+});
+
+test('a create acknowledged by its receipt before the SDK recorded it recovers from the retained copy: one POST, created, published, no approval, the copy untouched; the next build does not stop', async () => {
+  const workspaceDir = makeTempDir('dash-maker-ws-');
+  const w = await makerRun({ workspaceDir, cutCreateAnswer: true });
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const id = catalogFor(d).identityFor('dashboard', 'ops').derivedId;
+  assert.ok(await codeOf(settle(w, d)), 'the lost answer stops the run');
+  assert.ok(w.wire.saved.has(id), 'the create landed');
+  assert.equal(w.wire.log.filter(isCreate).length, 1);
+  assert.equal(w.store.readGroup('dashboard', 'ops').pending.dashboardCreate.acknowledged, true, 'the receipt is acknowledged');
+
+  const next = await makerRun({ wire: w.wire, dir: w.dir, workspaceDir });
+  const copy = treeBytes(workspaceDir);
+  const writes = w.wire.writes().length;
+  const out = await scopedSettle(next, d, { approvals: {} }, { publishToo: true });
+  assert.equal(out.isolated, true, 'the settle ran in an isolated workspace');
+  assert.deepEqual(out.settled.result, { committed: true, recovered: true });
+  assert.equal(out.settled.id, id);
+  assert.equal(out.published.sent, true);
+  assert.ok(w.wire.published.has(id), 'published');
+  assert.deepEqual(w.wire.writes().slice(writes).map((e) => `${e.method} ${e.path}`), ['POST PublishXml'], 'no create and no content write: only the publish');
+  assert.equal(w.wire.log.filter(isCreate).length, 1, 'one POST in the dashboard\'s life');
+  const group = next.store.readGroup('dashboard', 'ops');
+  assert.equal(group.pending, null);
+  assert.deepEqual(group.committed.records.map((r) => r.origin), ['created', 'created'], 'its own acknowledged create');
+  assert.equal(group.committed.records.find((r) => r.kind === 'dashboard').localCreateDraft.rootId, id);
+  assert.deepEqual(treeBytes(workspaceDir), copy, 'the maker\'s copy is kept byte for byte');
+
+  const third = await makerRun({ wire: w.wire, dir: w.dir, workspaceDir });
+  const later = w.wire.writes().length;
+  const again = await scopedSettle(third, d, { approvals: {} });
+  assert.equal(again.isolated, true, 'the create evidence leads the next build past its own retained copy again');
+  assert.equal(again.settled.result.noop, true);
+  assert.equal(w.wire.writes().length, later, 'nothing sent');
+  assert.deepEqual(treeBytes(workspaceDir), copy);
+});
+
+test('a retained copy edited after its acknowledged create is not recovered over: the build stops on the unsent edits and keeps the copy', async () => {
+  const workspaceDir = makeTempDir('dash-maker-ws-');
+  const w = await makerRun({ workspaceDir, cutCreateAnswer: true });
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const id = catalogFor(d).identityFor('dashboard', 'ops').derivedId;
+  assert.ok(await codeOf(settle(w, d)));
+  const next = await makerRun({ wire: w.wire, dir: w.dir, workspaceDir });
+  await next.sdk.updateElement('dashboard', id, '/description', 'edited locally');
+  const copy = treeBytes(workspaceDir);
+  const writes = w.wire.writes().length;
+  const err = await errorOf(scopedSettle(next, d, { approvals: {} }));
+  assert.equal(err && err.code, 'create-completion-required');
+  assert.equal(categoryOfErr(err), 'workspace-copy-unsent-edits');
+  assert.equal(w.wire.writes().length, writes, 'nothing sent');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, 'nothing bound');
+  assert.deepEqual(treeBytes(workspaceDir), copy, 'the copy is kept as the maker left it');
+});
+
+// A build killed at the create's durable acknowledgement, and the next build in a new OS process. The kill is
+// `process.exit` inside the store's acknowledgement write, so nothing the first process held in memory (its SDK, its
+// store handle, its send observer) can reach the second: that one sees only the binding store and the maker's SDK
+// workspace on disk, and a service that still holds the created row (helpers/dashboard-create-crash-child.js).
+function crashThenRecover(timing) {
+  const root = makeTempDir('dash-crash-');
+  const files = {
+    timing,
+    dir: path.join(root, 'store'),
+    workspaceDir: path.join(root, 'workspace'),
+    wireFile: path.join(root, 'wire.json'),
+    crashFile: path.join(root, 'crash.json'),
+    output: path.join(root, 'recover.json'),
+  };
+  fs.mkdirSync(files.dir);
+  fs.mkdirSync(files.workspaceDir);
+  const env = { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' };
+  delete env.NODE_TEST_CONTEXT;
+  const child = (action) => {
+    const input = path.join(root, `${action}-input.json`);
+    fs.writeFileSync(input, JSON.stringify({ ...files, action }));
+    return spawnSync(process.execPath, [path.join(__dirname, 'helpers', 'dashboard-create-crash-child.js'), input], { env, encoding: 'utf8', timeout: 120000 });
+  };
+  const crashed = child('crash');
+  assert.equal(crashed.status, 77, `the first build is killed at the acknowledgement: ${crashed.stderr}`);
+  const recovered = child('recover');
+  assert.equal(recovered.status, 0, recovered.stderr);
+  return { crash: JSON.parse(fs.readFileSync(files.crashFile, 'utf8')), next: JSON.parse(fs.readFileSync(files.output, 'utf8')) };
+}
+
+test('a build killed just BEFORE its create is durably acknowledged: the next build in a new process stops on the unsent copy, sends nothing, binds nothing and keeps the copy', () => {
+  const { crash, next } = crashThenRecover('before');
+  assert.notEqual(next.pid, crash.pid, 'two OS processes');
+  assert.equal(crash.posts, 1, 'the create reached the service');
+  assert.equal(crash.acknowledged, false, 'and the store never recorded it as acknowledged');
+  assert.equal(next.error && next.error.code, 'create-completion-required', next.error && next.error.message);
+  assert.equal(next.error.category, 'workspace-copy-unsent-edits', 'recovery stays the maker\'s');
+  assert.equal(next.posts, 0, 'no second create');
+  assert.deepEqual(next.writes, [], 'nothing sent');
+  assert.equal(next.origins, null, 'nothing bound');
+  assert.deepEqual(next.sourceAtStart, crash.source, 'the copy the killed build left');
+  assert.deepEqual(next.sourceAtEnd, crash.source, 'is kept byte for byte');
+});
+
+test('a build killed just AFTER its create is durably acknowledged: the next build in a new process recovers it with no second create and no approval, binds it as created, publishes it and keeps the copy', () => {
+  const { crash, next } = crashThenRecover('after');
+  assert.notEqual(next.pid, crash.pid, 'two OS processes');
+  assert.equal(crash.posts, 1, 'the create reached the service');
+  assert.equal(crash.acknowledged, true, 'and the store recorded it as acknowledged before the kill');
+  assert.equal(next.error, null, next.error && `${next.error.code}: ${next.error.message}`);
+  assert.deepEqual(next.result, { committed: true, recovered: true });
+  assert.equal(next.settledId, next.id);
+  assert.equal(next.isolated, true, 'the settle ran in an isolated workspace');
+  assert.equal(next.posts, 0, 'no second create');
+  assert.deepEqual(next.writes, ['POST PublishXml'], 'no content write: only the publish');
+  assert.equal(next.publishSent, true);
+  assert.equal(next.published, true, 'published');
+  assert.equal(next.pending, false);
+  assert.deepEqual(next.origins, ['created', 'created'], 'its own acknowledged create, not an adoption');
+  assert.deepEqual(next.sourceAtStart, crash.source, 'the copy the killed build left');
+  assert.deepEqual(next.sourceAtEnd, crash.source, 'is kept byte for byte');
+});
+
+for (const step of ['dispatch', 'answer']) {
+  test(`a create whose receipt ${step} cannot be written ${step === 'dispatch' ? 'is not sent' : 'is sent once and stays unacknowledged'}, and the build stops with the store's own error`, async () => {
+    const { failing, deps } = failNextStoreWrite();
+    const w = await makerRun({ workspaceDir: makeTempDir('dash-maker-ws-'), deps });
+    const name = step === 'dispatch' ? 'noteDashboardCreateDispatch' : 'noteDashboardCreateAnswer';
+    const original = w.store[name].bind(w.store);
+    let thrown = null;
+    w.store[name] = (token, args) => {
+      failing.armed = true;
+      try { return original(token, args); } catch (e) { thrown = e; throw e; }
+    };
+    const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+    const err = await errorOf(settle(w, d));
+    assert.ok(thrown && thrown.code, 'the store refused the receipt write');
+    assert.ok(causeChain(err).some((c) => c.code === thrown.code), `the store's own code is kept: ${causeChain(err).map((c) => c.code).join(', ')}`);
+    assert.equal(w.wire.log.filter(isCreate).length, step === 'dispatch' ? 0 : 1);
+    const pending = w.store.readGroup('dashboard', 'ops').pending;
+    assert.equal(pending.dashboardCreate.acknowledged, false, 'nothing acknowledged it');
+  });
+}
 
 test('a pinned dashboard is not the maker\'s consent to manage it: a write to it needs the typed adoption approval', async () => {
   const w = await world();

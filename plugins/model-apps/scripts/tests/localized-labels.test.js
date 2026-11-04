@@ -728,6 +728,119 @@ test('the guard costs nothing for a spec with only plain labels', async () => {
   assert.strictEqual(called, 0);
 });
 
+// The check runs before the build's FIRST write, which is the publisher and the solution, not the first table. Run inside the
+// data-model phase only, it stopped a build whose label names a language the organization lacks after the solution phase had
+// already created the publisher and the solution. The halt is the one the data-model phase gives: same code, phase and message.
+const SOLUTION_WRITE = /^(createPublisher|createSolution)$/;
+const ANY_WRITE = /^(create|update|delete|add|push|set|insert|associate|publish|save|remove)/;
+function spanishSpec() {
+  const s = base();
+  s.entities[0].displayName = ES;
+  s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base' };
+  return s;
+}
+// The simple mock SDK with no publisher and no solution yet, so the solution phase creates both; `writes` lists every write call by name.
+function languageWorld() {
+  const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+  const { sdk } = makeSimpleMockSdk();
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (entity, o) => (entity === 'solution' || entity === 'publisher' ? [] : query(entity, o));
+  const writes = [];
+  for (const name of Object.keys(sdk)) {
+    const fn = sdk[name];
+    if (typeof fn !== 'function' || !ANY_WRITE.test(name)) continue;
+    sdk[name] = (...args) => { writes.push(name); return fn(...args); };
+  }
+  return { sdk, writes };
+}
+async function buildWithLanguages(spec, { provisionedLanguages, apply = true, phases = ['solution', 'data-model'] }) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { sdk, writes } = languageWorld();
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'label-languages-'));
+  let probes = 0;
+  const probe = async () => { probes += 1; return provisionedLanguages(); };
+  try {
+    const result = await runSdkBuild(spec, {
+      sdk, apply, env: 'https://contoso.crm.dynamics.com', appDir, phases, livePlan: false, preResolvedLanguageCode: 1033, provisionedLanguages: probe, warn: () => {},
+    }).then((r) => ({ r }), (err) => ({ err }));
+    return { ...result, writes, probes };
+  } finally {
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+}
+
+test('a full build with a label in an unprovisioned language halts before the publisher and the solution are created', async () => {
+  const { checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
+  const today = await checkLocalizedLabelLanguages(spanishSpec(), async () => [1033]).then(() => null, (e) => e);
+  assert.ok(today, 'the check itself halts this spec');
+  for (const phases of [['solution', 'data-model'], undefined]) {
+    const { err, writes, probes } = await buildWithLanguages(spanishSpec(), { provisionedLanguages: async () => [1033], ...(phases ? { phases } : {}) });
+    assert.ok(err, `the build must halt (phases ${JSON.stringify(phases)})`);
+    assert.strictEqual(err.code, 'localized-label-language-not-provisioned', String(err && err.stack));
+    assert.strictEqual(err.phase, 'data-model');
+    assert.strictEqual(err.message, today.message);
+    assert.deepStrictEqual(writes.filter((w) => SOLUTION_WRITE.test(w)), [], 'the publisher or the solution was created before the label languages were checked');
+    assert.deepStrictEqual(writes, [], 'nothing may be written before the label languages are checked');
+    assert.strictEqual(probes, 1, 'the languages are read once');
+  }
+});
+
+test('a provisioned language, or a language list that cannot be read, builds as before with one read of the list', async () => {
+  for (const provisionedLanguages of [async () => [1033, 3082], async () => { throw new Error('HTTP 403'); }, async () => []]) {
+    const { err, writes, probes } = await buildWithLanguages(spanishSpec(), { provisionedLanguages });
+    assert.ifError(err);
+    assert.deepStrictEqual(writes.filter((w) => SOLUTION_WRITE.test(w)), ['createPublisher', 'createSolution']);
+    assert.ok(writes.includes('createTable'), `the table is created: ${writes.join(', ')}`);
+    assert.strictEqual(probes, 1, 'the languages are read once, not again in the data-model phase');
+  }
+});
+
+test('a dry run does not read the language list and writes nothing', async () => {
+  const { r, err, writes, probes } = await buildWithLanguages(spanishSpec(), { provisionedLanguages: async () => [1033], apply: false });
+  assert.ifError(err);
+  assert.strictEqual(r.dryRun, true);
+  assert.deepStrictEqual(writes, []);
+  assert.strictEqual(probes, 0);
+});
+
+test('a run without the data-model phase does not check the label languages', async () => {
+  const { err, writes, probes } = await buildWithLanguages(spanishSpec(), { provisionedLanguages: async () => [1033], phases: ['solution'] });
+  assert.ifError(err);
+  assert.deepStrictEqual(writes.filter((w) => SOLUTION_WRITE.test(w)), ['createPublisher', 'createSolution']);
+  assert.strictEqual(probes, 0);
+});
+
+test('provisionEntities halts on an unprovisioned label language before the publisher and the solution are created', async () => {
+  const path = require('node:path');
+  const { provisionEntities } = require(path.join(__dirname, '..', 'provision-entities.js'));
+  const input = {
+    solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
+    entities: [{ schemaName: 'contoso_projectbaseline', displayName: ES, pluralName: { 1033: 'Project Baselines', 3082: 'Líneas base' }, primaryAttribute: { schemaName: 'contoso_title' }, columns: [] }],
+    relationships: [],
+  };
+  const run = async (provisionedLanguages) => {
+    const { sdk, writes } = languageWorld();
+    let probes = 0;
+    const out = await provisionEntities(input, { apply: true }, {
+      sdk, provision: sdk, warn: () => undefined, provisionedLanguages: async () => { probes += 1; return provisionedLanguages(); },
+    }).then((r) => ({ r }), (err) => ({ err }));
+    return { ...out, writes, probes };
+  };
+  const halted = await run(async () => [1033]);
+  assert.strictEqual(halted.err && halted.err.code, 'localized-label-language-not-provisioned', String(halted.err && halted.err.stack));
+  assert.deepStrictEqual(halted.writes, [], 'nothing may be written before the label languages are checked');
+  assert.strictEqual(halted.probes, 1);
+  const built = await run(async () => [1033, 3082]);
+  assert.ifError(built.err);
+  assert.deepStrictEqual(built.writes.filter((w) => SOLUTION_WRITE.test(w)), ['createPublisher', 'createSolution']);
+  assert.ok(built.writes.includes('createTable'));
+  // Once, before the solution: the data-model phase does not read the list again (no language override here, so nothing else reads it).
+  assert.strictEqual(built.probes, 1);
+});
+
 test('the localized label reaches the SDK UNFLATTENED', async () => {
   // The plugin must not pre-flatten: the SDK's serializer is what turns a map into a multi-entry
   // LocalizedLabels array. Flattening here would silently restore the English-only behaviour while

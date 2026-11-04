@@ -26,6 +26,16 @@
 // flows (businessProcessFlows[].reconcile "declared"), which it leaves out too, into businessProcessFlows[] (`managedBpfs`). The download writes
 // no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>
 // (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>; each flow: adopt:bpf:<table>/<name>).
+// A declared form's handler library the spec does not declare is downloaded with the form, as an `external` web resource, when it is
+// this publisher's own unmanaged script (lib/declared-form-io.js libraryEntry; `managedForms.libraries`).
+// A persona a declared flow's securityRoles name that the downloaded spec lacks is read from its role and written into personas[] only
+// when a rebuild provably leaves that role exactly as it is (lib/persona-restore.js; `managedBpfs.personas`).
+// A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
+// calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
+// a NEW file `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json` (`managedFragments.file` in the result;
+// lib/managed-fragments.js). It is created exclusively, so it never replaces, moves or removes a file, and with nothing to write
+// nothing is written. So that a failure to write it leaves the folder as it was, the managed download writes the page tree to a
+// staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
 // Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
@@ -50,7 +60,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
+const crypto = require('node:crypto');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -62,6 +73,7 @@ const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
+const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -2992,6 +3004,35 @@ function writePageTree(pagesRoot, pages) {
   }
 }
 
+// The checks writePageTree makes before it removes anything, made on their own: the managed download asks them before it settles its
+// fragments file, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written.
+function assertPageTreeReplaceable(pagesRoot) {
+  try {
+    fs.lstatSync(pagesRoot);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return;
+    throw e;
+  }
+  assertSafeOutputDir(pagesRoot);
+  assertNoPlantedPageLinks(pagesRoot);
+}
+
+// A fresh staging folder for the managed download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
+// under a hidden name unique to this process and call. `mkdir` without `recursive` fails on a name that exists, so a folder that is
+// already there (another run's, or the maker's) is never reused or removed: another name is tried.
+function makePageStage(outDir) {
+  const root = assertSafeOutputDir(outDir, { create: true });
+  for (let attempt = 0; ; attempt += 1) {
+    const dir = path.join(root, `.download-pages.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+    try {
+      fs.mkdirSync(dir);
+      return dir;
+    } catch (e) {
+      if (!(e && e.code === 'EEXIST') || attempt >= 4) throw e;
+    }
+  }
+}
+
 // Reads every page the sitemap names, by id — so nothing outside this app is read — a few at a time, and answers
 // { ok: true, pages: [{ pageId, files }] } in the sitemap's order, or { ok: false, errors } naming each page that could not be read. A page that
 // cannot be read is a page the spec would drop: the caller refuses to write one rather than report it as an app without that page. That includes
@@ -3005,7 +3046,28 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities }) {
+// `stagePages` (the managed download, main): the page tree is written to a staging folder inside <out> (makePageStage) and read
+// back from there exactly as a download writes it — the same files, the same reverse-resolved page.tsx — and the folder is removed.
+// The real pages/ folder is not touched: the result's `stagedPages` publishes it later (`check` makes writePageTree's checks without
+// writing, `publish` writes the tree with writePageTree). main publishes it only after everything that can still stop the download
+// has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option the download is exactly as before.
+async function runDownload(options = {}) {
+  if (!options.stagePages) return downloadApp(options);
+  const stage = { dir: null, pages: null };
+  try {
+    const result = await downloadApp({ ...options, stage });
+    if (!result.ok || !stage.pages) return result;
+    const pagesRoot = path.join(path.resolve(options.outDir), 'pages');
+    const pages = stage.pages;
+    return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
+  } finally {
+    // Best-effort: the pages are in memory by now. A folder that stays is named, so the maker can delete it.
+    const left = stage.dir ? removeTreeWithRetry(stage.dir) : null;
+    if (left) process.stderr.write(`WARNING: the download's staging folder ${stage.dir} could not be removed (${left}): delete it.\n`);
+  }
+}
+
+async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -3175,12 +3237,19 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
 
     const read = await readSitemapPages(genpage, sitemapIds, concurrency);
     if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
-    writePageTree(pagesRoot, read.pages);
+    // Staged (see runDownload): the tree is written, read back and reverse-resolved under the staging folder, which stands in for
+    // <out> so each page's codeFile (relative to it) is the one a direct download gives.
+    if (stage) stage.dir = makePageStage(outDir);
+    const treeRoot = stage ? path.join(stage.dir, 'pages') : pagesRoot;
+    const writeRoot = stage ? stage.dir : outDir;
+    writePageTree(treeRoot, read.pages);
 
     const unreadableConfigs = [];
     const unkeptModels = [];
     const unkeptBindings = [];
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    pages = parseDownloadedPages(treeRoot, writeRoot, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    // A read error names the file it read; name the one the maker will find.
+    if (stage) for (const u of unreadableConfigs) u.reason = String(u.reason).split(stage.dir).join(path.resolve(outDir));
     // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
     // update leaves the model the page already has as it is (the SDK writes only what a spec names), and a page the rebuild creates
     // gets none.
@@ -3230,12 +3299,19 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     // place the lexer reads by guess is turned back, and only if the build would take the page written that way (see
     // reverseResolveNavIdsReport); the ids it leaves are reported below.
     for (const p of pages) {
-      const abs = path.join(outDir, p.codeFile);
+      const abs = path.join(writeRoot, p.codeFile);
       assertPlainFileTarget(abs);                         // FAIL on a planted link (no swallow, no write)
       const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
       const rev = reverseResolveNavIdsReport(src, idToKey); // structural — nav pageId literals only
       if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
       for (const left of rev.left) navIdsLeft.push({ page: p.name, ...left });
+    }
+    // The staged tree as it now is on disk, read back whole, for runDownload to publish: the bytes writePageTree will write again.
+    if (stage) {
+      stage.pages = read.pages.map(({ pageId, files }) => ({
+        pageId,
+        files: Object.fromEntries(Object.keys(files).map((name) => [name, fs.readFileSync(path.join(treeRoot, pageId, name), 'utf8')])),
+      }));
     }
     // Every page id of this app still in a downloaded page is reported, whether a call the checker recognised holds it or not (see
     // knownIdsLeft in pageref-resolver.js). One in a navigation call is a hardcoded page id to the build, which refuses one, so say so now
@@ -3682,7 +3758,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
+  // `publisher` is internal (main hands it to the managed restore, which downloads a form's handler library only under this
+  // publisher's verified prefix); it is not part of the printed result.
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
 async function main(deps = {}) {
@@ -3813,7 +3891,8 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities });
+    // The managed download stages its page tree (runDownload `stagePages`): it is published below, after everything that can still stop it.
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, ...(includeManaged ? { stagePages: true } : {}) });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
@@ -3854,6 +3933,8 @@ async function main(deps = {}) {
     let managedDashboards = null;
     let managedRules = null;
     let managedBpfs = null;
+    // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
+    const fragments = [];
     if (includeManaged) {
       const source = {
         sdk,
@@ -3863,6 +3944,8 @@ async function main(deps = {}) {
         appUniqueName: appUnique,
         solutionUniqueName: spec.solution && spec.solution.uniqueName,
         validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
+        fragments,
+        publisher: result.publisher,
       };
       try {
         managedForms = await restoreManagedForms(source);
@@ -3874,9 +3957,11 @@ async function main(deps = {}) {
         return;
       }
       for (const s of managedForms.stale) io.stderr.write(`WARNING: managed form ${s.key} was not restored: ${s.reason}. It is left out of forms[], as every form is without --include-managed.\n`);
+      for (const l of managedForms.libraries || []) io.stderr.write(`NOTE: handler library '${l.name}' of managed form ${l.forms.join(', ')} was downloaded into webResources[] as external: a build reuses it where it exists without writing its content, creates it where it is missing, and a teardown never deletes it.\n`);
       for (const s of managedDashboards.stale) io.stderr.write(`WARNING: managed dashboard ${s.key} was not restored: ${s.reason}. Its dashboard is downloaded as every dashboard is without --include-managed.\n`);
       for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
       for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
+      for (const p of managedBpfs.personas || []) io.stderr.write(`NOTE: persona '${p.name}' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build.\n`);
     }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
@@ -3895,6 +3980,23 @@ async function main(deps = {}) {
         + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
       );
     }
+    // The fragments file is settled before anything is published: the staged page tree, the spec and the baseline are written only
+    // after it, so a refusal or a failed write here leaves every one of them as it was. The page tree's own checks come first, so a
+    // tree that cannot be replaced stops the download before the fragments file is written.
+    let managedFragments = null;
+    if (includeManaged) {
+      if (result.stagedPages) result.stagedPages.check();
+      try {
+        managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
+      } catch (e) {
+        finish(false, { ok: false, code: (e && e.code) || 'managed-fragments-unwritable', error: (e && e.message) || String(e) });
+        return;
+      }
+      if (managedFragments) {
+        io.stderr.write(`WARNING: ${managedFragments.keys.length} managed item(s) left out only for what the download could not bring are written ready to paste in ${managedFragments.file}: add each "paste" entry to app-spec.json together with what its "needs" lists (from the spec it was built from), then build.\n`);
+      }
+      if (result.stagedPages) result.stagedPages.publish();
+    }
     writeFileSafe(specPath, JSON.stringify(spec, null, 2));
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
@@ -3912,7 +4014,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedFragments ? { managedFragments } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

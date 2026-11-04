@@ -44,6 +44,7 @@ const {
   emptyResult,
   operation,
   refusal,
+  readFailure,
   approvalKey,
   isApproved,
   lookupBinding,
@@ -194,8 +195,8 @@ async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
   if (!id && !binding && ctx.managed && typeof ctx.managed.observe === 'function') {
     try {
       id = normalizeGuid(await ctx.managed.observe('chart', key)) || '';
-    } catch {
-      plan.unknown.push(refusal(key, 'chart-lookup-unreadable', 'whether the chart exists could not be read'));
+    } catch (err) {
+      plan.unknown.push(readFailure(key, 'chart-lookup-unreadable', 'whether the chart exists could not be read', err));
       return plan;
     }
   }
@@ -204,9 +205,10 @@ async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
       id = normalizeGuid(await sdk.findArtifact('chart', { name: intent.name, entity: intent.entity }));
     } catch (err) {
       // The SDK refuses a name two rows share (AMBIGUOUS_ARTIFACT): choosing one would edit a row the spec
-      // may not mean, so the maker names it instead. Any other failure leaves existence unknown.
+      // may not mean, so the maker names it instead. Any other failure leaves existence unknown, with the read's own
+      // failure kept (as for a view).
       if (err && err.code === 'AMBIGUOUS_ARTIFACT') plan.refused.push(refusal(key, 'chart-name-ambiguous', 'several charts on the table have this name; rename or remove the extra one before it can be managed'));
-      else plan.unknown.push(refusal(key, 'chart-lookup-unreadable', 'whether the chart exists could not be read'));
+      else plan.unknown.push(readFailure(key, 'chart-lookup-unreadable', 'whether the chart exists could not be read', err));
       return plan;
     }
   }

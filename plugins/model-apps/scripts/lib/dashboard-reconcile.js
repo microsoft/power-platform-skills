@@ -88,6 +88,12 @@ const {
   rulesOf,
 } = require('./reconcile-common.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
+const { readRetainedCopy } = require('./dashboard-recovery-workspace.js');
+const { expectedCreateBody } = require('./create-request-body.js');
+// Loaded lazily, by the one accessor below: reseedBag runs only for a declared dashboard's create, and a default build must not
+// load the stable-identity modules (creates-port.test.js walks every require edge of the default build).
+const identity = () => require('./creates-identity.js');
+const { rootCreateAcknowledged: storeRootCreateAcknowledged, dashboardCreateAcknowledged } = require('./managed-bindings.js');
 const contract = require('./managed-feature-contract.js');
 const { runManagedFeature, publishManagedScope, CREATION_RECORD_UNSETTLED, PUBLICATION_UNVERIFIED, PUBLICATION_REFUSED } = contract;
 const { readSystemFormPublication, readSystemFormRootPresence, systemFormRootLayerSha256 } = require('./systemform-published.js');
@@ -137,6 +143,10 @@ const scopeOf = (id) => ({ type: KIND, id: bareId(id) });
 function stop(code, message, details = {}) {
   return Object.assign(new Error(message), { code }, details);
 }
+
+// The maker's workspace SDK: the scope's source when the settle has a workspace scope (dashboard-recovery-workspace.js),
+// whose `currentSdk` may be an isolated one; the settle's own SDK otherwise.
+const sourceSdkOf = (s) => (s.workspaceScope && s.workspaceScope.sourceSdk) || s.sdk;
 
 function isDeclaredDashboard(d) {
   return !!d && d.reconcile === 'declared';
@@ -774,7 +784,17 @@ function savedSnapshot(sdk, saved, key) {
   return { ...parsed, id: saved.formid, dashboardType: dashboardTypeOf(saved.type), entityLogicalName: parsed.entityLogicalName == null ? null : parsed.entityLogicalName };
 }
 
-/** Replace the seed tab's and section's ids in the SDK's freshly generated local seed; throws on any other shape. */
+/**
+ * Replace the seed tab's and section's ids in the SDK's freshly generated local seed with the catalog's, and the id of
+ * each cell the seed section holds with one derived from the section's id and its ordinal; throws on any other shape.
+ *
+ * Why the cells: the SDK's default dashboard layout mints a random id for its empty cell on every call, e.g.
+ *   section {4fc1...af09} > rows > row > cell [["id","{06f0c1b3-...-fb009c3dbbfa}"],["rowspan","12"],["colspan","2"],...]
+ * then, from another call,  cell [["id","{9b2e...}"], ...]
+ * so the same declaration gave a different create draft on every run. A create's receipt pins the POST to the hash of
+ * that whole draft, and a proven-unsent create continued by a later run must send the same one, so the id is derived
+ * (UUIDv5 under the section's catalog id, as bpf-settlement.js settleControlIds derives its ControlIds) rather than kept.
+ */
 function reseedBag(seedBag, tabId, sectionId) {
   const bag = JSON.parse(JSON.stringify(seedBag || {}));
   const found = { tab: [], section: [] };
@@ -787,6 +807,17 @@ function reseedBag(seedBag, tabId, sectionId) {
   if (found.tab.length !== 1 || found.section.length !== 1) throw stop('dashboard-seed-unrecognized', 'the SDK seeded a dashboard layout this build does not recognize; nothing was sent');
   found.tab[0].a.find((p) => p[0] === 'id')[1] = braced(tabId);
   found.section[0].a.find((p) => p[0] === 'id')[1] = braced(sectionId);
+  let n = 0;
+  const rekeyCells = (el) => {
+    if (!el || typeof el !== 'object') return;
+    const idAttr = el.n === 'cell' ? (el.a || []).find((p) => Array.isArray(p) && p[0] === 'id') : null;
+    if (idAttr) {
+      idAttr[1] = braced(identity().uuidV5(normalizeGuid(sectionId), JSON.stringify(['dashboard-seed-cell', 1, n])));
+      n += 1;
+    }
+    for (const child of el.c || []) rekeyCells(nodeOf(child));
+  };
+  rekeyCells(found.section[0]);
   return bag;
 }
 
@@ -930,7 +961,9 @@ function intendedDashboard(s, r) {
       for (const { path, value } of captionEdits) setAtPointer(art, path, value);
       intended = readBack(adapter.fromArtifact(art));
     }
-    return { intended, captionEdits };
+    // A create's complete local draft, as applyDashboard must assemble it in the workspace: the one its create receipt
+    // pins the POST to (applyDashboard compares the assembled artifact with it, whole, before anything is sent).
+    return { intended, captionEdits, ...(r.create ? { createDraft: JSON.parse(JSON.stringify(art)) } : {}) };
   } catch (err) {
     if (err && err.code === 'dashboard-seed-unrecognized') throw err;
     throw stop('dashboard-rejected', `the planned edit of dashboard "${s.key}" could not be written by the SDK; nothing was sent`, { cause: err });
@@ -1005,17 +1038,64 @@ function requireOriginalDeclaration(key, { committed, pending }) {
  *     such a copy is checked before the first one. `create-completion-required`, category `workspace-copy-unsent-edits`:
  *     the maker saves the edit into the spec or discards the copy; an identical rerun stops the same way.
  *     A copy the SDK cannot diff reads as edited (hasUnsyncedEdits fails open), so a doubtful copy is never dropped.
+ *     The one exception is this build's own create draft, retained when a run stopped after the service acknowledged
+ *     the create and before the SDK recorded it (retainedCreateDraft): with a workspace scope, the copy is left as it
+ *     is and the rest of the settle reads and writes through an isolated workspace (`s.sdk` from here on).
  */
 async function preflightDashboard(s, { committed, pending }) {
-  const { key, sdk, dashboard, catalog } = s;
+  const { key, dashboard, catalog } = s;
+  // The maker's own workspace is the one inspected, even when an earlier preflight of this settle already isolated it.
+  const sdk = sourceSdkOf(s);
   requireOriginalDeclaration(key, { committed, pending });
   if (s.retainedCreationIds.length) throw stop(CREATION_RECORD_UNSETTLED, `the creation record of dashboard "${key}" is not settled; it is not written or published in this run`);
   const ids = [committed && committed.root.id, pending && pending.root && pending.root.id, dashboard && dashboard.dashboardId, s.resolvedId];
   try { ids.push(catalog.identityFor(KIND, key).derivedId); } catch { /* not in the catalog: resolve stops it */ }
+  let isolate = null;
   for (const id of [...new Set(ids.map(normalizeGuid).filter(Boolean))]) {
-    if (await hasUnsyncedEdits(sdk, KIND, id)) {
+    if (!(await hasUnsyncedEdits(sdk, KIND, id))) continue;
+    const draftSha256 = await retainedCreateDraft(s, id, { committed, pending });
+    if (!draftSha256) {
       throw stop('create-completion-required', `the workspace copy of dashboard "${key}" holds edits that were never sent; save them into the spec or discard the copy before the build reconciles it`, { category: 'workspace-copy-unsent-edits', id });
     }
+    isolate = { id, draftSha256 };
+  }
+  // The retained copy of this build's own acknowledged create is left exactly as it is: every SDK read and write of this
+  // settle (and of its publish) goes through an isolated workspace from here on, over the same connection.
+  if (isolate) {
+    await s.workspaceScope.activateIsolated(isolate);
+    s.sdk = s.workspaceScope.currentSdk;
+  }
+}
+
+/**
+ * Whether the edited workspace copy at `id` is this build's own create draft, retained because the run that sent it
+ * stopped after the service acknowledged the create and before the SDK recorded it as synced. Answers the recorded
+ * draft hash when it is, null otherwise (the caller's unsent-edits refusal stands). It is only when all of these hold:
+ *   - `id` is the pending attempt's root and that attempt durably recorded the create's acknowledgement (its receipt,
+ *     managed-bindings.js dashboardCreateAcknowledged), or the committed group's root created by this build, whose
+ *     record keeps the create evidence (`localCreateDraft`);
+ *   - the settle has a workspace scope to isolate the rest of its work in (a caller without one keeps the refusal);
+ *   - the SDK reads the copy locally and consistently, as a pending create or a synced copy (creates-local.js), and
+ *     the whole artifact hashes to the recorded draft hash. Nothing is normalised first: any change, even one the
+ *     create's serializer would drop, refuses.
+ */
+async function retainedCreateDraft(s, id, { committed, pending }) {
+  const scope = s.workspaceScope;
+  if (!scope || typeof scope.activateIsolated !== 'function' || typeof scope.assertSourceUnchanged !== 'function') return null;
+  let recorded = null;
+  if (pending && pending.root && normalizeGuid(pending.root.id) === id && dashboardCreateAcknowledged(pending)) {
+    recorded = pending.dashboardCreate.draftSha256;
+  } else if (committed && normalizeGuid(committed.root.id) === id) {
+    const rootRec = committed.records.find((x) => x.kind === KIND && x.key === s.key);
+    const marker = rootRec && rootRec.origin === 'created' ? rootRec.localCreateDraft : null;
+    if (marker && normalizeGuid(marker.rootId) === id) recorded = marker.draftSha256;
+  }
+  if (!recorded) return null;
+  try {
+    const art = await readRetainedCopy(sourceSdkOf(s), id);
+    return art && typeof art === 'object' && sha(art) === recorded ? recorded : null;
+  } catch {
+    return null;
   }
 }
 
@@ -1192,14 +1272,14 @@ async function resolveDashboard(s, committed, pending) {
 async function withIntended(s, r) {
   if (!r.writes) return r;
   const tileLanguages = r.additions.length ? await tileCaptionLanguages(s) : null;
-  const { intended, captionEdits } = intendedDashboard(s, { ...r, tileLanguages });
+  const { intended, captionEdits, createDraft } = intendedDashboard(s, { ...r, tileLanguages });
   const why = unpreservableSend(s, r, intended, plannedTiles(r));
   if (why) {
     const keys = r.entries.filter((e) => r.create || r.additions.includes(e) || (e.changed && e.changed.length)).map((e) => e.tileKey);
     const refusals = (keys.length ? keys : [s.key]).map((k) => ({ key: k, code: 'dashboard-layout-unsupported', message: `${why}; make this change in Maker` }));
     throw stop('dashboard-layout-unsupported', `declared dashboard "${s.key}": ${refusals.map((x) => `${x.key}: ${x.message}`).join('; ')}`, { refusals });
   }
-  return { ...r, tileLanguages, intended, captionEdits };
+  return { ...r, tileLanguages, intended, captionEdits, ...(createDraft ? { createDraft } : {}) };
 }
 
 /** A dashboard no id names that is not there: it is created under its catalog id, every tile a catalog child of it. */
@@ -1291,21 +1371,30 @@ function planDashboard(s, resolution, committed) {
 // very large dashboard is refused before its send rather than sent with a reservation too small for its completion.
 const COMPLETION_TILE_BYTES = 2048;
 const COMPLETION_FIXED_BYTES = 64 * 1024;
+// A create's receipt (the attempt's `dashboardCreate`, about 330 bytes) and the create evidence its committed root keeps
+// (`localCreateDraft`, about 300): fixed-width ids and hashes, with margin.
+const COMPLETION_CREATE_EVIDENCE_BYTES = 2048;
 const COMPLETION_COPY_DEPTH = 8;
 function completionBound(s, entries, declaration) {
   const app = Buffer.byteLength(String((s.ctx && s.ctx.appUniqueName) || ''), 'utf8');
-  let bytes = COMPLETION_FIXED_BYTES;
+  let bytes = COMPLETION_FIXED_BYTES + COMPLETION_CREATE_EVIDENCE_BYTES;
   for (const e of entries) bytes += COMPLETION_TILE_BYTES + 4 * (Buffer.byteLength(`${s.key}/${e.tileKey}`, 'utf8') + app);
   const text = JSON.stringify(declaration, null, 2);
   return bytes + Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * COMPLETION_COPY_DEPTH;
 }
 
-/** Send the planned change once: a create, or the edits and appends of an existing dashboard, in one push. */
-async function applyDashboard(s, r) {
+/**
+ * Send the planned change once: a create, or the edits and appends of an existing dashboard, in one push.
+ * A create sent through the build's gated, observed connection (the run's publication barrier gates it and the send
+ * observer is installed on it) is receipted (createReceipted): the service's answer to the one create POST is recorded
+ * in the binding store before the SDK sees it. Without that connection a create is sent as before, with no receipt.
+ */
+async function applyDashboard(s, r, { token = null, sendEpoch = null } = {}) {
   const { sdk, key } = s;
   const id = r.id;
   if (!r.writes) return { createdRoot: false, createdTiles: [] };
   let pushed;
+  const receipted = r.create && receiptable(s, token, sendEpoch);
   try {
     if (r.create) {
       const art = await sdk.createArtifact(KIND, { name: s.dashboard.name, ...(r.description ? { description: r.description } : {}), id });
@@ -1324,10 +1413,65 @@ async function applyDashboard(s, r) {
     if (err && err.code === 'dashboard-create-id-not-kept') throw err;
     throw stop(err && err.code === 'dashboard-seed-unrecognized' ? err.code : 'dashboard-rejected', `the edit of dashboard "${key}" was refused before it was sent`, { cause: err, rules: rulesOf(err) });
   }
-  pushed = r.create ? await pushChecked(sdk, KIND, id) : await pushIfChanged(sdk, KIND, id);
+  let descriptor = false;
+  if (receipted) {
+    pushed = await createReceipted(s, r, { token, sendEpoch });
+    descriptor = true;
+  } else {
+    pushed = r.create ? await pushChecked(sdk, KIND, id) : await pushIfChanged(sdk, KIND, id);
+  }
   if (pushed.outcome === 'refused') throw stop('dashboard-rejected', `the edit of dashboard "${key}" was refused`, { rules: pushed.rules || [] });
   if (pushed.outcome === 'unknown') throw stop('dashboard-write-unknown', `the write of dashboard "${key}" did not report its outcome; check the dashboard`);
-  return { createdRoot: r.create, createdTiles: r.additions.map((e) => e.tileKey) };
+  return { createdRoot: r.create, createdTiles: r.additions.map((e) => e.tileKey), ...(descriptor ? { descriptor: true } : {}) };
+}
+
+// Whether this create can be receipted: an installed send observer that scopes a create receipt, a barrier that gates the
+// connection the push uses (so the create can be pinned to its body), the attempt's token and its send epoch. Without
+// all of them the create is sent as before, with no receipt (and a lost answer stays a manual recovery).
+function receiptable(s, token, sendEpoch) {
+  const observer = s.sendObserver;
+  const barrier = s.barrier;
+  return !!(observer && typeof observer.withDashboardCreateReceipt === 'function' && observer.installed
+    && barrier && typeof barrier.pinCreate === 'function' && typeof barrier.gatesTransport === 'function' && barrier.gatesTransport()
+    && typeof token === 'string' && token && Number.isSafeInteger(sendEpoch) && sendEpoch > 0);
+}
+
+/**
+ * The receipted create of a dashboard. In order:
+ *   1. the artifact the workspace now holds must be, whole, the draft intendedDashboard modelled (`r.createDraft`): any
+ *      other content (an edit made to the copy meanwhile, an SDK assembly the model does not reproduce) is refused
+ *      before anything is sent (`create-local-draft-changed`);
+ *   2. the body the SDK's push sends for that draft is worked out without sending it (create-request-body.js);
+ *   3. the draft's and the body's hashes are recorded on the attempt (noteDashboardCreateDraft) before the POST;
+ *   4. the create POST is pinned to exactly that body (a different body is refused with no request sent) and sent inside
+ *      the observer's receipt scope, which records its dispatch before it leaves and the service's answer before the SDK
+ *      sees it. A store failure there is raised as itself after the push, never read as the push's own outcome.
+ */
+async function createReceipted(s, r, { token, sendEpoch }) {
+  const { sdk, key, store, barrier } = s;
+  const id = r.id;
+  const changed = (why, extra = {}) => stop('create-local-draft-changed', `the local copy of dashboard "${key}" is not the draft this build assembled (${why}); nothing was sent`, { id, ...extra });
+  if (!r.createDraft || typeof r.createDraft !== 'object') throw changed('no draft was modelled');
+  const local = await sdk.getArtifact(KIND, id);
+  if (canonicalJson(local) !== canonicalJson(r.createDraft)) throw changed('the assembled copy differs from the modelled one');
+  let body;
+  try {
+    body = await expectedCreateBody(sdk, { kind: KIND, collection: 'systemforms', idField: 'formid', load: 'write' }, id, r.createDraft);
+  } catch (err) {
+    throw changed('the body its create would send could not be worked out', { cause: err });
+  }
+  const want = canonicalJson(body);
+  const bodySha256 = crypto.createHash('sha256').update(want).digest('hex');
+  store.noteDashboardCreateDraft(token, { sendEpoch, rootId: id, draftSha256: sha(r.createDraft), bodySha256 });
+  const pin = barrier.pinCreate({ collection: 'systemforms', idField: 'formid', id, matches: (b) => canonicalJson(b) === want });
+  let pushed;
+  try {
+    pushed = await s.sendObserver.withDashboardCreateReceipt({ store, token, sendEpoch, rootId: id, bodySha256 }, () => pushChecked(sdk, KIND, id));
+  } finally {
+    pin.release();
+  }
+  if (pin.refused) throw changed('the create the push sent was not the one recorded');
+  return pushed;
 }
 
 /**
@@ -1408,11 +1552,16 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   const created = expected.baseObservation === null;
   const { committed, pending } = store.readGroup(KIND, key);
   const attempt = recovering ? (pending && (!token || pending.token === token) ? pending : null) : null;
-  // The root create is acknowledged only by this run's own answer to its create, never by a read. A recovered
-  // attempt counts it only when the attempt itself durably recorded that acknowledgement before the run stopped.
+  // The root create is acknowledged only by this build's own answer to its create, never by a read: the shared rule
+  // (managed-bindings.js rootCreateAcknowledged) that consent and the commit apply too. A recovered attempt counts it
+  // only when the attempt itself durably recorded that acknowledgement — its create receipt, or the saved answer —
+  // before the run stopped. This run's receipted create (`applied.descriptor`) counts it only when the receipt was
+  // recorded; a create sent without a receipt (no observed connection) counts this run's own answer, as before.
+  const current = !recovering && applied && applied.descriptor && pending && token && pending.token === token ? pending : null;
   const rootCreateAcknowledged = recovering
-    ? created && !!attempt && (attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot === true))
-    : !!(applied && applied.createdRoot);
+    ? created && !!attempt && storeRootCreateAcknowledged(attempt)
+    : applied && applied.descriptor ? created && !!current && storeRootCreateAcknowledged(current)
+      : !!(applied && applied.createdRoot);
   const orphan = !created ? ''
     : rootCreateAcknowledged
       ? `. This build created dashboard ${id} and nothing binds it: delete it (in Maker, or by its id), then run the build again to create it anew`
@@ -1525,8 +1674,9 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   }
   return {
     savedProof: { savedSha256: savedSha },
-    // Acknowledged only by this run's own answer to its create: never on a recovery, never from a read.
-    acknowledgedRoot: !recovering && !!(applied && applied.createdRoot),
+    // Acknowledged only by this build's own answer to its create (rootCreateAcknowledged above): never on a recovery,
+    // never from a read. The store refuses it, too, for a receipted create whose receipt was not recorded.
+    acknowledgedRoot: !recovering && rootCreateAcknowledged,
     records,
     proof: { savedSha256: savedSha, semanticSha256: semantic, preservationSha256: preserved, expectedChildrenSha256: expected.children.length ? sha(expected.children) : null },
     consumerState: {
@@ -1557,7 +1707,12 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
  *                        ONLY consent to manage a dashboard this build did not create (a pin is not);
  *   ensureMembership     solution membership of the root ({ root, records, recovering });
  *   sendObserver         the build-wide send observer (managed-feature-contract.js createAttemptSendObserver, installed
- *                        on the client every send goes through), or none: with it, an attempt proven unsent continues;
+ *                        on the client every send goes through), or none: with it, an attempt proven unsent continues,
+ *                        and a create sent through the barrier's gated connection is receipted (applyDashboard);
+ *   workspaceScope       the dashboard workspace scope (dashboard-recovery-workspace.js withDashboardWorkspaceScope over
+ *                        `sdk`), or none: with it, a workspace copy that is exactly this build's own acknowledged create
+ *                        draft is kept as it is and the settle works in an isolated workspace instead
+ *                        (preflightDashboard); without it such a copy stops as any other unsent edit does;
  *   provisionedLanguages the organization's languages: an async function answering LCIDs (the build's
  *                        `() => readProvisionedLanguages(env)`, dataverse-auth.js) or the list itself. Read only when the
  *                        write creates a tile; without a usable answer such a write stops before it is sent;
@@ -1582,6 +1737,11 @@ async function settleDeclaredDashboard(args) {
   const key = dashboardKey(dashboard);
   const s = {
     dashboard, key, catalog, sdk, store,
+    // The run's publication barrier and the build's send observer, read by a create's receipt (applyDashboard), and the
+    // workspace scope a retained create draft is isolated in (preflightDashboard); `s.sdk` becomes its isolated SDK then.
+    barrier: args.barrier || null,
+    sendObserver: args.sendObserver || null,
+    workspaceScope: args.workspaceScope || null,
     resolveTile: args.resolveTile, toComponent: args.toComponent,
     retainedCreationIds: (args.retainedCreationIds || []).map(normalizeGuid).filter(Boolean),
     resolvedId: args.resolvedId || null,
@@ -1628,9 +1788,15 @@ async function settleDeclaredDashboard(args) {
         s.lastPlan = planDashboard(s, r, committed);
         return s.lastPlan;
       },
-      apply: async ({ resolution: r }) => applyDashboard(s, r),
+      apply: async ({ resolution: r, token, sendEpoch }) => applyDashboard(s, r, { token, sendEpoch }),
       prove: async ({ token, expected, applied, recovering, declaration }) => { id = expected.rootId; return proveDashboard(s, expected, applied, { token, recovering, declaration }); },
-      ensureMembership,
+      // A retained create draft (preflightDashboard) must still be exactly as recorded when this settle binds: checked
+      // before membership and again just before the commit. Neither claims a lock on the copy; it is never overwritten,
+      // so a later edit survives and the next run sees it.
+      ensureMembership: s.workspaceScope && typeof ensureMembership === 'function'
+        ? async (...a) => { await s.workspaceScope.assertSourceUnchanged(); return ensureMembership(...a); }
+        : ensureMembership,
+      ...(s.workspaceScope ? { beforeCommit: async () => s.workspaceScope.assertSourceUnchanged() } : {}),
     });
   } catch (err) {
     // Second belt (the wrapper is the first): a dashboard that did not settle, whatever step failed, keeps every row

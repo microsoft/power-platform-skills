@@ -345,6 +345,7 @@ const WRITES = /\.(?:writeFileSync|writeFile|appendFileSync|appendFile|createWri
 const GUARDED_WRITERS = {
   'lib/safe-fs.js': /redactFileData\(data, opts\)/,
   'lib/apply-snapshot-store.js': /fs\.writeFileSync\(fd, redactFileData\(text\)\)/,
+  'lib/managed-fragments.js': /fs\.writeFileSync\(fd, redactFileData\(text\)\)/,
 };
 
 // The writers that are not guarded, and why none of them can write a token: each writes what the plugin made itself, or what a person gave it, never a word of a service's, or runs in a process that obtains no token.

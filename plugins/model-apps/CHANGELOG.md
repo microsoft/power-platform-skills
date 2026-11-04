@@ -5,6 +5,23 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.22.0]
+
+- **Teardown:** a table's only Main form, refused with `0x8004F661`, settles with its table: one run removes the solution (#806).
+- **First builds:** reads about a just-created table retry the metadata-cache lag in place within the budget; a failed form lookup never creates a duplicate; exhausted retries quote the service (#796).
+- **Localized tables:** preflights skip the broad label-bearing read, stopping before writes if existence stays unknown (#796); unprovisioned label languages halt before the publisher or solution exist (#809).
+- **Tables found after "already exists"** reuse existing columns, applying declared column security and authorized Date and Time repairs at once (#796).
+- **Validation:** unknown `views[]` and filter keys warn with the likely key and fail `--strict` lint; an ignored view `type` stays silent (#799).
+- **Managed downloads:** a form's handler library returns as an external resource (never updated; teardown keeps it); a flow's personas return when proved from roles that later builds own (#800).
+- **Managed-download output** is replaced only after restoration, validation and fragments succeed; items blocked only by a missing library or persona go to a new `.maker-workspace/managed-fragments-*.json` (#800).
+- **Declared dashboards:** a durably acknowledged, still-present create is recovered after a stop without a second create or adoption when the retained draft is unchanged; creates send a fixed seed-cell id (#798).
+- **Adopted forms:** publication stops can name differing caption cells and language codes (#797).
+- **Authoring:** `/app-builder` offers optional capabilities, never by default; evals grade view filters and opt-in (#802, #804).
+
+### Limits
+
+- Adopted-form caption differences still need `publication-risk` approval (#797). Stops before a dashboard acknowledgement is recorded stay manual; older versions refuse these bindings: never reset or edit the store (#798).
+- Page-tree replacement is non-atomic (#814). Retry-stable configuration rows, owed rule publication and keyed command bars come later (#807, #808, #812).
 ## [2.21.0]
 
 - **`reconcile: "declared"`**: views/charts/web resources/forms/Global Standard dashboards; rules/flows create/adopt-only; adoption: `adopt:<family>:<key>`. Forms/dashboards/rules/flows `--verify`/download (`--include-managed --managed-manifest <store>`); removed, Maker-deleted roots can retire; re-declarations get fresh ids. New-app `createIdentity: "stable-v1"`: retry-stable view/chart ids. `quickFind.findColumns`, `app.mainFormsOnUpdate: "exact"`, `app.pinDeclaredArtifacts` (lost pin-add recovery).

@@ -310,16 +310,16 @@ test('a drifted saved layer someone else already published is not called unpubli
 const formRow = (id, formxml, table = 'account') => ({ formid: id, name: 'Main', objecttypecode: table, type: 2, formxml });
 // A form an earlier run committed on `account`: `publishedXml` is live, `savedXml` is saved, and the group's publication
 // is `state` — 'owed' (desired = the saved layer it committed) or 'not-needed' (saved equalled published at the commit).
-function committedForm(s, { id, key, publishedXml, savedXml, state = 'owed' }) {
+function committedForm(s, { id, key, publishedXml, savedXml, state = 'owed', origin = 'created' }) {
   s.wire.putForm(formRow(id, publishedXml), { publishedToo: true });
   s.wire.saved.get(id).formxml = savedXml;
   const t = s.store.prepareAttempt({ family: 'form', key, baseGeneration: null, root: { kind: 'form', key, id }, knownScopes: [ACCOUNT], declarationSha256: H('e'), publication: { scope: ACCOUNT, state: 'owed' } });
   s.store.markSending(t, expected(id));
-  s.store.noteSaved(t, { proof: null, acknowledgedRoot: true });
+  s.store.noteSaved(t, { proof: null, acknowledgedRoot: origin === 'created' });
   const publication = state === 'owed'
     ? { scope: ACCOUNT, state: 'owed', desiredSha256: layerHash(s.wire.saved.get(id)), dispatchToken: null }
     : { scope: ACCOUNT, state: 'not-needed', desiredSha256: null, dispatchToken: null };
-  s.store.commitGroup({ token: t, baseGeneration: null, records: [rec('form', key, id)], proof: PROOF, consumerState: consumer('form'), publication });
+  s.store.commitGroup({ token: t, baseGeneration: null, records: [{ ...rec('form', key, id), origin }], proof: PROOF, consumerState: consumer('form'), publication, adoptionApproved: origin === 'adopted' });
 }
 const MAIN_G = { family: 'form', key: 'account/main' };
 const QUICK_G = { family: 'form', key: 'account/quick' };
@@ -2433,6 +2433,168 @@ test('publication refusals: a send answered but not read back names its own disp
   c.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } }, unapplied: true });
   const bare = await caught(carryTable(c.sdk, c.store, c.barrier));
   assert.deepEqual(shapeOf(bare), [PUBLICATION_UNCONFIRMED, undefined, undefined, undefined]);
+});
+
+// --- Caption diagnostics of an adopted form (lib/form-caption-diagnostics.js) --------------------------------------
+// A form the build adopted can read one way saved and another way published in one cell's base-language caption, with
+// the publish's saved layer unchanged. No read tells a platform read projection from a maker's unpublished edit, so the
+// stop stays exactly as strict as before; it only names the cell and the language. Every helper failure must leave the
+// generic stop, its data, its requests and the store exactly as a run with no diagnostic leaves them.
+const CAP_TAB = '0a0a0a0a-0000-4000-8000-0000000000a1';
+const CAP_SECTION = '0b0b0b0b-0000-4000-8000-0000000000b1';
+const CAP_CELL = '0c0c0c0c-0000-4000-8000-0000000000c1';
+const CAP_CELL2 = '0d0d0d0d-0000-4000-8000-0000000000d1';
+const cellXml = (id, caption, { control = 'subgrid_issues', lcid = '1033', more = '' } = {}) => `<cell id="{${id.toUpperCase()}}"><labels><label description="${caption}" languagecode="${lcid}" />${more}</labels><control id="${control}" classid="{E7A81278-8635-4D9E-8D4D-59480B391C5B}" /></cell>`;
+const captionForm = (cells, { section = CAP_SECTION } = {}) => `<form><tabs><tab id="{${CAP_TAB}}" name="general"><labels><label description="General" languagecode="1033" /></labels><columns><column width="100%"><sections><section id="{${section}}" name="main"><labels><label description="Main" languagecode="1033" /></labels><rows><row>${cells}</row></rows></section></sections></column></columns></tab></tabs></form>`;
+const SAVED_SPLIT = captionForm(cellXml(CAP_CELL, 'Inspections'));
+const PUBLISHED_SPLIT = captionForm(cellXml(CAP_CELL, 'Issues'));
+const CAPTION_HELPER = require('node:path').join(__dirname, '..', 'lib', 'form-caption-diagnostics.js');
+
+// Run `fn` with the caption helper module replaced, in the module cache, by `impl` over the real one (a loader stub for
+// this test only: production code has no switch for it), and put the cache back after.
+async function withCaptionHelper(impl, fn) {
+  const Module = require('node:module');
+  const before = require.cache[CAPTION_HELPER];
+  const real = fs.existsSync(CAPTION_HELPER) ? require(CAPTION_HELPER) : {};
+  const stub = new Module(CAPTION_HELPER);
+  stub.filename = CAPTION_HELPER;
+  stub.loaded = true;
+  stub.exports = { ...real, ...impl };
+  require.cache[CAPTION_HELPER] = stub;
+  try { return await fn(); } finally { if (before) require.cache[CAPTION_HELPER] = before; else delete require.cache[CAPTION_HELPER]; }
+}
+// The store bytes with the tokens a run mints at random named by their order, so two runs compare by what they wrote.
+const tokenless = (text) => {
+  const seen = new Map();
+  return String(text).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, (t) => { if (!seen.has(t)) seen.set(t, `token-${seen.size}`); return seen.get(t); });
+};
+// An adopted form whose publish answers success and is not applied: the published read keeps the old caption, the saved
+// read the caption the publish shipped.
+async function splitPublish({ origin = 'adopted', savedXml = SAVED_SPLIT, publishedXml = PUBLISHED_SPLIT } = {}) {
+  const s = await setup();
+  committedForm(s, { id: MAIN, key: 'account/main', publishedXml, savedXml, origin });
+  s.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 204, unapplied: true });
+  const at = s.wire.log.length;
+  const e = await caught(publishManagedScope({
+    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, path: 'managed forms of account',
+    publish: () => publishTablesXml(s.sdk.dataverse, ['account']), settle: { sleep: async () => {} },
+  }));
+  const token = pubOf(s.store).dispatchToken;
+  return {
+    s, e, token,
+    requests: s.wire.log.slice(at).map((x) => `${x.method} ${x.path}`),
+    store: tokenless(fs.readFileSync(s.store.file, 'utf8')),
+    shape: [e.code, e.dispatchToken === token, e.approval === publicationRiskApproval(ACCOUNT, token), e.remedy === publicationRemedy(ACCOUNT, token)],
+  };
+}
+// The next run's read-only confirmation of that dispatch: the scope's block labels, its answer, and whether it wrote.
+async function splitConfirm(s) {
+  const n = await nextRun(s);
+  const labels = [];
+  const before = fs.readFileSync(n.store.file, 'utf8');
+  const at = s.wire.log.length;
+  const r = await confirmUncertainPublication({ store: n.store, barrier: { blockScope: (scope, label) => labels.push(label) }, scope: ACCOUNT, client: n.sdk.dataverse });
+  return { r, labels, unchanged: fs.readFileSync(n.store.file, 'utf8') === before, requests: s.wire.log.slice(at).map((x) => `${x.method} ${x.path}`) };
+}
+
+test('caption diagnostics: an adopted form whose saved and published captions differ in one cell stays unconfirmed, and its stop names that cell and language — never its text, never in the store', async () => {
+  const run = await splitPublish();
+  assert.equal(run.e.code, PUBLICATION_UNCONFIRMED);
+  assert.deepEqual(run.shape, [PUBLICATION_UNCONFIRMED, true, true, true], 'the dispatch, approval and remedy are the ones it always named');
+  assert.equal(pubOf(run.s.store).state, 'unconfirmed', 'a diagnostic confirms nothing');
+  assert.match(run.e.message, /does not show what it shipped: managed form "account\/main" its saved layer is still the one the publish shipped/);
+  assert.ok(run.e.message.endsWith(`. managed form "account/main": Caption difference at cell ${CAP_CELL} (language 1033). This observation does not show whether the difference is an unpublished edit or a platform read projection.`), run.e.message);
+  assert.doesNotMatch(run.e.message, /Inspections|Issues/, 'no caption text is repeated');
+  assert.doesNotMatch(fs.readFileSync(run.s.store.file, 'utf8'), /captionDifferences|languageCode|0c0c0c0c/i, 'the diagnostic is never written to the store');
+  // The reader answers it beside the two hashes, which are what they would be without it.
+  const group = run.s.store.readGroup('form', 'account/main').committed;
+  const read = await readSystemFormLayers(run.s.sdk.dataverse, group);
+  assert.deepEqual(read.captionDifferences, { entries: [{ cellId: CAP_CELL, languageCode: 1033 }], omittedCount: 0 });
+  const created = await readSystemFormLayers(run.s.sdk.dataverse, { ...group, records: group.records.map((r) => ({ ...r, origin: 'created' })) });
+  assert.deepEqual(created, { savedSha256: read.savedSha256, publishedSha256: read.publishedSha256 }, 'a created form gets no diagnostic, and the same two hashes');
+  // The next run's read-only confirmation names it too, writes nothing, and leaves the dispatch unconfirmed.
+  const next = await splitConfirm(run.s);
+  assert.deepEqual(next.r.confirmed, []);
+  assert.equal(next.unchanged, true);
+  assert.match(next.labels.join('\n'), new RegExp(`a fresh read did not prove it ended: its saved layer is still the one the publish shipped.*; .*publication-risk:table:account/.*\\. managed form "account/main": Caption difference at cell ${CAP_CELL} \\(language 1033\\)`));
+});
+
+test('caption diagnostics are fail-safe: a helper that throws, answers anything unusable, or a formatter that throws leaves the generic stop, its data, its requests and the store exactly as a run with no diagnostic', async () => {
+  let calls = 0;
+  const control = await withCaptionHelper({ cellCaptionDifferences: () => { calls += 1; return null; } }, () => splitPublish());
+  assert.ok(calls > 0, 'the adopted form\'s layers are offered to the diagnostic helper');
+  const controlNext = await withCaptionHelper({ cellCaptionDifferences: () => null }, () => splitConfirm(control.s));
+  assert.equal(control.e.message.includes('Caption difference'), false);
+  const cases = [
+    ['a helper that throws', { cellCaptionDifferences: () => { calls += 1; throw new Error('diagnostic exploded'); } }],
+    ['a malformed answer', { cellCaptionDifferences: () => { calls += 1; return { entries: [{ cellId: 'not-a-guid', languageCode: 1033 }], omittedCount: 0 }; } }],
+    ['an empty answer', { cellCaptionDifferences: () => { calls += 1; return { entries: [], omittedCount: 0 }; } }],
+    ['too many entries', { cellCaptionDifferences: () => { calls += 1; return { entries: Array.from({ length: 9 }, (_, i) => ({ cellId: `0c0c0c0c-0000-4000-8000-00000000000${i}`, languageCode: 1033 })), omittedCount: 0 }; } }],
+    ['a getter that throws', { cellCaptionDifferences: () => { calls += 1; return { get entries() { throw new Error('getter'); }, omittedCount: 0 }; } }],
+    ['a formatter that throws', { formatCaptionDifferences: () => { calls += 1; throw new Error('formatter exploded'); } }],
+    ['a formatter that answers no text', { formatCaptionDifferences: () => { calls += 1; return { text: 'x' }; } }],
+  ];
+  for (const [label, impl] of cases) {
+    calls = 0;
+    const run = await withCaptionHelper(impl, () => splitPublish());
+    assert.ok(calls > 0, `${label}: the stub was reached`);
+    assert.equal(run.e.code, control.e.code, label);
+    assert.equal(run.e.message, control.e.message, `${label}: the generic message`);
+    assert.deepEqual(run.shape, control.shape, `${label}: the dispatch, approval and remedy`);
+    assert.deepEqual(run.requests, control.requests, `${label}: the requests`);
+    assert.equal(run.store, control.store, `${label}: the store bytes`);
+    assert.equal(pubOf(run.s.store).state, 'unconfirmed', label);
+    const next = await withCaptionHelper(impl, () => splitConfirm(run.s));
+    assert.deepEqual(next.r, controlNext.r, `${label}: the recovered confirmation`);
+    assert.equal(next.unchanged, true, `${label}: the read-only confirmation writes nothing`);
+    assert.deepEqual(next.requests, controlNext.requests, `${label}: the confirmation's requests`);
+    assert.deepEqual(next.labels.map((l) => l.split(run.token).join('<token>')), controlNext.labels.map((l) => l.split(control.token).join('<token>')), `${label}: the confirmation's block`);
+  }
+});
+
+test('caption diagnostics compare one cell by its id, its tab, section and control, one language at a time — anything ambiguous or unread names nothing', () => {
+  const { cellCaptionDifferences, formatCaptionDifferences } = require('../lib/form-caption-diagnostics.js');
+  const pair = (s, p) => cellCaptionDifferences(captionForm(s), captionForm(p));
+  assert.deepEqual(pair(cellXml(CAP_CELL, 'A'), cellXml(CAP_CELL, 'B')), { entries: [{ cellId: CAP_CELL, languageCode: 1033 }], omittedCount: 0 });
+  assert.equal(pair(cellXml(CAP_CELL, 'A'), cellXml(CAP_CELL, 'A')), null, 'the same caption');
+  // A second language on both sides is compared on its own; one on a single side is not reported (no base language is inferred).
+  assert.deepEqual(pair(cellXml(CAP_CELL, 'A', { more: '<label description="X" languagecode="3082" />' }), cellXml(CAP_CELL, 'A', { more: '<label description="Y" languagecode="3082" />' })),
+    { entries: [{ cellId: CAP_CELL, languageCode: 3082 }], omittedCount: 0 });
+  assert.equal(pair(cellXml(CAP_CELL, 'A', { more: '<label description="X" languagecode="3082" />' }), cellXml(CAP_CELL, 'A')), null);
+  // An extra cell, a cell that moved section, or holds another control is not a caption difference.
+  assert.equal(pair(cellXml(CAP_CELL, 'A') + cellXml(CAP_CELL2, 'Z'), cellXml(CAP_CELL, 'A')), null);
+  assert.equal(cellCaptionDifferences(captionForm(cellXml(CAP_CELL, 'A')), captionForm(cellXml(CAP_CELL, 'B'), { section: CAP_CELL2 })), null);
+  assert.equal(pair(cellXml(CAP_CELL, 'A'), cellXml(CAP_CELL, 'B', { control: 'subgrid_other' })), null);
+  // Ambiguity names nothing: a cell id twice, a language twice in a cell, a language that is not a whole number, unread XML.
+  assert.equal(pair(cellXml(CAP_CELL, 'A') + cellXml(CAP_CELL, 'A'), cellXml(CAP_CELL, 'B')), null);
+  assert.equal(pair(cellXml(CAP_CELL, 'A', { more: '<label description="C" languagecode="1033" />' }), cellXml(CAP_CELL, 'B')), null);
+  assert.equal(pair(cellXml(CAP_CELL, 'A', { lcid: 'en' }), cellXml(CAP_CELL, 'B', { lcid: 'en' })), null);
+  assert.equal(cellCaptionDifferences('<form><tabs>', captionForm(cellXml(CAP_CELL, 'B'))), null);
+  assert.equal(cellCaptionDifferences(captionForm(cellXml(CAP_CELL, 'A')), null), null);
+  // Bounded: eight named, sorted by cell then language, the rest counted.
+  const ids = Array.from({ length: 10 }, (_, i) => `0e0e0e0e-0000-4000-8000-0000000000${String(10 + (9 - i))}`);
+  const many = cellCaptionDifferences(captionForm(ids.map((id) => cellXml(id, 'A', { control: id })).join('')), captionForm(ids.map((id) => cellXml(id, 'B', { control: id })).join('')));
+  assert.equal(many.entries.length, 8);
+  assert.equal(many.omittedCount, 2);
+  assert.deepEqual(many.entries.map((e) => e.cellId), [...ids].sort().slice(0, 8));
+  assert.match(formatCaptionDifferences(many), /^Caption differences at cell 0e0e0e0e-0000-4000-8000-000000000010 \(language 1033\), .*, and 2 more\. This observation does not show/);
+  assert.equal(formatCaptionDifferences({ entries: [{ cellId: 'x', languageCode: 1033 }], omittedCount: 0 }), null);
+});
+
+test('caption diagnostics never reach a dashboard or a created form, and never change a layer hash', async () => {
+  const run = await splitPublish({ origin: 'created' });
+  assert.equal(run.e.code, PUBLICATION_UNCONFIRMED);
+  assert.doesNotMatch(run.e.message, /Caption difference/, 'a form the build created is not diagnosed');
+  const adopted = await splitPublish();
+  assert.equal(adopted.e.message.split('. managed form "account/main": Caption difference')[0], run.e.message, 'the same generic stop before the diagnostic');
+  assert.deepEqual(adopted.requests, run.requests, 'the same requests');
+  // The dashboard reader is not the form reader: an adopted dashboard root gets no diagnostic.
+  const { readSystemFormRootLayers } = require('../lib/systemform-published.js');
+  const d = await setup();
+  d.wire.putForm({ formid: DASH, name: 'Ops', objecttypecode: 'none', type: 0, formxml: PUBLISHED_SPLIT }, { publishedToo: true });
+  d.wire.saved.get(DASH).formxml = SAVED_SPLIT;
+  const dash = await readSystemFormRootLayers(d.sdk.dataverse, { root: { kind: 'dashboard', key: 'ops', id: DASH }, records: [{ ...rec('dashboard', 'ops', DASH), origin: 'adopted' }] });
+  assert.deepEqual(Object.keys(dash).sort(), ['publishedSha256', 'savedSha256']);
 });
 
 // Straight after a publish the platform may answer a cell caption still being rewritten (the wire's `rewritingReads`), while a

@@ -436,7 +436,9 @@ function validateProof(proof, where) {
 }
 
 function validateRecord(rec, header, where) {
-  closedKeys(rec, ['formatVersion', 'appUniqueName', 'environmentFingerprint', 'kind', 'key', 'id', 'intentSha256', 'origin', 'parentKey', 'partsSha256'], where);
+  // `localCreateDraft` is placed only by the store (commitGroup) and only on a created dashboard root; validateGroup
+  // checks where it sits (validateLocalCreateDraft).
+  closedKeys(rec, ['formatVersion', 'appUniqueName', 'environmentFingerprint', 'kind', 'key', 'id', 'intentSha256', 'origin', 'parentKey', 'partsSha256', 'localCreateDraft'], where);
   if (rec.formatVersion !== 1) throw invalid(where, 'has an unknown format');
   if (rec.appUniqueName !== header.appUniqueName || rec.environmentFingerprint !== header.environmentFingerprint) throw invalid(where, 'belongs to another app or environment');
   if (!nonempty(rec.kind) || !nonempty(rec.key)) throw invalid(where, 'has no kind or key');
@@ -553,6 +555,7 @@ function validateGroup(g, header, where) {
   if (!nonempty(g.proofSchema)) throw invalid(where, 'names no proof schema');
   validateRecords(g.records, g.root, header, `${where}.records`);
   if (!g.records.some((r) => r.kind === g.root.kind && r.key === g.root.key)) throw invalid(where, 'holds no record of its root');
+  g.records.forEach((r, i) => { if (r.localCreateDraft !== undefined) validateLocalCreateDraft(g, r, `${where}.records[${i}].localCreateDraft`); });
   validateProof(g.proof, `${where}.proof`);
   closedKeys(g.consumerState, CONSUMER_KEYS[g.family], `${where}.consumerState`);
   validateConsumerValue(g.consumerState, `${where}.consumerState`);
@@ -565,8 +568,56 @@ function validateGroup(g, header, where) {
   validatePublication(g.publication, g.family, `${where}.publication`);
 }
 
+// A dashboard create's durable receipt, kept on its attempt (noteDashboardCreateDraft / Dispatch / Answer), e.g.
+//   { formatVersion: 1, rootId: '<guid>', sendEpoch: 1, draftSha256: '<64 hex>', bodySha256: '<64 hex>',
+//     dispatchToken: null | '<uuid>', acknowledged: false }
+// draftSha256 is the canonical hash of the whole local artifact the build assembled and sent; bodySha256 that of the
+// create request body it produced. The hashes canonicalize object-key order only: the XML strings inside are compared
+// byte for byte. `acknowledged` is true only once the observed transport saw a successful answer to that exact POST.
+// It is valid only on a create of a new dashboard root, after its send window was armed, under the window's epoch.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DASHBOARD_CREATE_KEYS = ['formatVersion', 'rootId', 'sendEpoch', 'draftSha256', 'bodySha256', 'dispatchToken', 'acknowledged'];
+function validateDashboardCreate(a, where) {
+  const d = a.dashboardCreate;
+  closedKeys(d, DASHBOARD_CREATE_KEYS, where);
+  for (const k of DASHBOARD_CREATE_KEYS) if (!Object.prototype.hasOwnProperty.call(d, k)) throw invalid(where, `has no ${k}`);
+  if (d.formatVersion !== 1) throw invalid(where, 'has an unknown format');
+  if (a.family !== 'dashboard') throw invalid(where, 'is kept on an attempt that is not a dashboard\'s');
+  guidField(d.rootId, `${where}.rootId`);
+  if (d.rootId !== a.root.id) throw invalid(where, 'names another root than its attempt');
+  if (a.baseGeneration !== null || !a.expected || a.expected.baseProofSha256 !== null || a.expected.baseObservation !== null) throw invalid(where, 'is kept on an attempt that is not a create of a new root');
+  if (a.phase === 'prepared') throw invalid(where, 'is kept on an attempt never marked sending');
+  if (!a.sendWindow || !Number.isSafeInteger(d.sendEpoch) || d.sendEpoch < 1 || d.sendEpoch !== a.sendWindow.epoch) throw invalid(where, 'is not under its attempt\'s send epoch');
+  hashOrNull(d.draftSha256, `${where}.draftSha256`, false);
+  hashOrNull(d.bodySha256, `${where}.bodySha256`, false);
+  if (d.dispatchToken !== null && !(typeof d.dispatchToken === 'string' && UUID_RE.test(d.dispatchToken))) throw invalid(`${where}.dispatchToken`, 'is not a dispatch token');
+  if (typeof d.acknowledged !== 'boolean') throw invalid(where, 'has no acknowledged flag');
+  if (d.acknowledged && d.dispatchToken === null) throw invalid(where, 'is acknowledged without a dispatch');
+  // An older acknowledgement on the same attempt is only ever the receipt's own: it cannot stand beside an
+  // unacknowledged receipt.
+  if ((a.acknowledgedRoot || (a.savedObservation && a.savedObservation.acknowledgedRoot)) && !d.acknowledged) throw invalid(where, 'is unacknowledged under an attempt that says its root was acknowledged');
+}
+
+// The create evidence a committed dashboard root keeps (commitGroup mints it from an acknowledged receipt and keeps it
+// on every later generation of the same root): { formatVersion: 1, rootId, attemptToken, draftSha256, bodySha256 }.
+// Only the root record of a dashboard group, with origin `created`, may carry it.
+const LOCAL_CREATE_DRAFT_KEYS = ['formatVersion', 'rootId', 'attemptToken', 'draftSha256', 'bodySha256'];
+function validateLocalCreateDraft(g, rec, where) {
+  const m = rec.localCreateDraft;
+  closedKeys(m, LOCAL_CREATE_DRAFT_KEYS, where);
+  for (const k of LOCAL_CREATE_DRAFT_KEYS) if (!Object.prototype.hasOwnProperty.call(m, k)) throw invalid(where, `has no ${k}`);
+  if (m.formatVersion !== 1) throw invalid(where, 'has an unknown format');
+  if (g.family !== 'dashboard' || rec.kind !== g.root.kind || rec.key !== g.root.key) throw invalid(where, 'is kept on a record that is not a dashboard root');
+  if (rec.origin !== 'created') throw invalid(where, 'is kept on a root this build did not create');
+  guidField(m.rootId, `${where}.rootId`);
+  if (m.rootId !== g.root.id || rec.id !== g.root.id) throw invalid(where, 'names another root');
+  if (typeof m.attemptToken !== 'string' || !UUID_RE.test(m.attemptToken)) throw invalid(`${where}.attemptToken`, 'is not an attempt token');
+  hashOrNull(m.draftSha256, `${where}.draftSha256`, false);
+  hashOrNull(m.bodySha256, `${where}.bodySha256`, false);
+}
+
 function validateAttempt(a, where) {
-  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve'], where);
+  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve', 'dashboardCreate'], where);
   // The completion reservation (prepareAttempt; see COMPLETION_BASE_BYTES), e.g. { bytes: 434176, used: 1290 }. Absent
   // on an attempt an older build prepared: it holds nothing until a new send under it acquires one (markSending, as an
   // admission); an attempt already sent with none (read-only recovery, a commit) uses only unreserved bytes.
@@ -622,6 +673,7 @@ function validateAttempt(a, where) {
     if (!Number.isSafeInteger(a.sendWindow.epoch) || a.sendWindow.epoch < 1) throw invalid(`${where}.sendWindow.epoch`, 'is not an epoch');
     if (a.phase === 'prepared') throw invalid(where, 'has a send window but was never marked sending');
   }
+  if (a.dashboardCreate !== undefined) validateDashboardCreate(a, `${where}.dashboardCreate`);
 }
 
 // The workflow effects the attempt `a` owns.
@@ -671,6 +723,9 @@ function fulfilInto(e, observedState, observedVersion) {
 function attemptProvenUnsent(a, effects) {
   if (!a || a.phase !== 'sending' || !a.expected) return false;
   if (a.acknowledgedRoot || a.savedObservation !== null) return false;
+  // An acknowledged dashboard create landed: it never continues, whatever the counts say. A dispatched one that was not
+  // acknowledged is judged by the counts like any mutation (its dispatch was counted; only a not-started answer lowers it).
+  if (a.dashboardCreate && a.dashboardCreate.acknowledged) return false;
   const w = a.sendWindow;
   if (!w || w.possible !== 0) return false;
   return ownedEffects(a, effects).every((x) => (x.state === 'definitely-unsent' || x.state === 'fulfilled') && x.dispatchToken === null);
@@ -699,8 +754,43 @@ function resumableCreate(group, a, effects) {
  * re-makes a committed group's vanished root under its stable id carries the committed proof as its base.
  */
 function rootCreateAcknowledged(a) {
-  if (!a || !(a.acknowledgedRoot || (a.savedObservation && a.savedObservation.acknowledgedRoot))) return false;
-  return !!a.expected && a.expected.baseObservation === null;
+  if (!a || !a.expected || a.expected.baseObservation !== null) return false;
+  if (a.acknowledgedRoot || (a.savedObservation && a.savedObservation.acknowledgedRoot)) return true;
+  return dashboardCreateAcknowledged(a);
+}
+
+/**
+ * Did the observed transport durably receipt a successful answer to this attempt's own dashboard create
+ * (noteDashboardCreateAnswer), under the attempt's current send epoch? A receipt is about the exact POST of the root it
+ * names, on an attempt that creates a new root; it says the row was created, never what it holds now.
+ */
+function dashboardCreateAcknowledged(a) {
+  const d = a && a.dashboardCreate;
+  if (!isObj(d) || a.family !== 'dashboard' || d.acknowledged !== true || d.dispatchToken === null) return false;
+  if (a.baseGeneration !== null || !a.expected || a.expected.baseObservation !== null || a.expected.baseProofSha256 !== null) return false;
+  return d.rootId === a.root.id && !!a.sendWindow && a.sendWindow.epoch === d.sendEpoch;
+}
+
+/**
+ * May the attempt take the early-receipt absence branch (runManagedFeature: a dashboard create whose answer was receipted,
+ * read absent by its id in both layers, then sent again under the same root)? Only a receipted create of a new root that
+ * nothing has committed or saved yet, with no owned workflow effect still open. Unlike resumableCreate it admits the
+ * create's own counted send: the receipt says it landed, and the absence read says the row is gone since.
+ */
+function dashboardCreateResumable(group, a, effects) {
+  if (group || !a || a.phase !== 'sending' || a.savedObservation !== null || a.acknowledgedRoot) return false;
+  if (!dashboardCreateAcknowledged(a)) return false;
+  return ownedEffects(a, effects).every((x) => x.state === 'confirmed' || x.state === 'fulfilled');
+}
+
+// What an early-receipt absence read was made against (observeDashboardCreateResume, then markSending `resumeObservation`):
+// the group, the attempt and its key's workflow effects, as for a retirement (retirementObservation).
+const DASHBOARD_CREATE_RESUME = /^dashboard-create-resume-v1:[0-9a-f]{64}$/;
+function dashboardCreateResumeObservation(env, family, key) {
+  const group = env.groups.find((x) => x.family === family && x.key === key) || null;
+  const attempt = env.attempts.find((x) => x.family === family && x.key === key) || null;
+  const effects = env.workflowEffects.filter((e) => e.family === family && e.key === key);
+  return `dashboard-create-resume-v1:${sha256(canonicalJson({ family, key, group, attempt, effects }))}`;
 }
 
 // The child-create receipt of an attempt: [{ kind, key, id }], each a child its expected proof named under that same
@@ -1450,14 +1540,19 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * a new obligation (every other reservation and the shared reserve kept free). A refusal (`managed-binding-store-full`)
      * writes nothing and comes before the send: the attempt, its phase, window, token and hold stay as they were.
      */
-    markSending(token, expected, { observed = false, claim, completionBytes } = {}) {
+    markSending(token, expected, { observed = false, claim, completionBytes, resumeObservation } = {}) {
       if (claim !== undefined && claim !== 'first' && claim !== 'continue' && claim !== 'resume') throw storeError(CODES.notSettled, `markSending cannot claim an attempt to "${claim}"`);
+      if (resumeObservation !== undefined && (claim !== 'resume' || typeof resumeObservation !== 'string' || !DASHBOARD_CREATE_RESUME.test(resumeObservation))) {
+        throw storeError(CODES.notSettled, 'markSending takes resumeObservation only with claim "resume", as observeDashboardCreateResume answered it');
+      }
       checkCompletionBytes(completionBytes, 'markSending `completionBytes`');
       let epoch = null;
       // Written before the send, with the expected proof, so a refusal here comes before the send. An attempt whose
       // reservation is already adequate spends it, so content written since its prepare cannot strand it unsent.
       mutate((env, disk, spend, admitHere) => {
         const a = requireAttempt(env, disk, token);
+        // Taken before anything below changes `env`: the observation is of the file as it was reread under the lease.
+        const observedNow = resumeObservation !== undefined ? dashboardCreateResumeObservation(env, a.family, a.key) : null;
         if (a.expected !== null && canonicalJson(a.expected) !== canonicalJson(expected)) {
           throw storeError(CODES.completion, 'a sent attempt keeps the expected proof it was sent with');
         }
@@ -1472,7 +1567,16 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         }
         if (claim === 'first' && a.phase !== 'prepared') throw storeError(CODES.pending, `${name} attempt was marked sending by another run`);
         if (claim === 'continue' && !(observed === true && attemptProvenUnsent(a, env.workflowEffects))) throw storeError(CODES.pending, `${name} attempt no longer shows that nothing it sent was carried out; it is not sent again`);
-        if (claim === 'resume' && !resumableCreate(group, a, env.workflowEffects)) throw storeError(CODES.pending, `${name} attempt is no longer a create no answer acknowledged; it is not sent again`);
+        if (claim === 'resume' && resumeObservation !== undefined) {
+          // The early-receipt branch: a receipted dashboard create read absent in both layers since `resumeObservation`.
+          // Anything that moved since (a send counted, a receipt, a commit) may have put the row back after that read.
+          if (!(observed === true && dashboardCreateResumable(group, a, env.workflowEffects))) throw storeError(CODES.pending, `${name} attempt is no longer a receipted create that may be sent again; it is not sent again`);
+          if (observedNow !== resumeObservation) throw storeError(CODES.conflict, `${name} changed since its root was read absent; it is not sent again in this run`);
+        } else if (claim === 'resume') {
+          if (!resumableCreate(group, a, env.workflowEffects)) throw storeError(CODES.pending, `${name} attempt is no longer a create no answer acknowledged; it is not sent again`);
+          // A receipted create is resumed only through its fenced branch above.
+          if (dashboardCreateAcknowledged(a)) throw storeError(CODES.pending, `${name} create was acknowledged; it is sent again only after a fenced absence read`);
+        }
         const need = completionReserveFor(a.declaration, completionBytes, name);
         if (!a.completionReserve || a.completionReserve.bytes < need) {
           a.completionReserve = { bytes: need, used: a.completionReserve ? a.completionReserve.used : 0 };
@@ -1486,6 +1590,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           if (observed === true) a.sendWindow = { possible: 0, notStarted: 0, epoch: 1 };
         } else if ((claim === 'continue' || claim === 'resume') && a.sendWindow) {
           a.sendWindow.epoch += 1;
+          // The receipt follows the epoch in the same write: the new send has neither dispatched nor been answered, and
+          // an answer to an older epoch's POST never acknowledges it. The root and the draft and body hashes stay.
+          if (a.dashboardCreate) Object.assign(a.dashboardCreate, { sendEpoch: a.sendWindow.epoch, dispatchToken: null, acknowledged: false });
         }
         epoch = a.sendWindow ? a.sendWindow.epoch : null;
       });
@@ -1524,6 +1631,89 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       });
     },
     /**
+     * Record, before the create POST of a new dashboard root leaves, what it sends (the receipt's immutable part):
+     * `rootId`, `draftSha256` (the whole local artifact the build assembled, as canonical JSON) and `bodySha256` (the
+     * create request body it produces), under the send epoch markSending answered. Only for an attempt marked sending
+     * with an observed window at that epoch, creating a new root (no committed group, no base). A repeated call in the
+     * same epoch must name the same root and hashes; an attempt whose receipt is kept never takes other ones.
+     * Refusals write nothing: `managed-settlement-pending` (another epoch), `create-completion-required` (other hashes),
+     * `managed-not-settled` (not such an attempt).
+     */
+    noteDashboardCreateDraft(token, { sendEpoch, rootId, draftSha256, bodySha256 } = {}) {
+      const root = normalizeGuid(rootId);
+      if (!root || !HEX64.test(String(draftSha256)) || !HEX64.test(String(bodySha256)) || !Number.isSafeInteger(sendEpoch) || sendEpoch < 1) {
+        throw storeError(CODES.notSettled, 'noteDashboardCreateDraft needs the send epoch, the root id and the draft and body hashes');
+      }
+      mutate((env, disk, spend) => {
+        const a = requireAttempt(env, disk, token);
+        spend(token);
+        const name = `the managed ${a.family} "${a.key}"`;
+        const group = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+        if (a.family !== 'dashboard' || group || a.baseGeneration !== null || !a.expected || a.expected.baseProofSha256 !== null || a.expected.baseObservation !== null) {
+          throw storeError(CODES.notSettled, `${name} is not a create of a new dashboard root; it keeps no create receipt`);
+        }
+        if (a.phase !== 'sending' || a.savedObservation !== null || !a.sendWindow) throw storeError(CODES.notSettled, `${name} is not being sent under an observed window`);
+        if (a.sendWindow.epoch !== sendEpoch) throw storeError(CODES.pending, `${name} attempt was claimed by another run since this send began; nothing is sent`);
+        if (root !== a.root.id) throw storeError(CODES.notSettled, `${name} creates ${a.root.id}, not ${root}`);
+        const d = a.dashboardCreate;
+        if (d) {
+          if (d.sendEpoch !== sendEpoch || d.rootId !== root || d.draftSha256 !== draftSha256 || d.bodySha256 !== bodySha256) {
+            throw storeError(CODES.completion, `${name} keeps the draft and body its create was sent with; another one is not sent under it`);
+          }
+          return;
+        }
+        a.dashboardCreate = { formatVersion: 1, rootId: root, sendEpoch, draftSha256, bodySha256, dispatchToken: null, acknowledged: false };
+      });
+    },
+    /**
+     * The observed transport, synchronously before the exact create POST of the receipt leaves (createAttemptSendObserver
+     * withDashboardCreateReceipt): the receipt's dispatch token, minted once per epoch and kept by a retry of that same
+     * POST. Answers { dispatchToken }. Grants no acknowledgement and lowers no count. A refusal leaves the POST unsent.
+     */
+    noteDashboardCreateDispatch(token, { sendEpoch, bodySha256 } = {}) {
+      let dispatchToken = null;
+      mutate((env, disk, spend) => {
+        const a = requireAttempt(env, disk, token);
+        spend(token);
+        const d = a.dashboardCreate;
+        if (!d) throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" keeps no create receipt to dispatch`);
+        if (!a.sendWindow || a.sendWindow.epoch !== sendEpoch || d.sendEpoch !== sendEpoch) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt was claimed by another run since this send began; the request is not sent`);
+        if (d.bodySha256 !== bodySha256) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" create body is not the one its receipt was recorded for; it is not sent`);
+        if (d.dispatchToken === null) d.dispatchToken = newToken();
+        dispatchToken = d.dispatchToken;
+      });
+      return { dispatchToken };
+    },
+    /**
+     * The observed transport, after a successful answer to the exact POST it dispatched (`dispatchToken`), before the
+     * answer is handed back: the receipt is acknowledged. Idempotent. It is not a save: no phase, saved observation,
+     * group or hold changes. A refusal (another epoch, dispatch or body) acknowledges nothing.
+     */
+    noteDashboardCreateAnswer(token, { sendEpoch, dispatchToken, bodySha256 } = {}) {
+      mutate((env, disk, spend) => {
+        const a = requireAttempt(env, disk, token);
+        spend(token);
+        const d = a.dashboardCreate;
+        if (!d || d.dispatchToken === null || d.dispatchToken !== dispatchToken) throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" answer is not to the create its receipt dispatched`);
+        if (!a.sendWindow || a.sendWindow.epoch !== sendEpoch || d.sendEpoch !== sendEpoch) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt was claimed by another run since this send began; its answer acknowledges nothing`);
+        if (d.bodySha256 !== bodySha256) throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" answer is to another create body`);
+        d.acknowledged = true;
+      });
+    },
+    /**
+     * Before the early-receipt branch reads its root by id in both layers: rereads the file and answers { observation },
+     * a fingerprint of the group, the attempt and the key's workflow effects. Hand it to markSending (`claim: 'resume'`,
+     * `resumeObservation`), which refuses when anything changed since. As for observeRetirement: never observe again to
+     * get past a refusal in the same invocation. Writes nothing.
+     */
+    observeDashboardCreateResume({ family, key } = {}) {
+      if (family !== 'dashboard' || !nonempty(key)) throw storeError(CODES.notSettled, 'observeDashboardCreateResume needs a dashboard key');
+      handle.refresh();
+      const unit = usable(unitOf(state, family, key));
+      if (!unit.attempt) throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no attempt to resume`);
+      return { observation: dashboardCreateResumeObservation(state.envelope, family, key) };
+    },
+    /**
      * Record what an acknowledged answer to this attempt's send proved, under its token, before anything else uses it:
      *   proof                     the saved observation (feature-owned plain data);
      *   acknowledgedRoot          true only when the answer acknowledged that this attempt CREATED its root. An answer
@@ -1548,6 +1738,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (!a.expected) throw storeError(CODES.notSettled, 'an attempt cannot be saved before it was sent');
         if (acknowledgedRoot === true && a.expected.baseObservation !== null) {
           throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" edited an existing root; an answer to an edit never acknowledges a create`);
+        }
+        // A create sent under a receipt is acknowledged by the receipt alone: an SDK result (saved, adopted, a no-op)
+        // that the observed transport did not receipt never makes the root this build's creation.
+        if (acknowledgedRoot === true && a.dashboardCreate && !dashboardCreateAcknowledged(a)) {
+          throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" create has no receipt of its answer; nothing else acknowledges it`);
         }
         const receipt = (a.acknowledgedChildCreates || []).map((c) => ({ ...c }));
         try {
@@ -1633,9 +1828,19 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (!old && !acknowledged && adoptionApproved !== true) {
           throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" root was never acknowledged as created; binding it needs its adoption approval`);
         }
+        // The create evidence of a dashboard root is the store's to mint and keep, never a caller's to propose: a record
+        // read back from the group and handed in again may carry it, but only exactly as the store keeps it on that root
+        // in this commit (checked below); it is set from the store's own, never from the caller's.
+        const echoedMarkers = [];
+        const proposed = (records || []).map((rec) => {
+          if (rec.localCreateDraft === undefined) return rec;
+          const { localCreateDraft, ...rest } = rec;
+          echoedMarkers.push({ kind: rec.kind, key: rec.key, marker: localCreateDraft });
+          return rest;
+        });
         const merged = [];
         const byKey = new Map();
-        for (const rec of records || []) byKey.set(`${rec.kind}\u0000${rec.key}`, rec);
+        for (const rec of proposed) byKey.set(`${rec.kind}\u0000${rec.key}`, rec);
         for (const rec of old ? old.records : []) {
           const k = `${rec.kind}\u0000${rec.key}`;
           const next = byKey.get(k);
@@ -1662,6 +1867,22 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         }
         const rootRec = merged.find((r) => r.kind === a.root.kind && r.key === a.root.key);
         if (!rootRec || String(rootRec.id).toLowerCase() !== a.root.id) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" root was not observed under its expected id`);
+        // The created dashboard root's create evidence: minted from this attempt's acknowledged receipt, or kept from
+        // the generation before for the same root. Never carried to another root, and gone with a retired group.
+        const oldRoot = old ? old.records.find((r) => r.kind === a.root.kind && r.key === a.root.key) : null;
+        let marker = null;
+        if (oldRoot && oldRoot.localCreateDraft && String(oldRoot.id).toLowerCase() === a.root.id) marker = clone(oldRoot.localCreateDraft);
+        else if (!old && dashboardCreateAcknowledged(a)) {
+          const d = a.dashboardCreate;
+          marker = { formatVersion: 1, rootId: a.root.id, attemptToken: a.token, draftSha256: d.draftSha256, bodySha256: d.bodySha256 };
+        }
+        const kept = marker && rootRec.origin === 'created' ? marker : null;
+        if (kept) merged[merged.indexOf(rootRec)] = { ...rootRec, localCreateDraft: kept };
+        for (const e of echoedMarkers) {
+          if (!(kept && e.kind === a.root.kind && e.key === a.root.key && canonicalJson(e.marker) === canonicalJson(kept))) {
+            throw storeError(CODES.groupInvalid, `a managed group commit was refused before it was written: the proposed ${e.kind} "${e.key}" carries create evidence only the store records`);
+          }
+        }
         for (const child of a.expected.children) {
           const got = merged.find((r) => r.kind === child.kind && r.key === child.key);
           if (!got || String(got.id).toLowerCase() !== String(child.id).toLowerCase()) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" lacks the expected ${child.kind} "${child.key}"`);
@@ -2308,6 +2529,8 @@ module.exports = {
   attemptProvenUnsent,
   resumableCreate,
   rootCreateAcknowledged,
+  dashboardCreateAcknowledged,
+  dashboardCreateResumable,
   publicationRiskApproval,
   publicationRemedy,
   blockedPublication,

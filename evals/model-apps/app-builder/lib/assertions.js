@@ -218,6 +218,24 @@ ASSERTIONS.set('ui: wire-facts build exactly the expected views and charts', ({ 
   return PASS;
 });
 
+// expect.viewFilters = [{ entity, view, attr, op, value? }]: a filter the PROMPT names for a view (written here from the prompt, never
+// read off the fixture being graded). It must appear among the view's compiled conditions, which are what the build reads from the
+// supported filters[] { attr, op, value } shape; the active-records condition is not part of the comparison. A misspelled key
+// (`filter`, `column`, `operator`) is ignored by the build, leaves no condition, and so fails here — as a missing filter does. The prompt
+// names a filter on the view's own table, so a condition scoped to a joined table (a declared view's `relatedEntity`) does not satisfy it.
+ASSERTIONS.set('ui: a view filter the prompt names is built from filters[] attr/op/value', ({ facts, eval: ev }) => {
+  const expected = ev.expect && ev.expect.viewFilters;
+  if (!Array.isArray(expected) || !expected.length) return fail('no independent view-filter expectations');
+  for (const want of expected) {
+    const view = facts.ui.views.find((v) => String(v.entity).toLowerCase() === String(want.entity).toLowerCase() && v.name === want.view);
+    if (!view) return fail(`view '${want.view}' on ${want.entity} is not built`);
+    const hit = view.conditions.some((c) => !c.scope && c.attribute === String(want.attr).toLowerCase() && c.operator === (want.op || 'eq')
+      && (want.value === undefined ? c.value === undefined : c.value === String(want.value)));
+    if (!hit) return fail(`view '${want.view}': no condition ${want.attr} ${want.op || 'eq'} ${want.value === undefined ? '' : JSON.stringify(want.value)}; got ${JSON.stringify(view.conditions)}`);
+  }
+  return PASS;
+});
+
 // #2 (default-view lookups not truncated) + #7 (enriched default views drop createdon).
 ASSERTIONS.set('ui: enriched default views keep parent lookups and drop createdon', ({ facts }) => {
   const dv = (facts.ui && facts.ui.defaultViews) || {};
@@ -1150,6 +1168,71 @@ ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stop
   ];
   const missing = needs.filter(([re]) => !re.test(bullet)).map(([, what]) => what);
   return missing.length ? fail(`the createIdentity guidance does not say ${missing.join(', ')}`) : PASS;
+});
+
+// Optional capabilities are OFF unless the maker asks for them (or says yes when /app-builder offers one; references/authoring-flow.md,
+// Level (a0) and (b)). This suite grades the spec, not the conversation, so what it pins is the spec-level opt-in, in both directions,
+// on EVERY fixture: the spec carries an app theme, a configuration item, or a declared form, dashboard, business rule or process flow
+// only when the prompt asks for it (no expectation = none is allowed). Whether the offer itself is made needs a transcript of a
+// conversation (EVAL_GUIDE.md, "Optional capabilities").
+// It grades presence and absence by capability kind and table, and nothing else: a name, a stage label, a tile order or a scope is the
+// maker's to choose, so none of them is compared here, and this check grades no shape at all. Shape is graded elsewhere only in part:
+// the common process assertions check well-formedness, fixture 21 has its own layout assertions, and the declared dashboard,
+// rules and flow of fixtures 22-24 have no shape assertion yet (EVAL_GUIDE.md, "Optional capabilities").
+//   expect.appTheme       as the theme assertion reads it (set = a theme is asked for)
+//   expect.configuration  as the configuration assertion reads it (a non-empty list, or solutionVersion, is an ask)
+//   expect.declared       { forms|dashboards|businessRules|businessProcessFlows: { tables: [table...], minCount: n } }
+//                         for each kind the prompt asks to keep declared. The tables that carry a `reconcile: "declared"` artifact of
+//                         that kind must be exactly `tables` (a dashboard has no table, so it states none), and there must be at least
+//                         `minCount` of them (default 1) where the prompt states a count. A kind it does not list allows none.
+const lc = (v) => String(v === undefined ? '' : v).toLowerCase();
+const DECLARED_KINDS = ['forms', 'dashboards', 'businessRules', 'businessProcessFlows'];const CONFIGURATION_LISTS = ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules'];
+const nonEmptyList = (list) => Array.isArray(list) && list.length > 0;
+ASSERTIONS.set('author: an optional capability is in the spec only when the prompt asks for it, and each one it asks for is authored as expected', ({ spec, eval: ev }) => {
+  const expect = (ev && ev.expect) || {};
+  const theme = spec.app && spec.app.theme;
+  if (theme !== undefined && !expect.appTheme) return fail('app.theme is declared, but the prompt asks for no branding');
+  if (theme === undefined && expect.appTheme) return fail('the prompt asks for branding, but app.theme is not declared');
+  const config = expect.configuration && typeof expect.configuration === 'object' ? expect.configuration : {};
+  for (const field of CONFIGURATION_LISTS) {
+    const have = nonEmptyList(spec[field]);
+    const want = nonEmptyList(config[field]);
+    if (have && !want) return fail(`${field} is declared, but the prompt asks for no such configuration item`);
+    if (!have && want) return fail(`the prompt asks for ${field} [${config[field]}], but the spec declares none`);
+  }
+  const version = spec.solution && spec.solution.version;
+  if (version !== undefined && !config.solutionVersion) return fail(`solution.version ${version} is declared, but the prompt asks for no version`);
+  if (version === undefined && config.solutionVersion) return fail(`the prompt asks for solution.version ${config.solutionVersion}, but the spec omits it`);
+  const declaredExpect = expect.declared && typeof expect.declared === 'object' ? expect.declared : {};
+  for (const kind of Object.keys(declaredExpect)) if (!DECLARED_KINDS.includes(kind)) return fail(`expect.declared names the unknown kind '${kind}'`);
+  let anyDeclared = false;
+  for (const kind of DECLARED_KINDS) {
+    const got = (Array.isArray(spec[kind]) ? spec[kind] : []).filter((x) => x && typeof x === 'object' && x.reconcile === 'declared');
+    const want = declaredExpect[kind];
+    if (!want) {
+      if (got.length) return fail(`${kind} declared on [${got.map((x) => x.entity || '(no table)')}], but the prompt asks to keep no ${kind} declared`);
+      continue;
+    }
+    if (got.length < (want.minCount || 1)) return fail(`${kind}: ${got.length} declared, but the prompt asks for ${want.minCount || 1}; missing (deleted, or without reconcile "declared")`);
+    if (Array.isArray(want.tables)) {
+      const have = [...new Set(got.map((x) => lc(x.entity)))].sort();
+      const asked = [...new Set(want.tables.map(lc))].sort();
+      if (!eq(have, asked)) return fail(`${kind} declared on [${have}], the prompt asks for [${asked}]; unasked: [${have.filter((t) => !asked.includes(t))}], missing: [${asked.filter((t) => !have.includes(t))}]`);
+    }
+    anyDeclared = true;
+  }
+  if (anyDeclared && !versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  return PASS;
+});
+
+// A maker who says no to business rules and process flows gets none of ANY kind: the declared-capability check above sees only
+// `reconcile: "declared"`, and a plain rule or flow is authored without it. expect.noBusinessLogic is written from the prompt.
+ASSERTIONS.set('author: a maker who declines business rules and process flows gets no rule and no flow of any kind', ({ spec, eval: ev }) => {
+  if (!ev.expect || ev.expect.noBusinessLogic !== true) return fail('no independent expectation that the prompt declines business rules and process flows');
+  for (const kind of ['businessRules', 'businessProcessFlows']) {
+    if (nonEmptyList(spec[kind])) return fail(`${kind} is declared (${spec[kind].map((x) => (x && x.name) || '?').join(', ')}), but the prompt declines them`);
+  }
+  return PASS;
 });
 
 module.exports = { ASSERTIONS };

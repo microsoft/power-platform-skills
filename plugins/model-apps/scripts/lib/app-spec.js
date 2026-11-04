@@ -1155,6 +1155,78 @@ function reportUnknownAppShellKeys(node, level, where, errors) {
   }
 }
 
+// The keys the build READS on a `views[]` entry (viewDef in sdk-build.js; compileViewIntent in view-reconcile.js, which also reads `key`,
+// `viewId` and `linkEntities` of a declared view; `description` is written to the view by both) and on each of its filter items
+// (`attr`, `op`, `value`, `values`; `relatedEntity` scopes a condition to a declared join). Any other key is dropped without a trace,
+// so a view written with `filter` instead of `filters` was built WITHOUT its filter and listed every active row (#799). Frozen, in the
+// order the messages list them.
+const VIEW_KEYS = Object.freeze(['entity', 'name', 'description', 'columns', 'sort', 'filters', 'activeOnly', 'reconcile', 'key', 'viewId', 'linkEntities']);
+const VIEW_FILTER_KEYS = Object.freeze(['attr', 'op', 'value', 'values', 'relatedEntity']);
+// Keys no code reads that are nevertheless accepted without a warning, because the docs and samples of earlier releases showed them
+// and they never changed what is built. Frozen: the list is closed, a new entry needs the same reason.
+const IGNORED_VIEW_KEYS = Object.freeze(['type']);
+
+// What to write instead, for the keys an author is most likely to reach for that a near spelling does not explain (`filter`, `column`
+// and `activeonly` are caught by the single-edit matcher). Prototype-less for the reason ENTITY_KEY_HINTS is: the lookup key comes from the
+// spec.
+//
+// `type` is deliberately not warned about (see IGNORED_VIEW_KEYS): older docs and the shipped
+// samples put it on a view, it never had an effect (a view is always a public view of its table), and a spec written from them must keep
+// passing `lint-app-spec.js --strict`, which fails on any warning. The keys that DO warn are the ones whose silent loss changes the view
+// (a misspelled `filters` drops the filter), so `--strict` failing on those is intended.
+const VIEW_KEY_HINTS = Object.assign(Object.create(null), {
+  where: " — did you mean 'filters'?",
+  conditions: " — did you mean 'filters'?",
+  orderBy: " — did you mean 'sort'? ([{ \"attr\": \"<column>\", \"dir\": \"asc\" | \"desc\" }])",
+  order: " — did you mean 'sort'? ([{ \"attr\": \"<column>\", \"dir\": \"asc\" | \"desc\" }])",
+  table: " — did you mean 'entity'?",
+  active: " — did you mean 'activeOnly'?",
+});
+const VIEW_FILTER_KEY_HINTS = Object.assign(Object.create(null), {
+  column: " — did you mean 'attr'? A filter names its column in 'attr'",
+  field: " — did you mean 'attr'? A filter names its column in 'attr'",
+  attribute: " — did you mean 'attr'? A filter names its column in 'attr'",
+  name: " — did you mean 'attr'? A filter names its column in 'attr'",
+  operator: " — did you mean 'op'? A filter names its comparison in 'op'",
+  operation: " — did you mean 'op'? A filter names its comparison in 'op'",
+  val: " — did you mean 'value'? (or 'values', for in / not-in)",
+  table: " — did you mean 'relatedEntity'? Only a condition on a declared join takes one",
+  entity: " — did you mean 'relatedEntity'? Only a condition on a declared join takes one",
+});
+
+// The warnings for the keys of one `views[]` entry and of its filter items (`filters[]`, and the `filters[]` of each `linkEntities[]` join, which are
+// the same shape), each with `vlabel` in front: one per unknown key, naming the key it most likely meant (a written hint first, then the shared
+// single-edit matcher, which also settles a casing slip). A WARNING, not an error: the build has always ignored such a key, so a spec that
+// carries one still builds as before, and one a release before this check validated clean must keep validating. Only a plain object is
+// inspected — a non-object entry or filter is reported by the shape checks — and enumeration is guarded because the spec comes from the caller.
+function viewKeyWarnings(v, vlabel) {
+  const unknown = (obj, allowed, hints, where, accepted = []) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
+    let keys;
+    try {
+      keys = Object.keys(obj);
+    } catch {
+      return [`${vlabel}: ${where || 'the view'} could not be inspected — enumerating its keys threw`];
+    }
+    return keys.filter((k) => !allowed.includes(k) && !accepted.includes(k)).map((k) => {
+      let hint = hints[k];
+      if (!hint) {
+        const near = nearestName(k, allowed.map((a) => a.toLowerCase()));
+        const meant = near && allowed.find((a) => a.toLowerCase() === near);
+        hint = meant ? ` — did you mean '${meant}'?` : '';
+      }
+      return `${vlabel}: ${where ? `${where}: ` : ''}unknown key '${k}'${hint}; the build ignores it (allowed: ${allowed.join(', ')})`;
+    });
+  };
+  const out = unknown(v, VIEW_KEYS, VIEW_KEY_HINTS, '', IGNORED_VIEW_KEYS);
+  const filterLists = [['filters', v && v.filters]];
+  if (v && Array.isArray(v.linkEntities)) v.linkEntities.forEach((l, i) => filterLists.push([`linkEntities[${i}].filters`, l && l.filters]));
+  for (const [path, list] of filterLists) {
+    if (Array.isArray(list)) list.forEach((f, i) => out.push(...unknown(f, VIEW_FILTER_KEYS, VIEW_FILTER_KEY_HINTS, `${path}[${i}]`)));
+  }
+  return out;
+}
+
 // The column logical names an entity legitimately exposes to a rule / process step: its declared
 // columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
 // column on the referencing table, just declared elsewhere in the spec).
@@ -3378,6 +3450,7 @@ function validateAppSpec(spec, opts = {}) {
       else v.filters.forEach((f, i) => attrRef(f && f.attr, `filters[${i}].attr`));
     }
     if (v && v.reconcile !== undefined && v.reconcile !== 'declared') errors.push(`${vlabel}: reconcile must be "declared" (or left out)`);
+    warnings.push(...viewKeyWarnings(v, vlabel));
     if (isDeclaredView(v)) {
       // compileViewIntent walks columns, sort, filters and joins as lists; a non-list one is already reported above (or by
       // the shape normalization), so it is not walked again into a TypeError.

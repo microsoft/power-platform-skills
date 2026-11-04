@@ -375,6 +375,7 @@ An `entities[].localizedLabels` key is therefore **not** a supported shape.
 - Labels for all languages are written in **one** create call. That matters: a later single-language
   `PUT` can overwrite the base label even with merge semantics.
 - **Every LCID you name must be provisioned in the organization, and the build halts if one is not.**
+  It halts before it writes anything: the publisher and the solution are not created either.
   This is the guard the feature depends on, not a nicety. Live-measured against a 1033-only org:
   `createTable` carrying `{ "1033": …, "3082": … }` returns **success** and stores **only** the 1033
   label — Dataverse does not warn, error, or report the drop anywhere. Without the halt you would get
@@ -962,6 +963,13 @@ why they need naming here at all.
   build then failed at the platform, mid-run, and left behind a view row that could not be read or
   deleted, so every later build failed the same way. It is now rejected up
   front, naming the view and the offending entry.
+- **A view takes only these keys:** `entity`, `name`, `description`, `columns`, `sort`, `filters`, `activeOnly`, and — on a view
+  with `"reconcile": "declared"` — `key`, `viewId`, `linkEntities`. A filter item takes `attr`, `op`, `value`, `values` and
+  `relatedEntity`. Any other key is **ignored by the build**, so validation warns about it and names the key it most likely meant
+  (`filter` → `filters`, `column` → `attr`, `operator` → `op`); a view written with `filter` would otherwise be built without its
+  filter. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is still
+  accepted without a warning. These are warnings, never errors — but `lint-app-spec.js --strict` fails on them, so a view with a
+  misspelled key stops a `--strict` pipeline instead of building without its filter.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
@@ -2269,7 +2277,7 @@ Administrator role only, so without a persona role users who have no maker-level
 `personas[]` produces a working access model so the app opens for real users.
 
 An app that **already exists** keeps the roles associated with it: a spec with no `personas[]` leaves
-them as they are, which is how an extension of such an app is written (a download carries none). Do
+them as they are, which is how an extension of such an app is written (a plain download carries none). Do
 not list an existing role as a persona to silence the lint — a persona's role is converged to exactly
 the privileges declared, and a role the build did not author is refused. Give an existing role access
 to a table the spec adds with `roleGrants[]` (below). Opening the app and using a table are two
@@ -2284,6 +2292,21 @@ The model is **deterministic**: you DECLARE the access each job requires — the
 privileges from a job's text. It **unions** every job's declared access into the persona's one role
 (max scope wins per entity+access) and applies it with replace semantics (a rebuild that drops a
 privilege removes it — the role converges to the spec).
+
+**A persona written by a managed download.** A download with `--include-managed --managed-manifest
+<store file>` that restores a declared business process flow whose `securityRoles` name a persona the
+downloaded spec lacks writes that persona from its role, but only when a rebuild provably leaves the
+role exactly as it is: one role of that name in the root business unit, made by a build and unmanaged,
+in the app's solution, holding only table privileges that compile back to exactly what it holds, the
+flow's grants included. The persona has one job, `Privileges read from the environment`, and
+`appAccess: false` when the app is not associated with the role — read from every page of the app's
+role associations; an association answer that is incomplete, malformed or refused proves nothing, so
+no persona is written (a role it missed would otherwise be written as not associated, and a build
+would remove its access to the app). A role lookup the server cuts short proves nothing either. From then on the spec **owns** that
+role like any other persona: a privilege someone adds to the role outside the spec is removed by the
+next build, and the download says so in a `NOTE`. When any of this cannot be proved, no persona is
+written and the flow is left out instead, with the reason (see the business process flows' notes in
+`app-spec-schema-advanced.md`).
 
 ```jsonc
 "personas": [

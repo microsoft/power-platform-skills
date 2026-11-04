@@ -153,7 +153,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/lint-app-spec.js`** — the CLI surface for both gates, for a headless author or a CI
   job (#560). Runs `migrateAppSpec` → `validateAppSpec` (what the build runs on load) → `lintAppSpec`
   (guardrails the builder does **not** run), and exits non-zero on errors (`--strict` also fails on
-  warnings). Prefer it over calling the library through `node -e`: linting the file **as written**
+  warnings, including the one for an unknown key on a `views[]` entry or its filters). Prefer it over calling the library through `node -e`: linting the file **as written**
   rather than the migrated shape is what let a spec pass the lint and then fail the build (#545).
   `--profile` defaults to **`plan`**, not `deploy`, because the authoring flow runs this while pages
   are still intents — a deploy default rejects a normal work-in-progress spec. `plan` relaxes only
@@ -2901,6 +2901,16 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   form wire (`tests/helpers/managed-wire.js`) answers a version that moves with the saved layer, which
   the service does not do: a test through it proves the SDK's re-read and refusal path, and a test whose
   double answers a version conflict proves the build's handling of that refusal, never a service guard.
+  **Caption diagnostic** (`lib/form-caption-diagnostics.js`): when an ADOPTED form's two layers differ,
+  `readSystemFormLayers` (`lib/systemform-published.js`) also offers both form XMLs to `cellCaptionDifferences`,
+  AFTER computing the two hashes and inside its own guard. A cell is compared only when its id, tab, section and
+  direct controls match on both sides, and a language only when it has exactly one label on each side; anything
+  ambiguous or unread answers nothing. A usable answer (at most 8 cell/language pairs, copied field by field) is
+  appended to the unconfirmed-publication stop (`publishManagedScope`, `confirmUncertainPublication`) as cell ids
+  and language codes, never caption text. It is a diagnostic, not a proof: it changes no hash, no decision and no
+  store record, and a helper that throws, is missing or answers anything else leaves the stop exactly as before.
+  It cannot tell an unpublished edit from the platform's read projection (the saved layer has no version), so the
+  stop still needs the printed `publication-risk` approval. Created forms and dashboards get no diagnostic.
   **Verify and download** (`lib/declared-form-io.js`): verify reads each bound declared form fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredForm`, never `readGroup`) and runs
   `verifyDeclaredForm` against the declaration and the store's recorded children (`managed-form` check);
@@ -2911,9 +2921,30 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   one leaves the host out as unverified, and the oracle has no wildcard. A quick view's target is looked up by
   name (ambiguous → unverified). `download-model-app.js --include-managed --managed-manifest <store file>`
   (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
-  pending, unreadable or invalid one is left out and named. A form with `events` is always invalid there:
-  the download writes only icon and logo web resources, so its handler library is undeclared and the form
-  is named in `managedForms.stale`; forms without a handler are restored. The restored form is the group's
+  pending, unreadable or invalid one is left out and named. A form with `events` brings each handler library
+  the spec does not declare (`librariesNotIn`), read by name through the download's SDK (`libraryEntry`, cached
+  per run) and added as `{ name, displayName?, type: 'js', contentBase64, external: true }` together with the
+  form, all or none (`managedForms.libraries: [{ name, forms }]`, only when one was added, and a NOTE line).
+  The gates: exactly one row on a complete answer (a lookup the server says continues is refused), `ismanaged === false` (absent is unknown), `webresourcetype === 3`, content,
+  and a name under the publisher prefix `runDownload` answers as `publisher: { prefix, resolved }` (internal,
+  not printed; `resolved` false refuses). `external` is what keeps a rebuild from writing or comparing the
+  library's content (`sdk-build.js` web-resources reuse) and a teardown from deleting it. A refused library
+  leaves the form in `managedForms.stale` ("handler library '<name>' was not downloaded: <why>"). A form left
+  out only for its
+  handler libraries (the spec validates with the form and a stub `js` entry per missing library) is written
+  to a fragments file (`lib/managed-fragments.js`, `managedFragments: { file, keys }` in the result), with
+  `needs: [{ webResource }]` and a `paste` entry; a flow left out only for its personas likewise (a stub
+  persona per name). The stubs are never written. Each download that has items writes ONE new file,
+  `<out>/.maker-workspace/managed-fragments-<UTC yyyymmddThhmmssZ>-<6 hex>.json`, made by an exclusive create
+  (`wx`) under a name nothing holds; it never replaces, renames over, removes or links any file, so a taken
+  name (a file, a folder, a link: Windows `CREATE_NEW` follows a dangling link, so an `lstat` passes over any
+  entry first and an inode check after the open refuses a link that raced in, before a byte is written) is kept
+  and another name tried. Files from earlier downloads stay. With nothing due nothing is written or removed. A
+  link, junction or file at `.maker-workspace`, or no name free after 8 tries, is `managed-fragments-unwritable`.
+  It is settled after the restore and the validation and before anything is published: `main` passes
+  `runDownload` `stagePages`, which writes the page tree to a hidden staging folder inside `<out>`, reads it
+  back and answers `stagedPages` (`check`, `publish`); the tree, the spec and the baseline are written only
+  after the fragments file, so a failure there leaves every output as it was. The restored form is the group's
   `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
   downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.
@@ -3007,6 +3038,45 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   applies unchanged: a GET answers the PUBLISHED row's ETag and `If-Match` does not protect the saved
   layer. The SDK re-reads the saved layer just before its PATCH; an edit landing between that read and
   the write cannot be detected, and nothing here claims a stale saved-layer write is rejected.
+  **An acknowledged create** (`lib/create-request-body.js`, `lib/dashboard-recovery-workspace.js`): when the
+  run's send observer is installed and the barrier gates the transport, a new dashboard's create is receipted
+  before it is sent; without them no receipt is made and recovery stays manual as before. `intendedDashboard`
+  keeps the complete build-owned **create draft** (the reseeded bag, tiles and captions). After `applyDashboard`
+  assembles the local copy, the copy must equal that draft (whole-artifact canonical hash), else
+  `create-local-draft-changed` and nothing is sent. `expectedCreateBody` serializes the draft through a fresh
+  throwaway SDK (`workspace.writeArtifact`, then a dry `pushArtifact` whose sink never transmits); real-bundle
+  tests pin that this body equals the wire POST for one and two languages. The store records the receipt on the
+  attempt (`noteDashboardCreateDraft`: root, send epoch, draft and body SHA-256) before the POST. The observer's
+  `withDashboardCreateReceipt` scope wraps only the create `pushChecked`; for the exact `systemforms` POST of
+  that root and body it persists a dispatch token before the bytes leave (`noteDashboardCreateDispatch`) and,
+  for a 200/201/204 with no error and no contradicting id, the acknowledgement before the SDK sees the answer
+  (`noteDashboardCreateAnswer`). A store failure keeps its own code and is thrown after `pushChecked` returns: a
+  failed dispatch record answers a synthetic, non-retried 409 and sends nothing; a failed answer record returns
+  the real response, so the SDK never replays the POST, and the receipt stays unacknowledged. A receipt proves
+  the row was created, not its content or its publication: fresh proof, `noteSaved`, consent, membership and the
+  whole-group commit still run. The commit turns an acknowledged receipt into `localCreateDraft` on the created
+  root (minted by the store only, kept for later generations of that root, dropped by a retirement; a caller
+  cannot add or change one). An epoch advance keeps the receipt's root and hashes and clears its dispatch and
+  acknowledgement; an acknowledged receipt never takes the proven-unsent `continue` claim. The empty seed cell
+  gets a fixed id (UUIDv5 under the section's catalog id, as `settleControlIds` derives BPF control ids):
+  the SDK's `createDefault` mints a random one on every call, and the draft hash must not change between runs.
+  The SDK copy of an acknowledged create is dirty (the SDK never recorded the answer). Preflight lets it through
+  only when it is the pending root with an acknowledged receipt, or the committed created root with
+  `localCreateDraft`, and its complete local artifact hashes to the recorded `draftSha256`; every other id keeps
+  the unsent-edit check, and another root, an unreadable copy or any changed value is
+  `workspace-copy-unsent-edits`. The build never refreshes or deletes that copy: `withDashboardWorkspaceScope`
+  (around the dashboard settle and publish in `sdk-build.js`) moves the dashboard's reads and writes to an
+  isolated SDK in a throwaway folder (same client, URL, language and solution header), checks the source copy
+  still hashes to the draft before membership and before the commit, and leaves it byte for byte as it was. So
+  the recovering build sends no second POST and needs no `adopt:` approval: it proves the row, commits it as
+  created and publishes it. A receipted create read absent in both layers (two `0x80040217` 404s) is sent again
+  under the same root only through the fenced branch of `recoverManagedAttempt` (`observeDashboardCreateResume`,
+  then `markSending` `claim: "resume"` with that observation; a stale observation refuses). What stays manual:
+  a stop inside the raw response handler before the acknowledgement is written (the receipt is not acknowledged:
+  the old `create-completion-required` and adoption path), a retained copy changed since the send, and a run
+  without the observer or gated transport. The pending declaration is kept as before. Tests: "dashboard create
+  receipt" and "created dashboard root" in `tests/managed-bindings.test.js`; the receipt and recovery tests in
+  `tests/dashboard-settlement-real-bundle.test.js`.
   **Verify and download** (`lib/declared-dashboard-io.js`): verify reads each bound declared dashboard fresh
   by its recorded id through the isolated reader (`readerFor(...).declaredDashboard`, which answers the
   artifact and the reading SDK's language) and runs `verifyDeclaredDashboard` (`managed-dashboard` check):
@@ -3139,10 +3209,25 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   attempt, below, included). A declaration that changes
   nothing of the workflow but differs from the group's `originalDeclaration` (its `securityRoles`, say) is the
   plan's `declaration` mode: no workflow request, and a commit that records it, so the store keeps the current
-  intent; an identical one is a no-op with no store write. Nothing is published. The managed download still
-  leaves a flow with `securityRoles` out (`personasNotIn`): a download writes no `personas[]`, and a persona
-  owns its role and is converged onto exactly what it declares, so one is never reconstructed from the
-  environment, and the flow is never restored without its roles; the stale reason names the missing personas.
+  intent; an identical one is a no-op with no store write. Nothing is published. The managed download restores
+  a flow with `securityRoles` only when every persona it names is in the downloaded spec or is PROVED from its
+  role (`lib/persona-restore.js` `createPersonaProver`, read-only, memoised per run). A persona owns its role
+  and is converged onto exactly what it declares (ReplacePrivilegesRole), so a persona is written only when a
+  rebuild provably leaves the role as it is, all gates fail closed: exactly one role of the name in the ROOT
+  business unit (`resolveRoleBusinessUnit` + `roleBuClause`; a lookup cut short — `hasMore` — refuses), carrying `SDK_ROLE_MARKER` with
+  `ismanaged === false` (any unmarked or managed row of the name refuses, as the SDK's own lookup does); a
+  member of the app's solution (component type 20); `appAccess` from the app association
+  (`appRoleIdsComplete`: every page through `collectionRows`, each row naming a role by GUID; a malformed,
+  refused or incomplete answer refuses, because a role missing from it would be written as `appAccess: false`
+  and a build would dissociate it — `appRoleIdsFor` stays verify's lenient reader); every held privilege (`roleprivileges`, paged, `depthFromMask`) mapped to a table and an
+  access through one `EntityDefinitions?$select=LogicalName,Privileges` read (a privilege no table carries is
+  refused); the candidate (one job, `JOB_NAME`, grouped by table and scope) put through
+  `personaRoleSpecFor` and `compileRolePrivileges` (`lib/role-privileges.js`, the SDK's compile) equals the
+  held set both ways; and the role already holds `BPF_ROLE_ACCESS` at Global on the flow's backing table
+  (`flowGrantsMissing`, also checked for a persona written for an earlier flow). A persona that fails leaves
+  the flow out, its reason naming each persona and why; the flow goes to the fragments file
+  (`noteBpfFragment`) when it validates with a stub persona per missing name. A written persona is in
+  `managedBpfs.personas: [{ name, flows }]` and a NOTE says a build owns its role from then on.
   **Verify and download** (`lib/declared-bpf-io.js`): verify reads each bound declared flow fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredBpf`) and runs `verifyDeclaredBpf`
   (`managed-bpf` check): the helper's one read-only `projectBpf`, certified only when it is a shape the
@@ -3217,7 +3302,9 @@ made before any number of retirements is refused. Adoption of a different id is 
 still wins over the catalog id, adoption by name or by the `adopt:` approval is unchanged, and a lost
 create keeps the incarnation in its pending attempt; in a retained SDK workspace the dirty-copy fence
 stops with `create-completion-required` and sends nothing until the owned local copy is discarded, after
-which the create resumes (or, when it landed, is adopted with approval) under the same id. A direct store
+which the create resumes (or, when it landed, is adopted with approval) under the same id. A dashboard
+whose create has an acknowledged receipt and an exactly matching retained draft is the one exception: it is
+recovered without approval through an isolated workspace (see **Dashboard** above). A direct store
 caller that passes no token is fenced by its handle's read and by key only. Views and charts are never
 retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js` ("incarnation"),
 `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after" / "after
@@ -3230,7 +3317,8 @@ and sends the same requests as before). For a declared view or chart, `lib/creat
 the id (`lib/creates-identity.js`), `lib/creates-port.js` creates or finds the row at that id, and
 `lib/managed-bindings.js` records the binding in the workspace (`managed-bindings.<hash>.json`, opened
 by `openBuildBindingGroups` for an apply with an app, a solution and an https environment). Every other
-kind keeps its current ids. A local copy at the id with an unsent edit, or a local create never
+kind keeps its current ids (a declared dashboard already has its catalog id; its create receipt adds no
+`createIdentity` value and does not make an id into consent). A local copy at the id with an unsent edit, or a local create never
 acknowledged, is refused before any read-back, reapply or send (`create-completion-required`, via
 `lib/creates-local.js`); there is no `overwrite:` approval for it, and no exception for the build's own
 draft: a diff cannot tell it from one a maker edited since (a name or description outside the

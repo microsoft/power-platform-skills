@@ -707,7 +707,11 @@ saved layer and another way in the published layer (seen on an adopted form whos
 base language did). No read can then confirm a publish of that form's table: the stop says that the saved
 layer is still the one the publish shipped, yet the published layer reads differently. Compare what is
 published with the spec in Maker; if it matches, pass the `publication-risk` key the build prints. A later
-publish of that table can stop the same way, and each needs its own key.
+publish of that table can stop the same way, and each needs its own key. For a form the build adopted, the
+stop can also name the cells and languages whose caption reads differently in the two layers (for example
+"Caption difference at cell <id> (language 1033)"), never the caption text. Start the comparison in Maker
+there. This does not show whether the difference is an unpublished edit or how the platform reads the layer,
+so the stop and its key stay the same. A form the build created and a dashboard get no such list.
 
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by
@@ -809,13 +813,34 @@ are only added.
   build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
   `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
   that is pending, gone or not valid is left out and named. A declared form with an event handler
-  (`events`) is not valid in the downloaded spec, because a download brings back only icon and logo web
-  resources, not the handler's library: it is left out and named in `managedForms.stale` ("onload handler
-  references undeclared web resource"), while the forms without a handler are restored. To keep it, add
-  the library to `webResources[]` and the form's declaration to `forms[]` by hand. The download transfers no binding: the
+  (`events`) comes back with each handler library the spec does not declare, added to `webResources[]` as
+  `external: true` and named in `managedForms.libraries` (`[{ name, forms }]`) and in a note. A library is
+  downloaded only when it is this app's own: exactly one web resource of that name (on a lookup that read
+  every row; one cut short proves nothing), unmanaged, a script,
+  with content, and named under the solution publisher's prefix, read and verified by the download. A
+  rebuild reuses an `external` library where it exists without writing or comparing its content, creates
+  it from the downloaded content where it is missing, and a teardown never deletes it. When a library
+  fails any of those checks the form is left out and named in `managedForms.stale` ("handler library
+  '<name>' was not downloaded: <why>"), and its declaration is written ready to paste in the build
+  folder's `.maker-workspace` (see below), with the library it needs: add both to
+  the spec. The download transfers no binding: the
   downloaded folder has no store, so the first build that binds a form there needs
   `--authorize "adopt:form:<key>"`. A rebuild that finds the form already as declared writes nothing and
   may leave it unbound.
+- **The fragments file.** A managed download writes each declared form or process flow it proved but left
+  out only for what it could not bring (a handler library, a persona) to
+  a new file, `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json`, and names that file in a
+  warning and in the result
+  (`managedFragments: { file, keys }`). Each item has the store `key`, the `reason` it was left out, what it
+  `needs` (`{ "webResource": "<name>" }` or `{ "persona": "<name>" }`) and a `paste` object
+  (`{ "forms": [ ... ] }` or `{ "businessProcessFlows": [ ... ] }`): add the entry to the same array in
+  `app-spec.json` with what it needs, from the spec it was built from. An item left out for anything else
+  (pending, changed, not valid) is not written there, because nothing proved it. The download only ever
+  creates a file under a name nothing holds: it never replaces, moves or removes a file in `.maker-workspace`,
+  so files from earlier downloads (and any of the maker's) stay as they are; delete old ones when you no longer
+  need them. With nothing left out it writes no file. When `.maker-workspace` is a link, a junction or a file,
+  or the file cannot be written, the download stops (`code: "managed-fragments-unwritable"`) before it writes
+  anything else: the pages, the spec and the baseline are written only after this file.
 - **A removed form that was deleted.** When the spec no longer declares a form and the form was deleted in
   the environment, the next build reads it by its id in both its saved and its published layer. When both
   say it does not exist, the build stops managing it, including a publish of its table it still owed: it
@@ -875,21 +900,44 @@ existing one is reused and its tiles are never edited.
   new tile that cannot be added without moving rows the dashboard already has, a part changed elsewhere
   since the last build, and a dashboard of the same name that an earlier build created and did not
   finish: that one is not taken over and not deleted. The dashboard is left as it is and the stop names
-  the cause.
+  the cause. A new dashboard is also not sent when the local copy the build assembled is not exactly the
+  draft it planned (`create-local-draft-changed`).
+- **A create whose answer was lost.** Before it sends a new dashboard, the build writes a receipt for it in
+  the binding store (its id, and a hash of the draft and of the exact request), and it writes the
+  acknowledgement there when the service answers that the dashboard was created, before anything else
+  runs. When the build stops after that (a crash, a lost connection, a failed later step), the next build
+  recovers it by itself: it does not send the create again, needs no `adopt:` approval, reads the
+  dashboard fresh to prove what it holds, binds it as created and publishes it. It does this only when the
+  local copy the SDK kept is still exactly the draft the receipt names. It does not refresh or delete that
+  copy: it works in a separate throwaway folder, and leaves the copy as it was. These cases still stop and
+  need you:
+  - The build stopped after the dashboard was sent but before the acknowledgement was written (or that
+    write failed). The stop names the cause; this is the earlier behavior. Settle it as described for a
+    lost create under `createIdentity` (**Local copy**): keep the declaration as it was, discard only the
+    local copy, and build again with `--authorize adopt:dashboard:<key>` if it asks for it.
+  - The local copy was changed since the send: the build stops with `workspace-copy-unsent-edits` and keeps
+    it. Keep the change you want apart, discard only the local copy, build again, then put your change into
+    the spec.
+  - A dashboard acknowledged and then deleted by hand is created again under the same id only when a fresh
+    read of both the saved and the published dashboard answers that it does not exist.
 - **Approvals.** The key is `dashboard:<key>`. A dashboard that already exists and that this build did
   not create is bound only with `--authorize adopt:dashboard:<key>`; the first binding needs it, later
   builds do not. `--authorize overwrite:dashboard:<key>` approves replacing a description changed
   elsewhere, and `overwrite:dashboard:<key>/<tile>` one tile changed elsewhere. A local copy that differs
-  from the server's stops the build (`workspace-copy-unsent-edits`).
+  from the server's stops the build (`workspace-copy-unsent-edits`), except the exact copy of an
+  acknowledged create (see **A create whose answer was lost**), which needs no approval.
 - **Publishing.** The dashboards step publishes the dashboard by itself, once, after its write, and only
   when the write is proved, with or without `--publish` (with it, the app's publish later in the build can
   publish it again). A dashboard this build cannot finish is not published, not even by the app's publish: an
-  app that would hold it is not written in that run.
+  app that would hold it is not written in that run. A recovered create is published by the build that
+  recovers it.
 - **Concurrent edits.** Dataverse does not version a dashboard's saved layer: a dashboard is a form row,
   and a plain read answers the published row's version, so a conditional write cannot reject a stale
   edit of it. The build re-reads the saved dashboard just before it writes and stops when it changed
   since the build read it. An edit made in Maker in the instant between that check and the write cannot
-  be detected: do not edit a declared dashboard while a build runs.
+  be detected: do not edit a declared dashboard while a build runs. Do not edit the local copy of a new
+  dashboard while its build runs, or before the next build after a stop: a changed copy is never recovered
+  over.
 - **Verify.** `--verify` reads each bound declared dashboard again by its id and holds it to what its last
   build proved: the managed tiles (each exactly once, with the target, name and size the build wrote), the
   description, and everything the spec does not declare (other tiles, tabs, sections and a tile's other
@@ -909,7 +957,13 @@ existing one is reused and its tiles are never edited.
   attempt, then by its `dashboardId`, and only then by its name. A `dashboardId` that is not the bound
   dashboard stops the build. `--verify` uses the same bound dashboard for every dashboard check, the site
   map's included. Before its first binding, `--verify` holds a declared dashboard to its `dashboardId`: if
-  that id names no dashboard, the check fails, even when another dashboard has the same name.
+  that id names no dashboard, the check fails, even when another dashboard has the same name. A new
+  dashboard's id stays the same for the spec, and a recovered create keeps it.
+- **The binding store.** The receipt and its acknowledgement are new, optional fields in the binding store
+  file; a store without them reads as before, and opening a store does not rewrite it. An older plugin
+  refuses the dashboard whose binding holds them (`managed-binding-group-invalid`): build with this version
+  or later. Do not reset, delete or edit the file to let an older plugin read it, and never put back an
+  older copy.
 - **A removed declaration.** When the spec no longer declares a dashboard whose last change is not
   settled, the build reads it before it builds any other dashboard:
   - A publish that is not confirmed is confirmed when a fresh read proves it live. It is never published
@@ -1060,10 +1114,13 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
 - **The backing table.** `securityRoles` are granted on the table name Dataverse stored for the flow,
   as the build read it, never on a name derived from the display name. A change of a managed flow's
   `securityRoles` alone (or of any setting the flow already holds) sends no workflow write; the build
-  records the flow's new declaration. A managed download does not restore a flow with `securityRoles`:
-  a download writes no `personas[]` (a persona's role is converged onto exactly what it declares, so one
-  is never guessed from the environment), and the flow is never restored without its roles. It is left
-  out with a warning naming the personas; copy the flow and those personas from the spec it was built from.
+  records the flow's new declaration. A managed download restores a flow with `securityRoles` only with
+  its roles. A persona the downloaded spec lacks is written into `personas[]` from its role only when a
+  rebuild provably leaves that role exactly as it is (a persona's role is converged onto exactly what it
+  declares, so one is never guessed): see "A persona written by a managed download" under `personas[]`
+  in app-spec-schema.md. Otherwise the flow is left out with a warning naming each persona and why, and
+  its declaration is written ready to paste in a new `.maker-workspace/managed-fragments-*.json` file (see the
+  declared forms' Download note); copy those personas from the spec it was built from.
 - **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
   an earlier build sent to it is still waiting to be proved, the build ends incomplete
   (`managed-not-settled`) and does not touch that flow: put its entry back and build again. Until then
@@ -1102,6 +1159,8 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   "views": [{ "entity": "new_ticket", "name": "Open Tickets", "reconcile": "declared", "columns": ["new_name"] }] }
 ```
 
+- **Dashboards.** A declared dashboard already has an id fixed by the spec, without this field; there is
+  no dashboard value for `createIdentity`. A fixed id finds a row, but is never an approval to bind it.
 - **What gets a stable id.** A declared view or chart (`reconcile: "declared"`) is created with an id
   the spec fixes (from the solution, the table and the name). A build that lost the answer to its
   create, run again from the same or a fresh workspace, finds the row at that id and binds it instead

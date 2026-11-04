@@ -170,6 +170,33 @@ test('a new declared rule is created Draft, proved by a read, then activated by 
   assert.deepEqual(writesSince(wire, again.from), []);
 });
 
+// #796: the rule's identity read on a table the build has only just created can meet the table's metadata-cache lag (HTTP 400 0x80041102 "…was not found in the MetadataCache…"). With the caller's `freshTable`
+// the stop is one the build's bounded retry may ride out and the next settlement creates the rule once; without it, for another table's answer or any other answer, it stays final. Nothing is sent either way.
+test('an identity read that meets the metadata-cache lag of a table the build just created stops as the retry may ride out; any other unread answer stays final (#796)', async () => {
+  const { retryPolicyFor } = require('../lib/retry-policy.js');
+  const notInCache = (t) => `The entity with a name = '${t}' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 1 and timestamp 1`;
+  const nameRead = (e) => e.method === 'GET' && e.path === 'workflows';
+  const answer400 = (code, message) => ({ statusCode: 400, body: { error: { code, message } } });
+  for (const [label, answer, freshTable, policy] of [
+    ['the lag of a table the build created', answer400('0x80041102', notInCache('account')), 'account', RETRY.SERVICE],
+    ['no freshTable', answer400('0x80041102', notInCache('account')), undefined, RETRY.NEVER],
+    ['the answer names another table', answer400('0x80041102', notInCache('contoso_other')), 'account', RETRY.NEVER],
+    ['an unrelated 400', answer400('0x80040265', 'The value of the attribute is not valid'), 'account', RETRY.NEVER],
+  ]) {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('rule-settle-');
+    wire.script(nameRead, answer);
+    const out = await settle(wire, dir, RULE, freshTable ? { freshTable } : {});
+    assert.equal(out.error && out.error.cause && out.error.cause.code, 'create-identity-unverified', label);
+    assert.equal(retryPolicyFor(out.error.cause), policy, label);
+    assert.deepEqual(writesSince(wire, out.from), [], `${label}: nothing is sent`);
+    if (policy !== RETRY.SERVICE) continue;
+    const again = await settle(wire, dir, RULE, { freshTable });
+    assert.ifError(again.error);
+    assert.deepEqual(writeLines(wire, again.from).filter((l) => l.startsWith('POST workflows')), ['POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson'], `${label}: one create`);
+  }
+});
+
 test('a Draft rule is created Draft and never activated', async () => {
   const wire = createWorkflowWire();
   const out = await settle(wire, makeTempDir('rule-settle-'), { ...RULE, status: 'Draft' });

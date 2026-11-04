@@ -94,7 +94,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
   **ON**, so set it to `false` only when the user explicitly wants the classic header.
 - **App theme and header logo (Preview, 2.21.0)** — `app.theme`. Add it **only when the maker explicitly asks
-  for branding** (brand colours, a header colour, a logo); an ordinary app gets **no** `app.theme`, and you never
+  for branding** (brand colours, a header colour, a logo) or says yes to the branding question you ask of every new app
+  at the personas step (authoring-flow Level (a0)); an ordinary app gets **no** `app.theme` without one of those, and you never
   invent a palette, a font or a logo. Offer the choices: a `basePaletteColor` (or explicit `palette` slots), the
   `appHeader` colours, a `font` only if they name one, and a `logo` that is an **existing image web resource**
   (or one you also declare in `webResources[]`), never a URL. Say before the build that the theme is published
@@ -156,7 +157,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   in this version). Leave a downloaded or older spec without these fields as it is — see the advanced reference.
 - **Declared form layouts** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a form
   only when the maker asked its layout to follow the spec (fields, spans, sections, field options, sub-grids,
-  handlers); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
+  handlers) or said yes when you offered it at Level (b); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
   declare stay where they are and nothing is deleted (so no `--allow-destructive` is needed for them); a layout the build cannot place safely stops before any
   write; a table publish puts live every saved change on that table, not only this form, with or without
   `--publish` (a declared dashboard is published after its write either way); and Dataverse does
@@ -167,8 +168,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
   declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
   not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
-  file>` (one with an event handler is left out and named in `managedForms.stale`, as its handler's web
-  resource is not downloaded: add both back by hand); it carries no binding, so the first build that binds each form from the downloaded folder needs
+  file>` (one with an event handler comes back with its handler library as an `external` web resource when
+  that library is this publisher's own unmanaged script; otherwise it is left out and named in
+  `managedForms.stale`, and its declaration is written ready to paste in the new file `managedFragments.file` names (`.maker-workspace/managed-fragments-<time>-<random>.json`)
+  with the library it needs, so tell the maker to add both from the spec it was built from); it carries no binding, so the first build that binds each form from the downloaded folder needs
   `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
   `--verify` fails it. One whose publish is unconfirmed is not released (see the unconfirmed publish below). A
@@ -179,7 +182,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   unconfirmed publish) is refused (`managed-form-unsettled`):
   restore the declaration and let it settle, or run the build again later.
 - **Declared dashboards** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a global
-  dashboard only when the maker asked its tiles to follow the spec on rebuilds; give it and every tile a
+  dashboard only when the maker asked its tiles to follow the spec on rebuilds, or said yes when you offered it at Level (b); give it and every tile a
   `key`. Tell the maker: tiles the spec omits stay (nothing is deleted), and settings a tile does not state are
   kept; a new tile is added after the last row; in an environment with more than one language a new tile gets
   its caption, with the same text, in every language the environment has (if the build cannot read those
@@ -202,7 +205,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   dashboard and tile ids it was proved on; its first binding needs `adopt:dashboard:<key>`, because the
   downloaded folder has no store.
 - **Declared business rules** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a rule only
-  when the maker accepts that the build manages the WHOLE rule; give every condition, action and apply-action a
+  when the maker accepts that the build manages the WHOLE rule (the offer at the personas step, or their own ask); give every condition, action and apply-action a
   `key`. Tell the maker: conditions and actions are never matched by their text; a new rule is created Draft and
   activated only if nobody changed it in between; a rule that already exists is never edited by the build
   (change it in Maker, then re-adopt it); a rule changed outside the spec stops the build until it is re-adopted
@@ -213,7 +216,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   out, as every business rule is); the first build that binds a rule that already exists needs
   `adopt:rule:<table>/<name>`, because the downloaded folder has no store.
 - **Declared business process flows** (`minimumPluginVersion: "2.21.0"`) — write
-  `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow; give every
+  `reconcile: "declared"` on a flow only when the maker accepts that the build manages the WHOLE flow (the offer at the personas step, or their own ask); give every
   stage and step a `key`. Tell the maker: a key keeps a stage's or step's id, so a rename keeps the records on it;
   a new flow is created Draft and activated only if nobody changed it in between; a flow that already exists is
   never edited by the build (to change its body or status, change it in Maker, then re-adopt it, keeping every
@@ -224,10 +227,16 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   it is re-adopted). A download brings it back declared, keys included, only with `--include-managed
   --managed-manifest <store file>` (otherwise it is left out); the first build that binds it from the downloaded folder
   needs `adopt:bpf:<table>/<name>`, because that folder has no store. Changing only who may run a managed flow
-  (`securityRoles`) writes nothing to the flow; the build records it. A managed download does NOT restore a flow
-  that has `securityRoles`: a download writes no `personas[]`, so it leaves that flow out with a warning naming the
-  personas (nothing is lost; the store and the maker's own spec keep it). Tell the maker to copy that flow and the
-  personas it names from the spec it was built from. A
+  (`securityRoles`) writes nothing to the flow; the build records it. A managed download restores a flow that has
+  `securityRoles` only when it can prove each persona the flow names from the role a build made for it, and then
+  writes that persona into `personas[]` (a NOTE names it). Tell the maker that persona now owns its role: a
+  privilege added to that role outside the spec is removed by the next build. When a persona cannot be proved,
+  the download leaves the flow out with a warning naming the personas and why (nothing is lost; the store and the
+  maker's own spec keep it) and writes the flow ready to paste in
+  the new file `managedFragments.file` names. Tell the maker to paste that flow and copy the
+  personas it names from the spec it was built from. Earlier fragments files are kept; never delete one
+  yourself. If the download stops with `managed-fragments-unwritable`, `.maker-workspace` is not a plain folder
+  or cannot be written: ask the maker to fix it, never move or delete it yourself. A
   declared rule or flow removed from the spec whose row was deleted is no longer managed once the build reads it gone
   by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
   change is still waiting to be proved keeps the build incomplete. A retirement a build reports it could not
@@ -255,7 +264,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   running again does not merge it: put the change into the spec, then refresh the local copy.
 - **Configuration items** (`minimumPluginVersion: "2.21.0"`) — `environmentVariables[]`,
   `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]` and `solution.version`. Declare one
-  only when the maker asks for it or a page of this app needs it (a page calling a connector needs its
+  only when the maker asks for it, accepts your offer at the personas step, or a page of this app needs it (a page calling a connector needs its
   connection reference; an action a page calls needs its Custom API). Never write a value that differs per
   environment into the spec — a current value, a connection id, a secret: those go in a `--deployment-settings`
   file (the solution deployment-settings shape), which the maker supplies, and a `secret` variable takes no
@@ -786,7 +795,10 @@ dependency order (**app module → dashboards → command bars → forms → sec
 → reset enriched default views to drop parent lookups → relationships → AI row summaries → tables
 [children-first] → web resources (generated app icon + page manifest + declared) → global choices →
 solution**). Forms/charts/views/relationships are deleted **explicitly before tables** (a table
-delete does not reliably cascade cross-references; it does remove the table's own columns). Security
+delete does not reliably cascade cross-references; it does remove the table's own columns). A built
+table's only Main form is refused by Dataverse ("You must have at least one active Main form"); the table's
+delete removes it, and the run counts it as removed only when a fresh read of its id shows it gone —
+otherwise the refusal stays a failure. Security
 roles come **after forms** because a form assigned to a role names it inside its own formxml, which
 the platform counts as a dependency, and **before** relationships/tables because a role holding a
 table's privileges can block that table's delete. Command

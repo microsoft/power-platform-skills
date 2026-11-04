@@ -139,6 +139,6 @@ test('lookup label language: a lookup labelled only in French, to a stock table,
   assert.deepEqual(step.unexpected, []);
   const said = step.error ? step.error.message : JSON.stringify(step.value && step.value.result);
   assert.match(said, /not provisioned in this organization: 1036/, 'the language it lacks is named');
-  assert.deepEqual(Object.keys(step.writes).sort(), ['POST publishers', 'POST solutions'], 'no table or lookup is written');
+  assert.deepEqual(Object.keys(step.writes).sort(), [], 'nothing is written: no publisher, solution, table or lookup');
   assert.equal(fresh.metadata.tables.get('contoso_case'), undefined);
 });

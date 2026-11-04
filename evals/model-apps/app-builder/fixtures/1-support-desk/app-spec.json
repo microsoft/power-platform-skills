@@ -169,7 +169,6 @@
   "views": [
     {
       "entity": "new_customer",
-      "type": "main",
       "name": "Active Customers",
       "columns": [
         "new_name",
@@ -186,7 +185,6 @@
     },
     {
       "entity": "new_ticket",
-      "type": "main",
       "name": "Active Tickets",
       "columns": [
         "new_name",
@@ -204,7 +202,6 @@
     },
     {
       "entity": "new_comment",
-      "type": "main",
       "name": "Active Comments",
       "columns": [
         "new_name",
