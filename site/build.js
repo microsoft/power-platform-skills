@@ -5,11 +5,15 @@
  * Builds the Power Platform Skills showcase site into a static folder for GitHub Pages.
  *
  * Usage:
- *   node site/build.js [--out <dir>] [--base-path <path>]
+ *   node site/build.js [--out <dir>] [--base-path <path>] [--media <dir>] [--require-media]
  *
- *   --out        Output folder. Default: site/dist
- *   --base-path  Absolute path the site is served from, used only by 404.html.
- *                Default: the path of the production site URL, /power-platform-skills/
+ *   --out            Output folder. Default: site/dist
+ *   --base-path      Absolute path the site is served from, used only by 404.html.
+ *                    Default: the path of the production site URL, /power-platform-skills/
+ *   --media          Local copy of the site-media branch. Default: site/media, which
+ *                    `node site/fetch-media.js` fills. See site/lib/media.js.
+ *   --require-media  Fail if a pinned media file is missing. Without it, the build leaves the
+ *                    video out with a warning, so the rest of the site can be previewed.
  *
  * The build has no dependencies beyond Node.js, so CI and contributors need no npm install.
  */
@@ -19,6 +23,7 @@ const path = require('node:path');
 const { loadCatalog } = require('./lib/catalog.js');
 const render = require('./lib/render.js');
 const links = require('./lib/install-links.js');
+const { copyMedia, loadMediaManifest } = require('./lib/media.js');
 
 const SITE_DIR = __dirname;
 const REPO_ROOT = path.resolve(SITE_DIR, '..');
@@ -30,6 +35,8 @@ const MARKER = '.power-platform-skills-site';
 // The launcher page also runs the same link builders as the build, so the two cannot disagree.
 const ASSETS_DIR = 'assets';
 const EXTRA_ASSETS = [['lib/install-links.js', 'assets/install-links.js']];
+const MEDIA_MANIFEST = path.join(SITE_DIR, 'media.json');
+const USAGE = 'Usage: node site/build.js [--out <dir>] [--base-path <path>] [--media <dir>] [--require-media]';
 
 function listAssets(dir, relative = '') {
   return fs.readdirSync(path.join(dir, relative), { withFileTypes: true }).flatMap((entry) => {
@@ -43,6 +50,8 @@ function parseArgs(argv) {
   const options = {
     outDir: path.join(SITE_DIR, 'dist'),
     basePath: new URL(links.SITE_URL).pathname,
+    mediaDir: path.join(SITE_DIR, 'media'),
+    requireMedia: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -53,8 +62,13 @@ function parseArgs(argv) {
     } else if (arg === '--base-path' && value) {
       options.basePath = value;
       index += 1;
+    } else if (arg === '--media' && value) {
+      options.mediaDir = path.resolve(value);
+      index += 1;
+    } else if (arg === '--require-media') {
+      options.requireMedia = true;
     } else {
-      throw new Error(`Unknown or incomplete argument: ${arg}\nUsage: node site/build.js [--out <dir>] [--base-path <path>]`);
+      throw new Error(`Unknown or incomplete argument: ${arg}\n${USAGE}`);
     }
   }
   if (!options.basePath.startsWith('/')) options.basePath = `/${options.basePath}`;
@@ -104,7 +118,9 @@ function loadExplainer() {
   };
 }
 
-function build({ repoRoot = REPO_ROOT, outDir, basePath }) {
+// mediaDir defaults to none, so a build in a test never depends on what happens to be in
+// site/media; the command line passes site/media.
+function build({ repoRoot = REPO_ROOT, outDir, basePath, mediaDir = null, requireMedia = false }) {
   const catalog = loadCatalog(repoRoot);
   prepareOutDir(outDir);
 
@@ -124,14 +140,23 @@ function build({ repoRoot = REPO_ROOT, outDir, basePath }) {
   for (const [from, to] of [...assets, ...EXTRA_ASSETS]) {
     written.push(writeFile(outDir, to, fs.readFileSync(path.join(SITE_DIR, from))));
   }
-  return { catalog, files: written };
+
+  const media = copyMedia({ manifest: loadMediaManifest(MEDIA_MANIFEST), mediaDir, outDir });
+  if (requireMedia && media.missing.length > 0) {
+    throw new Error(`Missing ${media.missing.join(', ')} from ${mediaDir || 'the media folder'}. Run node site/fetch-media.js first.`);
+  }
+  written.push(...media.written);
+  return { catalog, files: written, missingMedia: media.missing };
 }
 
 if (require.main === module) {
   try {
     const options = parseArgs(process.argv.slice(2));
-    const { catalog, files } = build(options);
+    const { catalog, files, missingMedia } = build(options);
     console.log(`Built ${files.length} files for ${catalog.plugins.length} plugins into ${path.relative(process.cwd(), options.outDir) || '.'}`);
+    if (missingMedia.length > 0) {
+      console.warn(`Left out ${missingMedia.join(', ')}, so the explainer video will not play. Run node site/fetch-media.js to include it.`);
+    }
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

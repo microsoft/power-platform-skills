@@ -1,7 +1,9 @@
 name: showcase-site
 
 # Publishes the repository's one GitHub Pages site, which holds:
-#   - the plugin showcase built from site/, at the site root
+#   - the plugin showcase built from site/, at the site root, with the video and poster that
+#     site/media.json pins, fetched from the site-media branch. They are kept off main because
+#     every marketplace install clones main (see site/lib/media.js).
 #   - the GitHub Repo Stats report, copied read-only from the github-repo-stats branch into
 #     microsoft/, so its existing URLs (for example microsoft/power-platform-skills/latest-report/
 #     report.html) keep working
@@ -77,8 +79,13 @@ jobs:
             - name: test
               run: node --test site/tests/site.test.js
 
+            # Pull requests fetch the media too, so a change to site/media.json that pins a file the
+            # site-media branch does not have fails here rather than at deploy.
+            - name: fetch media
+              run: node site/fetch-media.js
+
             - name: build
-              run: node site/build.js
+              run: node site/build.js --require-media
 
             - name: checkout repo stats
               if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

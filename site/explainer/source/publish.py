@@ -4,15 +4,19 @@ Steps:
   1. Render the picture as a 1080p60 master (CRF 17) and mux it with build/Final-mix.wav.
   2. Encode the web copy from that master. CRF 22 keeps the film at about 3 MB while text stays
      sharp on high-density screens, where the site shows it about 1,300 device pixels wide.
-     Every marketplace clone downloads this file, so it is worth keeping small.
+     Every visitor who presses play downloads it, so it is worth keeping small.
   3. Write the poster (the summary frame, which answers the question even before anyone plays
      it) and the captions.
   4. Check frame count, a clean decode, and loudness, so a broken file cannot ship.
+  5. Pin the video and poster: copy them into site/media under content-hashed names, the layout
+     of the site-media branch, and record their hashes in site/media.json.
 
 Run audio.py first; this script reads its mix. See ../README.md.
 """
 
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import captions  # noqa: E402
 import film  # noqa: E402
 from project import (  # noqa: E402
-    BUILD, FINAL_MIX, MASTER, PUBLISHED, PUBLISHED_POSTER, PUBLISHED_VIDEO,
+    BUILD, FINAL_MIX, MASTER, MEDIA, MEDIA_MANIFEST, SITE_PATHS, WEB_POSTER, WEB_VIDEO,
 )
 
 # The summary: plugin card, all five skills, and both labels, after the lit sweep has finished
@@ -53,11 +57,28 @@ def frame_count(path):
     return json.loads(out)["streams"][0]
 
 
+def pin():
+    """Copies the web video and poster into site/media as <name>-<first 12 hex of sha256><ext>
+    and writes site/media.json. A new render gets new names, so the site-media branch can hold
+    it next to the version main still uses."""
+    files = []
+    for local, site_path in SITE_PATHS.items():
+        data = local.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        source = f"video/{local.stem}-{digest[:12]}{local.suffix}"
+        target = MEDIA / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(local, target)
+        files.append({"path": site_path, "source": source, "sha256": digest, "bytes": len(data)})
+    MEDIA_MANIFEST.write_text(json.dumps({"branch": "site-media", "files": files}, indent=2) + "\n", encoding="utf-8")
+    for item in files:
+        print(f"pinned {item['source']}")
+
+
 def main():
     if not FINAL_MIX.exists():
         raise SystemExit(f"{FINAL_MIX} is missing. Run source/audio.py first.")
     BUILD.mkdir(parents=True, exist_ok=True)
-    PUBLISHED.mkdir(parents=True, exist_ok=True)
 
     picture = BUILD / "video-only.mp4"
     film.render(0, film.DURATION, picture)
@@ -65,14 +86,14 @@ def main():
         "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-movflags", "+faststart", str(MASTER))
     run("-i", str(picture), "-i", str(FINAL_MIX), "-map", "0:v", "-map", "1:a",
         "-c:v", "libx264", "-preset", "slow", "-crf", "22", "-profile:v", "high", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-movflags", "+faststart", str(PUBLISHED_VIDEO))
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-movflags", "+faststart", str(WEB_VIDEO))
 
     poster = film.frame_at(POSTER_TIME).resize((1280, 720), Image.LANCZOS)
-    poster.save(PUBLISHED_POSTER, quality=86, method=6)
+    poster.save(WEB_POSTER, quality=86, method=6)
     captions.main()
 
     expected = round(film.DURATION * film.FPS)
-    for path in (MASTER, PUBLISHED_VIDEO):
+    for path in (MASTER, WEB_VIDEO):
         stream = frame_count(path)
         frames = int(stream["nb_read_packets"])
         # The last frame can round either way against the audio length.
@@ -83,6 +104,8 @@ def main():
         if not (-17 <= lufs <= -15 and peak <= -1.0):
             raise SystemExit(f"{path.name}: {lufs} LUFS, {peak} dBTP; expected about -16 LUFS and at most -1 dBTP")
         print(f"{path.name}: {frames} frames, {lufs} LUFS, {peak} dBTP, {path.stat().st_size / 1e6:.2f} MB")
+
+    pin()
 
 
 if __name__ == "__main__":

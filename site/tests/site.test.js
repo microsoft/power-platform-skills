@@ -16,6 +16,7 @@ const links = require('../lib/install-links.js');
 const { loadCatalog } = require('../lib/catalog.js');
 const render = require('../lib/render.js');
 const { build, parseArgs, MARKER } = require('../build.js');
+const media = require('../lib/media.js');
 const installer = require('../../scripts/install.js');
 
 const MARKETPLACE = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'marketplace.json'), 'utf8'));
@@ -43,9 +44,17 @@ const BAD_NAMES = [
   42,
 ];
 
+const TEMP_DIRS = [];
+
 function tempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TEMP_DIRS.push(dir);
+  return dir;
 }
+
+test.after(() => {
+  for (const dir of TEMP_DIRS) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -573,8 +582,138 @@ test('the explainer video plays only on request, with captions on, from this sit
     'assets/video/plugins-and-skills.mp4',
     'assets/video/plugins-and-skills.vtt',
   ]);
-  for (const file of files) {
-    assert.ok(fs.existsSync(path.join(outDir, file)), `${file} is not in the build`);
+  // The captions are committed with the site; the video and poster come from site-media, pinned
+  // in site/media.json, and CI checks them with build --require-media.
+  const pinned = media.loadMediaManifest(path.join(REPO_ROOT, 'site', 'media.json')).files.map((entry) => entry.path);
+  assert.deepEqual(pinned.sort(), ['assets/video/plugins-and-skills-poster.webp', 'assets/video/plugins-and-skills.mp4']);
+  assert.ok(fs.existsSync(path.join(outDir, 'assets/video/plugins-and-skills.vtt')), 'captions are not in the build');
+});
+
+// ── Site media (site-media branch) ──────────────────────────────
+
+function mediaFixture(files) {
+  const dir = tempDir('pps-site-media-');
+  const entries = Object.entries(files).map(([name, text]) => {
+    const data = Buffer.from(text);
+    fs.mkdirSync(path.join(dir, 'video'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'video', name), data);
+    return { path: `assets/video/${name}`, source: `video/${name}`, sha256: media.sha256(data), bytes: data.length };
+  });
+  return { dir, manifest: { branch: 'site-media', files: entries } };
+}
+
+test('pinned media is copied into the site only when its hash matches', () => {
+  const { dir, manifest } = mediaFixture({ 'a.mp4': 'video bytes', 'b.webp': 'poster bytes' });
+  const outDir = tempDir('pps-site-out-');
+  assert.deepEqual(media.copyMedia({ manifest, mediaDir: dir, outDir }), {
+    written: ['assets/video/a.mp4', 'assets/video/b.webp'], missing: [],
+  });
+  assert.equal(fs.readFileSync(path.join(outDir, 'assets/video/a.mp4'), 'utf8'), 'video bytes');
+
+  fs.rmSync(path.join(dir, 'video', 'b.webp'));
+  assert.deepEqual(media.copyMedia({ manifest, mediaDir: dir, outDir: tempDir('pps-site-out-') }).missing, ['video/b.webp']);
+  assert.deepEqual(media.copyMedia({ manifest, mediaDir: null, outDir: tempDir('pps-site-out-') }).missing, ['video/a.mp4', 'video/b.webp']);
+
+  fs.writeFileSync(path.join(dir, 'video', 'a.mp4'), 'video bytes, re-encoded');
+  assert.throws(() => media.copyMedia({ manifest, mediaDir: dir, outDir: tempDir('pps-site-out-') }), /not the version site\/media\.json pins/);
+});
+
+test('a build that requires media fails without it, and one that does not says what it left out', () => {
+  const outDir = path.join(tempDir('pps-site-out-'), 'dist');
+  const empty = tempDir('pps-site-media-');
+  assert.throws(() => build({ outDir, basePath: '/power-platform-skills/', mediaDir: empty, requireMedia: true }), /Run node site\/fetch-media\.js/);
+  const { missingMedia } = build({ outDir, basePath: '/power-platform-skills/', mediaDir: empty });
+  const pinned = media.loadMediaManifest(path.join(REPO_ROOT, 'site', 'media.json')).files.map((entry) => entry.source);
+  assert.deepEqual(missingMedia, pinned);
+  assert.deepEqual(parseArgs(['--media', empty, '--require-media']).requireMedia, true);
+});
+
+test('the media manifest only accepts files under assets/ with safe paths and a hash', () => {
+  const good = { path: 'assets/video/a.mp4', source: 'video/a-0123456789ab.mp4', sha256: 'a'.repeat(64), bytes: 1 };
+  const write = (value) => {
+    const file = path.join(tempDir('pps-site-manifest-'), 'media.json');
+    fs.writeFileSync(file, JSON.stringify(value));
+    return file;
+  };
+  assert.doesNotThrow(() => media.loadMediaManifest(write({ branch: 'site-media', files: [good] })));
+  for (const [label, value] of [
+    ['wrong branch', { branch: 'main', files: [good] }],
+    ['no files', { branch: 'site-media', files: [] }],
+    ['outside assets', { branch: 'site-media', files: [{ ...good, path: 'index.html' }] }],
+    ['climbs out', { branch: 'site-media', files: [{ ...good, path: 'assets/../../x' }] }],
+    ['absolute source', { branch: 'site-media', files: [{ ...good, source: '/etc/passwd' }] }],
+    ['source climbs out', { branch: 'site-media', files: [{ ...good, source: '../x' }] }],
+    ['bad hash', { branch: 'site-media', files: [{ ...good, sha256: 'xyz' }] }],
+    ['no size', { branch: 'site-media', files: [{ ...good, bytes: 0 }] }],
+    ['duplicate', { branch: 'site-media', files: [good, good] }],
+  ]) {
+    assert.throws(() => media.loadMediaManifest(write(value)), Error, label);
+  }
+});
+
+function git(args, cwd) {
+  // Fixture repositories ignore the developer's global hooks and signing settings.
+  return spawnSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', ...args], { cwd, encoding: 'utf8' });
+}
+
+test('fetch-media takes exactly the pinned files from the site-media branch', (t) => {
+  if (git(['--version']).status !== 0) {
+    t.skip('git is not installed');
+    return;
+  }
+  const { dir: content, manifest } = mediaFixture({ 'a.mp4': 'video bytes', 'b.webp': 'poster bytes' });
+  const upstream = tempDir('pps-site-upstream-');
+  assert.equal(git(['init', '--quiet', '--initial-branch', 'site-media'], upstream).status, 0);
+  fs.cpSync(content, upstream, { recursive: true });
+  fs.writeFileSync(path.join(upstream, 'video', 'unpinned.mp4'), 'an older render');
+  assert.equal(git(['add', '.'], upstream).status, 0);
+  const commit = git(['-c', 'user.name=Site test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '--no-verify', '-m', 'media'], upstream);
+  assert.equal(commit.status, 0, commit.stderr);
+
+  const clone = tempDir('pps-site-clone-');
+  assert.equal(git(['init', '--quiet'], clone).status, 0);
+  const mediaDir = path.join(clone, 'site', 'media');
+  assert.deepEqual(media.fetchMedia({ manifest, mediaDir, from: upstream, cwd: clone }).fetched, ['video/a.mp4', 'video/b.webp']);
+  assert.equal(fs.readFileSync(path.join(mediaDir, 'video', 'b.webp'), 'utf8'), 'poster bytes');
+  assert.ok(!fs.existsSync(path.join(mediaDir, 'video', 'unpinned.mp4')), 'only pinned files are fetched');
+  // Nothing to do the second time.
+  assert.deepEqual(media.fetchMedia({ manifest, mediaDir, from: upstream, cwd: clone }).fetched, []);
+  // The fetch never touches the contributor's clone: a --depth fetch there would mark the whole
+  // clone shallow, and FETCH_HEAD or a branch would show that it ran.
+  for (const name of ['shallow', 'FETCH_HEAD']) {
+    assert.ok(!fs.existsSync(path.join(clone, '.git', name)), `the fetch wrote .git/${name} in the clone`);
+  }
+  assert.equal(git(['branch', '--list'], clone).stdout.trim(), '');
+
+  // A remote name of the clone, and a subfolder of the upstream repository, both work as --from.
+  assert.equal(git(['remote', 'add', 'media-source', upstream], clone).status, 0);
+  assert.deepEqual(media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: 'media-source', cwd: clone }).fetched.length, 2);
+  assert.deepEqual(media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: 'video', cwd: upstream }).fetched.length, 2);
+
+  const unknown = { branch: 'site-media', files: [{ ...manifest.files[0], source: 'video/missing.mp4' }] };
+  assert.throws(() => media.fetchMedia({ manifest: unknown, mediaDir: tempDir('pps-site-media-'), from: upstream, cwd: clone }), /has no video\/missing\.mp4/);
+  const tampered = { branch: 'site-media', files: [{ ...manifest.files[0], sha256: 'b'.repeat(64) }] };
+  assert.throws(() => media.fetchMedia({ manifest: tampered, mediaDir: tempDir('pps-site-media-'), from: upstream, cwd: clone }), /not the version/);
+  assert.throws(() => media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: tempDir('pps-site-empty-'), cwd: clone }), /is not a URL, a Git remote, or a folder in a Git repository/);
+  const noBranch = tempDir('pps-site-nobranch-');
+  assert.equal(git(['init', '--quiet', '--initial-branch', 'main'], noBranch).status, 0);
+  assert.throws(() => media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: noBranch, cwd: clone }), /site-media branch is not on/);
+});
+
+test('no audio, video, or large file is committed under site/', (t) => {
+  // Every marketplace install clones main, so the site's media lives on the site-media branch.
+  const listed = spawnSync('git', ['ls-files', '-z', '--', 'site'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  if (listed.status !== 0) {
+    t.skip('not a Git checkout');
+    return;
+  }
+  const LIMIT = 256 * 1024;
+  for (const file of listed.stdout.split('\0').filter(Boolean)) {
+    assert.doesNotMatch(file, /\.(?:mp4|m4v|mov|webm|mkv|avi|wav|mp3|m4a|ogg|flac)$/i, `${file}: put media on the site-media branch (see site/lib/media.js)`);
+    const full = path.join(REPO_ROOT, file);
+    if (fs.existsSync(full)) {
+      assert.ok(fs.statSync(full).size <= LIMIT, `${file} is over ${LIMIT / 1024} KB: put it on the site-media branch (see site/lib/media.js)`);
+    }
   }
 });
 

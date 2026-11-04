@@ -7,11 +7,15 @@ Nothing is recorded, licensed, or sent to an online service.
 
 ## What ships
 
-`source/publish.py` writes three files to `site/assets/video/`, and the site build copies them as-is:
+`source/publish.py` produces three files for the site:
 
 - `plugins-and-skills.mp4`: 1920x1080, 60 fps, H.264 with AAC audio, about 3 MB.
-- `plugins-and-skills.vtt`: English captions, on by default.
 - `plugins-and-skills-poster.webp`: the poster, the film's summary frame.
+- `plugins-and-skills.vtt`: English captions, on by default.
+
+The captions are text, so they are committed in `site/assets/video/`.
+The video and poster are not committed on `main`, because every marketplace install clones `main`.
+They live on the `site-media` branch, and `site/media.json` pins them by hash (see the [site README](../README.md#site-media)).
 
 `site/build.js` builds the page's transcript from `timeline.json` and `Descriptions.txt`: each paragraph of narration, then what is on screen while it is spoken.
 The film shows examples the narration never says aloud, such as the skill names and their steps, so the descriptions carry them for anyone who cannot see the video.
@@ -31,7 +35,7 @@ The site tests check that the transcript, the captions, and the narration use th
 | `source/film.py` | Picture: every frame as a function of time, with preview and render commands. |
 | `source/audio.py` | Score and sound effects, the mix, and loudness mastering. |
 | `source/captions.py` | WebVTT captions from `timeline.json`. |
-| `source/publish.py` | Renders the film, writes the three site files, and checks them. |
+| `source/publish.py` | Renders the film, writes the three site files, checks them, and pins the video and poster in `site/media.json`. |
 
 Generated stems, frames, and the full-quality master go to `build/`, and the voice model goes to `models/`.
 Git ignores both.
@@ -66,7 +70,11 @@ On Windows, use `.venv\Scripts\python` where these use `.venv/bin/python`, and t
 5. Publish: `.venv/bin/python source/publish.py`.
    Rendering takes about two and a half minutes.
    The script stops with an error if the frame count, the decode, or the loudness is wrong.
+   It writes the captions to `site/assets/video/`, copies the video and poster into `site/media/video/` under names that end in the first 12 characters of their SHA-256 hash, and updates `site/media.json`.
+   The same input gives byte-identical files, so an unchanged film keeps its names and `site/media.json` does not change.
 6. Run `node site/build.js` and `node --test site/tests/site.test.js` from the repository root, then watch the film on a local preview of the site.
+7. If `site/media.json` changed, push the new files to the `site-media` branch before you open the pull request, as the [site README](../README.md#site-media) describes.
+   The pull request's checks fetch the files it pins from that branch.
 
 To change what a scene shows, edit `source/film.py`, and update `Descriptions.txt` to match.
 The named moments in `T` tie each action to a sentence of the narration, and `audio.py` times its sound effects from the same moments, so picture and sound stay in sync when the narration changes.

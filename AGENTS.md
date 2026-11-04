@@ -86,6 +86,11 @@ technology, and install steps before internals. Keep repository internals in the
 or in `docs/`. The README's install links are checked against `site/lib/install-links.js`, so a new
 marketplace plugin also needs a `site/catalog.json` entry and README install links.
 
+**Keep large binaries off `main`.** Every marketplace install clones `main`, and every update
+downloads each new version of a file again. The site's video and poster live on the never-merged
+`site-media` branch, pinned by hash in `site/media.json` (see `site/README.md`, "Site media"). A
+site test rejects audio, video, or any file over 256 KB under `site/`.
+
 ## Local Development
 
 Test a plugin locally by launching your AI agent with the plugin path:

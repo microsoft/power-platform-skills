@@ -27,8 +27,20 @@ PREMASTER = BUILD / "premaster.wav"
 FINAL_MIX = BUILD / "Final-mix.wav"
 MASTER = BUILD / "Final.mp4"
 
-# What the site ships. The names match site/lib/render.js.
+# The web copies, before they are pinned and handed to the site.
+WEB_VIDEO = BUILD / "plugins-and-skills.mp4"
+WEB_POSTER = BUILD / "plugins-and-skills-poster.webp"
+
+# The captions are text, so they are committed with the site.
 PUBLISHED = SITE / "assets" / "video"
-PUBLISHED_VIDEO = PUBLISHED / "plugins-and-skills.mp4"
 PUBLISHED_CAPTIONS = PUBLISHED / "plugins-and-skills.vtt"
-PUBLISHED_POSTER = PUBLISHED / "plugins-and-skills-poster.webp"
+
+# The video and poster are not committed on main, which every marketplace install clones. They go
+# to site/media, a local copy of the site-media branch, and site/media.json pins them by hash.
+# See site/lib/media.js. The "path" values are the URLs site/lib/render.js uses.
+MEDIA = SITE / "media"
+MEDIA_MANIFEST = SITE / "media.json"
+SITE_PATHS = {
+    WEB_VIDEO: "assets/video/plugins-and-skills.mp4",
+    WEB_POSTER: "assets/video/plugins-and-skills-poster.webp",
+}

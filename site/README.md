@@ -6,10 +6,13 @@ It is a static site with no dependencies beyond Node.js.
 ## Build and preview
 
 ```bash
+node site/fetch-media.js
 node site/build.js
 node --test site/tests/site.test.js
 ```
 
+`fetch-media.js` downloads the explainer video and poster into `site/media/` (see [Site media](#site-media)).
+Skip it if you don't need the video: the build then leaves it out with a warning, and the rest of the site works.
 The build writes to `site/dist/`, which Git ignores.
 To preview it, serve that folder with any static file server, for example `npx serve site/dist`.
 The [showcase-site workflow](../.github/workflows/showcase-site.yml) runs the tests and the build on pull requests, and deploys to GitHub Pages from `main`.
@@ -46,13 +49,55 @@ The brief and design thesis are at the top of `site/lib/render.js`.
 ## Explainer video
 
 The Questions section opens with "What are plugins and skills?", a 35-second film with captions and a transcript.
-[`site/explainer`](explainer/README.md) generates the video, its captions, and its poster into `assets/video/`, and its README explains how to change and re-render it.
+[`site/explainer`](explainer/README.md) generates the video, its captions, and its poster, and its README explains how to change and re-render it.
+The captions are committed in `assets/video/`; the video and poster come from the `site-media` branch.
 The page builds the transcript from the film's `timeline.json` and `Descriptions.txt`, so it has both the narration and a description of what is on screen.
 A test fails if the transcript, the captions, and the script disagree, if the descriptions miss text the film shows, or if the film shows a Power Pages skill that no longer exists.
 
 The video never autoplays and preloads nothing, so its 3 MB download starts only when a visitor presses play.
 Until then, `assets/site.js` shows one large play button over the poster in place of the native controls.
 The film's text is sized for a desktop embed, so on a touch screen with a narrow player that button also opens the film full screen.
+
+## Site media
+
+Marketplace installs clone `main`.
+Every byte committed there is downloaded by everyone who adds the marketplace, and every new version of a file is downloaded again on each update.
+Claude Code and GitHub Copilot CLI clone only the default branch, so the site keeps its large binary files, the explainer video and its poster, on the `site-media` branch instead.
+That branch is never merged.
+
+- `site/media.json` pins each file: where the site serves it, its path on `site-media`, its SHA-256 hash, and its size.
+- `node site/fetch-media.js` fetches only the tip of `site-media` from the public repository and writes the pinned files to `site/media/`, which Git ignores.
+  It fetches into a temporary repository and deletes it, so it never changes your clone.
+  `--from <remote or path>` fetches from somewhere else, for example `--from .` for a local branch you have not pushed yet.
+- `node site/build.js` checks each file's hash and copies it into the site.
+  A different file stops the build, and `--require-media` also stops it when a file is missing.
+  The workflow fetches the media and builds with `--require-media` on every pull request and deploy.
+- A test fails if anyone commits audio, video, or a file over 256 KB under `site/`.
+
+Files on `site-media` are named by their hash, so a new version sits next to the old one.
+To publish one:
+
+1. Run the film's publish step, which writes the new files to `site/media/video/` and updates `site/media.json` (see [`explainer/README.md`](explainer/README.md)).
+2. Commit the new files to `site-media` and push it, from the repository root:
+
+   ```bash
+   git fetch origin site-media
+   git worktree add --detach ../site-media-worktree origin/site-media
+   ```
+
+   Copy the new files from `site/media/video/` to `../site-media-worktree/video/`, then:
+
+   ```bash
+   git -C ../site-media-worktree add video
+   git -C ../site-media-worktree commit -m "Add the re-rendered explainer video"
+   git -C ../site-media-worktree push origin HEAD:site-media
+   git worktree remove ../site-media-worktree
+   ```
+
+3. Open the pull request on `main` with the new `site/media.json`.
+   `main` keeps deploying the files it pins until that pull request merges.
+
+Keep old files on `site-media` until `main` no longer pins them.
 
 ## Check a design change
 
