@@ -40,7 +40,8 @@ if (require.main === module) {
     const { from } = parseArgs(process.argv.slice(2));
     const manifest = loadMediaManifest(path.join(SITE_DIR, 'media.json'));
     const mediaDir = path.join(SITE_DIR, 'media');
-    const { fetched } = fetchMedia({ manifest, mediaDir, from, cwd: SITE_DIR });
+    // Remote names resolve in the site's repository; relative folders from where this was run.
+    const { fetched } = fetchMedia({ manifest, mediaDir, from, cwd: SITE_DIR, pathBase: process.cwd() });
     console.log(fetched.length ? `Fetched ${fetched.join(', ')} into site/media` : 'site/media already has every pinned file');
   } catch (error) {
     console.error(error.message);

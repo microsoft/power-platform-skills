@@ -94,8 +94,9 @@ function git(args, cwd) {
 // Turns --from into something a fresh repository can fetch from: a URL as is, a remote name of
 // the repository in cwd as its URL, and a folder as the path of its Git directory. git fetch
 // accepts a remote name only in the repository that defines it, and a folder only at the top of
-// a repository, not a subfolder.
-function resolveSource(from, cwd) {
+// a repository, not a subfolder. A relative folder is relative to pathBase, the directory the
+// command was run from, as a user expects; remote names still belong to the site's repository.
+function resolveSource(from, cwd, pathBase = cwd) {
   // "https://host/owner/repo.git", "ssh://...", or scp-like "git@host:owner/repo.git".
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(from) || /^[^/\\:]+@[^/\\:]+:/.test(from)) return from;
   try {
@@ -103,7 +104,7 @@ function resolveSource(from, cwd) {
   } catch {
     // Not a remote name; try it as a folder.
   }
-  const folder = path.resolve(cwd, from);
+  const folder = path.resolve(pathBase, from);
   if (fs.existsSync(folder)) {
     try {
       return path.resolve(folder, git(['rev-parse', '--git-common-dir'], folder).toString().trim());
@@ -122,7 +123,7 @@ function resolveSource(from, cwd) {
 // A --depth fetch records the fetched commit in the repository's shared "shallow" file, which
 // would turn a full clone (and every worktree of it) into a shallow one, and would also drop
 // local history of site-media. A throwaway repository keeps all of that out of their clone.
-function fetchMedia({ manifest, mediaDir, from, cwd }) {
+function fetchMedia({ manifest, mediaDir, from, cwd, pathBase = cwd }) {
   const needed = manifest.files.filter((entry) => {
     const file = path.join(mediaDir, entry.source);
     if (!fs.existsSync(file)) return true;
@@ -131,7 +132,7 @@ function fetchMedia({ manifest, mediaDir, from, cwd }) {
   });
   if (needed.length === 0) return { fetched: [] };
 
-  const source = resolveSource(from, cwd);
+  const source = resolveSource(from, cwd, pathBase);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'pps-site-media-'));
   try {
     const repo = (args) => git([`--git-dir=${scratch}`, ...args]);

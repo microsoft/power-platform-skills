@@ -689,6 +689,12 @@ test('fetch-media takes exactly the pinned files from the site-media branch', (t
   assert.equal(git(['remote', 'add', 'media-source', upstream], clone).status, 0);
   assert.deepEqual(media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: 'media-source', cwd: clone }).fetched.length, 2);
   assert.deepEqual(media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: 'video', cwd: upstream }).fetched.length, 2);
+  // A relative folder is relative to where the command was run (pathBase), not to cwd, while a
+  // remote name still resolves in cwd's repository.
+  const relative = path.relative(path.dirname(upstream), upstream);
+  assert.deepEqual(media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: relative, cwd: clone, pathBase: path.dirname(upstream) }).fetched.length, 2);
+  assert.throws(() => media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: relative, cwd: clone }), /is not a URL, a Git remote, or a folder/);
+  assert.deepEqual(media.fetchMedia({ manifest, mediaDir: tempDir('pps-site-media-'), from: 'media-source', cwd: clone, pathBase: os.tmpdir() }).fetched.length, 2);
 
   const unknown = { branch: 'site-media', files: [{ ...manifest.files[0], source: 'video/missing.mp4' }] };
   assert.throws(() => media.fetchMedia({ manifest: unknown, mediaDir: tempDir('pps-site-media-'), from: upstream, cwd: clone }), /has no video\/missing\.mp4/);
