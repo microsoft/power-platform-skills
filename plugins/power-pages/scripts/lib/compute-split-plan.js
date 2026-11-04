@@ -196,6 +196,18 @@ function selectStrategy(estimate, config) {
 
 // --- Partitioning -----------------------------------------------------------
 
+// Integration-tier site components that every multi-solution partition must give an
+// owner, or setup-solution Step 5.6.3 stops on an unmatched type:
+//   - 'Site Connection' (ppc type 36) and 'Server Logic' (ppc type 35) call
+//     connectors / external services from the site;
+//   - 'Connection Reference' is the Dataverse record a site connection (or a cloud
+//     flow) binds to, so it travels with the components that use it.
+// Custom connectors are deliberately NOT routed here: Microsoft requires them in their
+// own solution imported before any connection reference that uses them, so
+// setup-solution creates a separate connectors solution outside the split plan.
+// https://learn.microsoft.com/en-us/connectors/custom-connectors/customconnectorssolutions#known-limitations
+const SITE_INTEGRATION_TYPES = Object.freeze(['Connection Reference', 'Site Connection', 'Server Logic']);
+
 function partitionBySingle(estimate, meta) {
   return [
     {
@@ -220,7 +232,7 @@ function partitionByLayer(estimate, meta) {
       uniqueName: `${meta.baseName}_Core`,
       displayName: `${meta.siteName} — Core`,
       order: 1,
-      componentTypes: ['Table', 'Site Setting', 'Web Role', 'Table Permission', 'Cloud Flow', 'Environment Variable', 'Bot Component'],
+      componentTypes: ['Table', 'Site Setting', 'Web Role', 'Table Permission', 'Cloud Flow', 'Environment Variable', 'Bot Component', ...SITE_INTEGRATION_TYPES],
       description:
         'Tables, security, integrations, site settings, environment variables. Low change frequency.',
       sizeMB: round(coreSize),
@@ -272,7 +284,7 @@ function partitionByChangeFrequency(estimate, meta) {
       uniqueName: `${meta.baseName}_Integration`,
       displayName: `${meta.siteName} — Integration`,
       order: 2,
-      componentTypes: ['Cloud Flow', 'Bot Component', 'Connection Reference'],
+      componentTypes: ['Cloud Flow', 'Bot Component', ...SITE_INTEGRATION_TYPES],
       description: 'Cloud flows, bots, connection references.',
       sizeMB: sizeFor(integrationCount),
       componentCount: integrationCount,
@@ -355,7 +367,7 @@ function partitionBySchema(estimate, meta, config) {
     uniqueName: `${meta.baseName}_Site`,
     displayName: `${meta.siteName} — Site`,
     order: siteOrder,
-    componentTypes: ['Web Role', 'Table Permission', 'Site Setting', 'Cloud Flow', 'Web File', 'Web Page', 'Web Template'],
+    componentTypes: ['Web Role', 'Table Permission', 'Site Setting', 'Cloud Flow', 'Web File', 'Web Page', 'Web Template', ...SITE_INTEGRATION_TYPES],
     description:
       'Site artifacts — web roles, permissions, settings, flows, pages. Imports after all domain solutions.',
     sizeMB: round(siteSizeMB),
@@ -611,7 +623,7 @@ function buildSubChildren(parent, estimate, thresholds, startOrder, opts = {}) {
   const parentHasIntegrationTypes =
     parentTypes.includes('Cloud Flow') ||
     parentTypes.includes('Bot Component') ||
-    parentTypes.includes('Connection Reference');
+    SITE_INTEGRATION_TYPES.some((t) => parentTypes.includes(t));
   const includeIntegration = flows > 0 || parentHasIntegrationTypes;
 
   // additiveStrategy4 flips the _Config componentTypes: when the top-level
@@ -653,7 +665,7 @@ function buildSubChildren(parent, estimate, thresholds, startOrder, opts = {}) {
       uniqueName: `${parent.uniqueName}_Integration`,
       displayName: `${parent.displayName} — Integration`,
       order: order++,
-      componentTypes: ['Cloud Flow', 'Bot Component', 'Connection Reference'],
+      componentTypes: ['Cloud Flow', 'Bot Component', ...SITE_INTEGRATION_TYPES],
       description: `Sub-partition of ${parent.uniqueName}: cloud flows, bots, connection references.`,
       sizeMB: sizeFor(integration),
       componentCount: integration,
@@ -915,4 +927,5 @@ module.exports = {
   validateSplits,
   buildRecommendations,
   subPartitionIfOverCap,
+  SITE_INTEGRATION_TYPES,
 };

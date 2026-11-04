@@ -799,3 +799,40 @@ test('Strategy 3: an oversized single cluster (>cap) stays whole + raises a warn
   assert.equal(tableSolutions[0].tableLogicalNames.length, 25);
   assert.ok(result.recommendations.some((r) => /dependency cluster that cannot be split/.test(r.message)), 'oversized-cluster warning must fire');
 });
+
+// --- Site connections / server logic / connection references routing ------
+
+test('every multi-solution strategy gives Site Connection, Server Logic and Connection Reference exactly one owner', () => {
+  const { SITE_INTEGRATION_TYPES } = require('../lib/compute-split-plan');
+  assert.deepEqual([...SITE_INTEGRATION_TYPES], ['Connection Reference', 'Site Connection', 'Server Logic']);
+
+  const scenarios = [
+    { label: 'layer', estimate: baseEstimate({ totalSizeMB: 142, webFilesAggregateMB: 110 }), config: baseConfig() },
+    { label: 'change-frequency', estimate: baseEstimate({ totalSizeMB: 74, componentCountSiteTotal: 7200, cloudFlowCount: 12 }), config: baseConfig() },
+    {
+      label: 'schema',
+      estimate: baseEstimate({ tableCount: 34, schemaAttrCount: 32000 }),
+      config: baseConfig({ domains: [{ name: 'Catalog', tableLogicalNames: ['tst_product'] }] }),
+    },
+    {
+      label: 'layer + sub-partition',
+      estimate: baseEstimate({ totalSizeMB: 200, webFilesAggregateMB: 110, componentCountSiteTotal: 8000, webFileCount: 400, cloudFlowCount: 0 }),
+      config: baseConfig(),
+    },
+  ];
+  for (const s of scenarios) {
+    const result = computeSplitPlan({ estimate: s.estimate, config: s.config, meta: { baseName: 'Test', siteName: 'Test Site' } });
+    const owners = (type) => result.proposedSolutions
+      .filter((sol) => !sol.isFutureBuffer && (sol.componentTypes || []).includes(type))
+      .map((sol) => sol.uniqueName);
+    for (const type of SITE_INTEGRATION_TYPES) {
+      assert.equal(owners(type).length, 1, `${s.label}: '${type}' owners = ${JSON.stringify(owners(type))}`);
+    }
+  }
+});
+
+test('single-solution plans stay one solution — site connection types ride the All partition', () => {
+  const result = computeSplitPlan({ estimate: baseEstimate(), config: baseConfig(), meta: { baseName: 'Test', siteName: 'Test Site' } });
+  assert.equal(result.proposedSolutions.length, 1);
+  assert.deepEqual(result.proposedSolutions[0].componentTypes, ['All']);
+});

@@ -283,7 +283,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.2 `setup-solution` (13 calls)
+### 6.2 `setup-solution` (14 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -292,6 +292,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `setup-solution:1.preloaded` | gate | plan | 1 | `docs/alm/alm-plan-context.json` present — *"Use pre-loaded choices? / Re-discover"* | nothing |
 | `setup-solution:1.stale-manifest` | gate | consent | 1 | Manifest references a solution not in env — *"Start fresh (back up) / Abort"* | nothing |
 | `setup-solution:2.publisher-prefix` | gate | consent | 2 | Publisher prefix selection — *"This is PERMANENT — confirm"* | nothing |
+| `setup-solution:5.2b.connector-migration` | gate | consent | 5.2b | Site connection uses a custom connector that is not solution-aware — *"Make it solution-aware in the connectors solution? Yes / I'll do it in the maker portal"* (one prompt per connector) | nothing |
 | `setup-solution:5.4a.promote` | gate | plan | 5.4A | `multiSelect` over auth settings — *"Which to promote to env vars?"* | nothing |
 | `setup-solution:5.4c.credentials` | gate | consent | 5.4C.2 | Bulk credential handling — *"Secret env var / String env var / Skip per credential"* | nothing |
 | `setup-solution:5.4b.orphan-envvars` | gate | plan | 5.4b | `DEFAULT-ONLY` env vars found — *"Which to adopt?"* (multiSelect) | nothing |
@@ -321,7 +322,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.4 `deploy-pipeline` (18 gates / 3 sub-prompts; 21 calls total)
+### 6.4 `deploy-pipeline` (19 gates / 3 sub-prompts; 22 calls total)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -335,6 +336,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `deploy-pipeline:3.6.batch-validation-failed` | gate | plan | 3.6 | `MULTI_RUN_MODE` parallel-validation batch — one or more solutions failed or timed out — *"Abort (Recommended) / Deploy succeeded subset only (advanced) / Cancel"* | `validated-stage-run` |
 | `deploy-pipeline:4.pending-approval` | gate | pause | 4 | `stagerunstatus=200000005` during validation (single-solution / legacy v2 only — `MULTI_RUN_MODE` handles approval via `3.6.batch-pending-approval` instead) — *"Approved in PPAC? Yes / Cancel"* | `external-state-pending` |
 | `deploy-pipeline:5.env-vars` | gate | plan | 5 | Unconfigured env vars per stage — *"Enter values"* | nothing |
+| `deploy-pipeline:5.connection-references` | gate | plan | 5.1c | Connection references in the artifact with no target connection for this stage — *"Which connection should {logicalName} use? / None yet"* (one prompt per reference; no deploy with an unbound reference) | nothing |
 | `deploy-pipeline:6.0.final-consent` | gate | final | 6.0 | About to fire `DeployPackageAsync` — *"Deploy now / Cancel"* | `validated-stage-run` |
 | `deploy-pipeline:6.pending-approval` | gate | pause | 6 | `stagerunstatus=200000005` mid-deploy — *"Approved? Yes / Cancel"* | `external-state-pending` |
 | `deploy-pipeline:7.6.2.blocked-attachments` | gate | consent | 7.6.2 | Reactive `AttachmentBlocked` — *"Modify `blockedattachments`? Yes / No"* | `attachment-block-modified` |
@@ -362,7 +364,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.6 `import-solution` (11 calls)
+### 6.6 `import-solution` (12 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -372,6 +374,7 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `import-solution:3.0.version-skew` | gate | consent | 3.0 | Zip version `≤` installed target version — *"Re-export with bump / Import anyway / Cancel"* | nothing |
 | `import-solution:3.config` | gate | plan | 3 | Import config — *"Staged dependency check / direct / overwrite options"* | nothing |
 | `import-solution:5b.blocked-attachments` | gate | consent | 5b.3 | `AttachmentBlocked` during import — *"Modify `blockedattachments` and retry? Yes / Skip"* | `attachment-block-modified` |
+| `import-solution:6a.connection-references` | gate | plan | 6a | Imported connection references are unbound — *"Which connection should {logicalName} use? / None yet"* (one prompt per reference) | nothing |
 | `import-solution:6b.env-vars` | gate | plan | 6b | Env vars need per-stage values — *"Enter values"* | nothing |
 | `import-solution:6c.cloud-flow-register` | gate | plan | 6c | Cloud flows in imported solution — *"Registered? Yes / Later"* | nothing |
 | `import-solution:6d.activate` | gate | plan | 6d | Site present but not activated — *"Activate now / later"* | nothing |

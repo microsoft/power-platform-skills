@@ -7,6 +7,7 @@
 // Usage:
 //   node discover-site-components.js --envUrl <url> --siteId <guid> [--token <t>]
 //                                    [--publisherPrefix <p>] [--solutionId <guid>]
+//                                    [--connectorSolutionId <guid>]
 //
 // Output (JSON to stdout):
 //   {
@@ -20,6 +21,10 @@
 //     cloudFlows: [{ id, name, state, category }],
 //     envVars: [{ id, schemaName, displayName, type, defaultValue }],
 //     customTables: [{ logicalName, schemaName, displayName }],
+//     siteConnections: null | {   // null when the site has no type-36 site connections
+//       siteConnections, connectionReferences, connectors, customConnectors,
+//       componentTypes: { connectionReference, connector }, problems
+//     },                          // shape: site-connections.js#discoverSiteConnectionDependencies
 //     inSolution: {               // only present when --solutionId passed
 //       total, objectIds: Set<string>, byType: { <componenttype>: N }
 //     },
@@ -28,7 +33,10 @@
 //       siteLanguages: [...],
 //       cloudFlows: [...],
 //       envVars: [...],
-//       customTables: [...]
+//       customTables: [...],
+//       connectionReferences: [...],  // used by site connections, not in the solution
+//       customConnectors: [...]       // not solution-aware, or (with --connectorSolutionId)
+//                                     // not in the connectors solution
 //     }
 //   }
 //
@@ -55,6 +63,12 @@
 const helpers = require('./validation-helpers');
 const { queryCustomUnmanagedTables } = require('./query-metadata');
 const { collectReferencedEntityNames, scopeCustomTables } = require('./resolve-site-tables');
+const {
+  SITE_CONNECTION_PPC_TYPE,
+  discoverSiteConnectionDependencies,
+  computeMissing: computeSiteConnectionMissing,
+  fetchSolutionObjectIds,
+} = require('./site-connections');
 
 /** Authoritative picklist labels for powerpagecomponenttype. */
 const PPC_TYPE_LABELS = Object.freeze({
@@ -89,6 +103,7 @@ const PPC_TYPE_LABELS = Object.freeze({
   33: 'Cloud Flow',
   34: 'UX Component',
   35: 'Server Logic',
+  36: 'Site Connection',
 });
 
 /**
@@ -109,6 +124,7 @@ function parseArgs(argv) {
     siteId: null,
     publisherPrefix: null,
     solutionId: null,
+    connectorSolutionId: null,
     projectRoot: null,
     datamodelManifestPath: null,
   };
@@ -118,6 +134,7 @@ function parseArgs(argv) {
     else if (args[i] === '--siteId' && args[i + 1]) out.siteId = args[++i];
     else if (args[i] === '--publisherPrefix' && args[i + 1]) out.publisherPrefix = args[++i];
     else if (args[i] === '--solutionId' && args[i + 1]) out.solutionId = args[++i];
+    else if (args[i] === '--connectorSolutionId' && args[i + 1]) out.connectorSolutionId = args[++i];
     else if (args[i] === '--projectRoot' && args[i + 1]) out.projectRoot = args[++i];
     else if (args[i] === '--datamodelManifest' && args[i + 1]) out.datamodelManifestPath = args[++i];
   }
@@ -164,6 +181,8 @@ async function odataGetAll(url, token, makeRequest = helpers.makeRequest) {
  * @param {string} args.siteId - powerpagesite GUID
  * @param {string} [args.publisherPrefix] - when provided, filters env vars + custom tables
  * @param {string} [args.solutionId] - when provided, computes `inSolution` and `missing` diff
+ * @param {string} [args.connectorSolutionId] - the separate connectors solution; when
+ *   provided, `missing.customConnectors` also flags solution-aware connectors not in it
  * @param {Function} [args.makeRequest] - injected for tests
  */
 async function discoverSiteComponents({
@@ -172,6 +191,7 @@ async function discoverSiteComponents({
   siteId,
   publisherPrefix = null,
   solutionId = null,
+  connectorSolutionId = null,
   projectRoot = null,
   datamodelManifestPath = null,
   makeRequest = helpers.makeRequest,
@@ -248,6 +268,15 @@ async function discoverSiteComponents({
     baseUrl, token, projectRoot, datamodelManifestPath, makeRequest,
   });
 
+  // 6) Site connections (ppc type 36) depend on Dataverse connection references —
+  //    and those on connectors — that are NOT powerpagecomponents, so the ppc
+  //    inventory alone ships a solution that exports without them (or fails export
+  //    with 0x80040265 for a custom connector). Only queried when the site has site
+  //    connections, so sites without them make no extra requests.
+  const siteConnections = (ppcByType[String(SITE_CONNECTION_PPC_TYPE)] || []).length > 0
+    ? await discoverSiteConnectionDependencies({ envUrl: baseUrl, token, siteId, makeRequest })
+    : null;
+
   const result = {
     siteId,
     powerpagecomponents: {
@@ -259,6 +288,7 @@ async function discoverSiteComponents({
     cloudFlows,
     envVars,
     customTables,
+    siteConnections,
   };
 
   // 5) Optional: diff against an existing solution
@@ -302,12 +332,28 @@ async function discoverSiteComponents({
       (t) => !inSolutionIds.has((t.id || '').toLowerCase())
     );
 
+    // Custom connectors ship in the separate connectors solution, never in this one,
+    // so diffing them against THIS solution would report a correct setup as a gap on
+    // every run. Check them against the connectors solution when its id is known;
+    // otherwise only a non-solution-aware connector is missing.
+    let connectorSolutionObjectIds = null;
+    if (siteConnections && connectorSolutionId) {
+      connectorSolutionObjectIds = await fetchSolutionObjectIds({
+        envUrl: baseUrl, token, solutionIds: [connectorSolutionId], makeRequest,
+      });
+    }
+    const siteConnectionMissing = siteConnections
+      ? computeSiteConnectionMissing(siteConnections, inSolutionIds, { connectorSolutionObjectIds })
+      : { connectionReferences: [], customConnectors: [] };
+
     result.missing = {
       powerpagecomponents: missingPpc,
       siteLanguages: missingLanguages,
       cloudFlows: missingFlows,
       envVars: missingEnvVars,
       customTables: missingTables,
+      connectionReferences: siteConnectionMissing.connectionReferences,
+      customConnectors: siteConnectionMissing.customConnectors,
     };
   }
 

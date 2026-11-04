@@ -172,6 +172,45 @@ test('URL validation rejects malicious hosts, credentials, ports, fragments, and
   );
 });
 
+// --- environment-routed Power Platform API host allowlist -------------------
+
+test('isEnvironmentApiHost accepts only the exact per-environment host shape', () => {
+  const { isEnvironmentApiHost, validateAuthenticatedRequestUrl } = require(helpersPath);
+  // Public cloud: 30 + 2 hex characters.
+  assert.equal(isEnvironmentApiHost('0123456789abcdef0123456789abcd.ef.environment.api.powerplatform.com'), true);
+  // Default environment: "default" + 30 + 2.
+  assert.equal(isEnvironmentApiHost('default0123456789abcdef0123456789abcd.ef.environment.api.powerplatform.com'), true);
+  // US Government clouds shard on the last 1 character.
+  assert.equal(isEnvironmentApiHost('0123456789abcdef0123456789abcde.f.environment.api.gov.powerplatform.microsoft.us'), true);
+  assert.equal(isEnvironmentApiHost('0123456789abcdef0123456789abcde.f.environment.api.appsplatform.us'), true);
+
+  const rejected = [
+    // wrong shard length for the cloud
+    '0123456789abcdef0123456789abcde.f.environment.api.powerplatform.com',
+    // not 32 hex characters in total
+    '0123456789abcdef.ef.environment.api.powerplatform.com',
+    // non-hex label
+    'zz23456789abcdef0123456789abcd.ef.environment.api.powerplatform.com',
+    // unknown suffix / look-alike
+    '0123456789abcdef0123456789abcd.ef.environment.api.powerplatform.com.attacker.invalid',
+    '0123456789abcdef0123456789abcd.ef.environment.api.example.com',
+    'environment.api.powerplatform.com',
+    '',
+  ];
+  for (const host of rejected) {
+    assert.equal(isEnvironmentApiHost(host), false, host);
+  }
+
+  assert.equal(
+    validateAuthenticatedRequestUrl('https://0123456789abcdef0123456789abcd.ef.environment.api.powerplatform.com/connectivity/connectors?api-version=1'),
+    'https://0123456789abcdef0123456789abcd.ef.environment.api.powerplatform.com/connectivity/connectors?api-version=1',
+  );
+  assert.throws(
+    () => validateAuthenticatedRequestUrl('https://evil.ef.environment.api.powerplatform.com/x'),
+    /not an allowed Microsoft Dataverse or Power Platform endpoint/,
+  );
+});
+
 // --- findProjectRoot: declarative data-model site awareness ------------------
 
 test('findProjectRoot recognizes a declarative .powerpages-site directory as a project root', (t) => {

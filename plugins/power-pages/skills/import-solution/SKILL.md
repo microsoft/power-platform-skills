@@ -162,13 +162,19 @@ Build a `postImportWarnings` list from the results:
 
 | Finding | Warning to surface |
 |---|---|
-| `connectionreference` count > 0 | "⚠️ **Connection references**: This solution includes N connection(s) (e.g. Dataverse connector). After import, you must bind each connection reference to a live connection in the target environment, or cloud flows that depend on them will be disabled." |
+| `connectionreference` count > 0 | "⚠️ **Connection references**: This solution includes N connection reference(s). They import **unbound** — Phase 6a binds each one to a live connection in the target. Until then, cloud flows that use them stay disabled and site connections that use them fail at runtime." |
 | `bots/` folder present | "⚠️ **Copilot Studio bot**: This solution includes a bot. After import, the bot must be republished in the target environment to complete provisioning." |
 | Hardcoded org URL found | "⚠️ **Hardcoded environment URL**: The cloud flow contains a hardcoded environment URL (`{foundUrl}`). This will cause the flow to call the source environment after import. Edit the flow in the target environment to update the URL." |
 
 If `postImportWarnings` is non-empty, display all warnings inline (not via `AskUserQuestion`) before presenting the zip details. The user should see these before confirming.
 
 Present the selected zip file details (name, size, path), any pre-import warnings, and confirm with user.
+
+**Step 5c — Connectors solution goes first.** If `.solution-manifest.json` has a `connectorSolution` block (or `docs/alm/last-export.json` has `connectorSolution.zipPath`), the site's site connections use custom connectors that ship in their own solution. Microsoft requires that solution to be imported **before** any solution carrying connection references for those connectors ([known limitations](https://learn.microsoft.com/en-us/connectors/custom-connectors/customconnectorssolutions#known-limitations)). Check the target:
+```
+GET {envUrl}/api/data/v9.2/solutions?$filter=uniquename eq '{connectorSolution.uniqueName}'&$select=version
+```
+If it is missing or older than the exported connectors zip, run Phases 3–6 for the connectors zip first (no Phase 6a–6d — it carries only connectors), then continue with the selected site solution zip. If the connectors zip can't be found, STOP and point the user at `/power-pages:export-solution`, which exports both.
 
 ### Phase 3 — Configure Import
 
@@ -391,6 +397,45 @@ Re-encode the zip and retry `ImportSolutionAsync` (repeat Phase 5 steps 1–4 an
    ```
    Otherwise leave `versionSkew: null`.
 
+### Phase 6a — Bind Connection References and Verify Site Connections (if any)
+
+Skip when the Step 5a `connectionreference` count was 0.
+
+Connection references import **unbound** — the solution carries the logical name and connector, never the connection. Their ids also change on import, which is why site connections resolve them by `connectionreferencelogicalname`. A site connection whose connection reference has no connection fails at runtime, so bind them now.
+
+1. **List what was imported** (target environment, the imported solution's id from Phase 6 step 1):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/connection-references.js" list-solution \
+     --envUrl "{targetEnvUrl}" --solutionIds "{importedSolutionId}"
+   ```
+   References with a non-empty `connectionId` are already bound (re-import of an upgraded solution keeps bindings) — skip them.
+2. **Resolve a connection for each unbound reference.** Use a matching `ConnectionReferences` entry from `deployment-settings.json` for this target (stage label = the target environment's label in the ALM plan, e.g. `Staging`) when one exists. Otherwise list the target's connections for the reference's connector (environment id from `pac env who` on the target):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/connection-references.js" list-connections \
+     --environmentId "{targetEnvironmentId}" --connector "{connectorName}"
+   ```
+
+   <!-- gate: import-solution:6a.connection-references | category=plan | cancel-leaves=nothing -->
+   > 🚦 **Gate (plan · import-solution:6a.connection-references):** Imported connection references need a target connection each. User picks one per reference (or creates one first). Cancel leaves them unbound — no writes yet.
+
+   Ask via `AskUserQuestion`, one question per unbound reference: *"Which connection in `{targetEnvUrl}` should `{logicalName}` ({connector display name}) use?"* — options are the listed connections (`displayName — status`, `Connected` ones first) plus *"None yet — I'll create one in the maker portal"*. If the user has no connection, tell them to create it (maker portal → **Connections → New connection**) and re-run this phase.
+3. **Save and bind.** Write the choices to `deployment-settings.json` (the same per-stage store `deploy-pipeline` uses) and bind them by logical name:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/connection-references.js" save-settings \
+     --settingsFile "./deployment-settings.json" --stageLabel "{stageLabel}" --entriesFile "{tmpEntries.json}"
+   node "${PLUGIN_ROOT}/scripts/lib/connection-references.js" bind \
+     --envUrl "{targetEnvUrl}" --settingsFile "./deployment-settings.json" --stageLabel "{stageLabel}"
+   ```
+   `{tmpEntries.json}` is a JSON array of `{ "LogicalName", "ConnectionId", "ConnectorId" }` (`ConnectionId` = the chosen connection's `connectionId`, `ConnectorId` = its `connectorId` from `list-connections`); delete it afterwards. `list-solution` runs in the target here, so its `connectorId` is already the target's — a custom connector has a different internal name in every environment. Report any `not-found` / `failed` entry from `bind`.
+4. **Verify site connections** (Power Pages solutions only — site id from `.solution-manifest.json` / `detect-project-context.js`):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/verify-site-connections.js" \
+     --envUrl "{targetEnvUrl}" --siteId "{websiteRecordId}" --environmentId "{targetEnvironmentId}"
+   ```
+   Show each `fail` / `warn` result with its `message`. `LOGICAL_NAME_MISSING` means the site connection was saved without `connectionreferencelogicalname` in the source and cannot resolve here — it must be fixed in the source and redeployed (this skill does not rewrite site connection content). Do not block the summary — the import itself succeeded.
+
+Remind the user that **Connector Integration** must also be enabled for the site in the target after activation (in the site's details in the Power Platform admin center), otherwise site connections are not served.
+
 ### Phase 6b — Set Environment Variable Values (if any)
 
 After a successful import, env var **definitions** travel in the solution but their **values do not**. The target environment will have the definition records but blank values until explicitly set.
@@ -523,6 +568,9 @@ Display a summary table:
 | Managed | Yes / No |
 | Components imported | N success, N warning, N failure |
 | Env var values set | N of N |
+| Connection references | N of M bound (if any) |
+| Site connections | P pass / F fail (if any — from `verify-site-connections.js`) |
+| Connectors solution | `{connectorSolution.uniqueName}` imported first (if any) |
 | Cloud flows | `{cloudFlowStatus}` (Registered / Pending registration / Not applicable) |
 | Site activation | Activated at `{siteUrl}` / Pending / Not applicable |
 | Import job | `{importJobId}` |
@@ -557,9 +605,10 @@ If `--stageName` is omitted the helper falls back to matching `docs/alm/last-imp
 4. **Phase 3**: Staged vs direct import; overwrite customizations
 5. **Phase 4**: Proceed despite missing dependencies
 6. **Phase 5b**: Consent to unblock attachment types — never modify environment settings without explicit approval
-7. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
-8. **Phase 6c**: Cloud flow registration — non-blocking; user may register later; status recorded in summary
-9. **Phase 6d**: Site activation — only if Power Pages website components present and site not yet activated
+7. **Phase 6a**: Connection reference bindings — one target connection per imported, unbound connection reference
+8. **Phase 6b**: Env var values — always prompted if solution contains env var definitions with no existing value in the target; Secret type definitions require the user's target-environment-specific secret value
+9. **Phase 6c**: Cloud flow registration — non-blocking; user may register later; status recorded in summary
+10. **Phase 6d**: Site activation — only if Power Pages website components present and site not yet activated
 
 ## Error Handling
 
@@ -579,6 +628,7 @@ If `--stageName` is omitted the helper falls back to matching `docs/alm/last-imp
 | Stage solution (dependency check) | Staging solution | Run StageSolution to check for missing dependencies before committing |
 | Import solution | Importing solution | POST ImportSolutionAsync, poll until complete; if AttachmentBlocked: identify blocked types, get user consent, unblock via pac env update-settings, retry |
 | Verify import | Verifying import | Confirm solution version in target, parse component results, write docs/alm/last-import.json |
+| Bind connection references | Binding connection references | Phase 6a: list imported connection references, pick a target connection for each unbound one (deployment-settings.json or prompt), bind by logical name via connection-references.js, verify site connections via verify-site-connections.js |
 | Detect cloud flows | Detecting cloud flows | List Workflows/*.json entries in zip; if found, prompt user to register flows with Power Pages site; record status (Registered / Pending registration) |
 | Check site activation | Checking site activation | If solution has componentType 10374: run check-activation-status.js; if not activated, ask user and invoke /power-pages:activate-site |
 | Present summary | Presenting summary | Show component counts (success/warning/failure), cloud flow registration status, site activation status, env var values set |
