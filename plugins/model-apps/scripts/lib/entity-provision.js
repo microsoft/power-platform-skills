@@ -2830,6 +2830,15 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           unprovenTables.add(logical);
         }
       }, { recoverable: true });
+      // A table found only after its create was answered "already exists" has its columns read now, as one the first lookup found does:
+      // the Date and Time guard below picks the declared repairs from them, so an authorized repair is made (and a refused one stops the
+      // build) BEFORE a column is added, in this build, and a column the table has is not sent again. The read is the same narrow one, and
+      // an unreadable answer leaves every declared column looking new, as before. A table that declares no column has nothing the read
+      // decides, so it is not read.
+      if (foundAfterCreate && buildable.length) {
+        existingColRows = await findExistingColumns(provision, logical, warn);
+        existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
+      }
     }
     // The primary name column's length, when the spec asks for one: one narrated step in every case (the plan counts it). For a
     // table this build created the step is queued here and runs at the end of the phase (provisionDataModel) — a label-bearing
@@ -3041,7 +3050,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // already existed (reconcileColumnSecurity). A secured column is secured in this phase, before any sample row is written. Never on a
     // Customer column (validation refuses it: updateColumn refuses every change to one), and the required and capability updates above
     // never carry it. A Lookup column is reconciled after the relationships that create it.
-    const securityTargets = existingTable ? new Set([...existingCols, ...skippedExisting]) : skippedExisting;
+    const securityTargets = (existingTable || foundAfterCreate) ? new Set([...existingCols, ...skippedExisting]) : skippedExisting;
     await reconcileColumnSecurity({ sdk, provision, runner, name: e.schemaName, logical, columns: buildable.filter((c) => c.type !== 'Customer'), targets: securityTargets, authorizedDestructive });
     for (const c of requiredDeclared) {
       if (existingTable && existingCols.has(c.schemaName.toLowerCase())) continue;
