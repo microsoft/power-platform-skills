@@ -12,7 +12,7 @@
 | Stage | Oracle | Plugin primitive |
 |---|---|---|
 | **author** | `validateAppSpec(plan profile)` passes · no lint errors · artifact names are table/type-scoped · ASCII page-quote warnings stay visible without changing approved names. Other advisories remain non-fatal. | `app-spec.js`, `spec-lint.js` |
-| **author** (optional capabilities) | Off unless the prompt asks for them, on every fixture: `app.theme`, a configuration item (`environmentVariables`, `connectionReferences`, `customApis`, `duplicateDetectionRules`, `solution.version`) and a declared form, dashboard, business rule or process flow (`reconcile: "declared"`) are present only when `expect` says the prompt asked. What it asked for must be there, graded by kind and table only (`expect.declared`: names, stage labels, tile order and scope are not compared; each eval's own assertions grade the shape), so a deleted artifact, a dropped `reconcile`, a wrong table or an extra kind fails. A prompt that declines rules and flows (`expect.noBusinessLogic`) gets no plain rule or flow either. See "Optional capabilities". | `app-spec.js`, `assertions.js` |
+| **author** (optional capabilities) | Off unless the prompt asks for them, on every fixture: `app.theme`, a configuration item (`environmentVariables`, `connectionReferences`, `customApis`, `duplicateDetectionRules`, `solution.version`) and a declared form, dashboard, business rule or process flow (`reconcile: "declared"`) are present only when `expect` says the prompt asked. What it asked for must be there, graded by kind and table only (`expect.declared`: names, stage labels, tile order and scope are not compared, and nothing in this check grades an artifact's shape), so a deleted artifact, a dropped `reconcile`, a wrong table or an extra kind fails. A prompt that declines rules and flows (`expect.noBusinessLogic`) gets no plain rule or flow either. See "Optional capabilities". | `app-spec.js`, `assertions.js` |
 | **plan** | Every planned item targets a known engine phase | `sdk-build.js` `planFor` + `PHASES` |
 | **data** | Normalized data-model facts match the `expect.tables/relationships` block | `schema-facts.js` `schemaFacts` |
 | **ui** | View/chart names match `expect.views/charts` · a filter the prompt names (`expect.viewFilters`, `{ entity, view, attr, op, value }`, written from the prompt) is among the view's compiled conditions, so a spelling the build ignores (`filter`, `column`, `operator`) fails · explicit tab/section names, topology, percentage widths, display flags, field state and spans match authored input · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
@@ -51,8 +51,14 @@ grade is the **spec**, in both directions, on every fixture:
   field is non-empty iff asked; for each declared kind (form, dashboard, business rule, process flow) the set of tables
   carrying a `reconcile: "declared"` artifact equals the asked set, with at least `minCount` artifacts where the prompt
   states a count. Deleting the artifact, dropping `reconcile: "declared"`, putting it on another table, or adding an
-  artifact of a kind or table nobody asked for fails. Names, stage labels, tile order and scope are never compared here;
-  the shape of each artifact stays with that eval's own assertions.
+  artifact of a kind or table nobody asked for fails. Names, stage labels, tile order and scope are never compared here.
+- What grades a declared artifact's shape, and what does not. On every fixture the common assertions check that each
+  business rule binds only columns the spec creates and compiles at least one condition and one action, that each
+  process-flow step binds a field on the flow's table and each stage is scoped to that table, and that each declared
+  dashboard, rule and flow has a teardown step. Beyond that, among the fixtures 21-24 only fixture 21 has its own shape assertions (the authored
+  tab, form-column and section topology, and column and row spans). The shape of the declared dashboard (tiles) in
+  fixture 22, of the declared rules in fixture 23 (scope, conditions) and of the declared flow (stages) in fixture 24 is
+  **not graded yet**: removing a tile or a stage still passes. Grading those shapes is a follow-up.
 - A prompt that declines rules and flows (`expect.noBusinessLogic: true`) fails on any rule or flow, declared or not.
 
 Whether the agent makes the offer is **not** graded. That is a property of a conversation, and no offline harness records

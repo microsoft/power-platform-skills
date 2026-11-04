@@ -1235,8 +1235,8 @@ test('a capability the prompt asks for must be authored: deleting it, or droppin
   // A kind the prompt did not ask for fails even on a positive fixture.
   assert.strictEqual(gradeOptional(23, (s) => { s.businessProcessFlows = [{ entity: 'cnt_request', name: 'Extra', reconcile: 'declared', stages: [] }]; }).status, 'fail', 'a flow nobody asked for beside the rules');
   assert.strictEqual(gradeOptional(21, (s) => { s.dashboards = [{ name: 'Board', key: 'board', reconcile: 'declared', tiles: [] }]; }).status, 'fail', 'a dashboard nobody asked for beside the form');
-  // Shape and wording are not the oracle's business (each eval's own assertions check them): another stage word, a reversed tile
-  // order, a rule scope swapped between two rules, or a changed tile kind still pass here.
+  // Shape and wording are not this check's business, and fixtures 22-24 have no shape assertion of their own yet: another stage
+  // word, a reversed tile order, a rule scope swapped between two rules, or a changed tile kind still pass here.
   assert.strictEqual(gradeOptional(24, (s) => { const st = s.businessProcessFlows[0].stages; st[1].name = 'Appraisal'; st[2].name = 'Outcome'; }).status, 'pass', 'other stage labels');
   assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles.reverse(); }).status, 'pass', 'tiles in another order');
   assert.strictEqual(gradeOptional(23, (s) => { const [r1, r2] = s.businessRules; [r1.scope, r2.scope] = [r2.scope, r1.scope]; }).status, 'pass', 'swapped scopes');

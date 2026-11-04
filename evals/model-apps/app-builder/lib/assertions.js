@@ -1176,7 +1176,9 @@ ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stop
 // only when the prompt asks for it (no expectation = none is allowed). Whether the offer itself is made needs a transcript of a
 // conversation (EVAL_GUIDE.md, "Optional capabilities").
 // It grades presence and absence by capability kind and table, and nothing else: a name, a stage label, a tile order or a scope is the
-// maker's to choose and each eval's own specific assertions check the shape, so none of them is compared here.
+// maker's to choose, so none of them is compared here, and this check grades no shape at all. Shape is graded elsewhere only in part:
+// the common process assertions check well-formedness, fixture 21 has its own layout assertions, and the declared dashboard,
+// rules and flow of fixtures 22-24 have no shape assertion yet (EVAL_GUIDE.md, "Optional capabilities").
 //   expect.appTheme       as the theme assertion reads it (set = a theme is asked for)
 //   expect.configuration  as the configuration assertion reads it (a non-empty list, or solutionVersion, is an ask)
 //   expect.declared       { forms|dashboards|businessRules|businessProcessFlows: { tables: [table...], minCount: n } }
