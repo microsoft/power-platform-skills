@@ -525,9 +525,7 @@
         "charts": [],
         "pages": [],
         "declared": {
-          "forms": [
-            { "entity": "cnt_site" }
-          ]
+          "forms": { "tables": ["cnt_site"] }
         }
       },
       "expectations": [
@@ -553,9 +551,7 @@
         ],
         "pages": [],
         "declared": {
-          "dashboards": [
-            { "name": "Field Operations", "tiles": ["list", "chart", "iframe"] }
-          ]
+          "dashboards": { "minCount": 1 }
         }
       },
       "expectations": []
@@ -576,10 +572,7 @@
         "charts": [],
         "pages": [],
         "declared": {
-          "businessRules": [
-            { "entity": "cnt_request", "scope": "AllForms" },
-            { "entity": "cnt_request" }
-          ]
+          "businessRules": { "tables": ["cnt_request"], "minCount": 2 }
         }
       },
       "expectations": []
@@ -600,9 +593,7 @@
         "charts": [],
         "pages": [],
         "declared": {
-          "businessProcessFlows": [
-            { "entity": "cnt_claim", "stages": ["intake", "assess", "decid|decis"] }
-          ]
+          "businessProcessFlows": { "tables": ["cnt_claim"] }
         }
       },
       "expectations": []

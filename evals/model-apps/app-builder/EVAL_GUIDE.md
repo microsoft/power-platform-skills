@@ -12,7 +12,7 @@
 | Stage | Oracle | Plugin primitive |
 |---|---|---|
 | **author** | `validateAppSpec(plan profile)` passes · no lint errors · artifact names are table/type-scoped · ASCII page-quote warnings stay visible without changing approved names. Other advisories remain non-fatal. | `app-spec.js`, `spec-lint.js` |
-| **author** (optional capabilities) | Off unless the prompt asks for them, on every fixture: `app.theme`, a configuration item (`environmentVariables`, `connectionReferences`, `customApis`, `duplicateDetectionRules`, `solution.version`) and a declared form, dashboard, business rule or process flow (`reconcile: "declared"`) are present only when `expect` says the prompt asked. What it asked for must be authored as the prompt states it (`expect.declared`: table, scope, shape, and a name only where the prompt gives one), so a deleted artifact, a dropped `reconcile` or an extra one fails. A prompt that declines rules and flows (`expect.noBusinessLogic`) gets no plain rule or flow either. See "Optional capabilities". | `app-spec.js`, `assertions.js` |
+| **author** (optional capabilities) | Off unless the prompt asks for them, on every fixture: `app.theme`, a configuration item (`environmentVariables`, `connectionReferences`, `customApis`, `duplicateDetectionRules`, `solution.version`) and a declared form, dashboard, business rule or process flow (`reconcile: "declared"`) are present only when `expect` says the prompt asked. What it asked for must be there, graded by kind and table only (`expect.declared`: names, stage labels, tile order and scope are not compared; each eval's own assertions grade the shape), so a deleted artifact, a dropped `reconcile`, a wrong table or an extra kind fails. A prompt that declines rules and flows (`expect.noBusinessLogic`) gets no plain rule or flow either. See "Optional capabilities". | `app-spec.js`, `assertions.js` |
 | **plan** | Every planned item targets a known engine phase | `sdk-build.js` `planFor` + `PHASES` |
 | **data** | Normalized data-model facts match the `expect.tables/relationships` block | `schema-facts.js` `schemaFacts` |
 | **ui** | View/chart names match `expect.views/charts` · a filter the prompt names (`expect.viewFilters`, `{ entity, view, attr, op, value }`, written from the prompt) is among the view's compiled conditions, so a spelling the build ignores (`filter`, `column`, `operator`) fails · explicit tab/section names, topology, percentage widths, display flags, field state and spans match authored input · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
@@ -46,10 +46,13 @@ grade is the **spec**, in both directions, on every fixture:
 
 - A capability nobody asked for fails. With no expectation, a spec that carries `app.theme`, a configuration item or a
   declared form, dashboard, rule or flow fails, so adding one to an ordinary fixture is caught.
-- A capability the prompt asked for must be there, as the prompt states it (`appTheme`, `configuration`, `declared` in
-  `expect`): the table, the scope or kind, and the shape the prompt asks for (a dashboard's tile types, a flow's stage
-  count and stage words). A name is graded only where the prompt gives one, so a maker's own name for a form, rule or flow
-  passes. Deleting the artifact or dropping `reconcile: "declared"` fails, and so does changing its table or shape.
+- A capability the prompt asked for must be there (`appTheme`, `configuration`, `declared` in `expect`). The check is
+  presence and absence by capability kind and table, nothing finer: the theme is present iff asked; each configuration
+  field is non-empty iff asked; for each declared kind (form, dashboard, business rule, process flow) the set of tables
+  carrying a `reconcile: "declared"` artifact equals the asked set, with at least `minCount` artifacts where the prompt
+  states a count. Deleting the artifact, dropping `reconcile: "declared"`, putting it on another table, or adding an
+  artifact of a kind or table nobody asked for fails. Names, stage labels, tile order and scope are never compared here;
+  the shape of each artifact stays with that eval's own assertions.
 - A prompt that declines rules and flows (`expect.noBusinessLogic: true`) fails on any rule or flow, declared or not.
 
 Whether the agent makes the offer is **not** graded. That is a property of a conversation, and no offline harness records

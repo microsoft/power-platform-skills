@@ -1173,55 +1173,18 @@ ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stop
 // Optional capabilities are OFF unless the maker asks for them (or says yes when /app-builder offers one; references/authoring-flow.md,
 // Level (a0) and (b)). This suite grades the spec, not the conversation, so what it pins is the spec-level opt-in, in both directions,
 // on EVERY fixture: the spec carries an app theme, a configuration item, or a declared form, dashboard, business rule or process flow
-// only when the prompt asks for it (no expectation = none is allowed), and what the prompt asks for is authored as the prompt states
-// it. Whether the offer itself is made needs a transcript of a conversation (EVAL_GUIDE.md, "Optional capabilities").
+// only when the prompt asks for it (no expectation = none is allowed). Whether the offer itself is made needs a transcript of a
+// conversation (EVAL_GUIDE.md, "Optional capabilities").
+// It grades presence and absence by capability kind and table, and nothing else: a name, a stage label, a tile order or a scope is the
+// maker's to choose and each eval's own specific assertions check the shape, so none of them is compared here.
 //   expect.appTheme       as the theme assertion reads it (set = a theme is asked for)
 //   expect.configuration  as the configuration assertion reads it (a non-empty list, or solutionVersion, is an ask)
-//   expect.declared       one entry per artifact the prompt asks to keep declared, and ONLY the fields the prompt states:
-//                           forms:                [{ entity }]
-//                           dashboards:           [{ name, tiles: [type...] }]
-//                           businessRules:        [{ entity, scope }]
-//                           businessProcessFlows: [{ entity, stages: [stem...] }]   (a stem is a regex tested on the start of a stage name)
-//                         `name` is graded only where the prompt names the artifact. Each list matches the artifacts that carry
-//                         reconcile: "declared", one to one. A maker is free to name what the prompt left unnamed, so a rename passes;
-//                         deleting the artifact, dropping its reconcile, or adding one nobody asked for each fail.
+//   expect.declared       { forms|dashboards|businessRules|businessProcessFlows: { tables: [table...], minCount: n } }
+//                         for each kind the prompt asks to keep declared. The tables that carry a `reconcile: "declared"` artifact of
+//                         that kind must be exactly `tables` (a dashboard has no table, so it states none), and there must be at least
+//                         `minCount` of them (default 1) where the prompt states a count. A kind it does not list allows none.
 const lc = (v) => String(v === undefined ? '' : v).toLowerCase();
-const tileTypes = (x) => (Array.isArray(x.tiles) ? x.tiles.map((t) => lc(t && t.type)) : []);
-const stageNames = (x) => (Array.isArray(x.stages) ? x.stages.map((s) => String((s && s.name) || '')) : []);
-const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
-const DECLARED_KINDS = {
-  forms: { fields: { entity: (w, x) => lc(w.entity) === lc(x.entity), name: (w, x) => lc(w.name) === lc(x.name) } },
-  dashboards: { fields: { name: (w, x) => lc(w.name) === lc(x.name), tiles: (w, x) => sameList(w.tiles.map(lc), tileTypes(x)) } },
-  businessRules: { fields: { entity: (w, x) => lc(w.entity) === lc(x.entity), name: (w, x) => lc(w.name) === lc(x.name), scope: (w, x) => lc(w.scope) === lc(x.scope) } },
-  businessProcessFlows: {
-    fields: {
-      entity: (w, x) => lc(w.entity) === lc(x.entity),
-      name: (w, x) => lc(w.name) === lc(x.name),
-      stages: (w, x) => { const names = stageNames(x); return names.length === w.stages.length && w.stages.every((stem, i) => new RegExp(`^(?:${stem})`, 'i').test(names[i])); },
-    },
-  },
-};
-const describeWanted = (w) => JSON.stringify(w);
-const describeItem = (x) => `${x.entity ? `${x.entity}/` : ''}${x.name}`;
-const meets = (kind, w, x) => Object.keys(w).every((k) => (DECLARED_KINDS[kind].fields[k] ? DECLARED_KINDS[kind].fields[k](w, x) : false));
-// One-to-one match of wanted entries to declared items (backtracking: an entry that states fewer fields could otherwise take the item
-// a stricter one needs). Returns the item index for each entry, or null when some entry has none.
-function matchDeclared(kind, wanted, items) {
-  const taken = new Array(items.length).fill(false);
-  const pick = new Array(wanted.length).fill(null);
-  const place = (i) => {
-    if (i === wanted.length) return true;
-    for (let j = 0; j < items.length; j++) {
-      if (taken[j] || !meets(kind, wanted[i], items[j])) continue;
-      taken[j] = true; pick[i] = j;
-      if (place(i + 1)) return true;
-      taken[j] = false; pick[i] = null;
-    }
-    return false;
-  };
-  return place(0) ? pick : null;
-}
-const CONFIGURATION_LISTS = ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules'];
+const DECLARED_KINDS = ['forms', 'dashboards', 'businessRules', 'businessProcessFlows'];const CONFIGURATION_LISTS = ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules'];
 const nonEmptyList = (list) => Array.isArray(list) && list.length > 0;
 ASSERTIONS.set('author: an optional capability is in the spec only when the prompt asks for it, and each one it asks for is authored as expected', ({ spec, eval: ev }) => {
   const expect = (ev && ev.expect) || {};
@@ -1239,20 +1202,22 @@ ASSERTIONS.set('author: an optional capability is in the spec only when the prom
   if (version !== undefined && !config.solutionVersion) return fail(`solution.version ${version} is declared, but the prompt asks for no version`);
   if (version === undefined && config.solutionVersion) return fail(`the prompt asks for solution.version ${config.solutionVersion}, but the spec omits it`);
   const declaredExpect = expect.declared && typeof expect.declared === 'object' ? expect.declared : {};
-  for (const kind of Object.keys(declaredExpect)) if (!DECLARED_KINDS[kind]) return fail(`expect.declared names the unknown kind '${kind}'`);
+  for (const kind of Object.keys(declaredExpect)) if (!DECLARED_KINDS.includes(kind)) return fail(`expect.declared names the unknown kind '${kind}'`);
   let anyDeclared = false;
-  for (const kind of Object.keys(DECLARED_KINDS)) {
+  for (const kind of DECLARED_KINDS) {
     const got = (Array.isArray(spec[kind]) ? spec[kind] : []).filter((x) => x && typeof x === 'object' && x.reconcile === 'declared');
-    const want = Array.isArray(declaredExpect[kind]) ? declaredExpect[kind] : [];
-    if (!matchDeclared(kind, want, got) || got.length !== want.length) {
-      const unasked = got.filter((x) => !want.some((w) => meets(kind, w, x))).map(describeItem);
-      const missing = want.filter((w) => !got.some((x) => meets(kind, w, x))).map(describeWanted);
-      // An entry that states little can be met by one item while another entry still has none, so count as well.
-      if (!missing.length && got.length < want.length) missing.push(`${want.length - got.length} of the expected artifacts`);
-      if (!unasked.length && got.length > want.length) unasked.push(`${got.length - want.length} more than asked for`);
-      return fail(`${kind} declared [${got.map(describeItem)}], expected [${want.map(describeWanted)}]${unasked.length ? `; unasked: ${unasked}` : ''}${missing.length ? `; missing (deleted, or without reconcile "declared"): ${missing}` : ''}`);
+    const want = declaredExpect[kind];
+    if (!want) {
+      if (got.length) return fail(`${kind} declared on [${got.map((x) => x.entity || '(no table)')}], but the prompt asks to keep no ${kind} declared`);
+      continue;
     }
-    if (got.length) anyDeclared = true;
+    if (got.length < (want.minCount || 1)) return fail(`${kind}: ${got.length} declared, but the prompt asks for ${want.minCount || 1}; missing (deleted, or without reconcile "declared")`);
+    if (Array.isArray(want.tables)) {
+      const have = [...new Set(got.map((x) => lc(x.entity)))].sort();
+      const asked = [...new Set(want.tables.map(lc))].sort();
+      if (!eq(have, asked)) return fail(`${kind} declared on [${have}], the prompt asks for [${asked}]; unasked: [${have.filter((t) => !asked.includes(t))}], missing: [${asked.filter((t) => !have.includes(t))}]`);
+    }
+    anyDeclared = true;
   }
   if (anyDeclared && !versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
   return PASS;

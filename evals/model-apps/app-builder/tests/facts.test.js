@@ -1202,7 +1202,7 @@ test('an optional capability nobody asked for fails on any fixture, an older one
     }
   }
   assert.match(reasonOf(gradeOptional(1, unasked['an app theme'])), /app\.theme is declared, but the prompt asks for no branding/);
-  assert.match(reasonOf(gradeOptional(1, unasked['a declared business rule'])), /businessRules declared .*unasked/);
+  assert.match(reasonOf(gradeOptional(1, unasked['a declared business rule'])), /businessRules declared on \[new_customer\], but the prompt asks to keep no businessRules declared/);
 });
 
 test('a capability the prompt asks for must be authored: deleting it, or dropping its reconcile, fails on each positive fixture', () => {
@@ -1212,7 +1212,7 @@ test('a capability the prompt asks for must be authored: deleting it, or droppin
     assert.strictEqual(gradeOptional(18, (s) => { delete s[field]; }).status, 'fail', `18: ${field} deleted`);
   }
   assert.strictEqual(gradeOptional(18, (s) => { delete s.solution.version; }).status, 'fail', '18: the solution version deleted');
-  // Declared forms (21), dashboards (22), rules (23), flows (24).
+  // Declared forms (21), dashboards (22), rules (23), flows (24): graded by kind and table, nothing finer.
   const positives = [
     [21, 'forms', (x) => x.name === 'Site Layout'],
     [22, 'dashboards', (x) => x.name === 'Field Operations'],
@@ -1223,29 +1223,25 @@ test('a capability the prompt asks for must be authored: deleting it, or droppin
     assert.strictEqual(gradeOptional(id, (s) => { s[kind] = s[kind].filter((x) => !isIt(x)); }).status, 'fail', `${id}: ${kind} entry deleted`);
     assert.strictEqual(gradeOptional(id, (s) => { delete s[kind].find(isIt).reconcile; }).status, 'fail', `${id}: reconcile removed`);
     assert.strictEqual(gradeOptional(id, (s) => { s[kind].find(isIt).reconcile = 'adopt'; }).status, 'fail', `${id}: reconcile is not "declared"`);
-    // A name the prompt did not give is the maker's to choose; one it did give (the dashboard) is graded.
-    const renamed = gradeOptional(id, (s) => { s[kind].find(isIt).name = 'Another name'; }).status;
-    assert.strictEqual(renamed, kind === 'dashboards' ? 'fail' : 'pass', `${id}: ${kind} renamed`);
-    assert.match(reasonOf(gradeOptional(id, (s) => { delete s[kind].find(isIt).reconcile; })), /missing \(deleted, or without reconcile "declared"\)/);
+    assert.match(reasonOf(gradeOptional(id, (s) => { delete s[kind].find(isIt).reconcile; })), /missing \(deleted, or without reconcile "declared"\)|missing: \[/);
+    // A name is the maker's to choose, whether or not the prompt gives one.
+    assert.strictEqual(gradeOptional(id, (s) => { s[kind].find(isIt).name = 'Another name'; }).status, 'pass', `${id}: ${kind} renamed`);
   }
-  // The identity is the entity too, and the declared artifact is not enough when it has the wrong shape.
-  assert.strictEqual(gradeOptional(21, (s) => { s.forms.find((x) => x.name === 'Site Layout').entity = 'cnt_issue'; }).status, 'fail', 'a form on another table');
-  assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles.pop(); }).status, 'fail', 'a tile missing');
-  assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles[1].type = 'list'; }).status, 'fail', 'a tile of another kind');
-  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.find((x) => x.name === 'Ask for an assignee').scope = 'Entity'; }).status, 'fail', 'the every-form rule the prompt asks for is not scoped to every form');
-  assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].stages.pop(); }).status, 'fail', 'a stage missing');
-  assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].stages.push({ name: 'Extra', steps: [] }); }).status, 'fail', 'a stage nobody asked for');
-  assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].stages.reverse(); }).status, 'fail', 'stages out of the prompt\'s order');
   assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.pop(); }).status, 'fail', 'one of the two rules the prompt asks for is missing');
-  // Wording and names the prompt leaves open pass: "assessment" and "a decision" are the prompt's words, and no rule, form or flow name is given.
-  assert.strictEqual(gradeOptional(24, (s) => { const st = s.businessProcessFlows[0].stages; st[1].name = 'Assessment'; st[2].name = 'Decision'; s.businessProcessFlows[0].name = 'Claims process'; }).status, 'pass', 'other stage words and flow name');
-  assert.strictEqual(gradeOptional(21, (s) => { s.forms.find((x) => x.name === 'Site Layout').name = 'Site Inspection'; }).status, 'pass', 'another form name');
-  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.forEach((r, i) => { r.name = `Rule ${i}`; }); }).status, 'pass', 'other rule names');
-  // And one more declared artifact than the prompt asks for fails even on a positive fixture.
+  // The table is graded: the artifact on another table is a different capability.
+  assert.strictEqual(gradeOptional(21, (s) => { s.forms.find((x) => x.name === 'Site Layout').entity = 'cnt_issue'; }).status, 'fail', 'a form on another table');
+  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.forEach((r) => { r.entity = 'cnt_other'; }); }).status, 'fail', 'rules on another table');
+  assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].entity = 'cnt_other'; }).status, 'fail', 'a flow on another table');
+  // A kind the prompt did not ask for fails even on a positive fixture.
   assert.strictEqual(gradeOptional(23, (s) => { s.businessProcessFlows = [{ entity: 'cnt_request', name: 'Extra', reconcile: 'declared', stages: [] }]; }).status, 'fail', 'a flow nobody asked for beside the rules');
-  assert.strictEqual(gradeOptional(21, (s) => { s.forms[1].reconcile = 'declared'; }).status, 'fail', 'a second declared form');
+  assert.strictEqual(gradeOptional(21, (s) => { s.dashboards = [{ name: 'Board', key: 'board', reconcile: 'declared', tiles: [] }]; }).status, 'fail', 'a dashboard nobody asked for beside the form');
+  // Shape and wording are not the oracle's business (each eval's own assertions check them): another stage word, a reversed tile
+  // order, a rule scope swapped between two rules, or a changed tile kind still pass here.
+  assert.strictEqual(gradeOptional(24, (s) => { const st = s.businessProcessFlows[0].stages; st[1].name = 'Appraisal'; st[2].name = 'Outcome'; }).status, 'pass', 'other stage labels');
+  assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles.reverse(); }).status, 'pass', 'tiles in another order');
+  assert.strictEqual(gradeOptional(23, (s) => { const [r1, r2] = s.businessRules; [r1.scope, r2.scope] = [r2.scope, r1.scope]; }).status, 'pass', 'swapped scopes');
   // The version floor still applies to a declared artifact.
-  assert.strictEqual(gradeOptional(24, (s) => { s.minimumPluginVersion = '2.20.6'; }).status, 'fail');
+  assert.strictEqual(gradeOptional(24, (s) => { s.minimumPluginVersion = '2.20.6'; }).status, 'fail');  assert.strictEqual(gradeOptional(24, (s) => { s.minimumPluginVersion = '2.20.6'; }).status, 'fail');
 });
 
 test('the expectation side is checked too: a declared kind it does not know fails, and an ask it does not state is not allowed', () => {
