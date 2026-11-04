@@ -802,3 +802,90 @@ test('a bound row keeps what its App Spec omits: the expectation is the row read
     assert.deepEqual([created.rows[0].expected.caseSensitive, created.rows[1].expected.ignoreBlankValues, created.rows[1].expected.characters], [false, false, null], 'a created rule: the create defaults');
   }
 });
+
+// Create one planned artifact through its own create set and commit it, as the lifecycle test does.
+async function createCommitted(h, p) {
+  const [attempt] = h.ctx.begin([p.plan]);
+  const classify = B.createSetClassifier([{ token: attempt.token, planned: p }]);
+  const scope = (fn, acceptResult) => h.ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label: 'configuration create', acceptResult }, fn);
+  const pushed = await scope(async () => {
+    await h.sdk.createArtifact(p.kind, B.artifactFor(p));
+    return h.sdk.pushArtifact(p.kind, p.plan.rows[0].id);
+  }, B.acceptResultFor(p));
+  assert.deepEqual([pushed.error, pushed.localError, pushed.checked], [null, null, true]);
+  await addMissingMembers(h, p, scope);
+  const [settled] = h.ctx.settle([{ token: attempt.token, observation: await B.observe(h.dv, p) }]);
+  assert.equal(settled.verdict.action, 'commit', `${settled.verdict.code || ''} ${settled.verdict.message || ''}`);
+  return settled;
+}
+async function addMissingMembers(h, p, scope) {
+  const missing = (await B.observe(h.dv, p)).members.filter((m) => m.state === 'absent').map((m) => p.plan.members.find((x) => x.id === m.id));
+  if (!missing.length) return;
+  const added = await scope(async () => {
+    for (const m of missing) await h.dv.post('/AddSolutionComponent', { ComponentId: m.id, ComponentType: m.componentType, SolutionUniqueName: SOL, AddRequiredComponents: false });
+  });
+  assert.equal(added.localError, null);
+}
+
+test('a bound Custom API edit is one checked change set end to end: the root PATCH with new children of both kinds, or new children only', async () => {
+  const api = (over) => spec({ customApis: [{ ...spec().customApis[0], ...over }] });
+  const declared = spec().customApis[0];
+  for (const [label, over, ops, want] of [
+    ['root plus both kinds', { isPrivate: true, requestParameters: [...declared.requestParameters, { uniqueName: 'B', type: 'string', isOptional: true }], responseProperties: [...declared.responseProperties, { uniqueName: 'S', type: 'integer' }] },
+      (p) => [['/isPrivate', true], ['/requestParameters', B.artifactFor(p).requestParameters], ['/responseProperties', B.artifactFor(p).responseProperties]], ['PATCH', 'POST', 'POST']],
+    ['children only, both kinds', { requestParameters: [...declared.requestParameters, { uniqueName: 'B', type: 'string' }], responseProperties: [...declared.responseProperties, { uniqueName: 'S', type: 'integer' }] },
+      (p) => [['/requestParameters', B.artifactFor(p).requestParameters], ['/responseProperties', B.artifactFor(p).responseProperties]], ['POST', 'POST']],
+  ]) {
+    const h = await lifecycle();
+    const fresh = planned('customApi', 'contoso_Calc');
+    await createCommitted(h, fresh);
+    const p = await rebound(h.dv, fresh, { spec: api(over), baseGeneration: h.store.readGroup('customApi', fresh.key).committed.generation });
+    const [attempt] = h.ctx.begin([p.plan]);
+    const classify = B.createSetClassifier([{ token: attempt.token, planned: p }]);
+    const batch = { apiBase: `${h.org.origin}/api/data/v9.0`, solution: SOL };
+    const scope = (fn, acceptResult) => h.ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label: 'configuration edit', acceptResult, batch }, fn);
+    const root = fresh.plan.rows[0].id;
+    const mark = h.org.requests.length;
+    const pushed = await scope(async () => {
+      await h.sdk.fetchArtifact('customApi', root, { overwrite: true });
+      for (const [pointer, value] of ops(p)) await h.sdk.updateElement('customApi', root, pointer, value);
+      return h.sdk.pushArtifact('customApi', root);
+    }, B.acceptResultFor(p));
+    const requests = h.org.requests.slice(mark).filter((r) => r.method !== 'GET');
+    assert.deepEqual([pushed.error, pushed.localError, pushed.checked], [null, null, true], `${label}: a checked change set`);
+    assert.deepEqual(requests.map((r) => r.path), ['/$batch'], `${label}: one request left`);
+    assert.deepEqual(requests[0].operations.map((c) => c.method), want);
+    await addMissingMembers(h, p, scope);
+    const [settled] = h.ctx.settle([{ token: attempt.token, observation: await B.observe(h.dv, p) }]);
+    assert.equal(settled.verdict.action, 'commit', `${label}: ${settled.verdict.code || ''} ${settled.verdict.message || ''}`);
+    const added = p.rows.filter((r) => r.mode === 'create').map((r) => r.id).sort();
+    assert.equal(added.length, 2);
+    assert.deepEqual(settled.group.records.filter((r) => added.includes(r.id)).map((r) => r.origin), ['created', 'created'], `${label}: the new children are this run's creates`);
+    assert.deepEqual(h.org.unexpected, []);
+  }
+});
+
+test('a change-set constituent the plan did not prepare is refused before anything is sent', async () => {
+  const h = await lifecycle();
+  const fresh = planned('customApi', 'contoso_Calc');
+  await createCommitted(h, fresh);
+  const declared = spec().customApis[0];
+  const p = await rebound(h.dv, fresh, { spec: spec({ customApis: [{ ...declared, isPrivate: true, requestParameters: [...declared.requestParameters, { uniqueName: 'B', type: 'string' }] }] }), baseGeneration: h.store.readGroup('customApi', fresh.key).committed.generation });
+  const root = fresh.plan.rows[0].id;
+  const [attempt] = h.ctx.begin([p.plan]);
+  // The SDK is asked for another child than the plan's (another type): the parser's constituent check refuses the set.
+  const other = B.artifactFor(p).requestParameters.map((c) => (c.uniqueName === 'B' ? { ...c, type: 'integer' } : c));
+  const mark = h.org.requests.length;
+  const out = await h.ctx.run({
+    attempts: [attempt], classify: B.createSetClassifier([{ token: attempt.token, planned: p }]), deleteCode: B.DELETE_CODE, label: 'configuration edit',
+    acceptResult: B.acceptResultFor(p), batch: { apiBase: `${h.org.origin}/api/data/v9.0`, solution: SOL },
+  }, async () => {
+    await h.sdk.fetchArtifact('customApi', root, { overwrite: true });
+    await h.sdk.updateElement('customApi', root, '/isPrivate', true);
+    await h.sdk.updateElement('customApi', root, '/requestParameters', other);
+    return h.sdk.pushArtifact('customApi', root);
+  });
+  const requests = h.org.requests.slice(mark).filter((r) => r.method !== 'GET');
+  assert.notEqual(out.localError, null, 'refused locally');
+  assert.deepEqual(requests, [], 'nothing was sent');
+});

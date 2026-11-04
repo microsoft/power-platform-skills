@@ -460,7 +460,20 @@ function createConfigOrg(options = {}) {
     return json(200, out);
   }
 
-  async function dispatch(method, where, body, headers) {
+  // The representation a write answers under `Prefer: return=representation`, as Dataverse renders it: its context names
+  // the set and the selected columns, and a created row echoes the lookups its body bound (the service answers the
+  // `_<lookup>_value` of an `@odata.bind` even when only the primary key is selected), e.g.
+  //   {"@odata.context":"<api base>/$metadata#customapirequestparameters(customapirequestparameterid)/$entity",
+  //    "@odata.etag":"W/\"7\"","customapirequestparameterid":"<id>","_customapiid_value":"<api id>"}
+  function representation(set, row, query, apiBase, created) {
+    const out = { '@odata.context': `${apiBase}/$metadata#${set}${query.$select ? `(${query.$select})` : ''}/$entity`, ...shape(set, row, query) };
+    if (created) for (const [k, v] of Object.entries(row)) if (/^_.+_value$/.test(k) && v !== null && v !== undefined && !(k in out)) out[k] = v;
+    return out;
+  }
+  // The API base a request named: `https://<host>/api/data/v9.x`.
+  const apiBaseOf = (parsed) => `${parsed.origin}${(/^\/api\/data\/v9\.\d/.exec(parsed.pathname) || ['/api/data/v9.0'])[0]}`;
+
+  async function dispatch(method, where, body, headers, apiBase = `${origin}/api/data/v9.0`) {
     const qIndex = where.indexOf('?');
     const pathPart = qIndex === -1 ? where : where.slice(0, qIndex);
     const query = qIndex === -1 ? {} : parseQuery(where.slice(qIndex));
@@ -468,7 +481,7 @@ function createConfigOrg(options = {}) {
       const answer = options.intercept({ method, path: where, body, headers });
       if (answer) return answer.raw ? answer.raw : json(answer.statusCode, answer.body);
     }
-    if (method === 'POST' && pathPart === '/$batch') return batch(body);
+    if (method === 'POST' && pathPart === '/$batch') return batch(body, apiBase);
     let m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)$/.exec(pathPart);
     if (m && method === 'GET') return entityDefinition(m[1], query);
     m = /^\/duplicaterules\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/.exec(pathPart);
@@ -495,7 +508,7 @@ function createConfigOrg(options = {}) {
       joinSolution(set, row, headerOf(headers, 'MSCRM.SolutionUniqueName'));
       const prefer = headerOf(headers, 'Prefer') || '';
       const entityId = `${origin}/api/data/v9.2/${set}(${row[SETS[set].pk]})`;
-      if (/return=representation/.test(prefer)) return json(201, shape(set, row, query), { 'odata-entityid': entityId, etag: etagOf(row) });
+      if (/return=representation/.test(prefer)) return json(201, representation(set, row, query, apiBase, true), { 'odata-entityid': entityId, etag: etagOf(row) });
       return { statusCode: 204, headers: { 'odata-entityid': entityId, 'odata-version': '4.0' }, body: '' };
     }
     if (method === 'PATCH' && key) {
@@ -503,7 +516,7 @@ function createConfigOrg(options = {}) {
       if (refused) return refused;
       const row = sets.get(set).get(normGuid(key));
       const prefer = headerOf(headers, 'Prefer') || '';
-      if (/return=representation/.test(prefer)) return json(200, shape(set, row, query), { etag: etagOf(row) });
+      if (/return=representation/.test(prefer)) return json(200, representation(set, row, query, apiBase, false), { etag: etagOf(row) });
       return { statusCode: 204, headers: { 'odata-version': '4.0', etag: etagOf(row) }, body: '' };
     }
     if (method === 'DELETE' && key) {
@@ -513,9 +526,9 @@ function createConfigOrg(options = {}) {
     throw new Unmodelled('the method');
   }
 
-  async function guarded(method, where, body, headers) {
+  async function guarded(method, where, body, headers, apiBase) {
     try {
-      return await dispatch(method, where, body, headers);
+      return await dispatch(method, where, body, headers, apiBase);
     } catch (error) {
       if (error instanceof Unmodelled) throw error;
       if (error && error.status) return failure(error.status, error.code || '0x80040203', error.message);
@@ -526,13 +539,13 @@ function createConfigOrg(options = {}) {
   // `$batch`: one change set, applied atomically — on the first failing operation every change of the set is rolled back and only
   // that operation's status is answered.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api#change-sets
-  async function batch(text) {
+  async function batch(text, apiBase) {
     const operations = parseBatch(String(text));
     const saved = new Map([...sets].map(([k, v]) => [k, structuredClone(v)]));
     const statuses = [];
     for (const op of operations) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await guarded(op.method, op.path, op.body, op.headers);
+      const res = await guarded(op.method, op.path, op.body, op.headers, op.apiBase || apiBase);
       if (res.statusCode < 200 || res.statusCode >= 300) {
         for (const [k, v] of saved) sets.set(k, v);
         return batchAnswer([{ contentId: op.contentId, status: res.statusCode, body: res.body }]);
@@ -580,7 +593,7 @@ function createConfigOrg(options = {}) {
       const payload = headEnd === -1 ? '' : http.slice(headEnd).replace(/^\r?\n\r?\n/, '').replace(/\r?\n$/, '');
       const parsed = new URL(url, origin);
       const where = decodeURIComponent(parsed.pathname + parsed.search).replace(API_ROOT, '');
-      return { contentId: (/^Content-ID:\s*(\S+)/im.exec(mime) || [])[1], method, path: where, headers, body: payload ? JSON.parse(payload) : undefined };
+      return { contentId: (/^Content-ID:\s*(\S+)/im.exec(mime) || [])[1], method, path: where, headers, body: payload ? JSON.parse(payload) : undefined, apiBase: apiBaseOf(parsed) };
     });
   }
   function batchAnswer(parts) {
@@ -599,8 +612,9 @@ function createConfigOrg(options = {}) {
         `HTTP/1.1 ${part.status} ${part.status < 300 ? (part.status === 204 ? 'No Content' : 'OK') : 'Bad Request'}`,
         ...Object.entries(part.headers || {}).filter(([k]) => /^(odata-entityid|location|etag)$/i.test(k)).map(([k, v]) => `${k === 'odata-entityid' ? 'OData-EntityId' : k}: ${v}`),
         'OData-Version: 4.0',
+        // The CRLF before the next delimiter belongs to the delimiter (RFC 2046), so a body is one line and no blank
+        // line follows it, as the service answers.
         ...(part.body ? ['Content-Type: application/json; odata.metadata=minimal', '', String(part.body)] : ['']),
-        '',
       ].join('\r\n')),
       `--${inner}--`,
       `--${outer}--`,
@@ -623,7 +637,7 @@ function createConfigOrg(options = {}) {
     }
     requests.push(recorded);
     try {
-      const answer = await guarded(method, where, parsedBody, headers);
+      const answer = await guarded(method, where, parsedBody, headers, apiBaseOf(parsed));
       recorded.status = answer.statusCode;
       return answer;
     } catch (error) {

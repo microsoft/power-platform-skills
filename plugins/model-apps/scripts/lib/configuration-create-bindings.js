@@ -503,7 +503,7 @@ function pinApiLabels(artifact, rootMode, slotModes, bases) {
 
 /**
  * The protected create plan of ONE declared configuration artifact, at the ids the create port derives for it:
- *   planOf(spec, { kind, key, bindings?, solution?, intentFor?, boundIdOf?, componentTypes?, boundSlots?, bases? })
+ *   planOf(spec, { kind, key, bindings?, solution?, intentFor?, boundIdOf?, componentTypes?, boundSlots?, bases?, baseGeneration? })
  * `kind` is a root kind and `key` its declared key (schema name, logical name, unique name, rule key). `bindings` are
  * the deployment bindings (readDeploymentBindings): a bound value adds the value row, a bound connection makes the
  * reference's connection a private input. `solution` is the run's solution (else the spec's, else Default); in a
@@ -512,12 +512,14 @@ function pinApiLabels(artifact, rootMode, slotModes, bases) {
  * `boundSlots` names children that already exist under it (updates, not creates). `bases` (a Map or an object, by row
  * id) holds the fresh readConfigurationRow answer of every row the plan updates with a PATCH: its row version is the only
  * If-Match the classifier admits for that row, and a Custom API row's labels the App Spec leaves out are kept from it.
+ * `baseGeneration` is the committed group's generation (the binding store's readGroup) an update is planned from: the
+ * store prepares the attempt only while the group is still at it.
  * Answers a frozen planned object { kind, key, solution, plan, rows } — `plan` is buildRowPlan's input (with the root's
  * `baseObservation` when it is an update read fresh); `rows` are its rows with what each must read back as
  * (`expected`), for a child its slot, and for a PATCHed row its held row version (`ifMatch`). No private input is in
  * either.
  */
-function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [], bases } = {}) {
+function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [], bases, baseGeneration } = {}) {
   if (!ROOT_KINDS.has(kind)) throw new TypeError(`planOf: ${kind} is not a configuration root kind`);
   const entry = A.configurationIntentOf(spec, kind, key);
   const sol = nonEmpty(solution) ? solution : spec && isPlain(spec.solution) && nonEmpty(spec.solution.uniqueName) ? spec.solution.uniqueName : 'Default';
@@ -600,6 +602,7 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     rows: planRows, members, ruleState,
     effects: [...members.map((m) => ({ kind: 'membership', id: m.id })), ...(publishes ? [{ kind: 'rule-state', id: rootId }] : [])],
     ...(baseObservation ? { baseObservation } : {}),
+    ...(rootMode === 'update' && baseGeneration !== undefined && baseGeneration !== null ? { baseGeneration } : {}),
   };
   const planned = deepFreeze({ kind, key: portKey, solution: sol, plan, rows });
   PRIVATE_INPUTS.set(planned, { artifact, secrets });
@@ -1228,16 +1231,74 @@ function createClassifier(entries) {
 }
 
 /**
- * The same classification for ONE constituent of a $batch change set. The gate refuses a $batch outright today; this is
- * the narrow shape a reviewed change-set parser may admit later, exactly as the SDK sends a bound Custom API's edit:
+ * The same classification for ONE constituent of a $batch change set, for the checked change-set parser
+ * (managed-create-batch.js, a run's `batch` option), exactly as the SDK sends a bound Custom API's edit:
  *   PATCH .../customapis(<bound id>)?$select=customapiid             If-Match: <held version>  { <editable root fields> }
  *   POST  .../customapiresponseproperties?$select=customapiresponsepropertyid  { ..., "CustomAPIId@odata.bind": "/customapis(<bound id>)" }
  * A root create, a child's label PATCH (admitted only on its own), a membership and a publish are never a constituent.
+ * The descriptor adds what the parser checks a constituent against: `prepared` (the wire body encoded from the plan,
+ * preparedWire), the root's held `ifMatch`, and a seal of the constituent's own wire fields.
  */
 function classifyConstituent(entries, req) {
-  const out = classifyWith(indexOf(entries), req, true);
-  if (!out) return null;
-  return out.rows.every((r) => API_KINDS.has(r.kind)) ? out : null;
+  return constituentOf(indexOf(entries), req);
+}
+
+function constituentOf(byId, req) {
+  const out = classifyWith(byId, req, true);
+  if (!out || out.rows.length !== 1 || !API_KINDS.has(out.rows[0].kind)) return null;
+  const { row } = byId.get(out.rows[0].id);
+  const json = parseBody(req.body).json;
+  const prepared = preparedWire(row, json);
+  if (!prepared || canonicalJson(prepared) !== canonicalJson(json)) return null;
+  // The change-set parser (managed-create-batch.js) compares `prepared` with the constituent key for key, holds the root
+  // PATCH to `ifMatch`, and checks the sealed projection against the constituent's own wire fields — so here the seal is
+  // of every wire key the constituent carries (no private input exists on these kinds), not the semantic projection a
+  // direct request is sealed by.
+  const sealed = { ...out.rows[0], ...sentProjection(json) };
+  return {
+    ...out,
+    rows: [sealed],
+    prepared,
+    ...(row.parentId === null ? { ifMatch: row.ifMatch } : {}),
+  };
+}
+
+// The wire body the plan prepared for one Custom API constituent, key for key over what the constituent carries, each value
+// encoded from the plan's expectation (never copied from the request): the primary key is the planned id, the parent bind
+// names the planned parent, a text or flag is the expected value and an option is its code. A case-insensitive name
+// (a table's logical name) keeps the request's spelling only when it IS the expected name, ignoring case. A key the plan
+// cannot encode makes the whole constituent unprepared (null).
+function preparedWire(row, json) {
+  const k = KINDS[row.kind];
+  const out = {};
+  for (const [key, raw] of Object.entries(json)) {
+    if (key === k.pk) { if (normalizeGuid(raw) !== row.id) return null; out[key] = raw; continue; }
+    const bind = /^(.+)@odata\.bind$/.exec(key);
+    if (bind) {
+      if (!k.parentBind || bind[1] !== k.parentBind || row.parentId === null || boundGuid(raw, k.parentSet) !== row.parentId) return null;
+      out[key] = raw;
+      continue;
+    }
+    const spec = has(k.columns, key) ? k.columns[key] : null;
+    if (!Array.isArray(spec) || !has(row.expected, spec[0])) return null;
+    const want = row.expected[spec[0]];
+    if (spec[1] === lowerText) out[key] = typeof raw === 'string' && typeof want === 'string' && raw.toLowerCase() === want ? raw : want;
+    else if (key === 'type') out[key] = has(PARAM_TYPES, want) ? PARAM_TYPES[want] : null;
+    else if (key === 'bindingtype') out[key] = has(API_BINDINGS, want) ? API_BINDINGS[want] : null;
+    else if (key === 'allowedcustomprocessingsteptype') out[key] = has(API_STEPS, want) ? API_STEPS[want] : null;
+    else out[key] = want;
+  }
+  return out;
+}
+
+/**
+ * The one classifier a run hands the gate (createManagedCreateContext run `classify`) when its set may send the checked
+ * change set: a constituent of a `$batch` (the parser passes its `contentId`) is classified as one (classifyConstituent),
+ * any other request as a direct one (createClassifier).
+ */
+function createSetClassifier(entries) {
+  const byId = indexOf(entries);
+  return (req) => (req && req.contentId !== undefined ? constituentOf(byId, req) : classifyWith(byId, req, false));
 }
 
 module.exports = {
@@ -1250,6 +1311,7 @@ module.exports = {
   acceptResultFor,
   createClassifier,
   classifyConstituent,
+  createSetClassifier,
   readConfigurationRow,
   readConfigurationConflicts,
   readComponentTypes,
