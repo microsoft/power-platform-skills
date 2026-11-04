@@ -5,44 +5,29 @@
 // writes (POST/PATCH systemforms) and the PublishXml requests, by dashboard id.
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
-const { ORIGIN, createManagedWire, sdkOver, clientOver } = require('./helpers/managed-wire.js');
-const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-const { withDashboardWorkspaceScope } = require('../lib/dashboard-recovery-workspace.js');
+const { createManagedWire, sdkOver, clientOver } = require('./helpers/managed-wire.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const X = require('./helpers/dashboard-formxml.js');
 const { openManagedContext } = require('../lib/managed-bindings.js');
 const { writeFileAtomic } = require('../lib/apply-snapshot-store.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
-const { createIntentCatalog } = require('../lib/creates-catalog.js');
-const { environmentFingerprint } = require('../lib/page-ownership-records.js');
-const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
-const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, preservationMatches, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
+const { publishDeclaredDashboard, projectDashboard, preservationMatches, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
 const { createAttemptSendObserver, publishManagedScope } = require('../lib/managed-feature-contract.js');
 const { LAYER_READERS } = require('../lib/managed-layer-readers.js');
+const { ENV, APP, SOL, OPEN, ALL, catalogFor, declared, settle, makerRun, treeBytes, scopedSettle } = require('./helpers/dashboard-maker-run.js');
 // The $select of the publication read of a systemform's saved layer (systemform-published.js), with and without its
 // root fields; the SDK's own fetch selects more, so a probe that injects between the two reads can tell them apart.
 const PUBLICATION_SELECTS = new Set(['formid,name,description,formxml', 'formid,name,description,formxml,type,objecttypecode']);
 
-const ENV = 'https://contoso.crm.dynamics.com';
-const APP = 'contoso_app';
-const SOL = 'contoso_solution';
-const FP = environmentFingerprint(ENV);
-const OPEN = '66666666-0000-4000-8000-000000000001';
-const ALL = '66666666-0000-4000-8000-000000000002';
-const MINE = '66666666-0000-4000-8000-000000000003';
 const DID = '55555555-0000-4000-8000-000000000001';
 const OTHER = '55555555-0000-4000-8000-000000000009';
 const C_OPEN = 'c1c1c1c1-0000-4000-8000-000000000001';
 const C_FOREIGN = 'c1c1c1c1-0000-4000-8000-000000000002';
-const spec = { views: [{ entity: 'incident', name: 'Open cases' }, { entity: 'incident', name: 'All cases' }, { entity: 'incident', name: 'My cases' }] };
-const built = { created: { views: { 'incident|Open cases': OPEN, 'incident|All cases': ALL, 'incident|My cases': MINE }, charts: {} } };
-const resolveTile = (tile) => dashboardTileOpts(spec, tile, built);
-
-const halt = (phase, label, code, { cause } = {}) => Object.assign(new Error(`${label}: ${code}`), { phase, code, cause, retry: 'never' });
 const codeOf = async (p) => { try { await p; } catch (e) { return e.code; } return null; };
 const contentWrites = (wire) => wire.writes().filter((e) => /^systemforms/i.test(e.path));
 // The binding store's next file write fails once, when `failing.armed` is set: a crash at that persistence boundary.
@@ -56,9 +41,6 @@ function failNextStoreWrite() {
   };
   return { failing, deps };
 }
-const catalogFor = (d) => createIntentCatalog([{ catalogKind: 'dashboard', key: dashboardKey(d), scope: { kind: 'solution', solution: SOL }, declaration: { scopeType: 'Standard', name: d.name } }]);
-const declared = (tiles, extra = {}) => ({ name: 'Ops', reconcile: 'declared', tiles, ...extra });
-
 // The build-wide send observer is installed on the client every send goes through (the build installs it once for the
 // run); `observer: false` is a run without it.
 async function world({ observer = true, platform } = {}) {
@@ -80,14 +62,6 @@ async function rerun(w, { observer = true } = {}) {
   return { ...w, barrier, sdk, store, observer: obs };
 }
 
-// The maker's typed adoption approval of `dashboard:ops` is given unless a test passes its own `approvals`.
-const ADOPT = { adopt: new Set(['dashboard:ops']) };
-const settle = (w, dashboard, extra = {}) => settleDeclaredDashboard({
-  dashboard, catalog: catalogFor(dashboard), sdk: w.sdk, store: w.store, barrier: w.barrier, halt, resolveTile, toComponent: dashboardComponent,
-  ensureMembership: async () => undefined, ctx: { appUniqueName: APP, environmentFingerprint: FP }, approvals: ADOPT,
-  provisionedLanguages: async () => w.wire.languages(),
-  ...(w.observer ? { sendObserver: w.observer } : {}), ...extra,
-});
 const publish = (w, key, id) => publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk: w.sdk, key, id });
 
 // A maker's dashboard: one bound-able list tile and one foreign custom control, published.
@@ -502,51 +476,6 @@ test('a create whose answer was lost: the next run binds it only with the typed 
 
 // --- A create acknowledged by its durable receipt before the SDK recorded it (the retained workspace copy) ----------------
 
-// A run over the maker's SDK workspace `workspaceDir`, kept between runs as a maker's is, and the binding store in `dir`.
-// `cutCreateAnswer`: the create POST reaches the service and its success passes the send observer (the receipt is
-// acknowledged), then the answer is lost on its way to the SDK: the client gets a final 409, so the SDK never records the
-// create and keeps its copy as an unsent draft. `deps`: the store's file seams (failNextStoreWrite).
-async function makerRun({ wire = createManagedWire(), dir = makeTempDir('dash-settle-'), workspaceDir, cutCreateAnswer = false, deps } = {}) {
-  const barrier = createPublicationBarrier();
-  const observer = createAttemptSendObserver();
-  const observed = observer.wrap(wire.request);
-  const transport = cutCreateAnswer
-    ? async (req) => {
-      const res = await observed(req);
-      if (String(req.method).toUpperCase() !== 'POST' || !/\/systemforms$/i.test(new URL(req.url).pathname)) return res;
-      return { statusCode: 409, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: { code: '0x80040216', message: 'the answer was lost' } }) };
-    }
-    : observed;
-  const httpClient = createAzHttpClient(ORIGIN, { getToken: () => 'x'.repeat(40), request: barrier.gateRequest(transport), sleep: async () => {} });
-  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: ORIGIN, httpClient });
-  await sdk.initWorkspace();
-  const { store } = openManagedContext({ workspaceDir: dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier, ...(deps ? { deps } : {}) });
-  return { wire, barrier, sdk, dir, store, observer, workspaceDir };
-}
-
-// Every file of a directory tree and its bytes: the maker's workspace copy must come out of a recovery as it went in.
-function treeBytes(root) {
-  const out = {};
-  const walk = (d) => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else out[path.relative(root, p)] = fs.readFileSync(p).toString('base64');
-    }
-  };
-  walk(root);
-  return out;
-}
-
-// The settle (and, when `publishToo`, the publish) of a run inside its dashboard workspace scope, as sdk-build.js runs them.
-async function scopedSettle(w, d, extra = {}, { publishToo = false } = {}) {
-  return withDashboardWorkspaceScope({ sourceSdk: w.sdk }, async (scope) => {
-    const settled = await settle(w, d, { ...extra, workspaceScope: scope });
-    const published = publishToo ? await publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk: scope.currentSdk, key: 'ops', id: settled.id }) : null;
-    return { settled, published, isolated: scope.isolated };
-  });
-}
-
 const errorOf = async (p) => { try { await p; } catch (e) { return e; } return null; };
 const categoryOfErr = (e) => e && ((e.cause && e.cause.category) || e.category);
 const causeChain = (e) => { const chain = []; for (let c = e; c && chain.length < 8; c = c.cause) chain.push(c); return chain; };
@@ -645,6 +574,69 @@ test('a retained copy edited after its acknowledged create is not recovered over
   assert.equal(w.wire.writes().length, writes, 'nothing sent');
   assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, 'nothing bound');
   assert.deepEqual(treeBytes(workspaceDir), copy, 'the copy is kept as the maker left it');
+});
+
+// A build killed at the create's durable acknowledgement, and the next build in a new OS process. The kill is
+// `process.exit` inside the store's acknowledgement write, so nothing the first process held in memory (its SDK, its
+// store handle, its send observer) can reach the second: that one sees only the binding store and the maker's SDK
+// workspace on disk, and a service that still holds the created row (helpers/dashboard-create-crash-child.js).
+function crashThenRecover(timing) {
+  const root = makeTempDir('dash-crash-');
+  const files = {
+    timing,
+    dir: path.join(root, 'store'),
+    workspaceDir: path.join(root, 'workspace'),
+    wireFile: path.join(root, 'wire.json'),
+    crashFile: path.join(root, 'crash.json'),
+    output: path.join(root, 'recover.json'),
+  };
+  fs.mkdirSync(files.dir);
+  fs.mkdirSync(files.workspaceDir);
+  const env = { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' };
+  delete env.NODE_TEST_CONTEXT;
+  const child = (action) => {
+    const input = path.join(root, `${action}-input.json`);
+    fs.writeFileSync(input, JSON.stringify({ ...files, action }));
+    return spawnSync(process.execPath, [path.join(__dirname, 'helpers', 'dashboard-create-crash-child.js'), input], { env, encoding: 'utf8', timeout: 120000 });
+  };
+  const crashed = child('crash');
+  assert.equal(crashed.status, 77, `the first build is killed at the acknowledgement: ${crashed.stderr}`);
+  const recovered = child('recover');
+  assert.equal(recovered.status, 0, recovered.stderr);
+  return { crash: JSON.parse(fs.readFileSync(files.crashFile, 'utf8')), next: JSON.parse(fs.readFileSync(files.output, 'utf8')) };
+}
+
+test('a build killed just BEFORE its create is durably acknowledged: the next build in a new process stops on the unsent copy, sends nothing, binds nothing and keeps the copy', () => {
+  const { crash, next } = crashThenRecover('before');
+  assert.notEqual(next.pid, crash.pid, 'two OS processes');
+  assert.equal(crash.posts, 1, 'the create reached the service');
+  assert.equal(crash.acknowledged, false, 'and the store never recorded it as acknowledged');
+  assert.equal(next.error && next.error.code, 'create-completion-required', next.error && next.error.message);
+  assert.equal(next.error.category, 'workspace-copy-unsent-edits', 'recovery stays the maker\'s');
+  assert.equal(next.posts, 0, 'no second create');
+  assert.deepEqual(next.writes, [], 'nothing sent');
+  assert.equal(next.origins, null, 'nothing bound');
+  assert.deepEqual(next.sourceAtStart, crash.source, 'the copy the killed build left');
+  assert.deepEqual(next.sourceAtEnd, crash.source, 'is kept byte for byte');
+});
+
+test('a build killed just AFTER its create is durably acknowledged: the next build in a new process recovers it with no second create and no approval, binds it as created, publishes it and keeps the copy', () => {
+  const { crash, next } = crashThenRecover('after');
+  assert.notEqual(next.pid, crash.pid, 'two OS processes');
+  assert.equal(crash.posts, 1, 'the create reached the service');
+  assert.equal(crash.acknowledged, true, 'and the store recorded it as acknowledged before the kill');
+  assert.equal(next.error, null, next.error && `${next.error.code}: ${next.error.message}`);
+  assert.deepEqual(next.result, { committed: true, recovered: true });
+  assert.equal(next.settledId, next.id);
+  assert.equal(next.isolated, true, 'the settle ran in an isolated workspace');
+  assert.equal(next.posts, 0, 'no second create');
+  assert.deepEqual(next.writes, ['POST PublishXml'], 'no content write: only the publish');
+  assert.equal(next.publishSent, true);
+  assert.equal(next.published, true, 'published');
+  assert.equal(next.pending, false);
+  assert.deepEqual(next.origins, ['created', 'created'], 'its own acknowledged create, not an adoption');
+  assert.deepEqual(next.sourceAtStart, crash.source, 'the copy the killed build left');
+  assert.deepEqual(next.sourceAtEnd, crash.source, 'is kept byte for byte');
 });
 
 for (const step of ['dispatch', 'answer']) {

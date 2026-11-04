@@ -940,8 +940,9 @@ existing one is reused and its tiles are never edited.
   dashboard's id stays the same for the spec, and a recovered create keeps it.
 - **The binding store.** The receipt and its acknowledgement are new, optional fields in the binding store
   file; a store without them reads as before, and opening a store does not rewrite it. An older plugin
-  refuses a store that holds them (`managed-binding-store-unreadable`): build with this version or later.
-  Do not reset, delete or edit the file to let an older plugin read it, and never put back an older copy.
+  refuses the dashboard whose binding holds them (`managed-binding-group-invalid`): build with this version
+  or later. Do not reset, delete or edit the file to let an older plugin read it, and never put back an
+  older copy.
 - **A removed declaration.** When the spec no longer declares a dashboard whose last change is not
   settled, the build reads it before it builds any other dashboard:
   - A publish that is not confirmed is confirmed when a fresh read proves it live. It is never published
