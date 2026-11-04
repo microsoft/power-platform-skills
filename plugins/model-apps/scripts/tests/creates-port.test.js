@@ -233,9 +233,11 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // so the engine's, the spec gate's and the flow reader's (declared-bpf-io.js) requires of it are gated edges as well. The
 // dashboard helper (dashboard-reconcile.js) derives its seed cell ids with creates-identity.js only on a declared dashboard's
 // create, and its workspace scope (dashboard-recovery-workspace.js) reads a retained create copy with creates-local.js only for
-// a declared dashboard; each through one lazy accessor, so those edges are gated too. Apart
+// a declared dashboard; each through one lazy accessor, so those edges are gated too. Verify (verify-model-app.js, which the
+// build requires for its inline --verify) requires configuration-protected.js only for an App Spec with configurationIdentity,
+// so that edge is gated as well. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
-const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js']];
+const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js'], ['verify-model-app.js', 'configuration-protected.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -288,6 +290,10 @@ test('the default build loads none of the stable-identity modules and still wire
   const dashboardScope = fs.readFileSync(path.join(SCRIPTS, 'lib', 'dashboard-recovery-workspace.js'), 'utf8');
   assert.match(dashboardScope, /^const createsLocal = \(\) => require\('\.\/creates-local\.js'\);$/m);
   assert.equal(dashboardScope.match(/require\('\.\/creates-local\.js'\)/g).length, 1);
+  // Verify loads the protected configuration only behind the opt-in.
+  const verifier = fs.readFileSync(path.join(SCRIPTS, 'verify-model-app.js'), 'utf8');
+  assert.match(verifier, /spec\.configurationIdentity === 'stable-v1'\r?\n\s*\? require\('\.\/lib\/configuration-protected\.js'\)/);
+  assert.equal(verifier.match(/require\('\.\/lib\/configuration-protected\.js'\)/g).length, 1);
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');

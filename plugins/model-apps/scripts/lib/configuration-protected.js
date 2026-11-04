@@ -366,8 +366,9 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
 
 /**
  * The build's configuration hookup: what the build calls with the binding store, the send-once gate bound to it and the
- * managed create context over both, once a protected feature is selected. Answers { preflight, port }: preflight runs the
- * read-only whole-plan pass, port is the create port the configuration runtime installs. Nothing here creates a gate or
+ * managed create context over both, once a protected feature is selected. Answers { preflight, port, obligations }: preflight
+ * runs the read-only whole-plan pass, port is the create port the configuration runtime installs, and obligations is the
+ * local store read a build without the opt-in runs (optInObligations). Nothing here creates a gate or
  * a store: the build owns them.
  */
 function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {}) {
@@ -379,6 +380,8 @@ function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {})
     ctx,
     preflight: ({ spec, dataverse, solution, bindings }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings }),
     port: ({ spec, dataverse, solution, bindings }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase }),
+    // A build without the opt-in: what the store still holds for its declared items (optInObligations), read locally.
+    obligations: ({ spec }) => optInObligations({ spec, store }),
   };
 }
 

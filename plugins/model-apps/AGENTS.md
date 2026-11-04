@@ -3334,9 +3334,11 @@ state stays owed and is never sent again, so a rerun after a failed or lost init
 publish, and a bound rule is never published. A pending EDIT is not recovered (its plan depends on the base
 it read) and stays `create-identity-unverified`. A bound environment variable's value clear (a settings
 `Value` of `null`, a DELETE of its value row) is refused in the preflight with
-`configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` reads the
-store the build hands over (`opts.protectedConfiguration.store`, local only) through `optInObligations`: a
-declared item it holds, committed or pending, stops with `create-identity-opt-in-required`. Verify
+`configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` asks the
+hookup the build hands over (`opts.protectedConfiguration.obligations`, `optInObligations`, a local store read
+only): a declared item the store holds, committed or pending, stops with `create-identity-opt-in-required`.
+`configuration-build.js` never requires `configuration-protected.js` itself, and verify requires it only under
+the opt-in (a gated edge in `tests/creates-port.test.js`). Verify
 (`verify-model-app.js` `readerFor`, shared with the build's `--verify`) passes `protectedVerifyPort` over the
 workspace's `managedManifestView` as an exact port: `verifyKind` reads each protected item at its bound id
 (`locateExactly`) and reports the typed code (`configuration-row-not-found`, `create-identity-unverified`;

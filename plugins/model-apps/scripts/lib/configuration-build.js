@@ -134,14 +134,16 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
     // store the build handed over, if any (nothing is sent). Under it, an item the binding store cannot locate exactly, or an edit the protected path cannot
     // make, stops the build here with nothing sent; every such stop is RETRY.NEVER, as the same plan stops again.
     async preflight() {
-      const fail = (code, message) => new BuildHalt(message, { phase: 'preflight', code, recoverable: false, retry: RETRY.NEVER });
+      const fail = (preflightCode, message) => new BuildHalt(message, { phase: 'preflight', code: preflightCode, recoverable: false, retry: RETRY.NEVER });
       if (!protectedOptIn) {
         // Removing the opt-in is not a migration: a declared item the build's binding store still holds (committed, or an
         // attempt pending) would go back to name lookup, where a namesake could stand in for its bound row. A local store
-        // read only, and only when the build handed its store over; an App Spec that never opted in has nothing there.
-        const store = opts.protectedConfiguration && opts.protectedConfiguration.store;
-        if (!store) return { halts: [] };
-        const { halts } = require('./configuration-protected.js').optInObligations({ spec, store });
+        // read only, and only when the build handed its hookup over; an App Spec that never opted in has nothing there.
+        // The hookup answers it itself (createProtectedConfiguration obligations), so a default build never requires the
+        // protected modules from here.
+        const obligations = opts.protectedConfiguration && opts.protectedConfiguration.obligations;
+        if (typeof obligations !== 'function') return { halts: [] };
+        const { halts } = obligations({ spec });
         if (!halts.length) return { halts };
         const others = halts.slice(1).map((h) => `${h.kind} ${h.key}`);
         throw fail(halts[0].code, `${halts[0].kind} ${halts[0].key}: ${halts[0].message}${others.length ? ` Also held: ${others.join(', ')}.` : ''}`);
