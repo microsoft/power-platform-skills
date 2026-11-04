@@ -124,13 +124,17 @@ function unwritableError(where, e, extra = '') {
 function settleFragments(outDir, { app, items, now = () => new Date(), suffix = () => crypto.randomBytes(3).toString('hex') } = {}) {
   const list = Array.isArray(items) ? items : [];
   if (!list.length) return null;
-  const named = path.join(path.resolve(outDir), WORKSPACE_DIR);
-  let dir;
+  // The folder and the file are named, used and reported in the form of the <out> the caller gave, as every other output of
+  // the download is. assertSafeOutputDir answers the folder's real path (a junction or symlink in a parent resolved, an 8.3
+  // short name such as C:\Users\RUNNER~1 expanded), but that is used for nothing: the safety it proves is that the final
+  // component is a plain folder, not a link, and the identity check in createExclusive compares the opened file with the name
+  // itself, so it needs no resolved path.
+  const dir = path.join(path.resolve(outDir), WORKSPACE_DIR);
   try {
     // Created when missing; refused when it is a link or junction (a write there would land outside <out>) or not a folder.
-    dir = assertSafeOutputDir(named, { create: true });
+    assertSafeOutputDir(dir, { create: true });
   } catch (e) {
-    throw unwritableError(named, e);
+    throw unwritableError(dir, e);
   }
   const text = fragmentsText(app, list);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {

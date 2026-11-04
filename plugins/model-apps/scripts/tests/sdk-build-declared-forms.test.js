@@ -939,7 +939,7 @@ test('the explicit managed download refuses a handler library it cannot prove is
       assert.deepEqual(r.written.forms, [], label);
       assert.equal(r.written.webResources, undefined, label);
       const { file } = r.emitted[0].payload.managedFragments;
-      assert.equal(path.dirname(file), fs.realpathSync(path.join(out, '.maker-workspace')), label);
+      assert.equal(path.dirname(file), path.join(out, '.maker-workspace'), label);
       assert.match(path.basename(file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/, label);
       assert.deepEqual(r.emitted[0].payload.managedFragments, { file, keys: [{ family: 'form', key: KEY }] }, label);
       const fragments = JSON.parse(fs.readFileSync(file, 'utf8'));

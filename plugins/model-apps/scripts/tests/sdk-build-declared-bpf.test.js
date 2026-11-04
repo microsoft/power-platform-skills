@@ -698,7 +698,7 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     // The proved flow is written ready to paste, with the personas it still needs, in the download's own fragments file.
     // A new file, named for this download: the result and the warning name it.
     const fragmentsFile = left.emitted[0].payload.managedFragments.file;
-    assert.equal(path.dirname(fragmentsFile), fs.realpathSync(path.join(out, '.maker-workspace')));
+    assert.equal(path.dirname(fragmentsFile), path.join(out, '.maker-workspace'));
     assert.match(path.basename(fragmentsFile), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/);
     assert.deepEqual(left.emitted[0].payload.managedFragments, { file: fragmentsFile, keys: [{ family: 'bpf', key: GROUP }] });
     assert.ok(left.said.includes(`WARNING: 1 managed item(s) left out only for what the download could not bring are written ready to paste in ${fragmentsFile}:`), left.said);
@@ -929,7 +929,7 @@ test('the managed download writes its fragments to a new file it creates, and ne
       assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted) + got.said);
       const { file, keys } = got.emitted[0].payload.managedFragments;
       assert.deepEqual(keys, [{ family: 'bpf', key: GROUP }], label);
-      assert.equal(path.dirname(file), fs.realpathSync(ws), label);
+      assert.equal(path.dirname(file), ws, label);
       assert.match(path.basename(file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/, label);
       assert.equal(path.basename(file) in before, false, `${label}: a name that was free`);
       assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items.map((i) => i.key), [GROUP], label);
@@ -962,6 +962,21 @@ test('the managed download writes its fragments to a new file it creates, and ne
     assert.notEqual(second.emitted[0].payload.managedFragments.file, first.file);
     assert.deepEqual(fs.readFileSync(first.file), firstBytes);
     assert.deepEqual(fs.readFileSync(second.emitted[0].payload.managedFragments.file), firstBytes, 'the same app writes the same bytes');
+    // <out> given through a junction (a directory symlink off Windows) in a parent folder: the result and the warning name the
+    // file under <out> as it was given, and the file lands in the real folder.
+    {
+      const real = makeTempDir('declared-bpf-');
+      const via = path.join(makeTempDir('declared-bpf-'), 'via');
+      fs.symlinkSync(real, via, process.platform === 'win32' ? 'junction' : 'dir');
+      const given = path.join(via, 'app');
+      fs.mkdirSync(path.join(real, 'app'));
+      const got = await download(wire, given, flags);
+      assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+      const { file } = got.emitted[0].payload.managedFragments;
+      assert.equal(path.dirname(file), path.join(given, '.maker-workspace'));
+      assert.ok(got.said.includes(`are written ready to paste in ${file}:`), got.said);
+      assert.equal(fs.lstatSync(path.join(real, 'app', '.maker-workspace', path.basename(file))).isFile(), true);
+    }
     // A junction or a file at .maker-workspace would put the file outside the app folder or where a folder is not: refused, and
     // the app folder is exactly as it was.
     const elsewhere = makeTempDir('declared-bpf-');
@@ -1102,7 +1117,7 @@ test('the fragments file is made by an exclusive create under a new name: a name
     const out = makeTempDir('declared-bpf-');
     const ws = path.join(out, '.maker-workspace');
     fs.mkdirSync(ws);
-    return { out, ws: fs.realpathSync(ws) };
+    return { out, ws };
   };
   const hooked = (name, hook, fn) => {
     const saved = fs[name];
@@ -1198,6 +1213,20 @@ test('the fragments file is made by an exclusive create under a new name: a name
     }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: () => 'aaaaaa' })),
     (e) => e.code === 'managed-fragments-unwritable' && e.message.includes(`A partial file was left at ${path.join(ws, nameOf('aaaaaa'))}; delete it.`));
     assert.deepEqual(fs.readdirSync(ws), [nameOf('aaaaaa')]);
+  }
+  // The path is reported as the caller gave <out>, not as the folder it really is: here <out> reaches its folder through a
+  // directory junction (a directory symlink off Windows) in a parent, like an 8.3 short name or a mapped folder would. The file
+  // really lands in the target.
+  {
+    const real = makeTempDir('declared-bpf-');
+    const via = path.join(makeTempDir('declared-bpf-'), 'via');
+    fs.symlinkSync(real, via, process.platform === 'win32' ? 'junction' : 'dir');
+    const given = path.join(via, 'app');
+    fs.mkdirSync(path.join(real, 'app'));
+    const got = settleFragments(given, { app: APP, items: ITEMS, now: () => at, suffix: () => 'aaaaaa' });
+    assert.equal(got.file, path.join(given, '.maker-workspace', nameOf('aaaaaa')));
+    assert.equal(fs.lstatSync(path.join(real, 'app', '.maker-workspace', nameOf('aaaaaa'))).isFile(), true, 'it lands in the real folder');
+    assert.deepEqual(fs.readdirSync(path.join(real, 'app', '.maker-workspace')), [nameOf('aaaaaa')]);
   }
   // The real clock and random suffix: a UTC time to the second and six hex digits.
   {
