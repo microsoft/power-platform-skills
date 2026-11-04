@@ -4,6 +4,7 @@
 // one Custom API with one request parameter, every id a fixed GUID, every hash a fixed digit run.
 const { openManagedBindings } = require('../../lib/managed-bindings.js');
 const { environmentFingerprint } = require('../../lib/page-ownership-records.js');
+const { apiPath } = require('../../lib/workflow-effect-context.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP = 'contoso_app';
@@ -61,4 +62,34 @@ function settleForm(store) {
   return store.commitGroup({ token, baseGeneration: null, records: [rec('form', 'account/main', FORM)], proof: PROOF, consumerState: { declaration: { name: 'Main' }, children: {}, proofSchema: 'form-v1' }, publication: { scope, state: 'owed', desiredSha256: H('5'), dispatchToken: null } });
 }
 
-module.exports = { ENV, APP, SOL, FP, H, API, REQ, FORM, API_KEY, REQ_KEY, PROOF, open, rec, codeOf, apiPlan, apiExpected, apiConsumer, settleForm };
+const URL_API = `${ENV}/api/data/v9.2/customapis`;
+const URL_MEMBER = `${ENV}/api/data/v9.2/AddSolutionComponent`;
+
+/** The deep insert of one Custom API and its one request parameter (the parameter names its parent as `parent`). */
+const apiBody = (api = API, req = REQ, parent = api) => ({ uniquename: API_KEY, customapiid: api, CustomAPIRequestParameters: [{ uniquename: 'p', customapirequestparameterid: req, parent }] });
+
+/**
+ * A test driver's classifier for `token`: the Custom API deep insert is the root and its one parameter, an
+ * AddSolutionComponent is a membership effect, and anything else is not the set's (null).
+ */
+function apiClassifier(token) {
+  // Loaded here, not at the top: the store's own tests use these fixtures without the request boundary.
+  const { sentProjection } = require('../../lib/managed-create-transport.js');
+  return ({ method, url, body }) => {
+    const p = apiPath(url);
+    if (method === 'POST' && p === 'customapis') {
+      const b = JSON.parse(body);
+      const c = b.CustomAPIRequestParameters[0];
+      return {
+        type: 'rows', token, rows: [
+          { kind: 'customApi', key: b.uniquename, id: b.customapiid, parentId: null, ...sentProjection({ uniquename: b.uniquename, customapiid: b.customapiid }) },
+          { kind: 'customApiRequestParameter', key: JSON.stringify([b.uniquename, `request:${c.uniquename}`]), id: c.customapirequestparameterid, parentId: c.parent, ...sentProjection({ uniquename: c.uniquename }) },
+        ],
+      };
+    }
+    if (method === 'POST' && p === 'AddSolutionComponent') return { type: 'effect', token, kind: 'membership', id: JSON.parse(body).ComponentId };
+    return null;
+  };
+}
+
+module.exports = { ENV, APP, SOL, FP, H, API, REQ, FORM, API_KEY, REQ_KEY, PROOF, URL_API, URL_MEMBER, open, rec, codeOf, apiPlan, apiExpected, apiConsumer, settleForm, apiBody, apiClassifier };
