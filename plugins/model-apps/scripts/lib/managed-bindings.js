@@ -40,7 +40,13 @@ const { withRecordLease } = require('./record-lease.js');
 const { redactOutput } = require('./output-redaction.js');
 
 const PREFIX = 'managed-bindings.';
+// The envelope version. A store that holds only the original families stays at 1, exactly as an older build writes
+// it; the first write that adds a group or attempt of a ROW_FAMILY (the configuration families, `configurationIdentity:
+// "stable-v1"`) writes 2 in the same atomic change, and a version-2 store stays at 2. An older build refuses a
+// version-2 file at this boundary, so it never reads a row protocol it does not know; resetting or deleting the file
+// is not a downgrade (its bindings and pending obligations would be lost).
 const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION_ROWS = 2;
 // The whole file, as written (indented JSON). A larger file is refused, never truncated: on read it is unreadable, and a
 // write that would make one is `managed-binding-store-full` with nothing written.
 // Sized for the declarations the file keeps. A group can hold its declaration up to three times: the committed
@@ -136,16 +142,43 @@ const CODES = Object.freeze({
   // `completionBytes`) may be, once the unreserved bytes are gone. Remedy: keep fewer or smaller declared groups in one
   // app and solution, or settle the pending ones first.
   storeFull: 'managed-binding-store-full',
+  // A configuration request that its attempt's row protocol does not allow (a row it did not prepare under that id, a
+  // second send of a row or effect): refused before the request leaves.
+  requestMismatch: 'managed-create-request-mismatch',
 });
 
-const FAMILIES = ['form', 'dashboard', 'rule', 'bpf', 'view', 'chart'];
+// The configuration families (lib/configuration-create-bindings.js): one group per declared environment variable,
+// connection reference, Custom API or duplicate-detection rule, holding its root and its own child rows. They exist only
+// in a version-2 store and keep the row protocol (validateRowProtocol) on their attempts.
+const ROW_FAMILIES = Object.freeze(['environmentVariable', 'connectionReference', 'customApi', 'duplicateRule']);
+const FAMILIES = ['form', 'dashboard', 'rule', 'bpf', 'view', 'chart', ...ROW_FAMILIES];
 // Forms and dashboards are rows of one table (systemform), rules and process flows of another (workflow): a root id
 // may be bound once per table, whichever family claims it.
-const NAMESPACE = { form: 'systemform', dashboard: 'systemform', rule: 'workflow', bpf: 'workflow', view: 'savedquery', chart: 'savedqueryvisualization' };
+const NAMESPACE = {
+  form: 'systemform', dashboard: 'systemform', rule: 'workflow', bpf: 'workflow', view: 'savedquery', chart: 'savedqueryvisualization',
+  environmentVariable: 'environmentvariabledefinition', connectionReference: 'connectionreference', customApi: 'customapi', duplicateRule: 'duplicaterule',
+};
+// The physical table of each row kind a row family binds, root and child: a row id may be bound once per table across
+// every group (an alias check by the record's own table, not its root family's).
+const ROW_TABLE = Object.freeze({
+  environmentVariable: 'environmentvariabledefinition', environmentVariableValue: 'environmentvariablevalue',
+  connectionReference: 'connectionreference',
+  customApi: 'customapi', customApiRequestParameter: 'customapirequestparameter', customApiResponseProperty: 'customapiresponseproperty',
+  duplicateRule: 'duplicaterule', duplicateRuleCondition: 'duplicaterulecondition',
+});
+// The child kinds each row family may hold under its root.
+const ROW_CHILD_KINDS = Object.freeze({
+  environmentVariable: ['environmentVariableValue'], connectionReference: [],
+  customApi: ['customApiRequestParameter', 'customApiResponseProperty'], duplicateRule: ['duplicateRuleCondition'],
+});
+const ROW_PROOF_SCHEMA = 'configuration-rows-v1';
 // The binding kind of each family's root record. It is the kind the create catalog (lib/creates-catalog.js) hands a
 // feature, so a feature records its root under the same spelling it was given: a business rule's group family is the
 // short `rule`, but its root is a `business-rule` binding, never a `rule` one.
-const ROOT_KIND = Object.freeze({ form: 'form', dashboard: 'dashboard', rule: 'business-rule', bpf: 'bpf', view: 'view', chart: 'chart' });
+const ROOT_KIND = Object.freeze({
+  form: 'form', dashboard: 'dashboard', rule: 'business-rule', bpf: 'bpf', view: 'view', chart: 'chart',
+  environmentVariable: 'environmentVariable', connectionReference: 'connectionReference', customApi: 'customApi', duplicateRule: 'duplicateRule',
+});
 const PUBLISHING = new Set(['form', 'dashboard', 'view', 'chart']);
 const PUBLICATION_STATES = new Set(['not-needed', 'owed', 'dispatching', 'unconfirmed', 'confirmed']);
 // `fulfilled` is a state change this attempt never sent whose desired state a fresh read found already on its row: a
@@ -163,6 +196,7 @@ const CONSUMER_KEYS = {
   bpf: ['declaration', 'stages'],
   view: ['baseline'],
   chart: ['baseline'],
+  ...Object.fromEntries(ROW_FAMILIES.map((f) => [f, ['version', 'rows']])),
 };
 // The fixed control id of a form's timeline; it repeats on every form that has one, so it is not a physical alias.
 const NOTES_CONTROL = 'notescontrol';
@@ -558,6 +592,11 @@ function validateGroup(g, header, where) {
   g.records.forEach((r, i) => { if (r.localCreateDraft !== undefined) validateLocalCreateDraft(g, r, `${where}.records[${i}].localCreateDraft`); });
   validateProof(g.proof, `${where}.proof`);
   closedKeys(g.consumerState, CONSUMER_KEYS[g.family], `${where}.consumerState`);
+  if (isRowFamily(g.family)) {
+    if (g.proofSchema !== ROW_PROOF_SCHEMA) throw invalid(where, `names the proof schema ${g.proofSchema}, not ${ROW_PROOF_SCHEMA}`);
+    for (const rec of g.records) if (!rowKindAllowed(g.family, rec.kind)) throw invalid(where, `binds a ${rec.kind} row, which a ${g.family} group does not hold`);
+    validateRowConsumer(g.consumerState, g.family, g.records, `${where}.consumerState`);
+  }
   validateConsumerValue(g.consumerState, `${where}.consumerState`);
   // The original declaration of the attempt that committed this generation, when it recorded one: kept beside the
   // feature's consumer state, never inside it (a feature's derived state is checked by the stricter rule above).
@@ -617,7 +656,7 @@ function validateLocalCreateDraft(g, rec, where) {
 }
 
 function validateAttempt(a, where) {
-  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve', 'dashboardCreate'], where);
+  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve', 'dashboardCreate', 'rowProtocol'], where);
   // The completion reservation (prepareAttempt; see COMPLETION_BASE_BYTES), e.g. { bytes: 434176, used: 1290 }. Absent
   // on an attempt an older build prepared: it holds nothing until a new send under it acquires one (markSending, as an
   // admission); an attempt already sent with none (read-only recovery, a commit) uses only unreserved bytes.
@@ -674,6 +713,18 @@ function validateAttempt(a, where) {
     if (a.phase === 'prepared') throw invalid(where, 'has a send window but was never marked sending');
   }
   if (a.dashboardCreate !== undefined) validateDashboardCreate(a, `${where}.dashboardCreate`);
+  // The row protocol: required on every attempt of a configuration family, refused on any other.
+  if (isRowFamily(a.family)) {
+    if (a.rowProtocol === undefined) throw invalid(where, 'has no row protocol');
+    validateRowProtocol(a.rowProtocol, a, `${where}.rowProtocol`);
+    if (a.expected) {
+      if (a.expected.proofSchema !== ROW_PROOF_SCHEMA) throw invalid(where, `expects the proof schema ${a.expected.proofSchema}, not ${ROW_PROOF_SCHEMA}`);
+      for (const c of a.expected.children) {
+        const row = a.rowProtocol.rows.find((r) => r.kind === c.kind && r.key === c.key);
+        if (!row || row.id !== rowIdKey(c.id)) throw invalid(where, `expects the ${c.kind} "${c.key}" its row protocol does not name under that id`);
+      }
+    }
+  } else if (a.rowProtocol !== undefined) throw invalid(where, 'keeps a row protocol its family has no place for');
 }
 
 // The workflow effects the attempt `a` owns.
@@ -728,6 +779,8 @@ function attemptProvenUnsent(a, effects) {
   if (a.dashboardCreate && a.dashboardCreate.acknowledged) return false;
   const w = a.sendWindow;
   if (!w || w.possible !== 0) return false;
+  // A row or completion effect marked dispatched may have reached the service even when no generic counter moved.
+  if (a.rowProtocol && (a.rowProtocol.rows.some((r) => r.dispatched) || a.rowProtocol.effects.some((e) => e.dispatched))) return false;
   return ownedEffects(a, effects).every((x) => (x.state === 'definitely-unsent' || x.state === 'fulfilled') && x.dispatchToken === null);
 }
 
@@ -814,6 +867,125 @@ function validateChildReceipt(list, a, where) {
     if (seen.has(k) || seen.has(id)) throw invalid(w, 'repeats a child');
     seen.add(k);
     seen.add(id);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// The row protocol of the configuration families (ROW_FAMILIES). An attempt of one of them carries, besides the
+// common expected proof, one closed record of every physical row it creates or edits, written BEFORE anything is sent:
+//   rowProtocol: {
+//     version: 1,
+//     rows: [{ kind, key, id, parentId, mode: 'create' | 'update', expectedSha256, sensitiveInput,
+//              sentFields: null | ['<field>', ...], sentSha256: null | '<sha256>', dispatched }],
+//     preserved: [],                                       // foreign rows a command bar keeps; none for configuration
+//     completion: { ruleState: null | 'published' | 'unpublished', members: [{ kind, id, componentType }] },
+//     effects: [{ kind: 'membership' | 'rule-state', id, dispatched }],
+//     cohort: null,
+//   }
+// `expectedSha256` is the semantic row the plan expects (never a private value or its digest; `sensitiveInput` only
+// says the row carries one). `sentFields`/`sentSha256` are the non-private projection of the request that actually
+// left, sealed with `dispatched: true` under the lease before the transport is called (sealRowDispatch); a sealed row
+// is never sealed again, so a second request for it is refused unsent. `completion.ruleState` is the rule state the
+// ORIGINAL plan wanted (a new rule's default included), so a retry never reinterprets it from the row as it now looks.
+const ROW_PROTOCOL_KEYS = ['version', 'rows', 'preserved', 'completion', 'effects', 'cohort'];
+const ROW_KEYS = ['kind', 'key', 'id', 'parentId', 'mode', 'expectedSha256', 'sensitiveInput', 'sentFields', 'sentSha256', 'dispatched'];
+const ROW_EFFECT_KINDS = new Set(['membership', 'rule-state']);
+const isRowFamily = (family) => ROW_FAMILIES.includes(family);
+const rowKindAllowed = (family, kind) => kind === ROOT_KIND[family] || (ROW_CHILD_KINDS[family] || []).includes(kind);
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_@.]{0,127}$/;
+
+function validateRowProtocol(p, a, where) {
+  closedKeys(p, ROW_PROTOCOL_KEYS, where);
+  if (p.version !== 1) throw invalid(where, 'has an unknown row protocol version');
+  if (!Array.isArray(p.rows) || p.rows.length === 0) throw invalid(where, 'names no row');
+  const keys = new Set();
+  const ids = new Set();
+  p.rows.forEach((r, i) => {
+    const w = `${where}.rows[${i}]`;
+    closedKeys(r, ROW_KEYS, w);
+    for (const k of ROW_KEYS) if (!Object.prototype.hasOwnProperty.call(r, k)) throw invalid(w, `has no ${k}`);
+    if (!rowKindAllowed(a.family, r.kind)) throw invalid(w, `is a ${r.kind} row, which a ${a.family} group does not hold`);
+    if (!nonempty(r.key)) throw invalid(w, 'has no key');
+    guidField(r.id, `${w}.id`);
+    if (r.parentId !== null) guidField(r.parentId, `${w}.parentId`);
+    if (r.mode !== 'create' && r.mode !== 'update') throw invalid(w, 'has an unknown mode');
+    hashOrNull(r.expectedSha256, `${w}.expectedSha256`, false);
+    if (typeof r.sensitiveInput !== 'boolean' || typeof r.dispatched !== 'boolean') throw invalid(w, 'has no sensitive-input or dispatched flag');
+    if (r.sentFields === null) {
+      if (r.sentSha256 !== null || r.dispatched) throw invalid(w, 'is dispatched without the request it sent');
+    } else {
+      if (!Array.isArray(r.sentFields) || !r.sentFields.every((f) => typeof f === 'string' && FIELD_NAME.test(f))) throw invalid(w, 'has unreadable sent fields');
+      if (r.sentFields.some((f, j) => j > 0 && r.sentFields[j - 1] >= f)) throw invalid(w, 'has sent fields that are not sorted and unique');
+      hashOrNull(r.sentSha256, `${w}.sentSha256`, false);
+      if (!r.dispatched) throw invalid(w, 'keeps a sealed request it never dispatched');
+    }
+    if (a.phase === 'prepared' && r.dispatched) throw invalid(w, 'was dispatched before its attempt was marked sending');
+    const k = `${r.kind}\u0000${r.key}`;
+    if (keys.has(k) || ids.has(r.id)) throw invalid(w, 'repeats a row');
+    keys.add(k);
+    ids.add(r.id);
+  });
+  const root = p.rows.find((r) => r.kind === a.root.kind && r.key === a.root.key);
+  if (!root || root.id !== a.root.id || root.parentId !== null) throw invalid(where, 'does not name the attempt\'s root as its top-level row');
+  p.rows.forEach((r, i) => {
+    if (r !== root && r.parentId !== root.id) throw invalid(`${where}.rows[${i}]`, 'is not a child of the attempt\'s root');
+  });
+  if (!Array.isArray(p.preserved) || p.preserved.length) throw invalid(where, 'preserves rows a configuration group never holds');
+  closedKeys(p.completion, ['ruleState', 'members'], `${where}.completion`);
+  if (p.completion.ruleState !== null && !(a.family === 'duplicateRule' && (p.completion.ruleState === 'published' || p.completion.ruleState === 'unpublished'))) {
+    throw invalid(`${where}.completion`, 'has a rule state for something that is not a duplicate rule');
+  }
+  if (a.family === 'duplicateRule' && p.completion.ruleState === null) throw invalid(`${where}.completion`, 'has no rule state for a duplicate rule');
+  if (!Array.isArray(p.completion.members)) throw invalid(`${where}.completion`, 'has no member list');
+  const members = new Set();
+  p.completion.members.forEach((m, i) => {
+    const w = `${where}.completion.members[${i}]`;
+    closedKeys(m, ['kind', 'id', 'componentType'], w);
+    guidField(m.id, `${w}.id`);
+    if (!p.rows.some((r) => r.kind === m.kind && r.id === m.id)) throw invalid(w, 'is not a row of this attempt');
+    if (!Number.isSafeInteger(m.componentType) || m.componentType <= 0) throw invalid(w, 'has no component type');
+    if (members.has(m.id)) throw invalid(w, 'repeats a member');
+    members.add(m.id);
+  });
+  if (!Array.isArray(p.effects)) throw invalid(where, 'has no effect list');
+  const effects = new Set();
+  p.effects.forEach((e, i) => {
+    const w = `${where}.effects[${i}]`;
+    closedKeys(e, ['kind', 'id', 'dispatched'], w);
+    if (!ROW_EFFECT_KINDS.has(e.kind)) throw invalid(w, 'has an unknown kind');
+    guidField(e.id, `${w}.id`);
+    if (typeof e.dispatched !== 'boolean') throw invalid(w, 'has no dispatched flag');
+    if (a.phase === 'prepared' && e.dispatched) throw invalid(w, 'was dispatched before its attempt was marked sending');
+    if (e.kind === 'membership' && !members.has(e.id)) throw invalid(w, 'adds a member the completion does not name');
+    if (e.kind === 'rule-state' && (a.family !== 'duplicateRule' || e.id !== a.root.id)) throw invalid(w, 'changes the state of another row than its rule');
+    const k = `${e.kind}\u0000${e.id}`;
+    if (effects.has(k)) throw invalid(w, 'repeats an effect');
+    effects.add(k);
+  });
+  // Configuration items are independent groups; only the command bar (not shipped by this store version) keeps cohorts.
+  if (p.cohort !== null) throw invalid(where, 'names a cohort, which a configuration group never joins');
+}
+
+// What a committed configuration group keeps as consumer state: the last confirmed semantic baseline of each row,
+//   { version: 1, rows: [{ kind, key, id, parentId, projectionSha256, sensitiveInput }] }
+// It grants no ownership of its own (the records do) and never holds a value, a connection id or a digest of either.
+function validateRowConsumer(state, family, records, where) {
+  closedKeys(state, ['version', 'rows'], where);
+  if (state.version !== 1) throw invalid(where, 'has an unknown version');
+  if (!Array.isArray(state.rows)) throw invalid(where, 'has no rows');
+  const seen = new Set();
+  state.rows.forEach((r, i) => {
+    const w = `${where}.rows[${i}]`;
+    closedKeys(r, ['kind', 'key', 'id', 'parentId', 'projectionSha256', 'sensitiveInput'], w);
+    if (!rowKindAllowed(family, r.kind) || !nonempty(r.key)) throw invalid(w, 'is not a row of this family');
+    guidField(r.id, `${w}.id`);
+    if (r.parentId !== null) guidField(r.parentId, `${w}.parentId`);
+    hashOrNull(r.projectionSha256, `${w}.projectionSha256`, false);
+    if (typeof r.sensitiveInput !== 'boolean') throw invalid(w, 'has no sensitive-input flag');
+    if (!records.some((rec) => rec.kind === r.kind && rec.key === r.key && rowIdKey(rec.id) === r.id)) throw invalid(w, 'is a row the group does not bind');
+    const k = `${r.kind}\u0000${r.key}`;
+    if (seen.has(k)) throw invalid(w, 'repeats a row');
+    seen.add(k);
   });
 }
 
@@ -1067,7 +1239,7 @@ function parseEnvelope(text, expect) {
     throw storeError(CODES.unreadable, `the managed binding store is not valid JSON (${e.message})`);
   }
   closedKeys(data, ['schemaVersion', 'environmentFingerprint', 'appUniqueName', 'solutionUniqueName', 'revision', 'groups', 'attempts', 'workflowEffects', 'publicationRiskAcceptances', 'retiredGroups', 'incarnations'], 'the managed binding store');
-  if (data.schemaVersion !== SCHEMA_VERSION) throw invalid('the managed binding store', `has schema version ${data.schemaVersion}, not ${SCHEMA_VERSION}`);
+  if (data.schemaVersion !== SCHEMA_VERSION && data.schemaVersion !== SCHEMA_VERSION_ROWS) throw invalid('the managed binding store', `has schema version ${data.schemaVersion}, not ${SCHEMA_VERSION} or ${SCHEMA_VERSION_ROWS}`);
   if (data.environmentFingerprint !== expect.environmentFingerprint || data.appUniqueName !== expect.appUniqueName || data.solutionUniqueName !== expect.solutionUniqueName) {
     throw invalid('the managed binding store', 'belongs to another environment, app or solution');
   }
@@ -1081,6 +1253,9 @@ function parseEnvelope(text, expect) {
   const invalidGroups = new Map();
   const identity = (x, where) => {
     if (!isObj(x) || !FAMILIES.includes(x.family) || !nonempty(x.key)) throw invalid(where, 'has no family and key');
+    // A configuration family is a version-2 unit: a version-1 file holding one was not written by this store, and the
+    // whole file is refused rather than read with a protocol its version does not promise.
+    if (isRowFamily(x.family) && data.schemaVersion !== SCHEMA_VERSION_ROWS) throw invalid(where, `is a ${x.family} unit in a version ${data.schemaVersion} store`);
     return groupId(x.family, x.key);
   };
   const markInvalid = (id, e) => { if (!invalidGroups.has(id)) invalidGroups.set(id, e.message); };
@@ -1140,6 +1315,21 @@ function parseEnvelope(text, expect) {
   };
   data.groups.forEach((g, i) => claim(g, `groups[${i}]`));
   data.attempts.forEach((a, i) => claim(a, `attempts[${i}]`));
+  // The child rows of the configuration families, by their own table: a value, parameter, property or condition row
+  // bound by two groups (or reserved by one group's attempt and bound by another) is refused for the whole file.
+  const rowOwner = new Map();
+  const claimRow = (x, kind, id, where) => {
+    if (!isRowFamily(x.family) || !ROW_TABLE[kind] || typeof id !== 'string') return;
+    const k = `${ROW_TABLE[kind]}\u0000${rowIdKey(id)}`;
+    const owner = rowOwner.get(k);
+    const gid = groupId(x.family, x.key);
+    if (owner && owner !== gid) throw invalid(where, `binds the ${ROW_TABLE[kind]} row ${id} that another group binds`);
+    rowOwner.set(k, gid);
+  };
+  data.groups.forEach((g, i) => { if (isObj(g) && Array.isArray(g.records)) g.records.forEach((r) => isObj(r) && claimRow(g, r.kind, r.id, `groups[${i}]`)); });
+  data.attempts.forEach((a, i) => {
+    if (isObj(a) && isObj(a.rowProtocol) && Array.isArray(a.rowProtocol.rows)) a.rowProtocol.rows.forEach((r) => isObj(r) && claimRow(a, r.kind, r.id, `attempts[${i}]`));
+  });
   return { envelope: data, invalidGroups };
 }
 
@@ -1312,6 +1502,10 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       const answer = change(next, disk, (token) => { spender = token; }, () => { admitNow = true; });
       if (answer && typeof answer.then === 'function') throw storeError(CODES.notSettled, 'a managed binding change must be synchronous');
       next.revision = disk.envelope.revision + 1;
+      // The first configuration-family unit upgrades the file to version 2 in this same write; a version-2 file stays 2,
+      // and a version-1 file written only for the original families stays 1, byte for byte what an older build writes.
+      const rowUnits = next.groups.some((g) => isRowFamily(g.family)) || next.attempts.some((a) => isRowFamily(a.family));
+      next.schemaVersion = disk.envelope.schemaVersion === SCHEMA_VERSION_ROWS || rowUnits ? SCHEMA_VERSION_ROWS : SCHEMA_VERSION;
       const prevBytes = typeof disk.bytes === 'number' ? disk.bytes : 0;
       let text = `${JSON.stringify(next, null, 2)}\n`;
       // Charge the growth to the spending attempt's reservation. Recording the charge changes the text by a few digits,
@@ -1399,6 +1593,158 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== a.token);
     return owned.length;
   };
+
+  // A sending attempt of a configuration family, at the window epoch the caller claimed (sealRowDispatch, markRowEffectDispatch).
+  const sendingRowAttempt = (env, disk, token, epoch) => {
+    const a = requireAttempt(env, disk, token);
+    if (!isRowFamily(a.family) || !a.rowProtocol) throw storeError(CODES.requestMismatch, 'the request names an attempt that keeps no row protocol');
+    if (a.phase !== 'sending' || !a.expected) throw storeError(CODES.requestMismatch, `the managed ${a.family} "${a.key}" attempt is not sending; nothing is sent under it`);
+    if (a.sendWindow && epoch !== undefined && epoch !== null && a.sendWindow.epoch !== epoch) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt was claimed by another run since this send began; the request is not sent`);
+    return a;
+  };
+
+  // A commit proposal (commitGroup, commitGroupSet) is checked whole before anything else: a list that repeats a
+  // (kind, key) or an id must be refused, not folded into a map where the last record silently wins, and a proof must
+  // carry every field it promises.
+  function checkCommitProposal({ records, proof, adoptionApprovedChildren } = {}) {
+    try {
+      if (!Array.isArray(records)) throw invalid('the proposed records', 'is not a list');
+      const keys = new Set();
+      const ids = new Set();
+      records.forEach((rec, i) => {
+        const where = `the proposed records[${i}]`;
+        validateRecord(rec, ctx.expect, where);
+        const k = `${rec.kind}\u0000${rec.key}`;
+        if (keys.has(k)) throw invalid(where, `repeats ${rec.kind} "${rec.key}"`);
+        keys.add(k);
+        const id = rec.id.toLowerCase();
+        if (id !== NOTES_CONTROL && ids.has(id)) throw invalid(where, `repeats the id ${rec.id}`);
+        ids.add(id);
+      });
+      validateProof(proof, 'the proposed proof');
+      if (adoptionApprovedChildren !== undefined) {
+        if (!Array.isArray(adoptionApprovedChildren)) throw invalid('the approved child adoptions', 'is not a list');
+        adoptionApprovedChildren.forEach((c, i) => {
+          closedKeys(c, ['kind', 'key', 'id'], `the approved child adoptions[${i}]`);
+          if (!nonempty(c.kind) || !nonempty(c.key) || !nonempty(c.id)) throw invalid(`the approved child adoptions[${i}]`, 'is incomplete');
+        });
+      }
+    } catch (e) {
+      throw storeError(CODES.groupInvalid, `a managed group commit was refused before it was written: ${e.message}`);
+    }
+  }
+
+  // The commit of one attempt inside a lease-held change (see commitGroup): answers the committed group.
+  // For a configuration family (ROW_FAMILIES) every NEW record proves its own origin: a root `created` needs this
+  // attempt's acknowledged root create, a root `adopted` the root's exact `adoptionApproved`; a child `created` needs
+  // its OWN child-create receipt (an acknowledged root never stands in for it), a child `adopted` an exact
+  // { kind, key, id } entry of `adoptionApprovedChildren`. A parent's approval or acknowledgement never mints a child.
+  function commitInto(env, disk, { token, baseGeneration, records, proof, consumerState, publication = null, proofSchema, adoptionApproved = false, adoptionApprovedChildren = [] }) {
+    const a = requireAttempt(env, disk, token);
+    if (a.baseGeneration !== baseGeneration) throw storeError(CODES.conflict, 'the managed attempt is based on another generation');
+    if (!a.expected) throw storeError(CODES.notSettled, 'an attempt that was never sent has nothing to commit');
+    const rowFamily = isRowFamily(a.family);
+    const effects = env.workflowEffects.filter((e) => e.attemptToken === token);
+    // Every workflow effect this attempt owns retires in this same write, so none must still be open: an effect
+    // that may have reached the server must be proved first, and one never sent must be sent and proved, or found
+    // fulfilled by a read (fulfillEffect). The refusal leaves the attempt and its effects as they are, and no other
+    // attempt's effects are read or touched.
+    if (effects.some((e) => e.state !== 'confirmed' && e.state !== 'fulfilled')) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" has a workflow effect that is not confirmed`);
+    const old = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+    // A publish of the old generation that may have been sent is settled first (a read-only confirmation, or it stays
+    // blocked). Carried over a new generation, a later read of the OLD layer would confirm the NEW group and drop
+    // the new generation's own debt; the new debt is never folded into the old dispatch either.
+    if (old && old.publication && UNCERTAIN.has(old.publication.state)) {
+      throw storeError(CODES.publicationUncertain, `the managed ${a.family} "${a.key}" has a publish that may have been sent and is not proved live; a new generation is committed only after it is confirmed`, blockedPublication(old.publication.scope, old.publication.dispatchToken));
+    }
+    const acknowledged = rootCreateAcknowledged(a);
+    const receipt = a.acknowledgedChildCreates || [];
+    // Strictly `true`: a truthy flag computed carelessly ('yes', 1) must not stand in for the maker's approval.
+    if (!old && !acknowledged && adoptionApproved !== true) {
+      throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" root was never acknowledged as created; binding it needs its adoption approval`);
+    }
+    // The create evidence of a dashboard root is the store's to mint and keep, never a caller's to propose: a record
+    // read back from the group and handed in again may carry it, but only exactly as the store keeps it on that root
+    // in this commit (checked below); it is set from the store's own, never from the caller's.
+    const echoedMarkers = [];
+    const proposed = (records || []).map((rec) => {
+      if (rec.localCreateDraft === undefined) return rec;
+      const { localCreateDraft, ...rest } = rec;
+      echoedMarkers.push({ kind: rec.kind, key: rec.key, marker: localCreateDraft });
+      return rest;
+    });
+    const merged = [];
+    const byKey = new Map();
+    for (const rec of proposed) byKey.set(`${rec.kind}\u0000${rec.key}`, rec);
+    for (const rec of old ? old.records : []) {
+      const k = `${rec.kind}\u0000${rec.key}`;
+      const next = byKey.get(k);
+      if (!next) { merged.push(rec); continue; }
+      if (String(next.id).toLowerCase() !== String(rec.id).toLowerCase()) {
+        throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" would bind ${rec.kind} "${rec.key}" to another row than it holds`);
+      }
+      // A configuration record keeps the origin it was first bound with, whatever the proposal says.
+      merged.push({ ...next, origin: rowFamily || rec.origin === 'adopted' ? rec.origin : next.origin });
+      byKey.delete(k);
+    }
+    for (const rec of byKey.values()) {
+      // A new record claims `created` only on this attempt's acknowledged root create, or, for a child, on this
+      // attempt's child-create receipt naming that same (kind, key, id); a lost answer needs adoption. A receipt
+      // never covers the root.
+      const isRoot = rec.kind === a.root.kind && rec.key === a.root.key;
+      const receipted = !isRoot && rowIdKey(rec.id) !== rowIdKey(a.root.id)
+        && receipt.some((c) => c.kind === rec.kind && c.key === rec.key && rowIdKey(c.id) === rowIdKey(rec.id));
+      if (rec.origin === 'created' && !acknowledged && !receipted) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without an acknowledged create`);
+      if (rowFamily) {
+        if (isRoot && rec.origin === 'adopted' && adoptionApproved !== true) throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" root is recorded adopted without its adoption approval`);
+        if (isRoot && rec.origin === 'created' && !acknowledged) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" root was never acknowledged as created`);
+        if (!isRoot && rec.origin === 'created' && !receipted) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without its own child-create receipt`);
+        if (!isRoot && rec.origin === 'adopted' && !adoptionApprovedChildren.some((c) => c.kind === rec.kind && c.key === rec.key && rowIdKey(c.id) === rowIdKey(rec.id))) {
+          throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" ${rec.kind} "${rec.key}" is recorded adopted without its own adoption approval`);
+        }
+      }
+      // A child the group did not hold before is bound only when the expected proof, persisted before the send,
+      // named it under that id: an observation cannot add a binding the attempt never said it would make.
+      const planned = isRoot || a.expected.children.some((c) => c.kind === rec.kind && c.key === rec.key && String(c.id).toLowerCase() === String(rec.id).toLowerCase());
+      if (!planned) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" would bind ${rec.kind} "${rec.key}", which its expected proof does not name`);
+      merged.push(rec);
+    }
+    const rootRec = merged.find((r) => r.kind === a.root.kind && r.key === a.root.key);
+    if (!rootRec || String(rootRec.id).toLowerCase() !== a.root.id) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" root was not observed under its expected id`);
+    // The created dashboard root's create evidence: minted from this attempt's acknowledged receipt, or kept from
+    // the generation before for the same root. Never carried to another root, and gone with a retired group.
+    const oldRoot = old ? old.records.find((r) => r.kind === a.root.kind && r.key === a.root.key) : null;
+    let marker = null;
+    if (oldRoot && oldRoot.localCreateDraft && String(oldRoot.id).toLowerCase() === a.root.id) marker = clone(oldRoot.localCreateDraft);
+    else if (!old && dashboardCreateAcknowledged(a)) {
+      const d = a.dashboardCreate;
+      marker = { formatVersion: 1, rootId: a.root.id, attemptToken: a.token, draftSha256: d.draftSha256, bodySha256: d.bodySha256 };
+    }
+    const kept = marker && rootRec.origin === 'created' ? marker : null;
+    if (kept) merged[merged.indexOf(rootRec)] = { ...rootRec, localCreateDraft: kept };
+    for (const e of echoedMarkers) {
+      if (!(kept && e.kind === a.root.kind && e.key === a.root.key && canonicalJson(e.marker) === canonicalJson(kept))) {
+        throw storeError(CODES.groupInvalid, `a managed group commit was refused before it was written: the proposed ${e.kind} "${e.key}" carries create evidence only the store records`);
+      }
+    }
+    for (const child of a.expected.children) {
+      const got = merged.find((r) => r.kind === child.kind && r.key === child.key);
+      if (!got || String(got.id).toLowerCase() !== String(child.id).toLowerCase()) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" lacks the expected ${child.kind} "${child.key}"`);
+    }
+    // The original declaration is the attempt's own, recorded before it sent, and nothing the caller passes here can
+    // replace it; the feature's consumer state is kept exactly as proved. A generation whose attempt recorded none
+    // keeps none: an older generation's original never describes this one.
+    const committed = {
+      family: a.family, key: a.key, generation: newToken(), previousGeneration: old ? old.generation : null,
+      root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState,
+      ...(a.declaration !== undefined ? { originalDeclaration: clone(a.declaration) } : {}), publication,
+    };
+    env.groups = env.groups.filter((g) => g !== old);
+    env.groups.push(committed);
+    env.attempts = env.attempts.filter((x) => x !== a);
+    env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== token);
+    return committed;
+  }
 
   const handle = {
     get file() { return ctx.full; },
@@ -1783,124 +2129,121 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * inside — `consumerState`, which is kept exactly as passed; a group committed by an attempt that recorded none has
      * no `originalDeclaration`.
      */
-    commitGroup({ token, baseGeneration, records, proof, consumerState, publication = null, proofSchema, adoptionApproved = false }) {
-      // The proposal is checked whole before anything else: a list that repeats a (kind, key) or an id must be refused,
-      // not folded into a map where the last record silently wins, and a proof must carry every field it promises.
-      try {
-        if (!Array.isArray(records)) throw invalid('the proposed records', 'is not a list');
-        const keys = new Set();
-        const ids = new Set();
-        records.forEach((rec, i) => {
-          const where = `the proposed records[${i}]`;
-          validateRecord(rec, ctx.expect, where);
-          const k = `${rec.kind}\u0000${rec.key}`;
-          if (keys.has(k)) throw invalid(where, `repeats ${rec.kind} "${rec.key}"`);
-          keys.add(k);
-          const id = rec.id.toLowerCase();
-          if (id !== NOTES_CONTROL && ids.has(id)) throw invalid(where, `repeats the id ${rec.id}`);
-          ids.add(id);
-        });
-        validateProof(proof, 'the proposed proof');
-      } catch (e) {
-        throw storeError(CODES.groupInvalid, `a managed group commit was refused before it was written: ${e.message}`);
-      }
+    commitGroup(proposal) {
+      checkCommitProposal(proposal);
       let committed;
-      mutate((env, disk) => {
-        const a = requireAttempt(env, disk, token);
-        if (a.baseGeneration !== baseGeneration) throw storeError(CODES.conflict, 'the managed attempt is based on another generation');
-        if (!a.expected) throw storeError(CODES.notSettled, 'an attempt that was never sent has nothing to commit');
-        const effects = env.workflowEffects.filter((e) => e.attemptToken === token);
-        // Every workflow effect this attempt owns retires in this same write, so none must still be open: an effect
-        // that may have reached the server must be proved first, and one never sent must be sent and proved, or found
-        // fulfilled by a read (fulfillEffect). The refusal leaves the attempt and its effects as they are, and no other
-        // attempt's effects are read or touched.
-        if (effects.some((e) => e.state !== 'confirmed' && e.state !== 'fulfilled')) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" has a workflow effect that is not confirmed`);
-        const old = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
-        // A publish of the old generation that may have been sent is settled first (a read-only confirmation, or it stays
-        // blocked). Carried over a new generation, a later read of the OLD layer would confirm the NEW group and drop
-        // the new generation's own debt; the new debt is never folded into the old dispatch either.
-        if (old && old.publication && UNCERTAIN.has(old.publication.state)) {
-          throw storeError(CODES.publicationUncertain, `the managed ${a.family} "${a.key}" has a publish that may have been sent and is not proved live; a new generation is committed only after it is confirmed`, blockedPublication(old.publication.scope, old.publication.dispatchToken));
-        }
-        const acknowledged = rootCreateAcknowledged(a);
-        const receipt = a.acknowledgedChildCreates || [];
-        // Strictly `true`: a truthy flag computed carelessly ('yes', 1) must not stand in for the maker's approval.
-        if (!old && !acknowledged && adoptionApproved !== true) {
-          throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" root was never acknowledged as created; binding it needs its adoption approval`);
-        }
-        // The create evidence of a dashboard root is the store's to mint and keep, never a caller's to propose: a record
-        // read back from the group and handed in again may carry it, but only exactly as the store keeps it on that root
-        // in this commit (checked below); it is set from the store's own, never from the caller's.
-        const echoedMarkers = [];
-        const proposed = (records || []).map((rec) => {
-          if (rec.localCreateDraft === undefined) return rec;
-          const { localCreateDraft, ...rest } = rec;
-          echoedMarkers.push({ kind: rec.kind, key: rec.key, marker: localCreateDraft });
-          return rest;
-        });
-        const merged = [];
-        const byKey = new Map();
-        for (const rec of proposed) byKey.set(`${rec.kind}\u0000${rec.key}`, rec);
-        for (const rec of old ? old.records : []) {
-          const k = `${rec.kind}\u0000${rec.key}`;
-          const next = byKey.get(k);
-          if (!next) { merged.push(rec); continue; }
-          if (String(next.id).toLowerCase() !== String(rec.id).toLowerCase()) {
-            throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" would bind ${rec.kind} "${rec.key}" to another row than it holds`);
-          }
-          merged.push({ ...next, origin: rec.origin === 'adopted' ? 'adopted' : next.origin });
-          byKey.delete(k);
-        }
-        for (const rec of byKey.values()) {
-          // A new record claims `created` only on this attempt's acknowledged root create, or, for a child, on this
-          // attempt's child-create receipt naming that same (kind, key, id); a lost answer needs adoption. A receipt
-          // never covers the root.
-          const isRoot = rec.kind === a.root.kind && rec.key === a.root.key;
-          const receipted = !isRoot && rowIdKey(rec.id) !== rowIdKey(a.root.id)
-            && receipt.some((c) => c.kind === rec.kind && c.key === rec.key && rowIdKey(c.id) === rowIdKey(rec.id));
-          if (rec.origin === 'created' && !acknowledged && !receipted) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without an acknowledged create`);
-          // A child the group did not hold before is bound only when the expected proof, persisted before the send,
-          // named it under that id: an observation cannot add a binding the attempt never said it would make.
-          const planned = isRoot || a.expected.children.some((c) => c.kind === rec.kind && c.key === rec.key && String(c.id).toLowerCase() === String(rec.id).toLowerCase());
-          if (!planned) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" would bind ${rec.kind} "${rec.key}", which its expected proof does not name`);
-          merged.push(rec);
-        }
-        const rootRec = merged.find((r) => r.kind === a.root.kind && r.key === a.root.key);
-        if (!rootRec || String(rootRec.id).toLowerCase() !== a.root.id) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" root was not observed under its expected id`);
-        // The created dashboard root's create evidence: minted from this attempt's acknowledged receipt, or kept from
-        // the generation before for the same root. Never carried to another root, and gone with a retired group.
-        const oldRoot = old ? old.records.find((r) => r.kind === a.root.kind && r.key === a.root.key) : null;
-        let marker = null;
-        if (oldRoot && oldRoot.localCreateDraft && String(oldRoot.id).toLowerCase() === a.root.id) marker = clone(oldRoot.localCreateDraft);
-        else if (!old && dashboardCreateAcknowledged(a)) {
-          const d = a.dashboardCreate;
-          marker = { formatVersion: 1, rootId: a.root.id, attemptToken: a.token, draftSha256: d.draftSha256, bodySha256: d.bodySha256 };
-        }
-        const kept = marker && rootRec.origin === 'created' ? marker : null;
-        if (kept) merged[merged.indexOf(rootRec)] = { ...rootRec, localCreateDraft: kept };
-        for (const e of echoedMarkers) {
-          if (!(kept && e.kind === a.root.kind && e.key === a.root.key && canonicalJson(e.marker) === canonicalJson(kept))) {
-            throw storeError(CODES.groupInvalid, `a managed group commit was refused before it was written: the proposed ${e.kind} "${e.key}" carries create evidence only the store records`);
-          }
-        }
-        for (const child of a.expected.children) {
-          const got = merged.find((r) => r.kind === child.kind && r.key === child.key);
-          if (!got || String(got.id).toLowerCase() !== String(child.id).toLowerCase()) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" lacks the expected ${child.kind} "${child.key}"`);
-        }
-        // The original declaration is the attempt's own, recorded before it sent, and nothing the caller passes here can
-        // replace it; the feature's consumer state is kept exactly as proved. A generation whose attempt recorded none
-        // keeps none: an older generation's original never describes this one.
-        committed = {
-          family: a.family, key: a.key, generation: newToken(), previousGeneration: old ? old.generation : null,
-          root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState,
-          ...(a.declaration !== undefined ? { originalDeclaration: clone(a.declaration) } : {}), publication,
-        };
-        env.groups = env.groups.filter((g) => g !== old);
-        env.groups.push(committed);
-        env.attempts = env.attempts.filter((x) => x !== a);
-        env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== token);
-      });
+      mutate((env, disk) => { committed = commitInto(env, disk, proposal); });
       return clone(committed);
+    },
+    /**
+     * Commit several configuration groups in ONE write (each proposal as commitGroup takes it, plus, for a row family,
+     * `adoptionApprovedChildren`): either every group of the set is committed and its attempt removed, or nothing is
+     * written. A partial set never exposes some new generations without the others.
+     */
+    commitGroupSet(proposals) {
+      if (!Array.isArray(proposals) || proposals.length === 0) throw storeError(CODES.notSettled, 'commitGroupSet needs a non-empty list of proposals');
+      proposals.forEach(checkCommitProposal);
+      if (new Set(proposals.map((p) => p.token)).size !== proposals.length) throw storeError(CODES.notSettled, 'commitGroupSet names one attempt twice');
+      const out = [];
+      mutate((env, disk) => { for (const p of proposals) out.push(commitInto(env, disk, p)); });
+      return clone(out);
+    },
+    /**
+     * Prepare the attempts of several configuration groups (ROW_FAMILIES) in ONE write, before anything is sent. Each
+     * plan: { family, key, baseGeneration, revision?, root, declarationSha256, rowProtocol, completionBytes? }. Every
+     * check of prepareAttempt applies to each (a usable group, no pending attempt, the generation it was planned on);
+     * any refusal writes nothing. The first such write upgrades a version-1 store to version 2. Answers the tokens, in
+     * order. `cohort` is reserved for command bars, which this store version does not hold: it must be null.
+     */
+    prepareAttemptSet(plans, { cohort = null } = {}) {
+      if (!Array.isArray(plans) || plans.length === 0) throw storeError(CODES.notSettled, 'prepareAttemptSet needs a non-empty list of plans');
+      if (cohort !== null) throw storeError(CODES.notSettled, 'prepareAttemptSet takes no cohort for configuration groups');
+      const prepared = plans.map((p) => {
+        if (!isObj(p) || !isRowFamily(p.family) || !nonempty(p.key)) throw storeError(CODES.notSettled, 'prepareAttemptSet prepares configuration groups only');
+        checkCompletionBytes(p.completionBytes, 'prepareAttemptSet `completionBytes`');
+        return { plan: p, token: newToken(), reserve: { bytes: completionReserveFor(undefined, p.completionBytes, `the managed ${p.family} "${p.key}"`), used: 0 } };
+      });
+      if (new Set(plans.map((p) => groupId(p.family, p.key))).size !== plans.length) throw storeError(CODES.notSettled, 'prepareAttemptSet names one group twice');
+      mutate((env, disk) => {
+        for (const { plan, token, reserve } of prepared) {
+          const { family, key, baseGeneration = null, revision, root, declarationSha256, rowProtocol } = plan;
+          if (revision !== undefined && revision !== disk.envelope.revision) throw storeError(CODES.conflict, `the managed binding store changed since the plan was made (revision ${disk.envelope.revision}, plan ${revision})`);
+          const unit = usable(unitOf(disk, family, key));
+          if (unit.attempt) throw storeError(CODES.pending, `the managed ${family} "${key}" already has a pending attempt`);
+          if ((unit.group ? unit.group.generation : null) !== baseGeneration) throw storeError(CODES.conflict, `the managed ${family} "${key}" changed since the plan was made`);
+          env.attempts.push({
+            family, key, token, baseGeneration, phase: 'prepared', root, knownScopes: [], declarationSha256, expected: null,
+            acknowledgedRoot: false, savedObservation: null, publication: null, completionReserve: reserve, rowProtocol: clone(rowProtocol),
+          });
+        }
+      }, { admit: true });
+      return prepared.map((x) => x.token);
+    },
+    /**
+     * Mark several prepared configuration attempts sending in ONE write, each with its complete expected proof:
+     * entries [{ token, expected }]. `claim` as markSending: 'first' (each must still be prepared) or 'continue' (each
+     * must prove that nothing it sent was carried out — attemptProvenUnsent, which a dispatched row or effect of its
+     * row protocol defeats). `observed: true` arms each send window at zero. Answers [{ token, epoch }].
+     */
+    markAttemptSetSending(entries, { claim = 'first', observed = true } = {}) {
+      if (!Array.isArray(entries) || entries.length === 0) throw storeError(CODES.notSettled, 'markAttemptSetSending needs a non-empty list');
+      if (claim !== 'first' && claim !== 'continue') throw storeError(CODES.notSettled, `markAttemptSetSending cannot claim an attempt to "${claim}"`);
+      const out = [];
+      mutate((env, disk, spend) => {
+        for (const { token, expected } of entries) {
+          const a = requireAttempt(env, disk, token);
+          if (!isRowFamily(a.family)) throw storeError(CODES.notSettled, 'markAttemptSetSending marks configuration attempts only');
+          const name = `the managed ${a.family} "${a.key}"`;
+          if (a.expected !== null && canonicalJson(a.expected) !== canonicalJson(expected)) throw storeError(CODES.completion, 'a sent attempt keeps the expected proof it was sent with');
+          if (claim === 'first' && a.phase !== 'prepared') throw storeError(CODES.pending, `${name} attempt was marked sending by another run`);
+          if (claim === 'continue' && !(observed === true && attemptProvenUnsent(a, env.workflowEffects))) throw storeError(CODES.pending, `${name} attempt no longer shows that nothing it sent was carried out; it is not sent again`);
+          spend(token);
+          a.expected = expected;
+          if (a.phase === 'prepared') {
+            a.phase = 'sending';
+            if (observed === true) a.sendWindow = { possible: 0, notStarted: 0, epoch: 1 };
+          } else if (claim === 'continue' && a.sendWindow) {
+            a.sendWindow.epoch += 1;
+          }
+          out.push({ token, epoch: a.sendWindow ? a.sendWindow.epoch : null });
+        }
+      });
+      return out;
+    },
+    /**
+     * Seal what ONE request is about to carry for the rows of a sending configuration attempt, and mark them dispatched,
+     * in one write before the request leaves (lib/managed-create-transport.js). rows: [{ kind, key, id, sentFields,
+     * sentSha256 }] — every row the request contains (a deep insert seals its root and children together). A row the
+     * protocol does not name under that id, a row already dispatched (its first sealed request is kept), or an epoch
+     * that is not the window's current one is refused: nothing is written and the request is not sent.
+     */
+    sealRowDispatch({ token, epoch, rows } = {}) {
+      if (!Array.isArray(rows) || rows.length === 0) throw storeError(CODES.notSettled, 'sealRowDispatch needs the rows the request carries');
+      mutate((env, disk, spend) => {
+        const a = sendingRowAttempt(env, disk, token, epoch);
+        spend(token);
+        for (const s of rows) {
+          const r = a.rowProtocol.rows.find((x) => x.kind === s.kind && x.key === s.key);
+          if (!r || r.id !== normalizeGuid(s.id)) throw storeError(CODES.requestMismatch, `the request carries a ${s.kind} row the attempt of the managed ${a.family} "${a.key}" did not prepare under that id`);
+          if (r.dispatched) throw storeError(CODES.requestMismatch, `the ${s.kind} row ${r.id} of the managed ${a.family} "${a.key}" was already sent once; it is not sent again`);
+          r.sentFields = [...s.sentFields].sort();
+          r.sentSha256 = s.sentSha256;
+          r.dispatched = true;
+        }
+        if (a.sendWindow) a.sendWindow.possible += 1;
+      });
+    },
+    /** Mark one completion effect (a solution membership, a rule's state) of a sending configuration attempt dispatched, before it leaves. */
+    markRowEffectDispatch({ token, epoch, kind, id } = {}) {
+      mutate((env, disk, spend) => {
+        const a = sendingRowAttempt(env, disk, token, epoch);
+        spend(token);
+        const e = a.rowProtocol.effects.find((x) => x.kind === kind && x.id === normalizeGuid(id));
+        if (!e) throw storeError(CODES.requestMismatch, `the ${kind} of ${id} is not an effect the attempt of the managed ${a.family} "${a.key}" prepared`);
+        if (e.dispatched) throw storeError(CODES.requestMismatch, `the ${kind} of ${id} was already sent once for the managed ${a.family} "${a.key}"; it is not sent again`);
+        e.dispatched = true;
+        if (a.sendWindow) a.sendWindow.possible += 1;
+      });
     },
     /**
      * Mark, in one write immediately before the one send of `scope` under `token`:
@@ -2468,6 +2811,8 @@ function managedManifestView(snapshot) {
       records: clone(g.records), proof: clone(g.proof),
       declaration: g.consumerState && g.consumerState.declaration !== undefined ? clone(g.consumerState.declaration) : undefined,
       originalDeclaration: g.originalDeclaration !== undefined ? clone(g.originalDeclaration) : undefined,
+      // A configuration group (ROW_FAMILIES) keeps no declaration: verify reads its rows' last confirmed baselines.
+      ...(isRowFamily(g.family) ? { rows: clone(g.consumerState.rows) } : {}),
     });
   }
   return view;
@@ -2513,6 +2858,10 @@ module.exports = {
   DECLARATION_MAX_BYTES,
   CODES,
   FAMILIES,
+  ROW_FAMILIES,
+  ROW_TABLE,
+  ROW_PROOF_SCHEMA,
+  SCHEMA_VERSION_ROWS,
   ROOT_KIND,
   storeFileName,
   parseEnvelope,
