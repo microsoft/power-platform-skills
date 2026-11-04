@@ -355,6 +355,82 @@ function expectedOf(kind, artifact, child) {
   }
 }
 
+// Whether the App Spec authors `field` on `from`: present and not undefined. An explicit null or false is authored (it
+// clears or turns off); only an omitted field is left to the row.
+const authored = (from, field) => isPlain(from) && has(from, field) && from[field] !== undefined;
+
+/**
+ * What a row the plan UPDATES must read back as: the row's own fields from its fresh exact read (`base`), with only what
+ * the App Spec authors laid over them — the same overlay the existing typed planner compares by
+ * (configuration-artifacts.js variablePlan, referencePlan, customApiPlan / compareChildren, duplicateRulePlan /
+ * overlayCondition). `created` is what a CREATE of the same declaration reads back as (expectedOf): an authored field
+ * takes its value from there, so a create and an update of one declaration say the same thing about it. An omitted
+ * field never takes a create default: the update does not send it, and the row keeps what it has.
+ * Kept from `created` in every case: the identity fields, the immutable ones the App Spec must state (a definition's
+ * type, a reference's connector, a rule's table, a child's type), a definition's secret store (only the store a create
+ * makes is supported, so another one read back is a difference, never an expectation) and a Custom API root's labels
+ * (pinApiLabels has already laid them over the base).
+ */
+function boundExpectation(kind, created, base, declared, binds) {
+  const row = semanticOf(kind, base.decoded);
+  const out = { ...created };
+  const keep = (field) => { out[field] = has(row, field) ? row[field] : null; };
+  const unless = (isAuthored, fields) => { if (!isAuthored) for (const f of fields) keep(f); };
+  switch (kind) {
+    case 'environmentVariable':
+      unless(declared.name != null, ['name']);
+      for (const f of ['description', 'defaultValue', 'valueSchema', 'connectorId', 'parameterKey']) unless(authored(declared, f), [f]);
+      unless(has(declared, 'isRequired'), ['isRequired']);
+      unless(has(declared, 'parentSchemaName'), ['parentDefinitionId']);
+      return out;
+    case 'connectionReference':
+      unless(declared.name != null, ['name']);
+      unless(authored(declared, 'description'), ['description']);
+      unless(authored(declared, 'customConnectorId'), ['customConnectorId']);
+      // Connected is what the deployment settings ask for when they name the reference, else the row's own.
+      unless(!!binds.connectionReferences.get(lower(declared.logicalName)), ['connected']);
+      return out;
+    case 'customApi':
+      for (const f of ['binding', 'boundEntityLogicalName', 'isFunction', 'allowedProcessingSteps', 'enabledForWorkflow', 'isPrivate', 'executePrivilegeName']) unless(authored(declared, f), [f]);
+      return out;
+    case 'customApiRequestParameter':
+    case 'customApiResponseProperty':
+      if (kind === 'customApiRequestParameter') unless(has(declared, 'isOptional'), ['isOptional']);
+      unless(authored(declared, 'entityLogicalName'), ['entityLogicalName']);
+      // A child's label: authored (an explicit null clears it) or the row's own.
+      for (const f of LABELS) out[f] = authored(declared, f) ? declared[f] : has(row, f) ? row[f] : null;
+      return out;
+    case 'duplicateRule':
+      unless(nonEmpty(declared.name), ['name']);
+      for (const f of ['description', 'matchingEntity', 'caseSensitive', 'excludeInactiveRecords']) unless(authored(declared, f), [f === 'matchingEntity' ? 'matchingEntityLogicalName' : f]);
+      return out;
+    case 'duplicateRuleCondition': {
+      // configuration-artifacts.js overlayCondition: the column and match are the declaration's; the matching column,
+      // character count and blank handling it omits stay as the row has them.
+      const fields = base.decoded.fields;
+      const pick = (f) => (authored(declared, f) ? declared[f] : fields[f]);
+      return A.normalCondition({ column: declared.column, matchingColumn: pick('matchingColumn'), match: declared.match, characters: pick('characters'), ignoreBlankValues: pick('ignoreBlankValues') === true });
+    }
+    default:
+      return out;
+  }
+}
+
+// The declaration of the child in `slot` of a root entry: a Custom API child by its unique name in its direction, a
+// condition by its key; a value has none (an empty object).
+function declaredChild(entry, slot) {
+  if (slot.startsWith('request:') || slot.startsWith('response:')) {
+    const list = slot.startsWith('request:') ? entry.requestParameters : entry.responseProperties;
+    return (list || []).find((c) => lower(c.uniqueName) === slot.slice(slot.indexOf(':') + 1)) || {};
+  }
+  return (entry.conditions || []).find((c) => c.key === slot) || {};
+}
+
+// The state a bound rule keeps when its App Spec omits `status`: the row's own, published while a publish is in flight.
+function boundRuleState(base) {
+  return ruleStateOf(base.decoded.state.statecode, base.decoded.state.statuscode) || 'published';
+}
+
 // The projection a row is judged by: the expected fields only, plus every unmodelled column a read found filled and,
 // for a root, every child row its complete graph holds that the plan does not (observe):
 //   sha256(canonicalJson({ kind, fields: { <expected field>: <value>, ... }, unmodelled?: [<column>, ...], unexpectedChildren?: ['<kind>:<id>', ...] }))
@@ -462,7 +538,11 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
   const rootMode = got.intent.boundId !== undefined ? 'update' : 'create';
   const bound = new Set(boundSlots);
   if (kind === 'customApi') pinApiLabels(artifact, rootMode, new Map(Object.keys(got.childIds).map((s) => [s, bound.has(s) ? 'update' : 'create'])), bases);
-  const root = { kind, key: portKey, id: rootId, parentId: null, slot: null, mode: rootMode, expected: expectedOf(kind, artifact), sensitiveInput: false };
+  const rootExpected = expectedOf(kind, artifact);
+  const root = {
+    kind, key: portKey, id: rootId, parentId: null, slot: null, mode: rootMode, sensitiveInput: false,
+    expected: rootMode === 'update' ? boundExpectation(kind, rootExpected, baseOf(bases, kind, rootId, null), entry, binds) : rootExpected,
+  };
   if (kind === 'connectionReference' && artifact.connectionId != null && artifact.connectionId !== '') {
     root.sensitiveInput = true;
     secrets.set(rowKey(kind, portKey), artifact.connectionId);
@@ -474,9 +554,12 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     const children = kind === 'customApi' ? [...artifact.requestParameters, ...artifact.responseProperties] : kind === 'duplicateRule' ? artifact.conditions : [];
     const child = children.find((c) => normalizeGuid(c.id) === id) || null;
     if (childKind !== 'environmentVariableValue' && !child) throw new TypeError(`planOf: the ${slot} child of ${kind} "${portKey}" is not in its artifact`);
+    const mode = bound.has(slot) ? 'update' : 'create';
+    const created = expectedOf(childKind, artifact, child);
     const row = {
-      kind: childKind, key: JSON.stringify([portKey, slot]), id, parentId: rootId, slot, mode: bound.has(slot) ? 'update' : 'create',
-      expected: expectedOf(childKind, artifact, child), sensitiveInput: childKind === 'environmentVariableValue',
+      kind: childKind, key: JSON.stringify([portKey, slot]), id, parentId: rootId, slot, mode,
+      expected: mode === 'update' ? boundExpectation(childKind, created, baseOf(bases, childKind, id, rootId), declaredChild(entry, slot), binds) : created,
+      sensitiveInput: childKind === 'environmentVariableValue',
     };
     // A condition's namesake is any condition of the rule its declaration describes (configuration-artifacts.js describes).
     if (childKind === 'duplicateRuleCondition') row.declared = structuredClone((entry.conditions || []).find((c) => c.key === slot));
@@ -501,7 +584,10 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
       members.push({ kind: r.kind, id: r.id, componentType });
     }
   }
-  const ruleState = kind === 'duplicateRule' ? artifact.status : null;
+  const ruleState = kind !== 'duplicateRule' ? null
+    // A bound rule whose App Spec omits `status` keeps the state the row shows (as the existing planner does: a build
+    // never republishes a rule somebody unpublished); a create, or an authored status, is the declared state.
+    : rootMode === 'update' && entry.status === undefined ? boundRuleState(baseOf(bases, kind, rootId, null)) : artifact.status;
   if (ruleState !== null && ruleState !== 'published' && ruleState !== 'unpublished') throw new TypeError(`planOf: rule status ${ruleState} is not one this driver plans`);
   // A protected rule is published once, by the create set that makes it: only a plan whose rule row is a create holds the
   // publish effect. A bound rule's plan keeps its state as a completion check (verified, never published again), so a

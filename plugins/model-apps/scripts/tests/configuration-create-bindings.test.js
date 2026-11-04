@@ -576,10 +576,18 @@ test('a rule is published once, by the create set that makes it: a bound rule\'s
   assert.deepEqual(B.createClassifier([{ token: 't', planned: created }])(publish(id)), { type: 'effect', token: 't', kind: 'rule-state', id });
   const unpublished = planned('duplicateRule', 'email', { spec: spec({ duplicateDetectionRules: [{ ...spec().duplicateDetectionRules[0], status: 'unpublished' }] }) });
   assert.deepEqual(unpublished.plan.effects.filter((e) => e.kind === 'rule-state'), []);
-  const bound = planned('duplicateRule', 'email', { boundIdOf: (k) => (k === 'duplicateRule' ? OTHER : undefined), boundSlots: ['e'] });
-  assert.deepEqual([bound.rows[0].mode, bound.plan.ruleState], ['update', 'published'], 'the declared state is still what the rule must read back as');
+  const w = await wireOf(created);
+  const bound = await rebound(w.sdk.dataverse, created);
+  assert.deepEqual([bound.rows[0].mode, bound.plan.ruleState], ['update', 'published'], 'the state the rule must read back as');
   assert.deepEqual(bound.plan.effects.filter((e) => e.kind === 'rule-state'), [], 'and no publish is planned for it');
-  assert.equal(B.createClassifier([{ token: 't', planned: bound }])(publish(OTHER)), null, 'a publish of a bound rule');
+  assert.equal(B.createClassifier([{ token: 't', planned: bound }])(publish(id)), null, 'a publish of a bound rule');
+  // A bound rule whose App Spec omits its status keeps the row's state: a rule somebody unpublished is verified as
+  // unpublished, never published again. An authored status is the declared one.
+  const unpublish = await w.org.request({ url: `${w.org.origin}/api/data/v9.2/duplicaterules(${id})`, method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ statecode: 0, statuscode: 0 }) });
+  assert.ok(unpublish.statusCode < 300);
+  assert.equal((await rebound(w.sdk.dataverse, created)).plan.ruleState, 'unpublished');
+  const declared = spec({ duplicateDetectionRules: [{ ...spec().duplicateDetectionRules[0], status: 'published' }] });
+  assert.equal((await rebound(w.sdk.dataverse, created, { spec: declared })).plan.ruleState, 'published');
 });
 
 test('completion reads the root\'s whole child graph: a child the plan does not hold, on any page, is a difference; a graph not read whole is unknown', async () => {
@@ -699,7 +707,11 @@ test('pins: a data-source definition, every root\'s namesake predicate, a condit
     assert.equal((await B.readConfigurationConflicts((await sdkOf(org, null)).dataverse, p)).state, 'conflict', kind);
   }
   // A condition's namesake under a bound rule: every authored optional field and the actual parent.
-  const rule = planned('duplicateRule', 'rk|/x', { spec: s23({ duplicateDetectionRules: [{ key: 'rk|/x', name: 'Same email', entity: 'contact', conditions: [{ key: 'ck|/y', column: 'emailaddress1', matchingColumn: 'lastname', match: 'firstCharacters', characters: 3, ignoreBlankValues: true }] }] }), boundIdOf: (k) => (k === 'duplicateRule' ? OTHER : undefined) });
+  const ruleBase = await B.readConfigurationRow(reader([[`/duplicaterules(${OTHER})`, { status: 200, body: {
+    '@odata.etag': 'W/"5"', duplicateruleid: OTHER, name: 'Same email', description: null, baseentityname: 'contact', matchingentityname: 'contact',
+    iscasesensitive: false, excludeinactiverecords: false, statecode: 1, statuscode: 2,
+  } }]]), 'duplicateRule', OTHER);
+  const rule = planned('duplicateRule', 'rk|/x', { spec: s23({ duplicateDetectionRules: [{ key: 'rk|/x', name: 'Same email', entity: 'contact', conditions: [{ key: 'ck|/y', column: 'emailaddress1', matchingColumn: 'lastname', match: 'firstCharacters', characters: 3, ignoreBlankValues: true }] }] }), boundIdOf: (k) => (k === 'duplicateRule' ? OTHER : undefined), bases: new Map([[OTHER, ruleBase]]) });
   assert.equal(rule.rows[1].key, JSON.stringify(['rk|/x', 'ck|/y']));
   const row = { duplicateruleconditionid: '11111111-1111-4111-8111-111111111111', baseattributename: 'EMAILADDRESS1', matchingattributename: 'LASTNAME', operatorcode: 1, operatorparam: 3, ignoreblankvalues: true, _regardingobjectid_value: OTHER };
   for (const [change, expected] of [[{}, 'conflict'], [{ matchingattributename: 'emailaddress1' }, 'clear'], [{ operatorparam: 2 }, 'clear'], [{ ignoreblankvalues: false }, 'clear'],
@@ -720,5 +732,73 @@ test('pins: a data-source definition, every root\'s namesake predicate, a condit
     const req = (await wireOf(p)).sent.find((r) => r.body && Object.hasOwn(JSON.parse(r.body), column));
     const other = withBody(req, (b) => { b[column] = column === 'value' ? 'value-two' : 'connection-two'; });
     assert.deepEqual(B.createClassifier([{ token: 't', planned: p }])(req), B.createClassifier([{ token: 't', planned: q }])(other));
+  }
+});
+test('a bound row keeps what its App Spec omits: the expectation is the row read under the authored fields, never a create default', async () => {
+  const sameAs = async (dv, p, label) => {
+    const seen = await B.observe(dv, p);
+    for (const r of p.rows) assert.equal(seen.rows.find((x) => x.id === r.id).projectionSha256, r.expectedSha256, `${label}: ${r.kind}`);
+  };
+  // A Custom API made private, then edited by a description-only App Spec that no longer says so.
+  {
+    const s = spec({ customApis: [{ ...spec().customApis[0], isPrivate: true }] });
+    const first = planned('customApi', 'contoso_Calc', { spec: s });
+    const w = await wireOf(first);
+    const next = structuredClone(s);
+    delete next.customApis[0].isPrivate;
+    next.customApis[0].description = 'A description-only edit';
+    const q = await rebound(w.sdk.dataverse, first, { spec: next });
+    assert.equal(q.rows[0].expected.isPrivate, true, 'an omitted flag keeps the row\'s own value');
+    const edit = await pushEdit(w, 'customApi', first.rows[0].id, [['/description', 'A description-only edit']]);
+    assert.equal(edit.result.saved, true);
+    assert.deepEqual(Object.keys(JSON.parse(edit.sent[0].body)), ['description'], 'the SDK sends only the edited field');
+    assert.ok(B.createClassifier([{ token: 't', planned: q }])(edit.sent[0]), 'and that PATCH is the planned one');
+    await sameAs(w.sdk.dataverse, q, 'omitted isPrivate');
+    // An explicit false is still a change, and a create of the same App Spec still takes the create default.
+    const flipped = structuredClone(next);
+    flipped.customApis[0].isPrivate = false;
+    const r = await rebound(w.sdk.dataverse, first, { spec: flipped });
+    assert.equal(r.rows[0].expected.isPrivate, false);
+    assert.notEqual((await B.observe(w.sdk.dataverse, r)).rows[0].projectionSha256, r.rows[0].expectedSha256, 'an explicit false the row does not show yet');
+    assert.equal(planned('customApi', 'contoso_Calc', { spec: next }).rows[0].expected.isPrivate, false, 'a created row: the create default');
+  }
+  // An environment variable's default value and required flag, omitted by a later description-only edit.
+  {
+    const s = spec({ environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', defaultValue: 'fallback', isRequired: true }] });
+    const first = planned('environmentVariable', 'contoso_ApiBase', { spec: s });
+    const w = await wireOf(first);
+    const next = spec({ environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', description: 'A description-only edit' }] });
+    const q = await rebound(w.sdk.dataverse, first, { spec: next });
+    assert.deepEqual([q.rows[0].expected.defaultValue, q.rows[0].expected.isRequired], ['fallback', true]);
+    const edit = await pushEdit(w, 'environmentVariable', first.rows[0].id, [['/description', 'A description-only edit']]);
+    assert.equal(edit.result.saved, true);
+    await sameAs(w.sdk.dataverse, q, 'omitted defaultValue and isRequired');
+    const cleared = spec({ environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', description: 'A description-only edit', defaultValue: null, isRequired: false }] });
+    const c = await rebound(w.sdk.dataverse, first, { spec: cleared });
+    assert.deepEqual([c.rows[0].expected.defaultValue, c.rows[0].expected.isRequired], [null, false], 'an explicit null and false stay changes');
+    const created = planned('environmentVariable', 'contoso_ApiBase', { spec: next });
+    assert.deepEqual([created.rows[0].expected.defaultValue, created.rows[0].expected.isRequired], [null, false], 'a created row: the create defaults');
+  }
+  // A connection reference's description and connection, and a rule's flags and its condition's optional fields.
+  {
+    const s = spec({ connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP, description: 'Kept' }] });
+    const first = planned('connectionReference', 'contoso_sp', { spec: s });
+    const w = await wireOf(first);
+    const next = spec({ connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] });
+    const q = await rebound(w.sdk.dataverse, first, { spec: next, bindings: A.readDeploymentBindings({}, next) });
+    assert.deepEqual([q.rows[0].expected.description, q.rows[0].expected.connected], ['Kept', true], 'no binding asked: the row keeps its connection');
+    await sameAs(w.sdk.dataverse, q, 'omitted description and connection');
+  }
+  {
+    const declared = { key: 'email', name: 'Same email', entity: 'contact', caseSensitive: true, conditions: [{ key: 'e', column: 'emailaddress1', match: 'firstCharacters', characters: 3, ignoreBlankValues: true }] };
+    const first = planned('duplicateRule', 'email', { spec: spec({ duplicateDetectionRules: [declared] }) });
+    const w = await wireOf(first);
+    const next = spec({ duplicateDetectionRules: [{ key: 'email', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'firstCharacters' }] }] });
+    const q = await rebound(w.sdk.dataverse, first, { spec: next });
+    assert.equal(q.rows[0].expected.caseSensitive, true);
+    assert.deepEqual(q.rows[1].expected, { column: 'emailaddress1', matchingColumn: 'emailaddress1', match: 'firstCharacters', characters: 3, ignoreBlankValues: true });
+    await sameAs(w.sdk.dataverse, q, 'omitted rule flag and condition fields');
+    const created = planned('duplicateRule', 'email', { spec: next });
+    assert.deepEqual([created.rows[0].expected.caseSensitive, created.rows[1].expected.ignoreBlankValues, created.rows[1].expected.characters], [false, false, null], 'a created rule: the create defaults');
   }
 });
