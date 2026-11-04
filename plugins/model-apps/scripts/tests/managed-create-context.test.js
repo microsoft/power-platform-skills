@@ -9,6 +9,7 @@ const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createDeferredManagedCreateGate, sentProjection } = require('../lib/managed-create-transport.js');
 const { CODES, createManagedCreateContext, buildRowPlan, defaultApprovalToken, acceptSaved } = require('../lib/managed-create-context.js');
 const { CODES: STORE } = require('../lib/managed-bindings.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { H, API, REQ, API_KEY, REQ_KEY, URL_API, URL_MEMBER, open, codeOf, apiBody, apiClassifier } = require('./helpers/managed-rows.js');
 
 const NOT_FOUND = 'configuration-row-not-found';
@@ -515,4 +516,64 @@ test('a read-only acceptance is all or nothing: one item not accepted holds ever
   assert.deepEqual(results.map((r) => [r.verdict.action === 'commit' ? 'commit' : r.verdict.code, r.group]), [['commit', undefined], [CODES.ownership, undefined]]);
   assert.equal(groupOf(dir), null, 'the accepted item is not committed alone');
   assert.equal(attemptsOf(dir).length, 2);
+});
+test('an attempt that omits a bound row keeps that row\'s confirmed baseline, read-only or sent, and never restamps it as observed', async () => {
+  // A plan of the root alone over a committed group, and a read of that root alone.
+  const rootOnly = (dir, sha) => {
+    const plan = readOnlyPlanOf({ baseGeneration: groupOf(dir).generation });
+    plan.rows = [{ ...plan.rows[0], expectedSha256: sha }];
+    plan.members = [plan.members[0]];
+    plan.effects = [];
+    return plan;
+  };
+  const rootRead = (sha) => {
+    const o = apiRead({ root: { projectionSha256: sha } });
+    o.rows = [o.rows[0]];
+    return o;
+  };
+  const baselines = (dir) => groupOf(dir).consumerState.rows;
+
+  const quiet = await committed();
+  const [, child] = baselines(quiet);
+  const r = begun(quiet, [rootOnly(quiet, H('7'))]);
+  const [capture] = r.ctx.captureReadOnly([r.attempts[0].token]);
+  const [accepted] = r.ctx.acceptReadOnly([{ token: r.attempts[0].token, observation: rootRead(H('7')), capture }]);
+  assert.equal(accepted.verdict.action, 'commit');
+  assert.deepEqual(baselines(quiet).map((b) => [b.kind, b.projectionSha256]), [['customApi', H('7')], ['customApiRequestParameter', H('8')]]);
+  assert.deepEqual(baselines(quiet)[1], child, 'the omitted row keeps its baseline exactly');
+
+  const edited = await committed();
+  const [, before] = baselines(edited);
+  const s = begun(edited, [rootOnly(edited, H('c'))]);
+  const classify = (req) => {
+    const c = apiClassifier(s.attempts[0].token)(req);
+    return c && c.type === 'rows' ? { ...c, rows: [c.rows[0]] } : c;
+  };
+  await send(s.ctx, s.store, s.attempts, { classify, members: [] });
+  const [done] = s.ctx.settle([{ token: s.attempts[0].token, observation: rootRead(H('c')) }]);
+  assert.equal(done.verdict.action, 'commit');
+  assert.deepEqual(baselines(edited).map((b) => [b.kind, b.projectionSha256]), [['customApi', H('c')], ['customApiRequestParameter', H('8')]]);
+  assert.deepEqual(baselines(edited)[1], before, 'the omitted row keeps its baseline exactly');
+  assert.deepEqual(groupOf(edited).records.map((rec) => [rec.kind, rec.id, rec.origin]), [['customApi', API, 'created'], ['customApiRequestParameter', REQ, 'created']]);
+});
+
+test('a 2xx whose identity repeats a member name is never a create receipt, through the real client: no created binding', async () => {
+  const child = `"uniquename":"p","customapirequestparameterid":"${REQ}"`;
+  const bodies = [
+    `{"customapi\\u0069d":"${OTHER}","customapiid":"${API}"}`,
+    `{"customapiid":"${API}","CustomAPIRequestParameters":[{"customapirequestparameterid":"${OTHER}",${child}}]}`,
+    `{"customapiid":"${API}","CustomAPIRequestParameters":[{"uniquename":"p","customapirequestparameterid":"${OTHER}"}],"CustomAPIRequestParameters":[{${child}}]}`,
+  ];
+  for (const body of bodies) {
+    const dir = makeTempDir('mc-context-');
+    const { ctx, store, attempts } = begun(dir);
+    const gate = createDeferredManagedCreateGate();
+    gate.bind(store);
+    const client = createAzHttpClient('https://contoso.crm.dynamics.com', {
+      getToken: () => 'offline-token', workflowEffectGate: gate, sleep: async () => {}, request: async () => ({ statusCode: 201, headers: {}, body }),
+    });
+    const out = await ctx.run({ attempts, classify: apiClassifier(attempts[0].token), acceptResult: () => true }, () => client.post(URL_API, JSON.stringify(apiBody())));
+    const [done] = ctx.settle([{ token: attempts[0].token, observation: apiRead() }]);
+    assert.deepEqual([out.checked, done.verdict.code, done.group, groupOf(dir)], [false, CODES.ownership, undefined, null], body);
+  }
 });

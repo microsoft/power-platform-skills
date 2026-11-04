@@ -222,8 +222,40 @@ test('a body is read for the prepared key and each named child only, and any dou
     ['two children match', res({ ...ok, CustomAPIRequestParameters: [child(), child()] }), 'unknown'],
     ['the child array is not an array', res({ ...ok, CustomAPIRequestParameters: {} }), 'unknown'],
     ['the child id is not a GUID', res({ ...ok, CustomAPIRequestParameters: [child({ customapirequestparameterid: 'x' })] }), 'unknown'],
+    // Two members of one decoded name in an object the identity is read from: JSON.parse keeps only the last.
+    ['the key spelled twice, once escaped', res(`{"customapi\\u0069d":"${OTHER}","customapiid":"${API}"}`, {}), 'unknown'],
+    ['a child key twice', res(`{"customapiid":"${API}","CustomAPIRequestParameters":[{"customapirequestparameterid":"${OTHER}","uniquename":"p","customapirequestparameterid":"${REQ}"}]}`, {}), 'unknown'],
+    ['the child navigation property twice', res(`{"customapiid":"${API}","CustomAPIRequestParameters":[{"uniquename":"p","customapirequestparameterid":"${OTHER}"}],"CustomAPIRequestParameters":[{"uniquename":"p","customapirequestparameterid":"${REQ}"}]}`, {}), 'unknown'],
+    // What must not change: one escaped spelling alone, escapes inside a value, and a repeat in an expanded lookup.
+    ['the key spelled once, escaped', res(`{"customapi\\u0069d":"${API}"}`, {}), 'acknowledged'],
+    ['escaped quotes and backslashes inside a value', res(`{"description":"a \\"quoted\\" \\\\ name","customapiid":"${API}"}`, {}), 'acknowledged'],
+    ['a repeat inside an expanded lookup', res(`{"customapiid":"${API}","plugintypeid":{"name":"a","name":"b"},"CustomAPIRequestParameters":[{"uniquename":"p","customapirequestparameterid":"${REQ}"}]}`, {}), 'acknowledged'],
   ];
   for (const [name, r, want] of cases) assert.equal(answerOf(r, EXPECT).outcome, want, name);
+});
+
+test('a GUID is compared without regard to case, in a header, the body and a child, and another GUID is a conflict in any case', () => {
+  // GUIDs are case-insensitive and the service may spell one in upper case. The fixture ids above are all digits, so
+  // these carry letters for case to matter.
+  const root = 'abcdef01-2345-4abc-8def-0123456789ab';
+  const kid = 'fedcba98-7654-4cba-8fed-ba9876543210';
+  const other = 'c0ffee00-beef-4ace-8bad-f00ddeadbeef';
+  const U = (s) => s.toUpperCase();
+  const want = (r = root, c = kid) => ({ ...EXPECT, id: r, children: [{ ...EXPECT.children[0], id: c }] });
+  const res = (h, b, c) => ({ statusCode: 201, headers: { 'odata-entityid': at(h) }, body: JSON.stringify({ customapiid: b, CustomAPIRequestParameters: [child({ customapirequestparameterid: c })] }) });
+  const cases = [
+    ['all in lower case', want(), res(root, root, kid), 'acknowledged'],
+    ['the child answered in upper case', want(), res(root, root, U(kid)), 'acknowledged'],
+    ['the root answered in upper case, header and body', want(), res(U(root), U(root), kid), 'acknowledged'],
+    ['the expected child in upper case', want(root, U(kid)), res(root, root, kid), 'acknowledged'],
+    ['the expected root in upper case', want(U(root)), res(root, root, kid), 'acknowledged'],
+    ['another child, upper case', want(), res(root, root, U(other)), 'conflict'],
+    ['another child, lower case, expected in upper case', want(root, U(kid)), res(root, root, other), 'conflict'],
+    ['another root in the header, upper case', want(), res(U(other), root, kid), 'conflict'],
+    ['another root in the body, upper case', want(), res(root, U(other), kid), 'conflict'],
+  ];
+  for (const [name, w, r, outcome] of cases) assert.equal(answerOf(r, w).outcome, outcome, name);
+  assert.equal(answerOf(res(U(other), root, kid), want()).answeredId, other, 'the id that disagrees is reported in one spelling');
 });
 
 test('a deep insert whose answer names another child id is a conflict for every row it carried', async () => {

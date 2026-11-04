@@ -19,7 +19,9 @@
 //   - an unbound gate, or a scope over another store (a wiring fault: there is no ungated or random-id fallback);
 //   - any DELETE (a protected scope never removes a row; the set names the code, e.g.
 //     configuration-protected-removal-unsupported);
-//   - a `$batch` (no reviewed parser proves every constituent belongs to the set; v1 does not support them);
+//   - a `$batch`, but for the one change set lib/managed-create-batch.js admits when the set opts in with `batch`: a
+//     Custom API change set editing the API the set binds and adding new children, every constituent a prepared row of
+//     one attempt, sealed together in one store write and sent once (batchHandle). Every other `$batch` is refused;
 //   - a mutation the classifier does not recognise, a token outside the set, a row the protocol does not name under
 //     that id and parent, or a row or effect already sent once in this scope or by an earlier run.
 // Response facts are kept in memory only, per row and effect (see answerOf); they are evidence a driver turns into
@@ -32,6 +34,7 @@ const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { canonicalJson, normalizeGuid } = require('./reconcile-common.js');
 const { apiPath } = require('./workflow-effect-context.js');
+const { MAX_BATCH_PARTS, ROLES: BATCH_ROLES, batchConfig, parseCustomApiChangeset, constituentFault, readChangesetAnswer } = require('./managed-create-batch.js');
 
 const MISMATCH = 'managed-create-request-mismatch';
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -64,8 +67,9 @@ function sentProjection(fields) {
 // an array instead, so a comma or a second value is two identities, which cannot be told apart: unknown. An alternate-key
 // URL — customapis(uniquename='contoso_api') — names no GUID, so it proves nothing about the id that was saved: unknown.
 // A body is read only for the expected primary-key field and the children the descriptor names (never for any GUID in
-// it: a lookup carries another row's id). A body whose key appears twice in its text (JSON.parse keeps the last one),
-// that is not JSON, not an object or an OData error envelope is unknown.
+// it: a lookup carries another row's id). A body that is not JSON, not an object or an OData error envelope is unknown,
+// and so is one in which an object the identity is read from — the body itself, or an element of a child array the
+// descriptor names — has two members of one name (see memberNameRepeats).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api
 const IDENTITY_HEADERS = ['odata-entityid', 'location'];
 const KEYED_URL = /^([A-Za-z_][A-Za-z0-9_]*)\(([^()]*)\)$/;
@@ -98,7 +102,78 @@ function bodyOf(raw) {
 }
 
 const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Every object of a JSON text, as { path, names }: the member names it holds, DECODED and in order, and where it sits
+// (the member names and array indexes that lead to it; [] for the top object). JSON.parse keeps only the LAST of two
+// members of one name, and names are compared after their escapes are decoded, so all of these read as one id to
+// JSON.parse while their text carries two:
+//   {"customapi\u0069d":"<other>","customapiid":"<guid>"}                      a key spelled twice
+//   {"CustomAPIRequestParameters":[{"customapirequestparameterid":"<other>","uniquename":"p","customapirequestparameterid":"<guid>"}]}
+//   {"CustomAPIRequestParameters":[{…<other>…}],"CustomAPIRequestParameters":[{…<guid>…}]}   a navigation property twice
+// Called only on text JSON.parse accepted, so the text is well-formed: a string token runs to the first quote that no
+// backslash escapes, and JSON.parse decodes that token exactly as it decoded the member name.
+// See: https://www.rfc-editor.org/rfc/rfc8259#section-4 (names SHOULD be unique; parsers differ when they are not)
+function objectsOf(text) {
+  const found = [];
+  let i = 0;
+  const ws = () => { while (i < text.length && ' \t\r\n'.includes(text[i])) i += 1; };
+  const string = () => {
+    const start = i;
+    i += 1;
+    while (text[i] !== '"') i += text[i] === '\\' ? 2 : 1;
+    i += 1;
+    return JSON.parse(text.slice(start, i));
+  };
+  const value = (path) => {
+    ws();
+    if (text[i] === '{') {
+      i += 1;
+      const names = [];
+      ws();
+      if (text[i] === '}') i += 1;
+      else {
+        for (;;) {
+          ws();
+          const name = string();
+          ws();
+          i += 1; // the colon
+          value([...path, name]);
+          names.push(name);
+          ws();
+          if (text[i++] !== ',') break;
+        }
+      }
+      found.push({ path, names });
+    } else if (text[i] === '[') {
+      i += 1;
+      ws();
+      if (text[i] === ']') { i += 1; return; }
+      for (let n = 0; ; n += 1) {
+        value([...path, n]);
+        ws();
+        if (text[i++] !== ',') break;
+      }
+    } else if (text[i] === '"') {
+      string();
+    } else {
+      while (i < text.length && !',}] \t\r\n'.includes(text[i])) i += 1;
+    }
+  };
+  value([]);
+  return found;
+}
+
+// Whether an object the identity of an answer is read from repeats a member name: the body itself (its primary key,
+// and each child navigation property, may be one of the repeats) or an element of a child array the descriptor names
+// (its key and its match fields). Any repeat there makes the answer ambiguous, whichever name it is. Objects deeper in
+// the body (an expanded lookup) are never read for identity, so a repeat there changes nothing. A text too deeply
+// nested to scan is ambiguous as well: the answer fails closed to unknown.
+function memberNameRepeats(text, arrays) {
+  let objects;
+  try { objects = objectsOf(text); } catch { return true; }
+  return objects.some(({ path, names }) => new Set(names).size !== names.length
+    && (path.length === 0 || (path.length === 2 && arrays.includes(path[0]) && typeof path[1] === 'number')));
+}
 
 /**
  * What one answer says about a send-once request, kept in memory only:
@@ -151,7 +226,7 @@ function answerOf(res, expect) {
       unknown = true;
     } else if (want.key) {
       const key = String(want.key);
-      if (body.text !== null && (body.text.match(new RegExp(`"${escapeRe(key)}"\\s*:`, 'g')) || []).length > 1) unknown = true;
+      if (body.text !== null && memberNameRepeats(body.text, (want.children || []).map((c) => c.at))) unknown = true;
       if (Object.prototype.hasOwnProperty.call(body.json, key)) compare(typeof body.json[key] === 'string' ? normalizeGuid(body.json[key]) : null);
       for (const c of want.children || []) {
         const list = body.json[c.at];
@@ -267,6 +342,73 @@ function effectHandle(scope, store, entry, c) {
   };
 }
 
+/**
+ * The send handle of the one `$batch` a set that opted in may send (managed-create-batch.js): the Custom API change set
+ * that edits the API the set binds and adds new children, and nothing else. Before anything is written:
+ *   - the request must parse as exactly that change set (framing, order, headers, fields, the bound id), with no more
+ *     parts than the set's attempts prepare rows;
+ *   - every constituent is classified on its own by the driver, as one prepared row of its own table, of ONE attempt of
+ *     this set whose root is the bound API — kept as a bound row (an update), never created here — and carrying exactly
+ *     the change and the held version token the driver prepared (constituentFault), then checked as any row request is
+ *     (checkRows: prepared under that id and parent, never sent before, a sealed projection of what it carries).
+ * Then ALL constituents are sealed in ONE sealRowDispatch, counted as one possible send, and the request goes out once:
+ * the client never re-sends a claimed request, and a second dispatch is refused. The answer is read per constituent by
+ * its Content-ID (readChangesetAnswer); every constituent is acknowledged only when the whole change set is.
+ */
+function batchHandle(scope, store, req) {
+  // The set's attempts bound how many parts can belong to it: a request is never read past what it could account for.
+  const snap = store.snapshot();
+  const prepared = (snap && snap.envelope ? snap.envelope.attempts : [])
+    .filter((x) => scope.entries.has(x.token) && x.rowProtocol).reduce((n, x) => n + x.rowProtocol.rows.length, 0);
+  const parsed = parseCustomApiChangeset(req, scope.batch, { limit: Math.min(prepared, MAX_BATCH_PARTS) });
+  let token = null;
+  const admitted = parsed.constituents.map((k) => {
+    const what = `a $batch was not sent: its part ${k.contentId}`;
+    const c = scope.classify({ method: k.method, url: k.url, body: k.body, headers: { ...k.headers }, contentId: k.contentId });
+    const fault = constituentFault(c, k, parsed.boundId);
+    if (fault) throw mismatch(`${what} ${fault}`);
+    if (token === null) token = c.token;
+    if (c.token !== token) throw mismatch('a $batch was not sent: its parts belong to more than one attempt');
+    if (!scope.entries.has(c.token)) throw mismatch(`${what} names an attempt outside this create set`);
+    const [row] = checkRows(scope, store, c);
+    if (sentProjection(Object.fromEntries(row.sentFields.map((f) => [f, k.json[f]]))).sentSha256 !== row.sentSha256) {
+      throw mismatch(`${what} seals another projection than the one it carries`);
+    }
+    if (row.mode !== (k.role === 'root' ? 'update' : 'create')) throw mismatch(`${what} would ${k.role === 'root' ? 'edit an API the set creates' : 'write a child the set does not create'}`);
+    return { contentId: k.contentId, role: k.role, id: k.id, row };
+  });
+  if (new Set(admitted.map((x) => x.row.id)).size !== admitted.length) throw mismatch('a $batch was not sent: it writes one row twice');
+  const a = attemptOf(store, token);
+  const root = a.rowProtocol.rows.find((r) => r.kind === BATCH_ROLES.root.kind && r.parentId === null && r.id === parsed.boundId);
+  if (a.family !== 'customApi' || !a.root || a.root.kind !== BATCH_ROLES.root.kind || normalizeGuid(a.root.id) !== parsed.boundId || !root || root.mode !== 'update') {
+    throw mismatch('a $batch was not sent: the API it edits is not one its attempt already binds');
+  }
+  const entry = scope.entries.get(token);
+  const answerPlan = { apiBase: scope.batch.apiBase, boundId: parsed.boundId, constituents: admitted.map(({ contentId, role, id }) => ({ contentId, role, id })) };
+  for (const x of admitted) scope.sent.add(`row\u0000${token}\u0000${x.row.id}`);
+  const state = { dispatched: false, answered: false };
+  const facts = (read) => admitted.map((x, i) => ({
+    type: 'row', token, kind: x.row.kind, key: x.row.key, id: x.row.id, mode: x.row.mode, contentId: x.contentId, ...read(i),
+  }));
+  scope.handles.push(() => (state.dispatched && !state.answered ? facts(() => ({ outcome: 'unknown', status: null, unanswered: true })) : []));
+  return {
+    dispatching() {
+      guard(scope, () => {
+        if (state.dispatched) throw mismatch('a send-once $batch was about to be sent a second time; it was not sent');
+        if (scope.closed) throw mismatch('a $batch was sent after its create set ended; it was not sent');
+        store.sealRowDispatch({ token, epoch: entry.epoch, rows: admitted.map(({ row: { kind, key, id, sentFields, sentSha256 } }) => ({ kind, key, id, sentFields, sentSha256 })) });
+        state.dispatched = true;
+      });
+    },
+    answered(res) {
+      if (state.answered || scope.closed) return;
+      state.answered = true;
+      const read = readChangesetAnswer(res, answerPlan);
+      scope.facts.push(...facts((i) => ({ ...read.parts[i], batchStatus: read.batchStatus, ...(read.failure ? { changesetFailure: read.failure } : {}) })));
+    },
+  };
+}
+
 // Run `fn`; a throw is recorded as the scope's local failure before it propagates (into the SDK, which may swallow it).
 function guard(scope, fn) {
   try {
@@ -300,7 +442,10 @@ function createDeferredManagedCreateGate() {
         if (!store) throw mismatch(`a ${m} was not sent: the managed create gate is not bound to the invocation's binding store`);
         if (scope.store && scope.store !== store) throw mismatch(`a ${m} was not sent: the create set belongs to another binding store than the gate's`);
         if (m === 'DELETE') throw mismatch(`a DELETE was not sent: a protected ${scope.label} never removes a row`, scope.deleteCode);
-        if (m === 'POST' && apiPath(url) === '$batch') throw mismatch(`a $batch was not sent: a protected ${scope.label} sends each change on its own`);
+        if (m === 'POST' && apiPath(url) === '$batch') {
+          if (!scope.batch) throw mismatch(`a $batch was not sent: a protected ${scope.label} sends each change on its own`);
+          return batchHandle(scope, store, { url, body, headers });
+        }
         const c = scope.classify({ method: m, url, body, headers });
         if (!c) throw mismatch(`a ${m} was not sent: it is not a change the protected ${scope.label} prepared`);
         const entry = scope.entries.get(c.token);
@@ -338,24 +483,31 @@ function createDeferredManagedCreateGate() {
  *         null for anything else (refused);
  *     deleteCode?,                  the code a DELETE is refused with (default managed-create-request-mismatch);
  *     label?,                       how messages name the set (default 'create set');
+ *     batch?,                       { apiBase, solution }: admit the one Custom API change set managed-create-batch.js
+ *                                   reads, sent through the SDK under that API base and solution header (batchConfig).
+ *                                   Each constituent is classified on its own, as { type: 'rows', token, expectTable,
+ *                                   expectKey, rows: [one row], prepared, ifMatch? } (constituentFault). Without it every
+ *                                   `$batch` is refused;
  *   }
  * Answers { value, error, localError, facts } and never throws for `fn`: `error` is what `fn` threw (or null), `localError`
  * the first local refusal or store failure inside the scope (or null) — the one to surface when set — and `facts` the
  * in-memory answers [{ type: 'row', token, kind, key, id, mode, outcome, status, answeredId? } | { type: 'effect', token,
  * kind, id, outcome, status }]; a request dispatched and not answered when `fn` settled is an `unknown` fact with
- * `unanswered: true`. The scope closes when `fn` settles: a request it left running is refused after that, and an
- * answer that arrives after it is not read.
+ * `unanswered: true`. A change set's row facts also carry their `contentId`, the outer `batchStatus` and, when the
+ * service reported one constituent failed, `changesetFailure` (a diagnostic only). The scope closes when `fn` settles: a
+ * request it left running is refused after that, and an answer that arrives after it is not read.
  */
 async function runWithManagedCreateSet(set, fn) {
   if (!set || typeof set.classify !== 'function' || !Array.isArray(set.entries) || set.entries.length === 0) throw new TypeError('runWithManagedCreateSet needs the set\'s entries and its classifier');
   if (typeof fn !== 'function') throw new TypeError('runWithManagedCreateSet needs the operation to run');
+  const batch = set.batch === undefined || set.batch === null ? null : batchConfig(set.batch);
   const entries = new Map();
   for (const e of set.entries) {
     if (!e || typeof e.token !== 'string' || entries.has(e.token)) throw new TypeError('runWithManagedCreateSet entries are distinct { token, epoch }');
     entries.set(e.token, { token: e.token, epoch: e.epoch === undefined ? null : e.epoch });
   }
   const scope = {
-    store: set.store || null, entries, classify: set.classify, deleteCode: set.deleteCode || MISMATCH, label: set.label || 'create set',
+    store: set.store || null, entries, classify: set.classify, deleteCode: set.deleteCode || MISMATCH, label: set.label || 'create set', batch,
     sent: new Set(), facts: [], errors: [], handles: [], closed: false,
   };
   let value;

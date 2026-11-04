@@ -296,6 +296,13 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       return { kind: r.kind, key: r.key, id: r.id, parentId: r.parentId, projectionSha256: s.projectionSha256, sensitiveInput: r.sensitiveInput };
     });
     const children = attempt.expected.children;
+    // The consumer state is the last confirmed baseline of every row the group binds, and the store keeps every record
+    // an attempt does not name. A row this attempt omitted (an update of the root alone) was not observed now, so it
+    // keeps the baseline it was last confirmed with, unchanged under its retained identity, and is never restamped
+    // as freshly observed. The saved proof stays over the rows this attempt observed.
+    const fresh = new Set(observed.map((r) => rowKey(r.kind, r.key)));
+    const prior = group && group.consumerState && Array.isArray(group.consumerState.rows) ? group.consumerState.rows : [];
+    const carried = prior.filter((r) => !fresh.has(rowKey(r.kind, r.key))).map((r) => ({ ...r }));
     return {
       token: attempt.token, baseGeneration: attempt.baseGeneration, proofSchema: ROW_PROOF_SCHEMA, records,
       proof: {
@@ -304,7 +311,7 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
         preservationSha256: attempt.expected.preservationSha256,
         expectedChildrenSha256: children.length ? sha(children) : null,
       },
-      consumerState: { version: 1, rows: observed },
+      consumerState: { version: 1, rows: [...observed, ...carried] },
       adoptionApproved: decided.some(({ row, origin, bound }) => !bound && row.parentId === null && origin === 'adopted'),
       adoptionApprovedChildren: decided.filter(({ row, origin, bound }) => !bound && row.parentId !== null && origin === 'adopted').map(({ row }) => ({ kind: row.kind, key: row.key, id: row.id })),
     };
@@ -354,11 +361,13 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
      * store (noteSaved, the attempt staying sending): a root create this run saw acknowledged and checked, of an attempt
      * still at the epoch it was sent under. A receipt the store cannot write is this run's `localError` (typed, never a
      * network retry), its acknowledgements are kept unchecked, and every later run of this context is refused unsent.
-     * Answers runWithManagedCreateSet's { value, error, localError, facts } and `checked`.
+     * Answers runWithManagedCreateSet's { value, error, localError, facts } and `checked`. `batch` is passed to it as given
+     * (the one Custom API change set a set may send, see runWithManagedCreateSet); an API PATCH in it is an update, so
+     * it never receipts a root.
      */
-    async run({ attempts, classify, deleteCode, label, acceptResult }, fn) {
+    async run({ attempts, classify, deleteCode, label, acceptResult, batch }, fn) {
       if (stopped) return { value: undefined, error: null, localError: stopped, facts: [], checked: false };
-      const outcome = await runWithManagedCreateSet({ store, entries: attempts.map(({ token, epoch }) => ({ token, epoch })), classify, deleteCode, label }, fn);
+      const outcome = await runWithManagedCreateSet({ store, entries: attempts.map(({ token, epoch }) => ({ token, epoch })), classify, deleteCode, label, batch }, fn);
       const rowFacts = outcome.facts.filter((f) => f.type === 'row');
       let localError = outcome.localError;
       let checked = typeof acceptResult === 'function' && outcome.error === null && localError === null

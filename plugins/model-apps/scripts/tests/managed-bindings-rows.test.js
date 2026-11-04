@@ -184,7 +184,7 @@ const rewrite = (store, corrupt) => {
   fs.writeFileSync(store.file, `${JSON.stringify(data, null, 2)}\n`);
 };
 
-test('a row protocol, consumer, record or proof version, a proof schema or a field this build does not know makes the whole store unreadable, and no sibling is written', () => {
+test('a row protocol, consumer, record or proof version, a proof schema or a field this build does not know, at any depth of a closed shape, makes the whole store unreadable, and no sibling is written', () => {
   const newer = {
     'row protocol version': (d) => { d.attempts[0].rowProtocol.version = 2; },
     'row field': (d) => { d.attempts[0].rowProtocol.rows[1].ordinal = 1; },
@@ -204,6 +204,13 @@ test('a row protocol, consumer, record or proof version, a proof schema or a fie
     'record field': (d) => { d.groups[0].records[0].cohort = 'c'; },
     'group proof schema': (d) => { d.groups[0].proofSchema = 'configuration-rows-v2'; },
     'group field': (d) => { d.groups[0].cohort = null; },
+    'group proof field': (d) => { d.groups[0].proof.cohortSha256 = H('2'); },
+    'group root field': (d) => { d.groups[0].root.cohort = 'c'; },
+    'group publication field': (d) => { d.groups[0].publication = { scope: { type: 'table', table: 'account' }, state: 'not-needed', desiredSha256: null, dispatchToken: null, cohort: null }; },
+    'attempt root field': (d) => { d.attempts[0].root.cohort = 'c'; },
+    'send window field': (d) => { d.attempts[0].sendWindow = { possible: 0, notStarted: 0, epoch: 1, lane: 0 }; },
+    'completion reserve field': (d) => { d.attempts[0].completionReserve.spare = 0; },
+    'known scope field': (d) => { d.attempts[0].knownScopes = [{ type: 'table', table: 'account', lane: 0 }]; },
   };
   const outcome = (name, corrupt) => {
     const { dir, store } = rowStore();
@@ -220,10 +227,21 @@ test('a configuration unit that is merely malformed is isolated, and a sibling i
     'a version of the wrong type': (d) => { d.attempts[0].rowProtocol.version = '1'; },
     'a missing field': (d) => { delete d.attempts[0].rowProtocol.rows[1].sentSha256; },
     'a hash that is not one': (d) => { d.attempts[0].expected.sentProjectionSha256 = 'x'; },
+    'a root with no id': (d) => { delete d.attempts[0].root.id; },
+    'a send window count of the wrong type': (d) => { d.attempts[0].sendWindow = { possible: '0', notStarted: 0, epoch: 1 }; },
+    'a reservation with no used count': (d) => { delete d.attempts[0].completionReserve.used; },
+    // A scope type is untrusted: one that is not a string is malformed, never a property key to look up, and an object
+    // that cannot even be turned into one must not escape the unit as a raw TypeError.
+    'a scope type that is an object no key can be made of': (d) => { d.attempts[0].knownScopes = [{ type: { toString: null } }]; },
+    'a scope with no type': (d) => { d.attempts[0].knownScopes = [{ table: 'account' }]; },
+    'a scope type that is a number': (d) => { d.attempts[0].knownScopes = [{ type: 1, table: 'account' }]; },
+    'a scope type that is a plain object': (d) => { d.attempts[0].knownScopes = [{ type: {}, table: 'account' }]; },
+    'a publication scope type no key can be made of': (d) => { d.attempts[0].publication = { scope: { type: { toString: null } }, state: 'owed' }; },
   };
   for (const [name, corrupt] of Object.entries(malformed)) {
     const { dir, store } = rowStore();
     rewrite(store, corrupt);
+    assert.equal(codeOf(() => store.refresh()), null, `${name}: a refresh reads the rest of the store`);
     const again = open(dir);
     assert.equal(codeOf(() => again.readGroup('customApi', 'contoso_other')), CODES.groupInvalid, name);
     assert.equal(typeof prepareForm(again, 'account/main', FORM, 'account'), 'string', `${name}: a form is still written`);

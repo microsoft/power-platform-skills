@@ -232,13 +232,15 @@ function guidField(v, where) {
   if (typeof v !== 'string' || normalizeGuid(v) !== v) throw invalid(where, 'is not a lowercase GUID');
 }
 
+// The closed vocabulary of a publish scope, by its type. Shared with checkRowExtensions.
+const SCOPE_KEYS = Object.freeze({ table: ['type', 'table'], dashboard: ['type', 'id'] });
 function validateScope(scope, where) {
   if (!isObj(scope)) throw invalid(where, 'is not a scope');
   if (scope.type === 'table') {
-    closedKeys(scope, ['type', 'table'], where);
+    closedKeys(scope, SCOPE_KEYS.table, where);
     if (!/^[a-z0-9_]+$/.test(String(scope.table))) throw invalid(where, 'names no table');
   } else if (scope.type === 'dashboard') {
-    closedKeys(scope, ['type', 'id'], where);
+    closedKeys(scope, SCOPE_KEYS.dashboard, where);
     guidField(scope.id, `${where}.id`);
   } else {
     throw invalid(where, 'is not a table or dashboard scope');
@@ -450,8 +452,9 @@ function checkDeclaration(family, key, declaration) {
   }
 }
 
+const ROOT_KEYS = ['kind', 'key', 'id'];
 function validateRoot(root, family, key, where) {
-  closedKeys(root, ['kind', 'key', 'id'], where);
+  closedKeys(root, ROOT_KEYS, where);
   if (!nonempty(root.kind) || root.key !== key) throw invalid(where, 'is not this group\'s root');
   guidField(root.id, `${where}.id`);
   if (root.kind !== ROOT_KIND[family]) throw invalid(where, `is a ${root.kind} root, and a ${family} group's root is a ${ROOT_KIND[family]}`);
@@ -479,6 +482,13 @@ const EXPECTED_CHILD_KEYS = ['kind', 'key', 'namespaceParentId', 'id', 'associat
 const BASE_OBSERVATION_KEYS = ['rowVersion', 'savedSha256'];
 const SAVED_OBSERVATION_KEYS = ['phase', 'proof', 'acknowledgedRoot'];
 const CHILD_RECEIPT_KEYS = ['kind', 'key', 'id'];
+const PUBLICATION_KEYS = ['scope', 'state', 'desiredSha256', 'dispatchToken', 'carriedFrom'];
+const ATTEMPT_PUBLICATION_KEYS = ['scope', 'state'];
+// A carried publication's `carriedFrom`: the current shape, and the older one (only state and dispatch token).
+const CARRIED_FROM_KEYS = ['state', 'dispatchToken', 'publishedSha256', 'savedSha256'];
+const LEGACY_CARRIED_FROM_KEYS = ['state', 'dispatchToken'];
+const SEND_WINDOW_KEYS = ['possible', 'notStarted', 'epoch'];
+const COMPLETION_RESERVE_KEYS = ['bytes', 'used'];
 
 function validateRecord(rec, header, where) {
   // `localCreateDraft` is placed only by the store (commitGroup) and only on a created dashboard root; validateGroup
@@ -527,10 +537,10 @@ function validatePublication(pub, family, where, { attempt = false } = {}) {
   }
   if (attempt) {
     if (pub === null) return;
-    closedKeys(pub, ['scope', 'state'], where);
+    closedKeys(pub, ATTEMPT_PUBLICATION_KEYS, where);
     if (pub.state !== 'owed') throw invalid(where, 'is not owed');
   } else {
-    closedKeys(pub, ['scope', 'state', 'desiredSha256', 'dispatchToken', 'carriedFrom'], where);
+    closedKeys(pub, PUBLICATION_KEYS, where);
     if (!PUBLICATION_STATES.has(pub.state)) throw invalid(where, 'has an unknown state');
     hashOrNull(pub.desiredSha256, `${where}.desiredSha256`);
     // A dispatch token is written only in the branch that actually sends, so it exists exactly when a send may have run.
@@ -546,14 +556,14 @@ function validatePublication(pub, family, where, { attempt = false } = {}) {
       const cf = pub.carriedFrom;
       const w = `${where}.carriedFrom`;
       if (isObj(cf) && ('publishedSha256' in cf || 'savedSha256' in cf)) {
-        closedKeys(cf, ['state', 'dispatchToken', 'publishedSha256', 'savedSha256'], w);
+        closedKeys(cf, CARRIED_FROM_KEYS, w);
         hashOrNull(cf.publishedSha256, `${w}.publishedSha256`, false);
         hashOrNull(cf.savedSha256, `${w}.savedSha256`, false);
         if (cf.state === 'confirmed') tokenField(cf.dispatchToken, `${w}.dispatchToken`);
         else if ((cf.state !== 'not-needed' && cf.state !== 'owed') || cf.dispatchToken !== null) throw invalid(w, 'is not a publication a publish can carry');
       } else {
         if (typeof pub.desiredSha256 !== 'string') throw invalid(where, 'is carried with no desired hash to confirm');
-        closedKeys(cf, ['state', 'dispatchToken'], w);
+        closedKeys(cf, LEGACY_CARRIED_FROM_KEYS, w);
         if (cf.state === 'confirmed') tokenField(cf.dispatchToken, `${w}.dispatchToken`);
         else if (cf.state !== 'not-needed' || cf.dispatchToken !== null) throw invalid(w, 'is not a settled publication');
       }
@@ -672,7 +682,7 @@ function validateAttempt(a, where) {
   // on an attempt an older build prepared: it holds nothing until a new send under it acquires one (markSending, as an
   // admission); an attempt already sent with none (read-only recovery, a commit) uses only unreserved bytes.
   if (a.completionReserve !== undefined) {
-    closedKeys(a.completionReserve, ['bytes', 'used'], `${where}.completionReserve`);
+    closedKeys(a.completionReserve, COMPLETION_RESERVE_KEYS, `${where}.completionReserve`);
     const { bytes, used } = a.completionReserve;
     if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > COMPLETION_MAX_BYTES || !Number.isSafeInteger(used) || used < 0 || used > bytes) throw invalid(`${where}.completionReserve`, 'is not a reservation');
   }
@@ -718,7 +728,7 @@ function validateAttempt(a, where) {
   //                 more at every claim to continue or resume it (markSending `claim`). A dispatch counted under any
   //                 other epoch is refused unsent (noteAttemptDispatch), so an older run is fenced at the transport.
   if (a.sendWindow !== undefined) {
-    closedKeys(a.sendWindow, ['possible', 'notStarted', 'epoch'], `${where}.sendWindow`);
+    closedKeys(a.sendWindow, SEND_WINDOW_KEYS, `${where}.sendWindow`);
     for (const k of ['possible', 'notStarted']) if (!Number.isSafeInteger(a.sendWindow[k]) || a.sendWindow[k] < 0) throw invalid(`${where}.sendWindow.${k}`, 'is not a count');
     if (!Number.isSafeInteger(a.sendWindow.epoch) || a.sendWindow.epoch < 1) throw invalid(`${where}.sendWindow.epoch`, 'is not an epoch');
     if (a.phase === 'prepared') throw invalid(where, 'has a send window but was never marked sending');
@@ -1025,8 +1035,12 @@ function validateRowConsumer(state, family, records, where) {
 // The version and vocabulary of a configuration unit, checked BEFORE its own validation and outside the catch that
 // isolates one invalid unit (parseEnvelope). A known-format unit that is merely wrong (a field missing or mistyped, a
 // hash that is not one) is isolated like any other; but a protocol, consumer, record or proof version this build does
-// not know, a proof schema it does not know, or a field outside the closed vocabulary below is what a NEWER plugin
-// writes. Isolating it would let this build write the rest of the file around a unit it cannot read, and a later
+// not know, a proof schema it does not know, or a field outside the closed vocabulary of the unit or of any closed shape
+// nested in it (a root, a proof, a record and its create evidence, the consumer state and its rows, a publication and
+// its scope, the expected proof, the saved observation, the send window, the completion reservation, the dashboard
+// create receipt, the row protocol and its rows, completion and effects) is what a NEWER plugin writes. The open values
+// (a saved observation's proof, a declaration, a record's partsSha256 map) have no closed vocabulary to check.
+// Isolating such a unit would let this build write the rest of the file around a unit it cannot read, and a later
 // write of its own would then carry that unit forward as this build understood it. So the whole store is refused
 // (managed-binding-store-unreadable), on open, on refresh and on the reread inside every write, and no sibling unit
 // (a form, a view) can be written either. Nothing is discarded: a compatible plugin reads the file as it was.
@@ -1045,17 +1059,50 @@ function checkRowExtensions(x, unit, where) {
   const schema = (obj, w) => {
     if (isObj(obj) && typeof obj.proofSchema === 'string' && obj.proofSchema !== ROW_PROOF_SCHEMA) throw newer(w, `names the proof schema ${obj.proofSchema}`);
   };
+  // A scope of a type this build knows is held to that type's vocabulary; a type it does not know is a malformed scope.
+  // Only a string type is looked up: a persisted type is untrusted, and using any other value as a property key would
+  // coerce it (an object such as { "toString": null } throws a raw TypeError there, before the per-unit catch). A
+  // missing or mistyped type is left to validateScope, which isolates the unit.
+  const scope = (s, w) => {
+    if (isObj(s) && typeof s.type === 'string' && Object.prototype.hasOwnProperty.call(SCOPE_KEYS, s.type)) closed(s, SCOPE_KEYS[s.type], w);
+  };
+  // A configuration family is never published, so its publication is null; one that is not is held to the vocabulary
+  // anyway, because a field this build does not know there is still what a newer plugin writes.
+  const publication = (pub, w, keys) => {
+    if (!isObj(pub)) return;
+    closed(pub, keys, w);
+    scope(pub.scope, `${w}.scope`);
+    if (isObj(pub.carriedFrom)) closed(pub.carriedFrom, CARRIED_FROM_KEYS, `${w}.carriedFrom`);
+  };
   if (unit === 'group') {
     closed(x, GROUP_KEYS, where);
     schema(x, where);
+    closed(x.root, ROOT_KEYS, `${where}.root`);
+    closed(x.proof, PROOF_KEYS, `${where}.proof`);
     each(x.records, RECORD_KEYS, `${where}.records`);
-    if (Array.isArray(x.records)) x.records.forEach((r, i) => version(r, 'formatVersion', `${where}.records[${i}]`));
+    if (Array.isArray(x.records)) {
+      x.records.forEach((r, i) => {
+        version(r, 'formatVersion', `${where}.records[${i}]`);
+        if (isObj(r)) {
+          closed(r.localCreateDraft, LOCAL_CREATE_DRAFT_KEYS, `${where}.records[${i}].localCreateDraft`);
+          version(r.localCreateDraft, 'formatVersion', `${where}.records[${i}].localCreateDraft`);
+        }
+      });
+    }
     closed(x.consumerState, CONSUMER_KEYS[x.family], `${where}.consumerState`);
     version(x.consumerState, 'version', `${where}.consumerState`);
     if (isObj(x.consumerState)) each(x.consumerState.rows, ROW_CONSUMER_ROW_KEYS, `${where}.consumerState.rows`);
+    publication(x.publication, `${where}.publication`, PUBLICATION_KEYS);
     return;
   }
   closed(x, ATTEMPT_KEYS, where);
+  closed(x.root, ROOT_KEYS, `${where}.root`);
+  if (Array.isArray(x.knownScopes)) x.knownScopes.forEach((s, i) => scope(s, `${where}.knownScopes[${i}]`));
+  closed(x.sendWindow, SEND_WINDOW_KEYS, `${where}.sendWindow`);
+  closed(x.completionReserve, COMPLETION_RESERVE_KEYS, `${where}.completionReserve`);
+  closed(x.dashboardCreate, DASHBOARD_CREATE_KEYS, `${where}.dashboardCreate`);
+  version(x.dashboardCreate, 'formatVersion', `${where}.dashboardCreate`);
+  publication(x.publication, `${where}.publication`, ATTEMPT_PUBLICATION_KEYS);
   const exp = x.expected;
   closed(exp, EXPECTED_KEYS, `${where}.expected`);
   version(exp, 'proofVersion', `${where}.expected`);
