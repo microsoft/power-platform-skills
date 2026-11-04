@@ -21,7 +21,7 @@ const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
-const { resolveAuthoringLanguage, BuildHalt, findExistingTable } = require('./lib/entity-provision.js');
+const { resolveAuthoringLanguage, BuildHalt, findExistingTable, entityHasLocalizedLabels } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
 const { createPublicationBarrier, describeWithheld } = require('./lib/publication-barrier.js');
 const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
@@ -302,7 +302,13 @@ async function discoverOpDiffState(spec, provision) {
     // this preflight (fail-closed), blocking the edit. Type-scoped resolution targets the requested form.
     // The lookup's MetadataCache answer is also the lag of a table created moments ago (#796), so it says "no form" only when the
     // table itself reads absent; a table that is there keeps the failure, and the gate stops rather than miss a form it would check.
-    const tableAbsent = async () => (await findExistingTable(provision, def.entityLogicalName)) === null;
+    // The table is asked about exactly as the data-model step asks (lib/entity-provision.js findExistingTable): this read runs BEFORE
+    // that step creates the table, so for a table whose labels are localized an inconclusive narrow read is read again and, if it stays
+    // inconclusive, stops the gate — never settled by the broad, label-bearing table list, which ahead of a localized create makes
+    // Dataverse keep only the base-language label. A table the spec does not declare is never created by the build, so it has no such hazard.
+    const declared = (spec.entities || []).find((e) => String(e && e.schemaName).toLowerCase() === def.entityLogicalName);
+    const hasLocalizedLabels = !!declared && entityHasLocalizedLabels(declared);
+    const tableAbsent = async () => (await findExistingTable(provision, def.entityLogicalName, { hasLocalizedLabels })) === null;
     const id = await resolveExistingFormId(provision, def, { tableNotInCache: tableAbsent });
     if (!id) continue; // not deployed yet → nothing to prune
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it

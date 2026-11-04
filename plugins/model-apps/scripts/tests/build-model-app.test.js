@@ -813,6 +813,27 @@ test('discoverOpDiffState (#796): a form lookup that meets the MetadataCache ans
   assert.strictEqual(absent.probes.length, 1);
   const present = env(true);
   await assert.rejects(() => discoverOpDiffState(spec, present.provision), /not found in the MetadataCache/, 'the table is there: the gate stops rather than skip the form');
+
+  // A table whose labels are localized is asked about as the data-model step asks: an inconclusive narrow read is read again, and the broad,
+  // label-bearing table list — which ahead of a localized create keeps only the base-language label — is never the answer.
+  const localized = { ...spec, entities: [{ ...spec.entities[0], displayName: { 1033: 'Ticket', 3082: 'Entrada' } }] };
+  const flaky = env(false);
+  let listReads = 0;
+  let narrowReads = 0;
+  let stuck = false;
+  flaky.provision.findTables = async () => { listReads += 1; return []; };
+  flaky.provision.dataverse.get = async () => ((narrowReads++ === 0 || stuck) ? { status: 503, body: {} } : { status: 404 });
+  assert.deepStrictEqual((await discoverOpDiffState(localized, flaky.provision)).forms, []);
+  assert.strictEqual(narrowReads, 2, 'the narrow read is read again');
+  assert.strictEqual(listReads, 0, 'and never settled by the table list');
+  stuck = true;
+  await assert.rejects(() => discoverOpDiffState(localized, flaky.provision), (e) => e.code === 'table-probe-inconclusive', 'still inconclusive: the gate stops');
+  assert.strictEqual(listReads, 0);
+  // A plain table keeps the old fallback: one narrow read, then the list.
+  stuck = false;
+  narrowReads = 0;
+  assert.deepStrictEqual((await discoverOpDiffState(spec, flaky.provision)).forms, []);
+  assert.strictEqual(listReads, 1);
 });
 
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {

@@ -143,3 +143,87 @@ test('a form lookup on a table this build created that stays lagged past the bui
   assert.equal(step.writes['POST systemforms'], undefined, 'no form is created');
   assert.equal(formsNamed(w.org, 'Ticket Form').length, 0);
 });
+
+// The form preflight of the destructive-change gate (build-model-app.js discoverOpDiffState) reads the form by name BEFORE the data-model step
+// creates the table, so on a new table the lookup answers the MetadataCache 400 and the gate asks whether the table is there. That question
+// must be asked the way the data-model step asks it (entity-provision.js findExistingTable): for a table whose labels are localized, an
+// inconclusive narrow read is read again, never answered by the broad `EntityDefinitions?$select=…DisplayName…` list — a read that, issued
+// before a localized create, makes Dataverse keep only the base-language label. A plain table may still fall back to the list, as before.
+const LOCALIZED = {
+  ...spec,
+  entities: [{ ...spec.entities[0], displayName: { 1033: 'Ticket', 3082: 'Entrada' }, pluralName: { 1033: 'Tickets', 3082: 'Entradas' }, columns: [] }],
+  views: [], charts: [],
+  forms: [{ entity: TABLE, name: 'Ticket Form', layout: 'explicit', tabs: [{ label: 'General', sections: [{ label: 'General', fields: ['contoso_name'] }] }] }],
+};
+const PLAIN = { ...LOCALIZED, entities: [{ ...LOCALIZED.entities[0], displayName: 'Ticket', pluralName: 'Tickets' }] };
+// `narrow(n)` answers the first n narrow table reads after the preflight's form lookup with `status` (the production client tries a 5xx six
+// times before it gives the answer back, so six 503s are one inconclusive read), e.g.
+//   GET /api/data/v9.0/EntityDefinitions(LogicalName='contoso_ticket')?$select=LogicalName,EntitySetName
+// and records the order of the broad table list read and the table's create, e.g.
+//   GET /api/data/v9.0/EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,IsCustomEntity
+async function preflightRun(label, s, status, narrowFaults) {
+  const org = createLifecycleOrg();
+  org.pageServer.languages.provisioned = [1033, 3082];
+  const original = org.request;
+  const sequence = [];
+  let formMissed = false;
+  let left = narrowFaults;
+  org.request = async (r) => {
+    const url = decodeURIComponent(r.url);
+    if (!org.metadata.tables.has(TABLE) && formRead('Ticket Form')(r, url)) { formMissed = true; return lagAnswer(); }
+    if (r.method === 'GET' && url.includes(`/EntityDefinitions(LogicalName='${TABLE}')`) && formMissed && left > 0) {
+      left -= 1;
+      sequence.push(`narrow ${status}`);
+      return status === 400 ? lagAnswer() : { statusCode: status, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: { code: '0x80040216', message: 'Service unavailable' } }) };
+    }
+    if (r.method === 'GET' && /\/EntityDefinitions\?/.test(url)) sequence.push('broad');
+    if (r.method === 'POST' && /\/EntityDefinitions$/.test(url)) sequence.push(`create ${Object.keys(labelsOf(r.body)).join('+')}`);
+    return original(r);
+  };
+  const h = createLifecycleHarness(org, makeTempDir(`read-lag-preflight-${label}-`));
+  const step = await h.measure(() => h.build(s, { publish: false, sampleData: false, verify: false }));
+  const createAt = sequence.findIndex((e) => e.startsWith('create'));
+  const broadAt = sequence.indexOf('broad');
+  return { org, step, sequence, formMissed, createAt, broadAt, broadBeforeCreate: broadAt >= 0 && (createAt < 0 || broadAt < createAt) };
+}
+// The LCIDs of a create's DisplayName: `{ LocalizedLabels: [{ Label, LanguageCode }, …] }`.
+function labelsOf(body) {
+  const b = typeof body === 'string' ? JSON.parse(body) : body;
+  return Object.fromEntries(((b.DisplayName && b.DisplayName.LocalizedLabels) || []).map((l) => [l.LanguageCode, l.Label]));
+}
+
+for (const [status, faults, what] of [[400, 1, 'answers the MetadataCache 400 once'], [503, 6, 'answers 503 past the client\'s own retries once']]) {
+  test(`#796 the form preflight on a new LOCALIZED table whose narrow table read ${what} reads it again, and never sends the broad label-bearing table list before the create`, async () => {
+    const run = await preflightRun(`loc-${status}`, LOCALIZED, status, faults);
+    assert.equal(run.step.error, undefined, run.step.error && run.step.error.message);
+    assert.ok(run.formMissed, 'the preflight looked the form up before the table existed');
+    assert.equal(run.broadBeforeCreate, false, `no broad read before the localized create: ${run.sequence.join(' → ')}`);
+    assert.equal(run.step.value.result.ok, true, JSON.stringify(run.step.value.result.errors));
+    assert.deepEqual(run.step.unexpected, []);
+    assert.equal(run.sequence[run.createAt], 'create 1033+3082', `the table is created with both labels: ${run.sequence.join(' → ')}`);
+  });
+}
+
+test('#796 the form preflight on a new LOCALIZED table whose narrow table reads stay inconclusive stops before any write, with no broad read and no create', async () => {
+  const run = await preflightRun('loc-stuck', LOCALIZED, 503, 1000);
+  assert.equal(run.step.error, undefined, run.step.error && run.step.error.message);
+  assert.equal(run.step.value.result.ok, false);
+  assert.match(run.step.value.result.errors.join('\n'), /preflight safety check could not run/);
+  assert.match(run.step.value.result.errors.join('\n'), /could not determine whether table 'contoso_ticket' already exists/);
+  assert.equal(run.broadAt, -1, run.sequence.join(' → '));
+  assert.equal(run.createAt, -1, 'no table is created');
+  assert.deepEqual(Object.keys(run.step.writes), [], 'nothing is written');
+});
+
+test('#796 controls: a conclusive 404 proves a new localized table absent as before; a PLAIN table may still settle an inconclusive read by the table list', async () => {
+  const conclusive = await preflightRun('loc-404', LOCALIZED, 400, 0);
+  assert.equal(conclusive.step.error, undefined, conclusive.step.error && conclusive.step.error.message);
+  assert.equal(conclusive.step.value.result.ok, true, JSON.stringify(conclusive.step.value.result.errors));
+  assert.ok(conclusive.formMissed);
+  assert.equal(conclusive.broadAt, -1, conclusive.sequence.join(' → '));
+  const plain = await preflightRun('plain-400', PLAIN, 400, 1);
+  assert.equal(plain.step.error, undefined, plain.step.error && plain.step.error.message);
+  assert.equal(plain.step.value.result.ok, true, JSON.stringify(plain.step.value.result.errors));
+  assert.deepEqual(plain.sequence.slice(0, 2), ['narrow 400', 'broad'], 'one narrow read, then the table list, unchanged');
+  assert.ok(plain.createAt > plain.broadAt);
+});

@@ -142,6 +142,12 @@ function localizedLabelLcidsInSpec(spec) {
   return [...byLcid.entries()].sort(([a], [b]) => a - b).map(([lcid, where]) => ({ lcid, where }));
 }
 
+// Whether the entity carries any localized label: the one fact that decides whether an inconclusive existence probe of its table may be
+// settled by the broad, label-bearing table list (findExistingTable). Every caller that probes a table the build may go on to create asks it here.
+function entityHasLocalizedLabels(entity) {
+  return localizedLabelLcidsInSpec({ entities: [entity] }).length > 0;
+}
+
 // Halt when a LOCALIZED label names a language the organization has not provisioned. AB#6686428.
 //
 // This is NOT a validation nicety — it is the difference between the feature working and the feature
@@ -2737,7 +2743,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // Whether THIS entity carries any localized label. It decides whether an inconclusive existence
     // probe may be resolved by the broad `findTables` read — safe for a plain-label entity, poisoning
     // for a localized one. See findExistingTable.
-    const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
+    const entityIsLocalized = entityHasLocalizedLabels(e);
     const hits = await findExistingTable(provision, e.schemaName, {
       hasLocalizedLabels: entityIsLocalized, includeKeys: !!(e.alternateKeys && e.alternateKeys.length),
     });
@@ -3775,4 +3781,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, ALREADY_EXISTS_CODES, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };
+module.exports = { makeRunner, entityHasLocalizedLabels, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, ALREADY_EXISTS_CODES, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };
