@@ -296,6 +296,13 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       return { kind: r.kind, key: r.key, id: r.id, parentId: r.parentId, projectionSha256: s.projectionSha256, sensitiveInput: r.sensitiveInput };
     });
     const children = attempt.expected.children;
+    // The consumer state is the last confirmed baseline of every row the group binds, and the store keeps every record
+    // an attempt does not name. A row this attempt omitted (an update of the root alone) was not observed now, so it
+    // keeps the baseline it was last confirmed with, unchanged under its retained identity, and is never restamped
+    // as freshly observed. The saved proof stays over the rows this attempt observed.
+    const fresh = new Set(observed.map((r) => rowKey(r.kind, r.key)));
+    const prior = group && group.consumerState && Array.isArray(group.consumerState.rows) ? group.consumerState.rows : [];
+    const carried = prior.filter((r) => !fresh.has(rowKey(r.kind, r.key))).map((r) => ({ ...r }));
     return {
       token: attempt.token, baseGeneration: attempt.baseGeneration, proofSchema: ROW_PROOF_SCHEMA, records,
       proof: {
@@ -304,7 +311,7 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
         preservationSha256: attempt.expected.preservationSha256,
         expectedChildrenSha256: children.length ? sha(children) : null,
       },
-      consumerState: { version: 1, rows: observed },
+      consumerState: { version: 1, rows: [...observed, ...carried] },
       adoptionApproved: decided.some(({ row, origin, bound }) => !bound && row.parentId === null && origin === 'adopted'),
       adoptionApprovedChildren: decided.filter(({ row, origin, bound }) => !bound && row.parentId !== null && origin === 'adopted').map(({ row }) => ({ kind: row.kind, key: row.key, id: row.id })),
     };
