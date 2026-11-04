@@ -2679,7 +2679,7 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
 // `owed` is the Map provisionDataModel keeps (see there): this attempt's tables whose length is to be set, and those an earlier attempt
 // left unset. `carriedIn` is the set of the second kind as the phase found them; `waitingKeys` collects the alternate keys that wait for
 // a length step, for createWaitingKeys to make once the steps have run.
-async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier, createdTables }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier, createdTables, localizedLabelsChecked = false }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
   // `lookupLabels` records the label each spec lookup column carries once this phase is done
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
@@ -2695,8 +2695,10 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
 
   // Before any write: refuse a localized label naming a language this org has not provisioned.
   // Dataverse would accept it and silently keep only the provisioned label (live-measured), so this
-  // must run ahead of the first createTable rather than as a post-hoc verify.
-  await checkLocalizedLabelLanguages(spec, provisionedLanguages);
+  // must run ahead of the first createTable rather than as a post-hoc verify. A caller that also creates the
+  // publisher and the solution checks earlier still, before those (runSdkBuildPhases, provisionEntities), and
+  // says so with `localizedLabelsChecked`, so the language list is read once.
+  if (!localizedLabelsChecked) await checkLocalizedLabelLanguages(spec, provisionedLanguages);
 
   const globalChoiceIds = result.globalChoiceIds;
   // The declared tables (lower-case logical names) this run found already in the environment, as opposed

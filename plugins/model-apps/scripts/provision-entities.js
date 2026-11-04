@@ -8,7 +8,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
-const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, relationshipsInCreateOrder } = require('./lib/entity-provision.js');
+const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, relationshipsInCreateOrder, checkLocalizedLabelLanguages } = require('./lib/entity-provision.js');
 const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength, keyWaitsForNameLength } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
@@ -188,6 +188,11 @@ async function provisionEntities(input, opts = {}, deps = {}) {
     ...(input.languageCode !== undefined ? { languageCode: input.languageCode } : {}),
   };
   
+  // A localized label in a language the organization has not provisioned stops here, before the publisher and the
+  // solution are created, rather than in the data-model phase after them (same check and halt as there; an
+  // unreadable language list does not stop the build). The data-model phase is told, so the list is read once.
+  await checkLocalizedLabelLanguages(spec, deps.provisionedLanguages);
+
   // Provision solution
   await provisionSolution({ sdk, provision, runner, solution: spec.solution });
   
@@ -207,6 +212,7 @@ async function provisionEntities(input, opts = {}, deps = {}) {
     // before any write, rather than half-succeeding (labels silently coerced to the base language,
     // then a hard 400 on the first DateTime/Memo column).
     provisionedLanguages: deps.provisionedLanguages,
+    localizedLabelsChecked: true,
     warn,
   });
   

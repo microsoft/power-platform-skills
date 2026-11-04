@@ -375,6 +375,7 @@ An `entities[].localizedLabels` key is therefore **not** a supported shape.
 - Labels for all languages are written in **one** create call. That matters: a later single-language
   `PUT` can overwrite the base label even with merge semantics.
 - **Every LCID you name must be provisioned in the organization, and the build halts if one is not.**
+  It halts before it writes anything: the publisher and the solution are not created either.
   This is the guard the feature depends on, not a nicety. Live-measured against a 1033-only org:
   `createTable` carrying `{ "1033": …, "3082": … }` returns **success** and stores **only** the 1033
   label — Dataverse does not warn, error, or report the drop anywhere. Without the halt you would get

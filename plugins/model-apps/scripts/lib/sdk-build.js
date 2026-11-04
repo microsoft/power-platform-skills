@@ -93,6 +93,7 @@ const {
   findExistingColumns,
   relationshipExists,
   localizedLabelLcidsInSpec,
+  checkLocalizedLabelLanguages,
   lookupsWithDefaultLabel,
   relationshipsInCreateOrder,
 } = require('./entity-provision.js');
@@ -3644,6 +3645,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // the attempt (bindingReads): the pages phase judges a navigation target it finds it has to make by the same reads, and reads only a name this check did not.
   const bindingReadsOfAttempt = bindingReads();
   await checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn, seen: bindingReadsOfAttempt });
+  // A localized label in a language the organization has not provisioned stops the build here too, before the solution phase can create
+  // the publisher and the solution, rather than at the data-model phase after them. Same check, halt and fail-soft policy as there
+  // (entity-provision.js checkLocalizedLabelLanguages); the data-model phase is told it ran (localizedLabelsChecked), so the list is read once.
+  // Only a run with the data-model phase: the labels are its to write.
+  const checkLabelLanguagesEarly = has('data-model');
+  if (checkLabelLanguagesEarly) await checkLocalizedLabelLanguages(spec, opts.provisionedLanguages);
   runner.stopIfRefused('preflight');
 
   const createdFormsThisRun = new Set();
@@ -4683,7 +4690,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
   };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, createdTables, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive, publicationBarrier: owed.barrier });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, createdTables, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive, publicationBarrier: owed.barrier, localizedLabelsChecked: checkLabelLanguagesEarly });
     Object.assign(result.created.entities, dataModel.entities);
   }
   // The field security profiles, after the columns are secured and before any sample data (provisionFieldSecurityProfiles). A spec
