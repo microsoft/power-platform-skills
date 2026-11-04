@@ -190,6 +190,7 @@ test('every identity an answer carries must agree with the prepared row: a secon
     ['a header folded with a comma', { statusCode: 204, headers: { 'odata-entityid': `${at()}, ${at()}` } }, 'unknown'],
     ['a header given as two values', { statusCode: 204, headers: { 'odata-entityid': [at(), at()] } }, 'unknown'],
     ['an alternate-key URL', { statusCode: 204, headers: { Location: `${ENV}/api/data/v9.2/customapis(uniquename='contoso_api')` } }, 'unknown'],
+    ['an alternate key whose value happens to be the id', { statusCode: 204, headers: { 'odata-entityid': `${ENV}/api/data/v9.2/customapis(parentid=${API})` } }, 'unknown'],
     ['a header that names no row', { statusCode: 204, headers: { Location: `${ENV}/api/data/v9.2/customapis` } }, 'unknown'],
     ['a 202, which only queued the request', { statusCode: 202, headers: { 'odata-entityid': at() } }, 'unknown'],
     ['a 201 with no identity at all', { statusCode: 201, headers: {} }, 'unknown'],
