@@ -469,10 +469,21 @@ function validateProof(proof, where) {
   }
 }
 
+// The closed field vocabulary of each persisted shape. The validators hold every unit to it, and checkRowExtensions
+// holds a configuration unit to it BEFORE that unit's own validation can isolate it (see there).
+const RECORD_KEYS = ['formatVersion', 'appUniqueName', 'environmentFingerprint', 'kind', 'key', 'id', 'intentSha256', 'origin', 'parentKey', 'partsSha256', 'localCreateDraft'];
+const GROUP_KEYS = ['family', 'key', 'generation', 'previousGeneration', 'root', 'proofSchema', 'records', 'proof', 'consumerState', 'originalDeclaration', 'publication'];
+const ATTEMPT_KEYS = ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve', 'dashboardCreate', 'rowProtocol'];
+const EXPECTED_KEYS = ['proofVersion', 'proofSchema', 'rootId', 'baseProofSha256', 'sentProjectionSha256', 'preservationSha256', 'baseObservation', 'children'];
+const EXPECTED_CHILD_KEYS = ['kind', 'key', 'namespaceParentId', 'id', 'associationSha256'];
+const BASE_OBSERVATION_KEYS = ['rowVersion', 'savedSha256'];
+const SAVED_OBSERVATION_KEYS = ['phase', 'proof', 'acknowledgedRoot'];
+const CHILD_RECEIPT_KEYS = ['kind', 'key', 'id'];
+
 function validateRecord(rec, header, where) {
   // `localCreateDraft` is placed only by the store (commitGroup) and only on a created dashboard root; validateGroup
   // checks where it sits (validateLocalCreateDraft).
-  closedKeys(rec, ['formatVersion', 'appUniqueName', 'environmentFingerprint', 'kind', 'key', 'id', 'intentSha256', 'origin', 'parentKey', 'partsSha256', 'localCreateDraft'], where);
+  closedKeys(rec, RECORD_KEYS, where);
   if (rec.formatVersion !== 1) throw invalid(where, 'has an unknown format');
   if (rec.appUniqueName !== header.appUniqueName || rec.environmentFingerprint !== header.environmentFingerprint) throw invalid(where, 'belongs to another app or environment');
   if (!nonempty(rec.kind) || !nonempty(rec.key)) throw invalid(where, 'has no kind or key');
@@ -554,7 +565,7 @@ function validatePublication(pub, family, where, { attempt = false } = {}) {
 }
 
 function validateExpected(exp, where) {
-  closedKeys(exp, ['proofVersion', 'proofSchema', 'rootId', 'baseProofSha256', 'sentProjectionSha256', 'preservationSha256', 'baseObservation', 'children'], where);
+  closedKeys(exp, EXPECTED_KEYS, where);
   if (exp.proofVersion !== 1) throw invalid(where, 'has an unknown proof version');
   if (!nonempty(exp.proofSchema)) throw invalid(where, 'names no proof schema');
   guidField(exp.rootId, `${where}.rootId`);
@@ -562,7 +573,7 @@ function validateExpected(exp, where) {
   hashOrNull(exp.sentProjectionSha256, `${where}.sentProjectionSha256`, false);
   hashOrNull(exp.preservationSha256, `${where}.preservationSha256`, false);
   if (exp.baseObservation !== null) {
-    closedKeys(exp.baseObservation, ['rowVersion', 'savedSha256'], `${where}.baseObservation`);
+    closedKeys(exp.baseObservation, BASE_OBSERVATION_KEYS, `${where}.baseObservation`);
     if (exp.baseObservation.rowVersion !== null && !nonempty(exp.baseObservation.rowVersion)) throw invalid(`${where}.baseObservation`, 'has an empty row version');
     hashOrNull(exp.baseObservation.savedSha256, `${where}.baseObservation.savedSha256`);
   }
@@ -570,7 +581,7 @@ function validateExpected(exp, where) {
   const seen = new Set();
   exp.children.forEach((c, i) => {
     const w = `${where}.children[${i}]`;
-    closedKeys(c, ['kind', 'key', 'namespaceParentId', 'id', 'associationSha256'], w);
+    closedKeys(c, EXPECTED_CHILD_KEYS, w);
     if (!nonempty(c.kind) || !nonempty(c.key) || !nonempty(c.id)) throw invalid(w, 'is incomplete');
     if (c.kind === 'business-rule-node') throw invalid(w, 'expects a business-rule node');
     guidField(c.namespaceParentId, `${w}.namespaceParentId`);
@@ -582,7 +593,7 @@ function validateExpected(exp, where) {
 }
 
 function validateGroup(g, header, where) {
-  closedKeys(g, ['family', 'key', 'generation', 'previousGeneration', 'root', 'proofSchema', 'records', 'proof', 'consumerState', 'originalDeclaration', 'publication'], where);
+  closedKeys(g, GROUP_KEYS, where);
   tokenField(g.generation, `${where}.generation`);
   tokenField(g.previousGeneration, `${where}.previousGeneration`, true);
   validateRoot(g.root, g.family, g.key, `${where}.root`);
@@ -656,7 +667,7 @@ function validateLocalCreateDraft(g, rec, where) {
 }
 
 function validateAttempt(a, where) {
-  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve', 'dashboardCreate', 'rowProtocol'], where);
+  closedKeys(a, ATTEMPT_KEYS, where);
   // The completion reservation (prepareAttempt; see COMPLETION_BASE_BYTES), e.g. { bytes: 434176, used: 1290 }. Absent
   // on an attempt an older build prepared: it holds nothing until a new send under it acquires one (markSending, as an
   // admission); an attempt already sent with none (read-only recovery, a commit) uses only unreserved bytes.
@@ -686,7 +697,7 @@ function validateAttempt(a, where) {
   }
   if (typeof a.acknowledgedRoot !== 'boolean') throw invalid(where, 'has no acknowledged-root flag');
   if (a.savedObservation !== null) {
-    closedKeys(a.savedObservation, ['phase', 'proof', 'acknowledgedRoot'], `${where}.savedObservation`);
+    closedKeys(a.savedObservation, SAVED_OBSERVATION_KEYS, `${where}.savedObservation`);
     if (!PHASES.has(a.savedObservation.phase) || typeof a.savedObservation.acknowledgedRoot !== 'boolean') throw invalid(`${where}.savedObservation`, 'is incomplete');
     validateConsumerValue(a.savedObservation.proof, `${where}.savedObservation.proof`);
   }
@@ -858,7 +869,7 @@ function validateChildReceipt(list, a, where) {
   const rootId = rowIdKey(a.root.id);
   list.forEach((c, i) => {
     const w = `${where}[${i}]`;
-    closedKeys(c, ['kind', 'key', 'id'], w);
+    closedKeys(c, CHILD_RECEIPT_KEYS, w);
     if (!nonempty(c.kind) || !nonempty(c.key) || !nonempty(c.id)) throw invalid(w, 'is incomplete');
     const id = rowIdKey(c.id);
     if ((c.kind === a.root.kind && c.key === a.root.key) || id === rootId) throw invalid(w, 'names the root, which only a root create acknowledges');
@@ -889,6 +900,10 @@ function validateChildReceipt(list, a, where) {
 // ORIGINAL plan wanted (a new rule's default included), so a retry never reinterprets it from the row as it now looks.
 const ROW_PROTOCOL_KEYS = ['version', 'rows', 'preserved', 'completion', 'effects', 'cohort'];
 const ROW_KEYS = ['kind', 'key', 'id', 'parentId', 'mode', 'expectedSha256', 'sensitiveInput', 'sentFields', 'sentSha256', 'dispatched'];
+const ROW_COMPLETION_KEYS = ['ruleState', 'members'];
+const ROW_MEMBER_KEYS = ['kind', 'id', 'componentType'];
+const ROW_EFFECT_KEYS = ['kind', 'id', 'dispatched'];
+const ROW_CONSUMER_ROW_KEYS = ['kind', 'key', 'id', 'parentId', 'projectionSha256', 'sensitiveInput'];
 const ROW_EFFECT_KINDS = new Set(['membership', 'rule-state']);
 const isRowFamily = (family) => ROW_FAMILIES.includes(family);
 const rowKindAllowed = (family, kind) => kind === ROOT_KIND[family] || (ROW_CHILD_KINDS[family] || []).includes(kind);
@@ -931,7 +946,7 @@ function validateRowProtocol(p, a, where) {
     if (r !== root && r.parentId !== root.id) throw invalid(`${where}.rows[${i}]`, 'is not a child of the attempt\'s root');
   });
   if (!Array.isArray(p.preserved) || p.preserved.length) throw invalid(where, 'preserves rows a configuration group never holds');
-  closedKeys(p.completion, ['ruleState', 'members'], `${where}.completion`);
+  closedKeys(p.completion, ROW_COMPLETION_KEYS, `${where}.completion`);
   if (p.completion.ruleState !== null && !(a.family === 'duplicateRule' && (p.completion.ruleState === 'published' || p.completion.ruleState === 'unpublished'))) {
     throw invalid(`${where}.completion`, 'has a rule state for something that is not a duplicate rule');
   }
@@ -940,7 +955,7 @@ function validateRowProtocol(p, a, where) {
   const members = new Set();
   p.completion.members.forEach((m, i) => {
     const w = `${where}.completion.members[${i}]`;
-    closedKeys(m, ['kind', 'id', 'componentType'], w);
+    closedKeys(m, ROW_MEMBER_KEYS, w);
     guidField(m.id, `${w}.id`);
     if (!p.rows.some((r) => r.kind === m.kind && r.id === m.id)) throw invalid(w, 'is not a row of this attempt');
     if (!Number.isSafeInteger(m.componentType) || m.componentType <= 0) throw invalid(w, 'has no component type');
@@ -951,7 +966,7 @@ function validateRowProtocol(p, a, where) {
   const effects = new Set();
   p.effects.forEach((e, i) => {
     const w = `${where}.effects[${i}]`;
-    closedKeys(e, ['kind', 'id', 'dispatched'], w);
+    closedKeys(e, ROW_EFFECT_KEYS, w);
     if (!ROW_EFFECT_KINDS.has(e.kind)) throw invalid(w, 'has an unknown kind');
     guidField(e.id, `${w}.id`);
     if (typeof e.dispatched !== 'boolean') throw invalid(w, 'has no dispatched flag');
@@ -970,13 +985,13 @@ function validateRowProtocol(p, a, where) {
 //   { version: 1, rows: [{ kind, key, id, parentId, projectionSha256, sensitiveInput }] }
 // It grants no ownership of its own (the records do) and never holds a value, a connection id or a digest of either.
 function validateRowConsumer(state, family, records, where) {
-  closedKeys(state, ['version', 'rows'], where);
+  closedKeys(state, CONSUMER_KEYS[family], where);
   if (state.version !== 1) throw invalid(where, 'has an unknown version');
   if (!Array.isArray(state.rows)) throw invalid(where, 'has no rows');
   const seen = new Set();
   state.rows.forEach((r, i) => {
     const w = `${where}.rows[${i}]`;
-    closedKeys(r, ['kind', 'key', 'id', 'parentId', 'projectionSha256', 'sensitiveInput'], w);
+    closedKeys(r, ROW_CONSUMER_ROW_KEYS, w);
     if (!rowKindAllowed(family, r.kind) || !nonempty(r.key)) throw invalid(w, 'is not a row of this family');
     guidField(r.id, `${w}.id`);
     if (r.parentId !== null) guidField(r.parentId, `${w}.parentId`);
@@ -987,6 +1002,61 @@ function validateRowConsumer(state, family, records, where) {
     if (seen.has(k)) throw invalid(w, 'repeats a row');
     seen.add(k);
   });
+}
+
+// The version and vocabulary of a configuration unit, checked BEFORE its own validation and outside the catch that
+// isolates one invalid unit (parseEnvelope). A known-format unit that is merely wrong (a field missing or mistyped, a
+// hash that is not one) is isolated like any other; but a protocol, consumer, record or proof version this build does
+// not know, a proof schema it does not know, or a field outside the closed vocabulary below is what a NEWER plugin
+// writes. Isolating it would let this build write the rest of the file around a unit it cannot read, and a later
+// write of its own would then carry that unit forward as this build understood it. So the whole store is refused
+// (managed-binding-store-unreadable), on open, on refresh and on the reread inside every write, and no sibling unit
+// (a form, a view) can be written either. Nothing is discarded: a compatible plugin reads the file as it was.
+// Only numbers and strings are compared here: a version or schema of the wrong type is a malformed unit, not a newer one.
+function checkRowExtensions(x, unit, where) {
+  if (!isRowFamily(x.family)) return;
+  const newer = (w, why) => invalid(w, `${why}: it was written by a newer plugin, so the whole store is refused`);
+  const closed = (obj, allowed, w) => {
+    if (!isObj(obj)) return;
+    for (const k of Object.keys(obj)) if (!allowed.includes(k)) throw newer(w, `has the unknown field "${k}"`);
+  };
+  const each = (list, allowed, w) => { if (Array.isArray(list)) list.forEach((v, i) => closed(v, allowed, `${w}[${i}]`)); };
+  const version = (obj, field, w) => {
+    if (isObj(obj) && typeof obj[field] === 'number' && obj[field] !== 1) throw newer(w, `has ${field} ${obj[field]}`);
+  };
+  const schema = (obj, w) => {
+    if (isObj(obj) && typeof obj.proofSchema === 'string' && obj.proofSchema !== ROW_PROOF_SCHEMA) throw newer(w, `names the proof schema ${obj.proofSchema}`);
+  };
+  if (unit === 'group') {
+    closed(x, GROUP_KEYS, where);
+    schema(x, where);
+    each(x.records, RECORD_KEYS, `${where}.records`);
+    if (Array.isArray(x.records)) x.records.forEach((r, i) => version(r, 'formatVersion', `${where}.records[${i}]`));
+    closed(x.consumerState, CONSUMER_KEYS[x.family], `${where}.consumerState`);
+    version(x.consumerState, 'version', `${where}.consumerState`);
+    if (isObj(x.consumerState)) each(x.consumerState.rows, ROW_CONSUMER_ROW_KEYS, `${where}.consumerState.rows`);
+    return;
+  }
+  closed(x, ATTEMPT_KEYS, where);
+  const exp = x.expected;
+  closed(exp, EXPECTED_KEYS, `${where}.expected`);
+  version(exp, 'proofVersion', `${where}.expected`);
+  schema(exp, `${where}.expected`);
+  if (isObj(exp)) {
+    closed(exp.baseObservation, BASE_OBSERVATION_KEYS, `${where}.expected.baseObservation`);
+    each(exp.children, EXPECTED_CHILD_KEYS, `${where}.expected.children`);
+  }
+  closed(x.savedObservation, SAVED_OBSERVATION_KEYS, `${where}.savedObservation`);
+  each(x.acknowledgedChildCreates, CHILD_RECEIPT_KEYS, `${where}.acknowledgedChildCreates`);
+  const p = x.rowProtocol;
+  closed(p, ROW_PROTOCOL_KEYS, `${where}.rowProtocol`);
+  version(p, 'version', `${where}.rowProtocol`);
+  if (isObj(p)) {
+    each(p.rows, ROW_KEYS, `${where}.rowProtocol.rows`);
+    each(p.effects, ROW_EFFECT_KEYS, `${where}.rowProtocol.effects`);
+    closed(p.completion, ROW_COMPLETION_KEYS, `${where}.rowProtocol.completion`);
+    if (isObj(p.completion)) each(p.completion.members, ROW_MEMBER_KEYS, `${where}.rowProtocol.completion.members`);
+  }
 }
 
 // The frozen workflow mutation shapes (lib/workflow-effect-context.js classifies requests into them), with the method
@@ -1264,6 +1334,7 @@ function parseEnvelope(text, expect) {
     const id = identity(g, `groups[${i}]`);
     if (groupIds.has(id)) throw invalid(`groups[${i}]`, 'repeats a group');
     groupIds.add(id);
+    checkRowExtensions(g, 'group', `groups[${i}]`);
     try { validateGroup(g, header, `groups[${i}]`); } catch (e) { markInvalid(id, e); }
   });
   const attemptIds = new Set();
@@ -1273,6 +1344,7 @@ function parseEnvelope(text, expect) {
     // One attempt per group: a second would mean two different intents both waiting to be proved.
     if (attemptIds.has(id)) throw invalid(`attempts[${i}]`, 'repeats an attempt for one group');
     attemptIds.add(id);
+    checkRowExtensions(a, 'attempt', `attempts[${i}]`);
     try {
       validateAttempt(a, `attempts[${i}]`);
       if (attemptTokens.has(a.token)) throw invalid(`attempts[${i}]`, 'repeats an attempt token');
@@ -1464,6 +1536,46 @@ function discoverManagedStore(args) {
  * `barrier` (lib/publication-barrier.js) receives the scope registrations, holds and quarantines the handle forwards.
  * `deps`, for tests: `writeFileAtomic(path, text)` and `lease` (the record-lease.js deps).
  */
+// Charge one write's growth to SEVERAL attempts' reservations (a set mutation: mutate's `spend` named more than one).
+// Each participant first pays its own positive growth — the bytes of its attempt as this write leaves it against the
+// bytes it had on disk, its reservation left out so the charge does not chase itself. What the file grew by beyond
+// those (the envelope's own fields, indentation, the digits the charges add) is then given out in the order the
+// participants were named, each up to what is left of its reservation, and the text is settled again until the charges
+// stop changing. An attempt the change never named is never charged: its reservation is for its own completion.
+// A participant with no reservation (an attempt an older build prepared) pays nothing, as with one spender.
+// Answers the text to write.
+function chargeParticipants(next, was, tokens, prevBytes, text) {
+  const sized = (a) => {
+    if (!a) return 0;
+    const { completionReserve, ...rest } = a;
+    return Buffer.byteLength(JSON.stringify(rest, null, 2), 'utf8');
+  };
+  const parts = tokens.map((t) => next.attempts.find((a) => a.token === t)).filter((a) => a && a.completionReserve);
+  const start = parts.map((a) => a.completionReserve.used);
+  const self = parts.map((a, i) => {
+    const before = sized(was.attempts.find((x) => x.token === a.token));
+    return Math.min(a.completionReserve.bytes - start[i], Math.max(0, sized(a) - before));
+  });
+  const selfTotal = self.reduce((s, n) => s + n, 0);
+  let out = text;
+  for (let pass = 0; pass < 8; pass += 1) {
+    let residual = Math.max(0, Buffer.byteLength(out, 'utf8') - prevBytes - selfTotal);
+    let changed = false;
+    parts.forEach((a, i) => {
+      const base = start[i] + self[i];
+      const take = Math.min(a.completionReserve.bytes - base, residual);
+      residual -= take;
+      if (a.completionReserve.used !== base + take) {
+        a.completionReserve.used = base + take;
+        changed = true;
+      }
+    });
+    if (!changed) break;
+    out = `${JSON.stringify(next, null, 2)}\n`;
+  }
+  return out;
+}
+
 function openManagedBindings({ workspaceDir, environment, appUniqueName, solutionUniqueName, barrier = null, deps = {} }) {
   const ctx = resolveContext({ workspaceDir, environment, appUniqueName, solutionUniqueName });
   const write = typeof deps.writeFileAtomic === 'function' ? deps.writeFileAtomic : writeFileAtomic;
@@ -1497,9 +1609,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     const lease = withRecordLease(root, ctx.file, () => {
       const disk = readStoreFile({ ...ctx, root, full }) || { envelope: emptyEnvelope(ctx.expect), invalidGroups: new Map() };
       const next = clone(disk.envelope);
-      let spender = null;
+      // Every attempt the change spent for, in the order it first said so. A set mutation (markAttemptSetSending, a
+      // seal for several rows) names more than one, and each of them must pay for what it adds.
+      const spenders = [];
       let admitNow = false;
-      const answer = change(next, disk, (token) => { spender = token; }, () => { admitNow = true; });
+      const answer = change(next, disk, (token) => { if (!spenders.includes(token)) spenders.push(token); }, () => { admitNow = true; });
       if (answer && typeof answer.then === 'function') throw storeError(CODES.notSettled, 'a managed binding change must be synchronous');
       next.revision = disk.envelope.revision + 1;
       // The first configuration-family unit upgrades the file to version 2 in this same write; a version-2 file stays 2,
@@ -1510,8 +1624,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       let text = `${JSON.stringify(next, null, 2)}\n`;
       // Charge the growth to the spending attempt's reservation. Recording the charge changes the text by a few digits,
       // so it is settled again until the size is stable (two or three passes; the base reservation covers the digits).
-      const own = spender ? findAttempt(next, spender) : null;
       const admitting = admit === true || admitNow;
+      const own = spenders.length === 1 ? findAttempt(next, spenders[0]) : null;
       if (own && own.completionReserve && !admitting) {
         const start = own.completionReserve.used;
         for (let pass = 0; pass < 4; pass += 1) {
@@ -1521,6 +1635,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           own.completionReserve.used = used;
           text = `${JSON.stringify(next, null, 2)}\n`;
         }
+      } else if (spenders.length > 1 && !admitting) {
+        text = chargeParticipants(next, disk.envelope, spenders, prevBytes, text);
       }
       // A file larger than any open reads back (readStoreFile: MAX_BYTES) would be written, then refused by every later
       // run, the attempt it records with it: refuse the change instead, before the disk is touched. A write that does
