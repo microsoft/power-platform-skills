@@ -4159,6 +4159,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // The configuration kinds' runtime (lib/configuration-build.js), or null for a spec that uses none of them: then no step below runs and
   // nothing is read for them. Built before the first write so a spec that declares an item twice stops here, having written nothing.
   const configurationRun = usesConfiguration(spec) ? createConfigurationRuntime({ spec, sdk, provision, opts, appUniqueName: appUniqueName(spec) }) : null;
+  // Protected configuration (configurationIdentity "stable-v1") is checked whole and read-only here, before the first write below: an edit
+  // the protected path cannot make stops the build with nothing sent (lib/configuration-build.js preflight; a no-op without the opt-in).
+  if (configurationRun) await configurationRun.preflight();
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
   // spec's web resources and the generated app icon are written again by id when they are in it, and the page manifest is written again by its id where
   // its published copy is not what the run wants (kept where it is: persistPageManifest). One per run of the phases, so the

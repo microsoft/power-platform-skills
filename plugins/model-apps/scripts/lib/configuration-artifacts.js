@@ -686,9 +686,17 @@ async function adoptionOf(managed, kind, key, id, remote, origin) {
   return { id, remote, origin };
 }
 
+// An exact port (protected configuration, lib/configuration-protected.js) is the one authority on the kinds it protects:
+// its binding store, read at exact ids, decides, and no other record (the managed-artifacts manifest) or name may stand in.
+function exactPortOf(ctx, kind) {
+  const port = portOf(ctx);
+  return port && port.exact === true && typeof port.protects === 'function' && port.protects(kind) ? port : null;
+}
+
 async function locate(ctx, kind, key, identity) {
   const managed = ctx.managed;
-  if (managed && typeof managed.lookup === 'function') {
+  const exactPort = exactPortOf(ctx, kind);
+  if (!exactPort && managed && typeof managed.lookup === 'function') {
     const bound = await managed.lookup(kind, key);
     if (bound && bound.id) {
       try {
@@ -716,7 +724,11 @@ async function locate(ctx, kind, key, identity) {
       throw identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error));
     }
     if (resolved && resolved.state === 'present' && typeof resolved.id === 'string' && resolved.id) {
-      return adoptionOf(managed, kind, key, resolved.id, await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), 'resolved');
+      const remote = await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true });
+      // An exact port proved the row is this build's own create (its committed binding, read at the exact id): it is
+      // not adopted, so the adoption policy and the manifest's record are not asked — the binding store answers.
+      if (exactPort) return { id: resolved.id, remote, origin: 'resolved' };
+      return adoptionOf(managed, kind, key, resolved.id, remote, 'resolved');
     }
     if (!resolved || resolved.state !== 'absent') throw identityStop('create-identity-unverified');
     derived = typeof resolved.id === 'string' && resolved.id ? resolved.id : null;
@@ -1972,9 +1984,36 @@ async function applyUpdate(op, ctx, result, known) {
     return answer && answer.result;
   };
 
+  // Under an exact port that edits this kind itself (protected configuration), the whole edit — new children included —
+  // is ONE attempt of the port: the children take the ids its plan derived (never one per child through `run`), and the
+  // one push runs inside that attempt's create set, which proves and records it.
+  const exactPort = portOf(ctx);
+  const exactUpdate = exactPort && exactPort.exact === true && typeof exactPort.update === 'function' && typeof exactPort.updates === 'function' && exactPort.updates(kind) ? exactPort : null;
+  const updateExactly = async () => {
+    let entered = false;
+    try {
+      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {} }) => {
+        entered = true;
+        for (const { change, child } of created) {
+          const childId = plannedIds[child.slot];
+          if (!childId) throw tagged(child.kind, key, 'create-identity-unverified', 'nothing');
+          placeChild(change, child, childId);
+          childIds[child.slot] = childId;
+        }
+        handle.ids = { id, childIds: { ...childIds } };
+        return write();
+      });
+      return answer.result;
+    } catch (error) {
+      if (error && error[TAGGED]) throw error;
+      const routed = routeFailure(error, entered);
+      throw tagged(kind, key, routed.code, entered ? 'unknown' : 'nothing', routed);
+    }
+  };
+
   let pushed;
   try {
-    pushed = await level(0);
+    pushed = exactUpdate ? await updateExactly() : await level(0);
   } catch (error) {
     const routed = routeFailure(error, false);
     // A write (not a create) whose answer was lost: what it changed is not known.
@@ -2289,6 +2328,8 @@ async function reconcileChildRecords(plan, ctx, result) {
   const sameItem = (op) => (line) => line.kind === op.kind && line.key === op.key;
   for (const op of plan.operations || []) {
     if (!op.detail || !CHILD_KINDS[op.kind] || (op.action !== 'update' && op.action !== 'unchanged')) continue;
+    // Under an exact port every child is a row of the root's committed binding, proved at its exact id: not adopted.
+    if (exactPortOf(ctx, op.kind)) continue;
     // A root whose own management is unconfirmed is reported as such already; its children wait for it.
     if (op.detail.unrecorded) continue;
     if (![...result.saved, ...result.unchanged].some(sameItem(op))) continue;

@@ -952,6 +952,59 @@ async function observe(dataverse, planned) {
   return { rows, members: await readMembers(dataverse, planned), ruleState };
 }
 
+/**
+ * What a bound plan would change, read fresh and sent nowhere — the build's read-only preflight decides from it whether
+ * the change is one the protected path can make:
+ *   { state: 'complete', rootChanged, creates: [kind], labelEdits: [kind], fixedEdits: [kind], removals: ['<kind>:<id>'],
+ *     missing: [{ kind, key, id }], ruleStateChanged }   or   { state: 'unknown' }
+ * One exact-id read per planned row and the root's complete child graph (readChildGraph), as observe reads them. A bound
+ * row that differs from its expectation is an edit: of the root, of a child's labels only (`labelEdits`: name, display
+ * name, description — what the SDK PATCHes in place), or of anything else (`fixedEdits`). A planned create the read finds
+ * present, an unreadable row or a graph that cannot be read completely is unknown: nothing is judged from a partial read.
+ * A child under the root the plan does not hold is a removal (`removals`); a bound row read absent is `missing`.
+ */
+async function editShapeOf(dataverse, planned) {
+  const out = { state: 'complete', rootChanged: false, creates: [], labelEdits: [], fixedEdits: [], removals: [], missing: [], ruleStateChanged: false };
+  const exact = new Map();
+  let rootPresent = false;
+  for (const r of planned.rows) {
+    const read = await readConfigurationRow(dataverse, r.kind, r.id);
+    exact.set(r.id, read.state);
+    if (read.state === 'unknown') return { state: 'unknown' };
+    if (r.mode === 'create') {
+      if (read.state !== 'absent') return { state: 'unknown' };
+      out.creates.push(r.kind);
+      continue;
+    }
+    if (read.state === 'absent') {
+      out.missing.push({ kind: r.kind, key: r.key, id: r.id });
+      continue;
+    }
+    if (r.parentId === null) rootPresent = true;
+    if (r.kind === 'duplicateRule') {
+      const now = ruleStateOf(read.decoded.state.statecode, read.decoded.state.statuscode);
+      if (now !== planned.plan.ruleState) out.ruleStateChanged = true;
+    }
+    const semantic = semanticOf(r.kind, read.decoded);
+    if (projectionOf(r.kind, r.expected, semantic, read.decoded.unmodelled) === r.expectedSha256) continue;
+    if (r.parentId === null) {
+      out.rootChanged = true;
+      continue;
+    }
+    // Which fields differ, compared as the plan holds them; a difference the field comparison cannot place (a column the
+    // projection normalizes, an unmodelled one) is not provably a label edit, so it is a fixed edit.
+    const differing = Object.keys(r.expected).filter((f) => canonicalJson(r.expected[f] === undefined ? null : r.expected[f]) !== canonicalJson(semantic[f] === undefined ? null : semantic[f]));
+    if (differing.length && differing.every((f) => LABELS.includes(f)) && API_KINDS.has(r.kind)) out.labelEdits.push(r.kind);
+    else out.fixedEdits.push(r.kind);
+  }
+  if (rootPresent) {
+    const graph = await readChildGraph(dataverse, planned, exact);
+    if (graph.state !== 'complete') return { state: 'unknown' };
+    out.removals = graph.unexpected;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The classifier: which planned row, or which completion effect, one mutation is. Anything else answers null (the
 // gate refuses it unsent). Every check is against the plan, never against what the request says about itself.
@@ -1316,5 +1369,6 @@ module.exports = {
   readConfigurationConflicts,
   readComponentTypes,
   observe,
+  editShapeOf,
   projectionOf,
 };
