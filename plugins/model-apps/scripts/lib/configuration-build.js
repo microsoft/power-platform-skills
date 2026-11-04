@@ -144,7 +144,11 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       // The edit refusal leads when there is one: it is the halt a maker acts on first, and its text is fixed.
       const first = halts.find((h) => h.code === 'configuration-edit-unsupported') || halts[0];
       const others = halts.filter((h) => h !== first).map((h) => `${h.kind} ${h.key} (${h.code})`);
-      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}`);
+      // A row of an earlier, unfinished create that no answer proved this build's own is adopted only under the maker's
+      // exact approval token, one per row (managed-create-context.js judgeRows), never wholesale.
+      const approvals = [...new Set(halts.flatMap((h) => h.approvals || []))];
+      const approve = approvals.length ? ` Its rows are bound only under these exact approvals, given after checking those rows are yours: ${approvals.map((t) => JSON.stringify(t)).join(', ')}.` : '';
+      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}`);
     },
     // Plan, apply and observe ONE phase's items. Returns {outcome, blocking, halt, plan}.
     async apply(phase) {

@@ -75,8 +75,8 @@ function configSpec(over = {}) {
 const api = (over) => ({ customApis: [{ ...API, ...over }] });
 const rule = (over) => ({ duplicateDetectionRules: [{ ...RULE, ...over }] });
 
-async function harness({ hookup = true } = {}) {
-  const org = createConfigOrg({ tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' } });
+async function harness({ hookup = true, intercept } = {}) {
+  const org = createConfigOrg({ tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' }, ...(intercept ? { intercept } : {}) });
   const gate = createDeferredManagedCreateGate();
   const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: org.request, sleep: async () => {}, sendOnce: configurationSendOnce, workflowEffectGate: gate });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('cfg-protected-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: SOL });
@@ -85,7 +85,13 @@ async function harness({ hookup = true } = {}) {
   gate.bind(store);
   const ctx = createManagedCreateContext({ store, notFoundCode: B.NOT_FOUND_CODE });
   const protectedConfiguration = hookup ? P.createProtectedConfiguration({ store, gate, ctx, apiBase: `${org.origin}/api/data/v9.0` }) : undefined;
-  return { org, sdk, store, ctx, protectedConfiguration };
+  return { org, sdk, store, gate, ctx, protectedConfiguration };
+}
+// A later process over the same binding store: a fresh managed create context (none of the earlier answers), with the
+// maker's exact approvals.
+function reopen(h, approvals = []) {
+  const ctx = createManagedCreateContext({ store: h.store, approvals, notFoundCode: B.NOT_FOUND_CODE });
+  return { ...h, ctx, protectedConfiguration: P.createProtectedConfiguration({ store: h.store, gate: h.gate, ctx, apiBase: `${h.org.origin}/api/data/v9.0` }) };
 }
 // One configuration pass as the build runs it: the preflight, then the data-model step. Answers what it sent.
 async function pass(h, spec, opts = {}) {
@@ -229,6 +235,100 @@ test('under the opt-in the binding store, not the managed-artifacts manifest, na
   assert.ok(patches[0].path.includes(boundId), `the edit went to the bound row: ${patches[0].path}`);
   assert.ok(!out.sent.some((r) => String(r.path).includes(otherId)), 'the manifest row is never written');
   assert.deepEqual(asked, []);
+});
+test('a rule whose initial publication failed keeps it owed: the rerun never sends it again, and commits once it is published under the same id', async () => {
+  let failPublish = true;
+  const h = await harness({ intercept: ({ method, path }) => (failPublish && method === 'POST' && /PublishDuplicateRule$/.test(path) ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'publish failed' } } } : undefined) });
+  const first = await pass(h, configSpec());
+  assert.ok(first.halt, 'the create is not complete');
+  const pending = h.store.readGroup('duplicateRule', 'email');
+  assert.equal(pending.committed, null);
+  assert.ok(pending.pending, 'the attempt stays pending with its original expectation');
+  assert.equal(pending.pending.rowProtocol.completion.ruleState, 'published', 'an omitted status owes the initial publication');
+  const ruleId = pending.pending.root.id;
+  assert.equal(h.org.rows('duplicaterules').find((r) => r.duplicateruleid === ruleId).statecode, 0);
+  failPublish = false;
+  const publishes = () => h.org.requests.filter((r) => /PublishDuplicateRule$/.test(r.path)).length;
+  const sentPublishes = publishes();
+
+  // The rerun proves the rows and the owed state at the same ids, and does not publish again.
+  const again = await pass(h, configSpec());
+  assert.equal(again.halt && again.halt.code, 'create-completion-required', again.halt && again.halt.message);
+  assert.equal(again.halt.phase, 'preflight');
+  assert.deepEqual(again.sent, [], 'nothing is sent: the publication is not replayed');
+  assert.equal(publishes(), sentPublishes);
+
+  // A changed declaration is not reinterpreted from the row as it is now.
+  const changed = await pass(h, configSpec(rule({ status: 'unpublished' })));
+  assert.equal(changed.halt && changed.halt.code, 'managed-pending-intent-changed', changed.halt && changed.halt.message);
+  assert.deepEqual(changed.sent, []);
+
+  // The maker completes it under the same id. A later process proves the rows the plugin itself created and
+  // receipted, and binds them without sending anything.
+  const res = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/duplicaterules(${ruleId})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  assert.ok(res.statusCode < 300);
+  const approved = reopen(h);
+  const done = await pass(approved, configSpec());
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent, [], 'binding the completed create sends nothing');
+  assert.equal(publishes(), sentPublishes + 1, 'the rule was published once by the plugin, and once by the maker');
+  const group = committed(h, 'duplicateRule', 'email');
+  assert.ok(group && group.records.some((r) => r.id === ruleId));
+  const rerun = await pass(approved, configSpec());
+  assert.equal(rerun.halt, null);
+  assert.deepEqual(rerun.sent, []);
+});
+test('a rule whose create answer was lost is never re-created or published by a rerun, and is bound only under its exact approvals', async () => {
+  let org = null;
+  let lose = true;
+  // The service applies the create, and its answer is lost on the way back.
+  const h = await harness({ intercept: async (req) => {
+    if (!lose || req.method !== 'POST' || req.path.split('?')[0] !== '/duplicaterules') return undefined;
+    lose = false;
+    await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    return { statusCode: 400, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } });
+  org = h.org;
+  const first = await pass(h, configSpec());
+  assert.ok(first.halt, 'the outcome is unknown');
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const writes = () => h.org.requests.filter((r) => r.method !== 'GET').length;
+
+  const again = await pass(reopen(h), configSpec());
+  assert.equal(again.halt && again.halt.code, 'create-completion-required', again.halt && again.halt.message);
+  assert.deepEqual(again.sent, []);
+  assert.equal(h.org.rows('duplicaterules').length, 1, 'the rule is not created again');
+
+  // The maker completes it under the same id: its initial publication and its solution membership.
+  const before = writes();
+  await h.org.request({ url: `${h.org.origin}/api/data/v9.2/duplicaterules(${ruleId})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const inSolution = new Set(h.org.rows('solutioncomponents').map((c) => c.objectid));
+  for (const m of h.store.readGroup('duplicateRule', 'email').pending.rowProtocol.completion.members) {
+    if (inSolution.has(m.id)) continue;
+    await h.org.request({ url: `${h.org.origin}/api/data/v9.2/AddSolutionComponent`, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ SolutionUniqueName: SOL, ComponentId: m.id, ComponentType: m.componentType, AddRequiredComponents: false }) });
+  }
+  const makerWrites = writes() - before;
+
+  // No answer proved those rows this plugin's own: a later process asks for each row's exact approval and sends nothing.
+  const asked = await pass(reopen(h), configSpec());
+  assert.equal(asked.halt && asked.halt.code, 'create-ownership-required', asked.halt && asked.halt.message);
+  assert.deepEqual(asked.sent, []);
+  const quoted = /given after checking those rows are yours: (.*)\.$/.exec(asked.halt.message);
+  assert.ok(quoted, asked.halt.message);
+  const tokens = JSON.parse(`[${quoted[1]}]`);
+  assert.ok(tokens.includes('adopt:duplicateRule:email'), tokens.join(' '));
+  assert.ok(tokens.some((t) => t.startsWith('adopt:duplicateRuleCondition:')), tokens.join(' '));
+
+  // A wholesale or partial approval binds nothing.
+  const partial = await pass(reopen(h, ['adopt:duplicateRule:email']), configSpec());
+  assert.equal(partial.halt && partial.halt.code, 'create-ownership-required');
+
+  const approved = reopen(h, tokens);
+  const done = await pass(approved, configSpec());
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent, []);
+  assert.equal(writes() - before, makerWrites, 'the plugin wrote nothing after the lost answer: no create, no publication');
+  assert.ok(committed(h, 'duplicateRule', 'email').records.some((r) => r.id === ruleId));
 });
 test('a bound row deleted outside the plugin is never replaced by a namesake: the build stops before any write', async () => {
   const h = await harness();

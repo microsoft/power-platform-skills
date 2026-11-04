@@ -119,8 +119,9 @@ class Unmodelled extends Error {}
  * @param {string} [options.origin]
  * @param {Array<{logicalName:string, duplicateDetectionEnabled?:boolean, attributes?:string[]}>} [options.tables]
  * @param {{uniqueName:string, version?:string, prefix?:string, managed?:boolean}} [options.solution]
- * @param {(req:{method:string,path:string,body:any}) => ({statusCode:number, body?:any}|undefined)} [options.intercept]
- *   answers a request before the store does (used to provoke a refusal or a lost answer)
+ * @param {(req:{method:string,path:string,body:any}) => ({statusCode:number, body?:any}|undefined|Promise<...>)} [options.intercept]
+ *   answers a request before the store does (used to provoke a refusal or a lost answer); it may be async, so it can
+ *   let the store apply the request first and then lose the answer
  * @param {boolean} [options.childrenJoin] a create sent with a solution header puts the children it carries (or a child
  *   created on its own) into that solution too. Off by default: a compound create's children are then left out, the
  *   behaviour the platform's own duplicate-rule code works around, so a caller must prove (and add) each child itself.
@@ -478,7 +479,7 @@ function createConfigOrg(options = {}) {
     const pathPart = qIndex === -1 ? where : where.slice(0, qIndex);
     const query = qIndex === -1 ? {} : parseQuery(where.slice(qIndex));
     if (options.intercept) {
-      const answer = options.intercept({ method, path: where, body, headers });
+      const answer = await options.intercept({ method, path: where, body, headers });
       if (answer) return answer.raw ? answer.raw : json(answer.statusCode, answer.body);
     }
     if (method === 'POST' && pathPart === '/$batch') return batch(body, apiBase);

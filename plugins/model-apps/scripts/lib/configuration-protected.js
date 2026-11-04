@@ -78,7 +78,7 @@ function slotOf(record) {
 /**
  * Locate one declared item by its binding and plan it, reading only:
  *   { state: 'unbound', planned }   no committed binding: a create at the derived ids;
- *   { state: 'pending', planned }   an attempt is pending (the lifecycle recovers it from its own expectation);
+ *   { state: 'pending', planned, token, edit }   an attempt is pending (recoverPending decides it from its own expectation);
  *   { state: 'bound', planned }     the committed binding, every bound row read fresh at its exact id.
  * A bound row read absent is `configuration-row-not-found` (never replaced by a namesake), an unreadable one or a binding
  * whose ids the declaration no longer derives is `create-identity-unverified`; both throw, typed.
@@ -87,7 +87,7 @@ async function locateItem(env, kind, key) {
   const { spec, store, dataverse, solution, bindings, componentTypes } = env;
   const fresh = B.planOf(spec, { kind, key, bindings, solution, componentTypes });
   const group = store.readGroup(kind, fresh.key);
-  if (group.pending) return { state: 'pending', planned: fresh };
+  if (group.pending) return { state: 'pending', planned: fresh, token: group.pending.token, edit: !!group.committed };
   if (!group.committed) return { state: 'unbound', planned: fresh };
   const records = group.committed.records || [];
   const root = records.find((r) => r.kind === kind && r.key === fresh.key);
@@ -148,6 +148,30 @@ function editVerdict(kind, shape) {
   return { code: EDIT_CODE, message: API_EDIT_MESSAGE };
 }
 
+/**
+ * A pending attempt is decided from its OWN persisted expectation (managed-create-context.js classifyRecovery), read-only,
+ * never re-planned from today's rows. For a create that is what keeps the original plan's completion owed: a duplicate
+ * rule created without an explicit status owes its initial publication, and a rerun after a partial create proves the
+ * rows and that state at the same ids — it commits only when the rule is published (by the original send, or by the
+ * maker under the same id), and it never sends the publication again: an uncertain or failed publish is not replayed,
+ * it stays a create-completion-required halt. A declaration changed since the attempt is managed-pending-intent-changed.
+ * A pending EDIT of a bound row is not recovered here (its plan depends on the base it read): it stays unverified.
+ * Answers { verdict, observation }.
+ */
+async function recoverPending(env, ctx, item) {
+  const { planned } = item;
+  if (item.edit || !ctx) {
+    return { verdict: { action: 'halt', code: UNVERIFIED_CODE, message: `the ${planned.kind} "${planned.key}" has a pending ${item.edit ? 'edit' : 'attempt'} that this build cannot recover; nothing is sent for it` } };
+  }
+  const observation = await B.observe(env.dataverse, planned);
+  return { observation, verdict: ctx.classify(item.token, observation, { declarationSha256: planned.plan.declarationSha256 }) };
+}
+
+const haltOf = (kind, key, verdict) => ({
+  kind, key, ...(verdict.rows && verdict.rows[0] ? { id: verdict.rows[0].id } : {}), code: verdict.code || UNVERIFIED_CODE, message: verdict.message || `the ${kind} "${key}" could not be recovered`,
+  ...(Array.isArray(verdict.approvals) && verdict.approvals.length ? { approvals: verdict.approvals.slice() } : {}),
+});
+
 // What every protected read needs, read once per build: the solution's component types (membership is planned only
 // outside the restricted solutions, but the read is cheap and fail-closed).
 async function environmentOf({ spec, store, dataverse, solution, bindings }) {
@@ -161,7 +185,7 @@ async function environmentOf({ spec, store, dataverse, solution, bindings }) {
  * or duplicate rule, its edit judged. Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
  * the build may continue. A read that cannot be completed is a halt (`create-identity-unverified`), never "no change".
  */
-async function preflightProtectedConfiguration({ spec, store, dataverse, solution, bindings }) {
+async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings }) {
   if (!configurationIdentityOf(spec)) return { halts: [] };
   const halts = [];
   let env;
@@ -173,6 +197,11 @@ async function preflightProtectedConfiguration({ spec, store, dataverse, solutio
   for (const { kind, key } of declaredItems(spec)) {
     try {
       const item = await locateItem(env, kind, key);
+      if (item.state === 'pending') {
+        const { verdict } = await recoverPending(env, ctx, item);
+        if (verdict.action === 'halt') halts.push(haltOf(kind, item.planned.key, verdict));
+        continue;
+      }
       if (item.state !== 'bound' || (kind !== 'customApi' && kind !== 'duplicateRule')) continue;
       const shape = await B.editShapeOf(dataverse, item.planned);
       if (shape.state !== 'complete') { halts.push({ kind, key: item.planned.key, code: UNVERIFIED_CODE, message: `the ${kind} "${item.planned.key}" could not be read completely` }); continue; }
@@ -229,7 +258,20 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const item = await locateItem(await env(), kind, key);
       const rootId = item.planned.plan.rows[0].id;
       if (item.state === 'bound') return { state: 'present', id: rootId };
-      if (item.state === 'pending') throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" has a pending attempt that must be recovered first`, { kind, key: item.planned.key, id: rootId });
+      if (item.state === 'pending') {
+        const { verdict, observation } = await recoverPending(await env(), ctx, item);
+        if (verdict.action === 'commit') {
+          // The earlier create is complete as it was planned: commit it, then it is this build's bound row.
+          const [settled] = ctx.settle([{ token: item.token, observation, declarationSha256: item.planned.plan.declarationSha256 }]);
+          if (settled.verdict.action === 'commit') return { state: 'present', id: rootId };
+          const h = haltOf(kind, item.planned.key, settled.verdict);
+          throw stop(h.code, h.message, h);
+        }
+        // Nothing the attempt sent can have been applied: it is created again, under the same ids (run resumes it).
+        if (verdict.action === 'resume') return { state: 'absent', id: rootId };
+        const h = haltOf(kind, item.planned.key, verdict);
+        throw stop(h.code, h.message, h);
+      }
       const read = await B.readConfigurationRow(dataverse, kind, rootId);
       if (read.state === 'absent') return { state: 'absent', id: rootId };
       // A row at the derived id that no binding holds is not adopted silently: adoption needs its own approval.
@@ -237,11 +279,18 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
     },
     async run({ kind, key }, fn) {
       const item = await locateItem(await env(), kind, key);
-      if (item.state !== 'unbound') throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" is not a create`, { kind, key: item.planned.key });
+      let resumed = null;
+      if (item.state === 'pending') {
+        const { verdict } = await recoverPending(await env(), ctx, item);
+        if (verdict.action !== 'resume') throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" pending attempt is not one to send again`, { kind, key: item.planned.key });
+        resumed = { token: item.token, claim: verdict.claim };
+      } else if (item.state !== 'unbound') {
+        throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" is not a create`, { kind, key: item.planned.key });
+      }
       const { planned } = item;
       const conflicts = await B.readConfigurationConflicts(dataverse, planned);
       if (conflicts.state !== 'clear') throw stop(conflicts.code || UNVERIFIED_CODE, `the ${kind} "${planned.key}" namesake query answered ${conflicts.state}`, { kind, key: planned.key });
-      const [attempt] = ctx.begin([planned.plan]);
+      const [attempt] = resumed ? ctx.resume([resumed]) : ctx.begin([planned.plan]);
       const classify = B.createSetClassifier([{ token: attempt.token, planned }]);
       const label = `configuration create ${kind} ${planned.key}`;
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult }, send);
@@ -307,7 +356,7 @@ function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {})
     store,
     gate,
     ctx,
-    preflight: ({ spec, dataverse, solution, bindings }) => preflightProtectedConfiguration({ spec, store, dataverse, solution, bindings }),
+    preflight: ({ spec, dataverse, solution, bindings }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings }),
     port: ({ spec, dataverse, solution, bindings }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase }),
   };
 }
