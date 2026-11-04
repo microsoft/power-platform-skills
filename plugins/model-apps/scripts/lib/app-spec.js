@@ -2104,6 +2104,9 @@ const APP_THEME_MIN_VERSION = '2.21.0';
 // createIdentity: "stable-v1" (stable create ids for declared views and charts) first shipped in 2.21.0.
 const CREATE_IDENTITY_MIN_VERSION = '2.21.0';
 const CREATE_IDENTITY_STABLE = 'stable-v1';
+// configurationIdentity: "stable-v1" (exact ids and a binding store for declared environment variables, connection references,
+// Custom APIs and duplicate detection rules) first ships in 2.23.0. It takes the same one value as createIdentity.
+const CONFIGURATION_IDENTITY_MIN_VERSION = '2.23.0';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
 // Declared reconciliation (views, charts and web resources with reconcile: "declared", a view's viewId pin and joins, a chart title, command
 // keys and row pins, a table's quickFind): an older plugin ignores these fields (or, for quickFind, refuses the table), so a
@@ -2287,6 +2290,10 @@ function appMembershipWarnings(spec) {
   if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity')
     && (!isPluginVersion(floor) || compareVersions(floor, CREATE_IDENTITY_MIN_VERSION) < 0)) {
     warnings.push(`set minimumPluginVersion to '${CREATE_IDENTITY_MIN_VERSION}' or newer when using createIdentity — older plugins ignore it and create with fresh ids`);
+  }
+  if (Object.prototype.hasOwnProperty.call(spec, 'configurationIdentity')
+    && (!isPluginVersion(floor) || compareVersions(floor, CONFIGURATION_IDENTITY_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${CONFIGURATION_IDENTITY_MIN_VERSION}' or newer when using configurationIdentity — older plugins ignore it, keep no binding store for configuration and find it by name`);
   }
   if (app.tables === undefined && app.mainForms === undefined) return warnings;
   if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
@@ -2807,6 +2814,12 @@ function validateAppSpec(spec, opts = {}) {
     // Checked here rather than through creates-identity.js readCreateIdentityMode, which says the same: a default build must not load
     // the stable-identity modules, and creates-identity.js requires this module. A test pins the two to one value.
     errors.push(`create-identity-invalid: createIdentity must be "${CREATE_IDENTITY_STABLE}" or absent; got ${JSON.stringify(spec.createIdentity)}`);
+  }
+  // configurationIdentity: absent, or exactly "stable-v1" (exact ids and a binding store for the declared environment variables,
+  // connection references, Custom APIs and duplicate detection rules). Like createIdentity, any other value is refused and never
+  // read as absent: a typo must not fall back to name lookups on the build that was meant to keep exact ids.
+  if (Object.prototype.hasOwnProperty.call(spec, 'configurationIdentity') && spec.configurationIdentity !== CREATE_IDENTITY_STABLE) {
+    errors.push(`create-identity-invalid: configurationIdentity must be "${CREATE_IDENTITY_STABLE}" or absent; got ${JSON.stringify(spec.configurationIdentity)}`);
   }
   if (spec.minimumPluginVersion !== undefined) {
     const want = spec.minimumPluginVersion;
@@ -5006,6 +5019,7 @@ module.exports = {
   APP_THEME_MIN_VERSION,
   CREATE_IDENTITY_MIN_VERSION,
   CREATE_IDENTITY_STABLE,
+  CONFIGURATION_IDENTITY_MIN_VERSION,
   isPluginVersion,
   sitemapEntityTables,
   appMembershipWarnings,
