@@ -3022,4 +3022,13 @@ module.exports = {
   readConfigurationForDownload,
   MEMBERSHIP_TABLES,
   CHILD_MEMBERSHIP_TABLES,
+  CLASSIC_MEMBERSHIP_TYPES,
+  // The pure helpers the protected configuration driver (lib/configuration-create-bindings.js) derives its row plan
+  // from, so a planned row and the artifact the SDK pushes come from one definition.
+  buildArtifact,
+  describes,
+  normalCondition,
+  portableIntent,
+  portKeyOf,
+  ruleStatus,
 };

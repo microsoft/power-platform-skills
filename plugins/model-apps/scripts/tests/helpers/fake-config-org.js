@@ -124,6 +124,8 @@ class Unmodelled extends Error {}
  * @param {boolean} [options.childrenJoin] a create sent with a solution header puts the children it carries (or a child
  *   created on its own) into that solution too. Off by default: a compound create's children are then left out, the
  *   behaviour the platform's own duplicate-rule code works around, so a caller must prove (and add) each child itself.
+ * @param {number} [options.pageSize] server-driven paging: a collection read without `$top` answers at most this many rows
+ *   and, when more remain, an absolute `@odata.nextLink` carrying `$skiptoken=<offset>`. Off by default (one page).
  */
 function createConfigOrg(options = {}) {
   const origin = options.origin || 'https://contoso.crm.dynamics.com';
@@ -322,6 +324,23 @@ function createConfigOrg(options = {}) {
     return rows;
   }
 
+  // One page of a collection read (options.pageSize). The continuation is the same query plus `$skiptoken=<offset>`, as
+  // an absolute URL — the shape Dataverse answers:
+  //   { "value": [ ... ], "@odata.nextLink": "https://contoso.crm.dynamics.com/api/data/v9.2/customapis?$select=...&$skiptoken=..." }
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/page-results
+  function page(set, query) {
+    const { $skiptoken: token, ...rest } = query;
+    const offset = token === undefined ? 0 : Number(token);
+    if (!Number.isInteger(offset) || offset < 0) throw Object.assign(new Error(`a malformed $skiptoken ${token}`), { status: 400 });
+    const rows = list(set, rest);
+    const out = { value: rows.slice(offset, offset + options.pageSize).map((row) => shape(set, row, rest)) };
+    if (offset + options.pageSize < rows.length) {
+      const search = Object.entries({ ...rest, $skiptoken: String(offset + options.pageSize) }).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+      out['@odata.nextLink'] = `${origin}/api/data/v9.2/${set}?${search}`;
+    }
+    return out;
+  }
+
   // The duplicate-detection publish job: `PublishDuplicateRule` queues an asyncoperation that, once read, has completed and set the
   // rule to Published (statecode 1, statuscode 2). Learn: duplicaterule StatusCode — 0/0 Unpublished, 0/1 Publishing, 1/2 Published.
   function publishRule(id) {
@@ -469,6 +488,7 @@ function createConfigOrg(options = {}) {
       if (!row) return failure(404, '0x80040217', `${set} With Id = ${key} Does Not Exist`);
       return json(200, shape(set, row, query));
     }
+    if (method === 'GET' && options.pageSize && !query.$top) return json(200, page(set, query));
     if (method === 'GET') return json(200, { value: list(set, query).map((row) => shape(set, row, query)) });
     if (method === 'POST' && !key) {
       const row = insert(set, body || {});
