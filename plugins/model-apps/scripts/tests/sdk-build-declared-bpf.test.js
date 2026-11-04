@@ -1179,7 +1179,9 @@ test('the fragments file is made by an exclusive create under a new name: a name
       let error;
       try {
         got = hooked('openSync', (open, self, args) => {
-          if (args[1] === 'wx' && args[0] === at0) fs.symlinkSync(target, at0, 'file');
+          // By name: the create is given the folder's real path, which differs from `ws` when the temp folder holds an 8.3
+          // short name (C:\Users\RUNNER~1 on a CI runner).
+          if (args[1] === 'wx' && path.basename(args[0]) === nameOf('aaaaaa')) fs.symlinkSync(target, at0, 'file');
           return open.apply(self, args);
         }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb') }));
       } catch (e) { error = e; }
@@ -1235,6 +1237,45 @@ test('the fragments file is made by an exclusive create under a new name: a name
     assert.equal(path.dirname(got.file), ws);
     assert.match(path.basename(got.file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/);
   }
+});
+
+test('the fragments file is written in the folder that was checked: a parent junction retargeted after the check, to a folder whose .maker-workspace is a junction elsewhere, does not move the write there', () => {
+  const { settleFragments } = require('../lib/managed-fragments.js');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const name = 'managed-fragments-20261103T182124Z-aaaaaa.json';
+  const checked = makeTempDir('declared-bpf-');
+  const other = makeTempDir('declared-bpf-');
+  const outside = makeTempDir('declared-bpf-');
+  const via = path.join(makeTempDir('declared-bpf-'), 'via');
+  const checkedWorkspace = path.join(checked, 'app', '.maker-workspace');
+  fs.mkdirSync(checkedWorkspace, { recursive: true });
+  fs.mkdirSync(path.join(other, 'app'));
+  fs.symlinkSync(outside, path.join(other, 'app', '.maker-workspace'), linkType);
+  fs.symlinkSync(checked, via, linkType);
+  const given = path.join(via, 'app');
+  const givenWorkspace = path.join(given, '.maker-workspace');
+  // assertSafeOutputDir answers the real path last, after its link checks: retarget `via` right then, once.
+  const realpath = fs.realpathSync.native;
+  let raced = 0;
+  let got;
+  let error;
+  fs.realpathSync.native = function (file, ...args) {
+    const resolved = realpath.call(this, file, ...args);
+    if (path.resolve(String(file)) === givenWorkspace && !raced) {
+      raced += 1;
+      fs.rmSync(via, { recursive: true, force: true });
+      fs.symlinkSync(other, via, linkType);
+    }
+    return resolved;
+  };
+  try {
+    got = settleFragments(given, { app: APP, items: [{ family: 'bpf', key: GROUP }], now: () => new Date('2026-11-03T18:21:24Z'), suffix: () => 'aaaaaa' });
+  } catch (e) { error = e; } finally { fs.realpathSync.native = realpath; }
+  assert.equal(raced, 1, 'the retarget ran after the check');
+  assert.deepEqual(fs.readdirSync(outside), [], 'nothing is written through the junction nobody checked');
+  assert.equal(error, undefined);
+  assert.deepEqual(fs.readdirSync(checkedWorkspace), [name], 'it lands in the folder that was checked');
+  assert.equal(got.file, path.join(givenWorkspace, name), 'and is reported as the caller gave <out>');
 });
 
 // Every name under `dir`, with each file's bytes, without following links: what a refusal must leave as it was.

@@ -76,7 +76,8 @@ function fragmentsText(app, items) {
 // link whose target does not exist and creates the target, where POSIX O_EXCL refuses any link. So a name holding anything,
 // a dangling link included, is passed over first; and a link put there between that look and the open (it would have to guess
 // the random name) is caught by comparing what was opened with what the name holds, before a byte is written.
-function createExclusive(file, text) {
+// `shownFile` names the file in the error text only (see settleFragments); every operation goes through `file`.
+function createExclusive(file, text, shownFile = file) {
   try {
     fs.lstatSync(file);
     return 'taken';
@@ -95,7 +96,7 @@ function createExclusive(file, text) {
     const named = fs.lstatSync(file, { bigint: true });
     // ino only: on Windows lstat reports dev 0 while fstat reports the volume serial, and both names are in one folder (one volume).
     if (!named.isFile() || named.ino !== opened.ino) {
-      throw codeError('managed-fragments-unwritable', `the managed fragments file could not be made at ${file}: a link or another file took the name while it was made, so nothing was written to it (if it was a link, an empty file may have been made where it points). No other output was written.`);
+      throw codeError('managed-fragments-unwritable', `the managed fragments file could not be made at ${shownFile}: a link or another file took the name while it was made, so nothing was written to it (if it was a link, an empty file may have been made where it points). No other output was written.`);
     }
     // Through redactFileData like every guarded writer (lib/safe-fs.js writeFileSafe, which this file wrote through before): a
     // declaration holds no token, but the file is written raw through its descriptor, so the guard is applied here.
@@ -124,32 +125,34 @@ function unwritableError(where, e, extra = '') {
 function settleFragments(outDir, { app, items, now = () => new Date(), suffix = () => crypto.randomBytes(3).toString('hex') } = {}) {
   const list = Array.isArray(items) ? items : [];
   if (!list.length) return null;
-  // The folder and the file are named, used and reported in the form of the <out> the caller gave, as every other output of
-  // the download is. assertSafeOutputDir answers the folder's real path (a junction or symlink in a parent resolved, an 8.3
-  // short name such as C:\Users\RUNNER~1 expanded), but that is used for nothing: the safety it proves is that the final
-  // component is a plain folder, not a link, and the identity check in createExclusive compares the opened file with the name
-  // itself, so it needs no resolved path.
-  const dir = path.join(path.resolve(outDir), WORKSPACE_DIR);
+  // Two forms of one folder. Every filesystem operation (the create, the link and identity checks) goes through `dir`, the real
+  // path assertSafeOutputDir answers for the folder it actually checked: a parent junction or symlink retargeted after that
+  // check cannot move the write into a folder nobody checked. `shown` is the same folder in the form of the <out> the caller
+  // gave (a parent link kept, an 8.3 short name such as C:\Users\RUNNER~1 not expanded), as every other output of the
+  // download is reported; it is used ONLY for what is reported (the result, the warning, the error text), never for I/O.
+  const shown = path.join(path.resolve(outDir), WORKSPACE_DIR);
+  let dir;
   try {
     // Created when missing; refused when it is a link or junction (a write there would land outside <out>) or not a folder.
-    assertSafeOutputDir(dir, { create: true });
+    dir = assertSafeOutputDir(shown, { create: true });
   } catch (e) {
-    throw unwritableError(dir, e);
+    throw unwritableError(shown, e);
   }
   const text = fragmentsText(app, list);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const file = path.join(dir, fragmentsName(now(), suffix()));
+    const name = fragmentsName(now(), suffix());
     let outcome;
     try {
-      outcome = createExclusive(file, text);
+      outcome = createExclusive(path.join(dir, name), text, path.join(shown, name));
     } catch (e) {
-      throw e && e.code === 'managed-fragments-unwritable' ? e : unwritableError(dir, e);
+      throw e && e.code === 'managed-fragments-unwritable' ? e : unwritableError(shown, e);
     }
     if (outcome === 'taken') continue;
-    if (outcome && outcome.partial) throw unwritableError(dir, outcome.partial, ` A partial file was left at ${file}; delete it.`);
+    const file = path.join(shown, name);
+    if (outcome && outcome.partial) throw unwritableError(shown, outcome.partial, ` A partial file was left at ${file}; delete it.`);
     return { file, keys: [...list].sort(byFamilyThenKey).map((i) => ({ family: i.family, key: i.key })) };
   }
-  throw unwritableError(dir, `every name tried (${MAX_ATTEMPTS}) was taken`);
+  throw unwritableError(shown, `every name tried (${MAX_ATTEMPTS}) was taken`);
 }
 
 // The stand-ins a proof validates with: shape only, never written.
