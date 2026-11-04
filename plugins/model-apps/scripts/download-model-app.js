@@ -32,10 +32,9 @@
 // when a rebuild provably leaves that role exactly as it is (lib/persona-restore.js; `managedBpfs.personas`).
 // A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
-// `<out>/.maker-workspace/managed-fragments.json` (`managedFragments` in the result; lib/managed-fragments.js). The download writes
-// that name only when it is missing or holds a file a download wrote: anything else there stops it, when there is something to
-// write there, before it publishes anything (`code: 'managed-fragments-path-taken'`); with nothing to write, it is left alone. So
-// that such a stop (or a failed write of the file) leaves the folder as it was, the managed download writes the page tree to a
+// a NEW file `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json` (`managedFragments.file` in the result;
+// lib/managed-fragments.js). It is created exclusively, so it never replaces, moves or removes a file, and with nothing to write
+// nothing is written. So that a failure to write it leaves the folder as it was, the managed download writes the page tree to a
 // staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
 // Off by default, so a download without them makes the reads it always made.
 //
@@ -3988,7 +3987,7 @@ async function main(deps = {}) {
     if (includeManaged) {
       if (result.stagedPages) result.stagedPages.check();
       try {
-        managedFragments = settleFragments(outDir, { app: appUnique, items: fragments, onWarning: (s) => io.stderr.write(`WARNING: ${s}\n`) });
+        managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-fragments-unwritable', error: (e && e.message) || String(e) });
         return;

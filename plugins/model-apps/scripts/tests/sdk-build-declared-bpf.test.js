@@ -624,9 +624,12 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     assert.equal(left.written.businessProcessFlows, undefined, 'never restored without its roles');
     assert.equal(left.written.personas, undefined, 'and no persona is made up');
     // The proved flow is written ready to paste, with the personas it still needs, in the download's own fragments file.
-    const fragmentsFile = path.join(out, '.maker-workspace', 'managed-fragments.json');
+    // A new file, named for this download: the result and the warning name it.
+    const fragmentsFile = left.emitted[0].payload.managedFragments.file;
+    assert.equal(path.dirname(fragmentsFile), fs.realpathSync(path.join(out, '.maker-workspace')));
+    assert.match(path.basename(fragmentsFile), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/);
     assert.deepEqual(left.emitted[0].payload.managedFragments, { file: fragmentsFile, keys: [{ family: 'bpf', key: GROUP }] });
-    assert.match(left.said, /WARNING: 1 managed item\(s\) left out only for what the download could not bring are written ready to paste in .*managed-fragments\.json/);
+    assert.ok(left.said.includes(`WARNING: 1 managed item(s) left out only for what the download could not bring are written ready to paste in ${fragmentsFile}:`), left.said);
     const fragments = JSON.parse(fs.readFileSync(fragmentsFile, 'utf8'));
     assert.equal(fragments.kind, 'model-apps.managed-download-fragments');
     assert.equal(fragments.formatVersion, 1);
@@ -636,12 +639,15 @@ test('the explicit managed download leaves out a flow whose securityRoles name p
     const one = await download(wire, makeTempDir('declared-bpf-'), flags, { personas: [{ ...DISPATCHER, persona: ' dispatcher ' }] });
     assert.match(one.emitted[0].payload.managedBpfs.stale[0].reason, /^its securityRoles name persona 'Agent', which the download could not prove from its role: /);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(one.emitted[0].payload.managedFragments.file), 'utf8')).items[0].needs, [{ persona: 'Agent' }]);
-    // Into the same folder: nothing is left out, so the payload says nothing of fragments and the earlier list is removed.
+    // Into the same folder: nothing is left out, so the payload says nothing of fragments, nothing is written, and the file the
+    // earlier download wrote is kept as it was (the download never removes a file there).
+    const earlier = fs.readFileSync(fragmentsFile);
     const both = await download(wire, out, flags, { personas: [DISPATCHER, AGENT] });
     assert.deepEqual(both.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] });
     assert.deepEqual(both.written.businessProcessFlows, [roled]);
     assert.equal('managedFragments' in both.emitted[0].payload, false);
-    assert.equal(fs.existsSync(fragmentsFile), false, 'a list from an earlier download does not outlive it');
+    assert.deepEqual(fs.readFileSync(fragmentsFile), earlier, 'the earlier download\'s file is kept, byte for byte');
+    assert.deepEqual(fs.readdirSync(path.join(out, '.maker-workspace')).filter((n) => n.startsWith('managed-fragments')), [path.basename(fragmentsFile)]);
   });
 });
 
@@ -831,7 +837,7 @@ test('the explicit managed download writes no persona it cannot prove from its r
   });
 });
 
-test('the managed download never writes over, through or instead of a fragments file it did not write: with something to write there it refuses, and nothing is written', async () => {
+test('the managed download writes its fragments to a new file it creates, and never writes over, through or instead of a file that is there', async () => {
   await withBpf(true, async () => {
     const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
     const DISPATCHER = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
@@ -839,40 +845,69 @@ test('the managed download never writes over, through or instead of a fragments 
     const dir = makeTempDir('declared-bpf-');
     assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [DISPATCHER] })).err, undefined);
     const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
-    const refusedAt = async (out, prepare) => {
+    const OWN = `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, app: APP, items: [{ family: 'bpf', key: 'old/Old' }] })}\n`;
+    // Whatever is in .maker-workspace before the download is there after it, byte for byte; the one new fragments file is added.
+    const writtenBeside = async (label, prepare) => {
+      const out = makeTempDir('declared-bpf-');
+      const ws = path.join(out, '.maker-workspace');
+      fs.mkdirSync(ws);
+      prepare(ws);
+      const before = snapshotTree(ws);
+      const got = await download(wire, out, flags);
+      assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted) + got.said);
+      const { file, keys } = got.emitted[0].payload.managedFragments;
+      assert.deepEqual(keys, [{ family: 'bpf', key: GROUP }], label);
+      assert.equal(path.dirname(file), fs.realpathSync(ws), label);
+      assert.match(path.basename(file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/, label);
+      assert.equal(path.basename(file) in before, false, `${label}: a name that was free`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items.map((i) => i.key), [GROUP], label);
+      assert.ok(got.said.includes(`are written ready to paste in ${file}:`), label);
+      const after = snapshotTree(ws);
+      for (const name of Object.keys(before)) assert.equal(after[name], before[name], `${label}: ${name} is as it was`);
+      assert.deepEqual(Object.keys(after).filter((n) => n.startsWith('managed-fragments') && !(n in before)), [path.basename(file)], label);
+      return { out, ws, file };
+    };
+    // A maker's file at the name earlier versions used, one that is not JSON, a folder there, and a file a download wrote: all kept.
+    await writtenBeside('a maker\'s JSON file', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), '{"mine":true}\n'));
+    await writtenBeside('a maker\'s notes', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), 'notes'));
+    await writtenBeside('a folder', (ws) => { fs.mkdirSync(path.join(ws, 'managed-fragments.json')); fs.writeFileSync(path.join(ws, 'managed-fragments.json', 'inside.txt'), 'kept'); });
+    await writtenBeside('an earlier download\'s file', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), OWN));
+    // Files named the way this download names its own, a maker's and an earlier download's: kept, and the new one is another name.
+    await writtenBeside('files of the new kind', (ws) => {
+      fs.writeFileSync(path.join(ws, 'managed-fragments-20260101T000000Z-000000.json'), 'maker notes');
+      fs.writeFileSync(path.join(ws, 'managed-fragments-20260102T000000Z-abcdef.json'), OWN);
+    });
+    // A hard link to a file elsewhere: nothing is written through it.
+    const outside = path.join(makeTempDir('declared-bpf-'), 'other.json');
+    fs.writeFileSync(outside, OWN);
+    await writtenBeside('a hard link', (ws) => fs.linkSync(outside, path.join(ws, 'managed-fragments.json')));
+    assert.equal(fs.readFileSync(outside, 'utf8'), OWN);
+    // Two downloads into one folder write two files; the first is kept as it was.
+    const first = await writtenBeside('a first download', () => {});
+    const firstBytes = fs.readFileSync(first.file);
+    const second = await download(wire, first.out, flags);
+    assert.equal(second.emitted[0].ok, true, JSON.stringify(second.emitted));
+    assert.notEqual(second.emitted[0].payload.managedFragments.file, first.file);
+    assert.deepEqual(fs.readFileSync(first.file), firstBytes);
+    assert.deepEqual(fs.readFileSync(second.emitted[0].payload.managedFragments.file), firstBytes, 'the same app writes the same bytes');
+    // A junction or a file at .maker-workspace would put the file outside the app folder or where a folder is not: refused, and
+    // the app folder is exactly as it was.
+    const elsewhere = makeTempDir('declared-bpf-');
+    for (const [label, prepare] of [
+      ['a junction', (ws) => fs.symlinkSync(elsewhere, ws, 'junction')],
+      ['a file', (ws) => fs.writeFileSync(ws, 'maker notes')],
+    ]) {
+      const out = makeTempDir('declared-bpf-');
       prepare(path.join(out, '.maker-workspace'));
       const before = snapshotTree(out);
       const r = await download(wire, out, flags);
-      assert.equal(r.emitted.length, 1);
-      assert.equal(r.emitted[0].ok, false, JSON.stringify(r.emitted));
-      assert.equal(r.emitted[0].payload.code, 'managed-fragments-path-taken');
-      assert.match(r.emitted[0].payload.error, /managed-fragments\.json exists and was not written by a download \(.+\); move or delete it and run again\. Nothing was written\./);
-      assert.deepEqual(snapshotTree(out), before, 'the app folder is exactly as it was');
-      return r;
-    };
-    // A maker's JSON file at the name, and one that is not JSON at all.
-    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(ws); fs.writeFileSync(path.join(ws, 'managed-fragments.json'), '{"mine":true}\n'); });
-    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(ws); fs.writeFileSync(path.join(ws, 'managed-fragments.json'), 'notes'); });
-    // A folder at the name.
-    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(path.join(ws, 'managed-fragments.json'), { recursive: true }); });
-    // A junction at .maker-workspace would put the file outside the app folder.
-    const elsewhere = makeTempDir('declared-bpf-');
-    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.symlinkSync(elsewhere, ws, 'junction'); });
+      assert.equal(r.emitted[0].ok, false, label + JSON.stringify(r.emitted));
+      assert.equal(r.emitted[0].payload.code, 'managed-fragments-unwritable', label);
+      assert.match(r.emitted[0].payload.error, /No other output was written\.$/, label);
+      assert.deepEqual(snapshotTree(out), before, `${label}: the app folder is exactly as it was`);
+    }
     assert.deepEqual(fs.readdirSync(elsewhere), [], 'nothing is written where the junction points');
-    // A hard link to a file elsewhere, even one holding a fragments file: writing it would change the other name.
-    const outside = path.join(makeTempDir('declared-bpf-'), 'other.json');
-    fs.writeFileSync(outside, `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, items: [] })}\n`);
-    const outsideBytes = fs.readFileSync(outside, 'utf8');
-    await refusedAt(makeTempDir('declared-bpf-'), (ws) => { fs.mkdirSync(ws); fs.linkSync(outside, path.join(ws, 'managed-fragments.json')); });
-    assert.equal(fs.readFileSync(outside, 'utf8'), outsideBytes);
-    // A file a download wrote is replaced with the new list.
-    const own = makeTempDir('declared-bpf-');
-    fs.mkdirSync(path.join(own, '.maker-workspace'));
-    fs.writeFileSync(path.join(own, '.maker-workspace', 'managed-fragments.json'), `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, app: APP, items: [{ family: 'bpf', key: 'old/Old' }] })}\n`);
-    const replaced = await download(wire, own, flags);
-    assert.equal(replaced.emitted[0].ok, true, JSON.stringify(replaced.emitted));
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(own, '.maker-workspace', 'managed-fragments.json'), 'utf8')).items.map((i) => i.key), [GROUP]);
-    // Without --include-managed the name is never looked at: a plain download writes and refuses exactly as before.
+    // Without --include-managed nothing is looked at: a plain download writes and refuses exactly as before.
     const plainOut = makeTempDir('declared-bpf-');
     fs.mkdirSync(path.join(plainOut, '.maker-workspace'));
     fs.writeFileSync(path.join(plainOut, '.maker-workspace', 'managed-fragments.json'), 'notes');
@@ -883,32 +918,38 @@ test('the managed download never writes over, through or instead of a fragments 
   });
 });
 
-test('a fragments name the download did not write never stops a managed download that has nothing to write there, and is left as it is', async () => {
+test('a managed download with nothing to write as fragments writes nothing there and removes nothing', async () => {
   await withBpf(true, async () => {
     const wire = createWorkflowWire();
     const dir = makeTempDir('declared-bpf-');
     assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
     const flags = ['--include-managed', '--managed-manifest', storeFileOf(dir)];
+    const OWN = `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, app: APP, items: [] })}\n`;
     for (const [label, prepare] of [
-      ['a maker\'s file', (f) => fs.writeFileSync(f, 'maker notes')],
-      ['a folder', (f) => { fs.mkdirSync(f); fs.writeFileSync(path.join(f, 'inside.txt'), 'kept'); }],
+      ['a maker\'s file', (ws) => fs.writeFileSync(path.join(ws, 'managed-fragments.json'), 'maker notes')],
+      ['a folder', (ws) => { fs.mkdirSync(path.join(ws, 'managed-fragments.json')); fs.writeFileSync(path.join(ws, 'managed-fragments.json', 'inside.txt'), 'kept'); }],
+      ['an earlier download\'s files', (ws) => {
+        fs.writeFileSync(path.join(ws, 'managed-fragments.json'), OWN);
+        fs.writeFileSync(path.join(ws, 'managed-fragments-20260101T000000Z-abcdef.json'), OWN);
+      }],
     ]) {
       const out = makeTempDir('declared-bpf-');
-      const f = path.join(out, '.maker-workspace', 'managed-fragments.json');
-      fs.mkdirSync(path.dirname(f));
-      prepare(f);
-      const before = snapshotTree(path.join(out, '.maker-workspace'));
+      const ws = path.join(out, '.maker-workspace');
+      fs.mkdirSync(ws);
+      prepare(ws);
+      const before = snapshotTree(ws);
       const got = await download(wire, out, flags);
       assert.equal(got.emitted[0].ok, true, label + JSON.stringify(got.emitted));
       assert.deepEqual(got.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [] }, label);
       assert.equal('managedFragments' in got.emitted[0].payload, false, label);
-      const after = snapshotTree(path.join(out, '.maker-workspace'));
+      const after = snapshotTree(ws);
       for (const name of Object.keys(before)) assert.equal(after[name], before[name], `${label}: ${name} is as it was`);
+      assert.deepEqual(Object.keys(after).filter((n) => n.startsWith('managed-fragments') && !(n in before)), [], `${label}: nothing new`);
     }
   });
 });
 
-test('a fragments write that fails leaves every output that was there as it was: the page tree, the spec and the baseline are published only after it', async () => {
+test('a fragments file that cannot be written leaves every output that was there as it was: the page tree, the spec and the baseline are published only after it', async () => {
   await withBpf(true, async () => {
     const { runDownload } = require('../download-model-app.js');
     const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
@@ -927,10 +968,9 @@ test('a fragments write that fails leaves every output that was there as it was:
     fs.writeFileSync(pageFile, 'MAKER EDIT THAT MUST SURVIVE FAILURE');
     const oldSpec = JSON.stringify({ ...specWith([]), pages: [{ key: 'old', name: 'Page', pageId: pid }] });
     fs.writeFileSync(path.join(out, 'app-spec.json'), oldSpec);
-    const f = path.join(out, '.maker-workspace', 'managed-fragments.json');
-    fs.mkdirSync(path.dirname(f));
-    fs.writeFileSync(f, JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, items: [] }));
-    fs.chmodSync(f, 0o444);
+    // A file where the fragments folder goes: no new file can be made in it.
+    const ws = path.join(out, '.maker-workspace');
+    fs.writeFileSync(ws, 'maker notes');
     const xml = `<SiteMap><Area><Group><SubArea GenPageId="${pid}" Title="Page"/><SubArea Entity="new_ticket"/></Group></Area></SiteMap>`;
     const layer = '00000000-0000-4000-8000-00000000cccc';
     const pageSdk = currentReadSdk({
@@ -956,17 +996,19 @@ test('a fragments write that fails leaves every output that was there as it was:
       },
     });
     const stagingLeft = () => fs.readdirSync(out).filter((n) => n.startsWith('.download-pages.'));
-    try {
+    {
+      const before = snapshotTree(out);
       const failed = await run();
       assert.equal(failed.emitted[0].ok, false);
       assert.equal(failed.emitted[0].payload.code, 'managed-fragments-unwritable');
       assert.equal(fs.readFileSync(pageFile, 'utf8'), 'MAKER EDIT THAT MUST SURVIVE FAILURE');
       assert.equal(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8'), oldSpec);
-      assert.match(failed.emitted[0].payload.error, /Nothing was written\.$/);
-      assert.deepEqual(fs.readdirSync(path.dirname(f)), ['managed-fragments.json'], 'no baseline, no leftover name');
+      assert.match(failed.emitted[0].payload.error, /No other output was written\.$/);
       assert.deepEqual(stagingLeft(), [], 'the staging folder is removed');
       assert.equal(staged, true, 'the managed download stages its pages');
-    } finally { fs.chmodSync(f, 0o666); }
+      assert.deepEqual(snapshotTree(out), before, 'no baseline, no fragments, no leftover name: the app folder is exactly as it was');
+    }
+    fs.unlinkSync(ws);
     // Once the file can be written, the same download publishes everything, the page tree included.
     const done = await run();
     assert.equal(done.emitted[0].ok, true, JSON.stringify(done.emitted) + done.said);
@@ -977,68 +1019,120 @@ test('a fragments write that fails leaves every output that was there as it was:
   });
 });
 
-test('replacing or removing its own fragments file, the download checks at the moment of the change that it is still the file it inspected, and never clobbers another', () => {
+
+test('the fragments file is made by an exclusive create under a new name: a name that is taken, even at the last moment, is left as it is and another is used', () => {
   const { settleFragments } = require('../lib/managed-fragments.js');
-  const own = `${JSON.stringify({ kind: 'model-apps.managed-download-fragments', formatVersion: 1, items: [] })}\n`;
   const ITEMS = [{ family: 'bpf', key: GROUP }];
-  const settle = (out, items, hooks) => {
-    const saved = Object.fromEntries(Object.keys(hooks).map((k) => [k, fs[k]]));
-    for (const [k, hook] of Object.entries(hooks)) fs[k] = function (...args) { hook(...args); return saved[k].apply(this, args); };
-    try { return { result: settleFragments(out, { app: APP, items }) }; } catch (error) { return { error }; } finally { Object.assign(fs, saved); }
-  };
-  const ownAt = () => {
+  const at = new Date('2026-11-03T17:14:12.667Z');
+  const nameOf = (suffix) => `managed-fragments-20261103T171412Z-${suffix}.json`;
+  const sequence = (...values) => () => values.shift() || 'ffffff';
+  const workspace = () => {
     const out = makeTempDir('declared-bpf-');
-    const file = path.join(out, '.maker-workspace', 'managed-fragments.json');
-    fs.mkdirSync(path.dirname(file));
-    fs.writeFileSync(file, own);
-    return { out, file };
+    const ws = path.join(out, '.maker-workspace');
+    fs.mkdirSync(ws);
+    return { out, ws: fs.realpathSync(ws) };
   };
-  // A foreign file that takes the name once the own file is moved aside (at the open of the new file's temporary sibling) is kept.
+  const hooked = (name, hook, fn) => {
+    const saved = fs[name];
+    fs[name] = function (...args) { return hook(saved, this, args); };
+    try { return fn(); } finally { fs[name] = saved; }
+  };
+  // Nothing due: nothing is made, not even the folder.
   {
-    const { out, file } = ownAt();
-    let swapped = false;
-    const got = settle(out, ITEMS, { openSync: (p) => {
-      if (!swapped && typeof p === 'string' && path.basename(p).startsWith('.managed-fragments.json.')) { swapped = true; fs.writeFileSync(file, 'FOREIGN MAKER NOTES'); }
-    } });
-    assert.equal(swapped, true);
-    assert.equal(got.error && got.error.code, 'managed-fragments-path-taken');
-    assert.equal(fs.readFileSync(file, 'utf8'), 'FOREIGN MAKER NOTES');
-    assert.deepEqual(fs.readdirSync(path.dirname(file)), ['managed-fragments.json'], 'nothing is left beside it');
+    const out = makeTempDir('declared-bpf-');
+    assert.equal(settleFragments(out, { app: APP, items: [] }), null);
+    assert.deepEqual(fs.readdirSync(out), []);
   }
-  // A file changed after the look, in place or as a new file with the same bytes, is put back as it is, and the change is refused;
-  // with nothing due it is left alone.
-  for (const items of [ITEMS, []]) {
-    for (const [how, change] of [
-      ['changed in place', (file) => fs.writeFileSync(file, 'FOREIGN MAKER NOTES')],
-      ['a new file with the same bytes', (file) => { fs.unlinkSync(file); fs.writeFileSync(file, own); }],
-    ]) {
-      const label = `${how}, ${items.length} due`;
-      const { out, file } = ownAt();
-      const expected = how === 'changed in place' ? 'FOREIGN MAKER NOTES' : own;
-      let swapped = false;
-      const got = settle(out, items, { renameSync: (from) => {
-        if (!swapped && path.resolve(String(from)) === path.resolve(file)) { swapped = true; change(file); }
-      } });
-      assert.equal(swapped, true, label);
-      if (items.length) {
-        assert.equal(got.error && got.error.code, 'managed-fragments-path-taken', label);
-        assert.match(got.error.message, /\(it changed while the download ran\)/, label);
-      } else {
-        assert.equal(got.error, undefined, label);
-        assert.equal(got.result, null, label);
-      }
-      assert.equal(fs.readFileSync(file, 'utf8'), expected, label);
-      assert.deepEqual(fs.readdirSync(path.dirname(file)), ['managed-fragments.json'], label);
+  // A name that is taken (a maker's file, a folder) is passed over and kept.
+  {
+    const { out, ws } = workspace();
+    fs.writeFileSync(path.join(ws, nameOf('aaaaaa')), 'MAKER NOTES');
+    fs.mkdirSync(path.join(ws, nameOf('bbbbbb')));
+    const got = settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb', 'cccccc') });
+    assert.equal(got.file, path.join(ws, nameOf('cccccc')));
+    assert.equal(fs.readFileSync(path.join(ws, nameOf('aaaaaa')), 'utf8'), 'MAKER NOTES');
+    assert.deepEqual(fs.readdirSync(path.join(ws, nameOf('bbbbbb'))), []);
+    assert.deepEqual(fs.readdirSync(ws).sort(), [nameOf('aaaaaa'), nameOf('bbbbbb'), nameOf('cccccc')]);
+  }
+  // A file that takes the chosen name after it was chosen, just before the create: kept, and the next name is used.
+  {
+    const { out, ws } = workspace();
+    let raced = 0;
+    const got = hooked('openSync', (open, self, args) => {
+      if (args[1] === 'wx' && !raced) { raced += 1; fs.writeFileSync(args[0], 'ARRIVED AT THE LAST MOMENT'); }
+      return open.apply(self, args);
+    }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb') }));
+    assert.equal(raced, 1);
+    assert.equal(got.file, path.join(ws, nameOf('bbbbbb')));
+    assert.equal(fs.readFileSync(path.join(ws, nameOf('aaaaaa')), 'utf8'), 'ARRIVED AT THE LAST MOMENT');
+  }
+  // A link at the name, even one pointing nowhere, is not followed: nothing is made where it points.
+  {
+    const { out, ws } = workspace();
+    const target = path.join(makeTempDir('declared-bpf-'), 'not-there.json');
+    let linked = true;
+    try { fs.symlinkSync(target, path.join(ws, nameOf('aaaaaa')), 'file'); } catch (e) { if (e.code !== 'EPERM') throw e; linked = false; }
+    if (linked) {
+      const got = settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb') });
+      assert.equal(got.file, path.join(ws, nameOf('bbbbbb')));
+      assert.equal(fs.existsSync(target), false, 'nothing is made through the link');
+      assert.equal(fs.readlinkSync(path.join(ws, nameOf('aaaaaa'))), target);
     }
   }
-  // Unchanged, it is replaced, and removed when nothing is due, with no other name left behind.
+  // A link put at the chosen name just before the create (it would have to guess the name): on POSIX the create refuses it and
+  // the next name is used; on Windows the create follows it, and the download sees that and writes nothing, through it or at all.
   {
-    const { out, file } = ownAt();
-    assert.deepEqual(settle(out, ITEMS, {}).result.keys, ITEMS);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items.map((i) => i.key), [GROUP]);
-    assert.deepEqual(fs.readdirSync(path.dirname(file)), ['managed-fragments.json']);
-    assert.equal(settle(out, [], {}).result, null);
-    assert.deepEqual(fs.readdirSync(path.dirname(file)), []);
+    const { out, ws } = workspace();
+    const target = path.join(makeTempDir('declared-bpf-'), 'not-there.json');
+    const at0 = path.join(ws, nameOf('aaaaaa'));
+    let linked = true;
+    try { fs.symlinkSync(target, path.join(ws, 'probe'), 'file'); fs.unlinkSync(path.join(ws, 'probe')); } catch (e) { if (e.code !== 'EPERM') throw e; linked = false; }
+    if (linked) {
+      let got;
+      let error;
+      try {
+        got = hooked('openSync', (open, self, args) => {
+          if (args[1] === 'wx' && args[0] === at0) fs.symlinkSync(target, at0, 'file');
+          return open.apply(self, args);
+        }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: sequence('aaaaaa', 'bbbbbb') }));
+      } catch (e) { error = e; }
+      assert.equal(fs.readlinkSync(at0), target, 'the link is left as it is');
+      if (error) {
+        assert.equal(error.code, 'managed-fragments-unwritable');
+        assert.match(error.message, /took the name while it was made, so nothing was written to it/);
+        assert.equal(fs.readFileSync(target, 'utf8'), '', 'nothing is written through the link');
+        assert.deepEqual(fs.readdirSync(ws), [nameOf('aaaaaa')]);
+      } else {
+        assert.equal(got.file, path.join(ws, nameOf('bbbbbb')));
+        assert.equal(fs.existsSync(target), false);
+      }
+    }
+  }
+  // Every name tried taken: refused, and nothing is written.
+  {
+    const { out, ws } = workspace();
+    fs.writeFileSync(path.join(ws, nameOf('aaaaaa')), 'MAKER NOTES');
+    assert.throws(() => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: () => 'aaaaaa' }),
+      (e) => e.code === 'managed-fragments-unwritable' && /every name tried \(8\) was taken/.test(e.message));
+    assert.deepEqual(fs.readdirSync(ws), [nameOf('aaaaaa')]);
+    assert.equal(fs.readFileSync(path.join(ws, nameOf('aaaaaa')), 'utf8'), 'MAKER NOTES');
+  }
+  // A write that fails after the create: refused, and the half-written file, its own, is named and left for the maker.
+  {
+    const { out, ws } = workspace();
+    assert.throws(() => hooked('writeFileSync', (write, self, args) => {
+      if (typeof args[0] === 'number') throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+      return write.apply(self, args);
+    }, () => settleFragments(out, { app: APP, items: ITEMS, now: () => at, suffix: () => 'aaaaaa' })),
+    (e) => e.code === 'managed-fragments-unwritable' && e.message.includes(`A partial file was left at ${path.join(ws, nameOf('aaaaaa'))}; delete it.`));
+    assert.deepEqual(fs.readdirSync(ws), [nameOf('aaaaaa')]);
+  }
+  // The real clock and random suffix: a UTC time to the second and six hex digits.
+  {
+    const { out, ws } = workspace();
+    const got = settleFragments(out, { app: APP, items: ITEMS });
+    assert.equal(path.dirname(got.file), ws);
+    assert.match(path.basename(got.file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/);
   }
 });
 

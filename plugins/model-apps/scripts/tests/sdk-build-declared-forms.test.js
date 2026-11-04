@@ -877,7 +877,7 @@ test('the explicit managed download restores a proved form with its handler libr
     assert.equal(r.emitted[0].ok, true, JSON.stringify(r.emitted) + r.said);
     assert.deepEqual(r.emitted[0].payload.managedForms, { restored: [KEY], stale: [], libraries: [{ name: LIBRARY, forms: [KEY] }] });
     assert.equal('managedFragments' in r.emitted[0].payload, false);
-    assert.equal(fs.existsSync(path.join(out, '.maker-workspace', 'managed-fragments.json')), false);
+    assert.deepEqual((fs.existsSync(path.join(out, '.maker-workspace')) ? fs.readdirSync(path.join(out, '.maker-workspace')) : []).filter((n) => n.startsWith('managed-fragments')), []);
     assert.deepEqual(r.written.forms, built.forms, 'the declaration it was built from');
     assert.deepEqual(r.written.webResources, [{ name: LIBRARY, displayName: 'Item script', type: 'js', contentBase64: row.publishedContent, external: true }]);
     assert.equal(Buffer.from(row.publishedContent, 'base64').toString('utf8'), LIBRARY_SOURCE);
@@ -938,7 +938,9 @@ test('the explicit managed download refuses a handler library it cannot prove is
       assert.match(managedForms.stale[0].reason, why, label);
       assert.deepEqual(r.written.forms, [], label);
       assert.equal(r.written.webResources, undefined, label);
-      const file = path.join(out, '.maker-workspace', 'managed-fragments.json');
+      const { file } = r.emitted[0].payload.managedFragments;
+      assert.equal(path.dirname(file), fs.realpathSync(path.join(out, '.maker-workspace')), label);
+      assert.match(path.basename(file), /^managed-fragments-\d{8}T\d{6}Z-[0-9a-f]{6}\.json$/, label);
       assert.deepEqual(r.emitted[0].payload.managedFragments, { file, keys: [{ family: 'form', key: KEY }] }, label);
       const fragments = JSON.parse(fs.readFileSync(file, 'utf8'));
       assert.deepEqual(fragments.items, [{ family: 'form', key: KEY, reason: managedForms.stale[0].reason, needs: [{ webResource: LIBRARY }], paste: { forms: built.forms } }], label);

@@ -822,25 +822,25 @@ are only added.
   it from the downloaded content where it is missing, and a teardown never deletes it. When a library
   fails any of those checks the form is left out and named in `managedForms.stale` ("handler library
   '<name>' was not downloaded: <why>"), and its declaration is written ready to paste in the build
-  folder's `.maker-workspace/managed-fragments.json` (see below), with the library it needs: add both to
+  folder's `.maker-workspace` (see below), with the library it needs: add both to
   the spec. The download transfers no binding: the
   downloaded folder has no store, so the first build that binds a form there needs
   `--authorize "adopt:form:<key>"`. A rebuild that finds the form already as declared writes nothing and
   may leave it unbound.
 - **The fragments file.** A managed download writes each declared form or process flow it proved but left
   out only for what it could not bring (a handler library, a persona) to
-  `<out>/.maker-workspace/managed-fragments.json`, and names the file in a warning and in the result
+  a new file, `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json`, and names that file in a
+  warning and in the result
   (`managedFragments: { file, keys }`). Each item has the store `key`, the `reason` it was left out, what it
   `needs` (`{ "webResource": "<name>" }` or `{ "persona": "<name>" }`) and a `paste` object
   (`{ "forms": [ ... ] }` or `{ "businessProcessFlows": [ ... ] }`): add the entry to the same array in
   `app-spec.json` with what it needs, from the spec it was built from. An item left out for anything else
-  (pending, changed, not valid) is not written there, because nothing proved it. The download writes that
-  name only when it is missing or holds a file a download wrote, and removes its own file when nothing is
-  left out. Any other file, folder or link there is left alone; when there is something to write there, it
-  stops the download before it writes anything (`code: "managed-fragments-path-taken"`): move or delete it
-  and run again. A file the download wrote that is read-only, or that cannot be written, stops it too
-  (`code: "managed-fragments-unwritable"`), also before it writes anything: the pages, the spec and the
-  baseline are written only after this file.
+  (pending, changed, not valid) is not written there, because nothing proved it. The download only ever
+  creates a file under a name nothing holds: it never replaces, moves or removes a file in `.maker-workspace`,
+  so files from earlier downloads (and any of the maker's) stay as they are; delete old ones when you no longer
+  need them. With nothing left out it writes no file. When `.maker-workspace` is a link, a junction or a file,
+  or the file cannot be written, the download stops (`code: "managed-fragments-unwritable"`) before it writes
+  anything else: the pages, the spec and the baseline are written only after this file.
 - **A removed form that was deleted.** When the spec no longer declares a form and the form was deleted in
   the environment, the next build reads it by its id in both its saved and its published layer. When both
   say it does not exist, the build stops managing it, including a publish of its table it still owed: it
@@ -1119,7 +1119,7 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   rebuild provably leaves that role exactly as it is (a persona's role is converged onto exactly what it
   declares, so one is never guessed): see "A persona written by a managed download" under `personas[]`
   in app-spec-schema.md. Otherwise the flow is left out with a warning naming each persona and why, and
-  its declaration is written ready to paste in `.maker-workspace/managed-fragments.json` (see the
+  its declaration is written ready to paste in a new `.maker-workspace/managed-fragments-*.json` file (see the
   declared forms' Download note); copy those personas from the spec it was built from.
 - **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
   an earlier build sent to it is still waiting to be proved, the build ends incomplete

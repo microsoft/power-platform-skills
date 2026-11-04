@@ -2932,19 +2932,19 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   leaves the form in `managedForms.stale` ("handler library '<name>' was not downloaded: <why>"). A form left
   out only for its
   handler libraries (the spec validates with the form and a stub `js` entry per missing library) is written
-  to the fragments file, `<out>/.maker-workspace/managed-fragments.json` (`lib/managed-fragments.js`,
-  `managedFragments` in the result), with `needs: [{ webResource }]` and a `paste` entry; a flow left out
-  only for its personas likewise (a stub persona per name). The stubs are never written. The file is the
-  download's only when it is missing or parses as its own `kind`. It is settled after the restore and the
-  validation and before anything is published: `main` passes `runDownload` `stagePages`, which writes the page
-  tree to a hidden staging folder inside `<out>`, reads it back and answers `stagedPages` (`check`, `publish`);
-  the tree, the spec and the baseline are written only after the fragments file, so a refusal or a failed write
-  leaves every output as it was. With nothing due, an own file is removed and anything else at the name is left
-  alone; with items due, anything else there, or a link at it or at `.maker-workspace`, is refused
-  (`managed-fragments-path-taken`). An absent name is created exclusively; an own file is proved writable
-  (a read-only one is `managed-fragments-unwritable`), moved aside, checked there to be the inspected file
-  (file id, one name, bytes), and the new file is created exclusively at the vacant name, so a file that changed
-  or arrived after the look is put back or kept, never replaced. The restored form is the group's
+  to a fragments file (`lib/managed-fragments.js`, `managedFragments: { file, keys }` in the result), with
+  `needs: [{ webResource }]` and a `paste` entry; a flow left out only for its personas likewise (a stub
+  persona per name). The stubs are never written. Each download that has items writes ONE new file,
+  `<out>/.maker-workspace/managed-fragments-<UTC yyyymmddThhmmssZ>-<6 hex>.json`, made by an exclusive create
+  (`wx`) under a name nothing holds; it never replaces, renames over, removes or links any file, so a taken
+  name (a file, a folder, a link: Windows `CREATE_NEW` follows a dangling link, so an `lstat` passes over any
+  entry first and an inode check after the open refuses a link that raced in, before a byte is written) is kept
+  and another name tried. Files from earlier downloads stay. With nothing due nothing is written or removed. A
+  link, junction or file at `.maker-workspace`, or no name free after 8 tries, is `managed-fragments-unwritable`.
+  It is settled after the restore and the validation and before anything is published: `main` passes
+  `runDownload` `stagePages`, which writes the page tree to a hidden staging folder inside `<out>`, reads it
+  back and answers `stagedPages` (`check`, `publish`); the tree, the spec and the baseline are written only
+  after the fragments file, so a failure there leaves every output as it was. The restored form is the group's
   `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
   downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.

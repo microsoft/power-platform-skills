@@ -170,7 +170,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
   file>` (one with an event handler comes back with its handler library as an `external` web resource when
   that library is this publisher's own unmanaged script; otherwise it is left out and named in
-  `managedForms.stale`, and its declaration is written ready to paste in `.maker-workspace/managed-fragments.json`
+  `managedForms.stale`, and its declaration is written ready to paste in the new file `managedFragments.file` names (`.maker-workspace/managed-fragments-<time>-<random>.json`)
   with the library it needs, so tell the maker to add both from the spec it was built from); it carries no binding, so the first build that binds each form from the downloaded folder needs
   `adopt:form:<key>` (a rebuild that writes nothing may leave it unbound). A form removed from the spec and
   then deleted in Maker is released by the next build, which names it (`managed-root-retired`); until then
@@ -233,9 +233,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   privilege added to that role outside the spec is removed by the next build. When a persona cannot be proved,
   the download leaves the flow out with a warning naming the personas and why (nothing is lost; the store and the
   maker's own spec keep it) and writes the flow ready to paste in
-  `.maker-workspace/managed-fragments.json`. Tell the maker to paste that flow and copy the
-  personas it names from the spec it was built from. If the download stops with `managed-fragments-path-taken`,
-  a file it did not write holds that name: ask the maker to move it, never delete it yourself. A
+  the new file `managedFragments.file` names. Tell the maker to paste that flow and copy the
+  personas it names from the spec it was built from. Earlier fragments files are kept; never delete one
+  yourself. If the download stops with `managed-fragments-unwritable`, `.maker-workspace` is not a plain folder
+  or cannot be written: ask the maker to fix it, never move or delete it yourself. A
   declared rule or flow removed from the spec whose row was deleted is no longer managed once the build reads it gone
   by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
   change is still waiting to be proved keeps the build incomplete. A retirement a build reports it could not
