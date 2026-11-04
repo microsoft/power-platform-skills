@@ -361,11 +361,13 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
      * store (noteSaved, the attempt staying sending): a root create this run saw acknowledged and checked, of an attempt
      * still at the epoch it was sent under. A receipt the store cannot write is this run's `localError` (typed, never a
      * network retry), its acknowledgements are kept unchecked, and every later run of this context is refused unsent.
-     * Answers runWithManagedCreateSet's { value, error, localError, facts } and `checked`.
+     * Answers runWithManagedCreateSet's { value, error, localError, facts } and `checked`. `batch` is passed to it as given
+     * (the one Custom API change set a set may send, see runWithManagedCreateSet); an API PATCH in it is an update, so
+     * it never receipts a root.
      */
-    async run({ attempts, classify, deleteCode, label, acceptResult }, fn) {
+    async run({ attempts, classify, deleteCode, label, acceptResult, batch }, fn) {
       if (stopped) return { value: undefined, error: null, localError: stopped, facts: [], checked: false };
-      const outcome = await runWithManagedCreateSet({ store, entries: attempts.map(({ token, epoch }) => ({ token, epoch })), classify, deleteCode, label }, fn);
+      const outcome = await runWithManagedCreateSet({ store, entries: attempts.map(({ token, epoch }) => ({ token, epoch })), classify, deleteCode, label, batch }, fn);
       const rowFacts = outcome.facts.filter((f) => f.type === 'row');
       let localError = outcome.localError;
       let checked = typeof acceptResult === 'function' && outcome.error === null && localError === null
