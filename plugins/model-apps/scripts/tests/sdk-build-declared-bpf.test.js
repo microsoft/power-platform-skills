@@ -674,6 +674,16 @@ async function rolesBuilt({ persona = DISPATCHER, grants = true, member = true, 
   return { wire, roles, backing, roleId, appRead, role: roles.roles.get(roleId), flags: ['--include-managed', '--managed-manifest', storeFileOf(dir)] };
 }
 
+// Answers the GETs `match` picks with `answer(req, prior)` in place of the wire's own (`prior` is the wire's own, to edit).
+function answerGets(r, match, answer) {
+  const prior = r.wire.request;
+  r.wire.request = async (req) => (req.method === 'GET' && match(req) ? answer(req, prior) : prior(req));
+}
+const json = (body) => ({ statusCode: 200, headers: {}, body: JSON.stringify(body) });
+const isAssociation = (req) => /appmoduleroles_association/.test(req.url);
+const isTables = (req) => /\/EntityDefinitions\?/.test(req.url);
+const associationPage2 = `${ORIGIN}/api/data/v9.2/appmodules(${APP_ID})/appmoduleroles_association?$select=roleid&page=2`;
+
 test('the explicit managed download writes a persona a restored flow names from its role, when a rebuild provably leaves that role as it is', async () => {
   await withBpf(true, async () => {
     for (const persona of [DISPATCHER, { ...DISPATCHER, appAccess: false }]) {
@@ -725,6 +735,44 @@ test('a persona the managed download wrote for one flow is proved again for the 
   });
 });
 
+test('the persona proof reads every page of the app association: a role the server answers on a later page is associated, never appAccess false', async () => {
+  await withBpf(true, async () => {
+    const r = await rolesBuilt();
+    const before = r.roles.heldOf(r.roleId);
+    const pages = [];
+    answerGets(r, isAssociation, (req) => {
+      pages.push(req.url);
+      return /page=2/.test(req.url)
+        ? json({ value: [{ roleid: r.roleId }] })
+        : json({ value: [{ roleid: '00000000-0000-4000-8000-00000000eeee' }], '@odata.nextLink': associationPage2 });
+    });
+    const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+    assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+    assert.equal(pages.length, 2, 'the next link is followed');
+    assert.deepEqual(got.emitted[0].payload.managedBpfs, { restored: [GROUP], stale: [], personas: [{ name: 'Dispatcher', flows: [GROUP] }] });
+    assert.equal('appAccess' in got.written.personas[0], false, 'associated: the default, which keeps the association');
+    assert.equal(got.written.personas[0].jobs[0].privileges.some((p) => p.entity === 'appmodule'), false, 'the appmodule read is the build\'s own, not a job privilege');
+    const { sdk } = await sdkOver(r.wire);
+    assert.equal((await sdk.createPersonaRole(personaRoleSpecFor(got.written.personas[0]))).roleId, r.roleId);
+    assert.deepEqual(r.roles.heldOf(r.roleId), before, 'a rebuild leaves the role as it was');
+  });
+});
+
+test('a flow whose securityRoles name two personas is restored only when both are proved', async () => {
+  await withBpf(true, async () => {
+    const r = await rolesBuilt();
+    const two = { ...ROLED, securityRoles: { personas: ['Dispatcher', 'Agent'] } };
+    const dir = path.dirname(r.flags[2]);
+    assert.equal((await build(r.wire, dir, { ...specWith([two]), personas: [DISPATCHER, { ...DISPATCHER, persona: 'Agent' }] })).err, undefined);
+    const got = await download(r.wire, makeTempDir('declared-bpf-'), r.flags, { appId: APP_ID });
+    assert.equal(got.emitted[0].ok, true, JSON.stringify(got.emitted) + got.said);
+    assert.deepEqual(got.emitted[0].payload.managedBpfs.restored, []);
+    assert.equal(got.written.personas, undefined, 'none of them, not the one that was proved');
+    assert.equal(got.written.businessProcessFlows, undefined);
+    assert.deepEqual(got.emitted[0].payload.managedFragments.keys, [{ family: 'bpf', key: GROUP }]);
+  });
+});
+
 test('the explicit managed download writes no persona it cannot prove from its role, and leaves the flow out with what to copy', async () => {
   await withBpf(true, async () => {
     const cases = [
@@ -736,6 +784,30 @@ test('the explicit managed download writes no persona it cannot prove from its r
       ['no flow grants', { grants: false }, () => {}, /its role does not hold prvCreate\w+, prvRead\w+, prvWrite\w+ and 1 more at organization scope on the flow's backing table '\w+', which a build would grant$/],
       ['the app associated without its read', {}, (r) => r.role.held.delete(r.appRead), /a persona read from its role would not rebuild it exactly \(a build would add prvReadAppmodule at Global\)$/],
       ['outside the solution', { member: false }, () => {}, /its role is not in solution 'BP', so a build would add it$/],
+      // Whether the app is associated is written as `appAccess`, so only a complete, well-formed association read decides it.
+      ['an app association answered without its list', {}, (r) => answerGets(r, isAssociation, () => json({ unexpected: 'no list' })), /whether the app is associated with its role could not be read \(the association rows: no readable result set\)$/],
+      ['an app association row that names no role', {}, (r) => answerGets(r, isAssociation, () => json({ value: [{ roleid: r.roleId }, { name: 'no id' }] })), /whether the app is associated with its role could not be read \(an association row names no role\)$/],
+      ['an app association page after the first refused', {}, (r) => answerGets(r, isAssociation, (req) => (/page=2/.test(req.url)
+        ? { statusCode: 403, headers: {}, body: JSON.stringify({ error: { code: '0x80040220', message: 'no read privilege' } }) }
+        : json({ value: [{ roleid: r.roleId }], '@odata.nextLink': associationPage2 }))), /whether the app is associated with its role could not be read \(the association rows: HTTP 403 /],
+      // A second marked role of the name, and a lookup the server cuts to one row with a next link: one row read is not one role.
+      ['a role lookup cut short', {}, (r) => {
+        r.roles.addRole({ name: 'Dispatcher' });
+        answerGets(r, (req) => /\/roles$/.test(new URL(req.url).pathname), async (req, prior) => {
+          const answer = await prior(req);
+          const body = JSON.parse(answer.body);
+          body.value = body.value.slice(0, 1);
+          body['@odata.nextLink'] = `${ORIGIN}/api/data/v9.2/roles?page=2`;
+          return { ...answer, body: JSON.stringify(body) };
+        });
+      }, /its role lookup was cut short, so it is not known to be the only role named 'Dispatcher' in the root business unit$/],
+      ['table metadata the server says continues', {}, (r) => answerGets(r, isTables, async (req, prior) => {
+        const answer = await prior(req);
+        const body = JSON.parse(answer.body);
+        body['@odata.nextLink'] = `${ORIGIN}/api/data/v9.2/EntityDefinitions?page=2`;
+        return { ...answer, body: JSON.stringify(body) };
+      }), /which table each privilege of its role belongs to could not be read \(the answer says more tables exist\)$/],
+      ['table metadata refused', {}, (r) => answerGets(r, isTables, () => ({ statusCode: 403, headers: {}, body: JSON.stringify({ error: { code: '0x80040220', message: 'no metadata access' } }) })), /which table each privilege of its role belongs to could not be read \(HTTP 403\)$/],
     ];
     for (const [label, opts, change, why] of cases) {
       const r = await rolesBuilt(opts);

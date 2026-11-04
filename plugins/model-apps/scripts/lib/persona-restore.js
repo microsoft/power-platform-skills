@@ -11,9 +11,10 @@
 // persona is proved, all or nothing, and the download refuses (and names why) on anything it cannot prove:
 //   a. role: exactly one role of that name in the ROOT business unit (a written persona carries no businessUnitId, so the build
 //      looks there), unmanaged (`ismanaged === false`, strictly) and carrying SDK_ROLE_MARKER. Any other row of the name there
-//      would make the build refuse the persona; more than one marked row, likewise.
+//      would make the build refuse the persona; more than one marked row, likewise. A lookup cut short proves neither.
 //   b. solution: the role is in the app's solution (solutioncomponent type 20), or a build would add it.
-//   c. app: whether the role is associated with the app (appmodules(<id>)/appmoduleroles_association) is `appAccess`.
+//   c. app: whether the role is associated with the app (appmodules(<id>)/appmoduleroles_association, every page, each row
+//      naming a role; a malformed or incomplete answer refuses) is `appAccess`.
 //   d. privileges: every privilege the role holds (roleprivileges, paged to the end, depth from privilegedepthmask) maps to a
 //      table, and to an access a persona can declare, through the table metadata. A privilege no table carries (e.g.
 //      prvExportToExcel) cannot be declared, so a build would remove it: refused.
@@ -29,8 +30,9 @@
 const { odataLit } = require('./odata.js');
 const { SDK_ROLE_MARKER, BPF_ROLE_ACCESS } = require('./app-spec.js');
 const { depthFromMask, compileRolePrivileges, SCOPE_DEPTH, ACCESS_TYPE, DEPTH_RANK } = require('./role-privileges.js');
-const { appRoleIdsFor } = require('./app-roles.js');
+const { appRoleIdsComplete } = require('./app-roles.js');
 const { readSolutionMembers } = require('./solution-membership.js');
+const { hasMoreOf } = require('./query-completeness.js');
 
 // sdk-build.js owns personaRoleSpecFor and the role business-unit scoping verify and teardown use; the download loads it already.
 const build = () => require('./sdk-build.js');
@@ -103,7 +105,9 @@ function createPersonaProver({ sdk, appUniqueName, solutionUniqueName }) {
   const members = () => memo('members', async () => {
     try { return await readSolutionMembers(sdk, solutionUniqueName, [ROLE_COMPONENT]); } catch { return null; }
   });
-  const appRoles = () => memo('app', () => appRoleIdsFor(sdk, appUniqueName));
+  // Strict on purpose (app-roles.js appRoleIdsComplete): an id missing from this answer is written as `appAccess: false`, which
+  // a build turns into a dissociation, so only every page, each row naming a role, is an answer.
+  const appRoles = () => memo('app', () => appRoleIdsComplete(sdk, appUniqueName));
   // Names for a refusal: best effort, the ids stand in when the names cannot be read.
   async function privilegeNames(ids) {
     const shown = ids.slice(0, 3);
@@ -126,6 +130,10 @@ function createPersonaProver({ sdk, appUniqueName, solutionUniqueName }) {
       return refuse(`its role could not be read (${messageOf(e)})`);
     }
     if (!Array.isArray(rows)) return refuse('its role could not be read');
+    // The lookup reads `top: 5`; a server that names a next link has more roles of that name than were read
+    // (query-completeness.js hasMoreOf, judged on the SDK's own array before anything copies it), so the rows read prove
+    // neither that the role is the only one nor that none of the others would make the build refuse.
+    if (hasMoreOf(rows) === true) return refuse(`its role lookup was cut short, so it is not known to be the only role named '${name}' in the root business unit`);
     if (!rows.length) return refuse(`no role named '${name}' is in the root business unit`);
     if (rows.some((r) => !r || r.description !== SDK_ROLE_MARKER || r.ismanaged === true)) {
       return refuse(`a role named '${name}' in the root business unit is managed or was not made by a build, and a build refuses to change it`);

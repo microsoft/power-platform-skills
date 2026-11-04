@@ -2298,7 +2298,10 @@ downloaded spec lacks writes that persona from its role, but only when a rebuild
 role exactly as it is: one role of that name in the root business unit, made by a build and unmanaged,
 in the app's solution, holding only table privileges that compile back to exactly what it holds, the
 flow's grants included. The persona has one job, `Privileges read from the environment`, and
-`appAccess: false` when the app is not associated with the role. From then on the spec **owns** that
+`appAccess: false` when the app is not associated with the role — read from every page of the app's
+role associations; an association answer that is incomplete, malformed or refused proves nothing, so
+no persona is written (a role it missed would otherwise be written as not associated, and a build
+would remove its access to the app). A role lookup the server cuts short proves nothing either. From then on the spec **owns** that
 role like any other persona: a privilege someone adds to the role outside the spec is removed by the
 next build, and the download says so in a `NOTE`. When any of this cannot be proved, no persona is
 written and the flow is left out instead, with the reason (see the business process flows' notes in

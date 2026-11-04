@@ -3214,10 +3214,12 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   role (`lib/persona-restore.js` `createPersonaProver`, read-only, memoised per run). A persona owns its role
   and is converged onto exactly what it declares (ReplacePrivilegesRole), so a persona is written only when a
   rebuild provably leaves the role as it is, all gates fail closed: exactly one role of the name in the ROOT
-  business unit (`resolveRoleBusinessUnit` + `roleBuClause`), carrying `SDK_ROLE_MARKER` with
+  business unit (`resolveRoleBusinessUnit` + `roleBuClause`; a lookup cut short — `hasMore` — refuses), carrying `SDK_ROLE_MARKER` with
   `ismanaged === false` (any unmarked or managed row of the name refuses, as the SDK's own lookup does); a
   member of the app's solution (component type 20); `appAccess` from the app association
-  (`appRoleIdsFor`); every held privilege (`roleprivileges`, paged, `depthFromMask`) mapped to a table and an
+  (`appRoleIdsComplete`: every page through `collectionRows`, each row naming a role by GUID; a malformed,
+  refused or incomplete answer refuses, because a role missing from it would be written as `appAccess: false`
+  and a build would dissociate it — `appRoleIdsFor` stays verify's lenient reader); every held privilege (`roleprivileges`, paged, `depthFromMask`) mapped to a table and an
   access through one `EntityDefinitions?$select=LogicalName,Privileges` read (a privilege no table carries is
   refused); the candidate (one job, `JOB_NAME`, grouped by table and scope) put through
   `personaRoleSpecFor` and `compileRolePrivileges` (`lib/role-privileges.js`, the SDK's compile) equals the
