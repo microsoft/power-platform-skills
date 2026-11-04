@@ -6,10 +6,10 @@
 // protected create must ask, and nothing here sends a write.
 //   planOf(spec, opts)                   the row plan of one artifact (buildRowPlan input) at its derived ids
 //   createClassifier(entries)            the gate's classifier: which planned row (or completion effect) a request is
-//   classifyConstituent(entries, req)    the same, for one constituent of a $batch change set (a later child only)
-//   readConfigurationRow(dv, kind, id)   one exact-id read: present, absent (only a 404 0x80040217) or unknown
+//   classifyConstituent(entries, req)    the same, for one constituent of a $batch change set (a bound Custom API's edit)
+//   readConfigurationRow(dv, kind, id)   one exact-id read: present (with its row version), absent (only a 404 0x80040217) or unknown
 //   readConfigurationConflicts(dv, p)    the fully paged namesake queries a create must run first
-//   observe(dv, planned)                 the fresh read a recovery or a settle judges (the lifecycle's observation)
+//   observe(dv, planned)                 the fresh read a recovery or a settle judges, the root's complete child graph included
 //   readComponentTypes(dv)               the ObjectTypeCode of each member table
 //   acceptResultFor(planned)             the run's check of what the SDK's pushArtifact answered
 //
@@ -18,8 +18,8 @@
 //   decodes through a fixed table; a value the table does not know (a new option code, a type change) is UNKNOWN,
 //   never "close enough", and a column this build never writes must be empty or the row is not the one it prepared.
 // - The projection a row is judged by hashes semantic fields (names exact, table and column names lower case), so the
-//   same row read through another API version or spelling compares the same, and the SDK's own label defaults (it
-//   fills a Custom API's unauthored labels) are not mistaken for a difference.
+//   same row read through another API version or spelling compares the same. A Custom API's labels the App Spec leaves
+//   out are pinned in the plan to what the SDK fills them with (pinApiLabels), so any other label is a difference.
 // - A private input — an environment variable's value, a connection reference's connection id — is never part of a
 //   plan, a projection, a sealed send or a hash: it is held in memory against the planned object only (PRIVATE), and
 //   compared there. Even its digest would be a dictionary-attackable copy of a short secret, so none is kept.
@@ -53,6 +53,13 @@ const rowKey = (kind, key) => `${kind}\u0000${key}`;
 // environmentvariabledefinition.type
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition#BKMK_Type
 const EV_TYPES = Object.freeze({ string: 100000000, number: 100000001, boolean: 100000002, json: 100000003, dataSource: 100000004, secret: 100000005 });
+// environmentvariabledefinition.secretstore: where a Secret's value is kept. The SDK manages a Secret only as an Azure
+// Key Vault reference and refuses to fetch one whose secretstore is set to anything but 0
+// (ENVIRONMENT_VARIABLE_SECRET_UNRECOGNIZED). No create this build plans sends the column, whatever the type, so a row it
+// made reads back empty or 0 (the column's default); 1 (kept by Dataverse) is a definition someone else made or changed,
+// and a code outside the table is unreadable.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition#BKMK_SecretStore
+const SECRET_STORES = Object.freeze({ keyVault: 0, dataverse: 1 });
 // customapi.bindingtype and customapi.allowedcustomprocessingsteptype
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/customapi#BKMK_BindingType
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/customapi#BKMK_AllowedCustomProcessingStepType
@@ -88,11 +95,16 @@ function code(table) {
   const byCode = new Map(Object.entries(table).map(([name, n]) => [n, name]));
   return (v) => (byCode.has(v) ? byCode.get(v) : BAD);
 }
+// An optional choice column: empty, or a code of its table.
+function optionalCode(table) {
+  const decodeCode = code(table);
+  return (v) => (v === null ? null : decodeCode(v));
+}
 // A column this build never writes. It may only be empty: a value there was put by someone else.
 const UNMODELLED = 'unmodelled';
 // The private input's column: compared in memory (privateStateOf), never projected.
 const PRIVATE = 'private';
-// The lookup to the row's parent: the K1a row's parentId, not a field.
+// The lookup to the row's parent: the managed row protocol's parentId (managed-create-context.js), not a field.
 const PARENT = 'parent';
 // The rule's state columns: read as ruleState (observe), not a field.
 const STATE = 'state';
@@ -110,7 +122,7 @@ const KINDS = Object.freeze({
       schemaname: ['schemaName', text], displayname: ['name', text, null], description: ['description', text, null],
       type: ['type', code(EV_TYPES)], defaultvalue: ['defaultValue', text, null], isrequired: ['isRequired', bool, false],
       valueschema: ['valueSchema', text, null], apiid: ['connectorId', text, null], parameterkey: ['parameterKey', text, null],
-      _parentdefinitionid_value: ['parentDefinitionId', guid, null],
+      _parentdefinitionid_value: ['parentDefinitionId', guid, null], secretstore: ['secretStore', optionalCode(SECRET_STORES), null],
       hint: UNMODELLED, learnmoreurl: UNMODELLED, inputcontrolconfig: UNMODELLED,
     },
     binds: { ParentDefinitionId: ['_parentdefinitionid_value', 'environmentvariabledefinitions'] },
@@ -289,17 +301,20 @@ function semanticOf(kind, decoded, mode = 'read') {
     const v = decoded.private.value;
     return { ...decoded.fields, connected: decoded.private.present && v !== null && v !== undefined && v !== '' };
   }
+  // Empty and 0 (Key Vault, the default) are the one store a definition this build made can read back with (SECRET_STORES).
+  if (kind === 'environmentVariable' && has(decoded.fields, 'secretStore')) {
+    return { ...decoded.fields, secretStore: decoded.fields.secretStore === 'keyVault' ? null : decoded.fields.secretStore };
+  }
   return decoded.fields;
 }
 
 const LABELS = ['name', 'displayName', 'description'];
-const pickLabels = (from) => Object.fromEntries(LABELS.filter((f) => has(from, f) && from[f] != null).map((f) => [f, from[f]]));
+const labelsOf = (from) => Object.fromEntries(LABELS.map((f) => [f, has(from, f) && from[f] !== undefined ? from[f] : null]));
 const guidOrText = (v) => (v == null ? null : normalizeGuid(v) || String(v));
 
 // What a row the plan prepares must read back as, from the artifact the SDK is handed (configuration-artifacts.js
-// buildArtifact) — one definition for both, so the plan and the push cannot drift apart. The Custom API labels the
-// App Spec does not author are left out: the SDK fills them itself (`<api>.<param>`, the unique name), and they are not
-// what the maker declared.
+// buildArtifact) — one definition for both, so the plan and the push cannot drift apart. A Custom API's labels are
+// all in it: planOf pins the ones the App Spec leaves out (pinApiLabels) before this reads them.
 function expectedOf(kind, artifact, child) {
   switch (kind) {
     case 'environmentVariable':
@@ -307,6 +322,7 @@ function expectedOf(kind, artifact, child) {
         schemaName: artifact.schemaName, name: artifact.name, description: artifact.description, type: artifact.type,
         defaultValue: artifact.defaultValue, isRequired: artifact.isRequired, valueSchema: artifact.valueSchema,
         connectorId: artifact.connectorId, parameterKey: artifact.parameterKey, parentDefinitionId: artifact.parentId ? normalizeGuid(artifact.parentId) : null,
+        secretStore: null,
       };
     case 'environmentVariableValue':
       return {};
@@ -319,13 +335,13 @@ function expectedOf(kind, artifact, child) {
       return {
         uniqueName: artifact.uniqueName, binding: artifact.binding, boundEntityLogicalName: artifact.boundEntityLogicalName,
         isFunction: artifact.isFunction, allowedProcessingSteps: artifact.allowedProcessingSteps, enabledForWorkflow: artifact.enabledForWorkflow,
-        isPrivate: artifact.isPrivate, executePrivilegeName: artifact.executePrivilegeName, ...pickLabels(artifact),
+        isPrivate: artifact.isPrivate, executePrivilegeName: artifact.executePrivilegeName, ...labelsOf(artifact),
       };
     case 'customApiRequestParameter':
     case 'customApiResponseProperty':
       return {
         uniqueName: child.uniqueName, type: child.type, entityLogicalName: child.entityLogicalName == null ? null : lower(child.entityLogicalName),
-        ...(kind === 'customApiRequestParameter' ? { isOptional: child.isOptional === true } : {}), ...pickLabels(child),
+        ...(kind === 'customApiRequestParameter' ? { isOptional: child.isOptional === true } : {}), ...labelsOf(child),
       };
     case 'duplicateRule':
       return {
@@ -339,11 +355,13 @@ function expectedOf(kind, artifact, child) {
   }
 }
 
-// The projection a row is judged by: the expected fields only, plus every unmodelled column a read found filled.
-//   sha256(canonicalJson({ kind, fields: { <expected field>: <value>, ... }, unmodelled?: [<column>, ...] }))
-function projectionOf(kind, expected, semantic, unmodelled = []) {
+// The projection a row is judged by: the expected fields only, plus every unmodelled column a read found filled and,
+// for a root, every child row its complete graph holds that the plan does not (observe):
+//   sha256(canonicalJson({ kind, fields: { <expected field>: <value>, ... }, unmodelled?: [<column>, ...], unexpectedChildren?: ['<kind>:<id>', ...] }))
+// Both lists are left out when empty, so a row with neither hashes exactly as its expectation does.
+function projectionOf(kind, expected, semantic, unmodelled = [], unexpectedChildren = []) {
   const fields = Object.fromEntries(Object.keys(expected).map((f) => [f, has(semantic, f) ? semantic[f] : null]));
-  return sha({ kind, fields, ...(unmodelled.length ? { unmodelled } : {}) });
+  return sha({ kind, fields, ...(unmodelled.length ? { unmodelled } : {}), ...(unexpectedChildren.length ? { unexpectedChildren } : {}) });
 }
 const sameValue = (a, b) => canonicalJson(a === undefined ? null : a) === canonicalJson(b === undefined ? null : b);
 
@@ -356,19 +374,74 @@ const sameValue = (a, b) => canonicalJson(a === undefined ? null : a) === canoni
 const PRIVATE_INPUTS = new WeakMap();
 const PLAN_KEY_FIELD = Object.freeze({ environmentVariable: 'schemaName', connectionReference: 'logicalName', customApi: 'uniqueName', duplicateRule: 'key' });
 
+// A Dataverse row version as a read answers it in `@odata.etag` and a conditional PATCH sends it in If-Match: W/"<n>".
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+const ROW_VERSION = /^W\/"\d+"$/;
+
+// The fresh base read of one row a plan UPDATES: a readConfigurationRow answer, present, of that kind at that id, under
+// the planned parent, with a row version. Anything else throws: an update prepared from no read, a stale read of another
+// row or a read without a version would let a PATCH through with no condition the plan holds.
+function baseOf(bases, kind, id, parentId) {
+  const b = bases instanceof Map ? bases.get(id) : isPlain(bases) && has(bases, id) ? bases[id] : undefined;
+  if (!isPlain(b) || b.state !== 'present' || b.kind !== kind || b.id !== id || typeof b.rowVersion !== 'string' || !ROW_VERSION.test(b.rowVersion)
+    || (parentId !== null && b.parentId !== parentId) || !isPlain(b.decoded) || !isPlain(b.decoded.fields)) {
+    throw new TypeError(`planOf: the ${kind} ${id} is planned as an update but has no fresh base read with a row version (readConfigurationRow)`);
+  }
+  return b;
+}
+
+// Pin every Custom API label in the artifact before anything is planned from it, so the plan, the push and the read-back
+// all compare one value and no label is left for something else to fill:
+//   a label the App Spec authors                 that label;
+//   an update row's label it does not author     the row's own label, from its fresh base read (an update keeps it);
+//   a created row's label it does not author     what the SDK fills it with at push — the same defaults, in the same order:
+//     root (CustomApiAdapter.createDefault, `??`)        name = uniqueName, displayName = uniqueName, description = displayName
+//     child (CustomApiAdapter.normalize, `=== undefined`) name = '<api uniqueName>.<child uniqueName>', displayName = uniqueName,
+//                                                         description = displayName
+// The SDK leaves a label that is already set untouched, so pinning changes nothing it sends; the parity test in
+// tests/configuration-create-bindings.test.js holds this to the bundled SDK's own push of an unpinned artifact.
+function pinApiLabels(artifact, rootMode, slotModes, bases) {
+  const pin = (own, fallback, isSet) => {
+    const out = {};
+    for (const f of LABELS) out[f] = isSet(own[f]) ? own[f] : fallback(f, out);
+    Object.assign(own, out);
+  };
+  const rootId = normalizeGuid(artifact.id);
+  if (rootMode === 'update') {
+    const base = baseOf(bases, 'customApi', rootId, null);
+    pin(artifact, (f) => base.decoded.fields[f], (v) => v != null);
+  } else {
+    pin(artifact, (f, out) => (f === 'description' ? out.displayName : artifact.uniqueName), (v) => v != null);
+  }
+  for (const [list, prefix, childKind] of [[artifact.requestParameters, 'request:', 'customApiRequestParameter'], [artifact.responseProperties, 'response:', 'customApiResponseProperty']]) {
+    for (const child of list) {
+      if (slotModes.get(`${prefix}${lower(child.uniqueName)}`) === 'update') {
+        const base = baseOf(bases, childKind, normalizeGuid(child.id), rootId);
+        pin(child, (f) => base.decoded.fields[f], (v) => v !== undefined);
+      } else {
+        pin(child, (f, out) => (f === 'name' ? `${artifact.uniqueName}.${child.uniqueName}` : f === 'displayName' ? child.uniqueName : out.displayName), (v) => v !== undefined);
+      }
+    }
+  }
+}
+
 /**
  * The protected create plan of ONE declared configuration artifact, at the ids the create port derives for it:
- *   planOf(spec, { kind, key, bindings?, solution?, intentFor?, boundIdOf?, componentTypes?, boundSlots? })
+ *   planOf(spec, { kind, key, bindings?, solution?, intentFor?, boundIdOf?, componentTypes?, boundSlots?, bases? })
  * `kind` is a root kind and `key` its declared key (schema name, logical name, unique name, rule key). `bindings` are
  * the deployment bindings (readDeploymentBindings): a bound value adds the value row, a bound connection makes the
  * reference's connection a private input. `solution` is the run's solution (else the spec's, else Default); in a
  * restricted solution (Default, Active) no membership is planned. `componentTypes` is readComponentTypes' `types`,
  * needed whenever membership is. `boundIdOf(kind, portKey)` is a recorded binding's id (the root is then an update);
- * `boundSlots` names children that already exist under it (updates, not creates).
- * Answers a frozen planned object { kind, key, solution, plan, rows } — `plan` is buildRowPlan's input; `rows` are its
- * rows with what each must read back as (`expected`) and, for a child, its slot. No private input is in either.
+ * `boundSlots` names children that already exist under it (updates, not creates). `bases` (a Map or an object, by row
+ * id) holds the fresh readConfigurationRow answer of every row the plan updates with a PATCH: its row version is the only
+ * If-Match the classifier admits for that row, and a Custom API row's labels the App Spec leaves out are kept from it.
+ * Answers a frozen planned object { kind, key, solution, plan, rows } — `plan` is buildRowPlan's input (with the root's
+ * `baseObservation` when it is an update read fresh); `rows` are its rows with what each must read back as
+ * (`expected`), for a child its slot, and for a PATCHed row its held row version (`ifMatch`). No private input is in
+ * either.
  */
-function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [] } = {}) {
+function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [], bases } = {}) {
   if (!ROOT_KINDS.has(kind)) throw new TypeError(`planOf: ${kind} is not a configuration root kind`);
   const entry = A.configurationIntentOf(spec, kind, key);
   const sol = nonEmpty(solution) ? solution : spec && isPlain(spec.solution) && nonEmpty(spec.solution.uniqueName) ? spec.solution.uniqueName : 'Default';
@@ -386,13 +459,15 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
   const artifact = A.buildArtifact({ kind, key: portKey, detail: { entry } }, got.id, got.childIds, { bindings: binds }, parentDefinitionId);
   const secrets = new Map();
   const rootId = normalizeGuid(got.id);
-  const root = { kind, key: portKey, id: rootId, parentId: null, slot: null, mode: got.intent.boundId !== undefined ? 'update' : 'create', expected: expectedOf(kind, artifact), sensitiveInput: false };
+  const rootMode = got.intent.boundId !== undefined ? 'update' : 'create';
+  const bound = new Set(boundSlots);
+  if (kind === 'customApi') pinApiLabels(artifact, rootMode, new Map(Object.keys(got.childIds).map((s) => [s, bound.has(s) ? 'update' : 'create'])), bases);
+  const root = { kind, key: portKey, id: rootId, parentId: null, slot: null, mode: rootMode, expected: expectedOf(kind, artifact), sensitiveInput: false };
   if (kind === 'connectionReference' && artifact.connectionId != null && artifact.connectionId !== '') {
     root.sensitiveInput = true;
     secrets.set(rowKey(kind, portKey), artifact.connectionId);
   }
   const rows = [root];
-  const bound = new Set(boundSlots);
   for (const [slot, rawId] of Object.entries(got.childIds)) {
     const childKind = childKindOf(kind, slot);
     const id = normalizeGuid(rawId);
@@ -408,7 +483,14 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     if (childKind === 'environmentVariableValue') secrets.set(rowKey(childKind, row.key), artifact.currentValue.value);
     rows.push(row);
   }
-  for (const r of rows) r.expectedSha256 = projectionOf(r.kind, r.expected, r.expected);
+  for (const r of rows) {
+    r.expectedSha256 = projectionOf(r.kind, r.expected, r.expected);
+    if (r.mode === 'update' && PATCHABLE.has(r.kind)) r.ifMatch = baseOf(bases, r.kind, r.id, r.parentId).rowVersion;
+  }
+  // An update of a bound root records the versions it was prepared from (the binding store's baseObservation); they stay
+  // out of the declaration, which a later fresh read must not change.
+  const versions = rows.filter((r) => r.ifMatch !== undefined).map((r) => ({ kind: r.kind, id: r.id, rowVersion: r.ifMatch }));
+  const baseObservation = root.ifMatch !== undefined ? { rowVersion: root.ifMatch, savedSha256: sha({ rows: versions }) } : null;
   const members = [];
   if (!isRestrictedSolution(sol)) {
     for (const r of rows) {
@@ -421,12 +503,17 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
   }
   const ruleState = kind === 'duplicateRule' ? artifact.status : null;
   if (ruleState !== null && ruleState !== 'published' && ruleState !== 'unpublished') throw new TypeError(`planOf: rule status ${ruleState} is not one this driver plans`);
+  // A protected rule is published once, by the create set that makes it: only a plan whose rule row is a create holds the
+  // publish effect. A bound rule's plan keeps its state as a completion check (verified, never published again), so a
+  // rule found unpublished there is held, not republished.
+  const publishes = ruleState === 'published' && root.mode === 'create';
   const planRows = rows.map(({ kind: k, key: rk, id, parentId, mode, expectedSha256, sensitiveInput }) => ({ kind: k, key: rk, id, parentId, mode, expectedSha256, sensitiveInput }));
   const plan = {
     family: kind, key: portKey,
     declarationSha256: sha({ kind, key: portKey, declaration: A.portableIntent(kind, entry), solution: sol, rows: planRows, ruleState }),
     rows: planRows, members, ruleState,
-    effects: [...members.map((m) => ({ kind: 'membership', id: m.id })), ...(ruleState === 'published' ? [{ kind: 'rule-state', id: rootId }] : [])],
+    effects: [...members.map((m) => ({ kind: 'membership', id: m.id })), ...(publishes ? [{ kind: 'rule-state', id: rootId }] : [])],
+    ...(baseObservation ? { baseObservation } : {}),
   };
   const planned = deepFreeze({ kind, key: portKey, solution: sol, plan, rows });
   PRIVATE_INPUTS.set(planned, { artifact, secrets });
@@ -490,9 +577,10 @@ const NOT_FOUND = '0x80040217';
  * One exact-id read of `kind` at `id`, every mapped column selected:
  *   GET /customapis(<id>)?$select=customapiid,uniquename,name,displayname,...,_plugintypeid_value
  *   { "@odata.etag": "W/\"1\"", "customapiid": "<id>", "uniquename": "contoso_Calc", ..., "_plugintypeid_value": null }
- * Answers { state: 'present', id, parentId, decoded } | { state: 'absent' } | { state: 'unknown', reason }. Present
- * only when the answer names this id and carries every selected column (Dataverse answers `null` for an empty one) but
- * the private one, whose absence is a masked value, not an unreadable row.
+ * Answers { state: 'present', kind, id, parentId, rowVersion, decoded } | { state: 'absent' } | { state: 'unknown', reason }.
+ * Present only when the answer names this id and carries every selected column (Dataverse answers `null` for an empty
+ * one) but the private one, whose absence is a masked value, not an unreadable row. `rowVersion` is the answer's
+ * `@odata.etag` when it is a row version (W/"<n>"), else null — a plan cannot update the row from such a read (planOf).
  */
 async function readConfigurationRow(dataverse, kind, id) {
   const k = KINDS[kind];
@@ -508,7 +596,9 @@ async function readConfigurationRow(dataverse, kind, id) {
   if (Object.entries(k.columns).some(([col, spec]) => spec !== PRIVATE && !has(res.body, col))) return { state: 'unknown', reason: 'the read left out a selected column' };
   const decoded = decode(kind, res.body, 'read');
   if (!decoded) return { state: 'unknown', reason: 'a column holds a value this build cannot read' };
-  return { state: 'present', id: want, parentId: decoded.parentId === undefined ? null : decoded.parentId, decoded };
+  const etag = res.body['@odata.etag'];
+  const rowVersion = typeof etag === 'string' && ROW_VERSION.test(etag) ? etag : null;
+  return { state: 'present', kind, id: want, parentId: decoded.parentId === undefined ? null : decoded.parentId, rowVersion, decoded };
 }
 
 /**
@@ -693,18 +783,63 @@ function privateStateOf(read, want) {
 }
 
 /**
+ * The complete child graph under a present root, against the plan: every child collection of the root's kind, filtered by
+ * the parent lookup and read to its last page (readAllPages):
+ *   GET /customapirequestparameters?$select=customapirequestparameterid,_customapiid_value&$filter=_customapiid_value eq <root id>
+ *   { "value": [ { "customapirequestparameterid": "<guid>", "_customapiid_value": "<root id>" } ], "@odata.nextLink": ... }
+ * (the same for response properties, a rule's conditions by _regardingobjectid_value and a definition's values by
+ * _environmentvariabledefinitionid_value). Answers { state: 'complete', unexpected: ['<kind>:<id>', ...] } or
+ * { state: 'unknown' } when a collection is not read completely, answers a row without an id or under another parent,
+ * names a row twice, or disagrees with the exact reads about a planned child (listed but read absent, or the reverse).
+ * The exact reads alone prove only the planned children: a row someone else added under the root would never be asked
+ * about, and the rule, API or definition it changes would still be judged the one the plan made.
+ */
+async function readChildGraph(dataverse, planned, exact) {
+  const rootId = planned.plan.rows[0].id;
+  const unexpected = [];
+  for (const [childKind, k] of Object.entries(KINDS)) {
+    if (!k.parentSet || k.parentSet !== KINDS[planned.kind].set) continue;
+    const read = await readAllPages(dataverse, `/${k.set}?$select=${k.pk},${k.parentColumn}&$filter=${k.parentColumn} eq ${rootId}`);
+    if (!read.complete) return { state: 'unknown' };
+    const listed = new Set();
+    for (const r of read.rows) {
+      const id = isPlain(r) && typeof r[k.pk] === 'string' ? normalizeGuid(r[k.pk]) : '';
+      if (!id || listed.has(id) || normalizeGuid(r[k.parentColumn]) !== rootId) return { state: 'unknown' };
+      listed.add(id);
+    }
+    const plannedIds = new Set();
+    for (const row of planned.rows) {
+      if (row.kind !== childKind) continue;
+      plannedIds.add(row.id);
+      const seen = exact.get(row.id);
+      if (seen === 'unknown') continue;
+      if ((seen === 'present') !== listed.has(row.id)) return { state: 'unknown' };
+    }
+    for (const id of listed) if (!plannedIds.has(id)) unexpected.push(`${childKind}:${id}`);
+  }
+  return { state: 'complete', unexpected: unexpected.sort() };
+}
+
+/**
  * The fresh observation the lifecycle judges (managed-create-context.js classifyRecovery / settle):
  *   { rows: [{ kind, key, id, state, parentId?, projectionSha256?, privateState? }], members: [{ id, state }], ruleState }
- * One exact-id read per planned row (readConfigurationRow), the solution's members (readMembers) and the rule's state
- * from its own read. An absent rule is reported unpublished — there is no rule to be published — so its absence is
- * judged as the missing row it is; an unreadable or publishing rule leaves the state unknown.
+ * One exact-id read per planned row (readConfigurationRow), the root's complete child graph (readChildGraph), the
+ * solution's members (readMembers) and the rule's state from its own read. The graph is judged on the root row, the one
+ * row the lifecycle compares for the whole artifact: a child the plan does not hold makes the root's projection differ
+ * (a conflict: it is neither deleted nor adopted), and a graph that cannot be read completely makes the root unknown —
+ * so no completion is proven from a partial graph. An absent rule is reported unpublished — there is no rule to be
+ * published — so its absence is judged as the missing row it is; an unreadable or publishing rule leaves the state unknown.
  */
 async function observe(dataverse, planned) {
   const { secrets } = privateOf(planned);
   const rows = [];
+  const exact = new Map();
+  let rootRead = null;
   let ruleState = null;
   for (const r of planned.rows) {
     const read = await readConfigurationRow(dataverse, r.kind, r.id);
+    exact.set(r.id, read.state);
+    if (r.parentId === null) rootRead = read;
     if (r.kind === 'duplicateRule') ruleState = read.state === 'absent' ? 'unpublished' : read.state === 'present' ? ruleStateOf(read.decoded.state.statecode, read.decoded.state.statuscode) : undefined;
     if (read.state !== 'present') {
       rows.push({ kind: r.kind, key: r.key, id: r.id, state: read.state });
@@ -717,6 +852,14 @@ async function observe(dataverse, planned) {
     if (r.sensitiveInput) out.privateState = privateStateOf(read.decoded.private, secrets.get(rowKey(r.kind, r.key)));
     rows.push(out);
   }
+  if (rootRead && rootRead.state === 'present') {
+    const root = planned.rows[0];
+    const graph = await readChildGraph(dataverse, planned, exact);
+    if (graph.state !== 'complete') rows[0] = { kind: root.kind, key: root.key, id: root.id, state: 'unknown' };
+    else if (graph.unexpected.length) {
+      rows[0].projectionSha256 = projectionOf(root.kind, root.expected, semanticOf(root.kind, rootRead.decoded), rootRead.decoded.unmodelled, graph.unexpected);
+    }
+  }
   return { rows, members: await readMembers(dataverse, planned), ruleState };
 }
 
@@ -726,7 +869,12 @@ async function observe(dataverse, planned) {
 
 const KIND_OF_SET = Object.freeze(Object.fromEntries(Object.entries(KINDS).map(([kind, k]) => [k.set, kind])));
 const API_KINDS = new Set(['customApi', 'customApiRequestParameter', 'customApiResponseProperty']);
-const PATCHABLE = new Set(['environmentVariable', 'environmentVariableValue', 'connectionReference', 'customApi']);
+const PATCHABLE = new Set(['environmentVariable', 'environmentVariableValue', 'connectionReference', 'customApi', 'customApiRequestParameter', 'customApiResponseProperty']);
+// What the SDK's Custom API adapter PATCHes in place: a root's editable fields, and a child's labels only — a child's
+// type, optionality and table are fixed once created (configuration-artifacts.js refuses a change to them).
+const API_ROOT_EDITABLE = new Set(['name', 'displayname', 'description', 'isprivate', 'executeprivilegename']);
+const API_CHILD_EDITABLE = new Set(['name', 'displayname', 'description']);
+const API_CHILD_KINDS = new Set(['customApiRequestParameter', 'customApiResponseProperty']);
 // The deep-insert navigations of a root: the child kinds created inside its POST.
 const navsOf = (kind) => Object.entries(KINDS).filter(([, k]) => k.nav && k.parentSet === KINDS[kind].set).map(([childKind, k]) => [k.nav, childKind]);
 
@@ -799,7 +947,7 @@ function privateMismatch(row) {
  * `how` is 'create' (a POST, nested or not) or 'patch'. The body must decode through the kind's closed map with no
  * unmodelled column, sit under the planned parent (a nested child binds none — its parent is the root it is inside;
  * any other child binds exactly its planned parent; a root binds none), and say exactly what the plan expects: every
- * semantic field equal, nothing more but the Custom API labels the SDK fills. A private input other than the planned one
+ * semantic field equal and nothing more (a Custom API's labels included: the plan pins them). A private input other than the planned one
  * throws (PRIVATE_MISMATCH) rather than answer null, so the run reports it as the local failure it is. The sealed
  * projection covers the semantic fields only: never a private input.
  */
@@ -814,8 +962,7 @@ function sendRow(planned, row, raw, how, nested) {
   if (!parentOk) return null;
   const sem = semanticOf(row.kind, d, how);
   for (const [f, v] of Object.entries(sem)) {
-    if (has(row.expected, f)) { if (!sameValue(v, row.expected[f])) return null; continue; }
-    if (!(API_KINDS.has(row.kind) && LABELS.includes(f) && typeof v === 'string')) return null;
+    if (!has(row.expected, f) || !sameValue(v, row.expected[f])) return null;
   }
   if (how === 'create' && Object.keys(row.expected).some((f) => !has(sem, f))) return null;
   if (d.private.present) {
@@ -853,6 +1000,12 @@ function classifyCreate(byId, req, kind, body, constituent) {
   if (kind === 'duplicateRuleCondition' || (constituent && row.parentId === null)) return null;
   const query = queryOf(req.url);
   if (!query || !createQueryOk(kind, query) || !solutionHeaderOk(planned, kind, req.headers)) return null;
+  // A change-set child is the SDK's later child of a BOUND Custom API, in exactly its shape:
+  //   POST /customapirequestparameters?$select=customapirequestparameterid  { ..., "CustomAPIId@odata.bind": "/customapis(<bound id>)" }
+  if (constituent) {
+    const parent = planned.rows.find((r) => r.id === row.parentId);
+    if (!parent || parent.mode !== 'update' || Object.keys(query).length !== 1 || query.$select !== k.pk) return null;
+  }
   const own = { ...body };
   const nested = [];
   for (const [nav, childKind] of row.parentId === null ? navsOf(kind) : []) {
@@ -884,16 +1037,35 @@ function classifyCreate(byId, req, kind, body, constituent) {
   return { type: 'rows', token, rows, expectTable: k.set, expectKey: k.pk };
 }
 
+// The If-Match of a PATCH, which must be exactly the row version the plan holds for the row (planOf `bases`):
+//   If-Match: W/"3"
+// A missing header, the wildcard `*`, another or older version, a list of versions, or two spellings of the header
+// (If-Match and if-match, which could each be read as THE condition) is no condition the plan holds.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api#apply-optimistic-concurrency
+function ifMatchOk(headers, held) {
+  const values = Object.entries(isPlain(headers) ? headers : {}).filter(([name]) => name.toLowerCase() === 'if-match').map(([, v]) => v);
+  return typeof held === 'string' && ROW_VERSION.test(held) && values.length === 1 && values[0] === held;
+}
+
+// The PATCH of one planned update row, as the SDK sends it:
+//   PATCH /customapis(<id>)?$select=customapiid   If-Match: W/"3"   MSCRM.SolutionUniqueName: ContosoSol   { "isprivate": true }
+//   PATCH /customapirequestparameters(<id>)?$select=customapirequestparameterid   If-Match: W/"9"   { "description": "Arg" }
+// The query is exactly the selected primary key (return=representation's id). A Custom API child is PATCHed only for its
+// labels, and only on its own: in a change set (`constituent`) only the bound root's PATCH of its editable fields is a
+// shape a reviewed change-set parser may admit.
 function classifyPatch(byId, req, kind, rawId, body, constituent) {
   const id = normalizeGuid(rawId);
   const hit = id ? byId.get(id) : undefined;
   if (!hit || hit.row.kind !== kind || hit.row.mode !== 'update' || !PATCHABLE.has(kind)) return null;
-  if (constituent && kind !== 'customApi') return null;
+  const keys = Object.keys(body);
+  if (constituent && (kind !== 'customApi' || !keys.length || !keys.every((c) => API_ROOT_EDITABLE.has(c)))) return null;
+  if (API_CHILD_KINDS.has(kind) && (!keys.length || !keys.every((c) => API_CHILD_EDITABLE.has(c)))) return null;
+  const k = KINDS[kind];
   const query = queryOf(req.url);
-  if (!query || Object.keys(query).length || !solutionHeaderOk(hit.planned, kind, req.headers)) return null;
+  if (!query || Object.keys(query).length !== 1 || query.$select !== k.pk) return null;
+  if (!ifMatchOk(req.headers, hit.row.ifMatch) || !solutionHeaderOk(hit.planned, kind, req.headers)) return null;
   const sent = sendRow(hit.planned, hit.row, body, 'patch', false);
   if (!sent) return null;
-  const k = KINDS[kind];
   return { type: 'rows', token: hit.token, rows: [sent], expectTable: k.set, expectKey: k.pk };
 }
 
@@ -913,13 +1085,15 @@ function classifyMembership(byId, req, body) {
   return { type: 'effect', token: hit.token, kind: 'membership', id };
 }
 
-// The publish of a planned rule whose declared state is published:
+// The publish of a rule its own create set made, whose declared state is published (the plan's rule-state effect):
 //   POST /duplicaterules(<guid>)/Microsoft.Dynamics.CRM.PublishDuplicateRule  {}
+// A bound rule's plan holds no such effect (planOf): a rule is published once, when it is created, and only verified after.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/publishduplicaterule
 function classifyPublish(byId, req, rawId, parsed) {
   const id = normalizeGuid(rawId);
   const hit = id ? byId.get(id) : undefined;
-  if (!hit || hit.row.kind !== 'duplicateRule' || hit.planned.plan.ruleState !== 'published') return null;
+  if (!hit || hit.row.kind !== 'duplicateRule' || hit.row.mode !== 'create') return null;
+  if (!hit.planned.plan.effects.some((e) => e.kind === 'rule-state' && e.id === id)) return null;
   if (!parsed.empty && !(isPlain(parsed.json) && Object.keys(parsed.json).length === 0)) return null;
   const query = queryOf(req.url);
   if (!query || Object.keys(query).length) return null;
@@ -958,7 +1132,9 @@ function classifyWith(byId, req, constituent) {
  * A descriptor names the attempt (`token`) and the planned rows a request carries, with their sealed non-private
  * projection — or the membership / rule-state effect it is. Null for everything else: a row not planned, planned as
  * an update but POSTed (or the reverse), a column outside the closed maps, a value other than the planned one, a
- * namesake id, a second solution, a query beyond the id, a direct condition, a removal.
+ * namesake id, a second solution, a query beyond the id, a PATCH without exactly the row version the plan holds
+ * (If-Match), a Custom API child PATCH of more than its labels, a publish of a rule the set did not create, a direct
+ * condition, a removal.
  */
 function createClassifier(entries) {
   const byId = indexOf(entries);
@@ -967,8 +1143,10 @@ function createClassifier(entries) {
 
 /**
  * The same classification for ONE constituent of a $batch change set. The gate refuses a $batch outright today; this is
- * the narrow shape a reviewed change-set parser may admit later: a bound Custom API root's PATCH and the POST of a
- * later child under its planned parent. A root create, a membership and a publish are never a constituent.
+ * the narrow shape a reviewed change-set parser may admit later, exactly as the SDK sends a bound Custom API's edit:
+ *   PATCH .../customapis(<bound id>)?$select=customapiid             If-Match: <held version>  { <editable root fields> }
+ *   POST  .../customapiresponseproperties?$select=customapiresponsepropertyid  { ..., "CustomAPIId@odata.bind": "/customapis(<bound id>)" }
+ * A root create, a child's label PATCH (admitted only on its own), a membership and a publish are never a constituent.
  */
 function classifyConstituent(entries, req) {
   const out = classifyWith(indexOf(entries), req, true);

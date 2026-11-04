@@ -54,12 +54,12 @@ async function seed(org, set, body) {
   const res = await org.request({ url: `${org.origin}/api/data/v9.2/${set}`, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   assert.ok(res.statusCode < 300, `seed ${set}: ${res.statusCode}`);
 }
-// Every mutation the real SDK sends to push `p`, as the gate is asked about it (the body is the JSON text it sends).
-async function wireOf(p) {
-  const org = orgOf();
+// Every mutation the real SDK sends to push `p` (or `artifact` in its place), as the gate is asked about it (the body is
+// the JSON text it sends). `sent` keeps capturing, so a later edit pushed through `sdk` is captured too.
+async function wireOf(p, { artifact = B.artifactFor(p), org = orgOf() } = {}) {
   const sent = [];
   const sdk = await sdkOf(org, { screen(req) { if (req.method !== 'GET') sent.push({ ...req, headers: { ...req.headers } }); return null; } });
-  await sdk.createArtifact(p.kind, B.artifactFor(p));
+  await sdk.createArtifact(p.kind, artifact);
   const result = await sdk.pushArtifact(p.kind, p.plan.rows[0].id);
   for (const m of p.plan.members) {
     await sdk.dataverse.post('/AddSolutionComponent', { ComponentId: m.id, ComponentType: m.componentType, SolutionUniqueName: SOL, AddRequiredComponents: false });
@@ -84,6 +84,43 @@ function reader(routes, { absolute } = {}) {
   return { get: async (p) => answerFor(p), getAbsolute: async (u) => (absolute ? absolute(u) : answerFor(u)) };
 }
 const ok = (value, extra = {}) => ({ status: 200, body: { value, ...extra } });
+
+// The fresh base read of every planned row that exists now, as a bound plan is prepared from it.
+async function basesOf(dv, p) {
+  const bases = new Map();
+  for (const r of p.plan.rows) {
+    const read = await B.readConfigurationRow(dv, r.kind, r.id);
+    if (read.state === 'present') bases.set(r.id, read);
+  }
+  return bases;
+}
+// The plan of an edit of `first` once it exists: its root bound, its existing children bound, each from a fresh read.
+async function rebound(dv, first, over = {}) {
+  const bases = await basesOf(dv, first);
+  const boundSlots = first.rows.filter((r) => r.slot !== null && bases.has(r.id)).map((r) => r.slot);
+  return planned(first.kind, first.key, { boundIdOf: (kind) => (kind === first.kind ? first.plan.rows[0].id : undefined), boundSlots, bases, ...over });
+}
+// The requests the real SDK sends to push an edit of an artifact it pushed before: `ops` are its element updates.
+async function pushEdit(w, kind, id, ops) {
+  await w.sdk.fetchArtifact(kind, id, { overwrite: true });
+  for (const [pointer, value] of ops) await w.sdk.updateElement(kind, id, pointer, value);
+  w.sent.length = 0;
+  const result = await w.sdk.pushArtifact(kind, id);
+  return { result, sent: [...w.sent] };
+}
+// The change-set constituents of a $batch as the SDK renders it (CRLF lines; the boundaries differ per request):
+//   --changeset_<id>\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\nContent-ID: 1\r\n\r\n
+//   PATCH https://contoso.crm.dynamics.com/api/data/v9.0/customapis(<id>)?$select=customapiid HTTP/1.1\r\n
+//   MSCRM.SolutionUniqueName: ContosoSol\r\nIf-Match: W/"16"\r\nPrefer: return=representation\r\n\r\n{"isprivate":false}\r\n
+function constituentsOf(req) {
+  return String(req.body).split(/--changeset_[\w-]+/).filter((c) => c.includes('application/http')).map((chunk) => {
+    const [, head, ...rest] = chunk.split('\r\n\r\n');
+    const [line, ...headerLines] = head.split('\r\n');
+    const [, method, url] = /^(\w+) (\S+) HTTP\/1\.1$/.exec(line);
+    const headers = Object.fromEntries(headerLines.map((h) => [h.slice(0, h.indexOf(':')), h.slice(h.indexOf(':') + 1).trim()]));
+    return { method, url, headers, body: rest.join('\r\n\r\n').replace(/\r\n$/, '') };
+  });
+}
 
 test('planOf: one artifact\'s rows at the derived ids, members of its solution, no private input anywhere in the plan', () => {
   const ev = planned('environmentVariable', 'contoso_ApiBase');
@@ -274,6 +311,7 @@ test('the classifier refuses anything but the plan: ids, parents, columns, value
     ['a value under another definition', withBody(valuePost, (b) => { b['EnvironmentVariableDefinitionId@odata.bind'] = `/environmentvariabledefinitions(${OTHER})`; })],
     ['a value under no definition', withBody(valuePost, (b) => { delete b['EnvironmentVariableDefinitionId@odata.bind']; })],
     ['a column this build never writes', withBody(crPost, (b) => { b.promptingbehavior = 1; })],
+    ['a definition kept by Dataverse', withBody(defPost, (b) => { b.secretstore = 1; })],
     ['a rule without its condition', withBody(rulePost, (b) => { b.DuplicateRule_DuplicateRuleConditions = []; })],
     ['a condition on its own', { method: 'POST', url: `${rulePost.url.replace('duplicaterules', 'duplicateruleconditions')}`, headers: {}, body: JSON.stringify(JSON.parse(rulePost.body).DuplicateRule_DuplicateRuleConditions[0]) }],
     ['a planned create PATCHed', { method: 'PATCH', url: apiPost.url.replace(/customapis\?.*$/, `customapis(${api.plan.rows[0].id})`), headers: {}, body: JSON.stringify({ description: 'x' }) }],
@@ -294,22 +332,126 @@ test('the classifier refuses anything but the plan: ids, parents, columns, value
   assert.throws(() => B.createClassifier([{ token: 'a', planned: api }, { token: 'b', planned: planned('customApi', 'contoso_Calc') }]), /planned twice/);
 });
 
-test('classifyConstituent: only a bound Custom API\'s later child or root PATCH, never a root create or an effect', async () => {
+test('a bound Custom API edit as the real SDK sends it: the root PATCH on its own or in a change set, a child\'s labels on their own', async () => {
   const fresh = planned('customApi', 'contoso_Calc');
-  const { sent } = await wireOf(fresh);
-  const [apiPost, member] = sent;
+  const w = await wireOf(fresh);
+  const [apiPost, member] = w.sent;
   assert.equal(B.classifyConstituent([{ token: 't', planned: fresh }], apiPost), null, 'a root create');
   assert.equal(B.classifyConstituent([{ token: 't', planned: fresh }], member), null, 'a membership');
   const root = fresh.plan.rows[0].id;
-  const bound = planned('customApi', 'contoso_Calc', { boundIdOf: (kind) => (kind === 'customApi' ? root : undefined) });
-  assert.equal(bound.plan.rows[0].mode, 'update');
-  const param = JSON.parse(apiPost.body).CustomAPIRequestParameters[0];
-  const childPost = { method: 'POST', url: apiPost.url.replace(/customapis\?.*$/, 'customapirequestparameters'), headers: {}, body: JSON.stringify({ ...param, customapirequestparameterid: rowOf(bound, 'customApiRequestParameter').id, 'CustomAPIId@odata.bind': `/customapis(${root})` }) };
-  const named = B.classifyConstituent([{ token: 't', planned: bound }], childPost);
-  assert.deepEqual(named && named.rows.map((r) => [r.kind, r.parentId]), [['customApiRequestParameter', root]]);
-  const patch = { method: 'PATCH', url: apiPost.url.replace(/customapis\?.*$/, `customapis(${root})`), headers: {}, body: JSON.stringify({ isfunction: true }) };
-  assert.equal(B.classifyConstituent([{ token: 't', planned: bound }], patch).rows[0].kind, 'customApi');
-  assert.equal(B.classifyConstituent([{ token: 't', planned: bound }], { ...patch, body: JSON.stringify({ isfunction: false }) }), null, 'a PATCH to another value');
+  const api = (over) => spec({ customApis: [{ ...spec().customApis[0], ...over }] });
+
+  // The root alone: one direct PATCH, the selected primary key in its query and the held row version in If-Match.
+  const priv = await rebound(w.sdk.dataverse, fresh, { spec: api({ isPrivate: true }) });
+  assert.deepEqual(priv.plan.rows.map((r) => r.id), fresh.plan.rows.map((r) => r.id), 'a bound plan keeps the ids it was created at');
+  assert.equal(priv.plan.baseObservation.rowVersion, priv.rows[0].ifMatch);
+  const one = await pushEdit(w, 'customApi', root, [['/isPrivate', true]]);
+  assert.equal(one.result.saved, true);
+  const [patch] = one.sent;
+  assert.match(patch.url, /customapis\([^)]+\)\?\$select=customapiid$/);
+  const entries = [{ token: 't', planned: priv }];
+  assert.deepEqual(B.createClassifier(entries)(patch).rows.map((r) => r.kind), ['customApi'], 'the direct PATCH');
+  assert.deepEqual(B.classifyConstituent(entries, patch).rows.map((r) => r.kind), ['customApi'], 'the same PATCH in a change set');
+  assert.equal(B.createClassifier(entries)({ ...patch, url: patch.url.replace(/\?.*$/, '') }), null, 'without the selected key');
+  assert.equal(B.createClassifier(entries)({ ...patch, url: `${patch.url},name` }), null, 'selecting more');
+  assert.equal(B.createClassifier(entries)(withBody(patch, (b) => { b.isprivate = false; })), null, 'a PATCH to another value');
+
+  // A child's labels alone, in both directions: a direct PATCH of that child.
+  for (const [pointer, value, over, kind] of [
+    ['/requestParameters/0/description', 'Arg', { requestParameters: [{ uniqueName: 'A', type: 'integer', description: 'Arg' }] }, 'customApiRequestParameter'],
+    ['/responseProperties/0/name', 'contoso_Calc.R2', { responseProperties: [{ uniqueName: 'R', type: 'string', name: 'contoso_Calc.R2' }] }, 'customApiResponseProperty'],
+  ]) {
+    const p = await rebound(w.sdk.dataverse, fresh, { spec: api({ isPrivate: true, ...over }) });
+    const edit = await pushEdit(w, 'customApi', root, [[pointer, value]]);
+    assert.equal(edit.result.saved, true);
+    assert.equal(edit.sent.length, 1);
+    const named = B.createClassifier([{ token: 't', planned: p }])(edit.sent[0]);
+    assert.deepEqual(named && named.rows.map((r) => [r.kind, r.parentId]), [[kind, root]], `${kind}: the SDK's own label PATCH`);
+    assert.equal(B.classifyConstituent([{ token: 't', planned: p }], edit.sent[0]), null, `${kind}: never a constituent`);
+    assert.equal(B.createClassifier([{ token: 't', planned: p }])(withBody(edit.sent[0], (b) => { b.type = 10; })), null, `${kind}: more than its labels`);
+  }
+
+  // The root with a later child, in both directions: one $batch whose constituents are the root PATCH and the child POST.
+  for (const [list, add, kind, isPrivate] of [
+    ['requestParameters', { uniqueName: 'B', type: 'string', isOptional: true }, 'customApiRequestParameter', false],
+    ['responseProperties', { uniqueName: 'S', type: 'string' }, 'customApiResponseProperty', true],
+  ]) {
+    const declared = spec().customApis[0];
+    const p = await rebound(w.sdk.dataverse, fresh, {
+      spec: api({ isPrivate, requestParameters: declared.requestParameters, responseProperties: declared.responseProperties, [list]: [...declared[list], add] }),
+    });
+    const added = p.rows.find((r) => r.kind === kind && r.mode === 'create');
+    const edit = await pushEdit(w, 'customApi', root, [['/isPrivate', isPrivate], [`/${list}`, B.artifactFor(p)[list]]]);
+    assert.equal(edit.result.saved, true);
+    assert.deepEqual(edit.sent.map((r) => r.url.replace(/^.*\/api\/data\/v9\.\d\//, '')), ['$batch']);
+    assert.equal(B.createClassifier([{ token: 't', planned: p }])(edit.sent[0]), null, 'the $batch itself is refused today');
+    const parts = constituentsOf(edit.sent[0]);
+    assert.deepEqual(parts.map((c) => c.method), ['PATCH', 'POST']);
+    const named = parts.map((c) => B.classifyConstituent([{ token: 't', planned: p }], c));
+    assert.deepEqual(named.map((n) => n && n.rows.map((r) => r.id)), [[root], [added.id]], `${kind}: each constituent is its planned row`);
+    assert.equal(B.classifyConstituent([{ token: 't', planned: p }], { ...parts[1], url: parts[1].url.replace(/\?.*$/, '') }), null, 'a child POST without its selected key');
+    assert.equal(B.classifyConstituent([{ token: 't', planned: fresh }], parts[1]), null, 'a child POST under a root the plan creates');
+  }
+
+  // The root with a child's labels: the change set's child PATCH is refused; it is admitted only on its own.
+  const both = await rebound(w.sdk.dataverse, fresh, { spec: api({ isPrivate: false, requestParameters: [{ uniqueName: 'A', type: 'integer', displayName: 'X' }] }) });
+  const mixed = await pushEdit(w, 'customApi', root, [['/isPrivate', false], ['/requestParameters/0/displayName', 'X']]);
+  const parts = constituentsOf(mixed.sent[0]);
+  assert.deepEqual(parts.map((c) => [c.method, c.url.replace(/^.*\/api\/data\/v9\.\d\/|\(.*$/g, '')]), [['PATCH', 'customapis'], ['PATCH', 'customapirequestparameters']]);
+  assert.ok(B.classifyConstituent([{ token: 't', planned: both }], parts[0]));
+  assert.equal(B.classifyConstituent([{ token: 't', planned: both }], parts[1]), null, 'a child label PATCH in a change set');
+  assert.ok(B.createClassifier([{ token: 't', planned: both }])(parts[1]), 'the same PATCH sent on its own');
+});
+
+test('a PATCH carries exactly the row version the plan was prepared from; an update without a fresh base read is not planned', () => {
+  const s = spec({ customApis: [{ ...spec().customApis[0], isPrivate: true }] });
+  const base = (over = {}) => ({ state: 'present', kind: 'customApi', id: OTHER, parentId: null, rowVersion: 'W/"3"', decoded: { fields: { name: 'n', displayName: 'd', description: 'x' } }, ...over });
+  const bound = (b) => planned('customApi', 'contoso_Calc', { spec: s, boundIdOf: (k) => (k === 'customApi' ? OTHER : undefined), bases: b === undefined ? undefined : new Map([[OTHER, b]]) });
+  const p = bound(base());
+  assert.equal(p.rows[0].ifMatch, 'W/"3"');
+  assert.deepEqual(p.plan.baseObservation && p.plan.baseObservation.rowVersion, 'W/"3"');
+  assert.equal(bound(base({ rowVersion: 'W/"4"' })).plan.declarationSha256, p.plan.declarationSha256, 'a version is no part of the declaration');
+  assert.deepEqual([p.rows[0].expected.name, p.rows[0].expected.displayName, p.rows[0].expected.description], ['n', 'd', 'x'], 'labels the App Spec leaves out are the row\'s own');
+  for (const [what, b] of [['no base', undefined], ['an absent base', { state: 'absent' }], ['another row\'s', base({ id: '11111111-1111-4111-8111-111111111111' })],
+    ['another kind\'s', base({ kind: 'connectionReference' })], ['no version', base({ rowVersion: null })], ['a wildcard version', base({ rowVersion: '*' })]]) {
+    assert.throws(() => bound(b), /no fresh base read with a row version/, what);
+  }
+  const classify = B.createClassifier([{ token: 't', planned: p }]);
+  const url = `https://contoso.crm.dynamics.com/api/data/v9.0/customapis(${OTHER})?$select=customapiid`;
+  const req = (headers) => ({ method: 'PATCH', url, headers, body: JSON.stringify({ isprivate: true }) });
+  assert.ok(classify(req({ 'If-Match': 'W/"3"' })), 'the held version');
+  assert.ok(classify(req({ 'if-match': 'W/"3"' })), 'in any spelling');
+  for (const [what, headers] of [['no condition', {}], ['the wildcard', { 'If-Match': '*' }], ['another version', { 'If-Match': 'W/"999"' }],
+    ['an older version', { 'If-Match': 'W/"2"' }], ['a list of versions', { 'If-Match': 'W/"3", W/"4"' }], ['two spellings', { 'If-Match': 'W/"3"', 'if-match': 'W/"3"' }],
+    ['a version that is not text', { 'If-Match': ['W/"3"'] }]]) {
+    assert.equal(classify(req(headers)), null, what);
+  }
+});
+
+test('Custom API labels: the plan pins what the SDK fills in, and the bundled SDK sends the same body from an unpinned artifact', async () => {
+  const authored = spec({ customApis: [{ uniqueName: 'contoso_Calc', displayName: 'Calc', requestParameters: [{ uniqueName: 'A', type: 'integer', displayName: 'Alpha' }], responseProperties: [{ uniqueName: 'R', type: 'string', description: 'Result' }] }] });
+  for (const s of [spec(), authored]) {
+    const p = planned('customApi', 'contoso_Calc', { spec: s });
+    const unpinned = B.artifactFor(p);
+    const declared = s.customApis[0];
+    const strip = (o, from) => { for (const f of ['name', 'displayName', 'description']) if (from[f] === undefined) delete o[f]; };
+    strip(unpinned, declared);
+    unpinned.requestParameters.forEach((c, i) => strip(c, declared.requestParameters[i]));
+    unpinned.responseProperties.forEach((c, i) => strip(c, declared.responseProperties[i]));
+    const pinnedPost = (await wireOf(p)).sent[0];
+    const rawPost = (await wireOf(p, { artifact: unpinned })).sent[0];
+    assert.deepEqual(JSON.parse(rawPost.body), JSON.parse(pinnedPost.body), 'the SDK fills an unset label exactly as the plan pins it');
+    assert.ok(B.createClassifier([{ token: 't', planned: p }])(rawPost));
+  }
+  const p = planned('customApi', 'contoso_Calc', { spec: authored });
+  const [root, req, resp] = [p.rows[0].expected, rowOf(p, 'customApiRequestParameter').expected, rowOf(p, 'customApiResponseProperty').expected];
+  assert.deepEqual([root.name, root.displayName, root.description], ['contoso_Calc', 'Calc', 'Calc']);
+  assert.deepEqual([req.name, req.displayName, req.description], ['contoso_Calc.A', 'Alpha', 'Alpha']);
+  assert.deepEqual([resp.name, resp.displayName, resp.description], ['contoso_Calc.R', 'R', 'Result']);
+  const classify = B.createClassifier([{ token: 't', planned: p }]);
+  const post = (await wireOf(p)).sent[0];
+  assert.equal(classify(withBody(post, (b) => { b.name = 'Unplanned root label'; })), null, 'a root label the plan does not hold');
+  assert.equal(classify(withBody(post, (b) => { b.CustomAPIRequestParameters[0].description = 'Unplanned'; })), null, 'a child label the plan does not hold');
 });
 // The real lifecycle: the SDK behind the real send-once gate, bound to a real binding store.
 async function lifecycle() {
@@ -388,4 +530,192 @@ test('fake org paging is opt-in: without pageSize a collection is one page, as b
   assert.equal(first.body.value.length, 2);
   const second = await sdk.dataverse.getAbsolute(first.body['@odata.nextLink']);
   assert.deepEqual([second.body.value.length, second.body['@odata.nextLink']], [1, undefined]);
+});
+
+test('an environment variable\'s secret store is read and compared: empty or Key Vault is what a create makes, Dataverse differs, anything else is unknown', async () => {
+  const s = spec({ environmentVariables: [spec().environmentVariables[0], { schemaName: 'contoso_Secret', type: 'secret' }, { schemaName: 'contoso_Plain', type: 'string' }] });
+  for (const key of ['contoso_Secret', 'contoso_Plain']) {
+    const p = planned('environmentVariable', key, { spec: s });
+    const w = await wireOf(p);
+    const id = p.plan.rows[0].id;
+    const store = async (value) => {
+      const res = await w.org.request({ url: `${w.org.origin}/api/data/v9.2/environmentvariabledefinitions(${id})`, method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ secretstore: value }) });
+      assert.ok(res.statusCode < 300, `PATCH secretstore ${value}: ${res.statusCode}`);
+    };
+    const root = async (dv = w.sdk.dataverse) => {
+      const r = (await B.observe(dv, p)).rows[0];
+      return r.state === 'present' ? (r.projectionSha256 === p.rows[0].expectedSha256 ? 'same' : 'differs') : r.state;
+    };
+    assert.equal(await root(), 'same', `${key}: as created (the column left empty)`);
+    await store(0);
+    assert.equal(await root(), 'same', `${key}: Azure Key Vault, the column's default`);
+    await store(1);
+    assert.equal(await root(), 'differs', `${key}: a value kept by Dataverse is not the definition the plan made`);
+    await store(2);
+    assert.equal(await root(), 'unknown', `${key}: a store this build cannot read`);
+    await store(null);
+    const unselected = { ...w.sdk.dataverse, get: async (q) => {
+      const r = await w.sdk.dataverse.get(q);
+      if (!q.startsWith('/environmentvariabledefinitions(')) return r;
+      const body = { ...r.body };
+      delete body.secretstore;
+      return { ...r, body };
+    } };
+    assert.equal(await root(unselected), 'unknown', `${key}: a read without the column proves nothing about it`);
+  }
+});
+
+test('a rule is published once, by the create set that makes it: a bound rule\'s plan verifies its state and publishes nothing', async () => {
+  const created = planned('duplicateRule', 'email');
+  const id = created.plan.rows[0].id;
+  assert.deepEqual(created.plan.effects.filter((e) => e.kind === 'rule-state'), [{ kind: 'rule-state', id }]);
+  const publish = (ruleId) => ({ method: 'POST', url: `https://contoso.crm.dynamics.com/api/data/v9.0/duplicaterules(${ruleId})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, headers: {}, body: '{}' });
+  assert.deepEqual(B.createClassifier([{ token: 't', planned: created }])(publish(id)), { type: 'effect', token: 't', kind: 'rule-state', id });
+  const unpublished = planned('duplicateRule', 'email', { spec: spec({ duplicateDetectionRules: [{ ...spec().duplicateDetectionRules[0], status: 'unpublished' }] }) });
+  assert.deepEqual(unpublished.plan.effects.filter((e) => e.kind === 'rule-state'), []);
+  const bound = planned('duplicateRule', 'email', { boundIdOf: (k) => (k === 'duplicateRule' ? OTHER : undefined), boundSlots: ['e'] });
+  assert.deepEqual([bound.rows[0].mode, bound.plan.ruleState], ['update', 'published'], 'the declared state is still what the rule must read back as');
+  assert.deepEqual(bound.plan.effects.filter((e) => e.kind === 'rule-state'), [], 'and no publish is planned for it');
+  assert.equal(B.createClassifier([{ token: 't', planned: bound }])(publish(OTHER)), null, 'a publish of a bound rule');
+});
+
+test('completion reads the root\'s whole child graph: a child the plan does not hold, on any page, is a difference; a graph not read whole is unknown', async () => {
+  // A condition added under the rule while it is still unpublished, then published inside the set: never the prepared rule.
+  {
+    const { org, sdk, dv, ctx } = await lifecycle();
+    const p = planned('duplicateRule', 'email');
+    const [attempt] = ctx.begin([p.plan]);
+    const classify = B.createClassifier([{ token: attempt.token, planned: p }]);
+    const run = (fn, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label: 'configuration create', acceptResult }, fn);
+    const artifact = B.artifactFor(p);
+    artifact.status = 'unpublished';
+    const pushed = await run(async () => { await sdk.createArtifact(p.kind, artifact); return sdk.pushArtifact(p.kind, p.plan.rows[0].id); }, B.acceptResultFor(p));
+    assert.equal(pushed.checked, true);
+    await seed(org, 'duplicateruleconditions', { duplicateruleconditionid: OTHER, baseattributename: 'lastname', matchingattributename: 'lastname', operatorcode: 0, ignoreblankvalues: false, 'regardingobjectid@odata.bind': `/duplicaterules(${p.rows[0].id})` });
+    const done = await run(async () => {
+      for (const m of (await B.observe(dv, p)).members.filter((x) => x.state === 'absent')) {
+        const full = p.plan.members.find((x) => x.id === m.id);
+        await dv.post('/AddSolutionComponent', { ComponentId: m.id, ComponentType: full.componentType, SolutionUniqueName: SOL, AddRequiredComponents: false });
+      }
+      await dv.post(`/duplicaterules(${p.rows[0].id})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, {});
+    });
+    assert.equal(done.localError, null);
+    const observation = await B.observe(dv, p);
+    assert.equal(observation.ruleState, 'published');
+    assert.deepEqual(observation.rows.slice(1).map((r) => r.projectionSha256 === rowOf(p, r.kind).expectedSha256), [true], 'the planned condition alone still reads as planned');
+    const [settled] = ctx.settle([{ token: attempt.token, observation }]);
+    assert.notEqual(settled.verdict.action, 'commit', 'a rule with a condition the plan never made is not the rule it prepared');
+  }
+  const differs = async (dv, p) => {
+    const r = (await B.observe(dv, p)).rows[0];
+    return r.state === 'present' ? (r.projectionSha256 === p.rows[0].expectedSha256 ? 'same' : 'differs') : r.state;
+  };
+  // A second value under the definition.
+  const ev = planned('environmentVariable', 'contoso_ApiBase');
+  const evWire = await wireOf(ev);
+  assert.equal(await differs(evWire.sdk.dataverse, ev), 'same');
+  await seed(evWire.org, 'environmentvariablevalues', { environmentvariablevalueid: OTHER, value: 'another', 'EnvironmentVariableDefinitionId@odata.bind': `/environmentvariabledefinitions(${ev.rows[0].id})` });
+  assert.equal(await differs(evWire.sdk.dataverse, ev), 'differs', 'a value the plan does not hold');
+  // A child the plan does not hold, in each direction, the second on a later page.
+  const api = planned('customApi', 'contoso_Calc');
+  const root = api.rows[0].id;
+  for (const [set, body, opts] of [
+    ['customapirequestparameters', { customapirequestparameterid: OTHER, uniquename: 'Z', name: 'Z', displayname: 'Z', type: 10 }, {}],
+    ['customapiresponseproperties', { customapiresponsepropertyid: OTHER, uniquename: 'Z', name: 'Z', displayname: 'Z', type: 10 }, { pageSize: 1 }],
+  ]) {
+    const w = await wireOf(api, { org: orgOf(opts) });
+    assert.equal(await differs(w.sdk.dataverse, api), 'same', `${set}: the planned graph`);
+    await seed(w.org, set, { ...body, 'CustomAPIId@odata.bind': `/customapis(${root})` });
+    const since = w.org.requests.length;
+    assert.equal(await differs(w.sdk.dataverse, api), 'differs', `${set}: an extra child`);
+    if (opts.pageSize) assert.ok(w.org.requests.slice(since).some((r) => r.path.startsWith('/customapiresponseproperties') && /\$skiptoken=/.test(r.path)), 'found on the second page');
+  }
+  // Any doubt about the graph leaves the root unknown.
+  const w = await wireOf(api);
+  const dv = w.sdk.dataverse;
+  const reqId = rowOf(api, 'customApiRequestParameter').id;
+  const around = (match, fn) => ({ ...dv, get: async (q) => (match.test(q) ? fn(q, await dv.get(q)) : dv.get(q)) });
+  const listOf = /^\/customapirequestparameters\?/;
+  for (const [what, reading] of [
+    ['a collection that cannot be read', around(listOf, () => ({ status: 500, body: {} }))],
+    ['a collection that does not end', around(listOf, (q, r) => ({ ...r, body: { ...r.body, '@Microsoft.Dynamics.CRM.morerecords': true } }))],
+    ['a row under another parent', around(listOf, (q, r) => ({ ...r, body: { value: r.body.value.map((x) => ({ ...x, _customapiid_value: OTHER })) } }))],
+    ['a row named twice', around(listOf, (q, r) => ({ ...r, body: { value: [...r.body.value, ...r.body.value] } }))],
+    ['a row without an id', around(listOf, (q, r) => ({ ...r, body: { value: [...r.body.value, { _customapiid_value: root }] } }))],
+    ['a planned child listed but read absent', around(new RegExp(`^/customapirequestparameters\\(${reqId}\\)`), () => ({ status: 404, body: { error: { code: '0x80040217' } } }))],
+    ['a planned child read but not listed', around(listOf, (q, r) => ({ ...r, body: { value: [] } }))],
+  ]) {
+    assert.equal(await differs(reading, api), 'unknown', what);
+  }
+  assert.equal(await differs(dv, api), 'same');
+});
+
+test('a label someone else changed, or one the plan never held, is never certified', async () => {
+  const { org, sdk, dv, ctx } = await lifecycle();
+  const p = planned('customApi', 'contoso_Calc');
+  const [attempt] = ctx.begin([p.plan]);
+  const classify = B.createClassifier([{ token: attempt.token, planned: p }]);
+  const artifact = B.artifactFor(p);
+  artifact.name = 'Unplanned root label';
+  artifact.requestParameters[0].name = 'Unplanned child label';
+  const run = await ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label: 'configuration create', acceptResult: B.acceptResultFor(p) }, async () => {
+    await sdk.createArtifact(p.kind, artifact);
+    return sdk.pushArtifact(p.kind, p.plan.rows[0].id);
+  });
+  assert.equal(run.checked, false);
+  assert.deepEqual(org.rows('customapis'), [], 'refused unsent');
+  const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dv, p) }]);
+  assert.notEqual(settled.verdict.action, 'commit');
+  // The planned labels, created as planned, then changed by someone else: the read-back differs on that row.
+  const w = await wireOf(p);
+  const reqId = rowOf(p, 'customApiRequestParameter').id;
+  const same = async () => (await B.observe(w.sdk.dataverse, p)).rows.map((r) => r.projectionSha256 === rowOf(p, r.kind).expectedSha256);
+  assert.deepEqual(await same(), [true, true, true]);
+  const res = await w.org.request({ url: `${w.org.origin}/api/data/v9.2/customapirequestparameters(${reqId})`, method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ description: 'Changed' }) });
+  assert.ok(res.statusCode < 300);
+  assert.deepEqual(await same(), [true, false, true]);
+});
+
+test('pins: a data-source definition, every root\'s namesake predicate, a condition\'s namesake, private inputs out of every durable record', async () => {
+  const s23 = (over) => spec({ minimumPluginVersion: '2.23.0', ...over });
+  // A data-source definition: the SDK's own create classifies and reads back as planned.
+  const site = planned('environmentVariable', 'contoso_Site', { spec: s23({ environmentVariables: [spec().environmentVariables[0], { schemaName: 'contoso_Site', type: 'dataSource', connectorId: SP, parameterKey: 'dataset' }] }) });
+  const siteWire = await wireOf(site);
+  assert.ok(B.createClassifier([{ token: 't', planned: site }])(siteWire.sent.find((r) => /environmentvariabledefinitions/.test(r.url))));
+  assert.equal((await B.observe(siteWire.sdk.dataverse, site)).rows[0].projectionSha256, site.rows[0].expectedSha256);
+  // A namesake differing only in case (a rule's name with quotes and an ampersand) at another id is a conflict.
+  for (const [kind, key, data, set, body] of [
+    ['environmentVariable', 'contoso_Name', { environmentVariables: [{ schemaName: 'contoso_Name', type: 'string' }] }, 'environmentvariabledefinitions', { environmentvariabledefinitionid: OTHER, schemaname: 'CONTOSO_name', type: 100000000 }],
+    ['connectionReference', 'contoso_Name', { connectionReferences: [{ logicalName: 'contoso_Name', connectorId: SP }] }, 'connectionreferences', { connectionreferenceid: OTHER, connectionreferencelogicalname: 'CONTOSO_name', connectorid: SP }],
+    ['customApi', 'contoso_Name', { customApis: [{ uniqueName: 'contoso_Name' }] }, 'customapis', { customapiid: OTHER, uniquename: 'CONTOSO_name' }],
+    ['duplicateRule', 'rk', { duplicateDetectionRules: [{ key: 'rk', name: "O'Brien & sons", entity: 'contact', conditions: [] }] }, 'duplicaterules', { duplicateruleid: OTHER, name: "O'BRIEN & SONS", baseentityname: 'account', matchingentityname: 'account' }],
+  ]) {
+    const p = planned(kind, key, { spec: { minimumPluginVersion: '2.23.0', solution: { uniqueName: SOL, publisherPrefix: 'contoso' }, ...data } });
+    const org = orgOf();
+    await seed(org, set, body);
+    assert.equal((await B.readConfigurationConflicts((await sdkOf(org, null)).dataverse, p)).state, 'conflict', kind);
+  }
+  // A condition's namesake under a bound rule: every authored optional field and the actual parent.
+  const rule = planned('duplicateRule', 'rk|/x', { spec: s23({ duplicateDetectionRules: [{ key: 'rk|/x', name: 'Same email', entity: 'contact', conditions: [{ key: 'ck|/y', column: 'emailaddress1', matchingColumn: 'lastname', match: 'firstCharacters', characters: 3, ignoreBlankValues: true }] }] }), boundIdOf: (k) => (k === 'duplicateRule' ? OTHER : undefined) });
+  assert.equal(rule.rows[1].key, JSON.stringify(['rk|/x', 'ck|/y']));
+  const row = { duplicateruleconditionid: '11111111-1111-4111-8111-111111111111', baseattributename: 'EMAILADDRESS1', matchingattributename: 'LASTNAME', operatorcode: 1, operatorparam: 3, ignoreblankvalues: true, _regardingobjectid_value: OTHER };
+  for (const [change, expected] of [[{}, 'conflict'], [{ matchingattributename: 'emailaddress1' }, 'clear'], [{ operatorparam: 2 }, 'clear'], [{ ignoreblankvalues: false }, 'clear'],
+    [{ operatorcode: 2 }, 'clear'], [{ _regardingobjectid_value: row.duplicateruleconditionid }, 'unknown'], [{ operatorparam: '3' }, 'unknown'], [{ duplicateruleconditionid: 'not-a-guid' }, 'unknown']]) {
+    const dv = { get: async (q) => {
+      assert.ok(q.startsWith(`/duplicateruleconditions?$filter=_regardingobjectid_value eq ${OTHER}&$select=`));
+      return { status: 200, body: { value: [{ ...row, ...change }] } };
+    } };
+    assert.equal((await B.readConfigurationConflicts(dv, rule)).state, expected, JSON.stringify(change));
+  }
+  // Another private input changes neither the plan nor a sealed projection.
+  const priv = s23({ environmentVariables: [{ schemaName: 'contoso_Private', type: 'string' }], connectionReferences: [{ logicalName: 'contoso_ref', connectorId: SP }] });
+  const deploy = (v) => A.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_Private', Value: `value-${v}` }], ConnectionReferences: [{ LogicalName: 'contoso_ref', ConnectionId: `connection-${v}` }] }, priv);
+  for (const [kind, key, column] of [['environmentVariable', 'contoso_Private', 'value'], ['connectionReference', 'contoso_ref', 'connectionid']]) {
+    const p = B.planOf(priv, { kind, key, bindings: deploy('one'), solution: SOL, componentTypes: TYPES });
+    const q = B.planOf(priv, { kind, key, bindings: deploy('two'), solution: SOL, componentTypes: TYPES });
+    assert.deepEqual(p, q);
+    const req = (await wireOf(p)).sent.find((r) => r.body && Object.hasOwn(JSON.parse(r.body), column));
+    const other = withBody(req, (b) => { b[column] = column === 'value' ? 'value-two' : 'connection-two'; });
+    assert.deepEqual(B.createClassifier([{ token: 't', planned: p }])(req), B.createClassifier([{ token: 't', planned: q }])(other));
+  }
 });
