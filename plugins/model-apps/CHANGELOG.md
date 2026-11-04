@@ -13,8 +13,8 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 - **Tables found after "already exists"** reuse existing columns, applying declared column security and authorized Date and Time repairs at once (#796).
 - **Validation:** unknown `views[]` and filter keys warn with the likely key and fail `--strict` lint; an ignored view `type` stays silent (#799).
 - **Managed downloads:** a form's handler library returns as an external resource (never updated; teardown keeps it); a flow's personas return when proved from roles that later builds own (#800).
-- **Download output** is replaced only after restoration, validation and fragments succeed; items blocked only by a missing library or persona go to a new `.maker-workspace/managed-fragments-*.json` (#800).
-- **Declared dashboards:** a durably acknowledged create is recovered after a stop without a second create or adoption when the retained draft is unchanged; creates send a fixed seed-cell id (#798).
+- **Managed-download output** is replaced only after restoration, validation and fragments succeed; items blocked only by a missing library or persona go to a new `.maker-workspace/managed-fragments-*.json` (#800).
+- **Declared dashboards:** a durably acknowledged, still-present create is recovered after a stop without a second create or adoption when the retained draft is unchanged; creates send a fixed seed-cell id (#798).
 - **Adopted forms:** publication stops can name differing caption cells and language codes (#797).
 - **Authoring:** `/app-builder` offers optional capabilities, never by default; evals grade view filters and opt-in (#802, #804).
 
