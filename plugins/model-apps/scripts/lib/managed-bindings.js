@@ -796,6 +796,24 @@ function attemptProvenUnsent(a, effects) {
 }
 
 /**
+ * What a read-only acceptance (commitReadOnlyGroupSet) is checked against, captured BEFORE the fresh read that proves
+ * the rows: { token, generation, epoch, digest } of the attempt `token` in `envelope` — its group's generation (null
+ * when none is committed), its send window epoch (null when it has none) and the sha256 of the attempt, its group and
+ * every workflow effect it owns, so any write to any of them between the capture and the acceptance refuses it.
+ * Answers null when the envelope holds no such attempt.
+ */
+function readOnlyCapture(envelope, token) {
+  const a = envelope && Array.isArray(envelope.attempts) ? envelope.attempts.find((x) => x.token === token) : null;
+  if (!a) return null;
+  const group = envelope.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+  const effects = (envelope.workflowEffects || []).filter((e) => e.attemptToken === token);
+  return {
+    token, generation: group ? group.generation : null, epoch: a.sendWindow ? a.sendWindow.epoch : null,
+    digest: sha256(canonicalJson({ attempt: a, group, effects })),
+  };
+}
+
+/**
  * May the attempt be resumed as a create (runManagedFeature's `resumeCreate`)? Only when its record says it was a create
  * of a new root and that no answer ever acknowledged it: no committed group and no base generation, an expected proof
  * with no base, phase `sending` with no acknowledgement or saved observation, and every workflow effect it owns a create
@@ -2190,14 +2208,35 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      *                             children `origin: 'created'`; it never acknowledges the root, never stands in for the
      *                             root's adoption approval, never turns a child the group already holds into a creation,
      *                             and grants no deletion.
+     *   epoch                     optional: the send window epoch the caller's answer came under; another epoch (the
+     *                             attempt was claimed by another run since) is `managed-settlement-pending`, nothing written.
+     * A configuration attempt's ROOT RECEIPT alone — { proof: null, acknowledgedRoot: true, phase: 'sending', epoch } —
+     * is written the moment a checked save acknowledged the root create, before any read-back or membership request:
+     * it sets only the acknowledgement, and the attempt stays `sending` (no saved observation), so its remaining
+     * requests can still be sent under it. It needs the current epoch and a root the row protocol prepared as a create.
      */
-    noteSaved(token, { proof, acknowledgedRoot = false, acknowledgedChildCreates = [], phase = 'saved' } = {}) {
-      if (phase !== 'saved' && phase !== 'state-pending' && phase !== 'membership-pending') throw storeError(CODES.notSettled, `noteSaved cannot move an attempt to ${phase}`);
+    noteSaved(token, { proof, acknowledgedRoot = false, acknowledgedChildCreates = [], phase = 'saved', epoch } = {}) {
+      const rootReceipt = phase === 'sending';
+      if (rootReceipt && !(proof === null && acknowledgedRoot === true && Array.isArray(acknowledgedChildCreates) && acknowledgedChildCreates.length === 0 && epoch !== undefined)) {
+        throw storeError(CODES.notSettled, 'a receipt written while an attempt is still sending records its acknowledged root create alone, under its epoch');
+      }
+      if (!rootReceipt && phase !== 'saved' && phase !== 'state-pending' && phase !== 'membership-pending') throw storeError(CODES.notSettled, `noteSaved cannot move an attempt to ${phase}`);
       if (!Array.isArray(acknowledgedChildCreates)) throw storeError(CODES.completion, 'a child-create receipt is a list of { kind, key, id }');
       mutate((env, disk, spend) => {
         const a = requireAttempt(env, disk, token);
         spend(token);
         if (!a.expected) throw storeError(CODES.notSettled, 'an attempt cannot be saved before it was sent');
+        if (epoch !== undefined && !(a.sendWindow && a.sendWindow.epoch === epoch)) {
+          throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt was claimed by another run since this send began; its answer is not recorded`);
+        }
+        if (rootReceipt) {
+          const root = a.rowProtocol ? a.rowProtocol.rows.find((r) => r.parentId === null && r.kind === a.root.kind && r.key === a.root.key) : null;
+          if (!isRowFamily(a.family) || a.phase !== 'sending' || !root || root.mode !== 'create' || rowIdKey(root.id) !== rowIdKey(a.root.id) || a.expected.baseObservation !== null) {
+            throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" has no root this sending attempt prepared as a create; nothing acknowledges it`);
+          }
+          a.acknowledgedRoot = true;
+          return;
+        }
         if (acknowledgedRoot === true && a.expected.baseObservation !== null) {
           throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" edited an existing root; an answer to an edit never acknowledges a create`);
         }
@@ -2262,6 +2301,44 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       if (new Set(proposals.map((p) => p.token)).size !== proposals.length) throw storeError(CODES.notSettled, 'commitGroupSet names one attempt twice');
       const out = [];
       mutate((env, disk) => { for (const p of proposals) out.push(commitInto(env, disk, p)); });
+      return clone(out);
+    },
+    /**
+     * Accept configuration attempts that were deliberately never sent — a plan of existing rows only, each read fresh
+     * and found exactly as planned — in ONE write: each proposal as commitGroupSet takes it, plus the `capture`
+     * (readOnlyCapture) taken before that fresh read. Under the lease every capture is checked again: the attempt, its
+     * group and its effects byte-for-byte as captured (same digest, generation and epoch), the expected proof of an
+     * existing-row plan (a base observation), and nothing of it dispatched (attemptProvenUnsent). Then each is committed
+     * exactly as commitGroupSet commits it, consuming its prepared proof. Nothing is acknowledged, no dispatch flag
+     * moves, and a record the group does not already hold is bound only as `adopted` under its own approval — never
+     * `created`. Any refusal writes nothing and leaves every attempt held.
+     */
+    commitReadOnlyGroupSet(proposals) {
+      if (!Array.isArray(proposals) || proposals.length === 0) throw storeError(CODES.notSettled, 'commitReadOnlyGroupSet needs a non-empty list of proposals');
+      proposals.forEach(checkCommitProposal);
+      if (new Set(proposals.map((p) => p.token)).size !== proposals.length) throw storeError(CODES.notSettled, 'commitReadOnlyGroupSet names one attempt twice');
+      const out = [];
+      mutate((env, disk) => {
+        for (const p of proposals) {
+          const now = readOnlyCapture(disk.envelope, p.token);
+          const was = p.capture || {};
+          if (!now || now.digest !== was.digest || now.generation !== was.generation || now.epoch !== was.epoch) {
+            throw storeError(CODES.conflict, 'a managed group changed since its read-only acceptance was captured; nothing was accepted');
+          }
+          const a = requireAttempt(env, disk, p.token);
+          const name = `the managed ${a.family} "${a.key}"`;
+          if (!isRowFamily(a.family) || !a.expected || !isObj(a.expected.baseObservation) || a.rowProtocol.rows.some((r) => r.mode !== 'update')) {
+            throw storeError(CODES.notSettled, `${name} is not a plan of existing rows with a base observation; it cannot be accepted without a send`);
+          }
+          if (!attemptProvenUnsent(a, env.workflowEffects)) throw storeError(CODES.pending, `${name} attempt may have sent something; it is recovered from its original expectation, never accepted read-only`);
+          const old = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+          for (const rec of p.records) {
+            const held = old && old.records.some((r) => r.kind === rec.kind && r.key === rec.key);
+            if (!held && rec.origin !== 'adopted') throw storeError(CODES.adoptionRequired, `${name} ${rec.kind} "${rec.key}" was never created by this attempt; accepted without a send it can only be adopted`);
+          }
+          out.push(commitInto(env, disk, p));
+        }
+      });
       return clone(out);
     },
     /**
@@ -2992,6 +3069,7 @@ module.exports = {
   isStoreEnvironment,
   REQUEST_SHAPES,
   attemptProvenUnsent,
+  readOnlyCapture,
   resumableCreate,
   rootCreateAcknowledged,
   dashboardCreateAcknowledged,

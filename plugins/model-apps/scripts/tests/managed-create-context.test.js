@@ -7,8 +7,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createDeferredManagedCreateGate, sentProjection } = require('../lib/managed-create-transport.js');
-const { CODES, createManagedCreateContext, buildRowPlan, defaultApprovalToken } = require('../lib/managed-create-context.js');
-const { H, API, REQ, API_KEY, REQ_KEY, URL_API, URL_MEMBER, open, apiBody, apiClassifier } = require('./helpers/managed-rows.js');
+const { CODES, createManagedCreateContext, buildRowPlan, defaultApprovalToken, acceptSaved } = require('../lib/managed-create-context.js');
+const { CODES: STORE } = require('../lib/managed-bindings.js');
+const { H, API, REQ, API_KEY, REQ_KEY, URL_API, URL_MEMBER, open, codeOf, apiBody, apiClassifier } = require('./helpers/managed-rows.js');
 
 const NOT_FOUND = 'configuration-row-not-found';
 const OTHER = '77777777-7777-4777-8777-777777777777';
@@ -47,7 +48,7 @@ function apiRead({ key = API_KEY, api = API, req = REQ, root = {}, child = {}, m
 }
 
 // Send the deep insert (and the two memberships) of the attempts through the real gate, answered as `answer` says.
-async function send(ctx, store, attempts, { classify, answer = { statusCode: 204, headers: {} }, body = apiBody(), members = [API, REQ] } = {}) {
+async function send(ctx, store, attempts, { classify, answer = { statusCode: 204, headers: {} }, body = apiBody(), members = [API, REQ], accept = () => true } = {}) {
   const gate = createDeferredManagedCreateGate();
   gate.bind(store);
   const exchange = (req) => {
@@ -55,7 +56,7 @@ async function send(ctx, store, attempts, { classify, answer = { statusCode: 204
     h.dispatching();
     h.answered(answer);
   };
-  return ctx.run({ attempts, classify: classify || apiClassifier(attempts[0].token) }, async () => {
+  return ctx.run({ attempts, classify: classify || apiClassifier(attempts[0].token), acceptResult: accept }, async () => {
     exchange({ method: 'POST', url: URL_API, body: JSON.stringify(body) });
     for (const id of members) exchange({ method: 'POST', url: URL_MEMBER, body: JSON.stringify({ ComponentId: id }) });
   });
@@ -146,7 +147,8 @@ test('recovery: another id, parent or content, or an answer naming another id, i
 test('recovery in a later process: an exact set nobody acknowledged needs each row\'s exact approval, and is then adopted', async () => {
   const dir = makeTempDir('mc-context-');
   const { store, ctx, attempts } = begun(dir);
-  await send(ctx, store, attempts);
+  // Nobody checked what the operation answered, so no answer of it acknowledges a create.
+  await send(ctx, store, attempts, { accept: null });
   const token = attempts[0].token;
   const halted = ctxOf(dir).classify(token, apiRead(), { declarationSha256: H('e') });
   assert.deepEqual([halted.code, halted.approvals], [CODES.ownership, [ROOT_TOKEN, CHILD_TOKEN]]);
@@ -222,8 +224,9 @@ test('a private input is proved by this process\'s own answer and a matching rea
   const at = { declarationSha256: H('e') };
   assert.equal(cross.ctx.classify(cross.token, read('masked')).code, CODES.completion, 'a masked value is never certified');
   assert.equal(cross.ctx.classify(cross.token, read()).code, CODES.completion, 'an unreported private state is not a match');
+  // The definition's create was receipted by its checked run; its private value still needs the maker's approval.
   const halted = ctxOf(cross.dir).classify(cross.token, read('match'), at);
-  assert.deepEqual([halted.code, halted.approvals], [CODES.ownership, [`adopt:environmentVariable:${EV_KEY}`, valueToken]]);
+  assert.deepEqual([halted.code, halted.approvals], [CODES.ownership, [valueToken]]);
   assert.equal(ctxOf(cross.dir, [`adopt:environmentVariable:${EV_KEY}`, valueToken]).classify(cross.token, read('masked'), at).code, CODES.completion, 'approval never certifies a masked value');
   const [adopted] = ctxOf(cross.dir, [`adopt:environmentVariable:${EV_KEY}`, valueToken]).settle([{ token: cross.token, observation: read('match'), declarationSha256: H('e') }]);
   assert.equal(adopted.verdict.action, 'commit');
@@ -260,4 +263,256 @@ test('each item of a set settles on its own: one halting never holds back anothe
   assert.ok(groupOf(dir, KEY2));
   assert.equal(groupOf(dir), null);
   assert.deepEqual(attemptsOf(dir).map((a) => [a.key, a.acknowledgedRoot]), [[API_KEY, true]], 'the halted item keeps its attempt and the receipt this process proved');
+});
+
+// One request through a bound gate inside a context's run, answered as `answer` says (null: dispatched, never answered).
+function exchangeVia(gate, req, answer) {
+  const h = gate.screen(req);
+  h.dispatching();
+  if (answer) h.answered(answer);
+}
+const OK = { statusCode: 204, headers: {} };
+const deepInsert = (body = apiBody()) => ({ method: 'POST', url: URL_API, body: JSON.stringify(body) });
+const membership = (id) => ({ method: 'POST', url: URL_MEMBER, body: JSON.stringify({ ComponentId: id }) });
+function gateOf(store) {
+  const gate = createDeferredManagedCreateGate();
+  gate.bind(store);
+  return gate;
+}
+
+test('only a checked run acknowledges a create: no check, a failed check, a thrown or refused operation, or any unproven row answer keeps every 2xx unchecked', async () => {
+  const runs = [
+    ['no result check', {}, async () => 'saved'],
+    ['the check says no', { acceptResult: () => false }, async () => 'saved'],
+    ['the check throws', { acceptResult: () => { throw new Error('malformed'); } }, async () => 'saved'],
+    ['the check answers a truthy non-true', { acceptResult: () => 1 }, async () => 'saved'],
+    ['the operation failed after its content was acknowledged', { acceptResult: () => true }, async () => { throw new Error('a later step of the push failed'); }],
+  ];
+  for (const [name, opts, after] of runs) {
+    const dir = makeTempDir('mc-context-');
+    const { store, ctx, attempts } = begun(dir);
+    const gate = gateOf(store);
+    const out = await ctx.run({ attempts, classify: apiClassifier(attempts[0].token), ...opts }, async () => {
+      exchangeVia(gate, deepInsert(), OK);
+      for (const id of [API, REQ]) exchangeVia(gate, membership(id), OK);
+      return after();
+    });
+    assert.equal(out.checked, false, name);
+    assert.deepEqual(ctx.facts(attempts[0].token).filter((f) => f.type === 'row').map((f) => f.outcome), ['unchecked', 'unchecked'], name);
+    assert.equal(attemptsOf(dir)[0].acknowledgedRoot, false, `${name}: no root receipt`);
+    const [halted] = ctx.settle([{ token: attempts[0].token, observation: apiRead() }]);
+    assert.deepEqual([halted.verdict.code, halted.verdict.approvals], [CODES.ownership, [ROOT_TOKEN, CHILD_TOKEN]], `${name}: nothing is taken as created`);
+  }
+  // A 2xx for another row is kept a conflict, and an unknown answer stays unknown: neither is laundered by the check.
+  const dir = makeTempDir('mc-context-');
+  const { store, ctx, attempts } = begun(dir);
+  const gate = gateOf(store);
+  const out = await ctx.run({ attempts, classify: apiClassifier(attempts[0].token), acceptResult: () => true }, async () => {
+    exchangeVia(gate, deepInsert(), { statusCode: 204, headers: { 'OData-EntityId': `${URL_API}(${OTHER})` } });
+    return { saved: true };
+  });
+  assert.equal(out.checked, false);
+  assert.deepEqual(ctx.facts(attempts[0].token).map((f) => f.outcome), ['conflict', 'conflict']);
+  assert.equal(ctx.classify(attempts[0].token, apiRead()).code, CODES.conflict);
+  const lost = begun(makeTempDir('mc-context-'));
+  const lostGate = gateOf(lost.store);
+  const l = await lost.ctx.run({ attempts: lost.attempts, classify: apiClassifier(lost.attempts[0].token), acceptResult: () => true }, async () => { exchangeVia(lostGate, deepInsert(), null); return { saved: true }; });
+  assert.equal(l.checked, false, 'an unanswered content request is never laundered by saved:true');
+  assert.deepEqual(lost.ctx.facts(lost.attempts[0].token).map((f) => [f.outcome, f.unanswered]), [['unknown', true], ['unknown', true]]);
+});
+
+test('a checked run receipts its new root before anything else: the attempt stays sending, its membership still goes, and its open debt is kept', async () => {
+  const dir = makeTempDir('mc-context-');
+  const { store, ctx, attempts } = begun(dir);
+  const gate = gateOf(store);
+  const token = attempts[0].token;
+  const out = await ctx.run({ attempts, classify: apiClassifier(token), acceptResult: () => true }, async () => { exchangeVia(gate, deepInsert(), OK); return 'saved'; });
+  assert.equal(out.checked, true);
+  const [a] = attemptsOf(dir);
+  assert.deepEqual([a.acknowledgedRoot, a.phase, a.savedObservation, a.acknowledgedChildCreates], [true, 'sending', null, undefined], 'the root alone, before any read-back');
+  // The membership work comes after the receipt, and one of its answers is lost: the receipt stands, the debt stays.
+  const later = await ctx.run({ attempts, classify: apiClassifier(token), acceptResult: () => true }, async () => {
+    exchangeVia(gate, membership(API), OK);
+    exchangeVia(gate, membership(REQ), { statusCode: 500, headers: {} });
+    return 'saved';
+  });
+  assert.equal(later.localError, null);
+  const pending = ctxOf(dir).classify(token, apiRead({ members: 'absent' }), { declarationSha256: H('e') });
+  assert.deepEqual([pending.code, pending.phase], [CODES.completion, 'membership-pending']);
+  const owned = ctxOf(dir).classify(token, apiRead(), { declarationSha256: H('e') });
+  assert.deepEqual([owned.code, owned.approvals], [CODES.ownership, [CHILD_TOKEN]], 'a later process has the root receipt; the child needs its own proof');
+  // An edit never creates a root receipt, and the store refuses a receipt from another epoch.
+  assert.equal(codeOf(() => store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'sending', epoch: 99 })), STORE.pending);
+  assert.equal(codeOf(() => store.noteSaved(token, { proof: { x: 1 }, acknowledgedRoot: true, phase: 'sending', epoch: 1 })), STORE.notSettled);
+});
+
+test('an edit\'s checked run receipts no root', async () => {
+  const dir = makeTempDir('mc-context-');
+  const one = begun(dir);
+  await send(one.ctx, one.store, one.attempts);
+  one.ctx.settle([{ token: one.attempts[0].token, observation: apiRead() }]);
+  const two = begun(dir, [apiPlanOf({ mode: 'update', baseGeneration: groupOf(dir).generation, baseObservation: { rowVersion: '1', savedSha256: H('1') } })]);
+  const out = await send(two.ctx, two.store, two.attempts, { members: [] });
+  assert.equal(out.checked, true);
+  assert.equal(attemptsOf(dir)[0].acknowledgedRoot, false);
+  assert.equal(codeOf(() => two.store.noteSaved(two.attempts[0].token, { proof: null, acknowledgedRoot: true, phase: 'sending', epoch: 1 })), STORE.notSettled);
+});
+
+test('a receipt the store cannot write is the run\'s typed local failure, and nothing more is sent under that context', async () => {
+  const dir = makeTempDir('mc-context-');
+  const { store, ctx, attempts } = begun(dir);
+  const gate = gateOf(store);
+  const full = Object.assign(new Error('the managed binding store would be too large'), { code: STORE.storeFull });
+  store.noteSaved = () => { throw full; };
+  const out = await ctx.run({ attempts, classify: apiClassifier(attempts[0].token), acceptResult: () => true }, async () => { exchangeVia(gate, deepInsert(), OK); return 'saved'; });
+  assert.deepEqual([out.checked, out.localError], [false, full]);
+  assert.deepEqual(ctx.facts(attempts[0].token).map((f) => f.outcome), ['unchecked', 'unchecked']);
+  let called = false;
+  const next = await ctx.run({ attempts, classify: apiClassifier(attempts[0].token), acceptResult: () => true }, async () => { called = true; });
+  assert.deepEqual([called, next.localError, next.checked], [false, full, false]);
+});
+
+test('acceptSaved accepts only the SDK\'s saved result for exactly the pushed artifact', () => {
+  const ok = acceptSaved({ type: 'customApi', id: API });
+  assert.equal(ok({ type: 'customApi', id: API.toUpperCase(), saved: true, shipped: true, publish: { kind: 'notRequested' } }), true);
+  for (const r of [
+    { type: 'customApi', id: API, saved: false, adoptedExisting: true },
+    { type: 'customApi', id: API, saved: false, shipped: false, publish: { kind: 'notRequested' }, error: { code: 'ALREADY_EXISTS' } },
+    { type: 'customApi', id: API, saved: true, error: { code: 'VERSION_CONFLICT' } },
+    { type: 'customApi', id: API, saved: true, adoptedExisting: true },
+    { type: 'customApi', id: API, saved: 'true' },
+    { type: 'customApi', id: OTHER, saved: true },
+    { type: 'environmentVariable', id: API, saved: true },
+    null, 'saved', [],
+  ]) assert.equal(ok(r), false, JSON.stringify(r));
+  const command = acceptSaved({ type: 'command', id: 'account' });
+  assert.equal(command({ type: 'command', id: 'account', saved: true }), true);
+  assert.equal(command({ type: 'command', id: 'Account', saved: true }), false, 'a command bar is named by its table, exactly');
+  assert.equal(command({ type: 'command', id: API, saved: true }), false, 'never by one of its root GUIDs');
+  assert.throws(() => acceptSaved({ type: 'customApi' }), TypeError);
+});
+
+// A directory holding the committed set of apiPlanOf, as one checked run and an exact read leave it.
+async function committed() {
+  const dir = makeTempDir('mc-context-');
+  const one = begun(dir);
+  await send(one.ctx, one.store, one.attempts);
+  assert.equal(one.ctx.settle([{ token: one.attempts[0].token, observation: apiRead() }])[0].verdict.action, 'commit');
+  return dir;
+}
+const editOf = (dir, sha) => {
+  const plan = apiPlanOf({ mode: 'update', baseGeneration: groupOf(dir).generation, baseObservation: { rowVersion: '1', savedSha256: H('1') } });
+  plan.rows[0].expectedSha256 = sha;
+  return plan;
+};
+
+test('an edit of bound rows records the intent it proved, never another identity or origin', async () => {
+  const dir = await committed();
+  const two = begun(dir, [editOf(dir, H('c'))]);
+  await send(two.ctx, two.store, two.attempts, { members: [] });
+  const [done] = two.ctx.settle([{ token: two.attempts[0].token, observation: apiRead({ root: { projectionSha256: H('c') } }) }]);
+  assert.equal(done.verdict.action, 'commit');
+  assert.deepEqual(groupOf(dir).records.map((r) => [r.kind, r.id, r.origin, r.intentSha256]), [['customApi', API, 'created', H('c')], ['customApiRequestParameter', REQ, 'created', H('8')]]);
+  for (const recordOf of [
+    (row, origin, attempt, header) => ({ formatVersion: 1, ...header, kind: row.kind, key: row.key, id: OTHER, intentSha256: row.expectedSha256, origin, ...(row.parentId ? { parentKey: API_KEY } : {}) }),
+    (row, origin, attempt, header) => ({ formatVersion: 1, ...header, kind: row.kind, key: row.key, id: row.id, intentSha256: row.expectedSha256, origin: 'adopted', ...(row.parentId ? { parentKey: API_KEY } : {}) }),
+  ]) {
+    const d = await committed();
+    const store = open(d);
+    const ctx = createManagedCreateContext({ store, notFoundCode: NOT_FOUND, recordOf });
+    const attempts = ctx.begin([editOf(d, H('c'))]);
+    await send(ctx, store, attempts, { members: [] });
+    const before = groupOf(d);
+    assert.throws(() => ctx.settle([{ token: attempts[0].token, observation: apiRead({ root: { projectionSha256: H('c') } }) }]), TypeError);
+    assert.deepEqual(groupOf(d), before, 'nothing committed');
+  }
+});
+
+// A plan over rows that already exist and that this run never writes: every row an update, with the base it read.
+const readOnlyPlanOf = (over = {}) => apiPlanOf({ mode: 'update', baseObservation: { rowVersion: '1', savedSha256: H('1') }, ...over });
+
+test('a plan of existing rows that sent nothing is accepted read-only: each unbound row adopted under its own approval, in one write', () => {
+  const dir = makeTempDir('mc-context-');
+  const { ctx, attempts } = begun(dir, [readOnlyPlanOf()]);
+  const token = attempts[0].token;
+  const [capture] = ctx.captureReadOnly([token]);
+  const [halted] = ctx.acceptReadOnly([{ token, observation: apiRead(), capture }]);
+  assert.deepEqual([halted.verdict.code, halted.verdict.approvals, halted.group], [CODES.ownership, [ROOT_TOKEN, CHILD_TOKEN], undefined]);
+  assert.equal(groupOf(dir), null);
+  const before = attemptsOf(dir)[0];
+  const approved = createManagedCreateContext({ store: open(dir), approvals: [ROOT_TOKEN, CHILD_TOKEN], notFoundCode: NOT_FOUND });
+  const [fresh] = approved.captureReadOnly([token]);
+  // The store accepts nothing unsent as created, whatever proposal a driver hands it.
+  const s = open(dir);
+  const real = s.commitReadOnlyGroupSet;
+  const created = [];
+  const spy = createManagedCreateContext({ store: Object.assign(Object.create(s), { commitReadOnlyGroupSet: (p) => { created.push(...p); throw new Error('held'); } }), approvals: [ROOT_TOKEN, CHILD_TOKEN], notFoundCode: NOT_FOUND });
+  assert.throws(() => spy.acceptReadOnly([{ token, observation: apiRead(), capture: fresh, declarationSha256: H('e') }]), /held/);
+  assert.equal(codeOf(() => real.call(s, created.map((p) => ({ ...p, records: p.records.map((r) => ({ ...r, origin: 'created' })) })))), STORE.adoptionRequired);
+  assert.equal(groupOf(dir), null);
+  const [done] = approved.acceptReadOnly([{ token, observation: apiRead(), capture: fresh, declarationSha256: H('e') }]);
+  assert.equal(done.verdict.action, 'commit');
+  assert.deepEqual(groupOf(dir).records.map((r) => [r.kind, r.id, r.origin]), [['customApi', API, 'adopted'], ['customApiRequestParameter', REQ, 'adopted']]);
+  assert.equal(done.group.generation, groupOf(dir).generation);
+  assert.deepEqual(attemptsOf(dir), []);
+  assert.deepEqual([before.acknowledgedRoot, before.rowProtocol.rows.map((r) => r.dispatched), before.rowProtocol.effects.map((e) => e.dispatched)], [false, [false, false], [false, false]], 'nothing was sent, and nothing claims it was');
+});
+
+test('a read-only acceptance keeps a bound row\'s origin and refuses anything else: a create plan, no capture, a store moved since the capture, a dispatch', async () => {
+  const dir = await committed();
+  const bound = begun(dir, [readOnlyPlanOf({ baseGeneration: groupOf(dir).generation })]);
+  const [cap] = bound.ctx.captureReadOnly([bound.attempts[0].token]);
+  const [kept] = bound.ctx.acceptReadOnly([{ token: bound.attempts[0].token, observation: apiRead(), capture: cap }]);
+  assert.equal(kept.verdict.action, 'commit');
+  assert.deepEqual(groupOf(dir).records.map((r) => r.origin), ['created', 'created'], 'bound rows keep how they were first bound');
+
+  const create = begun(makeTempDir('mc-context-'));
+  const [cc] = create.ctx.captureReadOnly([create.attempts[0].token]);
+  assert.throws(() => create.ctx.acceptReadOnly([{ token: create.attempts[0].token, observation: apiRead(), capture: cc }]), TypeError, 'a create plan is never accepted without its send');
+  const plain = begun(makeTempDir('mc-context-'), [readOnlyPlanOf()], [ROOT_TOKEN, CHILD_TOKEN]);
+  assert.throws(() => plain.ctx.acceptReadOnly([{ token: plain.attempts[0].token, observation: apiRead() }]), TypeError, 'no capture, no acceptance');
+
+  // The attempt moved between the capture and the acceptance: another process claimed it under a new epoch. Nothing
+  // is written; a write to another group alone moves nothing this acceptance rests on.
+  const moved = makeTempDir('mc-context-');
+  const m = begun(moved, [readOnlyPlanOf()], [ROOT_TOKEN, CHILD_TOKEN]);
+  const [mc] = m.ctx.captureReadOnly([m.attempts[0].token]);
+  begun(moved, [apiPlanOf({ key: 'contoso_api2', api: API2, req: REQ2 })]);
+  assert.deepEqual(m.ctx.captureReadOnly([m.attempts[0].token]), [mc]);
+  ctxOf(moved).resume([{ token: m.attempts[0].token, claim: 'continue' }]);
+  const snap = open(moved).snapshot().envelope;
+  assert.equal(codeOf(() => m.ctx.acceptReadOnly([{ token: m.attempts[0].token, observation: apiRead(), capture: mc }])), STORE.conflict);
+  assert.deepEqual(open(moved).snapshot().envelope, snap);
+
+  // Something was dispatched under the attempt: it may have written, so it is recovered, never accepted read-only.
+  const sent = makeTempDir('mc-context-');
+  const s = begun(sent, [readOnlyPlanOf()], [ROOT_TOKEN, CHILD_TOKEN]);
+  // The proposal the context would hand the store while nothing was sent, kept to hand it again after the dispatch.
+  const real = s.store.commitReadOnlyGroupSet;
+  let proposals;
+  s.store.commitReadOnlyGroupSet = (p) => { proposals = p; throw new Error('held'); };
+  assert.throws(() => s.ctx.acceptReadOnly([{ token: s.attempts[0].token, observation: apiRead(), capture: s.ctx.captureReadOnly([s.attempts[0].token])[0] }]), /held/);
+  s.store.commitReadOnlyGroupSet = real;
+  const gate = gateOf(s.store);
+  await s.ctx.run({ attempts: s.attempts, classify: apiClassifier(s.attempts[0].token) }, async () => exchangeVia(gate, membership(API), null));
+  const [sc] = s.ctx.captureReadOnly([s.attempts[0].token]);
+  const [refused] = s.ctx.acceptReadOnly([{ token: s.attempts[0].token, observation: apiRead(), capture: sc }]);
+  assert.deepEqual([refused.verdict.code, refused.group], [STORE.pending, undefined]);
+  assert.equal(groupOf(sent), null);
+  // The store refuses the same acceptance on its own, should a driver hand it a dispatched attempt.
+  assert.equal(codeOf(() => s.store.commitReadOnlyGroupSet(proposals.map((p) => ({ ...p, capture: sc })))), STORE.pending);
+  assert.equal(groupOf(sent), null);
+});
+
+test('a read-only acceptance is all or nothing: one item not accepted holds every other item too', () => {
+  const dir = makeTempDir('mc-context-');
+  const KEY2 = 'contoso_api2';
+  const { ctx, attempts } = begun(dir, [readOnlyPlanOf(), readOnlyPlanOf({ key: KEY2, api: API2, req: REQ2 })], [ROOT_TOKEN, CHILD_TOKEN]);
+  const captures = ctx.captureReadOnly(attempts.map((a) => a.token));
+  const results = ctx.acceptReadOnly([
+    { token: attempts[0].token, observation: apiRead(), capture: captures[0] },
+    { token: attempts[1].token, observation: apiRead({ key: KEY2, api: API2, req: REQ2 }), capture: captures[1] }]);
+  assert.deepEqual(results.map((r) => [r.verdict.action === 'commit' ? 'commit' : r.verdict.code, r.group]), [['commit', undefined], [CODES.ownership, undefined]]);
+  assert.equal(groupOf(dir), null, 'the accepted item is not committed alone');
+  assert.equal(attemptsOf(dir).length, 2);
 });

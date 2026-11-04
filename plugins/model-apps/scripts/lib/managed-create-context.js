@@ -28,7 +28,7 @@
 
 const crypto = require('node:crypto');
 const { canonicalJson, normalizeGuid } = require('./reconcile-common.js');
-const { ROW_PROOF_SCHEMA, ROOT_KIND, attemptProvenUnsent } = require('./managed-bindings.js');
+const { ROW_PROOF_SCHEMA, ROOT_KIND, CODES: STORE_CODES, attemptProvenUnsent, readOnlyCapture } = require('./managed-bindings.js');
 const { runWithManagedCreateSet } = require('./managed-create-transport.js');
 
 const CODES = Object.freeze({
@@ -41,6 +41,7 @@ const CODES = Object.freeze({
 
 const sha = (value) => crypto.createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
 const rowKey = (kind, key) => `${kind}\u0000${key}`;
+const idKey = (id) => normalizeGuid(id) || String(id).toLowerCase();
 
 /**
  * The approval token of one row, by default:
@@ -145,7 +146,16 @@ function classifyRecovery(attempt, observation, opts) {
   }
   if (attempt.phase === 'prepared') return { action: 'resume', claim: 'first' };
   if (attemptProvenUnsent(attempt, effects)) return { action: 'resume', claim: 'continue' };
+  return judgeRows(attempt, observation, { approvals, boundRecords, facts, notFoundCode, approvalTokenOf });
+}
 
+/**
+ * Rows 3-8 of the recovery table (classifyRecovery), for an attempt rows 1-2 did not settle — or, `readOnly: true`, for
+ * a plan of existing rows a read-only acceptance (acceptReadOnly) never sent: then no answer or receipt counts, so every
+ * row is either already bound (its origin kept) or adopted under its own exact approval.
+ */
+function judgeRows(attempt, observation, { approvals = new Set(), boundRecords = [], facts = [], notFoundCode, approvalTokenOf = defaultApprovalToken, readOnly = false } = {}) {
+  const name = `the managed ${attempt.family} "${attempt.key}"`;
   const p = attempt.rowProtocol;
   const obsRows = new Map(((observation && observation.rows) || []).map((r) => [rowKey(r.kind, r.key), r]));
   const bound = new Map(boundRecords.map((r) => [rowKey(r.kind, r.key), r]));
@@ -192,8 +202,8 @@ function classifyRecovery(attempt, observation, opts) {
     const token = approvalTokenOf(attempt.family, rootKey, row);
     const approved = approvals.has(token);
     const isRoot = row.parentId === null;
-    const freshAck = row.mode === 'create' && ackFact(row) && (!isRoot || createEdit);
-    const persistedAck = isRoot ? attempt.acknowledgedRoot === true : receipt.some((c) => c.kind === row.kind && c.key === row.key && normalizeGuid(c.id) === row.id);
+    const freshAck = !readOnly && row.mode === 'create' && ackFact(row) && (!isRoot || createEdit);
+    const persistedAck = !readOnly && (isRoot ? attempt.acknowledgedRoot === true : receipt.some((c) => c.kind === row.kind && c.key === row.key && normalizeGuid(c.id) === row.id));
     // A private input this process saw saved (a create or an edit) is proved by that answer plus the matching fresh read.
     // Across processes the answer is gone: only the maker's exact approval accepts today's readable, matching value as
     // the new baseline (never a claim to have confirmed the old send).
@@ -228,6 +238,28 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
   const approved = approvals instanceof Set ? approvals : new Set(approvals);
   const facts = new Map();
   const begun = new Set();
+  // The receipt-store failure that stopped this context (run): nothing more is sent under it.
+  let stopped = null;
+
+  const accepts = (check, value) => {
+    try { return check(value) === true; } catch { return false; }
+  };
+  // The root receipt of a checked run (run): for each attempt of the run whose root THIS run created — a create of a
+  // new root (no base observation), not already receipted, its root row's own fact acknowledged under the root's id —
+  // one noteSaved at the epoch the run was sent under. The store re-checks the epoch, the root and its create mode.
+  function receiptRoots(attempts, rowFacts) {
+    store.refresh();
+    const env = snapshot();
+    for (const { token, epoch } of attempts) {
+      const a = env.attempts.find((x) => x.token === token);
+      if (!a || !a.rowProtocol || a.acknowledgedRoot || !a.expected || a.expected.baseObservation !== null) continue;
+      const root = a.rowProtocol.rows.find((r) => r.parentId === null && r.kind === a.root.kind && r.key === a.root.key);
+      if (!root || root.mode !== 'create' || idKey(root.id) !== idKey(a.root.id)) continue;
+      const fact = rowFacts.find((f) => f.token === token && f.kind === root.kind && f.key === root.key);
+      if (!fact || fact.outcome !== 'acknowledged' || fact.mode !== 'create' || idKey(fact.id) !== idKey(root.id)) continue;
+      store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'sending', epoch });
+    }
+  }
 
   const snapshot = () => store.snapshot().envelope;
   const attemptOf = (env, token) => {
@@ -248,9 +280,17 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
     const header = { appUniqueName: env.appUniqueName, environmentFingerprint: env.environmentFingerprint };
     const group = env.groups.find((g) => g.family === attempt.family && g.key === attempt.key) || null;
     const seen = new Map(observation.rows.map((r) => [rowKey(r.kind, r.key), r]));
-    const records = decided.map(({ row, origin, bound }) => (bound
-      ? group.records.find((r) => r.kind === row.kind && r.key === row.key)
-      : (recordOf || defaultRecord)(row, origin, attempt, header)));
+    const records = decided.map(({ row, origin, bound }) => {
+      if (!bound) return (recordOf || defaultRecord)(row, origin, attempt, header);
+      // A bound row is recorded again with the intent this attempt proved (an edit changes what the row should be), but
+      // never under another identity or origin: the row it binds and how it was first bound are history, not intent.
+      const old = group.records.find((r) => r.kind === row.kind && r.key === row.key);
+      const next = (recordOf || defaultRecord)(row, old.origin, attempt, header);
+      if (!next || next.kind !== old.kind || next.key !== old.key || idKey(next.id) !== idKey(old.id) || next.origin !== old.origin) {
+        throw new TypeError(`the record of the bound ${row.kind} "${row.key}" must keep its kind, key, id and origin`);
+      }
+      return next;
+    });
     const observed = attempt.rowProtocol.rows.map((r) => {
       const s = seen.get(rowKey(r.kind, r.key));
       return { kind: r.kind, key: r.key, id: r.id, parentId: r.parentId, projectionSha256: s.projectionSha256, sensitiveInput: r.sensitiveInput };
@@ -302,14 +342,41 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       }
       return out;
     },
-    /** Run `fn` in the request scope of `attempts` (what begin/resume answered); keeps the answers per attempt. */
-    async run({ attempts, classify, deleteCode, label }, fn) {
+    /**
+     * Run `fn` in the request scope of `attempts` (what begin/resume answered); keeps the answers per attempt.
+     * `acceptResult(value)` is the driver's check of what `fn` answered (acceptSaved for an SDK push): the run is CHECKED
+     * only when it answers exactly `true` (a throw is false), `fn` threw nothing, the scope latched no local failure and
+     * every row request it sent was acknowledged (none unknown, unanswered or naming another row). No `acceptResult`
+     * means no checked run. Only a checked run's acknowledgements are kept as such: in any other run each one is kept as
+     * `unchecked` — a 2xx for one request of an operation that failed, or whose result nobody checked, proves no create —
+     * while a conflict or an unknown answer is kept exactly as it was.
+     * Right after a checked run, before any read-back or membership request, every root it created is receipted in the
+     * store (noteSaved, the attempt staying sending): a root create this run saw acknowledged and checked, of an attempt
+     * still at the epoch it was sent under. A receipt the store cannot write is this run's `localError` (typed, never a
+     * network retry), its acknowledgements are kept unchecked, and every later run of this context is refused unsent.
+     * Answers runWithManagedCreateSet's { value, error, localError, facts } and `checked`.
+     */
+    async run({ attempts, classify, deleteCode, label, acceptResult }, fn) {
+      if (stopped) return { value: undefined, error: null, localError: stopped, facts: [], checked: false };
       const outcome = await runWithManagedCreateSet({ store, entries: attempts.map(({ token, epoch }) => ({ token, epoch })), classify, deleteCode, label }, fn);
+      const rowFacts = outcome.facts.filter((f) => f.type === 'row');
+      let localError = outcome.localError;
+      let checked = typeof acceptResult === 'function' && outcome.error === null && localError === null
+        && rowFacts.every((f) => f.outcome === 'acknowledged') && accepts(acceptResult, outcome.value);
+      if (checked) {
+        try {
+          receiptRoots(attempts, rowFacts);
+        } catch (e) {
+          stopped = e;
+          localError = e;
+          checked = false;
+        }
+      }
       for (const f of outcome.facts) {
         if (!facts.has(f.token)) facts.set(f.token, []);
-        facts.get(f.token).push(f);
+        facts.get(f.token).push(!checked && f.type === 'row' && f.outcome === 'acknowledged' ? { ...f, outcome: 'unchecked' } : f);
       }
-      return outcome;
+      return { ...outcome, localError, checked };
     },
     /** This process's in-memory answers for one attempt. */
     facts(token) {
@@ -328,8 +395,9 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       });
     },
     /**
-     * Settle each item { token, observation, declarationSha256? } on its own, in order: record the receipts this
-     * process proved (noteSaved: an acknowledged create the fresh read found exact), then commit the item when it is
+     * Settle each item { token, observation, declarationSha256? } on its own, in order: record the child receipts this
+     * process proved (noteSaved: a child create a checked run saw acknowledged and the fresh read found exact; a root's
+     * receipt was already written by that run), then commit the item when it is
      * complete. One item's halt never stops an earlier or later item's commit (configuration groups are independent);
      * a store failure (busy, full, write failed) throws, typed. Answers [{ family, key, token, verdict, group? }].
      */
@@ -348,13 +416,12 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
         const mine = facts.get(token) || [];
         const acked = (row) => row.mode === 'create' && mine.some((f) => f.type === 'row' && f.kind === row.kind && f.key === row.key && f.outcome === 'acknowledged')
           && !mine.some((f) => f.type === 'row' && f.kind === row.kind && f.key === row.key && f.outcome === 'conflict');
-        const rootRow = a.rowProtocol.rows.find((r) => r.parentId === null);
-        const ackRoot = !a.acknowledgedRoot && a.expected && a.expected.baseObservation === null && acked(rootRow) && exact(rootRow);
+        // A root create is receipted by the checked run itself (run); only children wait for this fresh exact read.
         const have = a.acknowledgedChildCreates || [];
         const childReceipts = a.rowProtocol.rows.filter((r) => r.parentId !== null && acked(r) && exact(r) && !have.some((c) => c.kind === r.kind && c.key === r.key))
           .map((r) => ({ kind: r.kind, key: r.key, id: r.id }));
-        if (verdict.action !== 'resume' && verdict.code !== CODES.intentChanged && (ackRoot || childReceipts.length)) {
-          store.noteSaved(token, { proof: { savedSha256: sha((observation.rows || []).map(({ kind, key, id, projectionSha256 }) => ({ kind, key, id, projectionSha256: projectionSha256 || null }))) }, acknowledgedRoot: ackRoot, acknowledgedChildCreates: childReceipts, phase: verdict.phase || 'saved' });
+        if (verdict.action !== 'resume' && verdict.code !== CODES.intentChanged && childReceipts.length) {
+          store.noteSaved(token, { proof: { savedSha256: sha((observation.rows || []).map(({ kind, key, id, projectionSha256 }) => ({ kind, key, id, projectionSha256: projectionSha256 || null }))) }, acknowledgedChildCreates: childReceipts, phase: verdict.phase || 'saved' });
           verdict = this.classify(token, observation, { declarationSha256 });
           env = snapshot();
           a = attemptOf(env, token);
@@ -368,13 +435,86 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       }
       return results;
     },
+    /**
+     * What a read-only acceptance (acceptReadOnly) is later checked against, taken BEFORE the fresh read that proves its
+     * rows: one capture per token (managed-bindings.js readOnlyCapture), from a fresh read of the store.
+     */
+    captureReadOnly(tokens) {
+      store.refresh();
+      const env = snapshot();
+      return tokens.map((token) => {
+        attemptOf(env, token);
+        return readOnlyCapture(env, token);
+      });
+    },
+    /**
+     * Accept, WITHOUT sending anything, attempts deliberately planned over existing rows only (every row `update`, the
+     * expected proof carrying the base observation it read) and never sent: items [{ token, observation, capture,
+     * declarationSha256? }], `capture` from captureReadOnly before `observation` was read. Each item must be the
+     * declaration it was prepared for, show nothing dispatched, and read back exactly — rows, parents, content, members,
+     * rule state, and a private input readable and matching — with every row the group does not bind approved by its
+     * own exact token (rows 3-8 of the recovery table, with no answer or receipt counted). This is not the generic
+     * recovery of an unsent attempt (classifyRecovery resumes those), and an attempt that may have sent anything is
+     * never accepted here. The items are ONE acceptance: unless every one of them can commit, none is committed and
+     * every attempt stays held; otherwise all commit in one store write (commitReadOnlyGroupSet), which re-checks each
+     * capture and the zero dispatch under its lease, adopts each new record and keeps each bound record's origin.
+     * Answers [{ family, key, token, verdict, group? }].
+     */
+    acceptReadOnly(items) {
+      store.refresh();
+      const env = snapshot();
+      const results = [];
+      const proposals = [];
+      for (const { token, observation, capture, declarationSha256 } of items) {
+        const a = attemptOf(env, token);
+        const name = `the managed ${a.family} "${a.key}"`;
+        if (!a.rowProtocol || !a.expected || !a.expected.baseObservation || a.rowProtocol.rows.some((r) => r.mode !== 'update')) {
+          throw new TypeError(`${name} is not a plan of existing rows with a base observation; only such a plan is accepted without a send`);
+        }
+        if (!capture || capture.token !== token) throw new TypeError(`${name} has no capture taken before its fresh read (captureReadOnly)`);
+        const declared = declarationSha256 === undefined && begun.has(token) ? a.declarationSha256 : declarationSha256;
+        const group = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+        let verdict;
+        if (declared !== a.declarationSha256) {
+          verdict = halt(CODES.intentChanged, `${name} has a pending attempt prepared for another declaration; restore the original declaration and run again`);
+        } else if (!attemptProvenUnsent(a, env.workflowEffects)) {
+          verdict = halt(STORE_CODES.pending, `${name} attempt may have sent something; it is recovered from its original expectation, never accepted read-only`);
+        } else {
+          verdict = judgeRows(a, observation, { approvals: approved, boundRecords: group ? group.records : [], notFoundCode, approvalTokenOf, readOnly: true });
+        }
+        results.push({ family: a.family, key: a.key, token, verdict });
+        if (verdict.action === 'commit') proposals.push({ ...proposalOf(a, observation, verdict.rows, env), capture });
+      }
+      if (proposals.length !== items.length) return results;
+      const groups = store.commitReadOnlyGroupSet(proposals);
+      results.forEach((r, i) => { r.group = groups[i]; });
+      return results;
+    },
   };
+}
+
+/**
+ * The `acceptResult` of a run (createManagedCreateContext run) for the SDK's pushArtifact: the result proves a checked
+ * save only when it says `saved: true` for exactly the artifact the run pushed — the expected `type` and `id` (a GUID in
+ * any spelling; a command bar's id is its table name, compared exactly) — and carries no error. A refused
+ * ({ saved: false, error }), adopted-existing, no-op, malformed or missing result proves nothing.
+ *   { type, id, saved: true, shipped, publish, ... }                         a save: accepted
+ *   { type, id, saved: false, adoptedExisting: true, ... }                   an existing artifact taken over: not a create
+ *   { type, id, saved: false, shipped: false, publish, error: { code } }     a refusal (ALREADY_EXISTS, VERSION_CONFLICT, ...)
+ */
+function acceptSaved({ type, id } = {}) {
+  if (typeof type !== 'string' || !type || typeof id !== 'string' || !id) throw new TypeError('acceptSaved needs the artifact type and id the run pushes');
+  const want = normalizeGuid(id) || id;
+  return (result) => !!result && typeof result === 'object' && !Array.isArray(result)
+    && result.saved === true && result.adoptedExisting !== true && (result.error === undefined || result.error === null)
+    && result.type === type && typeof result.id === 'string' && (normalizeGuid(result.id) || result.id) === want;
 }
 
 module.exports = {
   CODES,
   createManagedCreateContext,
   classifyRecovery,
+  acceptSaved,
   buildRowPlan,
   expectedOf,
   defaultApprovalToken,
