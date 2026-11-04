@@ -41,6 +41,8 @@ const API_EDIT_MESSAGE = 'This protected Custom API change is not a supported si
   + 'or make the change outside the plugin. Removals require maintenance outside the plugin.';
 const REMOVAL_MESSAGE = 'Removing a child of a protected Custom API is not supported. No service changes were sent by this build. '
   + 'Removals require maintenance outside the plugin.';
+const VALUE_REMOVAL_MESSAGE = 'Clearing the value of a protected environment variable deletes its value row, which is not supported. '
+  + 'No service changes were sent by this build. Removals require maintenance outside the plugin.';
 
 // The declared lists of the protected kinds, in the order configuration-artifacts.js applies them.
 const LISTS = Object.freeze([
@@ -52,6 +54,12 @@ const LISTS = Object.freeze([
 const KINDS = new Set(LISTS.map(([kind]) => kind));
 
 const has = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
+// The deployment-settings bindings (configuration-artifacts.js readDeploymentBindings) hold { value: null } for a clear,
+// keyed by the lower-case schema name — the same key as the variable's plan.
+const clearsValue = (bindings, key) => {
+  const got = bindings && bindings.environmentVariables instanceof Map ? bindings.environmentVariables.get(key) : undefined;
+  return !!got && got.value === null;
+};
 /** The opt-in: exactly `configurationIdentity: "stable-v1"` (app-spec.js refuses any other value). */
 const configurationIdentityOf = (spec) => has(spec, 'configurationIdentity') && spec.configurationIdentity === IDENTITY;
 
@@ -189,7 +197,7 @@ async function environmentOf({ spec, store, dataverse, solution, bindings }) {
 
 /**
  * The whole-plan, read-only preflight: every declared protected item located by its binding and, for a bound Custom API
- * or duplicate rule, its edit judged. Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
+ * or duplicate rule, its edit judged; a bound environment variable's value clear is a removal and refused. Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
  * the build may continue. A read that cannot be completed is a halt (`create-identity-unverified`), never "no change".
  */
 async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings }) {
@@ -209,11 +217,17 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
         if (verdict.action === 'halt') halts.push(haltOf(kind, item.planned.key, verdict));
         continue;
       }
-      if (item.state !== 'bound' || (kind !== 'customApi' && kind !== 'duplicateRule')) continue;
+      if (item.state !== 'bound') continue;
+      // Clearing a bound variable's value (a deployment-settings Value of null) is a DELETE of its value row, a physical
+      // removal the protected path does not make, authorized or not. A settings entry that leaves the value alone ("" or
+      // none) or replaces it is not a clear; those keep the ordinary path and its authorization.
+      const clears = kind === 'environmentVariable' && clearsValue(bindings, item.planned.key);
+      if (kind !== 'customApi' && kind !== 'duplicateRule' && !clears) continue;
       const shape = await B.editShapeOf(dataverse, item.planned);
       if (shape.state !== 'complete') { halts.push({ kind, key: item.planned.key, code: UNVERIFIED_CODE, message: `the ${kind} "${item.planned.key}" could not be read completely` }); continue; }
       if (shape.missing.length) { halts.push({ kind, key: item.planned.key, id: shape.missing[0].id, code: B.NOT_FOUND_CODE, message: `a bound row of ${kind} "${item.planned.key}" is gone; it is not replaced by a namesake` }); continue; }
-      const verdict = editVerdict(kind, shape);
+      // A clear plans no value row, so a value row under the definition is the removal the clear would send.
+      const verdict = clears ? (shape.removals.length ? { code: B.DELETE_CODE, message: VALUE_REMOVAL_MESSAGE } : null) : editVerdict(kind, shape);
       if (verdict) halts.push({ kind, key: item.planned.key, ...verdict });
     } catch (error) {
       halts.push({ kind, key, ...(error.id ? { id: error.id } : {}), code: error.code || UNVERIFIED_CODE, message: error.message });

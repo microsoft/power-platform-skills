@@ -16,6 +16,7 @@ const { createManagedCreateContext } = require('../lib/managed-create-context.js
 const { openManagedBindings, managedManifestView } = require('../lib/managed-bindings.js');
 const { readerFor } = require('../verify-model-app.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
+const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
 const { RETRY } = require('../lib/retry-policy.js');
@@ -433,6 +434,42 @@ test('a namesake query that cannot be read whole stops the first protected creat
   assert.deepEqual(out.sent, [], 'nothing is sent');
   assert.deepEqual(h.org.rows('environmentvariabledefinitions'), []);
   assert.equal(h.store.readGroup('environmentVariable', 'contoso_apibase').committed, null);
+});
+
+test('clearing a protected variable\'s value would delete its value row: even authorized, it stops in preflight with nothing sent', async () => {
+  const spec = variableOnly();
+  const valueOf = (Value) => readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value }] }, spec);
+  const authorizedDestructive = new Set(['environmentVariableValue:contoso_apibase:value']);
+  const h = await harness();
+  const first = await pass(h, spec, { configurationBindings: valueOf('https://one.contoso.com') });
+  assert.equal(first.halt, null, first.halt && `${first.halt.code}: ${first.halt.message}`);
+  const [valueRow] = h.org.rows('environmentvariablevalues');
+  assert.ok(valueRow, 'the value was created');
+  const cleared = await pass(h, spec, { configurationBindings: valueOf(null), authorizedDestructive });
+  assert.equal(cleared.halt && cleared.halt.code, 'configuration-protected-removal-unsupported', cleared.halt && cleared.halt.message);
+  assert.equal(cleared.halt.phase, 'preflight');
+  assert.match(cleared.halt.message, /No service changes were sent by this build/);
+  assert.deepEqual(cleared.sent, [], 'nothing is sent');
+  assert.deepEqual(h.org.rows('environmentvariablevalues').map((r) => r.environmentvariablevalueid), [valueRow.environmentvariablevalueid]);
+  // The neighbours stay: an authorized replacement is made at the bound value row, and a settings entry that leaves the
+  // value alone sends nothing.
+  const replaced = await pass(h, spec, { configurationBindings: valueOf('https://two.contoso.com'), authorizedDestructive });
+  assert.equal(replaced.halt, null, replaced.halt && `${replaced.halt.code}: ${replaced.halt.message}`);
+  assert.deepEqual(replaced.sent.map((r) => r.method), ['PATCH']);
+  assert.deepEqual(h.org.rows('environmentvariablevalues').map((r) => [r.environmentvariablevalueid, r.value]), [[valueRow.environmentvariablevalueid, 'https://two.contoso.com']]);
+  const untouched = await pass(h, spec, { configurationBindings: valueOf('') });
+  assert.equal(untouched.halt, null, untouched.halt && untouched.halt.message);
+  assert.deepEqual(untouched.sent, []);
+  // Without the opt-in an authorized clear deletes the value, as before.
+  const { configurationIdentity, ...plain } = spec;
+  assert.equal(configurationIdentity, 'stable-v1');
+  const p = await harness({ hookup: false });
+  const made = await pass(p, plain, { configurationBindings: valueOf('https://one.contoso.com') });
+  assert.equal(made.halt, null, made.halt && made.halt.message);
+  const legacy = await pass(p, plain, { configurationBindings: valueOf(null), authorizedDestructive });
+  assert.equal(legacy.halt, null, legacy.halt && `${legacy.halt.code}: ${legacy.halt.message}`);
+  assert.deepEqual(legacy.sent.map((r) => r.method), ['DELETE']);
+  assert.deepEqual(p.org.rows('environmentvariablevalues'), []);
 });
 
 test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {
