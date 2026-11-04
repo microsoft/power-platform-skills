@@ -526,7 +526,7 @@
         "pages": [],
         "declared": {
           "forms": [
-            { "entity": "cnt_site", "name": "Site Layout" }
+            { "entity": "cnt_site" }
           ]
         }
       },
@@ -577,8 +577,8 @@
         "pages": [],
         "declared": {
           "businessRules": [
-            { "entity": "cnt_request", "name": "Close out a request", "scope": "Entity" },
-            { "entity": "cnt_request", "name": "Ask for an assignee", "scope": "AllForms" }
+            { "entity": "cnt_request", "scope": "AllForms" },
+            { "entity": "cnt_request" }
           ]
         }
       },
@@ -601,7 +601,7 @@
         "pages": [],
         "declared": {
           "businessProcessFlows": [
-            { "entity": "cnt_claim", "name": "Claim handling", "stages": ["Intake", "Assess", "Decide"] }
+            { "entity": "cnt_claim", "stages": ["intake", "assess", "decid|decis"] }
           ]
         }
       },

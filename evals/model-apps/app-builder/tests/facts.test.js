@@ -1184,7 +1184,7 @@ test('the opt-in check is a common assertion, so every fixture is graded by it, 
 
 test('an optional capability nobody asked for fails on any fixture, an older one included', () => {
   const unasked = {
-    'an app theme (the review\'s mutation)': (s) => { s.app = { ...s.app, theme: { basePaletteColor: '#123456' } }; s.minimumPluginVersion = '2.21.0'; },
+    'an app theme': (s) => { s.app = { ...s.app, theme: { basePaletteColor: '#123456' } }; s.minimumPluginVersion = '2.21.0'; },
     'an environment variable': (s) => { s.environmentVariables = [{ schemaName: 'new_Base', displayName: 'Base', type: 'string' }]; },
     'a connection reference': (s) => { s.connectionReferences = [{ logicalName: 'new_sp', connectorId: 'shared_sharepointonline' }]; },
     'a Custom API': (s) => { s.customApis = [{ uniqueName: 'new_Api' }]; },
@@ -1201,7 +1201,7 @@ test('an optional capability nobody asked for fails on any fixture, an older one
       assert.strictEqual(gradeOptional(id, mutate).status, 'fail', `fixture ${id}: ${name}`);
     }
   }
-  assert.match(reasonOf(gradeOptional(1, unasked['an app theme (the review\'s mutation)'])), /app\.theme is declared, but the prompt asks for no branding/);
+  assert.match(reasonOf(gradeOptional(1, unasked['an app theme'])), /app\.theme is declared, but the prompt asks for no branding/);
   assert.match(reasonOf(gradeOptional(1, unasked['a declared business rule'])), /businessRules declared .*unasked/);
 });
 
@@ -1223,15 +1223,24 @@ test('a capability the prompt asks for must be authored: deleting it, or droppin
     assert.strictEqual(gradeOptional(id, (s) => { s[kind] = s[kind].filter((x) => !isIt(x)); }).status, 'fail', `${id}: ${kind} entry deleted`);
     assert.strictEqual(gradeOptional(id, (s) => { delete s[kind].find(isIt).reconcile; }).status, 'fail', `${id}: reconcile removed`);
     assert.strictEqual(gradeOptional(id, (s) => { s[kind].find(isIt).reconcile = 'adopt'; }).status, 'fail', `${id}: reconcile is not "declared"`);
-    assert.strictEqual(gradeOptional(id, (s) => { s[kind].find(isIt).name = 'Another name'; }).status, 'fail', `${id}: another identity`);
+    // A name the prompt did not give is the maker's to choose; one it did give (the dashboard) is graded.
+    const renamed = gradeOptional(id, (s) => { s[kind].find(isIt).name = 'Another name'; }).status;
+    assert.strictEqual(renamed, kind === 'dashboards' ? 'fail' : 'pass', `${id}: ${kind} renamed`);
     assert.match(reasonOf(gradeOptional(id, (s) => { delete s[kind].find(isIt).reconcile; })), /missing \(deleted, or without reconcile "declared"\)/);
   }
   // The identity is the entity too, and the declared artifact is not enough when it has the wrong shape.
   assert.strictEqual(gradeOptional(21, (s) => { s.forms.find((x) => x.name === 'Site Layout').entity = 'cnt_issue'; }).status, 'fail', 'a form on another table');
   assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles.pop(); }).status, 'fail', 'a tile missing');
   assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles[1].type = 'list'; }).status, 'fail', 'a tile of another kind');
-  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.find((x) => x.name === 'Ask for an assignee').scope = 'Entity'; }).status, 'fail', 'a rule scope the prompt did not ask for');
+  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.find((x) => x.name === 'Ask for an assignee').scope = 'Entity'; }).status, 'fail', 'the every-form rule the prompt asks for is not scoped to every form');
   assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].stages.pop(); }).status, 'fail', 'a stage missing');
+  assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].stages.push({ name: 'Extra', steps: [] }); }).status, 'fail', 'a stage nobody asked for');
+  assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].stages.reverse(); }).status, 'fail', 'stages out of the prompt\'s order');
+  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.pop(); }).status, 'fail', 'one of the two rules the prompt asks for is missing');
+  // Wording and names the prompt leaves open pass: "assessment" and "a decision" are the prompt's words, and no rule, form or flow name is given.
+  assert.strictEqual(gradeOptional(24, (s) => { const st = s.businessProcessFlows[0].stages; st[1].name = 'Assessment'; st[2].name = 'Decision'; s.businessProcessFlows[0].name = 'Claims process'; }).status, 'pass', 'other stage words and flow name');
+  assert.strictEqual(gradeOptional(21, (s) => { s.forms.find((x) => x.name === 'Site Layout').name = 'Site Inspection'; }).status, 'pass', 'another form name');
+  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.forEach((r, i) => { r.name = `Rule ${i}`; }); }).status, 'pass', 'other rule names');
   // And one more declared artifact than the prompt asks for fails even on a positive fixture.
   assert.strictEqual(gradeOptional(23, (s) => { s.businessProcessFlows = [{ entity: 'cnt_request', name: 'Extra', reconcile: 'declared', stages: [] }]; }).status, 'fail', 'a flow nobody asked for beside the rules');
   assert.strictEqual(gradeOptional(21, (s) => { s.forms[1].reconcile = 'declared'; }).status, 'fail', 'a second declared form');
@@ -1251,7 +1260,7 @@ test('what must NOT change: plain forms, dashboards, rules and flows are not opt
   assert.strictEqual(gradeOptional(1, (s) => { s.businessRules = [...(s.businessRules || []), { entity: 'new_customer', name: 'Plain rule' }]; }).status, 'pass');
   assert.strictEqual(gradeOptional(1, (s) => { s.dashboards = [...(s.dashboards || []), { name: 'Plain board', tiles: [] }]; }).status, 'pass');
   assert.strictEqual(gradeOptional(1, (s) => { s.environmentVariables = []; s.customApis = []; }).status, 'pass', 'an empty list is no capability');
-  // The earlier offer-record machinery is gone: no fixture carries offer evidence and no assertion grades one.
+  // No fixture carries offer evidence and no assertion grades an offer: the evals grade the spec only.
   for (const f of loadFixtures(path.join(__dirname, '..', 'fixtures'))) assert.strictEqual(f.evidence.offers, undefined, `fixture ${f.id}`);
   assert.ok(![...ASSERTIONS.keys()].some((t) => /^offers:/.test(t)));
 });

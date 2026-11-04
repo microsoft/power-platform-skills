@@ -1173,22 +1173,54 @@ ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stop
 // Optional capabilities are OFF unless the maker asks for them (or says yes when /app-builder offers one; references/authoring-flow.md,
 // Level (a0) and (b)). This suite grades the spec, not the conversation, so what it pins is the spec-level opt-in, in both directions,
 // on EVERY fixture: the spec carries an app theme, a configuration item, or a declared form, dashboard, business rule or process flow
-// only when the prompt asks for it (no expectation = none is allowed), and what the prompt asks for is authored with the identity and
-// shape its own `expect` states. Whether the offer itself is made needs a transcript of a conversation (EVAL_GUIDE.md, "Optional
-// capabilities").
+// only when the prompt asks for it (no expectation = none is allowed), and what the prompt asks for is authored as the prompt states
+// it. Whether the offer itself is made needs a transcript of a conversation (EVAL_GUIDE.md, "Optional capabilities").
 //   expect.appTheme       as the theme assertion reads it (set = a theme is asked for)
 //   expect.configuration  as the configuration assertion reads it (a non-empty list, or solutionVersion, is an ask)
-//   expect.declared       { forms: [{ entity, name }], dashboards: [{ name, tiles: [type...] }],
-//                           businessRules: [{ entity, name, scope }], businessProcessFlows: [{ entity, name, stages: [name...] }] }
-// Each list is exactly the artifacts that carry reconcile: "declared". The identity is written by hand from the prompt's ask, so
-// deleting the artifact, dropping its reconcile, or adding one nobody asked for each fail.
+//   expect.declared       one entry per artifact the prompt asks to keep declared, and ONLY the fields the prompt states:
+//                           forms:                [{ entity }]
+//                           dashboards:           [{ name, tiles: [type...] }]
+//                           businessRules:        [{ entity, scope }]
+//                           businessProcessFlows: [{ entity, stages: [stem...] }]   (a stem is a regex tested on the start of a stage name)
+//                         `name` is graded only where the prompt names the artifact. Each list matches the artifacts that carry
+//                         reconcile: "declared", one to one. A maker is free to name what the prompt left unnamed, so a rename passes;
+//                         deleting the artifact, dropping its reconcile, or adding one nobody asked for each fail.
 const lc = (v) => String(v === undefined ? '' : v).toLowerCase();
+const tileTypes = (x) => (Array.isArray(x.tiles) ? x.tiles.map((t) => lc(t && t.type)) : []);
+const stageNames = (x) => (Array.isArray(x.stages) ? x.stages.map((s) => String((s && s.name) || '')) : []);
+const sameList = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 const DECLARED_KINDS = {
-  forms: { id: (x) => `${lc(x.entity)}/${lc(x.name)}`, shape: [] },
-  dashboards: { id: (x) => lc(x.name), shape: [['tiles', (x) => (Array.isArray(x.tiles) ? x.tiles.map((t) => lc(t && t.type)) : [])]] },
-  businessRules: { id: (x) => `${lc(x.entity)}/${lc(x.name)}`, shape: [['scope', (x) => lc(x.scope)]] },
-  businessProcessFlows: { id: (x) => `${lc(x.entity)}/${lc(x.name)}`, shape: [['stages', (x) => (Array.isArray(x.stages) ? x.stages.map((s) => lc(s && s.name)) : [])]] },
+  forms: { fields: { entity: (w, x) => lc(w.entity) === lc(x.entity), name: (w, x) => lc(w.name) === lc(x.name) } },
+  dashboards: { fields: { name: (w, x) => lc(w.name) === lc(x.name), tiles: (w, x) => sameList(w.tiles.map(lc), tileTypes(x)) } },
+  businessRules: { fields: { entity: (w, x) => lc(w.entity) === lc(x.entity), name: (w, x) => lc(w.name) === lc(x.name), scope: (w, x) => lc(w.scope) === lc(x.scope) } },
+  businessProcessFlows: {
+    fields: {
+      entity: (w, x) => lc(w.entity) === lc(x.entity),
+      name: (w, x) => lc(w.name) === lc(x.name),
+      stages: (w, x) => { const names = stageNames(x); return names.length === w.stages.length && w.stages.every((stem, i) => new RegExp(`^(?:${stem})`, 'i').test(names[i])); },
+    },
+  },
 };
+const describeWanted = (w) => JSON.stringify(w);
+const describeItem = (x) => `${x.entity ? `${x.entity}/` : ''}${x.name}`;
+const meets = (kind, w, x) => Object.keys(w).every((k) => (DECLARED_KINDS[kind].fields[k] ? DECLARED_KINDS[kind].fields[k](w, x) : false));
+// One-to-one match of wanted entries to declared items (backtracking: an entry that states fewer fields could otherwise take the item
+// a stricter one needs). Returns the item index for each entry, or null when some entry has none.
+function matchDeclared(kind, wanted, items) {
+  const taken = new Array(items.length).fill(false);
+  const pick = new Array(wanted.length).fill(null);
+  const place = (i) => {
+    if (i === wanted.length) return true;
+    for (let j = 0; j < items.length; j++) {
+      if (taken[j] || !meets(kind, wanted[i], items[j])) continue;
+      taken[j] = true; pick[i] = j;
+      if (place(i + 1)) return true;
+      taken[j] = false; pick[i] = null;
+    }
+    return false;
+  };
+  return place(0) ? pick : null;
+}
 const CONFIGURATION_LISTS = ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules'];
 const nonEmptyList = (list) => Array.isArray(list) && list.length > 0;
 ASSERTIONS.set('author: an optional capability is in the spec only when the prompt asks for it, and each one it asks for is authored as expected', ({ spec, eval: ev }) => {
@@ -1209,21 +1241,16 @@ ASSERTIONS.set('author: an optional capability is in the spec only when the prom
   const declaredExpect = expect.declared && typeof expect.declared === 'object' ? expect.declared : {};
   for (const kind of Object.keys(declaredExpect)) if (!DECLARED_KINDS[kind]) return fail(`expect.declared names the unknown kind '${kind}'`);
   let anyDeclared = false;
-  for (const [kind, { id, shape }] of Object.entries(DECLARED_KINDS)) {
+  for (const kind of Object.keys(DECLARED_KINDS)) {
     const got = (Array.isArray(spec[kind]) ? spec[kind] : []).filter((x) => x && typeof x === 'object' && x.reconcile === 'declared');
     const want = Array.isArray(declaredExpect[kind]) ? declaredExpect[kind] : [];
-    const gotIds = got.map(id).sort();
-    const wantIds = want.map(id).sort();
-    if (!eq(gotIds, wantIds)) {
-      const extra = gotIds.filter((x) => !wantIds.includes(x));
-      const missing = wantIds.filter((x) => !gotIds.includes(x));
-      return fail(`${kind} declared [${gotIds}], expected [${wantIds}]${extra.length ? `; unasked: ${extra}` : ''}${missing.length ? `; missing (deleted, or without reconcile "declared"): ${missing}` : ''}`);
-    }
-    for (const wanted of want) {
-      const item = got.find((x) => id(x) === id(wanted));
-      for (const [field, read] of shape) {
-        if (wanted[field] !== undefined && !eq(read(item), Array.isArray(wanted[field]) ? wanted[field].map(lc) : lc(wanted[field]))) return fail(`${kind} '${wanted.name}' ${field} is [${read(item)}], expected [${wanted[field]}]`);
-      }
+    if (!matchDeclared(kind, want, got) || got.length !== want.length) {
+      const unasked = got.filter((x) => !want.some((w) => meets(kind, w, x))).map(describeItem);
+      const missing = want.filter((w) => !got.some((x) => meets(kind, w, x))).map(describeWanted);
+      // An entry that states little can be met by one item while another entry still has none, so count as well.
+      if (!missing.length && got.length < want.length) missing.push(`${want.length - got.length} of the expected artifacts`);
+      if (!unasked.length && got.length > want.length) unasked.push(`${got.length - want.length} more than asked for`);
+      return fail(`${kind} declared [${got.map(describeItem)}], expected [${want.map(describeWanted)}]${unasked.length ? `; unasked: ${unasked}` : ''}${missing.length ? `; missing (deleted, or without reconcile "declared"): ${missing}` : ''}`);
     }
     if (got.length) anyDeclared = true;
   }
