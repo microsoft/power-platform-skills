@@ -14,8 +14,7 @@ A file that is missing or different stops the deploy.
 
 ## Adding a new version
 
-1. Run the film's publish step on `main` (see `site/explainer/README.md` there).
-   It writes the new files to `site/media/` under content-hashed names and updates `site/media.json`.
+1. Name each new file after the first 12 characters of its SHA-256 hash and update its entry in `site/media.json` on `main`, as the "Site media" section of `site/README.md` there describes.
 2. Commit the new files here, next to the old ones, and push this branch.
 3. Open the pull request on `main` that changes `site/media.json`.
 
