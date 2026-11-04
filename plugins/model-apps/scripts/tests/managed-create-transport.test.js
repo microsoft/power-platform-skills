@@ -222,6 +222,14 @@ test('a body is read for the prepared key and each named child only, and any dou
     ['two children match', res({ ...ok, CustomAPIRequestParameters: [child(), child()] }), 'unknown'],
     ['the child array is not an array', res({ ...ok, CustomAPIRequestParameters: {} }), 'unknown'],
     ['the child id is not a GUID', res({ ...ok, CustomAPIRequestParameters: [child({ customapirequestparameterid: 'x' })] }), 'unknown'],
+    // Two members of one decoded name in an object the identity is read from: JSON.parse keeps only the last.
+    ['the key spelled twice, once escaped', res(`{"customapi\\u0069d":"${OTHER}","customapiid":"${API}"}`, {}), 'unknown'],
+    ['a child key twice', res(`{"customapiid":"${API}","CustomAPIRequestParameters":[{"customapirequestparameterid":"${OTHER}","uniquename":"p","customapirequestparameterid":"${REQ}"}]}`, {}), 'unknown'],
+    ['the child navigation property twice', res(`{"customapiid":"${API}","CustomAPIRequestParameters":[{"uniquename":"p","customapirequestparameterid":"${OTHER}"}],"CustomAPIRequestParameters":[{"uniquename":"p","customapirequestparameterid":"${REQ}"}]}`, {}), 'unknown'],
+    // What must not change: one escaped spelling alone, escapes inside a value, and a repeat in an expanded lookup.
+    ['the key spelled once, escaped', res(`{"customapi\\u0069d":"${API}"}`, {}), 'acknowledged'],
+    ['escaped quotes and backslashes inside a value', res(`{"description":"a \\"quoted\\" \\\\ name","customapiid":"${API}"}`, {}), 'acknowledged'],
+    ['a repeat inside an expanded lookup', res(`{"customapiid":"${API}","plugintypeid":{"name":"a","name":"b"},"CustomAPIRequestParameters":[{"uniquename":"p","customapirequestparameterid":"${REQ}"}]}`, {}), 'acknowledged'],
   ];
   for (const [name, r, want] of cases) assert.equal(answerOf(r, EXPECT).outcome, want, name);
 });

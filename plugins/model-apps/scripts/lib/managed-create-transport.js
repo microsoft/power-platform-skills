@@ -64,8 +64,9 @@ function sentProjection(fields) {
 // an array instead, so a comma or a second value is two identities, which cannot be told apart: unknown. An alternate-key
 // URL — customapis(uniquename='contoso_api') — names no GUID, so it proves nothing about the id that was saved: unknown.
 // A body is read only for the expected primary-key field and the children the descriptor names (never for any GUID in
-// it: a lookup carries another row's id). A body whose key appears twice in its text (JSON.parse keeps the last one),
-// that is not JSON, not an object or an OData error envelope is unknown.
+// it: a lookup carries another row's id). A body that is not JSON, not an object or an OData error envelope is unknown,
+// and so is one in which an object the identity is read from — the body itself, or an element of a child array the
+// descriptor names — has two members of one name (see memberNameRepeats).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api
 const IDENTITY_HEADERS = ['odata-entityid', 'location'];
 const KEYED_URL = /^([A-Za-z_][A-Za-z0-9_]*)\(([^()]*)\)$/;
@@ -98,7 +99,78 @@ function bodyOf(raw) {
 }
 
 const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Every object of a JSON text, as { path, names }: the member names it holds, DECODED and in order, and where it sits
+// (the member names and array indexes that lead to it; [] for the top object). JSON.parse keeps only the LAST of two
+// members of one name, and names are compared after their escapes are decoded, so all of these read as one id to
+// JSON.parse while their text carries two:
+//   {"customapi\u0069d":"<other>","customapiid":"<guid>"}                      a key spelled twice
+//   {"CustomAPIRequestParameters":[{"customapirequestparameterid":"<other>","uniquename":"p","customapirequestparameterid":"<guid>"}]}
+//   {"CustomAPIRequestParameters":[{…<other>…}],"CustomAPIRequestParameters":[{…<guid>…}]}   a navigation property twice
+// Called only on text JSON.parse accepted, so the text is well-formed: a string token runs to the first quote that no
+// backslash escapes, and JSON.parse decodes that token exactly as it decoded the member name.
+// See: https://www.rfc-editor.org/rfc/rfc8259#section-4 (names SHOULD be unique; parsers differ when they are not)
+function objectsOf(text) {
+  const found = [];
+  let i = 0;
+  const ws = () => { while (i < text.length && ' \t\r\n'.includes(text[i])) i += 1; };
+  const string = () => {
+    const start = i;
+    i += 1;
+    while (text[i] !== '"') i += text[i] === '\\' ? 2 : 1;
+    i += 1;
+    return JSON.parse(text.slice(start, i));
+  };
+  const value = (path) => {
+    ws();
+    if (text[i] === '{') {
+      i += 1;
+      const names = [];
+      ws();
+      if (text[i] === '}') i += 1;
+      else {
+        for (;;) {
+          ws();
+          const name = string();
+          ws();
+          i += 1; // the colon
+          value([...path, name]);
+          names.push(name);
+          ws();
+          if (text[i++] !== ',') break;
+        }
+      }
+      found.push({ path, names });
+    } else if (text[i] === '[') {
+      i += 1;
+      ws();
+      if (text[i] === ']') { i += 1; return; }
+      for (let n = 0; ; n += 1) {
+        value([...path, n]);
+        ws();
+        if (text[i++] !== ',') break;
+      }
+    } else if (text[i] === '"') {
+      string();
+    } else {
+      while (i < text.length && !',}] \t\r\n'.includes(text[i])) i += 1;
+    }
+  };
+  value([]);
+  return found;
+}
+
+// Whether an object the identity of an answer is read from repeats a member name: the body itself (its primary key,
+// and each child navigation property, may be one of the repeats) or an element of a child array the descriptor names
+// (its key and its match fields). Any repeat there makes the answer ambiguous, whichever name it is. Objects deeper in
+// the body (an expanded lookup) are never read for identity, so a repeat there changes nothing. A text too deeply
+// nested to scan is ambiguous as well: the answer fails closed to unknown.
+function memberNameRepeats(text, arrays) {
+  let objects;
+  try { objects = objectsOf(text); } catch { return true; }
+  return objects.some(({ path, names }) => new Set(names).size !== names.length
+    && (path.length === 0 || (path.length === 2 && arrays.includes(path[0]) && typeof path[1] === 'number')));
+}
 
 /**
  * What one answer says about a send-once request, kept in memory only:
@@ -151,7 +223,7 @@ function answerOf(res, expect) {
       unknown = true;
     } else if (want.key) {
       const key = String(want.key);
-      if (body.text !== null && (body.text.match(new RegExp(`"${escapeRe(key)}"\\s*:`, 'g')) || []).length > 1) unknown = true;
+      if (body.text !== null && memberNameRepeats(body.text, (want.children || []).map((c) => c.at))) unknown = true;
       if (Object.prototype.hasOwnProperty.call(body.json, key)) compare(typeof body.json[key] === 'string' ? normalizeGuid(body.json[key]) : null);
       for (const c of want.children || []) {
         const list = body.json[c.at];
