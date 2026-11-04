@@ -252,9 +252,11 @@ For other capabilities (only those actually shipped by the template):
 > /add-native file-system       # expo-file-system wrapper
 > /add-native sharing           # expo-sharing wrapper
 > /add-native haptics           # expo-haptics impact, selection, and notification wrapper
+> /add-native push-notifications  # Firebase Cloud Messaging registration + the app's Firebase client files
+> /add-native scheduled-notifications  # notifications at times the app defines (due dates, appointments, daily check-ins), scheduled on the device
 ```
 
-Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `expo-notifications`; if the template does not ship it, notifications cannot be added until the upstream template includes it.
+Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `@react-native-firebase/messaging` and `expo-notifications`; an app created from a template without them cannot add push notifications.
 
 ### 4. Add a connector
 
@@ -398,7 +400,7 @@ metadata alone never means the app is healthy.
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Plan and approve a scoped Dataverse/connector change. Choose data-only work or full `/edit-app` integration; `--plan-only` returns a proposal without applying it. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `pa app add data-source` for any first-party or custom connector |
-| `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, haptics, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
+| `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, push and scheduled notifications, secure-store, file-system, sharing, haptics, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `pa app add data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/debug-app` | ✅ v0 | Diagnoses install/startup/QR failures before an app is loaded, then monitors live sanitized `.powernative` logs for runtime or silent failures. Same-lock restoration and Metro restart require explicit approval; it does not upgrade dependencies. `startup` returns without the runtime monitor; `--no-fix` stays non-mutating. |
