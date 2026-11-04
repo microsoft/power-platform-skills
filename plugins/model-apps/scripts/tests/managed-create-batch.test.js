@@ -422,6 +422,12 @@ test('an answer is read per constituent: anything but a complete success is unkn
     'a context of another API base': [answer(200, [rootPart(1, { '@odata.context': 'https://fabrikam.crm.dynamics.com/api/data/v9.0/$metadata#customapis(customapiid)/$entity' }), reqPart(2), respPart(3)]), unknown],
     'an alternate-key identity header': [answer(200, [rootPart(1), reqPart(2, {}, [...PART_HEADERS, `OData-EntityId: ${API9}/customapirequestparameters(uniquename='Extra')`]), respPart(3)]), unknown],
     'no primary key': [answer(200, [rootPart(1, { customapiid: undefined }), reqPart(2), respPart(3)]), unknown],
+    'a root body without its key, however well its OData-EntityId reads': [answer(200, [rootPart(1, { customapiid: undefined }, [`ETag: ${SAVED}`, `OData-EntityId: ${API9}/customapis(${API})`]), reqPart(2), respPart(3)]), unknown],
+    'a child body without its key, however well its Location reads': [answer(200, [rootPart(1), reqPart(2, { customapirequestparameterid: undefined }, [...PART_HEADERS, `Location: ${API9}/customapirequestparameters(${NEW_REQ})`]), respPart(3)]), unknown],
+    'a child key that is no id': [answer(200, [rootPart(1), reqPart(2, { customapirequestparameterid: 'Extra' }), respPart(3)]), unknown],
+    'a context that did not select the key': [answer(200, [rootPart(1), reqPart(2, { '@odata.context': `${API9}/$metadata#customapirequestparameters/$entity` }), respPart(3)]), unknown],
+    'a context that selected another column': [answer(200, [rootPart(1), reqPart(2, { '@odata.context': `${API9}/$metadata#customapirequestparameters(uniquename)/$entity` }), respPart(3)]), unknown],
+    'a body without its key and a Location naming another row': [answer(200, [rootPart(1), reqPart(2, { customapirequestparameterid: undefined }, [...PART_HEADERS, `Location: ${API9}/customapirequestparameters(${OTHER})`]), respPart(3)]), ['unknown', 'conflict', 'unknown']],
     'a child naming another API': [answer(200, [rootPart(1), reqPart(2, { _customapiid_value: OTHER }), respPart(3)]), ['unknown', 'conflict', 'unknown']],
     'a child answered as the other child table': [answer(200, [rootPart(1), reqPart(2, { '@odata.context': `${API9}/$metadata#customapiresponseproperties(customapiresponsepropertyid)/$entity` }), respPart(3)]), ['unknown', 'conflict', 'unknown']],
     'a Location naming another row': [answer(200, [rootPart(1, {}, [`ETag: ${SAVED}`, `Location: ${API9}/customapis(${OTHER})`]), reqPart(2), respPart(3)]), ['conflict', 'unknown', 'unknown']],
@@ -445,6 +451,23 @@ test('a checked run keeps the children\'s acknowledgements and never receipts th
   assert.equal(bad.checked, false);
   assert.ok(failed.ctx.facts(failed.token).every((f) => f.outcome === 'unknown'));
   assert.ok(!attemptOn(failed.dir).acknowledgedRoot);
+  // A child answered without its own key in its body, though its Location names it: nothing is acknowledged, and the
+  // exact fresh read that follows cannot turn the answer into a child-create receipt or created ownership.
+  const keyless = await harness({ respond: () => answer(200, [rootPart(1), reqPart(2, { customapirequestparameterid: undefined }, [...PART_HEADERS, `Location: ${API9}/customapirequestparameters(${NEW_REQ})`]), respPart(3)]) });
+  const run = await keyless.ctx.run({ attempts: keyless.attempts, classify: keyless.set.classify, batch: keyless.set.batch, acceptResult: () => true }, () => keyless.post(changeset([rootOp(), reqOp(), respOp()])));
+  assert.equal(run.checked, false);
+  assert.deepEqual(keyless.ctx.facts(keyless.token).map((f) => f.outcome), ['unknown', 'unknown', 'unknown']);
+  const receipts = [];
+  const noteSaved = keyless.store.noteSaved;
+  keyless.store.noteSaved = (token, details) => {
+    receipts.push(...((details && details.acknowledgedChildCreates) || []).map((c) => c.id));
+    return noteSaved(token, details);
+  };
+  const [settled] = keyless.ctx.settle([{ token: keyless.token, observation: readOf(rowsOf('update', NEW_ROWS)) }]);
+  assert.notEqual(settled.verdict.action, 'commit');
+  assert.deepEqual(receipts, []);
+  const group = open(keyless.dir).snapshot().envelope.groups.find((g) => g.family === 'customApi');
+  assert.ok(!group.records.some((r) => r.id === NEW_REQ || r.id === NEW_RESP), 'no created binding for a child the answer did not prove');
 });
 
 test('the request reader alone: the captured request reads as the API\'s edit and one new child; the hand-made one does not', () => {
@@ -457,4 +480,12 @@ test('the request reader alone: the captured request reads as the API\'s edit an
   const noSolution = changeset([reqOp(reqBody(), { headers: ['Content-Type: application/json;type=entry', 'Prefer: return=representation'] }), respOp(respBody(), { headers: ['Content-Type: application/json;type=entry', 'Prefer: return=representation'] })]);
   assert.equal(parseCustomApiChangeset({ url: BATCH_URL, body: noSolution, headers: CT }, unsolved).constituents.length, 2, 'no solution header when the SDK context has none');
   assert.throws(() => parseCustomApiChangeset({ url: BATCH_URL, body: changeset([reqOp(), respOp()]), headers: CT }, unsolved), { code: MISMATCH }, 'and none added');
+  // Ordinary spaces around the boundary parameter's '=' are its grammar, as the client's own multipart reader reads it;
+  // anything more than spaces, or a second parameter, is still refused.
+  const spaced = (decl) => parseCustomApiChangeset({ url: BATCH_URL, body: changeset([rootOp(), reqOp()], { boundary: `Content-Type: ${decl}` }), headers: { 'Content-Type': `multipart/mixed; boundary = ${BATCH_ID}` } }, config);
+  assert.equal(spaced(`multipart/mixed; boundary = "${CS_ID}"`).constituents.length, 2);
+  assert.equal(spaced(`multipart/mixed;boundary =${CS_ID}`).constituents.length, 2);
+  for (const decl of [`multipart/mixed; boundary =\t"${CS_ID}"`, `multipart/mixed; boundary = "${CS_ID}"; charset=utf-8`, `multipart/mixed; boundary = "${CS_ID}`, `multipart/mixed; boundary = ""`]) {
+    assert.throws(() => spaced(decl), { code: MISMATCH }, decl);
+  }
 });

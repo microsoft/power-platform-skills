@@ -141,10 +141,10 @@ function linesOf(text) {
   return lines;
 }
 
-// `multipart/mixed;boundary=X`, with ordinary spaces around ';' and X quoted or not; any other type, a second parameter,
-// an escape or an empty boundary answers null.
+// `multipart/mixed;boundary=X`, with ordinary spaces around ';' and '=' (as the client's own multipart reader allows)
+// and X quoted or not; any other type, a second parameter, an escape or an empty boundary answers null.
 function multipartBoundary(value) {
-  const m = /^multipart\/mixed[ ]*;[ ]*boundary=("?)([A-Za-z0-9_-]+)\1[ ]*$/i.exec(String(value));
+  const m = /^multipart\/mixed[ ]*;[ ]*boundary[ ]*=[ ]*("?)([A-Za-z0-9_-]+)\1[ ]*$/i.exec(String(value));
   return m ? m[2] : null;
 }
 
@@ -413,8 +413,9 @@ function contextOf(value, apiBase) {
 /**
  * What one answered part says about its constituent, by the gate's identity rules applied to the part as an answer of
  * its own (answerOf: every identity header and the body's primary key must name the constituent's row) and by what the
- * captured success carries: the role's status (the API's PATCH 200, a new child 201), a well-formed `@odata.etag`, an
- * `@odata.context` naming the constituent's own table, the root's ETag header (when present) equal to its body token,
+ * captured success carries: the role's status (the API's PATCH 200, a new child 201), the body's OWN selected primary key
+ * naming the row (headers only supplement it), a well-formed `@odata.etag`, an `@odata.context` naming the constituent's
+ * own table with exactly its primary key selected, the root's ETag header (when present) equal to its body token,
  * and each child's `_customapiid_value` naming the bound API. Anything naming another row, table or API is a conflict;
  * anything missing, malformed or unexpected is unknown.
  */
@@ -429,10 +430,16 @@ function judgePart(part, k, admitted, answerOf) {
   if (!json) {
     unknown = true;
   } else {
+    // The `$select` of the primary key makes the service echo it in the body: the body's own key is the evidence of
+    // which row the part wrote. An identity header (Location, OData-EntityId) may agree with it, never stand in for it,
+    // so a body without its key — or a context that did not select it — is unknown however well the headers read.
+    const pk = own(json, role.key) ? json[role.key] : undefined;
+    if (typeof pk !== 'string' || !GUID.test(pk)) unknown = true;
+    else if (normalizeGuid(pk) !== k.id) conflict = true;
     const ctx = contextOf(json['@odata.context'], admitted.apiBase);
     if (!ctx) unknown = true;
     else if (ctx.table !== role.table) conflict = true;
-    else if (ctx.select !== null && ctx.select !== role.key) unknown = true;
+    else if (ctx.select !== role.key) unknown = true;
     const etag = json['@odata.etag'];
     if (typeof etag !== 'string' || !HELD_ETAG.test(etag)) unknown = true;
     if (k.role === 'root') {
