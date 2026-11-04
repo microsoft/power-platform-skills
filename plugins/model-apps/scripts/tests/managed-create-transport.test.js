@@ -12,7 +12,7 @@ const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { CODES } = require('../lib/managed-bindings.js');
 const { apiPath } = require('../lib/workflow-effect-context.js');
 const { MISMATCH, createDeferredManagedCreateGate, runWithManagedCreateSet, composeWriteGates, answerOf } = require('../lib/managed-create-transport.js');
-const { ENV, API, URL_API, URL_MEMBER, open, apiPlan, apiExpected, apiBody, apiClassifier } = require('./helpers/managed-rows.js');
+const { ENV, API, REQ, URL_API, URL_MEMBER, open, apiPlan, apiExpected, apiBody, apiClassifier } = require('./helpers/managed-rows.js');
 
 const OTHER = '77777777-7777-4777-8777-777777777777';
 
@@ -114,7 +114,7 @@ test('an answer naming another id is a conflict; a lost answer is unknown; neith
   assert.equal(lost.sent.length, 1, 'a send-once request is not re-sent after a transport failure');
   assert.deepEqual(l.facts.map((f) => f.outcome), ['unknown', 'unknown']);
   assert.equal(l.localError, null, 'a remote failure is not a local one');
-  assert.deepEqual(answerOf({ statusCode: 201, headers: { Location: `${URL_API}(uniquename='contoso_api')` } }, API), { outcome: 'acknowledged', status: 201 });
+  assert.equal(answerOf({ statusCode: 201, headers: { Location: `${URL_API}(uniquename='contoso_api')` } }, API).outcome, 'unknown', 'an alternate-key answer names no id');
   assert.equal(answerOf({ statusCode: 409, headers: {} }, API).outcome, 'unknown');
 });
 
@@ -173,4 +173,132 @@ test('the gate binds once, to one store', () => {
   a.gate.bind(a.store);
   assert.throws(() => a.gate.bind(open(makeTempDir('mc-transport-'))), /already bound/);
   assert.throws(() => a.gate.bind({}), TypeError);
+});
+
+// The identity a protected Custom API create is answered under: its own row and the one request parameter it carries.
+const EXPECT = { id: API, table: 'customapis', key: 'customapiid', children: [{ id: REQ, at: 'CustomAPIRequestParameters', key: 'customapirequestparameterid', match: { uniquename: 'p' } }] };
+const at = (id = API, table = 'customapis') => `${ENV}/api/data/v9.2/${table}(${id})`;
+const child = (over = {}) => ({ uniquename: 'p', customapirequestparameterid: REQ, ...over });
+
+test('every identity an answer carries must agree with the prepared row: a second, folded or other-table header is never read past', () => {
+  const cases = [
+    ['one matching OData-EntityId', { statusCode: 204, headers: { 'OData-EntityId': at() }, body: '' }, 'acknowledged'],
+    ['OData-EntityId and Location agree', { statusCode: 204, headers: { 'odata-entityid': at(), LOCATION: at() } }, 'acknowledged'],
+    ['the key spelled as name=value', { statusCode: 204, headers: { 'odata-entityid': `${ENV}/api/data/v9.2/customapis(customapiid=${API})` } }, 'acknowledged'],
+    ['the empty 204 with no identity', { statusCode: 204, headers: {}, body: '' }, 'acknowledged'],
+    ['one header in two spellings', { statusCode: 204, headers: { 'OData-EntityId': at(), 'odata-entityid': at() } }, 'unknown'],
+    ['a header folded with a comma', { statusCode: 204, headers: { 'odata-entityid': `${at()}, ${at()}` } }, 'unknown'],
+    ['a header given as two values', { statusCode: 204, headers: { 'odata-entityid': [at(), at()] } }, 'unknown'],
+    ['an alternate-key URL', { statusCode: 204, headers: { Location: `${ENV}/api/data/v9.2/customapis(uniquename='contoso_api')` } }, 'unknown'],
+    ['a header that names no row', { statusCode: 204, headers: { Location: `${ENV}/api/data/v9.2/customapis` } }, 'unknown'],
+    ['a 202, which only queued the request', { statusCode: 202, headers: { 'odata-entityid': at() } }, 'unknown'],
+    ['a 201 with no identity at all', { statusCode: 201, headers: {} }, 'unknown'],
+    ['a 200 whose body names no key', { statusCode: 200, headers: {}, body: '{}' }, 'unknown'],
+    ['the first header agrees, the second names another row', { statusCode: 204, headers: { 'odata-entityid': at(), location: at(REQ) } }, 'conflict'],
+    ['a header under another table', { statusCode: 204, headers: { 'odata-entityid': at(API, 'accounts') } }, 'conflict'],
+    ['another row wins over a folded header', { statusCode: 204, headers: { 'odata-entityid': `${at()}, ${at()}`, location: at(REQ) } }, 'conflict'],
+  ];
+  for (const [name, res, want] of cases) assert.equal(answerOf(res, EXPECT).outcome, want, name);
+  assert.equal(answerOf({ statusCode: 204, headers: { location: at(REQ) } }, EXPECT).answeredId, REQ, 'the id that disagrees is the one reported');
+});
+
+test('a body is read for the prepared key and each named child only, and any doubt about it is unknown', () => {
+  const ok = { customapiid: API, uniquename: 'contoso_api', CustomAPIRequestParameters: [child()] };
+  const res = (body, headers = { 'odata-entityid': at() }) => ({ statusCode: 201, headers, body: typeof body === 'string' ? body : JSON.stringify(body) });
+  const cases = [
+    ['the body agrees with the header', res(ok), 'acknowledged'],
+    ['the body alone, as an object', { statusCode: 201, headers: {}, body: ok }, 'acknowledged'],
+    ['a lookup to another row is not an identity', res({ ...ok, _parentid_value: REQ }), 'acknowledged'],
+    ['no child array: the child is not answered for', res({ customapiid: API }), 'acknowledged'],
+    ['the body names another row', res({ ...ok, customapiid: REQ }), 'conflict'],
+    ['the child is answered under another id', res({ ...ok, CustomAPIRequestParameters: [child({ customapirequestparameterid: API })] }), 'conflict'],
+    ['the key twice in the text (JSON.parse keeps the last)', res(`{"customapiid":"${REQ}","customapiid":"${API}"}`), 'unknown'],
+    ['a key that is not a string', res({ ...ok, customapiid: 7 }), 'unknown'],
+    ['an OData error envelope under a 2xx', res({ error: { code: '0x80040217', message: 'no' } }), 'unknown'],
+    ['a body that is not JSON', res('<html/>'), 'unknown'],
+    ['a body that is an array', res([ok]), 'unknown'],
+    ['no child matches', res({ ...ok, CustomAPIRequestParameters: [] }), 'unknown'],
+    ['two children match', res({ ...ok, CustomAPIRequestParameters: [child(), child()] }), 'unknown'],
+    ['the child array is not an array', res({ ...ok, CustomAPIRequestParameters: {} }), 'unknown'],
+    ['the child id is not a GUID', res({ ...ok, CustomAPIRequestParameters: [child({ customapirequestparameterid: 'x' })] }), 'unknown'],
+  ];
+  for (const [name, r, want] of cases) assert.equal(answerOf(r, EXPECT).outcome, want, name);
+});
+
+test('a deep insert whose answer names another child id is a conflict for every row it carried', async () => {
+  const h = harness({ answer: () => ({ statusCode: 201, headers: { 'odata-entityid': at() }, body: JSON.stringify({ customapiid: API, CustomAPIRequestParameters: [child({ customapirequestparameterid: OTHER })] }) }) });
+  const out = await runWithManagedCreateSet(h.set, () => h.client.post(URL_API, JSON.stringify(apiBody()), { headers: { Prefer: 'return=representation' } }));
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(out.facts.map((f) => [f.kind, f.outcome]), [['customApi', 'conflict'], ['customApiRequestParameter', 'conflict']]);
+});
+
+test('a row request that does not say which table and key its answer is read against, or where a child is found, is refused unsent', async () => {
+  const variants = [
+    (c) => ({ ...c, expectTable: undefined }),
+    (c) => ({ ...c, expectKey: 'not a field' }),
+    (c) => ({ ...c, rows: c.rows.map((r, i) => (i ? { ...r, answer: { at: 'CustomAPIRequestParameters', key: 'customapirequestparameterid', match: {} } } : r)) }),
+  ];
+  for (const change of variants) {
+    const h = harness();
+    const base = apiClassifier(h.token);
+    h.set.classify = (req) => { const c = base(req); return c && c.type === 'rows' ? change(c) : c; };
+    const before = JSON.stringify(diskOf(h.dir));
+    const out = await runWithManagedCreateSet(h.set, () => swallow(h.client.post(URL_API, JSON.stringify(apiBody()))));
+    assert.equal(out.localError.code, MISMATCH);
+    assert.equal(h.sent.length, 0);
+    assert.equal(JSON.stringify(diskOf(h.dir)), before);
+  }
+  const control = harness();
+  control.set.classify = apiClassifier(control.token);
+  const sent = await runWithManagedCreateSet(control.set, () => control.client.post(URL_API, JSON.stringify(apiBody())));
+  assert.deepEqual([sent.localError, control.sent.length], [null, 1], 'the same request with its descriptor whole is sent');
+});
+
+test('a request still unanswered when its set settles is an unknown fact; its late answer, or a second one, is not read', async () => {
+  let release;
+  const h = harness({ answer: () => new Promise((resolve) => { release = resolve; }) });
+  let pending;
+  const out = await runWithManagedCreateSet(h.set, async () => {
+    pending = swallow(h.client.post(URL_API, JSON.stringify(apiBody())));
+    while (h.sent.length === 0) await new Promise((resolve) => setImmediate(resolve));
+    return 'the SDK did not wait';
+  });
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(out.facts.map((f) => [f.kind, f.outcome, f.status, f.unanswered]), [['customApi', 'unknown', null, true], ['customApiRequestParameter', 'unknown', null, true]]);
+  release({ statusCode: 204, headers: { 'odata-entityid': at() }, body: '' });
+  await pending;
+  assert.equal(out.facts.length, 2);
+  const twice = harness();
+  const t = await runWithManagedCreateSet(twice.set, async () => {
+    const hd = twice.gate.screen({ method: 'POST', url: URL_API, body: JSON.stringify(apiBody()), headers: {} });
+    hd.dispatching();
+    hd.answered({ statusCode: 204, headers: { 'odata-entityid': at() }, body: '' });
+    hd.answered({ statusCode: 204, headers: { 'odata-entityid': at(OTHER) }, body: '' });
+  });
+  assert.deepEqual(t.facts.map((f) => f.outcome), ['acknowledged', 'acknowledged']);
+});
+
+test('inside a set, a refusal anywhere in the composed boundary is kept as the local failure, in either gate order', async () => {
+  const refusal = () => Object.assign(new Error('no'), { code: 'managed-workflow-effect-mismatch' });
+  const refusing = { screen: () => { throw refusal(); } };
+  for (const order of [(g) => [refusing, g], (g) => [g, refusing]]) {
+    const h = harness();
+    const out = await runWithManagedCreateSet(h.set, async () => {
+      try { composeWriteGates(...order(h.gate)).screen({ method: 'POST', url: URL_API, body: JSON.stringify(apiBody()), headers: {} }); } catch { /* the SDK swallowed it */ }
+      return 'saved';
+    });
+    assert.equal(out.value, 'saved');
+    assert.equal(out.localError && out.localError.code, 'managed-workflow-effect-mismatch');
+  }
+  const thrown = refusal();
+  const owner = { dispatching() { throw thrown; }, answered() {} };
+  const workflow = { screen: () => owner };
+  const out = await runWithManagedCreateSet(harness().set, async () => {
+    const hd = composeWriteGates(workflow).screen({ method: 'POST', url: `${ENV}/api/data/v9.2/workflows`, body: '{}' });
+    try { hd.dispatching(); } catch { /* the SDK swallowed it */ }
+    return 'saved';
+  });
+  assert.equal(out.localError, thrown, 'a handle that refuses at dispatch is latched too');
+  assert.equal(composeWriteGates(workflow).screen({ method: 'POST', url: `${ENV}/api/data/v9.2/workflows` }), owner, 'outside a set the handle is the gate\'s own');
+  assert.throws(() => composeWriteGates(refusing).screen({ method: 'POST', url: URL_API }), { code: 'managed-workflow-effect-mismatch' });
 });

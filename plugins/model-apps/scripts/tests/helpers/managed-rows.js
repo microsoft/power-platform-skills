@@ -81,9 +81,12 @@ function apiClassifier(token) {
       const b = JSON.parse(body);
       const c = b.CustomAPIRequestParameters[0];
       return {
-        type: 'rows', token, rows: [
+        type: 'rows', token, expectTable: 'customapis', expectKey: 'customapiid', rows: [
           { kind: 'customApi', key: b.uniquename, id: b.customapiid, parentId: null, ...sentProjection({ uniquename: b.uniquename, customapiid: b.customapiid }) },
-          { kind: 'customApiRequestParameter', key: JSON.stringify([b.uniquename, `request:${c.uniquename}`]), id: c.customapirequestparameterid, parentId: c.parent, ...sentProjection({ uniquename: c.uniquename }) },
+          {
+            kind: 'customApiRequestParameter', key: JSON.stringify([b.uniquename, `request:${c.uniquename}`]), id: c.customapirequestparameterid, parentId: c.parent, ...sentProjection({ uniquename: c.uniquename }),
+            answer: { at: 'CustomAPIRequestParameters', key: 'customapirequestparameterid', match: { uniquename: c.uniquename } },
+          },
         ],
       };
     }

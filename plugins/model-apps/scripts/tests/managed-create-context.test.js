@@ -90,7 +90,7 @@ test('a parent\'s acknowledgement never mints a child: the child needs its own e
   const { store, ctx, attempts } = begun(dir);
   const token = attempts[0].token;
   // The driver sends the root on its own; the parameter appears by other means.
-  const rootOnly = ({ body }) => ({ type: 'rows', token, rows: [{ kind: 'customApi', key: API_KEY, id: JSON.parse(body).customapiid, parentId: null, ...sentProjection({ uniquename: API_KEY }) }] });
+  const rootOnly = ({ body }) => ({ type: 'rows', token, expectTable: 'customapis', expectKey: 'customapiid', rows: [{ kind: 'customApi', key: API_KEY, id: JSON.parse(body).customapiid, parentId: null, ...sentProjection({ uniquename: API_KEY }) }] });
   await send(ctx, store, attempts, { classify: rootOnly, members: [] });
   const [halted] = ctx.settle([{ token, observation: apiRead() }]);
   assert.equal(halted.verdict.code, CODES.ownership);
@@ -204,7 +204,7 @@ test('a private input is proved by this process\'s own answer and a matching rea
   });
   const evClassify = (token) => ({ body }) => {
     const b = JSON.parse(body);
-    return { type: 'rows', token, rows: [
+    return { type: 'rows', token, expectTable: 'environmentvariabledefinitions', expectKey: 'environmentvariabledefinitionid', rows: [
       { kind: 'environmentVariable', key: EV_KEY, id: b.id, parentId: null, ...sentProjection({ schemaname: EV_KEY }) },
       { kind: 'environmentVariableValue', key: VAL_KEY, id: EVV, parentId: b.id, ...sentProjection({ schemaname: EV_KEY }) }] };
   };
