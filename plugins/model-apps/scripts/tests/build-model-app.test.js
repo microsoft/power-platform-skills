@@ -1493,6 +1493,34 @@ test('--authorize: each repeated key is read, matched case-insensitively, and ke
   }
 });
 
+test('--authorize overwrite:<configuration kind>:<key> approves replacing exactly one declared protected item\'s local copy, only under the opt-in', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc' }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+    connectionReferences: [{ logicalName: 'contoso_sp', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }],
+    duplicateDetectionRules: [{ key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', 'overwrite:customApi:CONTOSO_CALC', '--authorize=overwrite:environmentVariable:contoso_apibase',
+    '--authorize', 'overwrite:connectionReference:contoso_SP', '--authorize', 'overwrite:duplicateRule:Email rule'], spec());
+  assert.strictEqual(ok.error, null);
+  // Stored as the preflight asks for it: <kind>:<port key> (a name in lower case, a rule's key byte for byte).
+  assert.deepStrictEqual([...ok.overwrite].sort(), ['connectionReference:contoso_sp', 'customApi:contoso_calc', 'duplicateRule:Email rule', 'environmentVariable:contoso_apibase']);
+  assert.strictEqual(ok.keys.size, 0, 'an overwrite consents to no destructive change');
+  assert.strictEqual(ok.adopt.size, 0);
+  for (const [key, over, why] of [
+    ['overwrite:duplicateRule:email rule', {}, /names a configuration item the spec does not declare/],
+    ['overwrite:customApi:contoso_Other', {}, /names a configuration item the spec does not declare/],
+    ['overwrite:customApi:contoso_Calc', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1"/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.overwrite.size, 0, key);
+  }
+});
+
 test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets, under its family', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   const spec = {

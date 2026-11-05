@@ -1339,6 +1339,9 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //   overwrite:chart:<table>/<name>      that differs from the server's (sdk-build.js, refuseUnsentCopy)
 //   overwrite:quickfind:<table>         replacing a local copy of a table's Quick Find view (entities[].quickFind) that differs
 //                                       from the server's; a Quick Find view is never adopted and has no server drift
+//   overwrite:<kind>:<declared key>     replacing a protected configuration item's local copy (configurationIdentity "stable-v1";
+//                                       kind customApi, environmentVariable, connectionReference or duplicateRule) that differs
+//                                       from the server's (lib/configuration-protected.js; read by configurationAuthorizationKeys)
 // The family is part of the key because ids collide across families: a view and a chart may share <table>/<name>, and a view
 // may be named "quickFind". Each approval is stored under its family-typed id (reconcile-common.js approvalKey, the flag minus
 // its verb) and each guard asks only for its own family, so consent to one artifact never reaches another. The untyped form
@@ -1388,10 +1391,14 @@ function authorizationKeys(argv, spec) {
   const configuration = configurationAuthorizationKeys(raw.filter((k) => !hasNul(k)), spec);
   const keys = new Set(configuration.keys);
   const adopt = new Set();
-  const overwrite = new Set();
+  // overwrite:<configuration kind>:<declared key> (a protected item's local copy, lib/configuration-protected.js) is claimed and checked
+  // there and stored as <kind>:<key>, a family no view, chart or other approval spells.
+  const overwrite = new Set(configuration.overwrite || []);
   const problems = nulKeys.map((key) => `'${key.replace(/\u0000/g, '\\u0000')}' holds a NUL character (U+0000), which a command-line argument cannot carry; give the item a name without it`).concat(configuration.problems.map(({ token, code }) => (code === 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM'
     ? `'${token}' names a configuration item the spec does not declare`
-    : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
+    : code === 'CONFIGURATION_OVERWRITE_UNPROTECTED'
+      ? `'${token}' replaces a protected configuration item's local copy, and the spec does not set configurationIdentity "stable-v1", so there is no such copy to replace`
+      : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
   // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
   // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick
   // Find view's (entities[].quickFind, lib/quick-find.js) is its table, in lower case.

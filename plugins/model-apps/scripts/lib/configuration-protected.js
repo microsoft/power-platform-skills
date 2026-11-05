@@ -23,7 +23,7 @@
 
 const B = require('./configuration-create-bindings.js');
 const A = require('./configuration-artifacts.js');
-const { normalizeGuid } = require('./reconcile-common.js');
+const { normalizeGuid, isAuthorized, approvalKey } = require('./reconcile-common.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 
 const IDENTITY = 'stable-v1';
@@ -33,9 +33,9 @@ const CONFLICT_CODE = 'create-identity-conflict';
 const COMPLETION_CODE = 'create-completion-required';
 const OWNERSHIP_CODE = 'create-ownership-required';
 const OPT_IN_CODE = 'create-identity-opt-in-required';
-// A local workspace copy with edits the service has not seen: the code (and the steps) of the declared forms' same stop
-// (form-layout-reconcile.js, category workspace-copy-unsent-edits).
-const DRAFT_CODE = 'create-completion-required';
+// A local workspace copy that differs from the server's: the declared views' and charts' stop (sdk-build.js
+// refuseUnsentCopy), with the same way on — keep what you want in the App Spec, then approve replacing the copy.
+const DRAFT_CODE = 'workspace-copy-unsent-edits';
 // The store's own code for a group whose attempt is not settled yet.
 const PENDING_CODE = require('./managed-bindings.js').CODES.pending;
 
@@ -49,9 +49,15 @@ const REMOVAL_MESSAGE = 'Removing a child of a protected Custom API is not suppo
   + 'Removals require maintenance outside the plugin.';
 const VALUE_REMOVAL_MESSAGE = 'Clearing the value of a protected environment variable deletes its value row, which is not supported. '
   + 'No service changes were sent by this build. Removals require maintenance outside the plugin.';
+// The one approval that replaces a protected item's local copy with the server's: `--authorize overwrite:<kind>:<key>`,
+// the views' and charts' verb, typed by the configuration kind and keyed as the port keys it (portKeyOf: a name in lower
+// case, a duplicate rule's key byte for byte). build-model-app.js reads it into opts.authorizedOverwrite without its verb
+// (configuration-artifacts.js configurationAuthorizationKeys), so it approves only this item's copy.
+const overwriteKey = (kind, key) => approvalKey(kind, A.portKeyOf(kind, key));
 const draftMessage = (kind, key, id) => `the local copy of the ${kind} "${key}" (${id}) in the workspace differs from the server's (an edit an earlier run did not send, `
   + 'or one made by hand), or could not be compared; nothing was read over it or written, and the copy was kept. '
-  + 'Put any change you want to keep into the App Spec, refresh the local copy from the server, then run again';
+  + 'Put any change you want to keep into the App Spec, then approve replacing the local copy with the server\'s: '
+  + A.authorizeFlags([`overwrite:${overwriteKey(kind, key)}`]);
 
 // The declared lists of the protected kinds, in the order configuration-artifacts.js applies them.
 const LISTS = Object.freeze([
@@ -390,13 +396,35 @@ async function environmentOf({ spec, store, dataverse, solution, bindings }) {
 }
 
 /**
+ * Replace a protected item's local copy with the server's, under the maker's overwrite approval only (the preflight checks
+ * it). The server's row is read directly first: present → the SDK's overwrite fetch; absent (a create the service never
+ * took) → the local copy is deleted, since there is no server copy to put in its place. Any other answer — a denied or
+ * failed read, a read of another row — or a failed fetch/delete answers false and the caller keeps the copy and halts: a
+ * fetch error cannot tell a missing row from a failed read (the SDK reports a remote 404 as a connection error).
+ */
+async function replaceLocalCopy(dataverse, sdk, kind, id) {
+  try {
+    const row = await B.readConfigurationRow(dataverse, kind, id);
+    if (row.state === 'present') {
+      await sdk.fetchArtifact(kind, id, { overwrite: true });
+      return !(await hasUnsyncedEdits(sdk, kind, id));
+    }
+    if (row.state !== 'absent') return false;
+    await sdk.deleteArtifact(kind, id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The whole-plan, read-only preflight: every declared protected item located by its binding and its edit judged — a
  * bound Custom API or duplicate rule by its supported shapes (editVerdict), a bound environment variable or connection
  * reference by its complete root/child plan (childVerdict), and a bound variable's value clear is a removal and refused.
  * Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
  * the build may continue. A read that cannot be completed is a halt (`create-identity-unverified`), never "no change".
  */
-async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk = null }) {
+async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk = null, authorizedOverwrite = null }) {
   if (!configurationIdentityOf(spec)) return { halts: [] };
   const halts = [];
   let env;
@@ -411,9 +439,20 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       // Every later step of a bound or pending item reads its row into the workspace over the local copy (locate's
       // overwrite fetch); a copy with edits the service has not seen stops it first, kept. The proofs above and below
       // read the service directly (B.readConfigurationRow / B.observe), never the workspace copy.
+      // The copy is replaced only under the maker's exact overwrite approval for this item, never by the build on its
+      // own (a failed send included): a diff says that the copy differs, never whose the difference is.
       if (item.state !== 'unbound' && sdk) {
         const id = item.planned.plan.rows[0].id;
-        if (await hasUnsyncedEdits(sdk, kind, id)) { halts.push({ kind, key: item.planned.key, id, code: DRAFT_CODE, message: draftMessage(kind, item.planned.key, id) }); continue; }
+        if (await hasUnsyncedEdits(sdk, kind, id)) {
+          if (!isAuthorized(authorizedOverwrite, overwriteKey(kind, item.planned.key))) {
+            halts.push({ kind, key: item.planned.key, id, code: DRAFT_CODE, message: draftMessage(kind, item.planned.key, id), overwrite: `overwrite:${overwriteKey(kind, item.planned.key)}` });
+            continue;
+          }
+          if (!(await replaceLocalCopy(env.dataverse, sdk, kind, id))) {
+            halts.push({ kind, key: item.planned.key, id, code: DRAFT_CODE, message: `the local copy of the ${kind} "${item.planned.key}" (${id}) could not be replaced with the server's as approved, because the server's row could not be read exactly; the local copy was kept and nothing was written. Run again` });
+            continue;
+          }
+        }
       }
       if (item.state === 'pending') {
         const rec = await recoverPending(env, ctx, item);
@@ -470,46 +509,6 @@ async function addMissingMembers(dataverse, planned, scope) {
 }
 
 /**
- * Whether every change a local copy still holds is one the build's own draft carries (withOwnCopy): `draft` is the copy
- * as the build handed it over just before its push, `diff` the SDK's local comparison with the synced baseline
- * (sdk.diffArtifact, a local read). A push that saved part of the draft rebases the copy on what was saved (a duplicate
- * rule saved and its publish refused keeps only `/status`), so the draft is compared change by change, not as a whole:
- *   { changes: [{ pointer: '', type: 'added', newValue: { …the whole artifact… } }] }       a create never taken: the draft
- *   { changes: [{ pointer: '/description', type: 'modified', oldValue: 'A', newValue: 'B' }] } B is the draft's value there
- *   { changes: [{ pointer: '/displayName', type: 'removed', oldValue: 'A' }] }                the draft holds nothing there
- * Pointers are RFC 6901 (`~1` is '/', `~0` is '~'; an array step is its index); a null and an absent field are one value
- * (canonicalJson). A pointer the draft cannot resolve, a
- * value it does not hold, no change at all or a malformed answer is not the build's own: the copy is kept.
- * See: https://www.rfc-editor.org/rfc/rfc6901
- */
-function ownedDraft(draft, diff) {
-  if (!diff || !Array.isArray(diff.changes) || !diff.changes.length) return false;
-  return diff.changes.every((c) => {
-    if (!c || typeof c.pointer !== 'string') return false;
-    const at = valueAt(draft, c.pointer);
-    const held = at.found && at.value !== null;
-    if (c.type === 'removed') return !held;
-    return held ? sameJson(at.value, c.newValue) : c.newValue === null && c.pointer !== '';
-  });
-}
-function valueAt(doc, pointer) {
-  if (pointer === '') return { found: doc !== undefined, value: doc };
-  if (pointer[0] !== '/') return { found: false };
-  let cur = doc;
-  for (const raw of pointer.slice(1).split('/')) {
-    const step = raw.replace(/~1/g, '/').replace(/~0/g, '~');
-    if (cur === null || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, step)) return { found: false };
-    cur = cur[step];
-  }
-  return { found: true, value: cur };
-}
-// The SDK writes an absent optional field as an explicit null when it prepares a push (a condition's `characters: null`),
-// so a null and an absent key are the same value here; nothing else is equated.
-const canonicalJson = (v) => (Array.isArray(v) ? v.map(canonicalJson)
-  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).filter((k) => v[k] !== null && v[k] !== undefined).sort().map((k) => [k, canonicalJson(v[k])])) : v);
-const sameJson = (a, b) => JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
-
-/**
  * The create port configuration-artifacts.js uses for the protected kinds (configurationAcceptsPort accepts it):
  *   protects(kind)                      the four configuration kinds;
  *   resolve({ kind, key })              { state: 'present', id } for a bound item (read at its exact id) — with `owed`
@@ -517,17 +516,15 @@ const sameJson = (a, b) => JSON.stringify(canonicalJson(a)) === JSON.stringify(c
  *                                       only update() sends — or
  *                                       { state: 'absent', id } with the derived id when nothing is bound and that id is
  *                                       free; anything else throws, typed — never a name lookup;
- *   run({ kind, key }, fn)              the mandatory complete namesake query, then ONE create set: fn({ id, childIds,
- *                                       ownCopy }) pushes the artifact through the gate (calling ownCopy() just before
- *                                       the push), the members are added, and the attempt is
+ *   run({ kind, key }, fn)              the mandatory complete namesake query, then ONE create set: fn({ id, childIds })
+ *                                       pushes the artifact through the gate, the members are added, and the attempt is
  *                                       observed and settled into the store. Answers { outcome: 'created', id, childIds,
  *                                       result } only for a committed create; anything else throws, typed;
  *   exact                               true: configuration-artifacts.js skips its name lookup for a protected kind;
  *   updates(kind)                       true for a Custom API, an environment variable and a connection reference, whose
  *                                       supported edits go through update();
- *   update({ kind, key, id }, fn)       ONE checked set for a bound item's edit the preflight admitted: fn({ childIds,
- *                                       ownCopy }) makes the SDK's element updates and ONE push (calling ownCopy() just
- *                                       before it; one request, or one checked
+ *   update({ kind, key, id }, fn)       ONE checked set for a bound item's edit the preflight admitted: fn({ childIds })
+ *                                       makes the SDK's element updates and ONE push (one request, or one checked
  *                                       change set when apiBase is known, refused unsent otherwise), new children are
  *                                       added to the solution, and the attempt is observed and settled. Answers
  *                                       { outcome: 'updated', id, childIds, result }; anything else throws, typed.
@@ -535,47 +532,13 @@ const sameJson = (a, b) => JSON.stringify(canonicalJson(a)) === JSON.stringify(c
 function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase = null, sdk = null }) {
   let envPromise = null;
   const env = () => (envPromise = envPromise || environmentOf({ spec, store, dataverse, solution, bindings }));
-  // A send this port ran that did not settle (a throw, a refused push, an answer that never came) can leave the build's OWN
-  // change in the workspace copy, which the next build's preflight would refuse as an unsent edit, so the attempt could
-  // never be continued. That copy is put back as the service holds it, as the declared forms do (form-layout-reconcile.js
-  // resetOwnCopy) — but only when it is provably the build's own draft: a clean copy before the send (the preflight, or
-  // locate, proved it) is not a certificate for the copy after it, since a local write can land while the send is
-  // awaited. So the send's caller hands its exact draft over just before the push (ownCopy, a locked read of the copy),
-  // and the copy is reset only while every change it still holds is one that draft carries (ownedDraft); any other copy —
-  // a maker's edit that arrived meanwhile, a draft never handed over, a copy that cannot be read — is kept, and the next
-  // build's preflight stops on it (DRAFT_CODE) for the maker to decide. The reset itself follows a fresh exact read of the
-  // service row: present, the copy is re-read with overwrite (a read, which the send window does not count); absent (a
-  // create the service never took), the copy is removed (a local delete, no request); unreadable, or a re-read that
-  // fails, keeps the copy — a failed read never proves the row is gone. The comparison is the last await before the
-  // reset, after a locked read that lets every write already queued through this SDK land first; the SDK serializes its
-  // own writes to one artifact, so a later one runs after the reset and is kept. A write by another process in between
-  // is not fenced: the SDK has no conditional overwrite.
-  const withOwnCopy = async (kind, id, body) => {
-    let draft;
-    const ownCopy = async () => {
-      if (!sdk) return;
-      try { draft = await sdk.getArtifact(kind, id); } catch { draft = undefined; }
-    };
-    try {
-      return await body(ownCopy);
-    } catch (error) {
-      if (sdk && draft !== undefined) {
-        try {
-          if (await hasUnsyncedEdits(sdk, kind, id)) {
-            const row = await B.readConfigurationRow(dataverse, kind, id);
-            if (row.state === 'present' || row.state === 'absent') {
-              await sdk.getArtifact(kind, id);
-              if (ownedDraft(draft, await sdk.diffArtifact(kind, id))) {
-                if (row.state === 'present') await sdk.fetchArtifact(kind, id, { overwrite: true });
-                else await sdk.deleteArtifact(kind, id);
-              }
-            }
-          }
-        } catch { /* the copy is kept: see above */ }
-      }
-      throw error;
-    }
-  };
+  // A send this port ran that did not settle (a throw, a refused push, an answer that never came) leaves the workspace copy
+  // exactly as it is: the build's own change, and any edit a maker wrote meanwhile through the same workspace. The copy is
+  // shared with the maker and the SDK has no operation that compares it and replaces it in one step, so no check made
+  // before a reset can prove the reset discards only the build's own change; the build therefore never resets it. The
+  // attempt is still recovered read-only from what it persisted (recoverPending), and the next build's preflight stops on
+  // the copy (DRAFT_CODE) until the maker keeps what they want and approves replacing it with the server's
+  // (--authorize overwrite:<kind>:<key>, overwriteKey).
   return {
     // The binding store is the authority on these kinds: locate asks this port before any other record (configuration-artifacts.js).
     exact: true,
@@ -638,17 +601,15 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult }, send);
       const id = planned.plan.rows[0].id;
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null).map((r) => [r.slot, r.id]));
-      return withOwnCopy(kind, id, async (ownCopy) => {
-        const pushed = await scope(() => fn({ id, childIds, ownCopy }), B.acceptResultFor(planned));
-        if (pushed.error) throw pushed.error;
-        if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
-        if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
-        const added = await addMissingMembers(dataverse, planned, scope);
-        if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id });
-        const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
-        if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
-        return { outcome: 'created', id, childIds, result: pushed.value };
-      });
+      const pushed = await scope(() => fn({ id, childIds }), B.acceptResultFor(planned));
+      if (pushed.error) throw pushed.error;
+      if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
+      if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
+      const added = await addMissingMembers(dataverse, planned, scope);
+      if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id });
+      const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
+      if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
+      return { outcome: 'created', id, childIds, result: pushed.value };
     },
     /**
      * A bound item's edit (configuration-artifacts.js applyUpdate) — a Custom API, an environment variable (its definition,
@@ -686,17 +647,15 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult, ...batch }, send);
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && r.mode === 'create').map((r) => [r.slot, r.id]));
       const rootId = planned.plan.rows[0].id;
-      return withOwnCopy(kind, rootId, async (ownCopy) => {
-        const pushed = await scope(() => fn({ childIds, ownCopy }), B.acceptResultFor(planned));
-        if (pushed.error) throw pushed.error;
-        if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
-        if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });
-        const added = await addMissingMembers(dataverse, planned, scope);
-        if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id: rootId });
-        const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
-        if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" edit was not proved`, { kind, key: planned.key, id: rootId });
-        return { outcome: 'updated', id: rootId, childIds, result: pushed.value };
-      });
+      const pushed = await scope(() => fn({ childIds }), B.acceptResultFor(planned));
+      if (pushed.error) throw pushed.error;
+      if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
+      if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });
+      const added = await addMissingMembers(dataverse, planned, scope);
+      if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id: rootId });
+      const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
+      if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" edit was not proved`, { kind, key: planned.key, id: rootId });
+      return { outcome: 'updated', id: rootId, childIds, result: pushed.value };
     },
   };
 }
@@ -738,7 +697,7 @@ function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {})
     store,
     gate,
     ctx,
-    preflight: ({ spec, dataverse, solution, bindings, sdk }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk }),
+    preflight: ({ spec, dataverse, solution, bindings, sdk, authorizedOverwrite }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk, authorizedOverwrite }),
     port: ({ spec, dataverse, solution, bindings, sdk }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase, sdk }),
     // A build without the opt-in: what the store still holds for its declared items (optInObligations), read locally.
     obligations: ({ spec }) => optInObligations({ spec, store }),

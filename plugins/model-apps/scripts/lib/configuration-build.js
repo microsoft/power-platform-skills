@@ -173,7 +173,8 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       if (!hookup) {
         throw fail('create-identity-unverified', 'configurationIdentity "stable-v1" needs the binding store for protected configuration, and it is not available to this build. No service changes were sent by this build.');
       }
-      const { halts } = await hookup.preflight(protectedArgs());
+      // The maker's overwrite approvals reach only the preflight: the one step that may replace a protected item's local copy.
+      const { halts } = await hookup.preflight({ ...protectedArgs(), authorizedOverwrite: opts.authorizedOverwrite });
       if (!halts.length) return { halts };
       // The edit refusal leads when there is one: it is the halt a maker acts on first, and its text is fixed.
       const first = halts.find((h) => h.code === 'configuration-edit-unsupported') || halts[0];

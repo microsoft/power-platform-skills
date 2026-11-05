@@ -116,6 +116,17 @@ async function created(h, spec = configSpec(), opts = {}) {
   return first;
 }
 const committed = (h, kind, key) => h.store.readGroup(kind, key).committed;
+// The maker's one approval that replaces a protected item's local copy with the server's, as build-model-app.js reads
+// `--authorize overwrite:<kind>:<key>` into opts.authorizedOverwrite (the flag minus its verb).
+const overwriteCopy = (kind, key) => ({ authorizedOverwrite: new Set([`${kind}:${key}`]) });
+// A build that found the item's local copy differing from the server's: it stops before any write, the copy kept, and
+// names the exact approval that replaces it.
+function assertCopyStop(out, kind, key) {
+  assert.equal(out.halt && out.halt.code, 'workspace-copy-unsent-edits', out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.equal(out.halt.phase, 'preflight');
+  assert.ok(out.halt.message.includes(`--authorize overwrite:${kind}:${key}`), out.halt.message);
+  assert.deepEqual(out.sent, [], 'nothing is written while the local copy differs');
+}
 
 test('protected configuration is created at its derived ids through the binding store, and an unchanged rerun sends nothing', async () => {
   const h = await harness();
@@ -271,8 +282,10 @@ test('a rule whose initial publication failed keeps it owed: the rerun never sen
   const publishes = () => h.org.requests.filter((r) => /PublishDuplicateRule$/.test(r.path)).length;
   const sentPublishes = publishes();
 
-  // The rerun proves the rows and the owed state at the same ids, and does not publish again.
-  const again = await pass(h, configSpec());
+  // The rerun proves the rows and the owed state at the same ids, and does not publish again. The failed send left
+  // the workspace copy as it was; the build stops on it until the maker approves replacing it with the server's.
+  assertCopyStop(await pass(h, configSpec()), 'duplicateRule', 'email');
+  const again = await pass(h, configSpec(), overwriteCopy('duplicateRule', 'email'));
   assert.equal(again.halt && again.halt.code, 'create-completion-required', again.halt && again.halt.message);
   assert.equal(again.halt.phase, 'preflight');
   assert.deepEqual(again.sent, [], 'nothing is sent: the publication is not replayed');
@@ -314,7 +327,8 @@ test('a rule whose create answer was lost is never re-created or published by a 
   const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
   const writes = () => h.org.requests.filter((r) => r.method !== 'GET').length;
 
-  const again = await pass(reopen(h), configSpec());
+  assertCopyStop(await pass(reopen(h), configSpec()), 'duplicateRule', 'email');
+  const again = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
   assert.equal(again.halt && again.halt.code, 'create-completion-required', again.halt && again.halt.message);
   assert.deepEqual(again.sent, []);
   assert.equal(h.org.rows('duplicaterules').length, 1, 'the rule is not created again');
@@ -641,7 +655,8 @@ test('a protected Custom API edit whose answer was lost after it applied commits
   assert.ok(first.halt, 'the lost answer stops the build');
   assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending, 'the edit is kept pending');
   assert.equal(h.org.rows('customapis')[0].description, 'Edited once');
-  const again = await pass(reopen(h), edited);
+  assertCopyStop(await pass(reopen(h), edited), 'customApi', 'contoso_calc');
+  const again = await pass(reopen(h), edited, overwriteCopy('customApi', 'contoso_calc'));
   assert.equal(again.halt, null, again.halt && `${again.halt.code}: ${again.halt.message}`);
   assert.deepEqual(again.sent, [], 'the edit is proved from its own expectation, never sent twice');
   const group = h.store.readGroup('customApi', 'contoso_calc');
@@ -659,9 +674,12 @@ test('a protected Custom API edit refused by the org stays owed: the rerun never
   mode.now = 'refuse';
   assert.ok((await pass(h, edited)).halt);
   assert.notEqual(h.org.rows('customapis')[0].description, 'Edited once', 'the org never applied it');
+  assertCopyStop(await pass(reopen(h), edited), 'customApi', 'contoso_calc');
+  // Replacing the copy is not consent to replay: the edit stays owed with the approval given, run after run.
   for (let i = 0; i < 2; i += 1) {
-    const again = await pass(reopen(h), edited);
+    const again = await pass(reopen(h), edited, overwriteCopy('customApi', 'contoso_calc'));
     assert.ok(again.halt, 'an edit that may have been sent is never replayed');
+    assert.notEqual(again.halt.code, 'workspace-copy-unsent-edits', again.halt.message);
     assert.deepEqual(again.sent, []);
     assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending, 'its debt is kept');
   }
@@ -806,7 +824,7 @@ test('an unsent protected first value whose row was made at its id outside the p
   assert.ok(h.store.readGroup('environmentVariable', 'contoso_apibase').pending);
 });
 
-test('a bound protected item whose workspace copy holds unsent edits is never read over: build and verify stop, the copy and its binding kept', async () => {
+test('a bound protected item whose workspace copy differs from the server\'s is never read over: build and verify stop, and only its exact overwrite approval replaces it', async () => {
   const h = await harness();
   const spec = apiSpec();
   await created(h, spec);
@@ -817,10 +835,8 @@ test('a bound protected item whose workspace copy holds unsent edits is never re
   const dirty = () => hasUnsyncedEdits(h.sdk, 'customApi', id);
   assert.equal(await dirty(), true);
   const out = await pass(reopen(h), spec);
-  assert.equal(out.halt && out.halt.code, 'create-completion-required', out.halt && out.halt.message);
-  assert.equal(out.halt.phase, 'preflight');
-  assert.match(out.halt.message, /local copy of the customApi "contoso_calc" .* the copy was kept\. Put any change you want to keep into the App Spec, refresh the local copy from the server, then run again/);
-  assert.deepEqual(out.sent, []);
+  assertCopyStop(out, 'customApi', 'contoso_calc');
+  assert.match(out.halt.message, /local copy of the customApi "contoso_calc" .* the copy was kept\. Put any change you want to keep into the App Spec, then approve replacing the local copy with the server's: --authorize overwrite:customApi:contoso_calc/);
   assert.equal(await dirty(), true, 'the draft is kept');
   // Without the preflight, the plan's own exact read stops on it too (typed, the id named), before any fetch over it.
   const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration }, appUniqueName: 'contoso_configured' });
@@ -834,49 +850,129 @@ test('a bound protected item whose workspace copy holds unsent edits is never re
   assert.equal(checks.find((c) => c.kind === 'customApi' && c.name === 'definition').code, 'create-completion-required');
   assert.equal(await dirty(), true);
   assert.deepEqual(committed(h, 'customApi', 'contoso_calc'), before, 'the binding is kept as it was');
-  // The maker's decision: the copy refreshed from the server. The next build goes on, and sends nothing for an unchanged item.
-  await h.sdk.fetchArtifact('customApi', id, { overwrite: true });
-  assert.equal(await dirty(), false);
-  const again = await pass(reopen(h), spec);
+  // An approval for another item, or another family's key of the same spelling, replaces nothing.
+  assertCopyStop(await pass(reopen(h), spec, { authorizedOverwrite: new Set(['customApi:contoso_other', 'view:contoso_calc', 'environmentVariable:contoso_calc']) }), 'customApi', 'contoso_calc');
+  assert.equal(await dirty(), true);
+  // The maker's decision, the exact approval: the copy is replaced with the server's, and the build goes on and sends
+  // nothing for an unchanged item.
+  const again = await pass(reopen(h), spec, overwriteCopy('customApi', 'contoso_calc'));
   assert.equal(again.halt, null, again.halt && `${again.halt.code}: ${again.halt.message}`);
   assert.deepEqual(again.sent, []);
+  assert.equal(await dirty(), false);
+  assert.notEqual(h.org.rows('customapis')[0].description, 'Retained maker draft', 'the draft was never sent');
+  assert.deepEqual((await pass(reopen(h), spec)).sent, []);
 });
 
-test('a failed protected send puts back only the exact copy it pushed: a local edit written while the push was pending is kept', async () => {
+// A protected edit the org refuses, with a local edit written into the shared workspace copy at some point of the
+// build's own send. `inject(h, id, sdk)` installs the edit; answers the harness, the root id and the edited App Spec.
+async function refusedSendWith(inject) {
   let reject = false;
   const h = await harness({ intercept: ({ method, path }) => (reject && method === 'PATCH' && path.startsWith('/customapis(')
     ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'refused edit' } } } : undefined) });
-  const spec = apiSpec();
-  await created(h, spec);
+  await created(h, apiSpec());
   const id = committed(h, 'customApi', 'contoso_calc').records.find((r) => r.kind === 'customApi').id;
-  const push = h.sdk.pushArtifact.bind(h.sdk);
-  let injected = false;
-  h.sdk.pushArtifact = async (...args) => {
-    const result = await push(...args);
-    if (reject && args[0] === 'customApi') {
-      await h.sdk.updateElement('customApi', id, '/displayName', 'Maker draft arrived during push');
-      injected = true;
-    }
-    return result;
-  };
+  const state = inject(h, id, { update: h.sdk.updateElement.bind(h.sdk), push: h.sdk.pushArtifact.bind(h.sdk), diff: h.sdk.diffArtifact.bind(h.sdk) });
   reject = true;
-  const out = await pass(h, apiSpec(api({ description: 'Build-owned edit' })));
-  assert.ok(injected);
+  const edited = apiSpec(api({ description: 'Build-owned edit' }));
+  const out = await pass(h, edited);
+  return { h, id, edited, out, state };
+}
+const holds = async (h, id, text) => JSON.stringify(await h.sdk.diffArtifact('customApi', id)).includes(text);
+// The kept copy stops every later build before anything is sent, the maker's edit still in it; only the maker's exact
+// approval replaces it, and the refused edit is then recovered from what its attempt persisted: never replayed. `unsent`:
+// the attempt never left (the gate refused its push before dispatch), so the approved build sends it once, its first send.
+async function assertKeptUntilApproved(h, id, edited, text, { unsent = false } = {}) {
+  for (let i = 0; i < 2; i += 1) {
+    assertCopyStop(await pass(reopen(h), edited), 'customApi', 'contoso_calc');
+    assert.ok(await holds(h, id, text), `the local edit "${text}" survives build ${i + 2}`);
+  }
+  const approved = await pass(reopen(h), edited, overwriteCopy('customApi', 'contoso_calc'));
+  assert.ok(approved.halt, 'the refused edit stays owed');
+  assert.notEqual(approved.halt.code, 'workspace-copy-unsent-edits', approved.halt.message);
+  assert.deepEqual(approved.sent.map((r) => `${r.method} ${r.path.split('?')[0]}`), unsent ? [`PATCH /customapis(${id})`] : [], 'replacing the copy sends nothing, and the edit is never replayed');
+  assert.equal(await holds(h, id, text), false, 'the copy was replaced, as the maker approved');
+  assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending, 'its debt is kept');
+}
+
+test('a failed protected send keeps the whole workspace copy: a local edit written while the push was pending survives, and the next build stops with the overwrite approval', async () => {
+  const { h, id, edited, out, state } = await refusedSendWith((h, id, sdk) => {
+    const state = { injected: false };
+    h.sdk.pushArtifact = async (...args) => {
+      const result = await sdk.push(...args);
+      if (!state.injected && args[0] === 'customApi') {
+        await h.sdk.updateElement('customApi', id, '/displayName', 'Maker draft arrived during push');
+        state.injected = true;
+      }
+      return result;
+    };
+    return state;
+  });
+  assert.ok(state.injected);
   assert.ok(out.halt);
   assert.equal(out.sent.length, 1);
-  const diff = await h.sdk.diffArtifact('customApi', id);
-  assert.ok(JSON.stringify(diff).includes('Maker draft arrived during push'), 'the edit the build did not make is kept');
-  // The kept copy stops the next build before anything is sent, the maker's edit still there.
-  h.sdk.pushArtifact = push;
-  const next = await pass(reopen(h), apiSpec(api({ description: 'Build-owned edit' })));
-  assert.equal(next.halt && next.halt.code, 'create-completion-required', next.halt && next.halt.message);
-  assert.deepEqual(next.sent, []);
-  assert.ok(JSON.stringify(await h.sdk.diffArtifact('customApi', id)).includes('Maker draft arrived during push'));
+  assert.ok(await holds(h, id, 'Maker draft arrived during push'), 'the edit the build did not make is kept');
+  assert.ok(await holds(h, id, 'Build-owned edit'), 'the build\'s own unsent change is kept with it: the copy is never reset');
+  await assertKeptUntilApproved(h, id, edited, 'Maker draft arrived during push');
 });
 
-test('a failed protected send never takes a failed read as proof that its copy may be removed', async () => {
-  const h = await harness({ intercept: ({ method, path }) => (method === 'POST' && path.startsWith('/customapis')
-    ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'refused create' } } } : undefined) });
+test('a local edit made while the build prepares its protected send is never taken for the build\'s own: the failed send keeps it', async () => {
+  const { h, id, edited, out, state } = await refusedSendWith((h, id, sdk) => {
+    const state = { injected: false };
+    // The maker's edit lands between the build's own element updates and its push, through the same SDK.
+    h.sdk.updateElement = async (...args) => {
+      const value = await sdk.update(...args);
+      if (!state.injected && args[0] === 'customApi' && args[2] === '/description') {
+        await sdk.update('customApi', id, '/displayName', 'Maker draft before capture');
+        state.injected = true;
+      }
+      return value;
+    };
+    return state;
+  });
+  assert.ok(state.injected);
+  assert.ok(out.halt);
+  // The push now carries a field the build's plan does not hold (the maker's), so the gate refuses it before it leaves.
+  assert.deepEqual(out.sent, [], 'the maker\'s field is never sent under the build\'s attempt');
+  assert.ok(await holds(h, id, 'Maker draft before capture'), 'the maker\'s edit survives the failed send');
+  await assertKeptUntilApproved(h, id, edited, 'Maker draft before capture', { unsent: true });
+});
+
+test('a local edit made after a failed protected send, while a build compares the copy, survives: the next build stops with the overwrite approval', async () => {
+  const { h, id, edited, out, state } = await refusedSendWith((h, id, sdk) => {
+    const state = { failed: false, injected: false };
+    h.sdk.pushArtifact = async (...args) => {
+      try {
+        return await sdk.push(...args);
+      } finally {
+        if (args[0] === 'customApi') state.failed = true;
+      }
+    };
+    // The maker's edit lands just after the first comparison of the copy that follows the failed send — the
+    // diff is not locked, so nothing a comparison answered can be relied on once it has returned.
+    h.sdk.diffArtifact = async (...args) => {
+      const diff = await sdk.diff(...args);
+      if (state.failed && !state.injected && args[0] === 'customApi') {
+        await sdk.update('customApi', id, '/displayName', 'Maker draft after comparison');
+        state.injected = true;
+      }
+      return diff;
+    };
+    return state;
+  });
+  assert.ok(out.halt);
+  assertCopyStop(await pass(reopen(h), edited), 'customApi', 'contoso_calc');
+  assert.ok(state.injected, 'the edit landed after a comparison of the copy');
+  assert.ok(await holds(h, id, 'Maker draft after comparison'), 'the maker\'s edit survives');
+  await assertKeptUntilApproved(h, id, edited, 'Maker draft after comparison');
+});
+
+test('a failed protected send never removes its copy, and an approved replacement that cannot read the server\'s row keeps it and stops', async () => {
+  let denyRead = false;
+  const h = await harness({ intercept: ({ method, path }) => {
+    if (method === 'POST' && path.startsWith('/customapis')) return { statusCode: 400, body: { error: { code: '0x80040216', message: 'refused create' } } };
+    if (denyRead && method === 'GET' && path.startsWith('/customapis(')) return { statusCode: 403, body: { error: { code: '0x80040220', message: 'read denied' } } };
+    return undefined;
+  } });
   const spec = apiSpec();
   const fetch = h.sdk.fetchArtifact.bind(h.sdk);
   // Every read of the Custom API into the workspace is refused, as a denied or failed read would be.
@@ -886,10 +982,21 @@ test('a failed protected send never takes a failed read as proof that its copy m
   };
   const out = await pass(h, spec);
   assert.ok(out.halt);
-  const listed = (await h.sdk.listArtifacts('customApi')).map((s) => s.id);
-  assert.equal(listed.length, 1, 'the copy of the refused create is kept, not deleted on a read that proves nothing');
+  const listed = async () => (await h.sdk.listArtifacts('customApi')).map((s) => s.id);
+  assert.equal((await listed()).length, 1, 'the copy of the refused create is kept, not deleted on a read that proves nothing');
+  assertCopyStop(await pass(reopen(h), spec), 'customApi', 'contoso_calc');
+  // Approved, but the server's row cannot be read: nothing proves what to put in the copy's place, so it is kept.
+  denyRead = true;
+  const unread = await pass(reopen(h), spec, overwriteCopy('customApi', 'contoso_calc'));
+  assert.equal(unread.halt && unread.halt.code, 'workspace-copy-unsent-edits', unread.halt && unread.halt.message);
+  assert.match(unread.halt.message, /could not be replaced with the server's as approved/);
+  assert.deepEqual(unread.sent, []);
+  assert.equal((await listed()).length, 1);
+  // Approved, and the row is proved absent (the create was never taken): the local copy is all there is, and it goes.
+  denyRead = false;
+  const approved = await pass(reopen(h), spec, overwriteCopy('customApi', 'contoso_calc'));
+  assert.ok(!approved.halt || approved.halt.code !== 'workspace-copy-unsent-edits', approved.halt && approved.halt.message);
 });
-
 // A rule create whose content the service saved and acknowledged, with its solution membership complete, whose initial
 // publication was never dispatched (the process that saved it stopped before the publish left). `settle: true` is what
 // the build's own create set does next (it records the children this process saw created); without it, an earlier

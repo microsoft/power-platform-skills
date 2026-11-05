@@ -654,8 +654,8 @@ function identityStop(code, id) {
 
 // Under an exact port the row its binding names is read into the workspace with a fetch that OVERWRITES the local copy.
 // A copy that holds edits the service has not seen (an earlier run's unsent change, or one made by hand) is the maker's to
-// keep or drop, never this read's: it stops typed, the copy kept (the protected preflight names it first, with the steps
-// to take). Only a diff (lib/unsynced-edits.js), no request; a copy the workspace does not hold reads clean, and a diff
+// keep or drop, never this read's: it stops typed, the copy kept (the protected preflight names it first, as
+// workspace-copy-unsent-edits with the one approval that replaces it, overwrite:<kind>:<key>). Only a diff (lib/unsynced-edits.js), no request; a copy the workspace does not hold reads clean, and a diff
 // that cannot be made reads as edits, so a doubtful copy is kept too.
 async function refuseLocalDraft(sdk, kind, id) {
   const { hasUnsyncedEdits } = require('./unsynced-edits.js');
@@ -1851,7 +1851,7 @@ async function applyCreate(op, ctx, result, known) {
   let given = null;
   let answer;
   try {
-    answer = await creates.run({ kind, key: portKeyOf(kind, key), identity: op.detail.identity || op.target, childKeys: op.detail.childKeys }, async ({ id, childIds = {}, ownCopy }) => {
+    answer = await creates.run({ kind, key: portKeyOf(kind, key), identity: op.detail.identity || op.target, childKeys: op.detail.childKeys }, async ({ id, childIds = {} }) => {
       sent = true;
       given = { id, childIds: { ...childIds } };
       handle.ids = given;
@@ -1861,8 +1861,6 @@ async function applyCreate(op, ctx, result, known) {
         // createArtifact only writes the local workspace, so nothing left this machine.
         throw tagged(kind, key, codeOf(error), 'nothing');
       }
-      // An exact port is handed the copy it may later put back, exactly as it is pushed (configuration-protected.js).
-      if (typeof ownCopy === 'function') await ownCopy();
       let pushed;
       try {
         pushed = await withConfigurationWrite(() => ctx.sdk.pushArtifact(kind, id));
@@ -1956,15 +1954,13 @@ async function applyUpdate(op, ctx, result, known) {
   // How the item ends when a create of a child stops it short of the write.
   let stop = null;
 
-  // The write itself: every change into the workspace copy, then one push. `ownCopy` (an exact port's) is handed the copy
-  // exactly as it is pushed, the only copy that port may later put back (configuration-protected.js).
-  const write = async (ownCopy) => {
+  // The write itself: every change into the workspace copy, then one push.
+  const write = async () => {
     try {
       for (const change of changes) await ctx.sdk.updateElement(kind, id, change.pointer, change.value);
     } catch (error) {
       throw tagged(kind, key, codeOf(error), 'nothing');
     }
-    if (typeof ownCopy === 'function') await ownCopy();
     let pushed;
     try {
       pushed = await withConfigurationWrite(() => ctx.sdk.pushArtifact(kind, id));
@@ -2011,7 +2007,7 @@ async function applyUpdate(op, ctx, result, known) {
   const updateExactly = async () => {
     let entered = false;
     try {
-      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {}, ownCopy }) => {
+      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {} }) => {
         entered = true;
         for (const { change, child } of created) {
           const childId = plannedIds[child.slot];
@@ -2020,7 +2016,7 @@ async function applyUpdate(op, ctx, result, known) {
           childIds[child.slot] = childId;
         }
         handle.ids = { id, childIds: { ...childIds } };
-        return write(ownCopy);
+        return write();
       });
       return answer.result;
     } catch (error) {
@@ -2612,18 +2608,37 @@ const TOKEN_ROOTS = Object.freeze({
 // Sort the `--authorize` tokens the maker passed: those of this module's kinds are checked against the App Spec
 // (the root must be declared; the field must be one a plan can ask for) and normalized exactly as a plan writes them
 // (lower-cased names and child names; a rule's key and a condition's key byte for byte). Tokens of other kinds are
-// answered unclaimed, for their own grammar. `{keys: Set, problems: [{token, code}], unclaimed: [token]}`.
+// answered unclaimed, for their own grammar. `{keys: Set, overwrite: Set, problems: [{token, code}], unclaimed: [token]}`.
+// `overwrite:<kind>:<declared key>` (e.g. overwrite:customApi:contoso_Calc) is the one approval that replaces a protected
+// item's local workspace copy with the server's (lib/configuration-protected.js, the preflight's stop on a copy that
+// differs). It names a whole root item, matched as the other tokens are (a duplicate rule's key exactly), and is read only
+// under `configurationIdentity: "stable-v1"`: the ordinary path never stops on a configuration copy, so the token would
+// approve nothing. It lands in `overwrite` as `<kind>:<port key>` (the flag minus its verb, reconcile-common.js approvalKey).
+const OVERWRITE_TOKEN = /^overwrite:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)$/;
 function configurationAuthorizationKeys(tokens, spec) {
   const keys = new Set();
+  const overwrite = new Set();
   const problems = [];
   const unclaimed = [];
+  const declaredRoots = (kind) => {
+    const [list, field] = TOKEN_ROOTS[kind];
+    return Array.isArray(spec && spec[list]) ? spec[list].filter(isObject).map((e) => e[field]).filter(nonEmptyString) : [];
+  };
   for (const token of tokens || []) {
     const text = typeof token === 'string' ? token : '';
+    const replace = OVERWRITE_TOKEN.exec(text);
+    if (replace) {
+      const [, kind, name] = replace;
+      const root = declaredRoots(kind).find((n) => (kind === 'duplicateRule' ? n === name : lower(n) === lower(name)));
+      if (!root) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
+      else if (!isObject(spec) || spec.configurationIdentity !== 'stable-v1') problems.push({ token: text, code: 'CONFIGURATION_OVERWRITE_UNPROTECTED' });
+      else overwrite.add(`${kind}:${portKeyOf(kind, root)}`);
+      continue;
+    }
     const kind = text.slice(0, text.indexOf(':'));
     if (!has(TOKEN_FIELDS, kind)) { unclaimed.push(token); continue; }
-    const [list, field] = TOKEN_ROOTS[kind];
     const rest = text.slice(kind.length + 1);
-    const roots = Array.isArray(spec && spec[list]) ? spec[list].filter(isObject).map((e) => e[field]).filter(nonEmptyString) : [];
+    const roots = declaredRoots(kind);
     const exact = kind === 'duplicateRule';
     const root = roots
       .filter((name) => (exact ? rest.startsWith(`${name}:`) : lower(rest).startsWith(`${lower(name)}:`)))
@@ -2634,7 +2649,7 @@ function configurationAuthorizationKeys(tokens, spec) {
     if (!TOKEN_FIELDS[kind].test(tail)) { problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_INVALID' }); continue; }
     keys.add(`${kind}:${portKeyOf(kind, root)}:${tail}`);
   }
-  return { keys, problems, unclaimed };
+  return { keys, overwrite, problems, unclaimed };
 }
 
 // The build runner's items for this feature: ONE data-model item and ONE solution-version item, whatever the
@@ -3094,6 +3109,9 @@ module.exports = {
   configurationDestructive,
   configurationHaltMessage,
   configurationAuthorizationKeys,
+  // The `--authorize` flags spelled as one shell argument each (commandArgOrPlaceholder): the protected preflight's
+  // overwrite approval names a duplicate rule's key, which may hold white space or quotes.
+  authorizeFlags,
   runConfigurationStep,
   configurationBlocking,
   configurationPlanItems,
