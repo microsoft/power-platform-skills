@@ -731,6 +731,110 @@ test('a bound protected item whose workspace copy holds unsent edits is never re
   assert.deepEqual(again.sent, []);
 });
 
+// A rule create whose content the service saved and acknowledged, with its solution membership complete, whose initial
+// publication was never dispatched (the process that saved it stopped before the publish left). `settle: true` is what
+// the build's own create set does next (it records the children this process saw created); without it, an earlier
+// process's answers are gone and nothing persisted proves the conditions this plugin's own.
+const publishes = (requests) => requests.filter((r) => /PublishDuplicateRule$/.test(r.path));
+const ruleOnly = () => configSpec({ environmentVariables: [], customApis: [] });
+async function savedUnpublishedRule(h, { settle }) {
+  const types = await B.readComponentTypes(h.sdk.dataverse);
+  const planned = B.planOf(ruleOnly(), { kind: 'duplicateRule', key: 'email', solution: SOL, componentTypes: types.types });
+  const [attempt] = h.ctx.begin([planned.plan]);
+  const classify = B.createSetClassifier([{ token: attempt.token, planned }]);
+  const artifact = B.artifactFor(planned);
+  artifact.status = 'unpublished';
+  const saved = await h.ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, acceptResult: B.acceptResultFor(planned) }, async () => {
+    await h.sdk.createArtifact('duplicateRule', artifact);
+    return h.sdk.pushArtifact('duplicateRule', planned.rows[0].id);
+  });
+  assert.equal(saved.checked, true, 'the content was saved and acknowledged');
+  const absent = (await B.observe(h.sdk.dataverse, planned)).members.filter((m) => m.state === 'absent');
+  await h.ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE }, async () => {
+    for (const m of absent) {
+      const want = planned.plan.members.find((x) => x.id === m.id);
+      await h.sdk.dataverse.post('/AddSolutionComponent', { ComponentId: m.id, ComponentType: want.componentType, SolutionUniqueName: SOL, AddRequiredComponents: false });
+    }
+  });
+  if (settle) {
+    const [settled] = h.ctx.settle([{ token: attempt.token, observation: await B.observe(h.sdk.dataverse, planned) }]);
+    assert.equal(settled.verdict.code, 'create-completion-required');
+  }
+  const pending = h.store.readGroup('duplicateRule', 'email').pending;
+  assert.equal(pending.acknowledgedRoot, true);
+  assert.deepEqual(pending.rowProtocol.effects.filter((e) => e.kind === 'rule-state').map((e) => e.dispatched), [false], 'the publication never left');
+  assert.equal(publishes(h.org.requests).length, 0);
+  return { ruleId: planned.rows[0].id, token: attempt.token };
+}
+
+test('a saved rule create whose initial publication never left is published once by the rerun, then bound; nothing is sent again', async () => {
+  const h = await harness();
+  const { ruleId } = await savedUnpublishedRule(h, { settle: true });
+  const later = reopen(h);
+  const out = await pass(later, ruleOnly());
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent.map((r) => r.path.split('?')[0]), [`/duplicaterules(${ruleId})/Microsoft.Dynamics.CRM.PublishDuplicateRule`], 'only the owed publication, once');
+  assert.equal(h.org.rows('duplicaterules').find((r) => r.duplicateruleid === ruleId).statecode, 1);
+  assert.ok(committed(h, 'duplicateRule', 'email').records.some((r) => r.id === ruleId));
+  const rerun = await pass(later, ruleOnly());
+  assert.equal(rerun.halt, null);
+  assert.deepEqual(rerun.sent, []);
+});
+
+test('an unsent rule publication whose conditions no persisted answer proves asks for their approval before anything is sent, then is sent once', async () => {
+  const h = await harness();
+  await savedUnpublishedRule(h, { settle: false });
+  const asked = await pass(reopen(h), ruleOnly());
+  assert.equal(asked.halt && asked.halt.code, 'create-ownership-required', asked.halt && asked.halt.message);
+  assert.deepEqual(asked.sent, [], 'nothing is published before every row is proved this plugin\'s own');
+  const quoted = /given after checking those rows are yours: (.*)\.$/.exec(asked.halt.message);
+  assert.ok(quoted, asked.halt.message);
+  const tokens = JSON.parse(`[${quoted[1]}]`);
+  assert.ok(tokens.length && tokens.every((t) => t.startsWith('adopt:duplicateRuleCondition:')), tokens.join(' '));
+  const approved = reopen(h, tokens);
+  const out = await pass(approved, ruleOnly());
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.equal(publishes(out.sent).length, 1);
+  assert.equal(out.sent.length, 1);
+  assert.deepEqual((await pass(approved, ruleOnly())).sent, []);
+});
+
+test('the one send of an unsent rule publication is fenced: a refused publish stays owed and is never sent again', async () => {
+  let refuse = true;
+  const h = await harness({ intercept: ({ method, path }) => (refuse && method === 'POST' && /PublishDuplicateRule$/.test(path) ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'publish failed' } } } : undefined) });
+  const { ruleId } = await savedUnpublishedRule(h, { settle: true });
+  const first = await pass(reopen(h), ruleOnly());
+  assert.equal(first.halt && first.halt.code, 'configuration-incomplete', first.halt && first.halt.message);
+  assert.match(first.halt.message, /duplicateRule email \(create-completion-required\)/);
+  assert.equal(publishes(first.sent).length, 1, 'sent once');
+  assert.deepEqual(h.store.readGroup('duplicateRule', 'email').pending.rowProtocol.effects.filter((e) => e.kind === 'rule-state').map((e) => e.dispatched), [true]);
+  refuse = false;
+  const again = await pass(reopen(h), ruleOnly());
+  assert.equal(again.halt && again.halt.code, 'create-completion-required');
+  assert.equal(again.halt.phase, 'preflight');
+  assert.deepEqual(again.sent, [], 'a publish that was sent is never replayed');
+  // The maker publishes it under the same id; the next build binds it with nothing sent.
+  await h.org.request({ url: `${h.org.origin}/api/data/v9.2/duplicaterules(${ruleId})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const done = await pass(reopen(h), ruleOnly());
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent, []);
+});
+
+test('only one claim may send an unsent rule publication: an older claim is refused at dispatch, and a dispatched one is never claimed again', async () => {
+  const h = await harness();
+  const { ruleId, token } = await savedUnpublishedRule(h, { settle: true });
+  const older = h.store.claimUnsentRowEffect({ token, kind: 'rule-state', id: ruleId });
+  const newer = h.store.claimUnsentRowEffect({ token, kind: 'rule-state', id: ruleId });
+  assert.equal(newer.epoch, older.epoch + 1);
+  assert.throws(() => h.store.markRowEffectDispatch({ token, epoch: older.epoch, kind: 'rule-state', id: ruleId }), (e) => e.code === 'managed-settlement-pending');
+  h.store.markRowEffectDispatch({ token, epoch: newer.epoch, kind: 'rule-state', id: ruleId });
+  assert.throws(() => h.store.claimUnsentRowEffect({ token, kind: 'rule-state', id: ruleId }), (e) => e.code === 'managed-settlement-pending');
+  assert.throws(() => h.store.claimUnsentRowEffect({ token, kind: 'membership', id: ruleId }), (e) => e.code === 'managed-not-settled');
+  const out = await pass(reopen(h), ruleOnly());
+  assert.equal(out.halt && out.halt.code, 'create-completion-required');
+  assert.deepEqual(out.sent, []);
+});
+
 test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {
   const { configurationIdentity, ...plain } = configSpec();
   assert.equal(configurationIdentity, 'stable-v1');

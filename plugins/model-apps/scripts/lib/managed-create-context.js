@@ -350,6 +350,18 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       return out;
     },
     /**
+     * Claim the one completion effect `{ kind, id }` of the attempt `token` that its record proves was never dispatched
+     * (store.claimUnsentRowEffect: a saved rule create's initial publication), under a new fenced epoch. Answers the
+     * entry `run` takes: { family, key, token, epoch, expected }.
+     */
+    claimEffect(token, { kind, id }) {
+      const { epoch } = store.claimUnsentRowEffect({ token, kind, id });
+      store.refresh();
+      const a = attemptOf(snapshot(), token);
+      begun.add(token);
+      return { family: a.family, key: a.key, token, epoch, expected: a.expected };
+    },
+    /**
      * Run `fn` in the request scope of `attempts` (what begin/resume answered); keeps the answers per attempt.
      * `acceptResult(value)` is the driver's check of what `fn` answered (acceptSaved for an SDK push): the run is CHECKED
      * only when it answers exactly `true` (a throw is false), `fn` threw nothing, the scope latched no local failure and

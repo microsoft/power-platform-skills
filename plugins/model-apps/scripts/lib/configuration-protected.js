@@ -30,6 +30,8 @@ const IDENTITY = 'stable-v1';
 const EDIT_CODE = 'configuration-edit-unsupported';
 const UNVERIFIED_CODE = 'create-identity-unverified';
 const CONFLICT_CODE = 'create-identity-conflict';
+const COMPLETION_CODE = 'create-completion-required';
+const OWNERSHIP_CODE = 'create-ownership-required';
 const OPT_IN_CODE = 'create-identity-opt-in-required';
 // A local workspace copy with edits the service has not seen: the code (and the steps) of the declared forms' same stop
 // (form-layout-reconcile.js, category workspace-copy-unsent-edits).
@@ -218,7 +220,9 @@ async function childVerdict(env, planned, shape) {
  * rule created without an explicit status owes its initial publication, and a rerun after a partial create proves the
  * rows and that state at the same ids — it commits only when the rule is published (by the original send, or by the
  * maker under the same id), and it never sends the publication again: an uncertain or failed publish is not replayed,
- * it stays a create-completion-required halt. A declaration changed since the attempt is managed-pending-intent-changed.
+ * it stays a create-completion-required halt. The one exception is a publication the attempt's own record proves never
+ * left (unsentPublication): that one is sent once, fenced (publishOnce). A declaration changed since the attempt is
+ * managed-pending-intent-changed.
  *
  * A pending EDIT of a bound item is judged the same way, by the attempt's own persisted rows: its declaration digest is
  * recomputed from today's declaration over THOSE rows (B.declarationSha256Of), and each row is read at its bound id and
@@ -285,6 +289,67 @@ async function settlePendingEdit(env, ctx, item, rec) {
   ctx.acceptReadOnly([{ token: item.token, observation, capture, declarationSha256: rec.declarationSha256 }]);
 }
 
+/**
+ * The one completion a pending rule create may still send itself: its initial publication, when the attempt's OWN
+ * record proves that publish never left — the root create acknowledged by its answer (the content was saved), the
+ * plan's `rule-state` effect still `dispatched: false` (the transport seals it dispatched before the request leaves,
+ * so an uncertain, failed or lost publish always reads dispatched), the rule read unpublished, and the attempt
+ * otherwise exactly what it prepared: judged as if the publication had landed, it would commit. Read only. Answers
+ * null when that is not the case (the halt stands), or { would }: the verdict that hypothetical judgement gave — a
+ * commit (the publication is the only thing owed: resolve sends it once), or the halt that would still stand after it
+ * (an ownership approval the maker must give first, named now rather than after the publish).
+ * Never for an edit (a bound rule is never published again), a publish that was or may have been sent, or a rule
+ * whose rows, members or declaration are not exactly the attempt's.
+ */
+function unsentPublication(ctx, item, rec) {
+  const a = item.attempt;
+  const p = a && a.rowProtocol;
+  if (!ctx || item.edit || item.planned.kind !== 'duplicateRule' || !p) return null;
+  const v = rec.verdict;
+  if (v.action !== 'halt' || v.code !== COMPLETION_CODE || v.phase !== 'state-pending') return null;
+  if (a.acknowledgedRoot !== true || p.completion.ruleState !== 'published' || !rec.observation || rec.observation.ruleState !== 'unpublished') return null;
+  const effect = p.effects.find((e) => e.kind === 'rule-state');
+  if (!effect || effect.dispatched) return null;
+  const would = ctx.classify(item.token, { ...rec.observation, ruleState: p.completion.ruleState }, { declarationSha256: item.planned.plan.declarationSha256 });
+  return would.action === 'commit' || would.code === OWNERSHIP_CODE ? { would } : null;
+}
+
+// The publish job is asynchronous: the rule reads Publishing (statecode 0, statuscode 1, neither state) until it ends.
+// The rule's own state is what proves it, so it is read again a bounded number of times (reads only); a rule still not
+// published then keeps its owed state, and a later build commits it once a read finds it published — never sending again.
+const PUBLISH_READS = 10;
+const PUBLISH_READ_INTERVAL_MS = 3000;
+
+/**
+ * Send the publication unsentPublication proved never dispatched, once, through the attempt's fenced create set:
+ *   POST /duplicaterules(<id>)/Microsoft.Dynamics.CRM.PublishDuplicateRule  {}
+ * claimed first under a new epoch (store.claimUnsentRowEffect), classified as the plan's own rule-state effect and sealed
+ * dispatched before it leaves; then the attempt is observed and settled. Answers the settled verdict.
+ * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/publishduplicaterule
+ */
+async function publishOnce(env, ctx, item) {
+  const { planned } = item;
+  const id = planned.plan.rows[0].id;
+  const attempt = ctx.claimEffect(item.token, { kind: 'rule-state', id });
+  const classify = B.createSetClassifier([{ token: attempt.token, planned }]);
+  const sent = await ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label: `configuration publish duplicateRule ${planned.key}` },
+    () => env.dataverse.post(`/duplicaterules(${id})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, {}));
+  let observation = await B.observe(env.dataverse, planned);
+  // Only a publish the service accepted (a 2xx answer) is waited for; a refused or unanswered one is judged by this one
+  // read (it may still have been applied: a read that finds the rule published proves it, and nothing is ever sent
+  // again either way).
+  const accepted = !sent.error && !sent.localError
+    && ctx.facts(item.token).some((f) => f.type === 'effect' && f.kind === 'rule-state' && f.outcome === 'acknowledged');
+  for (let i = 1; accepted && observation.ruleState !== 'published' && i < PUBLISH_READS; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, PUBLISH_READ_INTERVAL_MS));
+    // eslint-disable-next-line no-await-in-loop
+    observation = await B.observe(env.dataverse, planned);
+  }
+  const [settled] = ctx.settle([{ token: item.token, observation, declarationSha256: planned.plan.declarationSha256 }]);
+  return settled.verdict;
+}
+
 const haltOf = (kind, key, verdict) => ({
   kind, key, ...(verdict.rows && verdict.rows[0] ? { id: verdict.rows[0].id } : {}), code: verdict.code || UNVERIFIED_CODE, message: verdict.message || `the ${kind} "${key}" could not be recovered`,
   ...(Array.isArray(verdict.approvals) && verdict.approvals.length ? { approvals: verdict.approvals.slice() } : {}),
@@ -326,7 +391,13 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       }
       if (item.state === 'pending') {
         const rec = await recoverPending(env, ctx, item);
-        if (rec.verdict.action === 'halt') { halts.push(haltOf(kind, item.planned.key, rec.verdict)); continue; }
+        if (rec.verdict.action === 'halt') {
+          // A saved rule create whose initial publication provably never left: resolve sends it once (unsentPublication).
+          const owed = unsentPublication(ctx, item, rec);
+          if (owed && owed.would.action === 'commit') continue;
+          halts.push(haltOf(kind, item.planned.key, owed ? owed.would : rec.verdict));
+          continue;
+        }
         // A complete edit settles read-only (resolve): nothing more is written for it, so it is not judged as an edit.
         if (!item.edit || rec.verdict.action === 'commit') continue;
         if (!rec.sameRows && item.attempt.phase !== 'prepared') { halts.push(haltOf(kind, item.planned.key, pendingEditChanged(item.planned))); continue; }
@@ -421,7 +492,9 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         return { state: 'present', id: rootId };
       }
       if (item.state === 'pending') {
-        const { verdict, observation } = await recoverPending(await env(), ctx, item);
+        const rec = await recoverPending(await env(), ctx, item);
+        let { verdict } = rec;
+        const { observation } = rec;
         if (verdict.action === 'commit') {
           // The earlier create is complete as it was planned: commit it, then it is this build's bound row.
           const [settled] = ctx.settle([{ token: item.token, observation, declarationSha256: item.planned.plan.declarationSha256 }]);
@@ -431,6 +504,10 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         }
         // Nothing the attempt sent can have been applied: it is created again, under the same ids (run resumes it).
         if (verdict.action === 'resume') return { state: 'absent', id: rootId };
+        // A saved rule create whose initial publication provably never left: sent once, fenced, then settled.
+        const owed = unsentPublication(ctx, item, rec);
+        if (owed) verdict = owed.would.action === 'commit' ? await publishOnce(await env(), ctx, item) : owed.would;
+        if (verdict.action === 'commit') return { state: 'present', id: rootId };
         const h = haltOf(kind, item.planned.key, verdict);
         throw stop(h.code, h.message, h);
       }

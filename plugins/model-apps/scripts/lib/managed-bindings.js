@@ -2486,6 +2486,40 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       });
     },
     /**
+     * Claim ONE completion effect of a configuration attempt that its own record proves was never dispatched, after the
+     * rest of the attempt was sent: a duplicate rule's initial publication (`rule-state`), owed by a create whose root an
+     * answer acknowledged (noteSaved), when the run that saved it stopped before the publish left (a crash, a lost
+     * process). Checked against the record reread under the lease, never against what the caller read before:
+     *   - the attempt keeps a row protocol, an expected proof and an observed send window, and its root create was
+     *     acknowledged by its own answer;
+     *   - its phase is `sending` or `state-pending` (its members are complete or still being added, never
+     *     `membership-pending`), and the effect is the rule-state of its own root and still `dispatched: false`.
+     * Anything else is `managed-settlement-pending`, nothing written. The claim moves the window to a new epoch (an older
+     * run's dispatch under the old one is refused, as for 'continue') and puts the attempt back to `sending`, so the one
+     * publish goes through the same fenced transport as the original (markRowEffectDispatch seals it dispatched before
+     * it leaves, once): a publish that was, or may have been, dispatched is never claimed again. Answers { epoch }.
+     */
+    claimUnsentRowEffect({ token, kind, id } = {}) {
+      if (kind !== 'rule-state') throw storeError(CODES.notSettled, `claimUnsentRowEffect claims a rule's state only, not a ${kind}`);
+      let epoch = null;
+      mutate((env, disk, spend) => {
+        const a = requireAttempt(env, disk, token);
+        if (!isRowFamily(a.family) || !a.rowProtocol) throw storeError(CODES.notSettled, 'claimUnsentRowEffect claims configuration attempts only');
+        const name = `the managed ${a.family} "${a.key}"`;
+        if (!a.expected || !a.sendWindow || a.acknowledgedRoot !== true || (a.phase !== 'sending' && a.phase !== 'state-pending')) {
+          throw storeError(CODES.pending, `${name} attempt is not a saved create whose rule state alone is owed; nothing is sent under it`);
+        }
+        const e = a.rowProtocol.effects.find((x) => x.kind === kind && x.id === normalizeGuid(id));
+        if (!e || e.id !== rowIdKey(a.root.id)) throw storeError(CODES.requestMismatch, `the ${kind} of ${id} is not an effect the attempt of ${name} prepared for its root`);
+        if (e.dispatched) throw storeError(CODES.pending, `the ${kind} of ${id} was already sent once for ${name}; it is not sent again`);
+        spend(token);
+        a.sendWindow.epoch += 1;
+        a.phase = 'sending';
+        epoch = a.sendWindow.epoch;
+      });
+      return { epoch };
+    },
+    /**
      * Mark, in one write immediately before the one send of `scope` under `token`:
      *   groups   [{ family, key }] the owed, unsent publication each of them pays: owed -> dispatching. The caller read
      *            each of them not yet live at its desired hash (publishManagedScope `due`), so a later read that shows it
