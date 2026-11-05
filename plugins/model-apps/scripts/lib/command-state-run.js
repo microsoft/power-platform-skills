@@ -97,6 +97,9 @@ function commandStateMode(spec, { apply = false, publish = false, phases = PHASE
   return { mode: 'apply' };
 }
 
+// The remedy of a row that no longer holds its flags at the final proof: no write of this build is claimed, and none is undone.
+const LATE_MISMATCH_REMEDY = 'this build did not overwrite that change and rolls nothing back. Read the row (list-command-states.js), find out what changed it, then run the build again';
+
 function fail(code, message, detail) {
   return new CommandStateError(code, `${message} — ${REMEDY[code] || 'see the message above'}`, detail);
 }
@@ -431,6 +434,19 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     throw fail(CODES.writeUnknown, `${label(item)}: the write of ${flagWords(fresh.delta)} got ${why}; ${seen}`);
   }
 
+  // A row found without its declared flags at the final proof, said from what THIS run did to it. The commands phase already read each
+  // written row back holding the flags, so a mismatch here is a change made during the build, after that check. It keeps the code
+  // command-state-not-confirmed but not that code's remedy: "the platform accepted the write" is true only of a row this run wrote, and a
+  // row it left `unchanged` was never written by it.
+  function lateMismatch(s, row) {
+    const done = results.get(s.rowId);
+    const outcome = done && done.outcome;
+    const before = outcome === 'unchanged' ? 'this build did not write it (it already held the declared flags)'
+      : (outcome === 'acknowledged' || outcome === 'observed-matching-after-unknown-send') ? 'this build\'s write was accepted and read back holding the declared flags'
+        : 'it was checked earlier in the build';
+    return new CommandStateError(CODES.notConfirmed,
+      `${label(s)}: ${before}, but it now holds hidden ${row.hidden}, disabled ${row.disabled}: the flags no longer match, so the row changed during the build — ${LATE_MISMATCH_REMEDY}`);
+  }
   // The final proof (assertComplete): a fresh app context, then every declared row read and judged against it and its flags compared.
   async function recheckAtCompletion() {
     const lateNote = 'checked again at the end of the build, after its app work; the rows it wrote stay written and nothing is rolled back';
@@ -440,7 +456,7 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
       for (const s of states) {
         const { row } = await readJudged(context, s);
         if (!matches(s, row)) {
-          throw fail(CODES.notConfirmed, `${label(s)}: it now holds hidden ${row.hidden}, disabled ${row.disabled}`);
+          throw lateMismatch(s, row);
         }
       }
     } catch (error) {

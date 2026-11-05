@@ -347,7 +347,25 @@ test('the final proof also fails a row that no longer holds the declared flags a
   const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
   assert.strictEqual(error && error.code, 'command-state-not-confirmed', error && error.message);
   assert.match(error.message, /nothing is rolled back: .*it now holds hidden false/);
+  assert.match(error.message, /this build's write was accepted and read back holding the declared flags, but it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build/);
+  assert.match(error.message, /this build did not overwrite that change/);
   assert.strictEqual(h.patches().length, 1);
+  assert.strictEqual(error.commandStates.rows[0].outcome, 'acknowledged');
+});
+
+test('a row this build left unchanged that drifts before the final proof fails without a write being claimed', async () => {
+  const rows = [commandRow(ROW, T, MD, { hidden: true })];
+  const h = harness({ rows, onPublish: () => { rows[0].hidden = false; rows[0]['@odata.etag'] = 'W/"2000"'; } });
+  const spec = specFor();
+  const { approvals } = await h.approve(spec);
+  const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
+  assert.strictEqual(error && error.code, 'command-state-not-confirmed', error && error.message);
+  assert.strictEqual(h.patches().length, 0, 'the row held the flags through the commands phase');
+  assert.strictEqual(error.commandStates.rows[0].outcome, 'unchanged');
+  assert.deepStrictEqual(error.commandStates.rows[0].changed, []);
+  assert.strictEqual(error.commandStates.publication[0].outcome, 'confirmed');
+  assert.match(error.message, /this build did not write it \(it already held the declared flags\), but it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build/);
+  assert.doesNotMatch(error.message, /accepted/, 'no write of this build is claimed');
 });
 // The build's own entry (build-model-app.js buildModelApp) with its durable journal, for what a halt leaves on disk and says on the console.
 async function buildWithJournal(h, spec, approvals) {
