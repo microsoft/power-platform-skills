@@ -1385,9 +1385,16 @@ async function verifySpec(spec, read, opts = {}) {
   // Command states: each declared commandStates[] entry's row holds the flags it declares (verifyCommandStates, lib/command-state-read.js). Unlike
   // the existence check above this is not best-effort: a spec that declares states asked for them to be checked, so a reader that cannot read
   // command rows, or a read that fails, fails every entry — never a pass and never left out. Only stored flags are checked, not how the button renders.
+  // A verify of a run that did not run the commands phase (exactly --stage data, which leaves command states alone) reports each entry as
+  // phase-skipped and reads no row: that run never applied them. A verify with no phase list is unrestricted and still checks every entry.
+  const commandsPhaseRan = !ranPhases || ranPhases.has('commands');
   if (usesCommandStates(spec)) {
-    plan.each([spec], async ({ add }) => {
+    plan.each([spec], async ({ add, phaseSkipped }) => {
       const label = (s) => `${s.entity} ${s.bar} row ${s.rowId}`;
+      if (!commandsPhaseRan) {
+        for (const s of normalizeCommandStates(spec)) phaseSkipped.push(`command-state:${label(s)}`);
+        return;
+      }
       let checks;
       if (typeof read.commandStates !== 'function') {
         checks = normalizeCommandStates(spec).map((s) => ({ name: label(s), present: false, detail: 'this reader cannot read command rows' }));

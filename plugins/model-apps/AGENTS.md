@@ -3625,7 +3625,9 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   candidate.
 - **Verify** (`verifyCommandStates`, `verify-spec.js` kind `command-state`): each declared entry's exact row stores
   each declared flag — stored state only, not what the app renders. A reader without command-row access, or a
-  failed read, fails every entry.
+  failed read, fails every entry. A verify of a run that did not run the `commands` phase (exactly `--stage data`)
+  reports each entry as `phaseSkipped` (`command-state:<table> <bar> row <rowId>`) and reads no row; a verify with
+  no phase list is unrestricted and stays fail-closed.
 - **Changed-only**: the `commands` slice includes `commandStates` (by row id) only when some are declared; any change
   is a full build with no debt (`classify-changes.js`), and a spec that declares them never takes a no-op or fast
   apply (`COMMAND_STATES_FULL`, `changed-only-flow.js`).

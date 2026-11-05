@@ -68,6 +68,27 @@ test('verify checks each declared entry; a reader that cannot read command rows,
   assert.deepStrictEqual(kind(plain), [], 'no states: no command-state check');
 });
 
+test('a verify of exactly --stage data reports each entry phase-skipped and reads no row; a full or unrestricted verify still checks them', async () => {
+  const { STAGES, PHASES } = require('../lib/stages.js');
+  const base = { findTable: async () => ({ logicalName: 'new_x' }), findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '<SiteMap/>' };
+  const s = { ...spec([state(ROW), state(ROW2, { disabled: true })]), appShell: { areas: [] } };
+  const kind = (r) => r.checks.filter((c) => c.kind === 'command-state').map((c) => [c.name, c.present]);
+  let reads = 0;
+  const reader = { ...base, commandStates: async () => { reads += 1; return [{ name: 'one', present: true, detail: 'hidden true' }, { name: 'two', present: true, detail: 'disabled true' }]; } };
+  const data = await verifySpec(s, reader, { phases: STAGES.data });
+  assert.deepStrictEqual(kind(data), [], 'no command-state check');
+  assert.deepStrictEqual(data.phaseSkipped, [`command-state:new_x MainTab row ${ROW}`, `command-state:new_x MainTab row ${ROW2}`]);
+  assert.strictEqual(reads, 0, 'and no row read');
+  const dataNoReader = await verifySpec(s, base, { phases: STAGES.data });
+  assert.deepStrictEqual(kind(dataNoReader), [], 'a reader without command rows does not fail a phase that never ran');
+  const full = await verifySpec(s, reader, { phases: PHASES });
+  assert.deepStrictEqual(kind(full), [['one', true], ['two', true]]);
+  assert.strictEqual(reads, 1);
+  const unrestricted = await verifySpec(s, base);
+  assert.deepStrictEqual(kind(unrestricted).map((c) => c[1]), [false, false], 'with no phase list a reader that cannot read command rows still fails every entry');
+  assert.strictEqual(unrestricted.phaseSkipped, undefined);
+});
+
 test('the spec document lists the declared states, with an omitted flag as unchanged, and says nothing when there are none', () => {
   const doc = renderAppSpecDoc(spec([{ entity: 'New_X', location: 'HomeTab', scope: 'table', rowId: ROW, disabled: false }]));
   assert.match(doc, /### Existing command buttons shown or hidden/);

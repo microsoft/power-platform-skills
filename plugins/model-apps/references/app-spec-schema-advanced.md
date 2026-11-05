@@ -208,7 +208,8 @@ picked by its row id. Nothing else about the button changes, and a row is never 
 - **Delayed publication is not fenced.** A table publish that was sent can still complete after a
   halt, or after you remove the entry. This release keeps no record across runs: the next publishing
   run requests the table again only because `commandStates` still names it.
-- **`--verify` checks stored flags** of each declared row — not how the button renders. A changed-only
+- **`--verify` checks stored flags** of each declared row — not how the button renders (a verify of
+  `--stage data` lists them as phase-skipped and reads no row). A changed-only
   apply of a spec with `commandStates` always runs the full build. Removing an entry, or a teardown,
   does not restore a flag, and download does not write `commandStates` back into a spec.
 
