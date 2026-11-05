@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "languageCode": 1033,
+  "solution": { "uniqueName": "ContosoPortableOptions", "publisherPrefix": "cnt" },
+  "app": { "name": "Portable Options", "description": "Keep the option values an existing integration already depends on" },
+  "globalChoices": [
+    { "name": "cnt_region", "displayName": "Region", "options": [{ "value": 1, "label": "North" }, { "value": 2, "label": "South" }, { "value": 10, "label": "Export" }] }
+  ],
+  "entities": [
+    { "schemaName": "cnt_shipment", "displayName": "Shipment", "pluralName": "Shipments",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "cnt_priority", "displayName": "Priority", "type": "Choice",
+          "options": [{ "value": 1, "label": { "1033": "Low", "1036": "Basse" } }, { "value": 5, "label": { "1033": "High", "1036": "Haute" } }] },
+        { "schemaName": "cnt_stage", "displayName": "Stage", "type": "Choice", "options": ["Booked", { "value": 100000005, "label": "Held" }, "Delivered"] },
+        { "schemaName": "cnt_lane", "displayName": "Lane", "type": "Choice", "options": ["Road", "Rail"] },
+        { "schemaName": "cnt_region", "displayName": "Region", "type": "Choice", "globalChoice": "cnt_region" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_shipment", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "cnt_shipment", "name": "High Priority", "columns": ["cnt_name", "cnt_priority", "cnt_stage"], "filters": [{ "attr": "cnt_priority", "op": "eq", "value": 5 }] }],
+  "sampleData": { "cnt_shipment": [{ "cnt_name": "SH-001", "cnt_priority": 5, "cnt_stage": "Held", "cnt_lane": "Rail", "cnt_region": 10 }] },
+  "appShell": { "areas": [{ "label": "Logistics", "groups": [{ "label": "Work", "subAreas": [{ "entity": "cnt_shipment", "title": "Shipments" }] }] }] }
+}

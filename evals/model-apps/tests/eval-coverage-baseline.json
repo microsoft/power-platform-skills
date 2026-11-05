@@ -30,15 +30,15 @@
         "status": "deferred",
         "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers",
         "reason": "Gradeable from the page source, but the only eval-13 fixture, 13-contact-localization, shows real drift: it never reads usersettings and formats nothing through formatDate/formatNumber/formatCurrency (references/localization.md makes the usersettings read mandatory). A correct check fails it, and the runners have no expected-failure mark."
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; picklist options include {value,label} pairs",
-        "reason": "The expectation names an input shape provision-entities.js refuses: its input validation reads each Choice option as a label (a string, or a map of LCID to label) and rejects a {label, value} object ('label' is not an LCID); values are assigned 100000000 + index. It needs rewording to the label form together with agents/genpage-entity-builder.md Step 4, which documents the same refused shape, and the only eval-15 fixture, 15-support-tickets-real, did not capture its input JSON."
       }
     ],
     "neverGraded": [
+      {
+        "runner": "layer-1",
+        "eval": 15,
+        "text": "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; each picklist option is written as its label, in the plan's order (numbered 100000000 + index)",
+        "reason": "Graded from the input JSON each applying run of provision-entities.js (--apply; a run without it only plans and provisions nothing) was handed, provision-input.json, which the plugin's own input gate checks, but the only eval-15 fixture, 15-support-tickets-real, is a capture that did not keep that file, so the check skips it. A capture or a synthetic eval-15 fixture that keeps provision-input.json closes it."
+      },
       {
         "runner": "layer-2",
         "eval": null,

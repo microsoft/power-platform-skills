@@ -160,22 +160,31 @@ function pageStrings(content) {
 
 // The columns an OData $filter or orderBy expression names: `statecode eq 0 and contains(name, 'x')`,
 // `name asc, createdon desc`. Quoted values are dropped first, so `name eq 'Open eq'` names only `name`.
-function expressionColumns(text) {
-  const bare = String(text).replace(/'[^']*'/g, "''");
+// With `paths` (a scenario's verified lookup paths, see columnProblems), a typed navigation path is read whole first —
+// `customerid_account/accountid ne null`, `contains(customerid_account/name,'x')` — as { via, column }, and taken out of the
+// text, so its target column is never misread as a column of the queried table. Without it the text is read exactly as before.
+function expressionColumns(text, paths) {
+  let bare = String(text).replace(/'[^']*'/g, "''");
   const out = [];
+  if (paths) {
+    bare = bare.replace(/(?<![\w/])([A-Za-z_][\w]*)\/([A-Za-z_][\w]*)(?![\w/])/g, (whole, via, column) => {
+      out.push({ via, column });
+      return ' '.repeat(whole.length);
+    });
+  }
   for (const m of bare.matchAll(/\b([A-Za-z_][\w]*)\s+(?:eq|ne|gt|ge|lt|le|asc|desc)\b/gi)) out.push(m[1]);
   for (const m of bare.matchAll(/\b(?:contains|startswith|endswith)\s*\(\s*([A-Za-z_][\w]*)/gi)) out.push(m[1]);
   for (const part of bare.split(',')) {
     const only = /^\s*([A-Za-z_][\w]*)\s*$/.exec(part);
     if (only) out.push(only[1]);
   }
-  return out.filter((name) => !/^(?:and|or|not|null|true|false|eq|ne|gt|ge|lt|le|asc|desc)$/i.test(name));
+  return out.filter((name) => typeof name !== 'string' || !/^(?:and|or|not|null|true|false|eq|ne|gt|ge|lt|le|asc|desc)$/i.test(name));
 }
 
-// Every column a page names in its dataApi calls, as { table, column, where }. Arguments, and the
-// declarations a bare name resolves to, are read from the source with its comments blanked, so
-// `select: ['accountid', /* was 'old_name' */ 'name']` names accountid and name only.
-function namedColumns(content) {
+// Every column a page names in its dataApi calls, as { table, column, where } — and, with `paths`, a typed navigation path
+// as { table, column, via, where }. Arguments, and the declarations a bare name resolves to, are read from the source with its
+// comments blanked, so `select: ['accountid', /* was 'old_name' */ 'name']` names accountid and name only.
+function namedColumns(content, paths) {
   const { code } = sourceView(content);
   const src = withoutComments(content);
   const out = [];
@@ -203,24 +212,41 @@ function namedColumns(content) {
     for (const column of list ? strings(list) : []) out.push({ table, column, where: `${where} select` });
     for (const key of ['orderBy', 'filter']) {
       const text = props.has(key) ? stringValue(props.get(key)) : null;
-      for (const column of text ? expressionColumns(text) : []) out.push({ table, column, where: `${where} ${key}` });
+      for (const column of text ? expressionColumns(text, paths) : []) {
+        out.push(typeof column === 'string' ? { table, column, where: `${where} ${key}` } : { table, column: column.column, via: column.via, where: `${where} ${key}` });
+      }
     }
   }
   return out;
 }
 
 // Returns null when RuntimeTypes.ts registers no table or the page names no column, else a list of problems.
-function columnProblems(files, runtimeTypes) {
+// `context.lookupPaths` (optional) is a scenario's verified lookup metadata — the concrete paths of
+// scripts/get-lookup-metadata.js, [{ table, navigationProperty, target, referencedKey }] — and `context.targetColumns` the target
+// columns verified beside it ({ account: ['name'] }: a target's primary name column a search reads). With it, a typed
+// navigation path in a filter or an orderBy is checked whole: the navigation property must be a verified concrete path of the
+// queried table, and the column after it the target's key, a column RuntimeTypes.ts declares on the target, or one of its
+// verified columns. Without it, nothing changes: a slash in an expression gets no exemption, and its parts are read as before.
+function columnProblems(files, runtimeTypes, context) {
   const tables = runtimeTables(runtimeTypes);
   if (!tables.size) return null;
   const known = (columns, name) => columns.has(name.toLowerCase()) || SYSTEM_COLUMNS.has(name.toLowerCase());
+  const paths = context && Array.isArray(context.lookupPaths) ? context.lookupPaths : null;
+  const targetColumns = (context && context.targetColumns) || {};
   const problems = [];
   let named = 0;
   for (const file of files) {
-    for (const { table, column, where } of namedColumns(file.content)) {
+    for (const { table, column, via, where } of namedColumns(file.content, paths)) {
       named += 1;
       const columns = tables.get(table);
-      if (!columns) problems.push(`${file.name}: ${where} reads table ${table}, which RuntimeTypes.ts does not register`);
+      if (via !== undefined) {
+        const path = paths.find((entry) => entry.table === table && entry.navigationProperty === via);
+        const verified = path && (column.toLowerCase() === String(path.referencedKey).toLowerCase()
+          || (tables.get(path.target) && known(tables.get(path.target), column))
+          || (targetColumns[path.target] || []).some((name) => String(name).toLowerCase() === column.toLowerCase()));
+        if (!path) problems.push(`${file.name}: ${where} names ${via}/${column}, which is not a verified navigation path of ${table}`);
+        else if (!verified) problems.push(`${file.name}: ${where} names ${via}/${column}, which is not a verified column of ${path.target}`);
+      } else if (!columns) problems.push(`${file.name}: ${where} reads table ${table}, which RuntimeTypes.ts does not register`);
       else if (!known(columns, column)) problems.push(`${file.name}: ${where} names ${column}, which RuntimeTypes.ts does not declare on ${table}`);
     }
     // A display name read through its annotation: the column before `@` must exist on some registered table.

@@ -2,6 +2,9 @@
 // lib/throwaway-sdk.js: the bundled SDK over a throwaway workspace folder, removed whichever way the run ends. apps.js, list-tables.js and
 // list-languages.js each wrote this out before it was one module; these tests make every thing that can go wrong go wrong, and look for the folder.
 // The scripts' own tests drive the helper too (with the SDK and the client stubbed), and the real-bundle tests drive it with the real ones.
+// This file checks where lib/temp-workspace.js makes a workspace, so it works in a temp folder of its own (helpers/own-temp-folder.js): in the
+// suite's shared one, other test processes make and remove the plugin's workspace folder. Required first, so every path below is inside it.
+require('./helpers/own-temp-folder.js');
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

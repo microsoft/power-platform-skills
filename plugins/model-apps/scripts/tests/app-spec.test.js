@@ -1503,3 +1503,25 @@ test('ordinary sample rows still validate (the gate must not reject real data)',
   const hits = (v.errors || []).filter((e) => /sampleData/.test(e));
   assert.deepStrictEqual(hits, [], `valid rows must pass; got ${JSON.stringify(hits)}`);
 });
+
+// A secret environment variable must not carry its value in the spec (the spec is a file that gets shared and committed): a
+// defaultValue on one is an error when the spec is about to deploy, a warning when it is only read for its shape, and the value is
+// never repeated in either message.
+test('validateAppSpec: a secret environment variable with a defaultValue is a deploy error, a structural warning, and is never echoed', () => {
+  const spec = {
+    minimumPluginVersion: '2.21.0', schemaVersion: 2,
+    solution: { uniqueName: 'ContosoSol', displayName: 'Contoso Sol', publisherPrefix: 'contoso' },
+    app: { name: 'Config App', uniqueName: 'contoso_configapp' },
+    entities: [{ schemaName: 'contoso_ticket', displayName: 'Ticket', pluralName: 'Tickets', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } }],
+    environmentVariables: [{ schemaName: 'contoso_ApiKey', type: 'secret', defaultValue: 'Sup3rS3cretValue' }],
+  };
+  const expected = 'environmentVariables[0].defaultValue is not allowed for a secret variable (supply a Key Vault reference through deployment settings)';
+  const deploy = validateAppSpec(spec, { profile: 'deploy' });
+  const structural = validateAppSpec(spec, { profile: 'structural' });
+  assert.deepStrictEqual(deploy.errors, [expected]);
+  assert.deepStrictEqual(structural.warnings, [expected]);
+  assert.deepStrictEqual(structural.errors, []);
+  assert.ok(!JSON.stringify([deploy, structural]).includes('Sup3rS3cretValue'), 'the secret is not repeated');
+  const plain = { ...spec, environmentVariables: [{ schemaName: 'contoso_ApiKey', type: 'secret' }] };
+  assert.deepStrictEqual(validateAppSpec(plain, { profile: 'deploy' }).errors, [], 'a secret without a value is fine');
+});

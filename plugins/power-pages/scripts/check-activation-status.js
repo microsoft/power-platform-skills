@@ -26,12 +26,13 @@ function output(obj) {
 // Resolve site identity (siteName + websiteRecordId) from the project root.
 //
 // Resolution order:
-//   1. powerpages.config.json (code/SPA sites) — siteName + (optional) websiteRecordId.
-//   2. .powerpages-site/website.yml (declarative sites — standard or
-//      enhanced data model — which have no powerpages.config.json) — `name` -> siteName,
+//   1. powerpages.config.json (SPA sites) — siteName + (optional) websiteRecordId.
+//   2. .powerpages-site/website.yml (non-SPA sites — Standard or Enhanced data
+//      model — which have no powerpages.config.json) —
+//      `name` -> siteName,
 //      `id` -> websiteRecordId.
-//   3. `pac pages list` — ONLY when the GUID is still unknown (e.g. a code site whose
-//      config omitted websiteRecordId). Declarative sites already have it from
+//   3. `pac pages list` — ONLY when the GUID is still unknown (e.g. a SPA site whose
+//      config omitted websiteRecordId). Non-SPA sites already have it from
 //      website.yml, so they skip this exec entirely (`usedPacList` reports whether it ran).
 //
 // Returns `{ siteName, websiteRecordId, source, usedPacList }` on success, or
@@ -71,7 +72,7 @@ function resolveSiteIdentity(projectRoot, deps = {}) {
     return { error: 'Site name not found — looked in powerpages.config.json and .powerpages-site/website.yml' };
   }
 
-  // Only hit `pac pages list` when the GUID isn't already known. Declarative sites (and code
+  // Only hit `pac pages list` when the GUID isn't already known. Non-SPA sites (and SPA
   // sites whose config included websiteRecordId) skip this entirely.
   let usedPacList = false;
   if (!websiteRecordId) {

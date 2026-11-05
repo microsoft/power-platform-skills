@@ -507,7 +507,37 @@ function removeFileSafe(filePath, opts) {
   return true;
 }
 
+// Whether two names reach the same file — the question a writer asks when its output must never be its input. Spelling cannot answer it: on Windows `source.tsx` and
+// `SOURCE.tsx` are one file, so is its 8.3 short name (`REVIEW~1.TSX`), and a junction or symbolic link to the folder, a hard link, or an input that is itself a link
+// reaches it under a name that shares nothing with the original. So the file system is asked: `stat` (which follows links, as the read and the write will) gives each
+// name's device and file id, read with `bigint` because a Windows file id is 64 bits. A file system that gives no id (0) is answered by the canonical names instead
+// (`realpath.native`, which on Windows returns the long name in its stored case). Either signal saying "same" is enough: refusing a write is the safe side.
+// A name that does not exist is not the other file (a write creates it); a name that cannot be inspected is refused, as everywhere in this module.
+function sameFile(a, b, opts) {
+  const fsImpl = (opts && opts.fs) || fs;
+  const first = path.resolve(a);
+  const second = path.resolve(b);
+  const look = (name) => {
+    try {
+      return fsImpl.statSync(name, { bigint: true });
+    } catch (e) {
+      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
+      return unsafe(`refusing to write ${first}: whether it is the same file as ${second} could not be inspected (${(e && e.code) || e})`, 'uninspectable');
+    }
+  };
+  const one = look(first);
+  const other = look(second);
+  if (!one || !other) return false;
+  if (one.ino !== 0n && one.ino === other.ino && one.dev === other.dev) return true;
+  try {
+    return realpathNative(fsImpl, first) === realpathNative(fsImpl, second);
+  } catch (e) {
+    return unsafe(`refusing to write ${first}: whether it is the same file as ${second} could not be inspected (${(e && e.code) || e})`, 'uninspectable');
+  }
+}
+
 module.exports = {
+  sameFile,
   assertSafeOutputDir,
   assertPlainFileTarget,
   writeFileSafe,

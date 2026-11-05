@@ -21,30 +21,22 @@ test('queries customapi with request parameters expanded inline (no OR-of-ids pa
   assert.doesNotMatch(scriptSrc, /_customapiid_value eq/);
 });
 
-test('gates fail-closed via exitIfCustomApiDisabled before any query', () => {
-  assert.match(scriptSrc, /exitIfCustomApiDisabled\(\)/);
+// Custom API support has no feature flag any more: the script reads no gate, so nothing it does depends on GENPAGE_ENABLE_CUSTOM_API.
+test('reads no feature gate: discovery is always available', () => {
+  assert.doesNotMatch(scriptSrc, /feature-flags|exitIfCustomApiDisabled|isCustomApiEnabled/);
 });
 
-// --- Feature gate + arg validation (spawned CLI) ---------------------------
+// --- Arg validation (spawned CLI) ---------------------------------------------
 
-test('exits 3 with a disabled message when the custom-api flag is OFF', () => {
-  // The gate runs before any Dataverse call, so a valid-looking env URL still bails.
-  const res = spawnSync(process.execPath, [scriptPath, 'https://example.crm.dynamics.com'], {
-    encoding: 'utf8',
-    env: { ...process.env, GENPAGE_ENABLE_CUSTOM_API: '0' },
-  });
-  assert.equal(res.status, 3);
-  assert.match(res.stderr, /disabled/i);
-});
-
-test('missing args exits 1 with usage (when the flag is ON)', () => {
-  // Enable the flag so the run reaches arg validation instead of the feature gate.
-  const res = spawnSync(process.execPath, [scriptPath], {
-    encoding: 'utf8',
-    env: { ...process.env, GENPAGE_ENABLE_CUSTOM_API: '1' },
-  });
-  assert.equal(res.status, 1);
-  assert.match(res.stderr, /Usage:/);
+test('missing args exits 1 with usage, whatever GENPAGE_ENABLE_CUSTOM_API says', () => {
+  for (const value of [undefined, '0', '1']) {
+    const env = { ...process.env };
+    delete env.GENPAGE_ENABLE_CUSTOM_API;
+    if (value !== undefined) env.GENPAGE_ENABLE_CUSTOM_API = value;
+    const res = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8', env });
+    assert.equal(res.status, 1, String(value));
+    assert.match(res.stderr, /Usage:/);
+  }
 });
 
 // --- Unit tests for the pure helpers (require.main guard keeps main() from running) ---
@@ -204,7 +196,8 @@ function api(name, overrides = {}) {
   };
 }
 
-function discover({ apis, entities, enabled = '1', refuse, unreadable, responseBody } = {}) {
+// `enabled` is the value GENPAGE_ENABLE_CUSTOM_API carries into the child (null: unset). The variable no longer means anything.
+function discover({ apis, entities, enabled = null, refuse, unreadable, responseBody } = {}) {
   const dir = makeTempDir('custom-api-discovery-');
   const fixturePath = path.join(dir, 'fixture.json');
   const logPath = path.join(dir, 'requests.json');
@@ -297,21 +290,20 @@ test('lookup discovery retains the callable input name without emitting an unsup
   assert.ok(Object.values(entry.parameterKinds).every((kind) => PRIMITIVE_KINDS.has(kind)));
 });
 
-test('default-on discovery reaches the same supported result as an explicit enable', () => {
-  const input = { apis: [api('new_Primitive')] };
-  const expected = discover(input);
-  const result = discover({ ...input, enabled: null });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.output, expected.output);
-  assert.equal(result.requests.length, 1);
-});
-
-test('an explicit discovery opt-out makes zero requests and emits no bindings', () => {
-  const result = discover({ apis: [api('new_Primitive')], enabled: '0' });
-  assert.equal(result.status, 3);
-  assert.match(result.stderr, /disabled/i);
-  assert.equal(result.output, null);
-  assert.deepEqual(result.requests, []);
+// GENPAGE_ENABLE_CUSTOM_API was the opt-out of the removed custom-api flag. It is ignored now: set to 0, set to 1 or unset, discovery sends the
+// same one request and lists the same APIs (it once exited 3 with no request when the variable was 0).
+test('GENPAGE_ENABLE_CUSTOM_API is ignored: 0, 1 and unset list exactly the same, with the same request', () => {
+  const input = { apis: [api('new_Primitive'), api('new_Bound', { bindingtype: 1, boundentitylogicalname: 'account' })], entities: 'account' };
+  const unset = discover(input);
+  assert.equal(unset.status, 0, unset.stderr);
+  assert.equal(unset.output.customApis.length, 2);
+  for (const enabled of ['0', '1', 'false']) {
+    const result = discover({ ...input, enabled });
+    assert.equal(result.status, 0, `${enabled}: ${result.stderr}`);
+    assert.equal(result.stdout, unset.stdout, enabled);
+    assert.equal(result.stderr, unset.stderr, enabled);
+    assert.deepEqual(result.requests, unset.requests, enabled);
+  }
 });
 
 test('global-only discovery stays bounded, sorted and independent of the number of matching APIs', () => {

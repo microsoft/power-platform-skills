@@ -4,6 +4,9 @@
 // say: that the SDK still throws the codes this script falls back on, in the words it matches; that it still stages, deletes its staging copy and
 // sends ComponentParameters as it did; that a transport failure on the import is not repeated. Below, the script runs in a child process with a fake
 // `pac` alone on PATH (or none), and the run's every byte of output is searched for the secrets it was given.
+// This file checks where lib/temp-workspace.js makes a workspace, so it works in a temp folder of its own (helpers/own-temp-folder.js): in the
+// suite's shared one, other test processes make and remove the plugin's workspace folder. Required first, so every path below is inside it.
+require('./helpers/own-temp-folder.js');
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

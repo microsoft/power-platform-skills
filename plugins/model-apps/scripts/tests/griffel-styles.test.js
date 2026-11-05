@@ -863,6 +863,38 @@ test('griffel-styles: a call whose style object is built elsewhere is reported, 
   assert.deepEqual(griffelStyleProblems(`${IMPORT}const s = makeStyles();\n`).problems, [], 'a call with no argument has nothing to read');
 });
 
+// Known limit, pinned as it is (AGENTS.md, "A style object the check cannot see is a problem, never a pass"): a style object kept in a `const` is not read where it
+// is used — one at the top of the page, written once and used by the styles alone, included — so the call, the slot, the selector, the spread or the shorthand member
+// that names it is `unread-style-object`: a fail-closed refusal, kept on purpose. Reading the constant there would need the order in which the page's code runs, which
+// its text does not show (a call in a function declared below the constant runs when the page calls it, and the page is transpiled to `var`, so a call made before
+// the constant is initialized hands Griffel `undefined`), and every use read again (constants spread twice into the next double what is read at each step). The way
+// out is the one the message gives: write the style object in place.
+test('griffel-styles: known limit — a style object kept in a const is not read where it is used, a call in a hoisted function and constants spread into one another included', () => {
+  const cases = [
+    ['the call\'s argument', `${IMPORT}const styles = { root: { color: 'red' } };\nconst useStyles = makeStyles(styles);\n`, ['unread-style-object@3:19']],
+    ['a slot', `${IMPORT}const base = { color: 'red' };\nconst useStyles = makeStyles({ root: base });\n`, ['unread-style-object@3:32']],
+    ['a selector', `${IMPORT}const hover = { color: 'blue' };\nconst useStyles = makeStyles({ root: { ':hover': hover } });\n`, ['unread-style-object@3:40']],
+    ['a spread', `${IMPORT}const base = { color: 'red' };\nconst useStyles = makeStyles({ root: { ...base, padding: 0 } });\n`, ['unread-style-object@3:40']],
+    ['a shorthand slot after the declaration', `${IMPORT}const root = { color: 'red' };\nconst useStyles = makeStyles({ root });\n`, ['unread-style-object@3:32']],
+    ['a shorthand slot before the declaration', `${IMPORT}const useStyles = makeStyles({ root });\nconst root = { color: 'red' };\n`, ['unread-style-object@2:32']],
+    ['a call in a hoisted function that the page calls before the constant is initialized',
+      `${IMPORT}const useStyles = make();\nconst base = { color: 'red' };\nfunction make() { return makeStyles({ root: { ...base } }); }\n`, ['unread-style-object@4:47']],
+    // A key Griffel drops in such a constant is not named either: the object is unread, and the page is held all the same.
+    ['a constant that holds a key Griffel drops', `${IMPORT}const base = { borderWidth: '1px' };\nconst useStyles = makeStyles({ root: base });\n`, ['unread-style-object@3:32']],
+  ];
+  for (const [what, source, expected] of cases) assert.deepEqual(found(source), expected, what);
+  assert.deepEqual(found(`${IMPORT}const useStyles = makeStyles({ root: { color: 'red', ':hover': { color: 'blue' }, padding: 0 } });\n`), [], 'the style object written in place');
+  // Constants spread twice into the next: the slot that names the last one is reported at once, whatever their number, where a reading of every use read 2^n objects.
+  const chain = (n) => `${IMPORT}const c0 = { color: 'red' };\n${Array.from({ length: n }, (_, i) => `const c${i + 1} = { ...c${i}, ...c${i} };\n`).join('')}const useStyles = makeStyles({ root: c${n} });\n`;
+  for (const n of [20, 400]) {
+    const start = process.hrtime.bigint();
+    const problems = found(chain(n));
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    assert.deepEqual(problems, [`unread-style-object@${n + 3}:32`], `${n} constants spread twice into the next`);
+    assert.ok(ms < 1000, `${n} constants spread twice into the next took ${ms.toFixed(0)} ms`);
+  }
+});
+
 test('griffel-styles: a call that never closes is reported, not skipped', () => {
   for (const tail of ["makeStyles({ root: { borderWidth: 1 }", "makeStyles({ root: { borderWidth: 1 } }", 'makeStyles({ root: { color: "red" }, ']) {
     const result = griffelStyleProblems(`${IMPORT}const useStyles = ${tail}\n`);

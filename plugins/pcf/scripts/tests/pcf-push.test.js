@@ -597,3 +597,20 @@ test('failed receipt write emits receipt-stage JSON and leaves no partial receip
   assert.equal(realFs.existsSync(path.join(projectDir, 'pcf-receipt.json')), false);
   assert.deepEqual(realFs.readdirSync(projectDir).filter((entry) => entry.startsWith('.pcf-receipt-')), []);
 });
+
+// skill_completed telemetry: what a push's result says, in the closed vocabulary of lib/telemetry/skill-completed.js (a verbatim copy of
+// model-apps', whose own suite holds the privacy contract) — never a control, solution or environment name.
+test('pushCompletion maps each push result to its outcome, error class and registration', () => {
+  const { pushCompletion } = require('../pcf-push.js');
+  const info = (over) => ({ operation: 'control-push', incremental: false, registration: 'verified', steps: { push: { ok: 1 } }, ...over });
+  assert.deepEqual(pushCompletion({ stage: 'done', ok: true, registered: true }), { outcome: 'success', eventInfo: info() });
+  assert.deepEqual(pushCompletion({ stage: 'done', ok: true, registered: false, noVerify: true, incremental: true }),
+    { outcome: 'success', eventInfo: info({ registration: 'skipped', incremental: true }) });
+  assert.deepEqual(pushCompletion({ stage: 'done', ok: false, registered: false }),
+    { outcome: 'failure', errorClass: 'verify-failed', eventInfo: info({ registration: 'not-verified' }) });
+  assert.deepEqual(pushCompletion({ stage: 'receipt', registered: true }), { outcome: 'failure', errorClass: 'unexpected', eventInfo: info() });
+  assert.deepEqual(pushCompletion({ stage: 'push', timedOut: true }),
+    { outcome: 'failure', errorClass: 'timeout', eventInfo: info({ registration: 'not-verified', steps: { push: { error: 1 } }, haltPhase: 'push' }) });
+  assert.deepEqual(pushCompletion({ stage: 'push' }),
+    { outcome: 'failure', errorClass: 'deploy-failed', eventInfo: info({ registration: 'not-verified', steps: { push: { error: 1 } }, haltPhase: 'push' }) });
+});

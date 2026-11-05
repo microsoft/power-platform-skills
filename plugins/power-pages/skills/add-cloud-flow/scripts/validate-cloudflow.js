@@ -111,7 +111,7 @@ runValidation((cwd) => {
 
     // statecode / statuscode must not be present
     if (/^statecode:/m.test(content) || /^statuscode:/m.test(content)) {
-      errors.push(`${fileName}: 'statecode' and 'statuscode' must not be present in code-site YAML`);
+      errors.push(`${fileName}: 'statecode' and 'statuscode' must not be present in SPA YAML`);
     }
   }
 

@@ -41,8 +41,27 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
 - **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
   resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
-  and the old script keeps running. Delete the web resource (or tear down) and rebuild to change it —
+  and the old script keeps running. The build says so: it compares the deployed content with the spec's,
+  and when they differ its line reads `(exists — reuse; its deployed content differs from the spec's …)`
+  and a warning names the web resource; verify fails its `web-resource` check for the same reason (an
+  `external` entry is checked only for existence). Delete the web resource (or tear down) and rebuild to change it —
   note it cannot be deleted while a command or form handler still references it.
+- **`reconcile: "declared"`** *(optional; needs `minimumPluginVersion: "2.21.0"`)* — the build keeps this
+  web resource's content in step with the spec: a rebuild compares the published content with the
+  spec's and, when they differ, writes the spec's content to the same row, publishes it and reads it
+  back. When the row already exists and its content differs, the build stops at it before writing and
+  names the approval `--authorize adopt:webresource:<web resource name>`, with the row's id and the components the
+  platform reports as depending on it (a script loaded by a computed or relative path is not listed);
+  run the build again with that key to write it. The key is typed: a view's or chart's
+  `adopt:<table>/<name>` never approves a web resource, even one whose name is the same text. A spec that
+  empties the content of a web resource that has content also needs `--allow-destructive`, which the
+  adoption approval does not imply; the halt names it. A row whose content already matches needs no
+  approval. A declared web resource that is refused, whose write is not confirmed, or that cannot join
+  the app's solution stops the build at once; it is not retried automatically. Its name must be its own:
+  validation refuses a declared web resource when another entry's name differs from it only in letter case
+  (Dataverse matches web resource names without regard to case, so both would be one row). Not allowed with
+  `external: true`. Verify fails a declared web resource whose deployed content differs and says to
+  run the build again.
 - **An unconfirmed first write is different from an ordinary content edit.** A
   `WEB_RESOURCE_UNVERIFIED` halt names the existing row; it does not mean the resource was lost.
   Keep the same writable build workspace and run the full build again after resolving the cause:
@@ -128,10 +147,17 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - **Environment gate — read this first.** The SDK writes a rule through the bound
   `CreateProcessWithWfomJson` member, the same one the modern business-rule designer uses, and has
   **no fallback**. An environment that does not declare that member cannot host business rules at
-  all, and that is the common case rather than an edge case. The build then
-  **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
-  so you get a working app without the rules, not a half-built one. `--verify` will report those
-  rules as not deployed, which is the truth.
+  all, and that is the common case rather than an edge case. **Production environments are the
+  other common case**: they declare the member but have it switched off, so the first rule fails
+  with HTTP 400 `0x80040216` ("An unexpected error occurred.") whatever the rule says, and nothing is
+  created — a platform limit, not a fault in the rule. In both cases the build
+  **skips** `businessRules[]`, warns once (naming the member or the code), and builds everything
+  else normally — so you get a working app without the rules, not a half-built one. A 400
+  `0x80040216` is read this way only for the first rule of a build, and only when a read right
+  after it finds no new definition of that rule (the platform can also save a rule and then fail
+  with the same answer). Otherwise — a new definition, a rule created earlier in the build, or any
+  other code or status — the build halts as before. `--verify` will report those
+  rules as not applicable on this environment, which is the truth.
 - **Same-name definitions are not automatically disposable.** Rebuild reuses the oldest matching
   definition and keeps additional pre-existing ids with a warning. After a create, the SDK's returned
   definition is kept. Every other same-name id is reported as not attributable to this run, including
@@ -172,6 +198,8 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   rule genuinely would not have worked.
 - **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
   edits are **not** re-applied. Recreate the rule to change it.
+- **Managed as one rule.** Everything above is a rule without `reconcile`. To have the build create a
+  rule with an id it keeps and prove it on every rebuild, declare it: see `businessRules[].reconcile` below.
 
 ## businessProcessFlows[] (optional — guided, staged process on a table)
 
@@ -256,6 +284,9 @@ works through.
   The flow's own `description` and `order` are not reapplied, and `--verify` does not compare stages.
 - Verified by `--verify` on three axes: it exists, there is exactly **one** of it (duplicates would
   offer users the same process twice), and its deployed state matches `status`.
+- **Managed as one flow.** Everything above is a flow without `reconcile`. To have the build create a
+  flow whose stages and steps keep the ids it gave them, and prove it on every rebuild, declare it: see
+  `businessProcessFlows[].reconcile` below.
 
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
@@ -324,6 +355,8 @@ works through.
   alone too: it holds only a native chart tile to a chart and view of its table. A dashboard whose only
   tiles are such tiles is dropped with its navigation entry, which the download refuses without
   `--allow-lossy-download`.
+- **Following the spec on rebuilds.** Everything above is a dashboard without `reconcile`. To have a
+  rebuild apply the spec's tiles to an existing dashboard, declare it: see `dashboards[].reconcile` below.
 
 ## roleGrants[] (optional — extend a role you did NOT author)
 
@@ -442,6 +475,747 @@ fails closed when that table cannot be read — which also catches a flow that n
 Teardown plans nothing: measured, the flow (and with it the backing table and its privileges) is
 deleted before the roles, and the run completes with 0 failures.
 
+## fieldSecurityProfiles[] (optional — confidential columns: `isSecured` and who may read or change them)
 
-**Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
-security.
+Reach for these when the design names a value only some people may see or change: a salary, a
+medical note, a national identifier, a private comment. Needs `minimumPluginVersion: "2.21.0"`.
+
+```jsonc
+// on the column (any type except Customer)
+{ "schemaName": "new_salary", "displayName": "Salary", "type": "Money", "isSecured": true }
+// top level
+"fieldSecurityProfiles": [
+  { "key": "hr", "name": "HR Confidential", "description": "Read and update salary",
+    "permissions": [ { "table": "new_employee", "column": "new_salary", "read": true, "update": true } ],
+    "assignTo": { "teams": ["<team id>"], "users": ["<user id>"] } }
+]
+```
+
+- **`isSecured: true`** turns on column security: from then on, only a user given a profile that
+  permits it can read or change the value. Omitted: a new column is not secured, and an existing
+  column is left as it is. The build creates a secured column after its table (Dataverse does not
+  take one inside the table's create) and before any sample row, so no value is written into an open
+  column; it refuses to seed a column the spec declares secured while the environment still holds it
+  unsecured.
+- **`isSecured: false`** on a column that is secured removes the security **and deletes every
+  permission any profile holds on that column**. The build refuses it unless the run consents with
+  `--authorize isSecured:<table>.<column>`. Never write `false` merely to mean "not secured" — omit it.
+- **A profile** has a `key` (stable and unique in the spec), a `name` (at most 100 characters; the
+  build finds the profile by this name), an optional `description`, and `permissions[]`: one per
+  column, each `{ "table", "column", "read"?, "create"?, "update"? }`, an omitted permission being
+  `false`. Every column a permission names must be secured. Read-unmasked access is not authored, and
+  the platform's System Administrator profile is never changed. A profile that already exists with
+  other permissions stops the build (`FIELD_SECURITY_PROFILE_DIFFERS`) rather than widening or
+  narrowing someone else's access: change it in Power Apps, or give your profile another name.
+- **`assignTo`** names the users (`systemuserid`) and teams (`teamid`) to give the profile to. It is
+  explicit and additive: the build gives the profile to those it names and takes it from no one. It
+  never derives a user from a persona or a security role, and a security role does not open a
+  secured column — only a profile does. Omitted means the build gives the profile to no one; the
+  plan says *no assignment requested*. Prefer a team to a list of users.
+- **When it runs:** profiles and their permissions in the `data-model` phase, after the columns are
+  secured; assignments in the `security` phase. A `--stage data` run creates the profiles and lists
+  each assignment as **deferred**; the `app` stage gives them.
+- **Tell the maker, before the build:**
+  - *Administrators are exempt.* A System Administrator reads and changes every secured column
+    whatever profiles say, so testing as an administrator proves nothing — test as a user who has
+    only the app's role.
+  - *Refresh.* A user who already has the app open may need to reload it before a change to their
+    access shows.
+  - *Least privilege.* Give `read` where people only need to see a value, and `update` only to whoever
+    maintains it.
+  - *Unsecuring* deletes permissions (above), so it needs its own consent.
+- **Rights:** the account running the build needs to customize tables, create field security
+  profiles and give them to users and teams (for example, System Administrator).
+- **`--verify`** checks that each declared column is stored secured, that each profile holds exactly
+  its declared permissions, and that each named user and team holds the profile. These are metadata
+  reads made as the build's account; they do not prove what a user without the profile sees.
+- **Download** writes `isSecured: true` for a secured column. Profiles and their assignments are not
+  downloaded.
+- **Teardown** never deletes a profile (users and teams can hold it beyond this app): it keeps each
+  declared profile, with its permissions and assignments, and names it as kept, by name only. Remove a
+  profile yourself once no one needs it.
+
+## columns[].dateTimeBehavior · option values · table flags (optional — portable schema)
+
+Needs `minimumPluginVersion: "2.21.0"`.
+
+### Fixed option values — `{ "value", "label" }`
+
+```jsonc
+"options": [ { "value": 1, "label": "Low" }, { "value": 5, "label": { "1033": "High", "1036": "Haute" } } ]
+```
+
+Reach for it when an integration, report, flow or another environment already depends on an option's
+**number**. `value` is a whole number from 0 to 2147483647, unique within the set; `label` follows the
+usual option-label rules (a global choice's labels stay plain strings). A plain label in the same list
+keeps the number of its position (100000000 + index), so mixing the two forms is valid only when every
+resulting number is unique. Sample data and view filters may name an option by its number, which is
+how to pick between two options that share a label. The build does not renumber or replace the options
+of a column that already exists. A download writes `{ "value", "label" }` whenever an option's number
+differs from its position's default, and plain labels otherwise.
+
+### Date and Time behaviour — `dateTimeBehavior`
+
+```jsonc
+{ "schemaName": "new_renewaldate", "displayName": "Renewal Date", "type": "DateTime", "dateTimeBehavior": "DateOnly" }
+```
+
+- `UserLocal` (the default) — stored in UTC and shown in each user's time zone: a timestamp.
+- `DateOnly` — a calendar day with no time and no time-zone conversion: a birthday, a due date, a
+  renewal date. It implies the DateOnly format, so `dateFormat` may be omitted (`"DateAndTime"` is
+  refused).
+- `TimeZoneIndependent` — a date and time shown the same to everyone: a site visit at 09:00 site
+  time, a hotel check-in.
+
+Omitted: a new column is `UserLocal`, and an existing column is left as it is. Changing the behaviour
+of a column that already exists is **one-way** (`DateOnly` and `TimeZoneIndependent` cannot be changed
+back) and does **not** convert values already stored, so the build refuses it unless the run consents
+with `--authorize dateTimeBehavior:<table>.<column>`; do not change an existing column unless the maker
+asks. Declaring `UserLocal` on a column that has no behaviour at all is a repair and needs no consent.
+Before it adds a column, lookup or relationship to a table it did not create, the build reads that
+table's Date and Time behaviours once, and stops — before sending anything — when a column has none
+(`DATETIME_BEHAVIOR_MISSING`) or the read is not conclusive (`DATETIME_BEHAVIOR_UNVERIFIED`); the halt
+says how to fix it.
+
+### Table flags — `searchEnabled`, `changeTrackingEnabled`, `duplicateDetectionEnabled`
+
+```jsonc
+{ "schemaName": "new_ticket", "displayName": "Ticket", "pluralName": "Tickets",
+  "searchEnabled": true, "changeTrackingEnabled": true, "duplicateDetectionEnabled": true, "columns": [] }
+```
+
+Set a flag only when the maker asks for what it does; omitted leaves the table as it is.
+
+- `searchEnabled` puts the table in Dataverse search (`false` takes it out, which needs no consent:
+  turning it on again restores it once the table is indexed again). `true` also turns on change
+  tracking, which can never be turned off, so the spec must say `changeTrackingEnabled: true` too. A
+  table that does not allow search is refused.
+- `changeTrackingEnabled` can only be `true`.
+- `duplicateDetectionEnabled: false` on a table that has it on unpublishes every duplicate detection
+  rule of the table, and turning it on again does not republish them, so the build refuses it unless
+  the run consents with `--authorize tableFlags:<table>`.
+
+### Consent — `--authorize <key>`
+
+Repeatable, one key per change: `dateTimeBehavior:<table>.<column>`, `isSecured:<table>.<column>`,
+`tableFlags:<table>`, and `<kind>:<key>:<field>` for a configuration item (`references/app-spec-schema.md` →
+*Configuration items*). A key consents to exactly the change the spec declares for it and to nothing
+else; a key for a change the spec does not declare stops the build. `--allow-destructive` does not
+imply it. A refused change names the key to use, so read what the change does, then run the build
+again with it.
+
+### Download and verify
+
+A download always writes option values (as above) and `isSecured`. `--include-capabilities` also reads
+each table's Date and Time behaviours and flags (one read each per table) and writes the ones that
+differ from what a build creates by default; a read that fails, or an answer that does not state a
+column's behaviour or a flag, is left out and named in a warning, never taken as the default. Without
+it, a download makes the reads it always made. A spec that carries any of these fields gets
+`minimumPluginVersion: "2.21.0"`. `--verify` checks each declared value against a fresh read, and
+reports what it could not read as unverified, never as a pass.
+
+**Not yet supported** (tracked follow-up): access teams / hierarchy security.
+
+## views[].reconcile · charts[].reconcile · entities[].quickFind (optional — declared views and charts, Quick Find)
+
+Requires `minimumPluginVersion: "2.21.0"`. A spec without these fields builds exactly as before: a view
+or chart without `reconcile` is created when missing and, on a rebuild, an existing view only gains the
+spec's new columns.
+
+```jsonc
+{ "entity": "new_ticket", "name": "Open Tickets", "reconcile": "declared",
+  "columns": ["new_name", { "name": "name", "relatedEntity": "acct", "width": 150 }],
+  "linkEntities": [{ "name": "account", "from": "accountid", "to": "new_accountid", "alias": "acct", "linkType": "outer" }],
+  "sort": [{ "attr": "new_name", "dir": "asc" }] }
+```
+
+- **`views[].reconcile: "declared"`** — the build makes the view match the spec: the columns in the
+  declared order (an object column names its join in `relatedEntity`), the base filter, sort, joins
+  (`linkEntities[]`: `name`, `from`, `to`, optional `alias`, `linkType` `inner`/`outer` and `filters`)
+  and the description when set. What the spec does not declare (cell options, the Quick Find filter,
+  other joins) is kept. `viewId` pins the view to edit in one environment. A new declared view is
+  created and published like any other view. The stock `Active <plural>` and `Inactive <plural>` views
+  exist on every table, new ones included, so declaring one of them is an adoption (see Approvals).
+- **`charts[].reconcile: "declared"`** — the chart type, category, series and description follow the
+  spec. `title` is written only to a chart whose stored layout already has a title; a new chart cannot
+  store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).
+- **`entities[].quickFind: { "findColumns": [...] }`** — the columns the table's search box matches on
+  (its default Quick Find view). Distinct logical names; an empty list needs `--allow-destructive`. It
+  does not need `searchEnabled` or change tracking. `--verify` checks that the view stores exactly this
+  list, in order (`quick-find <table>`); a stored search template such as `{0}%` is kept and verifies.
+  A changed list is written without any `--authorize` key: `overwrite:quickfind:<table>` approves only
+  replacing a local copy that differs from the server's (see Local copy below).
+
+**Approvals.** A view or chart that already exists and that this spec has not created in this run is
+shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
+`--authorize adopt:view:<table>/<name>` or `--authorize adopt:chart:<table>/<name>` (the table in lower
+case, the name exactly as in the spec). One that already holds exactly what the spec declares is left
+unchanged and unbound without a stop (with `createIdentity`, the build warns and names the key; see
+Adoption below). `--authorize overwrite:view:<table>/<name>` (or `chart:`)
+approves replacing changes made elsewhere, and `--allow-destructive` approves removing columns. Each key
+approves only the artifact of its family, so a view and a chart with the same name are approved
+separately. Within a family a key must name one artifact: two declared views on one table need different
+names, and so do two declared charts (a chart's name is compared with its outer spaces trimmed). A
+`viewId` pin chooses the row a view edits but is not part of its key, so it does not tell two
+same-named declared views apart. A build or a plan refuses such a pair before any work; teardown and
+verification only warn. The same name on another table, or on a view and a chart, is fine. The older `adopt:<table>/<name>` form still works when it names exactly one declared view or
+chart; a key that could name several, or that names no declared view or chart, stops the build. **Local copy.** A declared view, chart or Quick Find view whose local copy differs from the
+server's (an edit an earlier run did not send, or one made by hand), or cannot be compared with it, is
+refused before anything is written (`workspace-copy-unsent-edits`); the copy is kept. Put any change
+to keep into the spec and refresh the local copy, or approve replacing it with the server's:
+the `overwrite:` key the refusal prints (`--authorize overwrite:view:<table>/<name>`,
+`overwrite:chart:<table>/<name>`, or `overwrite:quickfind:<table>` for a table's Quick Find). **Publishing.** A table is published only when every declared change on it succeeded: when one
+fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
+
+Declared upkeep of web resources is described with `webResources[]` above, of form layouts with
+`forms[].reconcile` below, of dashboards with `dashboards[].reconcile` below, and of business rules with
+`businessRules[].reconcile` below, and of business process flows with `businessProcessFlows[].reconcile`
+below. A command bar with
+`commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
+
+**An unconfirmed publish.** A table (or dashboard) publish whose answer was lost may still have run. The
+next build confirms it with a fresh read of the published layers, never by sending it again (for a declared
+form's table, also when the spec no longer declares the form); that run
+publishes nothing more on that table, and the build after it goes on as usual. When no read can confirm
+it (the publish carried only layers that were already live), the table stays blocked in every build, and
+the build stops and prints the approval that releases it:
+`--authorize publication-risk:table:<table>/<dispatch>` (`publication-risk:dashboard:<id>/<dispatch>` for a
+dashboard). `<dispatch>` names that one lost publish, so the key accepts only it: a key copied from an
+earlier stop does not accept a later lost publish of the same table, and a key with no `<dispatch>` is
+refused. Check what is live first. Pass the key exactly as printed: `--allow-destructive` and any other key
+never give it. Accepting it is a decision to take the risk, not a proof. The build takes it only as it
+starts, before it writes anything, whichever step printed the approval (also when the spec no longer
+declares the form or dashboard, or the run does not build forms or dashboards); that build then stops
+(`publication-risk-accepted`). A key that matches no lost publish at that point is reported as not used, and
+it accepts nothing later in that run. If the build cannot tell whether it recorded the acceptance (the
+record was written but its answer was lost), it stops before it writes anything
+(`publication-risk-record-unconfirmed`); run it again, without the key, and it reads the record afresh.
+After the acceptance the publish is owed again, and the next build publishes it after the usual checks: a
+form's table, also when the spec no longer declares the form (with `--publish`, the publish phase can
+publish the table again), or a declared dashboard. A dashboard the spec no longer declares is not paid: the
+build stops `publication-withheld` ("publish is owed") until you declare the dashboard again with
+`reconcile: "declared"`, and that build publishes it.
+
+**A saved change the build did not make.** When a declared form's saved layer holds a change made
+elsewhere since the build last proved it, the build does not publish that form's table, because the publish
+would put that change live; it stops incomplete. If the change is not published, the stop says so: publish it
+in Maker if it should be kept, or undo it there and save, then run the build again. If it is already
+published, run the build again: it reads the saved layer afresh and names any change it would overwrite.
+
+**Saved and published layers that read apart.** On some forms the platform reads a caption one way in the
+saved layer and another way in the published layer (seen on an adopted form whose sub-grid caption in the
+base language did). No read can then confirm a publish of that form's table: the stop says that the saved
+layer is still the one the publish shipped, yet the published layer reads differently. Compare what is
+published with the spec in Maker; if it matches, pass the `publication-risk` key the build prints. A later
+publish of that table can stop the same way, and each needs its own key. For a form the build adopted, the
+stop can also name the cells and languages whose caption reads differently in the two layers (for example
+"Caption difference at cell <id> (language 1033)"), never the caption text. Start the comparison in Maker
+there. This does not show whether the difference is an unpublished edit or how the platform reads the layer,
+so the stop and its key stay the same. A form the build created and a dashboard get no such list.
+
+**How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
+build reads the published layer and compares it with what it saved. The platform changes some captions by
+itself, and these do not count as a difference:
+
+- Straight after a publish, the published layer can show a cell caption that is still being changed. If
+  the first read does not show the publish, the build reads it again, for up to about 45 seconds in all.
+  If no read shows it, the publish is not confirmed (`managed-publication-unconfirmed`), as before.
+- When a dashboard is created, the platform adds an empty caption to each tab and section that has none.
+  An empty caption is not compared. A tab or section caption with text is compared.
+- In an organization with more than one language, the saved layer has captions in a second language on
+  some labels, and the published layer does not return them. **When the build checks that a publish is
+  live, a caption in a language that the published layer does not return, and that is not on every label
+  of the form, is not compared.** Thus a change only to such a translation is not seen as unpublished and
+  does not stop the build as drift. A caption in a language that both layers return is compared, and so is
+  all other content. A form that has a second language on every label, or a published read in more than
+  one language (the read of a user whose own language is not the base one), can stay unconfirmed.
+- In an organization with more than one language, the build writes each tile that it adds to a dashboard
+  with its caption in every language of the organization, with the same text. Thus the platform does not
+  add a caption of its own to the new tile. If the build cannot read the languages of the organization, it
+  stops before it writes the dashboard (`dashboard-languages-unreadable`). In an organization with one
+  language, the dashboard that the build writes does not change.
+- The platform does not keep all of these captions. In an organization with 1033 and 3082, an iframe tile
+  lost its 3082 caption, and a list tile kept it. The platform did not change the text of a caption that it
+  kept. Thus, on a tile that the build adds, a caption that the build sent and that is now missing does not
+  stop the build, but the caption in the base language must be there, first, with the text that the build sent.
+  A caption that is present must have the text that the build sent.
+- The rule about languages applies only to the publish check. It does not apply when the build proves
+  that a dashboard it wrote holds what it sent. That proof compares every caption in every language. The
+  only exceptions are an empty caption on a tab or a section, on every tab and section of the dashboard,
+  and a missing caption in a language other than the base language that the build sent to a tile that it added. A
+  caption with text that someone adds to a tab, a section or a tile before the proof, in any language,
+  stops the build (`create-completion-required`). If the build must read the languages again for this proof
+  (after a lost answer) and cannot, it stops with `dashboard-languages-unreadable` and does not change the
+  dashboard. Run the build again.
+- If the build creates a dashboard and this proof fails, the build does not bind, publish or add the
+  dashboard to the solution. The message gives the ID of the dashboard. If the build knows that it created
+  the dashboard, the message tells you to delete the dashboard and run the build again. The build then creates
+  the dashboard again. If the build does not know who created the dashboard with that ID, the message tells
+  you to examine the dashboard. Do not delete it before you know that it is not the work of another person.
+
+## forms[].reconcile (optional — declared form layouts)
+
+Requires `minimumPluginVersion: "2.21.0"`. A form without `reconcile` builds exactly as before: fields
+are only added.
+
+```jsonc
+{ "entity": "new_ticket", "name": "Ticket Triage", "formType": "Main", "reconcile": "declared",
+  "tabs": [{ "name": "general", "label": "General", "sections": [
+    { "name": "details", "label": "Details", "columns": 2,
+      "fields": ["new_name", { "name": "new_summary", "colspan": 2 }, { "name": "new_priority", "readOnly": false }] }] }],
+  "subgrids": [{ "childEntity": "new_task", "view": "Active Tasks", "label": "Tasks" }],
+  "events": [{ "event": "onload", "library": "new_ticket.js", "function": "Ticket.onLoad" }] }
+```
+
+- **What follows the spec.** The order, section and spans of each declared field, the declared tabs and
+  sections, a section's width when stated, and `readOnly` / `hidden` when stated (an explicit
+  `false` clears the flag). A missing sub-grid, quick view, timeline or event handler is added. A new
+  form is created whole in one write, with an id that stays the same for the spec.
+- **What is kept.** A control the spec does not declare (a maker's field, a sub-grid, a web resource)
+  keeps its place, and nothing is deleted: `prune` is refused on a declared form, and such a control is
+  never listed as a destructive removal (no `--allow-destructive` is needed). Labels, required
+  flags and control settings of existing cells are not changed unless the spec states them.
+- **What stops before a write.** A layout the build cannot place without moving a control it does not
+  own; an existing sub-grid or quick view that shows something else than the spec asks; a section the
+  spec puts in a column the tab lacks; a part changed elsewhere since the last build. The form is left
+  as it is and the stop names the cause.
+- **Refused fields.** `genPages`, `prune`, `isDefault`, `deactivateOtherMainForms`,
+  `securityRoles` and a place in `entities[].mainFormOrder` are refused on a declared form: set them
+  in Maker, or leave out `reconcile`. Two declared forms with one key (below) are refused.
+- **Approvals.** The key is `<table>/<formType>/<name>` in lower case, for example
+  `form:new_ticket/main/ticket triage` (quote it in the shell). A form that already exists and that
+  this build did not create is bound only with `--authorize "adopt:form:<key>"`; the first binding
+  needs it, later builds do not. `--authorize "overwrite:form:<key>"` approves replacing changes made
+  elsewhere. A local copy that differs from the server's stops the build (`workspace-copy-unsent-edits`).
+- **Publishing.** A declared form's table is published after all its form work, and only when every
+  declared change on it succeeded. A table publish puts live every saved change on that table, not only this
+  form's (new columns included, so a build without `--publish` does not leave that table's changes
+  unpublished), so the build withholds it while another managed change on the table is not proved. A saved
+  form that is definitely unpublished is published without a rewrite. `--publish` does not turn this off; it
+  decides only when: without it the forms step publishes the table, as the reconcile of any existing form
+  does; with it, the table is published later in the same build, with the build's other publishes.
+- **Concurrent edits.** Dataverse does not provide a working conditional-write guard for a form's saved
+  layer, so a conditional write cannot reject a stale edit of it. The build re-reads the saved form just
+  before it writes and stops when it changed since the build read it. An edit made in Maker in the
+  instant between that check and the write cannot be detected: do not edit a declared form while a build
+  runs.
+- **Verify.** `--verify` reads each bound declared form again by its id and checks it against the spec:
+  field order, sections, spans, stated flags, sub-grids, quick views and handlers, and the controls the
+  build added. A form whose last publish is not confirmed is listed as unverified, not passed. A
+  sub-grid must show the view the build would choose (the view it names, else the first view the spec
+  declares on that table, else the table's default view): a different view fails, a view the spec
+  declares that is not in the environment fails, and one whose name matches more than one view, or that
+  cannot be read, is unverified. A quick view whose form name matches more than one form is unverified.
+  Verify expects no default-form flag and no form-order place for a declared form, since the build sets
+  neither on it; the default and order checks of the table's plain forms are unchanged.
+- **Download.** A plain download leaves declared forms out. To bring them back, pass both
+  `--include-managed` and `--managed-manifest <store file>`, the `managed-bindings.<hash>.json` file in the
+  build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
+  `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
+  that is pending, gone or not valid is left out and named. A declared form with an event handler
+  (`events`) comes back with each handler library the spec does not declare, added to `webResources[]` as
+  `external: true` and named in `managedForms.libraries` (`[{ name, forms }]`) and in a note. A library is
+  downloaded only when it is this app's own: exactly one web resource of that name (on a lookup that read
+  every row; one cut short proves nothing), unmanaged, a script,
+  with content, and named under the solution publisher's prefix, read and verified by the download. A
+  rebuild reuses an `external` library where it exists without writing or comparing its content, creates
+  it from the downloaded content where it is missing, and a teardown never deletes it. When a library
+  fails any of those checks the form is left out and named in `managedForms.stale` ("handler library
+  '<name>' was not downloaded: <why>"), and its declaration is written ready to paste in the build
+  folder's `.maker-workspace` (see below), with the library it needs: add both to
+  the spec. The download transfers no binding: the
+  downloaded folder has no store, so the first build that binds a form there needs
+  `--authorize "adopt:form:<key>"`. A rebuild that finds the form already as declared writes nothing and
+  may leave it unbound.
+- **The fragments file.** A managed download writes each declared form or process flow it proved but left
+  out only for what it could not bring (a handler library, a persona) to
+  a new file, `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json`, and names that file in a
+  warning and in the result
+  (`managedFragments: { file, keys }`). Each item has the store `key`, the `reason` it was left out, what it
+  `needs` (`{ "webResource": "<name>" }` or `{ "persona": "<name>" }`) and a `paste` object
+  (`{ "forms": [ ... ] }` or `{ "businessProcessFlows": [ ... ] }`): add the entry to the same array in
+  `app-spec.json` with what it needs, from the spec it was built from. An item left out for anything else
+  (pending, changed, not valid) is not written there, because nothing proved it. The download only ever
+  creates a file under a name nothing holds: it never replaces, moves or removes a file in `.maker-workspace`,
+  so files from earlier downloads (and any of the maker's) stay as they are; delete old ones when you no longer
+  need them. With nothing left out it writes no file. When `.maker-workspace` is a link, a junction or a file,
+  or the file cannot be written, the download stops (`code: "managed-fragments-unwritable"`) before it writes
+  anything else: the pages, the spec and the baseline are written only after this file.
+- **A removed form that was deleted.** When the spec no longer declares a form and the form was deleted in
+  the environment, the next build reads it by its id in both its saved and its published layer. When both
+  say it does not exist, the build stops managing it, including a publish of its table it still owed: it
+  writes nothing, prints `managed-root-retired` with the form's key, and `--verify` no longer checks it.
+  Until that build runs, `--verify` fails the form. A form found in either layer, or a read that fails (no
+  access, a timeout), is kept as it is. If the build cannot confirm the retirement (another build settled or
+  changed the record while this one read it, or the record could not be written), it warns that the retirement
+  could not be confirmed and stops before it writes anything (incomplete, `managed-not-settled`): after it, the
+  build sends no form, dashboard, app or publish, not even the publish of a change an earlier attempt of the
+  same run saved before a temporary failure (the warning names it, and the next build publishes it; a name
+  column length that attempt still owed is named with how to set it in Maker). Running the build again reads
+  the record afresh. A form
+  whose last publish is unconfirmed is not released this way,
+  because that publish may still complete: it stays blocked until a read confirms it or the maker accepts
+  `publication-risk:table:<table>/<dispatch>` (see "An unconfirmed publish" above). A form the spec still declares is
+  not released either: its missing form stops the build (`form-layout-bound-row-missing`). A form you
+  declare under that key after it was released is a new one: the build creates it under a new id, never
+  the id of the deleted form, unless you approve adopting a form found by name (`adopt:form:<key>`).
+- **A plain form in place of a removed declared form that has not settled.** When the spec turns a declared
+  form into a plain one (no `reconcile`; a plain form with no `name` is named `<table> form`, and that name
+  counts), or names its id in a plain form's `formId`, while its managed record
+  still has unfinished work (a change an earlier build started, such as a create whose answer was lost, or a
+  publish that is owed or not confirmed), the build refuses that form before it sends anything for it
+  (`managed-form-unsettled`), so it never changes what that work owes or makes a second form. Other forms of the
+  table build as usual. Restore the declaration (`reconcile: "declared"` with its key) and let it settle, or run
+  the build again once that work has settled.
+
+## dashboards[].reconcile (optional — declared dashboards)
+
+Requires `minimumPluginVersion: "2.21.0"`. A dashboard without `reconcile` builds exactly as before: an
+existing one is reused and its tiles are never edited.
+
+```jsonc
+{ "name": "Operations", "key": "operations", "reconcile": "declared",
+  "description": "Daily queue health for the support lead.",
+  "tiles": [
+    { "key": "open-orders", "type": "list", "view": "Active Orders", "name": "Open orders", "colspan": 2 },
+    { "key": "by-status", "type": "chart", "chart": "Orders by Status", "view": "Active Orders" },
+    { "key": "map", "type": "iframe", "url": "https://contoso.example/map", "name": "Map" }] }
+```
+
+- **Scope.** A global **Standard** dashboard only. An interactive dashboard, or one scoped to a table, is
+  refused (`dashboard-interactive-unsupported`, `dashboard-scope-unsupported`), and left as it is.
+- **Keys.** The dashboard's key is its `key` (letters, digits, `_`, `.`, `-`; at most 64), or its name in
+  lower case when it has none; a name holding `/` needs a `key`. Two declared dashboards with one key are
+  refused. Every tile needs a `key` of the same grammar, unique in its dashboard; the build follows the
+  tile by it. `componentId` (a GUID, optional) binds a tile to a control the dashboard already has.
+- **What follows the spec.** The description (`""` clears it, and needs `--allow-destructive`), and what
+  each declared tile authors: its target (chart and view, view, URL or web resource), `name`, and
+  `colspan` / `rowspan` when stated. A new tile is added after the dashboard's last row; a new dashboard
+  is created whole, with an id that stays the same for the spec.
+- **What is kept.** A tile the spec does not declare keeps its place and settings, and nothing is
+  deleted: a tile dropped from the spec stays on the dashboard. A tile's settings the spec does not
+  state are kept. The dashboard's name is not changed: the spec's `name` finds it the first time, and
+  later builds follow the bound dashboard by its id, so a rename in Maker is kept.
+- **What stops before a write.** A tile whose type changed, a tile that is missing from the dashboard, a
+  new tile that cannot be added without moving rows the dashboard already has, a part changed elsewhere
+  since the last build, and a dashboard of the same name that an earlier build created and did not
+  finish: that one is not taken over and not deleted. The dashboard is left as it is and the stop names
+  the cause. A new dashboard is also not sent when the local copy the build assembled is not exactly the
+  draft it planned (`create-local-draft-changed`).
+- **A create whose answer was lost.** Before it sends a new dashboard, the build writes a receipt for it in
+  the binding store (its id, and a hash of the draft and of the exact request), and it writes the
+  acknowledgement there when the service answers that the dashboard was created, before anything else
+  runs. When the build stops after that (a crash, a lost connection, a failed later step), the next build
+  recovers it by itself: it does not send the create again, needs no `adopt:` approval, reads the
+  dashboard fresh to prove what it holds, binds it as created and publishes it. It does this only when the
+  local copy the SDK kept is still exactly the draft the receipt names. It does not refresh or delete that
+  copy: it works in a separate throwaway folder, and leaves the copy as it was. These cases still stop and
+  need you:
+  - The build stopped after the dashboard was sent but before the acknowledgement was written (or that
+    write failed). The stop names the cause; this is the earlier behavior. Settle it as described for a
+    lost create under `createIdentity` (**Local copy**): keep the declaration as it was, discard only the
+    local copy, and build again with `--authorize adopt:dashboard:<key>` if it asks for it.
+  - The local copy was changed since the send: the build stops with `workspace-copy-unsent-edits` and keeps
+    it. Keep the change you want apart, discard only the local copy, build again, then put your change into
+    the spec.
+  - A dashboard acknowledged and then deleted by hand is created again under the same id only when a fresh
+    read of both the saved and the published dashboard answers that it does not exist.
+- **Approvals.** The key is `dashboard:<key>`. A dashboard that already exists and that this build did
+  not create is bound only with `--authorize adopt:dashboard:<key>`; the first binding needs it, later
+  builds do not. `--authorize overwrite:dashboard:<key>` approves replacing a description changed
+  elsewhere, and `overwrite:dashboard:<key>/<tile>` one tile changed elsewhere. A local copy that differs
+  from the server's stops the build (`workspace-copy-unsent-edits`), except the exact copy of an
+  acknowledged create (see **A create whose answer was lost**), which needs no approval.
+- **Publishing.** The dashboards step publishes the dashboard by itself, once, after its write, and only
+  when the write is proved, with or without `--publish` (with it, the app's publish later in the build can
+  publish it again). A dashboard this build cannot finish is not published, not even by the app's publish: an
+  app that would hold it is not written in that run. A recovered create is published by the build that
+  recovers it.
+- **Concurrent edits.** Dataverse does not version a dashboard's saved layer: a dashboard is a form row,
+  and a plain read answers the published row's version, so a conditional write cannot reject a stale
+  edit of it. The build re-reads the saved dashboard just before it writes and stops when it changed
+  since the build read it. An edit made in Maker in the instant between that check and the write cannot
+  be detected: do not edit a declared dashboard while a build runs. Do not edit the local copy of a new
+  dashboard while its build runs, or before the next build after a stop: a changed copy is never recovered
+  over.
+- **Verify.** `--verify` reads each bound declared dashboard again by its id and holds it to what its last
+  build proved: the managed tiles (each exactly once, with the target, name and size the build wrote), the
+  description, and everything the spec does not declare (other tiles, tabs, sections and a tile's other
+  settings). It also fails when the spec now declares the dashboard differently from the declaration the
+  last build settled (build again to apply it). A dashboard changed in Maker since that build fails until a
+  build settles it. A dashboard whose last publish is not confirmed is listed as unverified, not passed.
+- **Download.** A plain download writes each dashboard of the site map as an undeclared entry pinned by its
+  id. With both `--include-managed` and `--managed-manifest <store file>`, each declared dashboard the store
+  proves (a fresh read still shows what its last build proved) comes back as the declaration it was built
+  from, with `reconcile: "declared"`, in place of that entry, plus the ids its last build proved: the
+  dashboard's `dashboardId` and each declared tile's `componentId`. A rebuild then finds that dashboard by its
+  id even after a rename in Maker or a new dashboard with the same name. One that is pending, gone, changed
+  since, or not valid stays the plain entry and is named. The ids are not a binding: the downloaded folder has
+  no store, so its first binding needs `--authorize "adopt:dashboard:<key>"` for each (a build without it
+  writes nothing to the dashboard and binds nothing).
+- **Identity.** A declared dashboard is found by its binding first, then by an earlier build's unfinished
+  attempt, then by its `dashboardId`, and only then by its name. A `dashboardId` that is not the bound
+  dashboard stops the build. `--verify` uses the same bound dashboard for every dashboard check, the site
+  map's included. Before its first binding, `--verify` holds a declared dashboard to its `dashboardId`: if
+  that id names no dashboard, the check fails, even when another dashboard has the same name. A new
+  dashboard's id stays the same for the spec, and a recovered create keeps it.
+- **The binding store.** The receipt and its acknowledgement are new, optional fields in the binding store
+  file; a store without them reads as before, and opening a store does not rewrite it. An older plugin
+  refuses the dashboard whose binding holds them (`managed-binding-group-invalid`): build with this version
+  or later. Do not reset, delete or edit the file to let an older plugin read it, and never put back an
+  older copy.
+- **A removed declaration.** When the spec no longer declares a dashboard whose last change is not
+  settled, the build reads it before it builds any other dashboard:
+  - A publish that is not confirmed is confirmed when a fresh read proves it live. It is never published
+    again. One it cannot confirm stops the build with `publication-risk:dashboard:<id>/<dispatch>`.
+  - A publish that is still owed (saved, never sent) is not paid by a build that does not declare the
+    dashboard. That build keeps the dashboard out of every app write and publish, and it ends incomplete.
+    Declare the dashboard again with `reconcile: "declared"` to publish it.
+  - If the dashboard was deleted in Maker, keep its declaration removed. The build reads the dashboard by
+    its id in both the saved and the published layer. When both answer that the row does not exist, the
+    build retires its record and reports `managed-dashboard-retired`; nothing is sent, and its unpublished
+    change is dropped with it. A row in either layer, or a read that fails (no access, a timeout), keeps the
+    block. If the build cannot confirm the retirement (another build settled or changed the record while this
+    one read it, or the record could not be written), it warns that the retirement could not be confirmed
+    and stops before it writes anything (incomplete, `managed-not-settled`): after it, the build sends no
+    dashboard, app or publish, not even the publish of a change an earlier attempt of the same run saved
+    before a temporary failure (the warning names it, and the next build publishes it). Running the build
+    again reads the record afresh. A dashboard you declare under that key
+    later is a new one.
+  - A plain `dashboards[]` entry with that dashboard's id or name stops the build before it sends anything,
+    so it never makes a second dashboard in its place.
+
+## businessRules[].reconcile (optional — declared business rules)
+
+Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exactly as before (see
+`businessRules[]` above).
+
+```jsonc
+{ "entity": "new_ticket", "name": "Hide notes when closed", "key": "ticket-closed", "reconcile": "declared",
+  "description": "Closed tickets are read-only history.",
+  "scope": "Entity",               // Entity (default) | AllForms
+  "status": "Active",              // Active (default) | Draft
+  "conditionLogic": "AND",         // AND (default) | OR
+  "conditions": [
+    { "key": "closed", "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" } ],
+  "actions": [
+    { "key": "hide-notes", "type": "SetVisibility", "field": "new_notes", "visible": false },
+    { "key": "reason-default", "type": "SetDefaultValue", "field": "new_reason", "value": "Resolved" },
+    { "key": "owner-check", "type": "ShowErrorMessage", "field": "new_owner", "errorMessage": "Set an owner first." },
+    { "key": "suggest", "type": "Recommendation", "field": "new_priority", "recommendationTitle": "Lower the priority",
+      "messageText": "Closed tickets need no priority.",
+      "applyActions": [ { "key": "suggest-low", "field": "new_priority", "value": "1", "dataType": "Picklist" } ] } ] }
+```
+
+- **One rule, managed whole.** A rule is one row; its conditions and actions are not, and the platform
+  gives them new ids on every read, so the build never matches one by its text. The build follows the rule
+  by the id it created it with, and proves the whole rule on every rebuild.
+- **Keys.** The rule's key is its `key` (letters, digits, `_`, `.`, `-`; at most 64), or
+  `<table>/<name>` when it has none. Every condition, action and recommendation apply-action needs a
+  `key` of the same grammar, unique in the rule. Two declared rules with one key are refused, and so is a
+  declared rule beside an undeclared one with the same table and name.
+- **What a declared rule can say**, beyond `businessRules[]` above: `conditionLogic` `OR`; the actions
+  `SetDefaultValue` (`value`), `ShowErrorMessage` (`errorMessage`) and `Recommendation`
+  (`recommendationTitle`, `messageText`, optional `acceptanceText`, and a non-empty `applyActions[]` of
+  `{ key, field, value, dataType }`; a `label`, when given, must equal the title); and the `AllForms` scope.
+  An action or condition takes only its own fields: anything else is refused.
+- **Creating.** A new rule is created **Draft** under an id that stays the same for the spec, read back,
+  and only then activated (when its `status` is `Active`). The activation carries the version of that
+  read, and Dataverse enforces it: if the rule was changed in Maker after the build read it, the build
+  does not activate it and stops. A repeated create of the same rule is answered by Dataverse without a
+  duplicate, so a create whose answer was lost is proved by reading it, never sent twice.
+- **Editing.** A rule that already exists is never edited: a change of its body or its status is
+  refused before any write (`workflow-edit-refused`). Change it in Maker, then re-adopt it.
+- **Approvals.** The key is `rule:<table>/<name>` (lower-case table). A rule that already exists and
+  that this build did not create is bound only with `--authorize adopt:rule:<table>/<name>`, and only when
+  the declaration names its whole current body in order; nothing is written. A rule changed outside the
+  spec stops the build (`rule-drift`) and needs the same complete re-adoption. There is no `overwrite:`
+  approval for a rule.
+- **Environment.** An environment that cannot host business rules skips every declared rule with one
+  warning and writes nothing for it, as above. The same answer after a declared rule was created in this
+  build stops it (`business-rule-unavailable-after-create`); an adopted rule does not count as created. A
+  declared rule whose earlier change is still waiting to be proved is never skipped this way: the build
+  ends incomplete (`managed-not-settled`) and sends nothing for it.
+- **Removing one.** A declared rule taken out of the spec leaves management and is kept. When a change an
+  earlier build sent to it is still waiting to be proved, the build ends incomplete (`managed-not-settled`)
+  and does not touch that rule: put its entry back and build again. Until then the build neither reads nor
+  creates a rule of the same table and name, because the earlier create may not be visible yet.
+- **A removed rule whose row is gone.** When a read by the rule's own id answers that the row does not
+  exist, the build stops managing it and warns `managed-root-retired` with its `<table>/<name>`: this
+  holds for a rule whose last change was proved, and for one whose create was proved but whose activation
+  was never sent. The notice says only that the row is gone, never that a change of it was made. A row that
+  is there, a read that is refused or cannot be read, and a change that may have been sent and is not proved
+  keep it as above. If the build cannot confirm the retirement (another build changed the record while this
+  one read the row, or the record could not be written), it ends incomplete (`managed-not-settled`) and, for
+  the rest of that build, neither reads nor creates a rule of that table and name; the next build reads the
+  record again. Once retired, `--verify` no longer checks it. A rule you declare under that `<table>/<name>`
+  later is a new one: the build creates it under a new id, never the id of the retired row.
+- **Publishing.** A rule is not published; its activation is the state change above.
+- **Verify.** `--verify` reads each bound declared rule again by its id and holds it to what its last
+  build proved: its whole body (every condition and action, the spec's and any other) and its status. It
+  also fails when the spec now declares the rule differently from what the rule holds, or names it with
+  another table or name (a build never renames or moves a managed rule). A rule changed in Maker since that
+  build fails until it is re-adopted. Its presence and status are read by its own id too, as is a rule whose
+  last change is still waiting to be proved; a rule of the same name never passes for it.
+- **Download.** A plain download writes no business rule. With both `--include-managed` and
+  `--managed-manifest <store file>`, each declared rule the store proves (a fresh read still shows what its
+  last build proved) comes back in `businessRules[]` as the declaration it was built from, with
+  `reconcile: "declared"`; one that is pending, gone, changed since, or not valid is left out and named. The
+  downloaded folder has no store, so the first build that binds each rule that already exists there needs
+  `--authorize "adopt:rule:<table>/<name>"`; a rule that is absent is created with no approval.
+
+## businessProcessFlows[].reconcile (optional — declared business process flows)
+
+Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exactly as before (see
+`businessProcessFlows[]` above).
+
+```jsonc
+{ "entity": "new_ticket", "name": "Ticket Handling", "reconcile": "declared",
+  "description": "How support tickets move to resolution",
+  "status": "Active",              // Active (default) | Draft
+  "order": 1,
+  "stages": [
+    { "key": "triage", "name": "Triage", "steps": [
+        { "key": "subject",  "name": "Subject",  "field": "new_subject", "required": true },
+        { "key": "priority", "name": "Priority", "field": "new_priority" } ] },
+    { "key": "resolve", "name": "Resolve", "steps": [
+        { "key": "notes", "name": "Resolution notes", "field": "new_notes" } ] } ] }
+```
+
+- **One flow, managed whole.** A flow is one row; its stages and steps keep the ids they were written
+  with, and a record sits on a stage by that id. The build gives every stage and step its id before it
+  sends anything, so a retry derives the same ids, and it proves the whole flow on every rebuild.
+- **Keys.** Every stage and every step needs a `key` (letters, digits, `_`, `-`, `.`; at most 64),
+  unique among its stage's steps or among the stages. A key is the identity: renaming a stage or step
+  under the same key keeps its id, and a step added later lands under its actual stage. The flow's own
+  key is `<table>/<name>`; a declared flow beside an undeclared one with the same table and name is
+  refused. Everything in `businessProcessFlows[]` above still applies (a single table, linear, at
+  least one step per stage, a step bound to a column, the name rules).
+- **Settings only.** A declared flow that the build already manages may leave out `stages` to keep
+  only its description, order and status in the spec. Creating or adopting a flow needs its stages.
+- **Status left out.** On a new flow, `status` defaults to Active. On a flow the build already manages,
+  leaving it out keeps the state its last build proved: the build changes nothing, and `--verify` expects
+  that state (a flow kept Draft stays Draft and passes). A `status` that is written is always held to.
+- **Creating.** A new flow is created **Draft** with every id, read back, and only then activated
+  (when its `status` is `Active`). The activation carries the version of that read, and Dataverse
+  enforces it: if the flow was changed in Maker after the build read it, the build does not activate it
+  and stops. A repeated create of the same flow is answered by Dataverse without a duplicate, so a
+  create whose answer was lost is proved by reading it, never sent twice.
+- **Editing.** A flow that already exists is never edited: a change of its body or its status is
+  refused before any write (`workflow-edit-refused`); change it in Maker, then re-adopt it. Removing or
+  reordering a stage or a step is refused in every case (`bpf-structure-refused`), before anything is
+  read, so no change in Maker and no approval unlocks it. Branching, stage actions, a stage on another
+  table and anything else the build does not write are refused (`bpf-shape-unsupported`).
+- **Approvals.** The key is `bpf:<table>/<name>` (lower-case table). A flow that already exists and
+  that this build did not create is bound only with `--authorize adopt:bpf:<table>/<name>`, and only when
+  the declaration names its whole current body in order (`bpf-whole-body-required`); nothing is written.
+  A flow changed outside the spec stops the build (`bpf-drift`) and needs the same complete
+  re-adoption. There is no `overwrite:` approval for a flow.
+- **The backing table.** `securityRoles` are granted on the table name Dataverse stored for the flow,
+  as the build read it, never on a name derived from the display name. A change of a managed flow's
+  `securityRoles` alone (or of any setting the flow already holds) sends no workflow write; the build
+  records the flow's new declaration. A managed download restores a flow with `securityRoles` only with
+  its roles. A persona the downloaded spec lacks is written into `personas[]` from its role only when a
+  rebuild provably leaves that role exactly as it is (a persona's role is converged onto exactly what it
+  declares, so one is never guessed): see "A persona written by a managed download" under `personas[]`
+  in app-spec-schema.md. Otherwise the flow is left out with a warning naming each persona and why, and
+  its declaration is written ready to paste in a new `.maker-workspace/managed-fragments-*.json` file (see the
+  declared forms' Download note); copy those personas from the spec it was built from.
+- **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
+  an earlier build sent to it is still waiting to be proved, the build ends incomplete
+  (`managed-not-settled`) and does not touch that flow: put its entry back and build again. Until then
+  an undeclared flow with the same table and name is not read, created or changed either, because the
+  row of a create whose answer was lost may not be visible yet.
+- **A removed flow whose row is gone.** When a read by the flow's own id answers that the row does not
+  exist, the build stops managing it and warns `managed-root-retired` with its `<table>/<name>`, as for a
+  rule (above): a flow whose last change was proved, one whose create was proved but whose activation
+  was never sent, and one whose change of the security roles alone failed before it was recorded. Anything
+  less than that answer keeps it as above, and a retirement the build cannot confirm ends it incomplete as
+  for a rule. Once retired, `--verify` no longer checks it. A flow you declare under that `<table>/<name>`
+  later is a new one, created under a new id.
+- **Publishing.** A flow is not published; its activation is the state change above.
+- **Verify.** `--verify` reads each bound declared flow again by its id and holds it to what its last
+  build proved: its whole body (every stage and step, with their ids) and its status. It also fails when
+  the spec now declares the flow differently from what the flow holds (a stage or step added, renamed or
+  changed, or one left out or moved, which a build refuses), or names it with another table or name (a
+  build never renames or moves a managed flow). A flow changed in Maker since that build fails until it is
+  re-adopted. Its presence and status are read by its own id too, as is a flow whose last change is still
+  waiting to be proved, so a flow with the same name never passes for it.
+- **Download.** A plain download writes no business process flow. With both `--include-managed` and
+  `--managed-manifest <store file>`, each declared flow the store proves (a fresh read still shows what its
+  last build proved) comes back in `businessProcessFlows[]` as the declaration it was built from, stage and
+  step keys included, with `reconcile: "declared"`; one that is pending, gone, changed since, or not valid
+  is left out and named. The downloaded folder has no store, so the first build that binds each flow there
+  needs `--authorize "adopt:bpf:<table>/<name>"`.
+
+## createIdentity (optional — stable create ids for declared views and charts)
+
+Requires `minimumPluginVersion: "2.21.0"`. Write it on a **new** app only; never add it to an existing or
+downloaded spec. The only value is `"stable-v1"`; any other value is a validation error
+(`create-identity-invalid`), and a spec without the field builds exactly as before.
+
+```jsonc
+{ "minimumPluginVersion": "2.21.0", "createIdentity": "stable-v1",
+  "views": [{ "entity": "new_ticket", "name": "Open Tickets", "reconcile": "declared", "columns": ["new_name"] }] }
+```
+
+- **Dashboards.** A declared dashboard already has an id fixed by the spec, without this field; there is
+  no dashboard value for `createIdentity`. A fixed id finds a row, but is never an approval to bind it.
+- **What gets a stable id.** A declared view or chart (`reconcile: "declared"`) is created with an id
+  the spec fixes (from the solution, the table and the name). A build that lost the answer to its
+  create, run again from the same or a fresh workspace, finds the row at that id and binds it instead
+  of creating a second one. Every other kind (configuration items, custom APIs, environment variables,
+  field security, duplicate rules, pages, legacy views and charts) keeps today's ids.
+- **Where the binding is kept.** In the build workspace, one file per environment, app and solution
+  (`managed-bindings.<hash>.json`). It holds ids, hashes and the state of each change (for a change
+  not yet proved, the content it expects the row to hold); never credentials. Keep it with the build
+  workspace: it is the record of changes not yet proved and of publishes not yet confirmed. A file the
+  build cannot trust stops the build before any write (`managed-binding-store-unreadable`). Keep it as
+  it is. Never put back an older copy — a backup or a version-control copy, the build's own included,
+  can miss a change or a publish sent after it was made, and a build from it could publish that change
+  unproved. Only a copy known to hold the file's latest content may take its place; when that cannot be
+  known, keep the file and the workspace as they are and do not build, edit or tear down the app from them.
+- **Adoption.** A row found at its id that this workspace never bound — including one equal to the
+  spec, and one left by a create whose answer was lost — is bound only with
+  `--authorize adopt:view:<table>/<name>` (or `adopt:chart:<table>/<name>`). Without it nothing is
+  written and the row stays unbound. A row that already holds exactly what the spec declares does not
+  stop the build: it ends successfully with a warning (`view-not-adopted` or `chart-not-adopted`) that
+  names the row's id and the `--authorize adopt:` key that binds it. Until it is bound, a changed
+  declaration for it stops for adoption.
+- **A change not yet proved** holds its table's publish. The next build proves it against the content
+  it recorded before the send, never against the current declaration: a change proved unsent is sent
+  again; a row that holds the recorded content is bound; a row that differs stays held until the
+  original declaration is built again or the row is put back. This holds for a removed declaration too:
+  the build proves it by its recorded content (with the adoption approval when the create was never
+  acknowledged), and removing a declaration never releases the hold — keep `createIdentity` set. A
+  publish whose outcome was lost is confirmed by a fresh read, never sent again.
+- **Local copy.** A local copy at the id with an edit the server has not seen, or a local create that
+  was never acknowledged, stops that view or chart before anything is fetched over, reapplied or sent
+  (`create-completion-required`); the copy is kept byte for byte, and running again stops again. There is
+  no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy. The
+  build never removes a local draft, not even its own: a create that was refused or lost its answer keeps
+  the draft it made and stops with `create-local-draft-kept`, and the next build stops as above. Its
+  change is still pending, and it is proved only against the declaration it was prepared from, so settle
+  it in this order (a changed declaration first stops with `create-completion-required` and keeps it
+  pending):
+  1. keep the change you want — from the local draft or from the spec — somewhere apart;
+  2. keep the spec's declaration of that view or chart as it was, or put it back;
+  3. discard only the local copy: the maker SDK's local discard (`deleteArtifact`) or a refresh of the
+     local copy. It removes nothing on the service and leaves the binding store as it is;
+  4. build again with the original declaration (with `--authorize adopt:view:<table>/<name>` or
+     `adopt:chart:…` if the build asks for it); it finds the row on the server, or sends the same create
+     again when nothing of it was sent;
+  5. then put your change into the spec and build again.
+
+  The create request is checked just before it is sent: if it is not exactly the create of the draft
+  the build made (a name or description edited meanwhile, even by another process), or the push turns
+  into any other write of that row (an update, or a batch that touches it), nothing is sent and the
+  build stops with `create-local-draft-changed`.
+- **Publishing.** A create whose answer was lost holds its table's publish until a later build has
+  found and bound the row; another table still publishes. While a change is not yet proved, page edits
+  that publish the app (`genpage.js` add-to-app and remove-from-app, `genpage-upload.js --app-id`) are
+  refused with `publication-withheld`, and a teardown leaves that table's publish unsent, with a warning.
+  A page edit makes that check under the app's build and pages leases, so it is refused with
+  `build-locked` while a build of the app runs in the same workspace; run it again once the build ends.
+- **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
+  a file it cannot read, is reported as unverified, never as a pass.

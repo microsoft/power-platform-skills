@@ -19,15 +19,18 @@ const switchOn = (value) => value === true || value === 'true';
 // none, so one approval cannot cover a later upload — including a second copy of the same
 // command. indexOf would bind every later copy to the first occurrence. A mention of the words
 // in an options list, a stop, or a choice logged after the command is not consent.
+// A clear of a page that binds a built-in operation is read the same way, from its own
+// `Clear choice:` lines (action-binding-union.js clearConfirmationProblems), so that one decision
+// never takes the other's slot: an upload that needs both answers carries both.
 const DIVERGENCE_CODES = new Set(['no-base', 'deployed-changed', 'deployed-unreadable']);
 const OVERWRITE_CHOICE_LINE = 'Choice: Overwrite the deployed changes';
 
-function uploadChoiceLines(workflowLog) {
+function uploadChoiceLines(workflowLog, prefix = 'Choice:') {
   const entries = [];
   let pending = null;
   for (const line of String(workflowLog || '').split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (trimmed.startsWith('Choice:')) {
+    if (trimmed.startsWith(prefix)) {
       pending = trimmed;
       continue;
     }
@@ -377,4 +380,5 @@ function uploadPreservationProblems(fixture, mode) {
 module.exports = {
   uploadProblems, uploadPreservationProblems, uploadTransportProblems, desiredBindings, sameBindings,
   uploadResultIdentityMatches, pageIdentityProblems, beforePageIdentityProblems, sameRecordedEnvironment,
+  uploadChoiceLines, consumedChoice,
 };

@@ -27,6 +27,9 @@
 //     need to be.
 // The bundle's own decision (which URLs name one environment) is deliberately NOT re-implemented in the plugin:
 // a stub that mimicked it would stay green if the SDK changed it.
+// This file checks where lib/temp-workspace.js makes a workspace, so it works in a temp folder of its own (helpers/own-temp-folder.js): in the
+// suite's shared one, other test processes make and remove the plugin's workspace folder. Required first, so every path below is inside it.
+require('./helpers/own-temp-folder.js');
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');

@@ -23,6 +23,11 @@ const { sha256 } = require('../lib/hash.js');
 const { readPageOwnership, readPendingCreations, recordPagePending, recordPageCreation } = require('../lib/page-ownership-records.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
+const { withPageType, PAGE_TYPE } = require('./helpers/page-component-type.js');
+// What a guess costs a page where the TypeScript parser does not settle it (lib/typescript-views.js): these tests read the page with the lexer alone.
+// parser-check.test.js holds what the parser settles.
+const { setParserCheck } = require('../lib/typescript-views.js');
+const lexerAlone = (t) => { setParserCheck(false); t.after(() => setParserCheck(true)); };
 
 // Real GUIDs for the three-authority sitemap mock. SELF_* resolve THIS app's appmodule + sitemap so
 // fetchSitemap(appUnique) returns opts.liveSitemapXml; a page-less EMPTY sitemap is the default membership.
@@ -101,7 +106,8 @@ function mockSdk(opts = {}) {
     // The shared-page scan's reads through the client: the list of apps (the published ones are all there are here, none was never published) and the other apps'
     // saved layer, which is each app's published sitemap while nothing is pending.
     dataverse: {
-      get: async (url) => {
+      // The page table's solution component type is answered too: the pages join the spec's solution (helpers/page-component-type.js).
+      get: withPageType(async (url) => {
         if (url.startsWith('/appmodules/')) {
           const value = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique, componentstate: 0 }];
           (opts.otherApps || []).forEach((a, i) => value.push({ appmoduleid: `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename, componentstate: 0 }));
@@ -109,7 +115,7 @@ function mockSdk(opts = {}) {
         }
         if (url.startsWith('/sitemaps/')) return { status: 200, body: { value: (opts.otherApps || []).map((a, i) => ({ sitemapid: `sm-${i + 2}`, sitemapxml: a.sitemapxml || '<SiteMap/>', componentstate: 0 })) } };
         return { status: 404, body: null };
-      },
+      }),
     },
   };
   return { sdk, calls };
@@ -289,7 +295,8 @@ test('deploy: a PAGEREF_ token no navigation rewrite resolves HALTs before any u
 // A page whose `/` after an object literal hides a call: JavaScript makes both navigations, but the lexer reads the `/` after the object literal on line 4 as a regex and
 // the `/*` in `/\/*$/` as a comment over the second call, so the build resolved the first and shipped "PAGEREF_detail" in the second —
 // with promotion, parity and the residue check all passing. It halts before any write, naming the call and the `/`.
-test('deploy: a page whose "/" after an object literal hides a navigation call HALTs before any upload, naming the call and the "/"', async () => {
+test('deploy: a page whose "/" after an object literal hides a navigation call HALTs before any upload, naming the call and the "/"', async (t) => {
+  lexerAlone(t);
   const { appDir, spec } = makeTwoPageApp();
   try {
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), OBJECT_DIVISION_PAGE, 'utf8');
@@ -322,7 +329,8 @@ test('deploy: a page whose "/" after an object literal hides a navigation call H
 // Every way of making the lexer hide a navigation call, or read text as one, is a page the build refuses before any write
 // (tests/helpers/misread-page.js). From the first spot the lexer reads by guess, every PAGEREF_ token is stray and none is rewritten, so
 // the page is not half resolved. The message names the page, each token's line and column, and the kind and position of the guess.
-test('deploy: each misread page HALTs before any upload, naming the token and the guess', async () => {
+test('deploy: each misread page HALTs before any upload, naming the token and the guess', async (t) => {
+  lexerAlone(t);
   for (const [name, { kind, frontier, code, reaching }] of Object.entries(MISREAD_PAGES)) {
     const { appDir, spec } = makeTwoPageApp();
     try {
@@ -349,11 +357,30 @@ test('deploy: each misread page HALTs before any upload, naming the token and th
   }
 });
 
+// The same pages, read as the TypeScript parser reads them where the lexer guessed (lib/typescript-views.js): the `/` after the object literal is the division it is,
+// and so is `of/2`, so every call is seen, resolved and deployed — where the lexer alone halts the build.
+test('deploy: a page the lexer misreads is read as TypeScript parses it, and every call in it deploys resolved', async () => {
+  for (const [what, code, calls] of [['the object-division page', OBJECT_DIVISION_PAGE, 2], ['the page whose call the lexer hid', HIDDEN_CALL_PAGE.code, 1]]) {
+    const { appDir, spec } = makeTwoPageApp();
+    try {
+      fs.writeFileSync(path.join(appDir, 'overview.tsx'), code, 'utf8');
+      const { sdk } = mockSdk();
+      const genpageCli = mockGenpageCli();
+      await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+      const overview = genpageCli.uploads.find((u) => u.name === 'Overview');
+      assert.strictEqual(overview.content.split(`"${DETAIL_ID}"`).length - 1, calls, `${what}: every call is resolved`);
+      assert.ok(!/PAGEREF_/.test(overview.content), what);
+      assert.strictEqual(fs.readFileSync(path.join(appDir, 'overview.tsx'), 'utf8'), code, `${what}: the canonical source is untouched`);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
 // A declared call the lexer cannot see is "declared-but-absent", and that alone sends the author looking for a call that is plainly there.
 // The page of a live run: `of/2` is read as the start of a regex whose `/*` opens a comment over the call. The halt names the guess that
 // hides it — which it is, where, what it could be, and what to change — and nothing is written. A page with no guess, and no call, is
 // told only what is missing.
-test('deploy: a declared call the lexer cannot see HALTs on parity, naming the guess that hides it', async () => {
+test('deploy: a declared call the lexer cannot see HALTs on parity, naming the guess that hides it', async (t) => {
+  lexerAlone(t);
   const { code, frontier } = HIDDEN_CALL_PAGE;
   const before = code.slice(0, frontier(code)).split('\n');
   const { appDir, spec } = makeTwoPageApp();
@@ -647,6 +674,197 @@ test('deploy: a rebuild re-binds ids from the live enumeration and issues only U
     assert.ok(genpageCli.uploads.length > 0);
     assert.ok(genpageCli.uploads.every((u) => !!u.requestedId), 'every upload targets a known pageId (UPDATE) — no CREATE, no duplicate');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// THE SOLUTION HOLDS THE PAGES (AB#6443257). Every other component the build makes joins the spec's solution, and the add of the app brings its sitemap — never the
+// pages its navigation opens. So each page is added on its own, as a component of the page table's type the environment allocates, with its files.
+const pageAdds = (calls) => calls.filter((c) => c.name === 'addSolutionComponent' && c.args[0].componentType === PAGE_TYPE).map((c) => c.args[0]);
+
+test('solution: every page the build creates joins the spec\u2019s solution — as the page table\u2019s type the environment answers, with its files — once', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    const { sdk, calls } = mockSdk();
+    const genpageCli = mockGenpageCli();
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.deepStrictEqual(pageAdds(calls).sort((a, b) => a.componentId.localeCompare(b.componentId)), [
+      { componentId: OVERVIEW_ID, componentType: PAGE_TYPE, solutionUniqueName: 'PgDeploy', addRequiredComponents: true },
+      { componentId: DETAIL_ID, componentType: PAGE_TYPE, solutionUniqueName: 'PgDeploy', addRequiredComponents: true },
+    ]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('solution: a rebuild re-asserts each page it writes — one the solution is proven to hold costs no add, one it does not hold (an earlier build\u2019s) joins it', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
+    const { sdk, calls } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest', liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+    // The solution holds Overview (a row of the page table's type) and not Detail: what a build before this one left.
+    const SOLUTION_ID = '5a5a5a5a-0000-4000-8000-00000000005a';
+    const query = sdk.queryRecords;
+    sdk.queryRecords = async (entity, options) => {
+      if (entity === 'solution') return [{ solutionid: SOLUTION_ID }];
+      if (entity === 'solutioncomponent') {
+        calls.push({ name: 'queryRecords', args: [entity, options] });
+        return options.filter.includes(`componenttype eq ${PAGE_TYPE}`) ? [{ objectid: OVERVIEW_ID, componenttype: PAGE_TYPE, rootcomponentbehavior: null }] : [];
+      }
+      return query(entity, options);
+    };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli: mockGenpageCli(live), phases: PHASES });
+    assert.deepStrictEqual(pageAdds(calls), [{ componentId: DETAIL_ID, componentType: PAGE_TYPE, solutionUniqueName: 'PgDeploy', addRequiredComponents: true }]);
+    const pageMembershipReads = calls.filter((c) => c.name === 'queryRecords' && c.args[0] === 'solutioncomponent' && c.args[1].filter.includes(`componenttype eq ${PAGE_TYPE}`));
+    assert.strictEqual(pageMembershipReads.length, 1, 'the solution\u2019s pages are read once, for every page');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('solution: a system solution holds every page already — no page is added, and the page table\u2019s type is not read', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    spec.solution = { uniqueName: 'Default', displayName: 'Default Solution', publisherPrefix: 'contoso' };
+    const { sdk, calls } = mockSdk();
+    const reads = [];
+    const get = sdk.dataverse.get;
+    sdk.dataverse.get = async (url) => { reads.push(url); return get(url); };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli: mockGenpageCli(), phases: PHASES });
+    assert.deepStrictEqual(pageAdds(calls), []);
+    assert.ok(!reads.some((url) => /EntityDefinitions\(LogicalName='uxagentproject'\)/.test(url)));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The halt is as transient as the read it wraps (tests/halt-retry-policy.test.js): a 503 is run again, a refusal is final — whatever the solution is called, since its name is the maker's.
+test('solution: an environment that cannot say the page table\u2019s type halts the pages phase before any page is written — run again for a 503, final for a refusal', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  for (const [status, said, transient] of [[503, 'Service Unavailable', true], [403, 'Principal user is missing prvReadEntity privilege', false]]) {
+    const { appDir, spec } = makeTwoPageApp();
+    try {
+      spec.solution.uniqueName = 'Timeout_503_TryAgainLater';
+      const { sdk, calls } = mockSdk();
+      const get = sdk.dataverse.get;
+      sdk.dataverse.get = async (url) => (/EntityDefinitions\(LogicalName='uxagentproject'\)/.test(url) ? { status, body: { error: { message: said } } } : get(url));
+      const genpageCli = mockGenpageCli();
+      let halt = null;
+      try { await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }); } catch (e) { halt = e; }
+      assert.ok(halt && halt.phase === 'pages' && halt.code === 'pages-solution-type-unreadable', `${status}: ${halt && halt.stack}`);
+      assert.ok(halt.message.includes(`cannot join solution Timeout_503_TryAgainLater — nothing in the pages phase was written: the solution component type of a generative page could not be read (HTTP ${status}: ${said})`), halt.message);
+      assert.strictEqual(isTransientHalt(halt, { spec }), transient, `${status}: the build runs again for it only when the read it wraps can succeed on another try`);
+      assert.strictEqual(genpageCli.uploads.length, 0, 'no page was written');
+      assert.deepStrictEqual(pageAdds(calls), []);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
+// A changed-only run (a fast apply: the changed page only, the app's navigation left as it is) over an environment that keeps what each run wrote — the page manifest, the
+// pages and the solution's pages — so a second run sees what the first one left. Overview is the changed page. Detail, the page it navigates to, is not selected: `detail`
+// is its id, or null for a page deleted in Maker since the last apply, which the run makes again because Overview's link needs it. `members` are the pages the solution
+// holds; `refuse(id)` says whether the solution add of a page is refused (a 503, before anything is written).
+const DELETED_DETAIL_ID = '33333333-0000-4000-8000-000000000003';
+function changedOnlyEnvironment({ detail, members, refuse = () => false }) {
+  const { spec, appDir } = makeTwoPageApp();
+  const workspaceDir = path.join(appDir, 'workspace');
+  fs.mkdirSync(workspaceDir);
+  const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, ...(detail ? [{ pageId: detail, name: 'Detail' }] : [])];
+  const held = new Set(members);
+  // The options mockSdk reads at every request, so a write below changes what the next read answers.
+  const remote = {
+    pageManifest: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: detail || DELETED_DETAIL_ID }] })).toString('base64'),
+    manifestId: 'wr-manifest',
+    liveSitemapXml: pageSitemap([OVERVIEW_ID, detail || DELETED_DETAIL_ID]),
+    selfAppUnique: appUniqueName(spec),
+    pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })),
+  };
+  const run = async () => {
+    const { sdk, calls } = mockSdk(remote);
+    const query = sdk.queryRecords;
+    sdk.queryRecords = async (entity, options) => {
+      if (entity === 'solution') return [{ solutionid: '5a5a5a5a-0000-4000-8000-00000000005a' }];
+      if (entity === 'solutioncomponent') {
+        calls.push({ name: 'queryRecords', args: [entity, options] });
+        return options.filter.includes(`componenttype eq ${PAGE_TYPE}`) ? [...held].map((id) => ({ objectid: id, componenttype: PAGE_TYPE, rootcomponentbehavior: null })) : [];
+      }
+      return query(entity, options);
+    };
+    for (const method of ['createWebResource', 'updateWebResource']) {
+      const write = sdk[method];
+      sdk[method] = async (...args) => {
+        const body = method === 'createWebResource' ? args[0] : args[1];
+        if (body.content) remote.pageManifest = Buffer.from(body.content, 'utf8').toString('base64');
+        return write(...args);
+      };
+    }
+    const add = sdk.addSolutionComponent;
+    sdk.addSolutionComponent = async (o) => {
+      await add(o);
+      if (o.componentType !== PAGE_TYPE) return;
+      if (refuse(o.componentId)) throw Object.assign(new Error('Service Unavailable'), { statusCode: 503 });
+      held.add(o.componentId);
+    };
+    const genpageCli = mockGenpageCli(live);
+    const create = genpageCli.create;
+    genpageCli.create = async (o) => {
+      const made = await create(o);
+      live.push({ pageId: made.pageId, name: made.name });
+      remote.pageRows = live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name }));
+      return made;
+    };
+    let halt = null;
+    try {
+      await runSdkBuild(spec, {
+        sdk, apply: true, env: 'https://contoso.crm.dynamics.com', appDir, workspaceDir, genpageCli, phases: ['pages'],
+        changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys: ['overview'], deployedKeys: ['overview', 'detail'] },
+      });
+    } catch (e) { halt = e; }
+    return {
+      halt,
+      uploads: genpageCli.uploads.map((u) => `${u.requestedId ? 'update' : 'create'} ${u.name}`),
+      pageAdds: pageAdds(calls).map((a) => a.componentId),
+      pageMembershipReads: calls.filter((c) => c.name === 'queryRecords' && c.args[0] === 'solutioncomponent' && c.args[1].filter.includes(`componenttype eq ${PAGE_TYPE}`)).length,
+    };
+  };
+  return { spec, held, run, dispose: () => fs.rmSync(appDir, { recursive: true, force: true }) };
+}
+
+// The page a changed-only run makes is not one it selected, so a run taken again — the build's own retry of a halt it takes for transient keeps the same selection — finds it
+// bound by its creation receipt and leaves it as it is. Its solution add is not left with it: the run asserts every page it keeps, not only those it writes.
+test('solution: a changed-only run whose add of a page it made was refused adds that page when the run is taken again — and does not write the page again', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  let refused = false;
+  const env = changedOnlyEnvironment({ detail: null, members: [OVERVIEW_ID], refuse: (id) => id === DETAIL_ID && !refused && (refused = true) });
+  try {
+    const first = await env.run();
+    assert.ok(first.halt && first.halt.phase === 'pages', `the refused add stops the pages phase: ${first.halt && first.halt.stack}`);
+    assert.strictEqual(isTransientHalt(first.halt, { spec: env.spec }), true, 'a 503 is run again, with the same selection');
+    assert.deepStrictEqual(first.uploads, ['create Detail'], 'the absent target is made first, and its add is refused');
+    assert.deepStrictEqual(first.pageAdds, [DETAIL_ID]);
+    assert.ok(!env.held.has(DETAIL_ID), 'the solution does not hold the page yet');
+
+    const second = await env.run();
+    assert.strictEqual(second.halt, null, `the run taken again completes: ${second.halt && second.halt.stack}`);
+    assert.deepStrictEqual(second.uploads, ['update Overview'], 'the page the first run made is bound now, and left as it is: only the changed page is written');
+    assert.deepStrictEqual(second.pageAdds, [DETAIL_ID], 'the page the first run made, and could not add, joins the solution');
+    assert.ok(env.held.has(DETAIL_ID));
+  } finally { env.dispose(); }
+});
+
+test('solution: a changed-only run asserts the pages it leaves as they are, with the one read — a page the solution does not hold joins it, and none of them is written', async () => {
+  const env = changedOnlyEnvironment({ detail: DETAIL_ID, members: [OVERVIEW_ID] });
+  try {
+    const run = await env.run();
+    assert.strictEqual(run.halt, null, run.halt && run.halt.stack);
+    assert.deepStrictEqual(run.uploads, ['update Overview'], 'the page it leaves as it is is not written');
+    assert.deepStrictEqual(run.pageAdds, [DETAIL_ID], 'it joins the solution, as a full build would add it');
+    assert.strictEqual(run.pageMembershipReads, 1, 'the solution\u2019s pages are read once, for every page');
+  } finally { env.dispose(); }
+});
+
+test('solution: a changed-only run over pages the solution already holds adds none of them, and writes only the page it changed', async () => {
+  const env = changedOnlyEnvironment({ detail: DETAIL_ID, members: [OVERVIEW_ID, DETAIL_ID] });
+  try {
+    const run = await env.run();
+    assert.strictEqual(run.halt, null, run.halt && run.halt.stack);
+    assert.deepStrictEqual(run.uploads, ['update Overview']);
+    assert.deepStrictEqual(run.pageAdds, []);
+    assert.strictEqual(run.pageMembershipReads, 1);
+  } finally { env.dispose(); }
 });
 
 // Duplicate page names: validateAppSpec TOLERATES a duplicate name when both pages carry a

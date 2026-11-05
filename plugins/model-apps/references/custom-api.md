@@ -6,10 +6,9 @@ token** (no broker, no impersonation). The `name` string a page passes to
 `dataApi.executeAction` / `executeFunction` **MUST** equal an `actionBindings[].name` value
 in the page `config.json`, and that Custom API must exist in the target environment.
 
-> **Custom API discovery is enabled by default**, with a retained `custom-api` feature flag.
-> Set `GENPAGE_ENABLE_CUSTOM_API=0` to opt out. Unknown flags and missing/unreadable config
-> still fail closed. When OFF, no new Custom API bindings or calls are authored; unrelated
-> edits preserve existing bindings unchanged. The `genpage-customapi-builder` agent owns this gate.
+> **Custom API support has no feature flag.** Discovery, authoring and upload are always
+> available; the `custom-api` flag that once gated them was removed, and
+> `GENPAGE_ENABLE_CUSTOM_API` is ignored. The `genpage-customapi-builder` agent owns discovery.
 
 > **Vocabulary.** Makers author **Custom APIs** (the Dataverse `customapi` artifact); each is
 > either an **Action** (POST; call with `executeAction`) or a **Function** (GET;
@@ -18,6 +17,11 @@ in the page `config.json`, and that Custom API must exist in the target environm
 > *action*: bindings persist into `config.json.actionBindings` and the upload flag is
 > `--actions`. So the maker-facing skill says "Custom API" while the wire format stays
 > `actionBindings` — the two describe the same thing at different layers.
+
+> **Two `actionBindings` names are not Custom APIs.** Exactly `WhoAmI` and `RetrieveVersion`
+> are reviewed built-in Dataverse Functions behind their own default-off
+> `dataverse-operations` flag: discovery here never lists them, and a missing Custom API row
+> is never their problem. See `references/dataverse-operations.md`.
 
 ## Binding shape: `actions.json` (array) vs page `config.json` (object)
 
@@ -87,8 +91,7 @@ a spec that states one is refused (see `references/app-spec-schema.md` → `page
 itself never reads or writes the spec. The spec carries the list and not the Custom APIs it names: each must
 already exist in the environment you rebuild into, deployed in a solution. A rebuild reads the environment's Custom
 APIs before it writes and says by name one that is not there, one that is the other kind (Action or Function) and
-one bound to another table; it does not stop for them. The `custom-api` flag gates what the `/genpage` agents
-author, not this.
+one bound to another table; it does not stop for them.
 
 An App Spec must not declare `EntityReference`, `Entity` or `EntityCollection`. A downloaded list
 holding an unsupported declared kind is left out whole and reported by place and property, never
@@ -149,9 +152,10 @@ See <https://learn.microsoft.com/power-apps/developer/data-platform/reference/en
 
 - Always cast `dataApi` to the optional action-method shape and **presence-check** the method
   before calling it — the methods are absent on older runtimes.
-- **Actions may mutate: guard against double-submit.** Keep an `isSubmitting` flag per
-  action-triggering control; disable it while a call is in flight; never fire a second
-  `executeAction` for the same trigger before the first resolves.
+- **Actions may mutate: guard against double-submit.** Keep a synchronous latch per
+  action-triggering control (`pending.current`, set before the call and reset in `finally`, as in
+  the pattern below) or an `isSubmitting` flag; disable the control while a call is in flight;
+  never fire a second `executeAction` for the same trigger before the first resolves.
 - **Functions use GET, not a proof of harmless behavior.** Automatic mount/filter invocation
   requires author-known read semantics for the selected Custom API. Otherwise require an explicit
   user trigger and prevent overlapping submissions; still avoid pointless fetches and ignore stale responses.
@@ -164,10 +168,16 @@ See <https://learn.microsoft.com/power-apps/developer/data-platform/reference/en
 - **Read outputs from `res.outputs`, never `res.value`.**
 - **Never surface raw fault text.** On `res.ok === false`, show only the SANITIZED
   `res.error?.message` in a message bar. Never render stack traces or plug-in fault detail.
+  Every failed result and every rejection goes through the page's `reportPageError`
+  (rules.md → *Missing Error Handling*) with the result's `res.error?.code` and
+  `res.error?.message` — never the result itself — and a literal kind; `PageErrorBar` shows
+  the view it returns.
 - **Never auto-retry.** `res.indeterminate` (timeout after dispatch — the server may have
   committed) must never be retried automatically; ask the user to refresh. Only
   `res.error?.code === 'network'` is safely retryable (the request never left the client), and
-  even then only via a manual "Try again". Do not confuse the two.
+  even then only via a manual "Try again". Do not confuse the two. Check both indeterminate
+  forms first — `res.indeterminate`, then `res.error?.code === 'indeterminate'` — then
+  `network`, then any other failure, each reporting and returning before `res.outputs` is read.
 - **Never guess** a name, parameter name, or output field. Use only the plan's
   `## Custom API Bindings` values and the declared parameter/output names.
 - Keep non-action pages unchanged; only emit action code when the plan has action bindings.
@@ -213,37 +223,135 @@ Teach every one; a page that mishandles a code degrades badly.
 
 ## Verified Action pattern (may mutate; double-submit guarded)
 
+A complete `PageBody` for a bound Action, built on the page error block of rules.md (which supplies
+`PAGE_NAME`, `reportPageError`, `PageErrorBar`, the boundary and the default export). The handler is a
+named function inside `PageBody` because it closes over state; `setActionFailure` stores the view and
+`pending: false` in one update; `retryApprove` is passed, never called, and only for a `network` result.
+The approval belongs to the record it was started on: `approvalFor` holds the record the panel shows, a
+record change clears the panel — and with it any retry — and an answer that arrives after the page moved
+to another record is ignored, so a retry can only ever re-send the approval of the record on screen.
+
 ```typescript
-const actionApi = dataApi as unknown as { executeAction?: (request: { name: string; parameters?: Record<string, unknown>; boundTo?: { entityName: string; id: string } }) => Promise<{ ok: boolean; indeterminate?: boolean; outputs?: Record<string, unknown>; error?: { message: string; code?: string } }>; };
-if (typeof actionApi.executeAction !== 'function') { return; } // presence-check; hide/disable the trigger
-if (isSubmitting) { return; }                                   // double-submit guard
-setIsSubmitting(true);
-try {
-  const res = await actionApi.executeAction({
-    name: 'new_ApproveOrder',
-    parameters: { Comment: comment, Amount: amount },           // types match parameterKinds
-    boundTo: { entityName: pageInput.entityName, id: pageInput.recordId }, // REQUIRED: entity-bound
-  });
-  if (res.indeterminate) { setError("We couldn't confirm this completed — refresh before retrying."); return; }
-  if (!res.ok) { setError(res.error?.message ?? 'The action failed.'); return; } // sanitized only
-  const { NewStatus } = res.outputs as { NewStatus: string };   // read from outputs, never value
-} finally {
-  setIsSubmitting(false);
+type ActionResult = { ok: boolean; indeterminate?: boolean; outputs?: Record<string, unknown>; error?: { message: string; code?: string } };
+type ActionApi = {
+  executeAction?: (request: { name: string; parameters?: Record<string, unknown>; boundTo?: { entityName: string; id: string } }) => Promise<ActionResult>;
+};
+
+function PageBody(props: GeneratedComponentProps) {
+  const { dataApi, pageInput } = props;
+  const actionApi = dataApi as unknown as ActionApi;
+  const currentRecord = pageInput?.recordId ?? '';
+  const [comment, setComment] = React.useState('');
+  const [approval, setApproval] = React.useState<{ pending: boolean; status: string; error: PageErrorView | null }>({ pending: false, status: '', error: null });
+  const pending = React.useRef(false);                          // double-submit latch
+  const approvalFor = React.useRef(currentRecord);              // the record the approval panel belongs to
+
+  // Another record starts a clean panel: the previous record's result, and its retry, are cleared.
+  React.useEffect(() => {
+    approvalFor.current = currentRecord;
+    setApproval({ pending: false, status: '', error: null });
+  }, [currentRecord]);
+
+  function setActionFailure(view: PageErrorView) {
+    setApproval({ pending: false, status: '', error: view });
+  }
+
+  function retryApprove() {
+    if (currentRecord && currentRecord === approvalFor.current) void approveOrder(currentRecord, comment);   // only while this record is shown
+  }
+
+  async function approveOrder(recordId: string, note: string) {
+    if (typeof actionApi.executeAction !== 'function') return;   // presence-check; hide/disable the trigger
+    if (pending.current || !recordId) return;                    // double-submit guard
+    pending.current = true;
+    setApproval({ pending: true, status: '', error: null });
+    try {
+      const res = await actionApi.executeAction({
+        name: 'new_ApproveOrder',
+        parameters: { Comment: note },                           // types match parameterKinds
+        boundTo: { entityName: 'salesorder', id: recordId },     // REQUIRED: entity-bound
+      });
+      if (recordId !== approvalFor.current) return;              // the page moved on: not this record's answer
+      if (res.indeterminate) { setActionFailure(reportPageError(PAGE_NAME, 'approveOrder', res.error?.code, res.error?.message, 'indeterminate')); return; }
+      if (res.error?.code === 'indeterminate') { setActionFailure(reportPageError(PAGE_NAME, 'approveOrder', res.error?.code, res.error?.message, 'indeterminate')); return; }
+      if (!res.ok && res.error?.code === 'network') { setActionFailure(reportPageError(PAGE_NAME, 'approveOrder', res.error?.code, res.error?.message, 'network', retryApprove)); return; }
+      if (!res.ok) { setActionFailure(reportPageError(PAGE_NAME, 'approveOrder', res.error?.code, res.error?.message, 'write')); return; }
+      const status = res.outputs?.NewStatus;                      // read from outputs, never value
+      setApproval({ pending: false, status: typeof status === 'string' ? status : '', error: null });
+    } catch (error) {
+      if (recordId !== approvalFor.current) return;
+      setActionFailure(reportPageError(PAGE_NAME, 'approveOrder', undefined, error, 'write'));
+    } finally {
+      pending.current = false;
+    }
+  }
+
+  return (
+    <div>
+      <PageErrorBar error={approval.error} />
+      <Input aria-label="Comment" value={comment} onChange={(_, data) => setComment(data.value)} />
+      <Button appearance="primary" disabled={approval.pending} onClick={() => void approveOrder(currentRecord, comment)}>Approve</Button>
+      {approval.status && <Text>{approval.status}</Text>}
+    </div>
+  );
 }
 ```
 
-For a **Global** action, omit `boundTo` entirely.
+The order is the contract: both indeterminate forms first (`'indeterminate'`, no retry — the server may
+have committed), then `network` (`'network'`, the named manual retry), then any other failure
+(`'write'`, no retry), each storing its view and returning before `res.outputs` is read; a rejection is
+a `'write'` too. Each kind is a literal — never a ternary. For a **Global** action, omit `boundTo`
+entirely.
 
 ## Function pattern (known read semantics required before automatic invocation)
 
-```typescript
-const actionApi = dataApi as unknown as { executeFunction?: (request: { name: string; parameters?: Record<string, unknown> }) => Promise<{ ok: boolean; outputs?: Record<string, unknown>; error?: { message: string; code?: string } }>; };
-if (typeof actionApi.executeFunction !== 'function') { return; }
-const res = await actionApi.executeFunction({ name: 'new_GetOrderSummary', parameters: { OrderId: orderId } });
-if (!res.ok) { setError(res.error?.message ?? 'Could not load the summary.'); return; }
-const { Total, Status } = res.outputs as { Total: number; Status: string };
-```
+A complete `PageBody` for a Function the plan records as a read: a failure is a `'read'` with a named
+reload. A Function whose side effects are not established is a `'write'` with no retry, called only
+from a button with the Action's overlap guard.
 
+```typescript
+type FunctionResult = { ok: boolean; indeterminate?: boolean; outputs?: Record<string, unknown>; error?: { message: string; code?: string } };
+type FunctionApi = {
+  executeFunction?: (request: { name: string; parameters?: Record<string, unknown> }) => Promise<FunctionResult>;
+};
+
+function PageBody(props: GeneratedComponentProps) {
+  const { dataApi, pageInput } = props;
+  const functionApi = dataApi as unknown as FunctionApi;
+  const [summary, setSummary] = React.useState<{ total: number | null; error: PageErrorView | null }>({ total: null, error: null });
+
+  function setSummaryFailure(view: PageErrorView) {
+    setSummary({ total: null, error: view });
+  }
+
+  function retrySummary() {
+    void loadSummary(pageInput?.recordId ?? '');
+  }
+
+  async function loadSummary(orderId: string) {
+    if (typeof functionApi.executeFunction !== 'function') return;
+    try {
+      const res = await functionApi.executeFunction({ name: 'new_GetOrderSummary', parameters: { OrderId: orderId } });
+      if (res.indeterminate) { setSummaryFailure(reportPageError(PAGE_NAME, 'loadSummary', res.error?.code, res.error?.message, 'indeterminate')); return; }
+      if (res.error?.code === 'indeterminate') { setSummaryFailure(reportPageError(PAGE_NAME, 'loadSummary', res.error?.code, res.error?.message, 'indeterminate')); return; }
+      if (!res.ok && res.error?.code === 'network') { setSummaryFailure(reportPageError(PAGE_NAME, 'loadSummary', res.error?.code, res.error?.message, 'network', retrySummary)); return; }
+      if (!res.ok) { setSummaryFailure(reportPageError(PAGE_NAME, 'loadSummary', res.error?.code, res.error?.message, 'read', retrySummary)); return; }
+      const total = res.outputs?.Total;
+      setSummary({ total: typeof total === 'number' ? total : null, error: null });
+    } catch (error) {
+      setSummaryFailure(reportPageError(PAGE_NAME, 'loadSummary', undefined, error, 'read', retrySummary));
+    }
+  }
+
+  return (
+    <div>
+      <PageErrorBar error={summary.error} />
+      <Button onClick={() => void loadSummary(pageInput?.recordId ?? '')}>Show summary</Button>
+      {summary.total !== null && <Text>{summary.total}</Text>}
+    </div>
+  );
+}
+```
 ## Optional discovery: `listBoundActions`
 
 `dataApi.listBoundActions?.()` returns the operations THIS PAGE is bound to (`name`,

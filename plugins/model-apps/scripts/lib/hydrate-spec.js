@@ -90,7 +90,7 @@ function withDescription(obj, rawDescription) {
 function sanitizeDescriptionInventory(inv) {
   if (!inv || typeof inv !== 'object' || Array.isArray(inv)) return undefined;
   const out = {};
-  for (const key of ['views', 'charts', 'forms', 'businessRules', 'globalChoices']) {
+  for (const key of ['views', 'charts', 'forms', 'businessRules', 'globalChoices', 'commands']) {
     if (!Array.isArray(inv[key])) continue;
     out[key] = inv[key].map((item) => {
       const { Description, description, ...rest } = item || {};
@@ -246,8 +246,9 @@ async function hydrateSpec(read) {
     //
     // All four survive on the live app — a rebuild into the SAME environment preserves them — but are
     // absent from the downloaded spec, so edit them in Maker or a fresh spec. This is no longer
-    // silent: every deployed form/view/chart is listed in `descriptionInventory` below, and
-    // `download-model-app` reports the omission by class and table on every run (AB#6686423).
+    // silent: every deployed form/view/chart, and every command-bar customisation of the app's tables,
+    // is listed in `descriptionInventory` below, and `download-model-app` reports the omission by class
+    // and table on every run (AB#6686423).
     charts: [],
     forms: [],
     commands: [],

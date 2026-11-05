@@ -539,3 +539,113 @@ test('a malformed connectorid or connectionid in a successful answer is NOT CHEC
   const { provision } = readerOf({ connectionreference: [{ ...row, connectorid: '/providers/Microsoft.PowerApps/apis/shared_office365users' }] });
   assert.deepStrictEqual(judgeBindingTargets([odd], await readBindingTargets(provision, [odd])).findings, []);
 });
+
+// ── the two reviewed built-in operations: WhoAmI and RetrieveVersion ────────────────────────────────────────────────────────────
+// They are platform messages, not rows of `customapi` (lib/dataverse-operations.js), so a `customapi` read cannot find them and an `api-missing` warning would tell the author to deploy
+// something that is not deployable. An EXACT catalogue name leaves the Custom API read before the names are folded in case and cut into chunks; it is reported as not checked — its
+// availability in the environment or player and the user's permissions are not known — and never as "compatible". A preserved one whose declarations do not explicitly say "unbound
+// Function, no inputs" is warned of and left as it is. A name in another case (`whoami`), and every other name, stays a Custom API name.
+const WHO_AM_I = { name: 'WhoAmI', isFunction: true, displayName: 'Current Dataverse identity', parameterKinds: {} };
+const RETRIEVE_VERSION = { name: 'RetrieveVersion', isFunction: true, displayName: 'Dataverse server version', parameterKinds: {} };
+const BUILT_IN_UNCHECKED = 'These are reviewed built-in operation names; their availability in this environment or player and the signed-in user\'s permissions were not checked.';
+
+test('built-in operations: a page that binds only WhoAmI and RetrieveVersion reads no customapi row, is warned of nothing missing, and is said to be not checked', async () => {
+  const page = { key: 'ops', name: 'Ops', actionBindings: [WHO_AM_I, RETRIEVE_VERSION] };
+  const { provision, calls } = readerOf({});
+  const targets = await readBindingTargets(provision, [page]);
+  assert.deepStrictEqual(calls, [], 'zero reads');
+  assert.deepStrictEqual(targets, { references: null, apis: null, definitions: null, problems: {} });
+  const verdict = judgeBindingTargets([page], targets);
+  assert.deepStrictEqual(verdict.findings, [], 'no api-missing, and no shape warning for a binding that states the reviewed contract');
+  assert.deepStrictEqual(verdict.unchecked, [{
+    what: 'Dataverse operations', page: { key: 'ops', name: 'Ops' }, names: ['WhoAmI', 'RetrieveVersion'],
+    text: `page "Ops" binds the built-in operations WhoAmI, RetrieveVersion. ${BUILT_IN_UNCHECKED}`,
+  }]);
+  // Not checked is never "compatible": the sentence says so, and nothing claims a check.
+  assert.doesNotMatch(verdict.unchecked[0].text, /compatible|verified|deploy/i);
+});
+
+test('built-in operations: beside Custom APIs, only the Custom API names are read — and a Custom API still missing is still said', async () => {
+  const page = { key: 'mixed', name: 'Mixed', actionBindings: [APPROVE, WHO_AM_I, RETRIEVE_VERSION, SUMMARY] };
+  const { provision, calls } = readerOf({ customapi: [customApi('contoso_ApproveOrder', { boundentitylogicalname: 'contoso_item', bindingtype: 1 })] });
+  const targets = await readBindingTargets(provision, [page]);
+  assert.deepStrictEqual(calls.map((c) => [c.entity, c.options.filter]), [['customapi', "uniquename eq 'contoso_ApproveOrder' or uniquename eq 'contoso_GetSummary'"]]);
+  const verdict = judgeBindingTargets([page], targets);
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.kind, f.names]), [['api-missing', ['contoso_GetSummary']]]);
+  assert.deepStrictEqual(verdict.unchecked.map((u) => [u.what, u.names]), [['Dataverse operations', ['WhoAmI', 'RetrieveVersion']]]);
+  // The Custom API read fails: the Custom API bindings are not checked — and a page that binds only built-ins is not named among them.
+  const denied = readerOf({}, { failOn: ['customapi'] });
+  const pages = [page, { key: 'ops', name: 'Ops', actionBindings: [WHO_AM_I] }];
+  const failed = judgeBindingTargets(pages, await readBindingTargets(denied.provision, pages));
+  assert.deepStrictEqual(failed.findings, []);
+  assert.deepStrictEqual(failed.unchecked.map((u) => u.text), [
+    `page "Mixed" binds the built-in operations WhoAmI, RetrieveVersion. ${BUILT_IN_UNCHECKED}`,
+    `page "Ops" binds the built-in operation WhoAmI. ${BUILT_IN_UNCHECKED}`,
+    'could not read this environment\'s Custom APIs (customapi: HTTP 403), so the Custom API bindings of page "Mixed" were not checked against them',
+  ]);
+});
+
+test('built-in operations: only an EXACT catalogue name leaves the Custom API read — whoami, a namespaced name and an effectful Function stay Custom API names', async () => {
+  const page = { key: 'p', name: 'P', actionBindings: [{ name: 'whoami', isFunction: true }, { name: 'Microsoft.Dynamics.CRM.WhoAmI', isFunction: true }, { name: 'CalculateRollupField', isFunction: true }, { name: 'RETRIEVEVERSION', isFunction: true }] };
+  const { provision, calls } = readerOf({});
+  const verdict = judgeBindingTargets([page], await readBindingTargets(provision, [page]));
+  assert.deepStrictEqual(calls.map((c) => c.options.filter), ["uniquename eq 'whoami' or uniquename eq 'Microsoft.Dynamics.CRM.WhoAmI' or uniquename eq 'CalculateRollupField' or uniquename eq 'RETRIEVEVERSION'"]);
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.kind, f.names]), [['api-missing', ['whoami', 'Microsoft.Dynamics.CRM.WhoAmI', 'CalculateRollupField', 'RETRIEVEVERSION']]]);
+  assert.deepStrictEqual(verdict.unchecked, []);
+});
+
+test('built-in operations leave the read before the names are folded in case and chunked: the chunks go from ceil(nBefore/25) to ceil(nAfter/25), and whoami beside WhoAmI is still read', async () => {
+  const apis = Array.from({ length: 25 }, (_, i) => ({ name: `contoso_Api${String(i).padStart(2, '0')}`, isFunction: true }));
+  // 25 Custom APIs and both built-ins: 27 names before, 25 after — one chunk, not two.
+  const both = readerOf({});
+  await readBindingTargets(both.provision, [{ key: 'a', name: 'A', actionBindings: [...apis, WHO_AM_I, RETRIEVE_VERSION] }]);
+  assert.deepStrictEqual(both.calls.map((c) => c.options.filter.split(' or ').length), [25]);
+  assert.ok(!both.calls.some((c) => /'WhoAmI'|'RetrieveVersion'/.test(c.options.filter)));
+  // WhoAmI and whoami fold to ONE name when they are read together; WhoAmI leaves first, so whoami is read under its own spelling — subtracting every built-in binding from the
+  // folded count would have dropped it.
+  const twins = readerOf({});
+  await readBindingTargets(twins.provision, [{ key: 'a', name: 'A', actionBindings: [...apis.slice(0, 24), WHO_AM_I, { name: 'whoami', isFunction: true }] }]);
+  assert.deepStrictEqual(twins.calls.map((c) => c.options.filter.split(' or ').length), [25]);
+  assert.match(twins.calls[0].options.filter, / or uniquename eq 'whoami'$/);
+  assert.doesNotMatch(twins.calls[0].options.filter, /'WhoAmI'/);
+  const order = readerOf({});
+  await readBindingTargets(order.provision, [{ key: 'a', name: 'A', actionBindings: [{ name: 'whoami', isFunction: true }, WHO_AM_I] }]);
+  assert.deepStrictEqual(order.calls.map((c) => c.options.filter), ["uniquename eq 'whoami'"], 'whichever comes first');
+});
+
+test('built-in operations: a preserved binding that does not explicitly say "unbound Function, no inputs" is warned of — omitted apart from contradicted — and left exactly as it is', async () => {
+  const legacy = { name: 'WhoAmI', displayName: 'Who am I' };
+  const noKinds = { name: 'RetrieveVersion', isFunction: true };
+  const action = { name: 'WhoAmI', isFunction: false, displayName: 'Current Dataverse identity', parameterKinds: {} };
+  const inputs = { name: 'RetrieveVersion', isFunction: true, parameterKinds: { Target: 'String', Depth: 'Integer' } };
+  const bound = { name: 'WhoAmI', isFunction: true, boundEntityLogicalName: 'systemuser', parameterKinds: {} };
+  const pages = [
+    { key: 'old', name: 'Old', actionBindings: [legacy, noKinds] },
+    { key: 'bad', name: 'Bad', actionBindings: [action, inputs, bound] },
+  ];
+  const before = structuredClone(pages);
+  const { provision, calls } = readerOf({});
+  const verdict = judgeBindingTargets(pages, await readBindingTargets(provision, pages));
+  assert.deepStrictEqual(calls, []);
+  assert.deepStrictEqual(pages, before, 'nothing is rewritten');
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.severity, f.kind, f.page.key, f.binding, f.declaration]), [
+    ['warn', 'dataverse-operation-shape', 'old', 'WhoAmI', 'omitted'],
+    ['warn', 'dataverse-operation-shape', 'old', 'RetrieveVersion', 'omitted'],
+    ['warn', 'dataverse-operation-shape', 'bad', 'WhoAmI', 'contradicted'],
+    ['warn', 'dataverse-operation-shape', 'bad', 'RetrieveVersion', 'contradicted'],
+    ['warn', 'dataverse-operation-shape', 'bad', 'WhoAmI', 'contradicted'],
+  ]);
+  const SHAPE = 'This binding does not explicitly match the reviewed unbound, zero-input Function contract. It was preserved; invocation may fail.';
+  assert.deepStrictEqual(verdict.findings.map((f) => f.text), [
+    `page "Old": built-in operation binding "WhoAmI" does not declare its kind or its inputs (isFunction, parameterKinds). ${SHAPE}`,
+    `page "Old": built-in operation binding "RetrieveVersion" does not declare its inputs (parameterKinds). ${SHAPE}`,
+    `page "Bad": built-in operation binding "WhoAmI" declares an Action (isFunction: false). ${SHAPE}`,
+    `page "Bad": built-in operation binding "RetrieveVersion" declares inputs (Target, Depth). ${SHAPE}`,
+    `page "Bad": built-in operation binding "WhoAmI" declares a bound table (systemuser). ${SHAPE}`,
+  ]);
+  // No promise of what the player answers: the runtime codes of a Custom API mismatch are not this check's to name.
+  assert.ok(verdict.findings.every((f) => !/wrong_operation_kind|invalid_bound_to|api-missing|deploy/.test(f.text)));
+  assert.deepStrictEqual(verdict.unchecked.map((u) => u.names), [['WhoAmI', 'RetrieveVersion'], ['WhoAmI', 'RetrieveVersion']], 'each page still says its built-ins were not checked');
+  // A different display label is not a shape problem: only kind, binding and inputs are.
+  assert.deepStrictEqual(judgeBindingTargets([{ key: 'l', name: 'L', actionBindings: [{ ...WHO_AM_I, displayName: 'Me' }] }], { references: null, apis: null, problems: {} }).findings, []);
+});

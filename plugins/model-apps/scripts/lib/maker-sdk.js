@@ -18,9 +18,10 @@
 // client the factory gives: the SDK's reads through the Power Platform API (a Test org's, and a connector's tables) need a `powerPlatformApiClient`, and the
 // tables a `connectorRuntimeClient` too, which an Azure CLI token cannot back (lib/sdk-first.js, "No Power Platform API client").
 //
-// The `httpClient` the caller names is handed to the SDK with two additions, each of which looks at one kind of request and leaves every other request as it is. The first (lib/collection-answers.js): the read of the environment's table list must answer a list. The SDK's findTables() reads a 2xx with no `value` list
+// The `httpClient` the caller names is handed to the SDK with two additions, each of which looks at one kind of request and leaves every other request as it is. The first (lib/collection-answers.js): the read of the environment's table list must answer a list. The SDK's findTables() used to read a 2xx with no `value` list
 // as "no tables" (`body.value ?? []`) — and a sign-in or proxy page, `{}` and `null` are such answers — and every script that asks it turns "no tables" into a conclusion: a table is missing, create it, nothing clashes, it is not a
-// system table, so delete it. Guarded here, once, no script that makes an SDK can forget it, and no request is added or changed: only that answer is looked at. It then fails as an SdkError (TABLES_UNREADABLE), which the
+// system table, so delete it. The bundled SDK now refuses such an answer itself, but as a ConnectionError of the 200 it read, with no word of what to do; the guard answers first, so
+// every script still meets TABLES_UNREADABLE (which the callers recognise, lib/collection-answers.js unreadableAnswer) and the remedy it names. Guarded here, once, no script that makes an SDK can forget it, and no request is added or changed: only that answer is looked at. It then fails as an SdkError (TABLES_UNREADABLE), which the
 // bundle rethrows as it is.
 // The second (lib/app-header-text.js): a PATCH of an app module row whose name or description is not a string — through `patch`, through
 // `patchRaw`, or in a change set a caller sends raw (`dataverse.postBatch`) — is refused before it is sent. The SDK's push of an app writes every text its workspace copy holds whenever its own comparison
@@ -33,6 +34,7 @@
 // land in a file. The folder, the paths and every other member are the storage's own: the wrapper has it for a prototype, so a caller's `instanceof` and the SDK's own look for a file-system storage still hold.
 const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
+const { guardPageNesting } = require('./page-nesting.js');
 const { guardTableLists } = require('./collection-answers.js');
 const { guardAppHeaderWrites } = require('./app-header-text.js');
 const { guardWorkspaceStorage } = require('./output-redaction.js');
@@ -41,8 +43,17 @@ const { guardWorkspaceStorage } = require('./output-redaction.js');
 // (a seam for the test: the bundle's own exports are read-only). The `connectivity` request itself is the factory's, never the SDK's.
 function withVendoredCompiler(create) {
   return (options) => {
-    const { connectivity, ...forSdk } = options || {};
-    const made = { typescript: () => loadVendoredTypeScript(), ...forSdk };
+    const { connectivity, themeReads, ...forSdk } = options || {};
+    // The compiler goes to the SDK through guardPageNesting (lib/page-nesting.js): a page nested too deeply for it to compile is refused with a code (PAGE_NESTING_TOO_DEEP), not a bare RangeError.
+    const made = { typescript: () => guardPageNesting(loadVendoredTypeScript(), (code, message) => new bundle.SdkError(code, message)), ...forSdk };
+    // `themeReads` (app.theme, Preview): only a caller that declared a theme asks for it, so every other SDK neither loads
+    // lib/app-theme-reads.js nor sends its reads through it. Innermost of the client guards, so the theme policy judges the
+    // answer exactly as the service sent it. The SDK made over it is marked, and lib/app-theme.js runs only on a marked SDK.
+    let themeGuard = null;
+    if (themeReads && made.httpClient) {
+      const { guardAppThemeReads } = require('./app-theme-reads.js');
+      made.httpClient = themeGuard = guardAppThemeReads(made.httpClient, (code, message) => new bundle.SdkError(code, message));
+    }
     if (made.httpClient) made.httpClient = guardTableLists(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.httpClient) made.httpClient = guardAppHeaderWrites(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.workspaceStorage) made.workspaceStorage = guardWorkspaceStorage(made.workspaceStorage);
@@ -51,7 +62,9 @@ function withVendoredCompiler(create) {
       const { createPowerAppsServiceClient } = require('./power-apps-service-client.js');
       made.powerAppsServiceClient = createPowerAppsServiceClient();
     }
-    return create(made);
+    const sdk = create(made);
+    if (themeGuard) require('./app-theme-reads.js').markThemeReadGuarded(sdk, themeGuard);
+    return sdk;
   };
 }
 

@@ -7,6 +7,10 @@ const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 const { parseTranslationWorkbook, readTranslationLabels } = require('../lib/translation-labels.js');
 const { workbookXml, exportZip, exportAnswer } = require('./helpers/translation-export.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
+// What a guess costs a page where the TypeScript parser does not settle it (lib/typescript-views.js): these tests read the page with the lexer alone.
+// parser-check.test.js holds what the parser settles.
+const { setParserCheck } = require('../lib/typescript-views.js');
+const lexerAlone = (t) => { setParserCheck(false); t.after(() => setParserCheck(true)); };
 
 const idFor = (set) => ({ savedquery: 'savedqueryid', savedqueryvisualization: 'savedqueryvisualizationid', systemform: 'formid' }[set] || 'id');
 
@@ -480,7 +484,7 @@ test('verifySpec pages: a residual PAGEREF_ in deployed nav code FAILS the no-pa
 // the lexer read only by guess proves no edge: after `of/2` it reads a regex up to the next `/`, and the `/*` inside it opens a comment that
 // ends inside a string, so the string's text — here a navigation call to the target — is read as code.
 test('verifySpec pages: an id in a call the lexer reads only by guess does not prove the nav edge', async () => {
-  const forgery = ['const of = 12;', 'const count = of/2; const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
+  const forgery = ['const of = 12;', 'for (const x of of/2 + "") {} const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
   const verify = async (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
   const forged = await verify(forgery);
   assert.ok(forged.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present), 'the string is not a navigation');
@@ -493,7 +497,8 @@ test('verifySpec pages: an id in a call the lexer reads only by guess does not p
 
 // A PAGEREF_ token the lexer hides is still a token that shipped: this page was resolved the way a build resolved it, and its second call
 // sits behind a false comment, so the oracle finds no target for it and the old check passed.
-test('verifySpec pages: a PAGEREF_ token the lexer hid in deployed code FAILS the no-pageref check, naming where', async () => {
+test('verifySpec pages: a PAGEREF_ token the lexer hid in deployed code FAILS the no-pageref check, naming where', async (t) => {
+  lexerAlone(t);
   const deployed = OBJECT_DIVISION_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`);
   assert.strictEqual(deployed.split('PAGEREF_detail').length - 1, 1, 'one call resolved, one left');
   const read = pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: deployed } });
@@ -513,6 +518,19 @@ test('verifySpec pages: a PAGEREF_ token the lexer hid in deployed code FAILS th
   const clean = await withComment('// the link was resolved at deploy');
   assert.ok(clean.checks.some((c) => c.kind === 'page-no-pageref' && c.present));
   assert.strictEqual(clean.ok, true, JSON.stringify(clean.missing));
+});
+
+// The same page, read as the TypeScript parser reads it where the lexer guessed (lib/typescript-views.js): the second call is seen, so its token is the token of a call
+// that the resolve step left — with no guess to name — and the check still fails.
+test('verifySpec pages: a PAGEREF_ token left in a call the lexer misreads FAILS the no-pageref check, read as TypeScript parses the page', async () => {
+  const deployed = OBJECT_DIVISION_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`);
+  const read = pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: deployed } });
+  const r = await verifySpec(pageSpec(), read);
+  const check = r.checks.find((c) => c.kind === 'page-no-pageref');
+  assert.ok(check && !check.present);
+  assert.doesNotMatch(check.detail, /ambiguity/);
+  assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.present), 'the resolved call proves the edge');
+  assert.strictEqual(r.ok, false);
 });
 
 // A call is trusted only if all of it lies before the first place the lexer guessed. The members of an options object after a guess are
@@ -3589,4 +3607,260 @@ test('verify tells a maker what the flag is for when a string caption is compare
   const spanish = await checkWith(readsEnglishWithIds(), inSpanish, inOrgAsking(exportOf(), undefined, 3082));
   assert.strictEqual(spanish.chk.present, true, spanish.chk.detail);
   assert.strictEqual(spanish.res.unverified, undefined);
+});
+
+// Column types: a declared column that exists is also held to its declared type, from the very rows the existence check reads through the
+// real SDK bundle — so the check costs no request, and a legacy spec's verification sends exactly what it sent before.
+test('REAL BUNDLE: verify fails a column deployed with another type, says so by both types, and sends only the reads it always sent', async () => {
+  const fsx = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { readerFor } = require('../verify-model-app.js');
+  const B = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const label = (l) => ({ UserLocalizedLabel: { Label: l, LanguageCode: 1033 }, LocalizedLabels: [{ Label: l, LanguageCode: 1033 }] });
+  const run = async (spec) => {
+    const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'verify-types-'));
+    const requests = [];
+    const get = async (url) => {
+      const u = new URL(url);
+      const p = decodeURIComponent(u.pathname + u.search).replace(/^\/api\/data\/v9\.\d+/, '');
+      requests.push(p.replace(/\?.*$/, ''));
+      if (/^\/EntityDefinitions\?/.test(p)) {
+        return { status: 200, headers: {}, body: { value: [{ LogicalName: 'new_ticket', SchemaName: 'new_Ticket', EntitySetName: 'new_tickets', MetadataId: '66666666-6666-6666-6666-666666666666', DisplayName: label('Ticket'), DisplayCollectionName: label('Tickets'), IsCustomEntity: true, PrimaryNameAttribute: 'new_name', PrimaryIdAttribute: 'new_ticketid', ObjectTypeCode: 10001 }] } };
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\?/.test(p)) {
+        return { status: 200, headers: {}, body: { value: [
+          { LogicalName: 'new_name', SchemaName: 'new_Name', DisplayName: label('Name'), AttributeType: 'String', IsCustomAttribute: true },
+          { LogicalName: 'new_amount', SchemaName: 'new_Amount', DisplayName: label('Amount'), AttributeType: 'Money', IsCustomAttribute: true },
+          { LogicalName: 'new_due', SchemaName: 'new_Due', DisplayName: label('Due'), AttributeType: 'DateTime', IsCustomAttribute: true },
+        ] } };
+      }
+      return { status: 404, headers: {}, body: { error: { code: '0x80060888', message: 'Not found' } } };
+    };
+    const sdk = B.createMakerSdk({ workspaceStorage: B.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: { get, post: get, put: get, patch: get, delete: get } });
+    try {
+      await sdk.initWorkspace();
+      requests.length = 0;
+      return { result: await verifySpec(spec, readerFor(sdk, 'new_app', {})), requests };
+    } finally { fsx.rmSync(dir, { recursive: true, force: true }); }
+  };
+  const wrong = await run({ entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Amount', type: 'Decimal' }, { schemaName: 'new_Due', type: 'DateTime' }] }] });
+  assert.deepStrictEqual(wrong.result.checks.filter((c) => !c.present).map((c) => [c.kind, c.name, c.detail]), [
+    ['column-type', 'new_Ticket.new_Amount', 'declared Decimal, deployed Money: a column\'s type cannot be changed in place'],
+  ]);
+  assert.strictEqual(wrong.result.ok, false);
+  assert.strictEqual(wrong.result.unverified, undefined);
+  // A legacy spec that matches (and an untyped column, which is Text) passes as before, with the same reads — no further request.
+  const legacy = await run({ entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Name' }, { schemaName: 'new_Due', type: 'DateTime' }] }] });
+  assert.strictEqual(legacy.result.ok, true);
+  assert.strictEqual(legacy.result.unverified, undefined);
+  assert.deepStrictEqual(legacy.result.checks.map((c) => c.kind), ['entity', 'column', 'column']);
+  assert.deepStrictEqual(legacy.requests, ['/EntityDefinitions', "/EntityDefinitions(LogicalName='appmodule')", "/EntityDefinitions(LogicalName='new_ticket')/Attributes"]);
+  assert.deepStrictEqual(wrong.requests, legacy.requests);
+});
+
+// Declared date behaviours, table flags, secured columns, field security profiles and their users: each is held to a fresh read of what
+// the environment holds, through the real SDK bundle. What a read cannot state is unverified, never a pass. (The legacy spec above pins
+// that a spec declaring none of them sends no request for them.)
+test('REAL BUNDLE: verify holds declared date behaviours, table flags and field security to what is deployed', async () => {
+  const fsx = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { readerFor } = require('../verify-model-app.js');
+  const B = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const PROFILE = '11111111-1111-4111-8111-111111111111';
+  const USER = '33333333-3333-4333-8333-333333333333';
+  const label = (l) => ({ UserLocalizedLabel: { Label: l, LanguageCode: 1033 }, LocalizedLabels: [{ Label: l, LanguageCode: 1033 }] });
+  const ok = (body) => ({ status: 200, headers: {}, body });
+  const run = async ({ flags = ok({ IsDuplicateDetectionEnabled: { Value: true }, ChangeTrackingEnabled: false, SyncToExternalSearchIndex: true, CanEnableSyncToExternalSearchIndex: { Value: true } }) } = {}) => {
+    const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'verify-features-'));
+    const requests = [];
+    const get = async (url) => {
+      const u = new URL(url);
+      const p = decodeURIComponent(u.pathname + u.search).replace(/^\/api\/data\/v9\.\d+/, '');
+      requests.push(p.replace(/\?.*$/, ''));
+      if (/^\/EntityDefinitions\?/.test(p)) {
+        return ok({ value: [{ LogicalName: 'new_ticket', SchemaName: 'new_Ticket', EntitySetName: 'new_tickets', MetadataId: '66666666-6666-6666-6666-666666666666', DisplayName: label('Ticket'), DisplayCollectionName: label('Tickets'), IsCustomEntity: true, PrimaryNameAttribute: 'new_name', PrimaryIdAttribute: 'new_ticketid', ObjectTypeCode: 10001 }] });
+      }
+      if (p === "/EntityDefinitions(LogicalName='new_ticket')/Attributes?$select=LogicalName,IsSecured") return ok({ value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_secret', IsSecured: true }] });
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\?/.test(p)) {
+        return ok({ value: [
+          { LogicalName: 'new_name', SchemaName: 'new_Name', DisplayName: label('Name'), AttributeType: 'String', IsCustomAttribute: true },
+          { LogicalName: 'new_due', SchemaName: 'new_Due', DisplayName: label('Due'), AttributeType: 'DateTime', IsCustomAttribute: true },
+          { LogicalName: 'new_secret', SchemaName: 'new_Secret', DisplayName: label('Secret'), AttributeType: 'String', IsCustomAttribute: true },
+        ] });
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\/Microsoft\.Dynamics\.CRM\.DateTimeAttributeMetadata\?/.test(p)) {
+        return ok({ value: [{ LogicalName: 'new_due', DateTimeBehavior: { Value: 'UserLocal' }, CanChangeDateTimeBehavior: { Value: true } }] });
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\?\$select=IsDuplicateDetectionEnabled/.test(p)) return flags;
+      if (/^\/fieldsecurityprofiles\?/.test(p) && /\$filter=/.test(p)) return ok({ value: [{ fieldsecurityprofileid: PROFILE, name: 'HR' }] });
+      if (p === `/fieldsecurityprofiles(${PROFILE})?$select=name,description`) return ok({ name: 'HR', description: null });
+      if (/^\/fieldpermissions\?/.test(p)) return ok({ value: [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_ticket', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 0, canreadunmasked: 0 }] });
+      if (p.startsWith(`/fieldsecurityprofiles(${PROFILE})/systemuserprofiles_association?`)) return ok({ value: [] });
+      return { status: 404, headers: {}, body: { error: { code: '0x80060888', message: 'Not found' } } };
+    };
+    const sdk = B.createMakerSdk({ workspaceStorage: B.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: { get, post: get, put: get, patch: get, delete: get } });
+    const spec = {
+      entities: [{ schemaName: 'new_Ticket', duplicateDetectionEnabled: true, changeTrackingEnabled: true, columns: [
+        { schemaName: 'new_Name' },
+        { schemaName: 'new_Due', type: 'DateTime', dateTimeBehavior: 'DateOnly', dateFormat: 'DateOnly' },
+        { schemaName: 'new_Secret', isSecured: true },
+      ] }],
+      fieldSecurityProfiles: [{ key: 'hr', name: 'HR', permissions: [{ table: 'new_ticket', column: 'new_secret', read: true }], assignTo: { users: [USER] } }],
+    };
+    try {
+      await sdk.initWorkspace();
+      requests.length = 0;
+      return { result: await verifySpec(spec, readerFor(sdk, 'new_app', {})), requests };
+    } finally { fsx.rmSync(dir, { recursive: true, force: true }); }
+  };
+  const { result } = await run();
+  assert.strictEqual(result.ok, false);
+  assert.deepStrictEqual(result.checks.filter((c) => !['entity', 'column'].includes(c.kind)).map((c) => [c.kind, c.name, c.present, c.detail || '']), [
+    ['dateTimeBehavior', 'new_ticket.new_due', false, 'declared DateOnly, deployed UserLocal'],
+    ['tableFlag', 'new_ticket.changeTrackingEnabled', false, 'changeTrackingEnabled declared true, deployed false'],
+    ['tableFlag', 'new_ticket.duplicateDetectionEnabled', true, ''],
+    ['isSecured', 'new_ticket.new_secret', true, ''],
+    ['fieldSecurityProfile', 'hr', true, ''],
+    ['fieldSecurityAssignment', `hr:users:${USER}`, false, 'systemuser does not hold the profile'],
+  ]);
+  assert.strictEqual(result.unverified, undefined);
+  // A flags read that fails leaves each declared flag unverified — not passed, not failed.
+  const unread = await run({ flags: { status: 500, headers: {}, body: {} } });
+  assert.deepStrictEqual(unread.result.checks.filter((c) => c.kind === 'tableFlag'), []);
+  assert.deepStrictEqual(unread.result.unverified.filter((u) => u.startsWith('tableFlag:')), [
+    'tableFlag:new_ticket.changeTrackingEnabled (changeTrackingEnabled declared true, deployed unreadable)',
+    'tableFlag:new_ticket.duplicateDetectionEnabled (duplicateDetectionEnabled declared true, deployed unreadable)',
+  ]);
+});
+
+// The configuration kinds: verify asks the reader's configuration(spec, bindings) getter for one answer per declared item and aspect,
+// reports a pass as present, a drift with its code and fields, and an unproven Custom API implementation as unverified (the API is
+// deployed; whether it runs is not something a read can prove). A reader without the getter is said so; a spec without the fields reads nothing.
+const CONFIG_SPEC = {
+  minimumPluginVersion: '2.21.0', schemaVersion: 2,
+  solution: { uniqueName: 'ContosoSol', displayName: 'Contoso Sol', publisherPrefix: 'contoso' },
+  app: { name: 'Config App', uniqueName: 'contoso_configapp' }, entities: [],
+  environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+  customApis: [{ uniqueName: 'contoso_Calc' }],
+};
+// Every read other than the configuration getter answers null, so only the configuration section decides these results.
+const otherReadsNull = (own) => new Proxy(own, {
+  get: (o, k) => (k in o ? o[k] : (typeof k === 'string' && k !== 'then' && k !== 'configuration' ? async () => null : undefined)),
+  has: (o, k) => k in o || (typeof k === 'string' && k !== 'then' && k !== 'configuration'),
+});
+const configChecks = (r) => r.checks.filter((c) => c.kind === 'configuration');
+
+test('verifySpec: configuration items pass, drift with code and fields, and an unproven Custom API implementation is unverified', async () => {
+  let seen;
+  const bindings = { environmentVariables: new Map(), connectionReferences: new Map() };
+  const read = otherReadsNull({ configuration: async (s, b) => { seen = { s, b }; return [
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'definition', ok: true },
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'value', ok: false, code: 'ENVIRONMENT_VARIABLE_VALUE_DRIFT', fields: ['value'] },
+    { kind: 'customApi', key: 'contoso_Calc', name: 'implementation', ok: false, code: 'CUSTOM_API_IMPLEMENTATION_UNPROVEN' },
+  ]; } });
+  const r = await verifySpec(CONFIG_SPEC, read, { configurationBindings: bindings });
+  assert.strictEqual(seen.s, CONFIG_SPEC);
+  assert.strictEqual(seen.b, bindings, 'the bindings the build recorded are handed to the getter');
+  assert.deepStrictEqual(configChecks(r), [
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: definition', present: true, detail: '' },
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: value', present: false, detail: 'ENVIRONMENT_VARIABLE_VALUE_DRIFT (value)' },
+  ]);
+  assert.deepStrictEqual(r.unverified.filter((u) => /configuration/.test(u)), ['configuration:customApi contoso_Calc: implementation (CUSTOM_API_IMPLEMENTATION_UNPROVEN)']);
+  assert.strictEqual(r.ok, false, 'a drift fails the verify');
+});
+
+test('verifySpec: a reader without the configuration getter reports the configuration items as unverified, not as passing', async () => {
+  const r = await verifySpec(CONFIG_SPEC, otherReadsNull({}), {});
+  assert.deepStrictEqual(configChecks(r), []);
+  assert.deepStrictEqual(r.unverified.filter((u) => /configuration/.test(u)), ['configuration (this reader cannot read configuration items)']);
+});
+
+test('verifySpec: a spec without configuration fields adds no configuration section and never calls the getter', async () => {
+  const plain = { ...CONFIG_SPEC };
+  delete plain.environmentVariables;
+  delete plain.customApis;
+  let called = false;
+  const r = await verifySpec(plain, otherReadsNull({ configuration: async () => { called = true; return []; } }), {});
+  assert.strictEqual(called, false);
+  assert.deepStrictEqual(configChecks(r), []);
+  assert.ok(!(r.unverified || []).some((u) => /configuration/.test(u)), 'nothing configuration-related is unverified');
+});
+
+// --- managed bindings (lib/managed-bindings.js readManagedManifest): a bound view or chart is held to its bound id ---------------------
+
+test('verifySpec: a bound view or chart is read by its bound id; a pending or unusable group is unverified, never a pass', async () => {
+  const VIEW_ID = '11111111-2222-4333-8444-555555555555';
+  const CHART_ID = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+  const managedManifest = {
+    revision: 3,
+    groups: [
+      { family: 'view', key: 'new_o/V', root: { kind: 'view', key: 'new_o/V', id: VIEW_ID } },
+      { family: 'chart', key: 'new_o/C', root: { kind: 'chart', key: 'new_o/C', id: CHART_ID } },
+    ],
+    pending: [{ family: 'view', key: 'new_o/W', code: 'managed-settlement-pending' }],
+    invalid: [{ family: 'store', key: 'managed-bindings', reason: 'not valid JSON', code: 'managed-binding-store-unreadable' }],
+  };
+  const filters = [];
+  const read = (bound, { ignoreFilter = false } = {}) => ({
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      filters.push(`${set}: ${opts.filter}`);
+      // The row as the service answers it: its own id, a real GUID.
+      if (ignoreFilter) return bound.length ? [{ [idFor(set)]: bound[0] }] : [];
+      const hit = bound.find((id) => opts.filter.endsWith(id));
+      return hit ? [{ [idFor(set)]: hit }] : [];
+    },
+  });
+  const spec = { entities: [], appShell: { areas: [] } };
+  const both = await verifySpec(spec, read([VIEW_ID, CHART_ID]), { managedManifest });
+  assert.deepStrictEqual(both.checks.filter((c) => c.kind.startsWith('managed-')).map((c) => [c.kind, c.name, c.present]), [
+    ['managed-view', `new_o/V (${VIEW_ID})`, true],
+    ['managed-chart', `new_o/C (${CHART_ID})`, true],
+  ]);
+  assert.deepStrictEqual(filters.sort(), [`savedquery: savedqueryid eq ${VIEW_ID}`, `savedqueryvisualization: savedqueryvisualizationid eq ${CHART_ID}`]);
+  assert.deepStrictEqual(both.unverified.filter((u) => u.startsWith('managed:')), [
+    'managed:view new_o/W (managed-settlement-pending)',
+    'managed:store managed-bindings (managed-binding-store-unreadable)',
+  ]);
+  // The row a name check would find is not enough: the bound id is gone, so the bound view is missing.
+  const gone = await verifySpec(spec, read([CHART_ID]), { managedManifest });
+  assert.strictEqual(gone.ok, false);
+  assert.ok(gone.missing.some((m) => m.kind === 'managed-view' && m.name === `new_o/V (${VIEW_ID})`));
+  // A reader that answers another row (here the chart's id for the view's read) is not the bound row either.
+  const other = await verifySpec(spec, read([CHART_ID], { ignoreFilter: true }), { managedManifest });
+  assert.ok(other.missing.some((m) => m.kind === 'managed-view' && m.name === `new_o/V (${VIEW_ID})`));
+  // Control: no manifest (or an empty one) adds no check and no read.
+  filters.length = 0;
+  const none = await verifySpec(spec, read([]), { managedManifest: { revision: 0, groups: [], pending: [], invalid: [] } });
+  assert.strictEqual(none.checks.some((c) => c.kind.startsWith('managed-')), false);
+  assert.deepStrictEqual(filters, []);
+});
+
+test('readManagedManifest: read-only; no store and a non-https target are empty, an unusable store is one unverified entry', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { makeTempDir } = require('./helpers/temp-dirs.js');
+  const { openManagedBindings, readManagedManifest, PREFIX } = require('../lib/managed-bindings.js');
+  const dir = makeTempDir('verify-managed-');
+  const args = { workspaceDir: dir, environment: 'https://contoso.crm.dynamics.com', appUniqueName: 'contoso_app', solutionUniqueName: 'Contoso' };
+  assert.deepStrictEqual(readManagedManifest(args), { revision: 0, groups: [], pending: [], invalid: [] });
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'reading creates nothing');
+  openManagedBindings(args).prepareAttempt({
+    family: 'view', key: 'new_o/V', baseGeneration: null, root: { kind: 'view', key: 'new_o/V', id: '11111111-2222-4333-8444-555555555555' },
+    expected: { proofVersion: 1, proofSchema: 'view-v1', rootId: '11111111-2222-4333-8444-555555555555', baseProofSha256: null, sentProjectionSha256: 'a'.repeat(64), preservationSha256: 'a'.repeat(64), baseObservation: null, children: [] },
+    knownScopes: [{ type: 'table', table: 'new_o' }], declarationSha256: 'b'.repeat(64),
+  });
+  const file = path.join(dir, fs.readdirSync(dir).find((f) => f.startsWith(PREFIX)));
+  const bytes = fs.readFileSync(file, 'utf8');
+  assert.deepStrictEqual(readManagedManifest(args).pending.map((p) => p.key), ['new_o/V']);
+  assert.deepStrictEqual(readManagedManifest({ ...args, environment: 'http://contoso.crm.dynamics.com' }), { revision: 0, groups: [], pending: [], invalid: [] });
+  fs.writeFileSync(file, '{ "not": "a store"');
+  const broken = readManagedManifest(args);
+  assert.deepStrictEqual(broken.invalid.map((i) => [i.family, i.key, i.code]), [['store', 'managed-bindings', 'managed-binding-store-unreadable']]);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ "not": "a store"');
+  assert.notStrictEqual(bytes, '');
 });

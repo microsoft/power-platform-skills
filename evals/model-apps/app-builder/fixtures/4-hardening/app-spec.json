@@ -43,7 +43,7 @@
   ],
   "views": [
     {
-      "entity": "new_ticket", "type": "main", "name": "Open Tickets",
+      "entity": "new_ticket", "name": "Open Tickets",
       "columns": ["new_subject", "new_status"], "sort": [{ "attr": "new_subject", "dir": "asc" }], "activeOnly": true
     }
   ],

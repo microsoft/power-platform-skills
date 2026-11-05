@@ -23,6 +23,9 @@ const assert = require('node:assert');
 const { loadTypescriptOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
 const { validPages, heldOpenLinePages, NAVIGATION_CALL, SIGNATURE_MEMBERS, HIDDEN_CLOSING_MEMBERS, KEYWORD_PARAMETER_MEMBERS, KEYWORD_HIDDEN_MEMBERS, KEYWORD_HEAD_ELEMENTS, KEYWORD_HIDING_ELEMENTS, HIDING_ELEMENTS, INITIALIZER_ELEMENTS, FAILING_LIST_ELEMENTS, EXACT_INITIALIZER_ELEMENTS, PROSE_ELEMENTS, SHAPED_PROSE_ELEMENTS, PROSE_OPEN_ELEMENTS, HELD_OPEN_ELEMENTS, VALUE_POSITIONS, page: pageOf } = require('./helpers/valid-pages.js');
 const next = require('../lib/pageref-resolver.js');
+// These tests hold the lexer to its own rules — what it reads for certain, what it reports as a guess, and what a guess costs a page — so they read pages with
+// the lexer alone. Where the lexer guesses, the gates ask the TypeScript parser (typescript-views.js), which parser-check.test.js tests.
+require('../lib/typescript-views.js').setParserCheck(false);
 
 const SKIP = 'no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it';
 const ID = '11111111-1111-4111-8111-111111111111';

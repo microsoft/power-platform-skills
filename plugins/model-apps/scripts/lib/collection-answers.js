@@ -3,10 +3,11 @@
 //
 // Dataverse answers a read of a collection as
 //   { "@odata.context": "…", "value": [ … ], "@odata.nextLink": "…" }
-// (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-data-web-api). Some of the SDK's readers take a 2xx answer with no `value` list for "no rows" — `findTables()`
-// is `body.value ?? []` — and the plugin's HTTP client keeps a body that is not JSON as the text it is, so a sign-in page, a proxy's error page, `{}` or `null` read as an environment with
+// (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-data-web-api). SDKs before the one bundled now took a 2xx answer with no `value` list for "no rows" — `findTables()`
+// was `body.value ?? []` — and the plugin's HTTP client keeps a body that is not JSON as the text it is, so a sign-in page, a proxy's error page, `{}` or `null` read as an environment with
 // no table at all. A script that turns "no rows" into a conclusion (`list-tables.js --exact`: every searched table is `missing`, which the planner reads as "create it") must not be handed
-// that. The bundle is vendored and is not edited, so the shape is enforced here, on the one read, between the script and the SDK. `{ "value": [] }` is a real, empty answer and passes.
+// that. The bundle is vendored and is not edited, so the shape is enforced here, on the one read, between the script and the SDK. (The bundled SDK now refuses such an answer itself, as a
+// ConnectionError of the 200 it read — "paginated read returned a malformed page" — with no code of the plugin's and no remedy; this guard answers first, so a script still meets its own.) `{ "value": [] }` is a real, empty answer and passes.
 //
 //   const client = requireCollectionAnswers(httpClient, {
 //     reads: (url) => /\/EntityDefinitions\?/.test(url),            // the reads whose answer must be a collection (the SDK passes the full URL)

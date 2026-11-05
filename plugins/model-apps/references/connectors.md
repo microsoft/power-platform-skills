@@ -70,7 +70,9 @@ credential or a connection id into `connectors.json`; a spec that states one is 
 `/genpage` itself never reads or writes the spec. The spec carries the list and not what it names: the connection
 reference — and the connection behind it — must already exist in the environment you rebuild into
 (`create-connection-reference.js`, or a solution: `add-page-to-solution.js --connection-refs`, then
-`solution-settings.js`). A rebuild reads the environment's references before it writes: one of that name for
+`solution-settings.js`) — unless the spec declares it in `connectionReferences[]`: the build then makes it, binds
+it to the connection `--deployment-settings` names, and writes no page that calls it until it is bound
+(`references/app-spec-schema.md` → *Configuration items*). A rebuild reads the environment's references before it writes: one of that name for
 **another connector** than the binding's `connectorId` stops it, before anything is written; one that is not there,
 one that has no connection, and an operation in `operations` that a custom connector there does not define are
 said by name; what the environment's answer did not prove (its row's connector or connection, or which custom
@@ -80,7 +82,15 @@ connector it is for) is said by name as not checked.
 
 - Always cast `dataApi` to an optional connector-method shape.
 - Always presence-check the method before calling it.
-- Always wrap calls in `try`/`catch` and set a graceful empty/error state.
+- Always await calls in a `try` whose `catch` reports the failure through the page's
+  `reportPageError` (rules.md → *Missing Error Handling*) into the panel's error state, rendered
+  by `PageErrorBar` beside a graceful empty state. A failed operation response (`!response.ok`)
+  is a failure too, though nothing was thrown: report it before reading `response.body`. Its
+  envelope carries no message or code, so pass none — never invent an `error.code` — and the bar
+  shows its fixed fallback copy.
+- Classify the kind from the plan, never from the response: a `queryConnectorTable` read, or an
+  operation the plan records as a read, is `'read'` and may offer a named manual retry; any other
+  operation is `'write'`, with no retry.
 - Never guess a logical name, dataset, table GUID, operation name, field name,
   parameter name, or response field name. Use the plan's `## Connector Bindings`
   values only.
@@ -144,10 +154,72 @@ const parameters: { Location: string; units?: string } = { Location: 'Seattle', 
 
 ## Verified tabular pattern
 
+A complete `PageBody` for a list read on mount, built on the page error block of rules.md. A
+connector read is a real host read, so it uses the in-flight de-dupe and cache of
+`references/data-caching.md` (Pattern 1), with keys unique to the page and the connector query:
+
 ```typescript
-const connectorApi = dataApi as unknown as { queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: Row[] }>; };
-if (typeof connectorApi.queryConnectorTable !== 'function') { return; }
-const result = await connectorApi.queryConnectorTable('new_uxtest_sharepoint', 'https://host.sharepoint.com/sites/x', '<list-guid>', { top: 50 });
+type DocumentRow = { ID?: number; Title?: string; Modified?: string };
+type ConnectorTableApi = {
+  queryConnectorTable?: (connectorLogicalName: string, dataset: string, table: string, options: Record<string, unknown>) => Promise<{ rows: DocumentRow[] }>;
+};
+
+const winAny = window as any;
+const CACHE_KEY = '__ppTeamDocuments_documentsCache';
+const INFLIGHT_KEY = '__ppTeamDocuments_documentsInflight';
+
+function PageBody(props: GeneratedComponentProps) {
+  const { dataApi, pageInput } = props;
+  void pageInput;
+  const connectorApi = dataApi as unknown as ConnectorTableApi;
+  const dataReady = !!dataApi;
+  const [reloadKey, setReloadKey] = React.useState(0);
+  const [{ documents, loading, error }, setData] = React.useState<{ documents: DocumentRow[]; loading: boolean; error: PageErrorView | null }>(() => {
+    const cached = winAny[CACHE_KEY] as DocumentRow[] | undefined;
+    return { documents: cached ?? [], loading: cached === undefined, error: null };
+  });
+
+  function retryLoad() {
+    delete winAny[CACHE_KEY];
+    delete winAny[INFLIGHT_KEY];
+    setReloadKey((key) => key + 1);
+  }
+
+  React.useEffect(() => {
+    if (!dataReady) return;
+    // An older runtime without the method has no connector data to show: an empty list, not a failure.
+    if (typeof connectorApi.queryConnectorTable !== 'function') { setData({ documents: [], loading: false, error: null }); return; }
+    const cached = winAny[CACHE_KEY] as DocumentRow[] | undefined;
+    if (cached !== undefined) {
+      if (documents !== cached) setData({ documents: cached, loading: false, error: null });
+      return;
+    }
+    let cancelled = false;
+    let inflight = winAny[INFLIGHT_KEY] as Promise<DocumentRow[]> | undefined;
+    if (!inflight) {
+      inflight = connectorApi
+        .queryConnectorTable('new_uxtest_sharepoint', 'https://contoso.sharepoint.com/sites/docs', '<list-guid>', { top: 50 })
+        .then((result) => {
+          winAny[CACHE_KEY] = result.rows;
+          return result.rows;
+        })
+        .finally(() => { if (winAny[INFLIGHT_KEY] === inflight) delete winAny[INFLIGHT_KEY]; });
+      winAny[INFLIGHT_KEY] = inflight;
+    }
+    inflight
+      .then((rows) => { if (!cancelled) setData({ documents: rows, loading: false, error: null }); })
+      .catch((failure) => { if (!cancelled) setData({ documents: [], loading: false, error: reportPageError(PAGE_NAME, 'loadDocuments', undefined, failure, 'read', retryLoad) }); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataReady, reloadKey]);
+
+  return (
+    <div>
+      <PageErrorBar error={error} />
+      {loading ? <Spinner label="Loading documents" /> : documents.map((row) => <Text key={String(row.ID)}>{row.Title}</Text>)}
+    </div>
+  );
+}
 ```
 
 Use this for connectors exposed as tables/lists. The `dataset` and `table`
@@ -155,10 +227,45 @@ arguments come from `## Connector Bindings` (`Dataset` and `Tables (GUIDs)`).
 
 ## Verified REST/action pattern
 
+A complete `PageBody` for an operation the user starts. `CurrentWeather` only reads, so its
+failure is a `'read'` with a named retry; an operation the plan does not record as a read is a
+`'write'` with no retry.
+
 ```typescript
-const connectorApi = dataApi as unknown as { executeConnectorOperation?: (connectorLogicalName: string, operationName: string, parameters: Record<string, unknown>) => Promise<{ ok: boolean; body: unknown }>; };
-if (typeof connectorApi.executeConnectorOperation !== 'function') { return; }
-const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', { Location: 'Seattle', units: 'C' });
+type WeatherResponse = { temperature?: number; conditions?: string; humidity?: number };
+type ConnectorOperationApi = {
+  executeConnectorOperation?: (connectorLogicalName: string, operationName: string, parameters: Record<string, unknown>) => Promise<{ ok: boolean; body: unknown }>;
+};
+
+function PageBody(props: GeneratedComponentProps) {
+  const { dataApi, pageInput } = props;
+  void pageInput;
+  const connectorApi = dataApi as unknown as ConnectorOperationApi;
+  const [weather, setWeather] = React.useState<{ weather: WeatherResponse | null; error: PageErrorView | null }>({ weather: null, error: null });
+
+  function retryWeather() {
+    void loadWeather();
+  }
+
+  async function loadWeather() {
+    if (typeof connectorApi.executeConnectorOperation !== 'function') return;
+    try {
+      const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', { Location: 'Seattle', units: 'C' });
+      if (!response.ok) { setWeather({ weather: null, error: reportPageError(PAGE_NAME, 'loadWeather', undefined, undefined, 'read', retryWeather) }); return; }
+      setWeather({ weather: response.body as WeatherResponse, error: null });
+    } catch (error) {
+      setWeather({ weather: null, error: reportPageError(PAGE_NAME, 'loadWeather', undefined, error, 'read', retryWeather) });
+    }
+  }
+
+  return (
+    <div>
+      <PageErrorBar error={weather.error} />
+      <Button onClick={() => void loadWeather()}>Show the weather</Button>
+      {weather.weather?.conditions && <Text>{weather.weather.conditions}</Text>}
+    </div>
+  );
+}
 ```
 
 Use this for REST-style connector operations. Check `response.ok` before reading

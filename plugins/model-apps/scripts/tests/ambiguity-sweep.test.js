@@ -27,6 +27,9 @@ const { loadTypescriptOracle, loadBabelOracle, loadBaseLexer } = require('./help
 const { tokenVocabulary, programsFor, cleanSourceFile, readingAt, isElement, REGEX_BODY, AFTER_WITH_CALL, CONTINUATIONS, FRAMES, PRODUCER_FRAMES, TRIVIA_SEPARATORS, SIGNATURE_FRAMES, SIGNATURE_ENDINGS, HIDING_ENDINGS, CERTAIN_ELEMENTS, GUESSED_ELEMENTS, HIDDEN_TEXT_ELEMENTS, UNREAD_LIST_ELEMENTS, MEMBER_ELEMENT_FRAMES, NO_MEMBER_ELEMENT_FRAMES, valuedKeywordElements, DECOYS, signaturePages, elementPages, ELEMENT_FRAMES, elementPage, signaturePage, failingLists, LEFT_LISTS, EXACT_DEFAULTS, defaultLists, exactDefaultLists, commentedDefaultLists, commentedConstraintLists, commentedMemberEndings, commentedArrowContinuations, PROSE_SHAPED_LINES, PROSE_OPEN_LINES, PROSE_HIDING_ELEMENTS, PROSE_HIDING_ENDINGS, PROSE_TYPE_ENDINGS, proseElements, KEYWORD_SIGNATURE_HEADS, KEYWORD_HEAD_ELEMENTS, KEYWORD_HIDING_ELEMENTS } = require('./helpers/angle-frames.js');
 const { AMBIGUITY_KINDS, blankNonCodePreservingTemplateExpressions } = require('../lib/source-literals.js');
 const { extractNavTargets, resolvePageRefs, strayPageRefs, navMalformedRefs, reverseResolveNavIdsReport, navigationFrontier } = require('../lib/pageref-resolver.js');
+// These tests hold the lexer to its own rules — what it reads for certain, what it reports as a guess, and what a guess costs a page — so they read pages with
+// the lexer alone. Where the lexer guesses, the gates ask the TypeScript parser (typescript-views.js), which parser-check.test.js tests.
+require('../lib/typescript-views.js').setParserCheck(false);
 const { LONG_KEY, MISREAD_PAGES, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 const { ANY_SPACE } = require('./helpers/jsx-element-fuzz.js');
 const { numberedMemberPages, nestedTextPages, expressionLinePages, literalTagPages, nestedSoupPages, nestedCodePages, nestedTagPages, nestedPairPages, taggedStringPages, importTypePages, accessorNamePages } = require('./helpers/hidden-closing-pages.js');
@@ -55,7 +58,7 @@ const JS_CONSTRUCTS = [
   { name: 'a division after an object literal', kind: 'brace', code: 'const n1 = {valueOf(){return 12;}}/2; const r1 = /\\/*$/;' },
   { name: 'a regex after a block', kind: 'brace', code: 'if (true) { }\n/ab+c/.test("x");' },
   { name: 'a regex after a parenthesis out of reach', kind: 'paren', code: `if (true /*${'x'.repeat(2100)}*/) /x+/.test("y");` },
-  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'const of = 12; const n2 = of/2; const r2 = /\\/*$/;' },
+  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'const yield = 12; const n2 = yield/2; const r2 = /\\/*$/;' },
   { name: 'an identifier written with an escape', kind: 'identifier', code: 'var a\\u0062 = 1; var n3 = a\\u0062/2; var r3 = /\\/*$/;' },
   { name: 'a regex after a spread', kind: 'operator', code: 'var s1 = [.../ab/.exec("ab")];' },
   { name: 'a regex after three signs', kind: 'operator', code: 'var i3 = 1; var n4 = i3+++/x/.test("x");' },
@@ -215,10 +218,10 @@ const TS_PAYLOADS = [
 // a spread. The members after a guess are not read for certain, so the call is not trusted — its token is not rewritten, though it lies before
 // the guess — and a page that is accepted must have its generative calls rewritten and every other call as it was. With the guess before the
 // `pageId` the false comment it opens covers the `pageId` itself. Each page also holds a real call after the object.
-const NEST_PREAMBLE = 'const typeKey = "pageType"; const of = 12; const override = { pageType: "entityrecord" }; const flag = false;';
+const NEST_PREAMBLE = 'const typeKey = "pageType"; const yield = 12; const override = { pageType: "entityrecord" }; const flag = false;';
 const NEST_GUESSES = [
   { name: 'a division after an object literal', kind: 'brace', code: 'data: {valueOf(){return 12;}}/2, r: /\\/*$/,' },
-  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'data: of/2, r: /\\/*$/,' },
+  { name: 'a division by a name that can be a keyword', kind: 'keyword', code: 'data: yield/2, r: /\\/*$/,' },
   { name: 'no guess', kind: null, code: 'data: 12 / 2, r: /\\/*$/,' },
 ];
 const NEST_OVERRIDES = [

@@ -124,7 +124,7 @@ Key sections the orchestrator and other agents rely on:
 
 | Section | Read by | Purpose |
 |---------|---------|---------|
-| `## Environment` (Solution + Publisher Prefix) | entity-builder | Solution scoping + prefix construction |
+| `## Environment` (Solution + Publisher Prefix) | entity-builder, orchestrator (Phase 6) | Solution scoping + prefix construction; the solution the new app and every page this run creates join |
 | `## Entity Creation Required` | orchestrator (Phase 2 gate) + entity-builder | Whether to invoke entity-builder; what to create |
 | `## Existing Entities` | orchestrator (Phase 4) | Which entities feed `genpage.js types` |
 | `## Pages` | orchestrator (Phase 5) | How many builders to dispatch; target filenames |

@@ -712,7 +712,10 @@ const FIRST_BUILD_WRITES = {
 };
 const FIRST_BUILD_READS = 41;
 const UNCHANGED_REBUILD_WRITES = { 'PATCH sitemaps': 1, 'POST AddAppComponents': 1, 'POST PublishXml': 2 };
-const UNCHANGED_REBUILD_READS = 92;
+// The bundled SDK reads three more before an unchanged rebuild's app update re-adds the app's components (an unpublished update that
+// adds components): the app row's token and, as it matches, the app's current layer and its components — then sends the action as
+// before when every component is there. Writes are unchanged.
+const UNCHANGED_REBUILD_READS = 95;
 
 const BAD_RECORDS = [
   ['damaged', (file) => fs.writeFileSync(file, '{ "schemaVersion": 1, "dashboards": '), /could not be read/],

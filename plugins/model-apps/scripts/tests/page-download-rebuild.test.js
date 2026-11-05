@@ -11,6 +11,7 @@ const { validateAppSpec } = require('../lib/app-spec.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { withPageType } = require('./helpers/page-component-type.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -57,7 +58,8 @@ test('download-hydrate-rebuild preserves page identity name model and bindings',
         logicalName: logical, schemaName: logical, displayName: 'Item',
         primaryNameAttribute: 'contoso_name', entitySetName: 'contoso_items', attributes: [], relationships: [],
       });
-      sdk.dataverse = { get: async () => ({ status: 200, body: { value: [] } }) };
+      // The rebuild's pages join the app's solution, so the page table's component type is read first (lib/page-solution.js).
+      sdk.dataverse = { get: withPageType(async () => ({ status: 200, body: { value: [] } })) };
       sdk.queryRecords = async (logical, opts = {}) => {
         if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE_ID, uniquename: APP_UNIQUE }];
         if (logical === 'appmodulecomponent') return /componenttype eq 62/.test(opts.filter || '') ? [{ objectid: SITEMAP_ID, componenttype: 62 }] : [];

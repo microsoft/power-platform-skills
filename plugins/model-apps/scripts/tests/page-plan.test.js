@@ -200,6 +200,20 @@ test('the approved design contract reaches the worker', () => {
   assert.equal(require('../../../../evals/model-apps/genpage/lib/assertions-layer-1.js').validateGenpagePlanSchema(bare).length, 0);
 });
 
+// A look of the maker's own (AB#6320143): the plan used to say "Fluent UI V9 defaults" or the tokens, whatever the maker asked for, so every page came out in the default
+// model-driven look. `design.style` leads the Styling line as `Maker-requested:`, which the page-builder applies instead of the defaults (references/rules.md).
+test('a maker-requested style in design.style leads the Styling line as Maker-requested:, sanitised, with the tokens after it', () => {
+  const s = spec();
+  s.design = { style: 'navy #0b2545 primary, gold #c9a227 accent,\nGeorgia headings | 2px corners (from: screenshot)', accentColor: '#0b2545' };
+  const md = buildPagePlan(s, { workingDir: '/wd' });
+  assert.match(md, /^- Styling: Maker-requested: navy #0b2545 primary, gold #c9a227 accent, Georgia headings \/ 2px corners \(from: screenshot\) \(Fluent UI V9 components; also Accent color: #0b2545\)$/m);
+  assert.equal(require('../../../../evals/model-apps/genpage/lib/assertions-layer-1.js').validateGenpagePlanSchema(md).length, 0);
+  const alone = buildPagePlan({ ...spec(), design: { style: 'warm earth palette #8b5e3c' } }, { workingDir: '/wd' });
+  assert.match(alone, /^- Styling: Maker-requested: warm earth palette #8b5e3c \(Fluent UI V9 components\)$/m);
+  // Without one the line is what it was: the tokens, or the defaults.
+  assert.match(buildPagePlan({ ...spec(), design: { accentColor: '#0f6cbd' } }, { workingDir: '/wd' }), /^- Styling: Fluent UI V9 tokens — Accent color: #0f6cbd$/m);
+});
+
 test('the plan declares Mode so the worker can pick the right identity rule', () => {
   assert.match(buildPagePlan(spec(), { workingDir: '/wd' }), /- Mode: app-builder/);
 });

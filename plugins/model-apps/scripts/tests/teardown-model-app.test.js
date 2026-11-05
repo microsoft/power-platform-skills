@@ -156,6 +156,28 @@ test('such a spec is still refused before any teardown for any other problem, an
   assert.strictEqual(sdk.calls.length, 0, 'no SDK calls on a bad spec');
 });
 
+// A key a table's `primaryAttribute` does not take is refused the same way, and an earlier release accepted and ignored it just the
+// same: under the structural profile it is a warning, so such an app is still torn down, behind the same authorization.
+const PRIMARY_ATTRIBUTE_TYPO = "entity new_ticket: unknown key 'maxlength' on primaryAttribute — did you mean 'maxLength'? (allowed: schemaName, displayName, autoNumberFormat, required, maxLength)";
+function deskWithPrimaryAttributeTypo() {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.entities.find((e) => e.schemaName === 'new_ticket').primaryAttribute.maxlength = 200;
+  return spec;
+}
+
+test('a spec whose primaryAttribute carries a key it does not take is still torn down: the dry run lists the same plan, and apply deletes', async () => {
+  const structural = validateAppSpec(deskWithPrimaryAttributeTypo(), { profile: 'structural' });
+  assert.deepStrictEqual([structural.ok, structural.errors, structural.warnings], [true, [], [PRIMARY_ATTRIBUTE_TYPO]], 'the finding is a warning there');
+  const r = await teardownModelApp(deskWithPrimaryAttributeTypo(), { apply: false }, { sdk: { queryRecords: async () => [] } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const plain = await teardownModelApp(desk, { apply: false }, { sdk: { queryRecords: async () => [] } });
+  assert.deepStrictEqual(r.plan, plain.plan, 'the plan of the same spec without the key');
+  const sdk = presentSdk();
+  const applied = await teardownModelApp(deskWithPrimaryAttributeTypo(), { apply: true, allowDestructive: true }, { sdk });
+  assert.strictEqual(applied.ok, true, JSON.stringify(applied.errors));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
+});
+
 // REVERSED by #587 item 5, deliberately. This test used to assert that teardown CONTINUES after a
 // failed app delete ("later steps still run after the app refusal"), on a best-effort rationale:
 // one failure should not strand the rest. Deep lifecycle testing showed that is the wrong rule for
@@ -363,6 +385,14 @@ function loadTeardownCli({
         },
       };
     }
+    // The managed fence of the app's workspace (lib/managed-standalone-fence.js) reads the real file system: the harness answers that no build left a
+    // store there, which is what every case here is about, and records the workspace it was asked about.
+    if (id === './lib/managed-standalone-fence.js') {
+      const { createPublicationBarrier } = require('../lib/publication-barrier.js');
+      return { openStandaloneManagedFence: (o) => { events.push({ type: 'managedFence', workspaceDir: o.workspaceDir }); return { barrier: createPublicationBarrier(), absent: true, debt: [] }; } };
+    }
+    if (id === './lib/configuration-artifacts.js') return require('../lib/configuration-artifacts.js');
+    if (id === './lib/field-security.js') return require('../lib/field-security.js');
     if (id === './lib/sdk-teardown.js') {
       return {
         runTeardown: async (spec, opts, deps) => {
@@ -496,6 +526,10 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
 
   assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === harness.sdkTemp));
   assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === true));
+  // The managed debt of the same workspace is read before the client is made, and its barrier is the one the engine withholds by.
+  const fenceIndex = harness.events.findIndex((e) => e.type === 'managedFence' && e.workspaceDir === workspaceDir);
+  assert.ok(fenceIndex > -1 && fenceIndex < harness.events.findIndex((e) => e.type === 'createMakerSdk'), 'the managed fence is read before the client exists');
+  assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.publicationBarrier && typeof e.opts.publicationBarrier.allow === 'function'));
   assert.ok(harness.events.some((e) => e.type === 'tombstoneSnapshot' && e.workspaceDir === workspaceDir));
   assert.ok(harness.events.some((e) => e.type === 'releaseTombstone' && e.workspaceDir === workspaceDir && e.teardownId === 'td-1'),
     'a clean teardown releases the tombstone entry IT wrote');
@@ -931,4 +965,73 @@ test('overlapping teardowns keep the fence until the last one finishes, whicheve
       }
     } finally { fs.rmSync(parent, { recursive: true, force: true }); }
   }
+});
+
+// A teardown never deletes a configuration item (nothing proves this app owns one), so it names each declared item as kept —
+// names only, never a value — and says when a Custom API bound to a table the spec makes will block that table's delete.
+test('a spec with configuration items: each is named as kept, without its value, before anything is deleted', async () => {
+  const spec = JSON.parse(JSON.stringify(desk));
+  const table = spec.entities.find((e) => e.existing !== true).schemaName;
+  spec.environmentVariables = [{ schemaName: 'contoso_ApiBase', displayName: 'API base', type: 'string', defaultValue: 'https://api.contoso.com/v1' }];
+  spec.connectionReferences = [{ logicalName: 'contoso_sharepoint', displayName: 'SharePoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }];
+  spec.customApis = [{ uniqueName: 'contoso_Escalate', boundEntityLogicalName: table }];
+  spec.duplicateDetectionRules = [{ key: 'same-email', name: 'Same email', entity: 'contact' }];
+  const sdk = presentSdk();
+  const warnings = [];
+  const r = await teardownModelApp(spec, { apply: false }, { sdk, warn: (m) => { warnings.push({ m, calls: sdk.calls.length }); } });
+  assert.strictEqual(r.ok, true);
+  const kept = warnings.filter((w) => / kept: /.test(w.m));
+  assert.deepStrictEqual(kept.map((w) => w.m.split(' kept:')[0]), [
+    'environment variable contoso_ApiBase',
+    'connection reference contoso_sharepoint',
+    'Custom API contoso_Escalate',
+    'duplicate detection rule same-email',
+  ]);
+  assert.ok(kept.every((w) => w.calls === 0), 'named before any SDK call');
+  assert.match(kept[2].m, new RegExp(`bound to ${table.toLowerCase()}, so delete the Custom API first`));
+  assert.ok(!warnings.some((w) => /api\.contoso\.com/.test(w.m)), 'no value is echoed');
+});
+
+test('a spec without configuration items has no kept-item warning', async () => {
+  const warnings = [];
+  const r = await teardownModelApp(desk, { apply: false }, { sdk: presentSdk(), warn: (m) => warnings.push(m) });
+  assert.strictEqual(r.ok, true);
+  assert.ok(!warnings.some((m) => / kept: a teardown does not delete configuration items/.test(m)));
+});
+
+// A teardown has no step for field security profiles and never deletes one (users and teams can hold it beyond this app), so it names
+// each declared profile as kept — its name only — the way it names configuration items.
+test('a spec with field security profiles: each is named as kept, by name only, before anything is deleted', async () => {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.fieldSecurityProfiles = [
+    { key: 'hr', name: 'HR Confidential', permissions: [{ table: 'new_employee', column: 'new_salary', read: true }], assignTo: { teams: ['11111111-2222-3333-4444-555555555555'] } },
+    { key: 'audit', name: 'Audit Readers', permissions: [] },
+  ];
+  const sdk = presentSdk();
+  const warnings = [];
+  const r = await teardownModelApp(spec, { apply: false }, { sdk, warn: (m) => { warnings.push({ m, calls: sdk.calls.length }); } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const kept = warnings.filter((w) => /^field security profile .* kept: /.test(w.m));
+  assert.deepStrictEqual(kept.map((w) => w.m.split(' kept:')[0]), [
+    'field security profile "HR Confidential"',
+    'field security profile "Audit Readers"',
+  ]);
+  assert.ok(kept.every((w) => w.calls === 0), 'named before any SDK call');
+  assert.ok(kept.every((w) => /a teardown does not delete field security profiles/.test(w.m)));
+  assert.ok(!warnings.some((w) => /new_salary|11111111-2222/.test(w.m)), 'no permission or holder is echoed');
+});
+
+// The neighbour: a spec that declares no profile (absent or empty) prints exactly what it printed before — every log line and warning.
+test('a spec without field security profiles prints exactly what it did before', async () => {
+  const run = async (spec) => {
+    const logs = [];
+    const warnings = [];
+    const r = await teardownModelApp(spec, { apply: false }, { sdk: presentSdk(), log: (m) => logs.push(m), warn: (m) => warnings.push(m) });
+    assert.strictEqual(r.ok, true);
+    return { logs, warnings };
+  };
+  const without = await run(desk);
+  const empty = await run({ ...JSON.parse(JSON.stringify(desk)), fieldSecurityProfiles: [] });
+  assert.deepStrictEqual(empty, without);
+  assert.ok(![...without.logs, ...without.warnings].some((m) => /field security profile/.test(m)));
 });

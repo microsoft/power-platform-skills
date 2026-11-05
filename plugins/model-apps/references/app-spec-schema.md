@@ -70,7 +70,10 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   (png/jpg/gif/svg/ico in `webResources[]`) so the app is **self-contained** on export/import.
   **Omit it** and the build generates a simple default SVG icon **inside the solution** — either
   way the app never depends on an arbitrary external/managed icon (which would fail to import into
-  a new environment). The app's **sitemap** is also added to the solution automatically.
+  a new environment). The app's **sitemap** is also added to the solution automatically, and so is every
+  **generative page** the build writes or keeps (a changed-only run asserts the pages it leaves as they are
+  too): the add of the app brings its sitemap but never the pages its
+  navigation opens, so each page is added on its own (a system solution such as `Default` holds them already).
   **The icon is set when the app is created, and a rebuild cannot change it** (the platform stores it once): when
   `app.icon` names a web resource that is not the icon the app has, the build warns that it was **not applied** —
   change it in the app designer, or point `app.icon` at the web resource the app already uses. A spec with no
@@ -120,6 +123,48 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   app, with a warning and `created.headerNavigationRefresh: "unknown"` — never a silent success, and
   never a claim about a value that was not written. On success
   `created.headerNavigationRefreshOutcome` records `created` / `updated` / `unchanged`.
+- **`app.theme`** *(optional, **Preview**, `minimumPluginVersion: "2.21.0"`)* — the app's **modern theme
+  and header logo**. Declare it **only when the maker asks for branding** (colours, a header colour, a
+  logo); never add one on your own, and never pair it with fonts or New look the maker did not ask for.
+  ```json
+  {
+    "minimumPluginVersion": "2.21.0",
+    "app": {
+      "name": "Field Service",
+      "theme": {
+        "basePaletteColor": "#0F6CBD",
+        "appHeader": { "background": "#0F3D6E", "foreground": "#FFFFFF" },
+        "logo": { "webResourceName": "contoso_/images/logo.svg", "tooltip": "Contoso Field Service" }
+      }
+    }
+  }
+  ```
+  | Field | Value |
+  |---|---|
+  | `basePaletteColor` | a colour `#RRGGBB` the palette is derived from |
+  | `lockPrimary` | `true` / `false` — keep `basePaletteColor` as the exact primary colour |
+  | `vibrancy`, `hueTorsion` | whole numbers from -100 to 100 that tune the derived palette |
+  | `font` | a font name (only when the maker names one) |
+  | `palette` | explicit palette slots, each `#RRGGBB`: `darker70`…`darker10`, `primary`, `lighter10`…`lighter80` |
+  | `appHeader` | header colours `#RRGGBB`: `background` (required), `foreground`, and the `…Hover`, `…Pressed`, `…Selected` pairs of both |
+  | `logo` | `{ webResourceName?, tooltip? }` — `webResourceName` is an existing **image** web resource (PNG, JPG, GIF, ICO, SVG) of the environment, never a URL |
+
+  At least one field is required; any other key (raw theme attributes included) is refused.
+  **Omitted** leaves the app's theme exactly as it is — nothing is read or written. **`null`** removes the
+  app's own theme override, so the app follows the environment's theme again. The theme is stored as a
+  content-named version web resource (`<prefix>_/apptheme/<hash>.xml`) plus the app's theme setting, both
+  added to the solution when the theme is set. An unchanged theme whose records are missing from the solution
+  is not repaired silently: the build stops (`APP_THEME_MEMBERSHIP_MISSING`) and names the repair — add the
+  version web resource (component type 61) and the app's theme setting to the solution, then run again. The theme is published with the
+  **app**, and an app publication publishes **every** pending app change, not only the theme. After that
+  publication the build reads the theme back once and finishes incomplete (`APP_THEME_UNVERIFIED`) when the
+  app does not resolve it; a refused or unknown write stops as `APP_THEME_INCOMPLETE` and is never sent
+  again automatically. `--verify` checks the saved and the resolved theme: that is **API state, not proof
+  of what a browser paints** — check the header in the app itself.
+  **The logo is referenced, not owned:** declare it in `webResources[]` to create it (with `external: true`
+  to keep it on teardown); theme versions are never deleted. Download emits `app.theme` only with
+  `--include-capabilities`; see [the capabilities doc](../docs/app-builder-capabilities.md) (App theme and
+  header logo) for what it refuses.
 - **`app.uniqueName`** *(optional, download-emitted)* — the app module's **real, immutable** Dataverse
   uniquename (e.g. `crba3_supportdesk`). A **downloaded** spec carries it so a rebuild resolves the
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
@@ -164,6 +209,34 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   `--verify`: remove them in Maker (**app designer → table → Forms**) or include them in the list.
   Every later app push re-supplies the directive; it is not stored as a server-side allow-list.
   Quick Create, Quick View and card forms, dashboards, views and charts are unaffected.
+- **`app.mainFormsOnUpdate`** *(optional, `"addOnly"` (the default) or `"exact"`)* and
+  **`app.pinDeclaredArtifacts`** *(optional, `true`)*:
+  ```json
+  {
+    "minimumPluginVersion": "2.21.0",
+    "app": {
+      "name": "Work Items",
+      "mainForms": { "contoso_workitem": ["Work Item"] },
+      "mainFormsOnUpdate": "exact",
+      "pinDeclaredArtifacts": true
+    }
+  }
+  ```
+  **Only these forms on an existing app.** `app.mainForms` adds the forms you list. To also take the table's other Main
+  forms **out of the app** on an update, set `"mainFormsOnUpdate": "exact"` — ask the maker first, it is a removal from the
+  app's membership (no form is deleted). It needs an unmanaged, published app; the build publishes only once Dataverse reads
+  back exactly your list, and otherwise stops with the change saved and the app's publication owed.
+
+  **Pin the artifacts the spec declares.** `"pinDeclaredArtifacts": true` adds the spec's own forms, views, charts and
+  dashboards to the app explicitly — use it for a chart or view of a table that is not in the navigation. It only adds.
+  `"exact"` needs `app.mainForms` with at least one table and form (an empty list would mean "every
+  form"). On an app that already exists it is listed as a destructive operation, one per table (the dry run lists it too), and
+  refused without `--allow-destructive`; on a new app it removes nothing. `--verify` reads an exact
+  list strictly and fails a form outside it. `pinDeclaredArtifacts` pins the spec's declared forms
+  (except a Main form the `app.mainForms` list leaves out), views, charts and dashboards; it never removes. Neither
+  field is stored on the app: download does not emit them, so an edited spec keeps them only if the
+  maker keeps them. If the answer to a push's component pin is lost, the build reads the app, adds what
+  is missing with at most one more push, or stops with a partial result — with or without these fields.
   This does **not** choose a default, an order or security roles. Lint warns when the list excludes
   the explicit default or first `entities[].mainFormOrder` form. A user's remembered Main form is
   **per table**, not per app. **Measured:** membership changes after first publish did not reach
@@ -180,9 +253,14 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   their occurrence counts must match. If those multisets disagree, or the SDK sitemap is missing,
   download refuses the mixed snapshot: publish the app, then download again.
 - **Capability floor:** set **`minimumPluginVersion: "2.13.0"` or newer** whenever using `app.tables`
-  or `app.mainForms`; lint warns without it. Download adds that floor when it emits either field and
+  or `app.mainForms` (**`"2.21.0"`** with `app.mainFormsOnUpdate` or `app.pinDeclaredArtifacts`); lint warns without it. Download adds that floor when it emits either field and
   retains a higher authored floor. The 2.12 consumer's existing version gate refuses such a spec
   instead of silently ignoring membership instructions it cannot build.
+- **Capability floor 2.21.0:** set **`minimumPluginVersion: "2.21.0"` or newer** whenever a spec uses
+  option values (`{ "value", "label" }`), `dateTimeBehavior`, `isSecured`, a table's `searchEnabled` /
+  `changeTrackingEnabled` / `duplicateDetectionEnabled`, or `fieldSecurityProfiles[]`; validation warns
+  without it, because an older plugin ignores or rejects these fields. Download adds that floor when it
+  writes any of them.
 - **`app.aiDescription`** *(optional)* — the app's **routing description**: what an agent or router
   reads to decide whether *this* app is the right place for a request. It is **separate from
   `app.description`**, the text on the app tile, and maps to the platform's
@@ -297,6 +375,7 @@ An `entities[].localizedLabels` key is therefore **not** a supported shape.
 - Labels for all languages are written in **one** create call. That matters: a later single-language
   `PUT` can overwrite the base label even with merge semantics.
 - **Every LCID you name must be provisioned in the organization, and the build halts if one is not.**
+  It halts before it writes anything: the publisher and the solution are not created either.
   This is the guard the feature depends on, not a nicety. Live-measured against a 1033-only org:
   `createTable` carrying `{ "1033": …, "3082": … }` returns **success** and stores **only** the 1033
   label — Dataverse does not warn, error, or report the drop anywhere. Without the halt you would get
@@ -307,11 +386,40 @@ An `entities[].localizedLabels` key is therefore **not** a supported shape.
 
 **Referencing a localized label.** Anywhere the spec names an artifact by its label — `sampleData`
 choosing a Choice option, or `personas[].jobs[].surfaces[]` naming a screen — **any** of its
-languages resolves to the same artifact. One option, one value, several names.
+languages resolves to the same artifact. One option, one value, several names. So one text must not
+name two options of a column: validation **refuses** it when you cannot see it on the line — one of the
+two is a label of several languages the other does not match in every language, or they are in different
+languages (`"Open"` beside `{ "3082": "Open" }`) — and **warns** when you can: two equal plain strings, or
+two identical localized labels, the same text in each of the same languages (`{ "1036": "Ouvert" }` twice,
+or `{ "1033": "Abierto", "3082": "Abierto" }` twice — how Dataverse holds two options labelled "Abierto" in
+Spanish on an English environment: it fills the base language in with the same text). Dataverse allows
+that duplicate; a reference to the text resolves to the first of the two.
 
 **Round-trip.** `download-model-app` reconstructs localized labels from Dataverse: a table, plural,
-column or option labelled in several languages comes back as a map, and one labelled in a single
-language comes back as a plain string (so no existing spec changes shape). The download emits
+column, lookup, alternate key or option labelled in several languages comes back as a map. One labelled
+in a single language comes back as a plain string when that language is the download's authoring
+language (`--language-code`, else the `languageCode` the spec already on disk pins, else the environment's
+base language — so no ordinary spec changes shape), and as a **one-entry map** when it is another:
+`{ "3082": "Pedido" }` for a table labelled only in Spanish, the base language of its environment,
+downloaded in English with `--language-code 1033`; `{ "1033": "Note" }` for an English-only column of an
+English environment downloaded with `--language-code 3082`. (Dataverse fills the base language in, with the
+same text, when a label is created in another language only, so the one language a label holds alone is the
+environment's base language.) A plain string is written in the language a rebuild resolves, so that label used to
+come back as an English label with Spanish text; a map keeps its language, and a rebuild into an
+environment that does not have it stops at the start of its data model and names it (see the rule above)
+instead. Every plain label in a downloaded spec is in the authoring language, as its navigation titles
+are: a rebuild into an environment whose base language is another writes them in that one, unless the
+spec pins `languageCode` or the build is given `--language-code`. Two Choice options a maker labelled with
+the same text keep their labels, and the column its type, when the two labels are identical in every language
+they hold (a duplicate validation warns about) — the way Dataverse holds them; when the text is in two
+languages — an English `"Open"` on one option, a Spanish `"Open"` on another — the spec can hold those two
+options only as plain strings, so they alone are written that way, and the download warns that their labels
+could not keep their language. A clash the spec cannot hold at all — two labels of several languages that
+differ in some language, so which option the text means depends on the language — leaves the column without
+a type, and the download's warning names the clash. A lookup that sets no
+label is labelled like the table it points at (see `lookup.displayName` below), so the download leaves a
+lookup's label out only when that label is the lookup's own, language for language: an English `"Contact"`
+on a lookup to a table labelled only in French `"Contact"` is written out. The download emits
 `pluralName` alongside a localized `displayName`, so its own output re-validates, and beside a plain one
 whenever it is not the `"<displayName>s"` a rebuild would derive — `"Tag Catalog"` for `"Tag"` comes back,
 `"Tags"` does not (it is the default).
@@ -363,7 +471,8 @@ maker typed in the UI**.
 reconstruct as rebuildable spec (`solution`, `entities[]`, `entities[].columns[]`, `dashboards[]`).
 Views, charts, forms, business rules and global choices are not fully reconstructed yet, so their
 deployed descriptions are exposed under `descriptionInventory` for inspection only rather than as
-partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted, never written as
+partial rebuildable artifacts (the command-bar buttons of the app's tables are listed there too, by
+table and label). Null or absent Dataverse descriptions are omitted, never written as
 `""`.
 
 **Rebuild behaviour:** a description is written at CREATE, and is additionally **reconciled on an
@@ -400,6 +509,14 @@ difference and the next full build restores the spec's value (a `--changed-only`
 spec with its last snapshot, not with the deployed row, so it does not notice).
 
 ## entities[]
+
+**An app with no tables of its own** — one whose navigation holds only generative pages, dashboards over
+tables the environment already has, or URLs (an app made with `apps.js create --page-id` is one) — is a
+valid spec with `"entities": []`. The build makes it (a navigation of pages only is built pages first), and
+`download-model-app.js`, `--verify` and teardown take it as they take any other spec. A spec with no table
+**and** no navigation entry has nothing to build an app from, and is refused: `at least one entity is
+required`.
+
 ```jsonc
 {
   "schemaName": "new_ticket",            // publisher-prefixed; logical name is its lowercase
@@ -469,7 +586,10 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   plus `statusReasons` / `alternateKeys` / `mainFormOrder`. Anything else — a misspelled `pluralname`, or a
   `languageCode` / `localizedLabels` asking for a per-table language or a parallel label block —
   fails validation naming the alternative, rather than validating clean and being dropped from the
-  build.
+  build. **`primaryAttribute` takes exactly `schemaName`, `displayName`, `autoNumberFormat`, `required`
+  and `maxLength`** — the same rule one level down: a `maxlength`, `autonumberFormat`, `requiredLevel` or
+  `type` there is refused, naming the key it most likely meant (the name column is always text, so it has
+  no `type`).
 - **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
@@ -478,7 +598,10 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
   Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
   raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
-  (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
+  (`DateOnly`/`DateAndTime`) and `dateTimeBehavior` (`UserLocal`/`DateOnly`/`TimeZoneIndependent`);
+  any type but Customer → `isSecured`; Choice/MultiChoice `options[]` items → a label or
+  `{ "value", "label" }` (the last three: see *Conditional features* below); Boolean →
+  `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
   `false` — see note below); File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber →
   `autoNumberFormat` (**required** on an AutoNumber column, e.g. `"C-{SEQNUM:5}"` — see the
   AutoNumber note below); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
@@ -714,6 +837,14 @@ list with "reach for it when…" guidance.
 | `dashboards[]` | chart/list/iframe/web-resource tiles |
 | `roleGrants[]` | extend a role you did NOT author |
 | `businessProcessFlows[].securityRoles` | who may run a flow |
+| `fieldSecurityProfiles[]` | confidential columns (`columns[].isSecured`) and who may read or change them |
+| `views[].reconcile` | declared views and charts (`reconcile: "declared"` on a view or chart: the rebuild applies the spec's columns, filters, sort and joins), a table's Quick Find columns (`entities[].quickFind`), and a declared web resource's content (`webResources[].reconcile`) |
+| `forms[].reconcile` | a declared form layout (`reconcile: "declared"` on a form: the rebuild places the spec's fields, spans, sections and field options and adds missing sub-grids, quick views and handlers, keeping every control the spec does not declare) |
+| `dashboards[].reconcile` | a declared dashboard (`reconcile: "declared"` on a global dashboard: the rebuild applies the spec's tiles by key and its description, adds new tiles, and keeps every tile the spec does not declare) |
+| `businessRules[].reconcile` | a declared business rule (`reconcile: "declared"` on a rule: created Draft under an id the build keeps, then activated; managed and proved whole, with keyed conditions and actions, OR logic, default values, error messages and recommendations; an existing rule is adopted read-only, never edited) |
+| `businessProcessFlows[].reconcile` | a declared business process flow (`reconcile: "declared"` on a flow, with a `key` on every stage and step: created Draft with ids the build keeps, then activated; managed and proved whole, so a rename keeps a stage's or step's id; an existing flow is adopted read-only, never edited, and a removed or reordered stage or step is refused) |
+| `createIdentity` | stable create ids for declared views and charts, on a new app only (`createIdentity: "stable-v1"`) |
+| `columns[].dateTimeBehavior` | portable schema: calendar-day dates, fixed option values (`{ "value", "label" }`), table search and duplicate detection (`searchEnabled` / `changeTrackingEnabled` / `duplicateDetectionEnabled`) |
 
 ## relationships[]
 ```jsonc
@@ -832,6 +963,13 @@ why they need naming here at all.
   build then failed at the platform, mid-run, and left behind a view row that could not be read or
   deleted, so every later build failed the same way. It is now rejected up
   front, naming the view and the offending entry.
+- **A view takes only these keys:** `entity`, `name`, `description`, `columns`, `sort`, `filters`, `activeOnly`, and — on a view
+  with `"reconcile": "declared"` — `key`, `viewId`, `linkEntities`. A filter item takes `attr`, `op`, `value`, `values` and
+  `relatedEntity`. Any other key is **ignored by the build**, so validation warns about it and names the key it most likely meant
+  (`filter` → `filters`, `column` → `attr`, `operator` → `op`); a view written with `filter` would otherwise be built without its
+  filter. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is still
+  accepted without a warning. These are warnings, never errors — but `lint-app-spec.js --strict` fails on them, so a view with a
+  misspelled key stops a `--strict` pipeline instead of building without its filter.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
@@ -1144,6 +1282,11 @@ why they need naming here at all.
   residual collision where a table has **two forms of the same `(entity, type, name)`** that type-scoped
   resolution can't disambiguate — the build then errors and tells you to set `formId`. The id is verified
   to belong to the form's table before anything is reconciled. Omit it for normal forms.
+- **`reconcile`** *(optional; needs `minimumPluginVersion: "2.21.0"`)* — `"declared"` makes the
+  rebuild place the spec's fields, spans, sections and field options as declared (an explicit `false`
+  clears a flag) and add a missing sub-grid, quick view or handler, while a control the spec does not
+  declare keeps its place. Without it a rebuild only adds fields. See `forms[].reconcile` in
+  [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md) for what is refused, the approvals and publishing.
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),
@@ -1619,8 +1762,11 @@ custom control), but the spec validator emits a warning.
   An unreadable proof or failed record write leaves the app intact. A retry uses those records even
   when `pages[]` is empty and the app has already gone. Proven pages still undeleted keep their records,
   manifest and solution and prevent a successful result. Only completed deletion or confirmed absence
-  consumes the records. Form-only references are not scanned; platform sitemap dependencies remain an
-  additional safeguard, not proof that no form embeds the page.
+  consumes the records. A page a **form** still embeds (the `MscrmControls.UxAgentControl`
+  control, whose `RefId` holds the page id) is not deleted: teardown reads every form in both layers before it
+  deletes anything and stops, keeping the app, the page, its manifest and the solution, with an error that names
+  the form. Take the page off that form and run teardown again. The dry run names each form that would stop the
+  apply and reports itself as failed.
 - **Workspace clearing preserves ownership.** `--clear-workspace` refuses while any unconsumed local
   ownership record remains, including other apps/environments. The refusal names each record file.
   Teardown consumes a record when it deletes or confirms the page's absence; a record whose page
@@ -1700,8 +1846,9 @@ custom control), but the spec validator emits a warning.
   so each must already exist in the environment you rebuild into: the **connection reference** each connector
   binding goes through, and the connection behind it, which holds a user's sign-in (create the reference with
   `create-connection-reference.js`, or move it in a solution with `add-page-to-solution.js --connection-refs` and
-  `solution-settings.js`); the **Custom API** each action binding names, a solution component and not an App Spec
-  item; and, for a connector binding that names a `dataset` or `tables` (a SharePoint site and its list ids),
+  `solution-settings.js`, or declare it in `connectionReferences[]` — see *Configuration items* below — and the build
+  makes it before the pages); the **Custom API** each action binding names, a solution component unless the spec
+  declares it in `customApis[]`; and, for a connector binding that names a `dataset` or `tables` (a SharePoint site and its list ids),
   the same resources. A download names what it found, on stderr and as `pageBindings` in its JSON result.
   **A rebuild checks them before it writes anything** (a build, and a dry run in its plan): it reads the
   environment's connection references and Custom APIs for the names the pages it writes state, and
@@ -1727,12 +1874,19 @@ custom control), but the spec validator emits a warning.
     only through a custom connector's definition (its `connector` row), which is the environment's own and can be
     another version than the page was made with; a reference whose custom connector lookup is absent, null or not a
     GUID — which a connector the platform publishes also has — is not proof of which connector defines them.
+  - **built-in operations** — an `actionBindings` entry named exactly `WhoAmI` or `RetrieveVersion` is a reviewed
+    built-in Dataverse Function, not a Custom API (`references/dataverse-operations.md`): it is left out of the
+    `customapi` read (a page that binds only them reads no `customapi` row), never called missing, and said as NOT
+    CHECKED — its availability in the environment or player and the signed-in user's permissions; one whose
+    declarations do not explicitly say "unbound Function, no inputs" draws a `dataverse-operation-shape` warning and
+    is written as the spec states it. A download names them under `pageBindings.neededInTarget.dataverseOperations`,
+    never under `customApis`: there is nothing to deploy. Any other spelling (`whoami`) is a Custom API name.
 
   `/app-builder` never authors these lists — it writes no connector or Custom API code — so they come from a page
   a download read. A page you reset to `source.kind: "intent"` to regenerate it is generated without connector
-  code: delete its bindings from the spec too, or it keeps bindings its code no longer uses. The `custom-api`
-  feature flag gates what the `/genpage` agents author, not the download or the rebuild of bindings a page
-  already holds.
+  code: delete its bindings from the spec too, or it keeps bindings its code no longer uses. The
+  `dataverse-operations` feature flag gates what the `/genpage` agents author, not the download or the rebuild
+  of bindings a page already holds.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is
@@ -1757,9 +1911,82 @@ custom control), but the spec validator emits a warning.
     applied it), writing the longhands makes the style start to render. A page that already exists and is sent again as recorded —
     or has no record in this workspace — is sent as it is and the build **warns** with the same detail instead: it ships nothing
     new. A call the check cannot read is reported as that (with what to change in the code), not as CSS Griffel drops.
+- **Generative pages on forms — `placement` and `forms[].genPages`.** A page that only makes sense next to one record (a case
+  summary on the Case form) can be embedded in a **Main** form instead of the navigation:
+  ```jsonc
+  "pages": [{ "key": "case-summary", "placement": "form", ... }],          // "sitemap" (the default) | "form"
+  "forms": [{ "entity": "incident", "name": "Case", "genPages": [
+    { "key": "summary", "page": "case-summary", "tab": "general", "section": "details",
+      "after": "title", "inputData": { "mode": "compact" } } ] }]
+  ```
+  Each entry: `key` (unique in the form), `page` (a declared page key, once per form), `tab` and `section` (both required; each
+  must name exactly one place on the form), optional `after` (a column logical name) and optional `inputData` (a JSON object
+  handed to the page). Any other key is an error. A `placement: "form"` page is exempt from the sitemap membership rule
+  above, but some form must embed it and the sitemap must not link it. The page is placed as a block (its row plus five
+  reserved empty rows), verified through the form that embeds it, and teardown refuses to delete a page a form still embeds.
+  **Limits in this release:** the CLI build cannot apply an embed yet — it builds everything else and then halts
+  `form-page-embeds-incomplete` (`managed-bindings-unavailable`), so put the page in the navigation instead; a run with the
+  forms phase but not the pages phase is refused at preflight; and a download does not read `genPages` or
+  `placement: "form"` back, so they must be re-authored.
 - **Offline evaluation.** The app-builder eval harness (`evals/model-apps/app-builder/`) grades
   page-stage structural facts from the spec offline (navigation graph resolution, intent-vs-tsx
   completeness). See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md).
+
+## Configuration items (optional) — `environmentVariables[]`, `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]`, `solution.version`  [2.21.0]
+```jsonc
+{
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoDesk", "publisherPrefix": "contoso", "version": "1.2.0.0" },
+  "environmentVariables": [
+    { "schemaName": "contoso_ApiBase", "type": "string", "name": "API base", "defaultValue": "https://api.contoso.com" },
+    { "schemaName": "contoso_ApiKey", "type": "secret", "name": "API key" }                       // value: deployment settings only
+  ],
+  "connectionReferences": [
+    { "logicalName": "contoso_sharepoint", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline" }
+  ],
+  "customApis": [
+    { "uniqueName": "contoso_Escalate", "binding": "entity", "boundEntityLogicalName": "contoso_ticket", "isFunction": false,
+      "requestParameters": [ { "uniqueName": "Reason", "type": "string" } ],
+      "responseProperties": [ { "uniqueName": "Accepted", "type": "boolean" } ] }
+  ],
+  "duplicateDetectionRules": [
+    { "key": "same-email", "name": "Contacts with the same email", "entity": "contact",
+      "conditions": [ { "key": "email", "column": "emailaddress1", "match": "exact" } ] }
+  ]
+}
+```
+- **What the build does.** A build makes each declared item in the build solution (and proves it, and each
+  Custom API parameter, response property and rule condition, a member of it), compares an item that is already
+  there and writes only the fields that differ, and sets `solution.version` (`major.minor.build.revision`). An
+  unchanged spec built again sends no write. **An omitted field is not managed:** declaring an item that exists
+  without a field, or without a child list, never clears the field or removes the children. Lint warns without
+  `minimumPluginVersion: "2.21.0"` — an older plugin ignores these fields. A spec without them builds exactly as before.
+- **Values that differ per environment never live in the spec.** An environment variable's current value and a
+  connection reference's connection come from `--deployment-settings <file>`, the solution deployment-settings
+  shape (`EnvironmentVariables[]` with `SchemaName` / `Value`, `ConnectionReferences[]` with `LogicalName` /
+  `ConnectionId`). Nothing from the file is printed. A `secret` variable takes no `defaultValue` (an error when
+  the spec is built, a warning when it is only read); give it a Key Vault reference through the settings file. A
+  connection the file names must be listed in the environment's connections for the reference's connector, or the
+  configuration step stops (a connection of another connector is not proof).
+- **Consent to a destructive change.** Clearing a value, unbinding a reference, removing a Custom API parameter or
+  property, or removing a rule condition is refused until it is authorized, one change at a time:
+  `--authorize <kind>:<key>:<field>` (for example `--authorize environmentVariableValue:contoso_apibase:value`,
+  `--authorize connectionReference:contoso_sharepoint:connectionId`). The key is the declared name, lower-cased (a
+  rule's own `key` as written); a refused change (`DESTRUCTIVE_CHANGE_UNAUTHORIZED`) names the exact token it lacks. A token for an item the spec does
+  not declare is refused before anything runs.
+- **Pages wait for what they call.** A page whose bindings name a declared connection reference or Custom API is not
+  written until the item is usable — the reference made and bound to a proven connection, the Custom API made with an
+  implementation (a plug-in type) the build can see: the build stops before the pages with
+  `configuration-prerequisite-not-applied` instead of warning and writing a page that cannot reach its data. A
+  declared Custom API without an implementation is still built (a scaffold); only the pages that call it wait. A
+  reference already there for another connector still stops the build (`pages-binding-reference-conflict`).
+- **Lost answers.** A configuration write is sent once in a build: when its answer is lost the step stops as
+  unknown (`configuration-incomplete`) and the build is not retried. Configuration rows are created through the
+  plain create path, so a whole-build retry after a lost answer can create a second one — check the environment
+  before you run the build again.
+- **Not carried by teardown or download.** A teardown never deletes a configuration item (nothing proves this app
+  owns it); it names each one as kept, by name only, and says when a Custom API bound to a table the spec makes will
+  block that table's delete. A download does not bring these items back into the spec yet.
 
 ## appShell
 ```jsonc
@@ -1868,6 +2095,15 @@ custom control), but the spec validator emits a warning.
 ```
 - Shared styling tokens threaded to every page so generated pages look consistent with each other
   and the model-driven shell (both Fluent UI V9). Unknown keys are rejected.
+- **`style`** *(optional)* — the maker's own look, in words, when they ask for one: a screenshot or
+  mockup read into colors and fonts, a website to match, or a description (`"navy #0b2545 primary,
+  gold #c9a227 accent, warm white #faf7f0 background, Georgia headings, 2px corners (from:
+  screenshot)"`). Give concrete values: hex colors with their roles, a font with a fallback, corner
+  radius, density. It wins over the default model-driven look: the page plan carries it as a
+  `Styling:` line that starts with `Maker-requested:`, and every page applies it
+  (`references/rules.md` → *Maker-requested styling*, which also says what a page cannot match).
+  Omit it to keep the default look. It must be a non-empty string. It is stored in the app's page
+  manifest with the rest of `design`, so a download keeps it.
 - During **generate-pages** the design contract is passed to each headless `page-builder` agent
   so all generated `.tsx` files apply the same Fluent UI V9 token set (accent color, density,
   corner radius, dark-mode policy). Run `node scripts/preview-app.js @<dir>/app-spec.json` to
@@ -2041,7 +2277,7 @@ Administrator role only, so without a persona role users who have no maker-level
 `personas[]` produces a working access model so the app opens for real users.
 
 An app that **already exists** keeps the roles associated with it: a spec with no `personas[]` leaves
-them as they are, which is how an extension of such an app is written (a download carries none). Do
+them as they are, which is how an extension of such an app is written (a plain download carries none). Do
 not list an existing role as a persona to silence the lint — a persona's role is converged to exactly
 the privileges declared, and a role the build did not author is refused. Give an existing role access
 to a table the spec adds with `roleGrants[]` (below). Opening the app and using a table are two
@@ -2056,6 +2292,21 @@ The model is **deterministic**: you DECLARE the access each job requires — the
 privileges from a job's text. It **unions** every job's declared access into the persona's one role
 (max scope wins per entity+access) and applies it with replace semantics (a rebuild that drops a
 privilege removes it — the role converges to the spec).
+
+**A persona written by a managed download.** A download with `--include-managed --managed-manifest
+<store file>` that restores a declared business process flow whose `securityRoles` name a persona the
+downloaded spec lacks writes that persona from its role, but only when a rebuild provably leaves the
+role exactly as it is: one role of that name in the root business unit, made by a build and unmanaged,
+in the app's solution, holding only table privileges that compile back to exactly what it holds, the
+flow's grants included. The persona has one job, `Privileges read from the environment`, and
+`appAccess: false` when the app is not associated with the role — read from every page of the app's
+role associations; an association answer that is incomplete, malformed or refused proves nothing, so
+no persona is written (a role it missed would otherwise be written as not associated, and a build
+would remove its access to the app). A role lookup the server cuts short proves nothing either. From then on the spec **owns** that
+role like any other persona: a privilege someone adds to the role outside the spec is removed by the
+next build, and the download says so in a `NOTE`. When any of this cannot be proved, no persona is
+written and the flow is left out instead, with the reason (see the business process flows' notes in
+`app-spec-schema-advanced.md`).
 
 ```jsonc
 "personas": [
@@ -2135,5 +2386,6 @@ are **not** enforced at lint time (they surface as a clear build halt): whether 
 requested access, and the rule that different entities sharing one Dataverse privilege must request the
 same scope.
 
-**Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
-security. The security surface today is role-per-persona plus `roleGrants[]` (below).
+**Not yet supported** (tracked follow-up): access teams / hierarchy security. The security surface
+today is role-per-persona plus `roleGrants[]` (below) and, from 2.21.0, column-level security
+(`isSecured` + `fieldSecurityProfiles[]`, in the advanced reference).

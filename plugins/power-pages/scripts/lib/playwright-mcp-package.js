@@ -21,6 +21,13 @@ function resolveNpxCli({
     pathApi.resolve(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js'),
     pathApi.join(nodeDir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
   ];
+  if (platform !== 'win32') {
+    // Debian and Ubuntu install distro-packaged npm under /usr/share/nodejs rather
+    // than beside /usr/bin/node in either of the standard Node.js layouts above.
+    candidates.push(
+      pathApi.resolve(nodeDir, '..', 'share', 'nodejs', 'npm', 'bin', 'npx-cli.js'),
+    );
+  }
   const match = candidates.find((candidate) => existsSync(candidate));
 
   if (!match) {

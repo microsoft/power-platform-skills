@@ -26,6 +26,7 @@ const { runSdkBuild, BuildHalt } = require('../lib/sdk-build.js');
 const { classifyPages } = require('../lib/classify-changes.js');
 const { buildManifest } = require('../lib/page-manifest.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+const { withPageType } = require('./helpers/page-component-type.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
@@ -417,6 +418,66 @@ test('pageBindingsNote says what a rebuild into another environment cannot bring
   assert.ok(!/^NOTE/.test(lost), 'no page holds a binding the spec states, so there is no note about them');
 });
 
+// ── the two reviewed built-in operations in a download ──────────────────────────────────────────────────────────────────────────
+// WhoAmI and RetrieveVersion are platform messages (lib/dataverse-operations.js), not Custom APIs: a download that lists them under `customApis` tells the operator to deploy something that
+// cannot be deployed. An EXACT catalogue name is reported under `neededInTarget.dataverseOperations` instead — a legacy or contradictory entry too, since a parameter map does not make
+// the name a Custom API — and the binding itself is carried as the page holds it: not repaired, not certified. A list that holds an unsafe field is still left out whole.
+const WHO_AM_I = { name: 'WhoAmI', isFunction: true, displayName: 'Current Dataverse identity', parameterKinds: {} };
+const RETRIEVE_VERSION = { name: 'RetrieveVersion', isFunction: true, displayName: 'Dataverse server version', parameterKinds: {} };
+
+test('built-in operations: a download names WhoAmI and RetrieveVersion as built-in operations, never as Custom APIs to deploy — legacy, contradictory and parameterized entries alike', () => {
+  const pages = [
+    { pageId: A, key: 'ops', name: 'Ops', actionBindings: [APPROVE, WHO_AM_I, RETRIEVE_VERSION] },
+    { pageId: B, key: 'legacy', name: 'Legacy', actionBindings: [{ name: 'WhoAmI' }, { name: 'RetrieveVersion', isFunction: false, parameterKinds: { Target: 'String' } }] },
+    { pageId: C, key: 'cased', name: 'Cased', actionBindings: [{ name: 'whoami', isFunction: true }] },
+  ];
+  const report = pageBindingsReport(pages, []);
+  assert.deepStrictEqual(report.neededInTarget, {
+    customApis: ['contoso_ApproveOrder', 'whoami'],
+    dataverseOperations: ['RetrieveVersion', 'WhoAmI'],
+  });
+  assert.deepStrictEqual(report.pages.map((p) => p.actionBindings), [['contoso_ApproveOrder', 'RetrieveVersion', 'WhoAmI'], ['RetrieveVersion', 'WhoAmI'], ['whoami']], 'each page still lists every binding it holds');
+  assert.match(report.note, /built-in Dataverse operations \(dataverseOperations\) are not solution components/);
+  assert.match(report.note, /preserved as the page holds them, not repaired/);
+  assert.match(report.note, /not certified/);
+
+  const text = pageBindingsNote(report);
+  const line = text.split('\n').find((l) => /built-in Dataverse operation/.test(l));
+  assert.ok(line, text);
+  assert.match(line, /^ {4}- built-in Dataverse operation\(s\) RetrieveVersion, WhoAmI: /);
+  assert.doesNotMatch(line, /deploy|list-custom-apis|solution component, not an App Spec item/i);
+  assert.match(text, /Custom API\(s\) contoso_ApproveOrder, whoami: a Custom API is a solution component/, 'the Custom APIs keep their own line');
+  assert.doesNotMatch(text.split('\n').find((l) => /Custom API\(s\)/.test(l)), /WhoAmI|RetrieveVersion/);
+  // No response value is ever part of it: a binding names an operation, it does not hold what the operation answered.
+  assert.doesNotMatch(JSON.stringify(report) + text, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i);
+
+  const builtInOnly = pageBindingsReport([{ pageId: A, key: 'ops', name: 'Ops', actionBindings: [WHO_AM_I] }], []);
+  assert.deepStrictEqual(builtInOnly.neededInTarget, { dataverseOperations: ['WhoAmI'] });
+  assert.doesNotMatch(pageBindingsNote(builtInOnly), /Custom API\(s\)/);
+  // A report with no built-in operation says exactly what it always said.
+  const plain = pageBindingsReport([{ pageId: A, key: 'w', name: 'W', actionBindings: [APPROVE] }], []);
+  assert.ok(!('dataverseOperations' in plain.neededInTarget));
+  assert.doesNotMatch(plain.note + pageBindingsNote(plain), /built-in/);
+});
+
+test('built-in operations: a download carries the binding as the page holds it, and recognizing a name never rescues a list that holds an unsafe field', () => {
+  const legacy = { name: 'WhoAmI' };
+  const root = pageTree({
+    [A]: { actionBindings: [APPROVE, WHO_AM_I, RETRIEVE_VERSION, legacy] },
+    [B]: { actionBindings: [WHO_AM_I, { ...RETRIEVE_VERSION, bindingType: 'Global' }] },
+    [C]: { actionBindings: [WHO_AM_I, { ...RETRIEVE_VERSION, response: { typeName: 'Microsoft.Dynamics.CRM.RetrieveVersionResponse' } }] },
+  });
+  const unkept = [];
+  const pages = parseDownloadedPages(root, root, null, [], [], unkept);
+  const byId = new Map(pages.map((p) => [p.pageId, p]));
+  assert.deepStrictEqual(byId.get(A).actionBindings, [APPROVE, WHO_AM_I, RETRIEVE_VERSION, legacy], 'carried exactly: no isFunction or display name added to the legacy entry');
+  for (const id of [B, C]) assert.ok(!Object.hasOwn(byId.get(id), 'actionBindings'), `${id}: a descriptor key on the wire leaves the whole list out`);
+  assert.deepStrictEqual(unkept.map((u) => [u.pageId, u.field]), [[B, 'actionBindings'], [C, 'actionBindings']]);
+  const report = pageBindingsReport(pages.map((p, i) => ({ ...p, key: `p${i}`, name: `P${i}` })), unkept);
+  assert.deepStrictEqual(report.neededInTarget, { customApis: ['contoso_ApproveOrder'], dataverseOperations: ['RetrieveVersion', 'WhoAmI'] }, 'only the list the spec states is reported');
+  assert.strictEqual(report.notCarried.length, 2);
+});
+
 // ── a download, end to end over the stand-in SDK ──────────────────────────────────────────────────────────────────────────────
 
 // What one app of two pages looks like to a download: the navigation names both, and the stand-in SDK answers the reads runDownload makes.
@@ -439,7 +500,8 @@ function downloadFixture(pages) {
   sdk.listArtifacts = async (kind) => (kind === 'app' ? [{ id: APP_ID, isDirty: false }] : []);
   sdk.findTables = async () => [{ logicalName: 'contoso_item', entitySetName: 'contoso_items' }];
   sdk.fetchEntityMetadata = async (logical) => ({ logicalName: logical, schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', entitySetName: 'contoso_items', attributes: [], relationships: [] });
-  sdk.dataverse = { get: async () => ({ status: 200, body: { value: [] } }) };
+  // The page table's solution component type is answered too: a rebuild adds the pages it writes to the spec's solution (helpers/page-component-type.js).
+  sdk.dataverse = { get: withPageType(async () => ({ status: 200, body: { value: [] } })) };
   const manifest = buildManifest({ pages: pages.map((p) => ({ key: p.key, name: p.name })) }, new Map(pages.map((p) => [p.key, p.pageId])));
   let manifestContent = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
   sdk.queryRecords = async (logical, opts = {}) => {
@@ -843,7 +905,7 @@ function freshEnvironmentSdk() {
     pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
     addSolutionComponent: async () => {},
     publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
-    dataverse: { get: async () => ({ status: 404, body: null }) },
+    dataverse: { get: withPageType(async () => ({ status: 404, body: null })) },
   };
 }
 
@@ -1011,6 +1073,34 @@ test('a Custom API of the other kind, or bound to another table, is a warning by
     'page "Weather": Custom API binding "contoso_ApproveOrder" says it is an Action, but the Custom API of that name in this environment is a Function — the runtime refuses the call (wrong_operation_kind)',
     'page "Weather": Custom API binding "contoso_GetSummary" is for a Global operation, but the Custom API of that name in this environment is bound to table contoso_other — the runtime refuses the call (invalid_bound_to)',
   ]);
+});
+
+// The two reviewed built-in operations through a whole build: what the build reads for them (nothing), what it says (not checked), and what it writes (the bindings as the spec states them).
+test('built-in operations: a build reads customapi only for the Custom API names, says WhoAmI and RetrieveVersion were not checked, and writes every binding as the spec states it', async () => {
+  const { spec, outDir } = await portableCopy();
+  spec.pages.find((p) => p.key === 'weather').actionBindings = [APPROVE, WHO_AM_I, RETRIEVE_VERSION];
+  spec.pages.find((p) => p.key === 'detail').actionBindings = [WHO_AM_I];
+  assert.ok(validateAppSpec(spec).ok, validateAppSpec(spec).errors.join('; '));
+  const { sdk, reads } = targetEnvironment({ references: BOTH_REFERENCES, apis: BOTH_APIS });
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  assert.deepStrictEqual(reads.map((r) => [r.entity, r.options.filter]).filter(([entity]) => entity === 'customapi'), [['customapi', "uniquename eq 'contoso_ApproveOrder'"]], 'one read, of the one Custom API name');
+  const said = bindingWords(warnings).concat(warnings.filter((m) => /built-in operation/.test(m)));
+  assert.ok(said.includes('page "Weather" binds the built-in operations WhoAmI, RetrieveVersion. These are reviewed built-in operation names; their availability in this environment or player and the signed-in user\'s permissions were not checked.'), JSON.stringify(said));
+  assert.ok(said.includes('page "Item Detail" binds the built-in operation WhoAmI. These are reviewed built-in operation names; their availability in this environment or player and the signed-in user\'s permissions were not checked.'), JSON.stringify(said));
+  assert.ok(!warnings.some((m) => /Custom APIs? (WhoAmI|RetrieveVersion)|deployed here/.test(m)), 'no built-in operation is called a missing Custom API');
+  const made = new Map(genpage.of('create').map((c) => [c.args[0].name, c.args[0]]));
+  assert.deepStrictEqual(made.get('Weather').actionBindings, [APPROVE, WHO_AM_I, RETRIEVE_VERSION]);
+  assert.deepStrictEqual(made.get('Item Detail').actionBindings, [WHO_AM_I]);
+
+  // Built-ins and nothing else: the build reads no customapi row at all.
+  const only = await portableCopy();
+  only.spec.pages.find((p) => p.key === 'weather').actionBindings = [WHO_AM_I, RETRIEVE_VERSION];
+  const quiet = targetEnvironment({ references: BOTH_REFERENCES, apis: BOTH_APIS });
+  assert.ok((await runSdkBuild(only.spec, { sdk: quiet.sdk, genpage: fakeGenpage(), appDir: only.outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: () => {} })).ok);
+  assert.deepStrictEqual(quiet.reads.map((r) => r.entity), ['connectionreference'], 'zero customapi reads');
 });
 
 // A page made with a CUSTOM connector: its binding goes through a reference whose connector's definition is a row of the environment (`connector.openapidefinition`), and the copy there can be another version.
@@ -1223,4 +1313,95 @@ test('a dry run whose read of the references fails says so, and halts nothing', 
   assert.deepStrictEqual(planned.planItems.filter((item) => item.wouldHalt), []);
   assert.strictEqual(bindingWords(warnings).length, 1);
   assert.match(bindingWords(warnings)[0], /^could not read this environment's connection references \(HTTP 403\)/);
+});
+
+// ── Declared connection references and the page gate ─────────────────────────────────────────────────────────────────────────────
+// A spec that declares a connection reference makes it in the configuration step, before any page is written. A page that names a
+// declared reference is written only when the reference was made AND bound to a proven connection; until then the build stops before
+// the pages, instead of writing a page that cannot reach its data. The base steps run on this file's mock environment; the configuration
+// step's requests go to the real maker-SDK bundle over the strict configuration org (tests/helpers/fake-config-org.js).
+const configurationRouted = (() => {
+  const { createConfigOrg } = require('./helpers/fake-config-org.js');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+  const { configurationSendOnce } = require('../lib/configuration-transport.js');
+  const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  const CONFIG_KIND = /^(environmentVariable|connectionReference|customApi|duplicateRule)/;
+  const CONFIG_PATH = /^\/(duplicaterules|EntityDefinitions\(LogicalName='(connectionreference|customapi|duplicaterule)'\))/;
+  return async function routed(mock, spec) {
+    const org = createConfigOrg({ tables: [{ logicalName: 'contoso_item', attributes: ['contoso_name'] }], solution: { uniqueName: spec.solution.uniqueName, version: '1.0.0.0', prefix: spec.solution.publisherPrefix } });
+    const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: (r) => org.request(r), sleep: async () => {}, sendOnce: configurationSendOnce });
+    const real = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(tmp('config-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: spec.solution.uniqueName });
+    await real.initWorkspace();
+    const ids = new Set();
+    const sdk = Object.create(mock);
+    for (const m of ['createArtifact', 'findArtifact', 'fetchArtifact', 'pushArtifact', 'updateElement']) {
+      sdk[m] = (kind, ...rest) => {
+        if (!CONFIG_KIND.test(String(kind))) return mock[m](kind, ...rest);
+        if (typeof rest[0] === 'string') ids.add(rest[0].toLowerCase());
+        if (rest[0] && typeof rest[0] === 'object' && typeof rest[0].id === 'string') ids.add(rest[0].id.toLowerCase());
+        return real[m](kind, ...rest);
+      };
+    }
+    sdk.dataverse = { ...mock.dataverse, get: (p, ...rest) => (CONFIG_PATH.test(String(p)) ? real.dataverse.get(p, ...rest) : mock.dataverse.get(p, ...rest)) };
+    sdk.addSolutionComponent = (o) => (ids.has(String(o && o.componentId).toLowerCase()) ? real.addSolutionComponent(o) : mock.addSolutionComponent(o));
+    sdk.queryRecords = (entity, options) => ((entity === 'solutioncomponent' || (entity === 'solution' && options && options.top === 1 && String(options.select) === 'solutionid')) ? real.queryRecords(entity, options) : mock.queryRecords(entity, options));
+    return { sdk, org, creates: createPassthroughCreates() };
+  };
+})();
+
+const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+
+const declareReferences = (spec) => {
+  spec.minimumPluginVersion = '2.21.0';
+  spec.connectionReferences = [
+    { logicalName: 'contoso_msnweather', connectorId: apiId('shared_msnweather') },
+    { logicalName: 'contoso_sharepoint', connectorId: apiId('shared_sharepointonline') },
+  ];
+  return spec;
+};
+
+test('a page naming a declared connection reference left unbound is not written: the build stops before the pages and never retries', async () => {
+  const { spec, outDir } = await portableCopy();
+  declareReferences(spec);
+  const env = targetEnvironment({ references: [], apis: BOTH_APIS });
+  const w = await configurationRouted(env.sdk, spec);
+  const genpage = fakeGenpage();
+  const halt = await runSdkBuild(spec, { sdk: w.sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, creates: w.creates, warn: () => {}, connections: async () => [] }).then(() => null, (e) => e);
+  assert.ok(halt instanceof BuildHalt, String(halt && halt.stack));
+  assert.strictEqual(halt.code, 'configuration-prerequisite-not-applied', halt.message);
+  assert.strictEqual(halt.retry, 'never');
+  assert.strictEqual(genpage.of('create').length + genpage.of('update').length, 0, 'no page written');
+  assert.strictEqual(w.org.rows('connectionreferences').length, 2, 'the configuration step made both references');
+  assert.deepStrictEqual(w.org.unexpected, []);
+});
+
+test('declared references bound to proven connections let the pages be written, without a "create the reference" warning; an undeclared missing Custom API is still warned about', async () => {
+  const { spec, outDir } = await portableCopy();
+  declareReferences(spec);
+  const env = targetEnvironment({ references: [], apis: [BOTH_APIS[1]] });
+  const w = await configurationRouted(env.sdk, spec);
+  const bindings = readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_msnweather', ConnectionId: 'conn-w' }, { LogicalName: 'contoso_sharepoint', ConnectionId: 'conn-s' }] }, spec);
+  assert.deepStrictEqual(bindings.errors, []);
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk: w.sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, creates: w.creates, configurationBindings: bindings, connections: async () => [{ connectionId: 'conn-w', connectorId: apiId('shared_msnweather') }, { connectionId: 'conn-s', connectorId: apiId('shared_sharepointonline') }], warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok, JSON.stringify(rebuilt.errors));
+  assert.strictEqual(genpage.of('create').length, 2, 'both pages written');
+  const bound = bindingWords(warnings);
+  assert.ok(!bound.some((m) => /connection reference contoso_(msnweather|sharepoint) is not in this environment/.test(m)), `no reference warning: ${JSON.stringify(bound)}`);
+  assert.ok(bound.some((m) => /Custom API contoso_ApproveOrder is not in this environment/.test(m)), 'an undeclared missing Custom API is still warned about');
+  assert.deepStrictEqual(w.org.rows('connectionreferences').map((r) => r.connectionid).sort(), ['conn-s', 'conn-w']);
+  assert.deepStrictEqual(w.org.unexpected, []);
+});
+
+test('a reference already bound to another connector still refuses before anything is written, declared or not', async () => {
+  const { spec, outDir } = await portableCopy();
+  declareReferences(spec);
+  const env = targetEnvironment({ references: [referenceRow('contoso_msnweather', 'shared_office365users'), BOTH_REFERENCES[1]], apis: BOTH_APIS });
+  const w = await configurationRouted(env.sdk, spec);
+  const halt = await runSdkBuild(spec, { sdk: w.sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, creates: w.creates, warn: () => {}, connections: async () => [] }).then(() => null, (e) => e);
+  assert.ok(halt instanceof BuildHalt, String(halt && halt.stack));
+  assert.strictEqual(halt.code, 'pages-binding-reference-conflict');
+  assert.deepStrictEqual(env.writes, [], 'nothing written by the base steps');
+  assert.deepStrictEqual(w.org.writes(0), [], 'nothing written by the configuration step');
 });

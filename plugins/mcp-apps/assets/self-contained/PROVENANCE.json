@@ -1,6 +1,6 @@
 {
   "artifact": "mcp-app-runtime.min.js",
-  "sha256": "d29345e06683378efd21354896488945df22b14c19c49b2a1d597e030b5f88d2",
+  "sha256": "a8fcc8895d87ef963776b3932b0ed9d314e7d9022283923589825d71131156b4",
   "build": {
     "entry": "scripts/_vendor-build/entry.js",
     "command": "npm ci && npm run build",
@@ -15,6 +15,14 @@
     "@modelcontextprotocol/ext-apps": {
       "version": "1.7.5",
       "source": "https://github.com/modelcontextprotocol/ext-apps"
+    },
+    "@modelcontextprotocol/sdk": {
+      "version": "1.32.1",
+      "source": "https://github.com/modelcontextprotocol/typescript-sdk"
+    },
+    "zod": {
+      "version": "4.6.7",
+      "source": "https://github.com/colinhacks/zod"
     }
   },
   "licenses": "THIRD-PARTY-NOTICES.md",
@@ -24,6 +32,7 @@
     "@fluentui/tokens",
     "@standard-schema/spec",
     "@swc/helpers",
-    "zod"
+    "zod",
+    "zod-to-json-schema"
   ]
 }

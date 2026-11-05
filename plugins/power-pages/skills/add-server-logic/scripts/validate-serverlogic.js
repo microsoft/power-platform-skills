@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Validates that Server Logic files were created correctly for a Power Pages code site.
+// Validates that Server Logic files were created correctly for a Power Pages SPA site.
 // Checks both the .js code file and the .serverlogic.yml metadata file.
 // Runs via the centralized PostToolUse hook to verify the skill produced valid output.
 

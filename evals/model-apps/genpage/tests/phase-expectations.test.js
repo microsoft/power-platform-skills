@@ -592,6 +592,54 @@ test('eval 13: generated text carries no hardcoded currency symbols or date form
   assertPass(gradeCode(text, page("const mode = isMoney ? 'currency' : 'decimal'; return null;")));
 });
 
+// JSX decodes the character references in its text and in an attribute's string (lib/jsx-references.js, the page compiler's
+// own decoding), so a page shows `&euro;` as "€" and `&#36;` as "$": a symbol or a date format spelled with them is hardcoded
+// exactly as its plain spelling is. A JavaScript string is not decoded, so `'&euro;'` shows those characters and no symbol.
+test('eval 13: a currency symbol or a date format spelled with character references in JSX is hardcoded too', () => {
+  const text = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const page = (body) => [{ name: 'page.tsx', content: `export default function GeneratedComponent() {\n  ${body}\n}\n` }];
+  assertFail(gradeCode(text, page('return <Text>&euro;{total}</Text>;')), /hardcoded currency symbol "\u20ac"/);
+  assertFail(gradeCode(text, page('return <Text>{total} &pound;</Text>;')), /hardcoded currency symbol "\u00a3"/);
+  assertFail(gradeCode(text, page('return <Input placeholder="&yen;" />;')), /hardcoded currency symbol "\u00a5"/);
+  assertFail(gradeCode(text, page('return <Text>&#36;{total}</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>&#x24;100</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>$&#49;00</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>MM&#47;dd&#47;yyyy</Text>;')), /hardcoded date format "MM\/dd\/yyyy"/);
+  // As when written plainly, a "$" with no amount after it is not currency, nor is a reference that is no symbol.
+  assertPass(gradeCode(text, page('return <Text>$</Text>;')));
+  assertPass(gradeCode(text, page('return <Text>&#36;</Text>;')));
+  assertPass(gradeCode(text, page('return <Text>{formatCurrency(total)} &amp; {formatDate(due)} &copy; &nbsp;</Text>;')));
+  assertPass(gradeCode(text, page("return <Text>{'&euro;'}{total}</Text>;")));
+  assertPass(gradeCode(text, page("const label = '&#36;' + total; return null;")));
+});
+
+// The page compiler erases a component's type arguments, so the string of a generic component's attribute renders like any
+// other: `<DataGridRow<Row> title="&euro;" />` shows "€". A tag whose type arguments are not names only (a function, string,
+// template or other type) is one the reader cannot bound for certain (lib/tsx-structure.js), so the check fails on it
+// rather than pass a symbol it could not see.
+test('eval 13: a currency symbol in a generic component\u2019s attribute is hardcoded too, and a tag the reader cannot read fails', () => {
+  const text = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const page = (body) => [{ name: 'page.tsx', content: `export default function GeneratedComponent() {\n  ${body}\n}\n` }];
+  for (const tag of ['<DataGridRow<Row>', '<A <Row>', '<A /* row */ <Row>', '<A\n<Row>', '<A\r\n<Row>', '<Grid<Map<string, Row[]>>', '<A.B<T | U, V & W>', '<A<B>']) {
+    assertFail(gradeCode(text, page(`return ${tag} title="&euro;" />;`)), /hardcoded currency symbol "\u20ac"/);
+  }
+  assertFail(gradeCode(text, page('return <DataGridRow<Row> title="&#36;100" />;')), /hardcoded "\$" currency symbol/);
+  assertPass(gradeCode(text, page('return <DataGridRow<Row> title={t("total")} aria-label="&amp;" />;')));
+  const unreadable = [
+    '<A<() => () => "<B<() => string>>"> title="&euro;">Hello</A>',
+    '<DataGridRow<() => () => string /* <B<() => string>> */> title="&euro;" />',
+    '<A<() => "a\\\nb"> title="&euro;" />',
+    '<A<() => "a\\\r\nb"> title="&euro;" />',
+    '<A<() => `x${string /* the type\'s name */}y`> title={t("ok")} />',
+    '<A<"a\\"//"> title="&euro;" />',
+    '<A<"a\\"/*"> title="&euro;" />',
+  ];
+  for (const tag of unreadable) {
+    const name = tag.match(/^<(\w+)/)[1];
+    assertFail(gradeCode(text, page(`return ${tag};`)), new RegExp(`^page\\.tsx: <${name}> at line 2, column 10 has type arguments that are not only names`));
+  }
+});
+
 // --- Eval 15 -----------------------------------------------------------------------------------
 
 const E15 = '15-support-tickets-real';
@@ -656,6 +704,85 @@ test('eval 15: genpage.js types picks up an enum registration for every planned 
   assertFail(grade(text, mutated(E15, 'runtimeTypes', '"Closed" = 100000003,', '"Closed" = 100000004,')), /values 100000000,100000001,100000002,100000004 differ/);
   assertFail(grade(text, mutated(E15, 'workflowLog', 'generate-types --data-sources "cr_ticket"', 'generate-types --data-sources "contact"')), /no genpage\.js types run has --data-sources cr_ticket/);
   assertSkip(grade(text, { ...committed(E15), runtimeTypes: null }), /RuntimeTypes\.ts was not captured/);
+});
+
+// The input JSON as agents/genpage-entity-builder.md Step 4 has the entity-builder write it, for eval 15's plan: each Choice option is its
+// label, in the plan's order. The capture did not keep its input, so the cases below hand it one.
+const TICKET_CHOICES = "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; each picklist option is written as its label, in the plan's order (numbered 100000000 + index)";
+function ticketInput(priority = ['Low', 'Medium', 'High', 'Critical'], status = ['Open', 'In Progress', 'Resolved', 'Closed']) {
+  return {
+    solution: { uniqueName: 'Crdec34', publisherPrefix: 'cr' },
+    entities: [{
+      schemaName: 'cr_Ticket', displayName: 'Ticket', pluralName: 'Tickets',
+      primaryAttribute: { schemaName: 'cr_name', displayName: 'Name', maxLength: 100 },
+      columns: [
+        { schemaName: 'cr_Priority', displayName: 'Priority', type: 'Choice', options: priority },
+        { schemaName: 'cr_Status', displayName: 'Status', type: 'Choice', options: status },
+        { schemaName: 'cr_DueDate', displayName: 'Due Date', type: 'DateTime', dateFormat: 'DateOnly' },
+      ],
+    }],
+    relationships: [],
+  };
+}
+const withInput = (input) => ({ ...committed(E15), artifacts: { ...committed(E15).artifacts, 'provision-input.json': typeof input === 'string' ? input : JSON.stringify(input) } });
+
+test('eval 15: the choice options of the input JSON are labels in the plan\'s order, as provision-entities.js takes them', () => {
+  assertPass(grade(TICKET_CHOICES, withInput(ticketInput())));
+  // A label in several languages is a label too.
+  assertPass(grade(TICKET_CHOICES, withInput(ticketInput([{ 1033: 'Low', 1036: 'Bas' }, 'Medium', 'High', 'Critical']))));
+  // The explicit form (2.21.0): each option states the number the plan gives its label, so the column is the same.
+  const labelValue = ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: 100000000 + i })));
+  assertPass(grade(TICKET_CHOICES, withInput(labelValue)));
+  assertPass(grade(TICKET_CHOICES, withInput(ticketInput([{ value: 100000000, label: { 1033: 'Low', 1036: 'Bas' } }, 'Medium', 'High', 'Critical']))));
+  // ... but a number the plan does not give that label renumbers the column, and a malformed option is refused by the plugin's gate.
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: i + 1 }))))),
+    /ticket priority options are .*, but the plan numbers Low, Medium, High, Critical from 100000000/);
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput([{ label: 'Low', value: 100000000, color: 'red' }, 'Medium', 'High', 'Critical']))),
+    /provision-entities\.js refuses the captured input: .*options\[0\] must have exactly 'value' and 'label' \(unknown color\)/);
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput(['Medium', 'Low', 'High', 'Critical']))), /ticket priority options are "Medium", "Low", "High", "Critical", but the plan numbers Low, Medium, High, Critical from 100000000/);
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput(undefined, ['Open', 'Resolved', 'Closed']))), /ticket status options are .*, but the plan numbers Open, In Progress, Resolved, Closed/);
+  const noStatus = ticketInput();
+  noStatus.entities[0].columns.splice(1, 1);
+  assertFail(grade(TICKET_CHOICES, withInput(noStatus)), /declares no ticket status column/);
+  const textStatus = ticketInput();
+  textStatus.entities[0].columns[1] = { schemaName: 'cr_Status', displayName: 'Status', type: 'Text' };
+  assertFail(grade(TICKET_CHOICES, withInput(textStatus)), /ticket status is Text, not a Choice column/);
+  assertFail(grade(TICKET_CHOICES, withInput('{ not json')), /provision-input\.json is not JSON/);
+  assertFail(grade(TICKET_CHOICES, { ...withInput(ticketInput()), workflowLog: committed(E15).workflowLog.replace('--input @D:/temp/support-tickets/provision-input.json ', '') }), /not run with --input <json>/);
+});
+
+test('eval 15: a capture that did not keep its input JSON is skipped, and a current fixture without it fails', () => {
+  assertSkip(grade(TICKET_CHOICES, committed(E15)), /provision-input\.json was not captured/);
+  assertFail(grade(TICKET_CHOICES, { ...committed(E15), contractVersion: 2, manifest: { contractVersion: 2, provenance: 'synthetic' } }), /provision-input\.json was not captured/);
+});
+
+// A table is provisioned by a run that APPLIED its input: provision-entities.js without --apply only plans, writes nothing, and answers
+//   { "ok": true, "dryRun": true, "plan": [ … ] }
+// so such a run is no provisioning, however good its input. The input graded is the one the applying run was handed, not a preview's.
+function provisionedBy(events, artifacts) {
+  return { ...committed(E15), contractVersion: 2, manifest: { contractVersion: 2, provenance: 'synthetic' }, artifacts: { ...committed(E15).artifacts, ...artifacts }, events };
+}
+const provisionRun = (id, input, flags, result) => ({ id, command: `node scripts/provision-entities.js --env https://contoso.crm.dynamics.com --input @${input}${flags}`, result });
+
+test('eval 15: a dry run of provision-entities.js provisions nothing, and the input graded is the applying run\'s', () => {
+  const good = JSON.stringify(ticketInput());
+  const labelValue = JSON.stringify(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: i + 1 }))));
+  const applied = { ok: true, entities: [{ schemaName: 'cr_Ticket', logicalName: 'cr_ticket', entitySetName: 'cr_tickets' }] };
+  const planned = { ok: true, dryRun: true, plan: [{ step: 'createTable', schemaName: 'cr_Ticket' }] };
+  assertPass(grade(TICKET_CHOICES, provisionedBy([provisionRun('apply', 'provision-input.json', ' --apply', applied)], { 'provision-input.json': good })));
+  // Planned only: no --apply, and the CLI's own dry-run answer.
+  assertFail(grade(TICKET_CHOICES, provisionedBy([provisionRun('plan', 'provision-input.json', '', planned)], { 'provision-input.json': good })),
+    /provision-entities\.js was not run with --input <json> --apply/);
+  // An answer that says it was a dry run is no apply, whatever flags were recorded with it.
+  assertFail(grade(TICKET_CHOICES, provisionedBy([provisionRun('apply', 'provision-input.json', ' --apply', planned)], { 'provision-input.json': good })),
+    /provision-entities\.js was not run with --input <json> --apply/);
+  // A preview with another input file, then the apply: the apply's input decides — either way round.
+  const previewThenApply = [provisionRun('plan', 'preview-input.json', '', planned), provisionRun('apply', 'provision-input.json', ' --apply', applied)];
+  assertPass(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': labelValue, 'provision-input.json': good })));
+  assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good, 'provision-input.json': labelValue })),
+    /ticket priority options are .*, but the plan numbers Low, Medium, High, Critical from 100000000/);
+  // The applying run's input was not kept: a current fixture fails, though the preview's was.
+  assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good })), /provision-input\.json was not captured/);
 });
 
 // --- Eval 19 -----------------------------------------------------------------------------------

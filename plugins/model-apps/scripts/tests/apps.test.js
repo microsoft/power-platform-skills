@@ -33,6 +33,8 @@ const world = (overrides = {}) => ({
   language: 1033,
   push: { type: 'app', id: APP_ID, saved: true, shipped: false, publish: { kind: 'notRequested' } },
   publishResult: { type: 'app', id: APP_ID, shipped: false, publish: { kind: 'submitted' } },
+  // The ObjectTypeCode of the page table (`uxagentproject`), which the environment allocates; `null`: its metadata cannot be read (HTTP 503).
+  pageType: 10372,
   ...overrides,
 });
 const appRow = (overrides = {}) => ({ appmoduleid: '77777777-7777-4777-8777-777777777777', name: 'Contoso Sales', uniquename: 'contoso_sales', description: null, componentstate: 0, ...overrides });
@@ -85,6 +87,12 @@ async function run(argv, w = world(), hooks = {}, deps = {}) {
           if (/^\/sitemaps\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(p)) {
             const name = /sitemapnameunique eq '([^']*)'/.exec(p);
             return answer(sitemapsNow().filter((s) => name && s.sitemapnameunique.toLowerCase() === name[1].toLowerCase()));
+          }
+          // The page table's component type, as the platform answers it: { "ObjectTypeCode": 10372, … }. The SDK's client answers an HTTP failure, it does not throw it.
+          if (p === "/EntityDefinitions(LogicalName='uxagentproject')?$select=ObjectTypeCode") {
+            return w.pageType === null
+              ? { status: 503, headers: {}, body: { error: { code: '0x80040216', message: 'the metadata service is busy' } } }
+              : { status: 200, headers: {}, body: { ObjectTypeCode: w.pageType, MetadataId: '66666666-6666-4666-8666-666666666666' } };
           }
           throw new Error(`unexpected read ${p}`);
         },
@@ -232,6 +240,7 @@ async function run(argv, w = world(), hooks = {}, deps = {}) {
 }
 
 const CREATE = ['create', '--env', ENV, '--name', 'Account Metrics', '--solution', 'ContosoCore', '--page-id', PAGE_A];
+const BOTH_PAGES_IN_SOLUTION = ['create', '--env', ENV, '--name', 'Two Pages', '--solution', 'ContosoCore', '--page-id', `${PAGE_A},${PAGE_B}`];
 const without = (argv, flag) => { const i = argv.indexOf(flag); return i === -1 ? argv : [...argv.slice(0, i), ...argv.slice(i + 2)]; };
 
 // --- the command line ------------------------------------------------------------------------------------------
@@ -525,7 +534,7 @@ test('the throwaway workspace is removed after a list, after one that failed, an
 
 // --- create: the writes ------------------------------------------------------------------------------------------
 
-test('create reads, then writes in order — the app and its sitemap, the app and the sitemap into the solution — and publishes only with --publish', async () => {
+test('create reads, then writes in order — the app and its sitemap, the app, the sitemap and the page into the solution — and publishes only with --publish', async () => {
   const r = await run(CREATE, world({ language: 3082 }));
   assert.strictEqual(r.exitCode, 0, r.stderr);
   // Every read comes before the first write, and the reads are the ones the checks need.
@@ -533,13 +542,14 @@ test('create reads, then writes in order — the app and its sitemap, the app an
   assert.ok(r.events.slice(0, firstWrite).every((e) => e.type !== 'write'));
   assert.deepStrictEqual(r.events.filter((e) => e.type === 'read').map((e) => e.what.replace(/\?.*$/, '')), [
     'queryRecords solution',
+    "/EntityDefinitions(LogicalName='uxagentproject')",
     '/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()',
     'resolveArtifact app',
     '/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()',
     'queryRecords organization',
     `genpage describe ${PAGE_A}`,
   ]);
-  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent']);
+  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent', 'addSolutionComponent']);
   assert.ok(!r.writeNames.includes('publishArtifact'), 'no publish without --publish');
 
   // Two SDKs over one workspace: the first reads, in no particular language; the second writes, in the environment's base language.
@@ -566,6 +576,7 @@ test('create reads, then writes in order — the app and its sitemap, the app an
   assert.deepStrictEqual(adds, [
     { componentId: APP_ID, componentType: 80, solutionUniqueName: 'ContosoCore' },
     { componentId: def.sitemapId, componentType: 62, solutionUniqueName: 'ContosoCore' },
+    { componentId: PAGE_A, componentType: 10372, solutionUniqueName: 'ContosoCore', addRequiredComponents: true },
   ]);
   assert.deepStrictEqual(r.payload, {
     ok: true,
@@ -576,7 +587,7 @@ test('create reads, then writes in order — the app and its sitemap, the app an
     unpublishedChanges: true,
     solution: 'ContosoCore',
     addedToSolution: true,
-    inSolution: ['app', 'sitemap'],
+    inSolution: ['app', 'sitemap', 'pages'],
     sitemapId: def.sitemapId,
     languageCode: 3082,
     navigation: { area: 'Main', group: 'Pages', pages: [{ pageId: PAGE_A, title: 'Overview' }] },
@@ -590,8 +601,8 @@ test('create reads, then writes in order — the app and its sitemap, the app an
 test('create --publish publishes the app last, once, by the id the push answered with, and reports it published with nothing left unpublished', async () => {
   const r = await run([...CREATE, '--publish']);
   assert.strictEqual(r.exitCode, 0, r.stderr);
-  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent', 'publishArtifact']);
-  assert.deepStrictEqual(r.writes[5].detail, { type: 'app', id: APP_ID });
+  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent', 'addSolutionComponent', 'publishArtifact']);
+  assert.deepStrictEqual(r.writes[6].detail, { type: 'app', id: APP_ID });
   assert.strictEqual(r.def.published, false, 'still created as a draft: the explicit publish is what ships it');
   assert.deepStrictEqual([r.payload.published, r.payload.unpublishedChanges], [true, false], 'a publish takes the saved row into the published layer');
 });
@@ -729,7 +740,7 @@ test('a system solution (Default, Active, Basic) holds every component already: 
   }
   // A solution of the author's own is added to, and is not a system solution.
   const own = await run(CREATE);
-  assert.deepStrictEqual([own.payload.addedToSolution, own.payload.inSolution], [true, ['app', 'sitemap']]);
+  assert.deepStrictEqual([own.payload.addedToSolution, own.payload.inSolution], [true, ['app', 'sitemap', 'pages']]);
   assert.ok(!('systemSolution' in own.payload), 'the flag is there only when it is true');
 });
 
@@ -738,6 +749,60 @@ test('a failure after the push into a system solution says the same: nothing was
   const r = await run(['create', '--env', ENV, '--name', 'A', '--solution', 'Default', '--page-id', PAGE_A, '--publish'], w);
   assert.strictEqual(r.exitCode, 1);
   assert.deepStrictEqual([r.payload.stage, r.payload.addedToSolution, r.payload.inSolution, r.payload.systemSolution], ['publish', false, [], true]);
+});
+
+// --- create: the pages join the solution with the app (AB#6443257) ------------------------------------------------------------
+// The add of an app brings its sitemap, never the pages its navigation opens, so an app made around pages "into" a solution left the pages out of it: the solution then
+// exported an app whose navigation opens pages the target environment does not have. Each page is added explicitly, as a component of the page table's own type, which
+// the environment allocates and is read — never assumed — before anything is written.
+
+test('create adds every page it opens on to the solution, after the app and its sitemap, as a component of the page table\u2019s type read from the environment, bringing its files with it', async () => {
+  const r = await run(BOTH_PAGES_IN_SOLUTION, world({ pageType: 10380 }));
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  const adds = r.writes.filter((e) => e.what === 'addSolutionComponent').map((e) => e.detail);
+  assert.deepStrictEqual(adds, [
+    { componentId: APP_ID, componentType: 80, solutionUniqueName: 'ContosoCore' },
+    { componentId: r.def.sitemapId, componentType: 62, solutionUniqueName: 'ContosoCore' },
+    { componentId: PAGE_A, componentType: 10380, solutionUniqueName: 'ContosoCore', addRequiredComponents: true },
+    { componentId: PAGE_B, componentType: 10380, solutionUniqueName: 'ContosoCore', addRequiredComponents: true },
+  ]);
+  assert.deepStrictEqual(r.held.map((h) => [h.componentId, h.componentType]), [[APP_ID, 80], [r.def.sitemapId, 62], [PAGE_A, 10380], [PAGE_B, 10380]], 'what the solution now holds');
+  assert.deepStrictEqual([r.payload.addedToSolution, r.payload.inSolution], [true, ['app', 'sitemap', 'pages']]);
+  // The type is read once, with the checks, before the first write.
+  const typeReads = r.events.filter((e) => e.type === 'read' && /EntityDefinitions/.test(e.what));
+  assert.strictEqual(typeReads.length, 1);
+  assert.ok(r.events.indexOf(typeReads[0]) < r.events.findIndex((e) => e.type === 'write'), 'read before anything is written');
+});
+
+test('a page that cannot join the solution fails the create at the solution stage: the app and its sitemap joined, the pages did not, and nothing is published', async () => {
+  const r = await run([...BOTH_PAGES_IN_SOLUTION, '--publish'], world(), { addSolutionComponent: (o) => { if (o.componentId === PAGE_B) throw new Error('the page could not be added'); } });
+  assert.strictEqual(r.exitCode, 1);
+  assert.deepStrictEqual(r.payload, draftLeft(r, { error: 'the page could not be added', stage: 'solution', addedToSolution: false, inSolution: ['app', 'sitemap'] }));
+  assert.deepStrictEqual(r.held.map((h) => h.componentId), [APP_ID, r.def.sitemapId, PAGE_A], 'the first page joined before the second failed');
+  assert.ok(!r.writeNames.includes('publishArtifact'), 'a publish is never attempted over a half-joined solution');
+});
+
+test('the page table\u2019s component type is read before anything is written: an environment that cannot answer it refuses the create, with nothing made', async () => {
+  const r = await run(CREATE, world({ pageType: null }));
+  assert.strictEqual(r.exitCode, 1);
+  assert.strictEqual(r.payload.code, 'GENPAGE_COMPONENT_TYPE_UNRESOLVED');
+  assert.match(r.payload.error, /the solution component type of a generative page could not be read \(HTTP 503: the metadata service is busy\)/);
+  assert.strictEqual(r.payload.written, false);
+  assert.deepStrictEqual(r.writes, []);
+  // An answer that holds no usable type is refused the same way: a page added under a wrong type joins as some other component, or as nothing.
+  for (const pageType of [0, -5, 'abc', 1.5]) {
+    const odd = await run(CREATE, world({ pageType }));
+    assert.strictEqual(odd.payload.code, 'GENPAGE_COMPONENT_TYPE_UNRESOLVED', String(pageType));
+    assert.deepStrictEqual(odd.writes, [], String(pageType));
+  }
+});
+
+test('a system solution needs no add and no read of the page table\u2019s type: the create is made exactly as before', async () => {
+  const r = await run(['create', '--env', ENV, '--name', 'A', '--solution', 'Default', '--page-id', PAGE_A], world({ solutions: [solution({ uniquename: 'Default' })], pageType: null }));
+  assert.strictEqual(r.exitCode, 0, r.stderr);
+  assert.ok(!r.events.some((e) => e.type === 'read' && /EntityDefinitions/.test(e.what)), 'the type is not read');
+  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact']);
+  assert.deepStrictEqual([r.payload.addedToSolution, r.payload.inSolution, r.payload.systemSolution], [false, [], true]);
 });
 
 test('the SDK\u2019s notes on a push that succeeded are in the output and on stderr, not lost', async () => {
@@ -772,8 +837,8 @@ test('create pins the default public view of every table the pages read — each
   assert.deepStrictEqual(reads.slice(-3), [`genpage describe ${PAGE_A}`, `genpage describe ${PAGE_B}`, 'genpage defaultViews']);
   assert.deepStrictEqual(r.events.find((e) => e.what === 'genpage defaultViews').detail, ['account', 'contact', 'task']);
   assert.ok(r.events.findIndex((e) => e.what === 'genpage defaultViews') < r.events.findIndex((e) => e.what === 'initWorkspace'), 'before the first write');
-  // The views are part of the create's one push: no later write adds them.
-  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent']);
+  // The views are part of the create's one push: no later write adds them (the adds after it are the app, its sitemap and its two pages joining the solution).
+  assert.deepStrictEqual(r.writeNames, ['initWorkspace', 'createArtifact', 'pushArtifact', 'addSolutionComponent', 'addSolutionComponent', 'addSolutionComponent', 'addSolutionComponent']);
 });
 
 test('the page backend the create reads the tables through is the page backend\'s own, made once for the environment, and disposed — bounded — whichever way the create ends', async () => {
@@ -1143,7 +1208,7 @@ test('a push the SDK reported as saved wrote both rows, so a read-back that cann
   const failedPublish = world({ publishResult: { type: 'app', id: APP_ID, shipped: false, publish: { kind: 'failed', error: new Error('another publish is running') } } });
   for (const [stage, w, argv, error, joined] of [
     ['solution', world(), CREATE, 'the app could not be added', []],
-    ['publish', failedPublish, [...CREATE, '--publish'], 'another publish is running', ['app', 'sitemap']],
+    ['publish', failedPublish, [...CREATE, '--publish'], 'another publish is running', ['app', 'sitemap', 'pages']],
   ]) {
     let armed = false;
     const r = await run(argv, w, {
@@ -1163,7 +1228,7 @@ test('a push the SDK reported as saved wrote both rows, so a read-back that cann
       left: { app: true, sitemap: true },
       lookFor: { uniqueName: r.payload.uniqueName, appId: APP_ID, sitemapId: r.def.sitemapId },
       readBackError: refused.message,
-      addedToSolution: joined.length === 2,
+      addedToSolution: joined.length === 3,
       inSolution: joined,
     }, stage);
     assert.ok(!('published' in r.payload), `${stage}: the platform could not be asked, so nothing is said of whether the app is published`);
@@ -1215,7 +1280,7 @@ test('a failure between the two solution adds says which component is in the sol
   const r = await run([...CREATE, '--publish'], world(), { addSolutionComponent: () => { adds += 1; if (adds === 2) throw new Error('the sitemap could not be added'); } });
   assert.strictEqual(r.exitCode, 1);
   assert.deepStrictEqual(r.payload, draftLeft(r, { error: 'the sitemap could not be added', stage: 'solution', addedToSolution: false, inSolution: ['app'] }));
-  // What the platform holds: the app joined the solution, its sitemap did not. `addedToSolution` is true only when both did.
+  // What the platform holds: the app joined the solution, its sitemap did not (nor its page). `addedToSolution` is true only when all of them did.
   assert.deepStrictEqual(r.held, [{ componentId: APP_ID, componentType: 80, solution: 'ContosoCore' }]);
   assert.ok(!r.writeNames.includes('publishArtifact'), 'a publish is never attempted over a half-joined solution');
   assert.strictEqual(r.writeNames.filter((n) => n === 'addSolutionComponent').length, 2);
@@ -1228,12 +1293,12 @@ test('a failure of the app\u2019s own add leaves nothing in the solution, and sa
   assert.strictEqual(r.writeNames.filter((n) => n === 'addSolutionComponent').length, 1, 'the sitemap is not tried after the app failed');
 });
 
-test('a publish the SDK reports as failed is a failure at the publish stage, the app and its sitemap already in the solution, and still a draft', async () => {
+test('a publish the SDK reports as failed is a failure at the publish stage, the app, its sitemap and its page already in the solution, and still a draft', async () => {
   const w = world({ publishResult: { type: 'app', id: APP_ID, shipped: false, publish: { kind: 'failed', error: Object.assign(new Error('another publish is running'), { code: 'CONNECTION_ERROR' }) } } });
   const r = await run([...CREATE, '--publish'], w);
   assert.strictEqual(r.exitCode, 1);
-  assert.deepStrictEqual(r.payload, draftLeft(r, { code: 'CONNECTION_ERROR', error: 'another publish is running', stage: 'publish', addedToSolution: true, inSolution: ['app', 'sitemap'] }));
-  assert.deepStrictEqual(r.held.map((component) => component.componentType), [80, 62]);
+  assert.deepStrictEqual(r.payload, draftLeft(r, { code: 'CONNECTION_ERROR', error: 'another publish is running', stage: 'publish', addedToSolution: true, inSolution: ['app', 'sitemap', 'pages'] }));
+  assert.deepStrictEqual(r.held.map((component) => component.componentType), [80, 62, 10372]);
 });
 
 test('a publish the SDK reports as failed that the platform in fact took is published — the read-back, not the SDK\u2019s word, says what is there', async () => {
@@ -1244,7 +1309,7 @@ test('a publish the SDK reports as failed that the platform in fact took is publ
       return { publish: { kind: 'failed', error: new Error('the publish was submitted but could not be confirmed') } };
     },
   });
-  assert.deepStrictEqual(r.payload, draftLeft(r, { error: 'the publish was submitted but could not be confirmed', stage: 'publish', addedToSolution: true, inSolution: ['app', 'sitemap'], published: true, unpublishedChanges: false }));
+  assert.deepStrictEqual(r.payload, draftLeft(r, { error: 'the publish was submitted but could not be confirmed', stage: 'publish', addedToSolution: true, inSolution: ['app', 'sitemap', 'pages'], published: true, unpublishedChanges: false }));
 });
 
 test('the SDK\u2019s notes on the push are kept when the run fails after it — in the output and on stderr — at the solution stage, the publish stage and for a push not saved', async () => {

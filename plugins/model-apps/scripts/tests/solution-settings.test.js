@@ -2,6 +2,9 @@
 // scripts/solution-settings.js — deployment settings for a solution: the CLI contract, the checks made before any request, the SDK calls and
 // pac's defaults, which refusals fall back to pac and which do not, the long-running-action client, and what the sanitizer keeps out of what is printed (and what it leaves).
 // The SDK and pac are stood in for here; tests/solution-settings-real-bundle.test.js drives the real bundle and the real script.
+// This file checks where lib/temp-workspace.js makes a workspace, so it works in a temp folder of its own (helpers/own-temp-folder.js): in the
+// suite's shared one, other test processes make and remove the plugin's workspace folder. Required first, so every path below is inside it.
+require('./helpers/own-temp-folder.js');
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -489,10 +492,11 @@ test('the limits the skill, AGENTS.md and the CHANGELOG state are the limits the
       /is found only as a whole word, so it is printed when glued to letters, digits, marks or underscores or written inside an escape the sanitizer does not decode/,
       /quoted in part, hashed, base64-encoded, written as an HTML entity beyond XML's five, Unicode-normalized or nested in more than three levels of encoding is not recognised/,
     ]],
+    // The CHANGELOG names the same limits in fewer words: an entry there holds at most 300 (changelog-brevity.test.js).
     ['CHANGELOG.md', read('CHANGELOG.md'), [
-      /quoted in part, hashed, base64-encoded, written as an HTML entity beyond XML's five, normalized in its Unicode by a service, or nested in more than three levels of encoding/,
-      /a value of fewer than six characters that is known not to be a secret, which is printed wherever a text quotes it/,
-      /a value of fewer than six characters with no recorded type that a text glues to letters, digits, marks or underscores or writes inside an escape the sanitizer does not read/,
+      /values partly quoted, hashed, base64-encoded, Unicode-normalized, nested over three encodings or written with HTML entities beyond XML's five/,
+      /non-secret values under six characters/,
+      /untyped ones under six glued to letters, digits, marks or underscores or inside an undecoded escape/,
     ]],
     ['AGENTS.md', read('AGENTS.md'), [
       /the SDK's account of which entry is wrong \(it names entries, never values\) stays readable unless the value is itself a whole word of that sentence \(see below\)/,

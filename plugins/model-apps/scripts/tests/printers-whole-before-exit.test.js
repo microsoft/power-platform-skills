@@ -256,26 +256,26 @@ test('genpage-worker-output.js prints a result that quotes the longest path a co
 
 // ── Every script's own usage error ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-// The script, the arguments that reach its flag check (a verb where it takes one), and the environment it needs to get there.
+// The script, and the arguments that reach its flag check (a verb where it takes one).
 const USAGE_CASES = [
   ['add-page-to-solution.js'], ['ai-preflight.js'], ['apps.js', ['list']], ['build-model-app.js'], ['connector.js', ['operations']],
   ['create-connection-reference.js'], ['dataverse-request.js'], ['download-model-app.js'], ['genpage.js', ['list']], ['list-connections.js'],
-  ['list-custom-apis.js', [], { GENPAGE_ENABLE_CUSTOM_API: '1' }], ['list-languages.js'], ['list-tables.js'], ['preview-app.js'], ['preview-form.js'],
+  ['list-custom-apis.js'], ['list-languages.js'], ['list-tables.js'], ['preview-app.js'], ['preview-form.js'],
   ['promote-intent-pages.js'], ['provision-entities.js'], ['provision-solution.js'], ['solution-settings.js', ['template']], ['teardown-model-app.js'],
   ['verify-model-app.js'], ['write-app-spec-doc.js'], ['write-page-plan.js'],
-].map(([script, args = [], env = {}]) => ({ script, args, env }));
+].map(([script, args = []]) => ({ script, args }));
 
 test('every script prints a usage error that quotes a message of a megabyte whole on stderr, with exit 1 — through both kinds of stream', async () => {
   const text = hugeFailureText('flag', BIG);
-  await eachAtOnce(USAGE_CASES, ({ script, args, env }) => assertWholeBothWays([path.join(SCRIPTS, script), ...args], {
-    preloads: [HUGE], env: { ...env, HUGE_FAILURE: 'flag', HUGE_FAILURE_SIZE: String(BIG) }, status: 1, stream: 'stderr', text: `✗ ${text}\n`,
+  await eachAtOnce(USAGE_CASES, ({ script, args }) => assertWholeBothWays([path.join(SCRIPTS, script), ...args], {
+    preloads: [HUGE], env: { HUGE_FAILURE: 'flag', HUGE_FAILURE_SIZE: String(BIG) }, status: 1, stream: 'stderr', text: `✗ ${text}\n`,
   }, script).then(({ queued }) => assert.equal(queued.stdout, '', `${script}: nothing on stdout`)));
 });
 
 test('every script\'s usage error is what it always was: the message, then the usage text, on stderr, with exit 1', async () => {
   const text = hugeFailureText('flag', 10);
-  await eachAtOnce(USAGE_CASES, async ({ script, args, env }) => {
-    const ran = await runScript([path.join(SCRIPTS, script), ...args], { preloads: [HUGE], env: { ...env, HUGE_FAILURE: 'flag', HUGE_FAILURE_SIZE: '10' } });
+  await eachAtOnce(USAGE_CASES, async ({ script, args }) => {
+    const ran = await runScript([path.join(SCRIPTS, script), ...args], { preloads: [HUGE], env: { HUGE_FAILURE: 'flag', HUGE_FAILURE_SIZE: '10' } });
     assert.equal(ran.status, 1, `${script}: ${ran.own}${ran.stderr}`);
     assert.equal(ran.stdout, '', `${script}: nothing on stdout`);
     assert.match(ran.stderr, new RegExp(`^✗ ${text.replace(/[<>]/g, '\\$&')}\\n\\S[^]*\\n$`), `${script}: ${JSON.stringify(ran.stderr.slice(0, 200))}`);

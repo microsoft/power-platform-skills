@@ -447,7 +447,7 @@ const CONTRACT = {
   },
   'genpage-upload.js': {
     flags: ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file', 'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message',
-      'agent-message-file', 'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed'],
+      'agent-message-file', 'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed', 'solution', 'app-dir'],
   },
   // The page verbs the skills ran through `pac model genpage`; the table is the script's own VERBS (checked below).
   'genpage.js': {
@@ -455,9 +455,10 @@ const CONTRACT = {
       list: ['env', 'app-id', 'include-unpublished'],
       download: ['env', 'page-id', 'output-directory', 'app-id'],
       types: ['env', 'data-sources', 'output-file', 'detail'],
-      'add-to-app': ['env', 'app-id', 'page-id', 'title'],
-      'remove-from-app': ['env', 'app-id', 'page-id', 'allow-empty-navigation'],
+      'add-to-app': ['env', 'app-id', 'page-id', 'title', 'draft', 'app-dir'],
+      'remove-from-app': ['env', 'app-id', 'page-id', 'allow-empty-navigation', 'draft', 'app-dir'],
       delete: ['env', 'page-id', 'allow-destructive'],
+      'prepare-compiler-refresh': ['env', 'page-id', 'file', 'expected-base-sha256', 'output-file'],
     },
   },
 };
@@ -627,7 +628,7 @@ test('the genpage skill creates a new app from its first page: no app in Phase 3
   assert.match(newApp, /node "\$\{PLUGIN_ROOT\}\/scripts\/apps\.js" create ` --env '<org-url>' ` --name '<App Name>' ` --solution '<Solution unique name>' ` --page-id '<first-page-id>' ` --publish/);
   assert.match(newApp, /\*\*`--publish` is mandatory:\*\* without it the new app stays in draft/);
   assert.match(newApp, /a create into `Default` needs no add and did not fail/);
-  assert.match(newApp, /Upload each with `--app-id '<appId>'` and `--add-to-sitemap`/);
+  assert.match(newApp, /Upload each with `--app-id '<appId>'`, `--add-to-sitemap` and `--solution`/);
   // The create itself pins the default public view of each table the first page reads — so there is no step 4 of re-uploading the page to pin them, and no `record` of the new app's
   // id to make that re-upload possible: a page with no app is recorded with the page alone (genpage-base.test.js), and the first update that names the app records it
   // (genpage-upload.test.js, "the new-app flow"). apps.js create's own tests (apps.test.js, apps-real-bundle.test.js) pin that it pins them.

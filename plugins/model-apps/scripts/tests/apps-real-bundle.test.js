@@ -184,6 +184,7 @@ test('REAL BUNDLE: create without --publish writes the app, its sitemap and the 
     'POST appsettings',
     'POST AddSolutionComponent',
     'POST AddSolutionComponent',
+    'POST AddSolutionComponent',
   ]);
   assert.deepStrictEqual(org.unexpected, []);
   assert.deepStrictEqual(org.state.publishes, [], 'the SDK published nothing inside the create');
@@ -214,9 +215,9 @@ test('REAL BUNDLE: create --publish adds exactly one PublishXml, naming the app,
   const names = org.writeNames();
   assert.deepStrictEqual(names.filter((n) => n === 'POST PublishXml'), ['POST PublishXml']);
   assert.strictEqual(names[names.length - 1], 'POST PublishXml', 'the last write');
-  // The sequence, in order: the app row, the sitemap, the app and the sitemap into the solution, the publish.
+  // The sequence, in order: the app row, the sitemap, the app, the sitemap and the page into the solution, the publish.
   const key = names.filter((n) => ['POST appmodules', 'POST sitemaps', 'POST AddSolutionComponent', 'POST PublishXml'].includes(n));
-  assert.deepStrictEqual(key, ['POST appmodules', 'POST sitemaps', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST PublishXml']);
+  assert.deepStrictEqual(key, ['POST appmodules', 'POST sitemaps', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST PublishXml']);
   assert.deepStrictEqual(org.state.publishes, [result.appId], 'the publish names the app');
   assert.strictEqual(org.state.apps[0].componentstate, 0, 'the app is now published');
   assert.strictEqual(result.published, true);
@@ -227,11 +228,11 @@ test('REAL BUNDLE: create --publish adds exactly one PublishXml, naming the app,
   assert.ok(firstWrite >= 6, 'the script asked about the solution, the pages, the unique name and the language first');
 });
 
-test('REAL BUNDLE: what the platform holds after a create — the app row, the sitemap\u2019s name and id, and the solution\u2019s two components', async () => {
+test('REAL BUNDLE: what the platform holds after a create — the app row, the sitemap\u2019s name and id, and the solution\u2019s three components', async () => {
   const org = orgWithPages();
   const result = await createApp(args({ description: 'KPIs for the team', publish: true }), client(org), seams);
   assert.deepStrictEqual(Object.keys(result).sort(), ['addedToSolution', 'appId', 'dataSources', 'inSolution', 'languageCode', 'name', 'navigation', 'ok', 'pinnedViews', 'published', 'sitemapId', 'solution', 'uniqueName', 'unpublishedChanges']);
-  assert.deepStrictEqual([result.published, result.unpublishedChanges, result.inSolution], [true, false, ['app', 'sitemap']]);
+  assert.deepStrictEqual([result.published, result.unpublishedChanges, result.inSolution], [true, false, ['app', 'sitemap', 'pages']]);
   assert.strictEqual(result.uniqueName, 'account_metrics_1a2b3c4d');
   assert.match(result.appId, GUID);
   assert.match(result.sitemapId, GUID);
@@ -254,9 +255,12 @@ test('REAL BUNDLE: what the platform holds after a create — the app row, the s
   assert.deepStrictEqual(org.state.components, [
     { solution: 'ContosoCore', objectid: result.appId, type: 80 },
     { solution: 'ContosoCore', objectid: result.sitemapId, type: 62 },
+    // The page, as a component of the page table's type the environment answered (lib/page-solution.js), with its files: AddRequiredComponents.
+    { solution: 'ContosoCore', objectid: PAGE_A, type: 10372 },
   ]);
   const addComponent = org.requests.filter((r) => r.path === '/AddSolutionComponent').map((r) => r.body);
-  assert.ok(addComponent.every((b) => b.AddRequiredComponents === false && b.SolutionUniqueName === 'ContosoCore'));
+  assert.deepStrictEqual(addComponent.map((b) => b.AddRequiredComponents), [false, false, true]);
+  assert.ok(addComponent.every((b) => b.SolutionUniqueName === 'ContosoCore'));
 });
 
 const SUB_AREA = /<SubArea\b[^>]*>/g;
@@ -337,8 +341,8 @@ test('REAL BUNDLE: create reads each page\'s tables and their default public vie
   const components = JSON.stringify(bodies[0]).toLowerCase();
   for (const view of [VIEW_ACCOUNT, VIEW_CONTACT]) assert.ok(components.includes(view), `AddAppComponents names the view ${view}: ${components}`);
   assert.ok(components.includes(result.sitemapId), 'and the sitemap');
-  // The same writes as a create with no views: nothing was added to the sequence.
-  assert.deepStrictEqual(org.writeNames(), ['POST appmodules', 'POST sitemaps', 'POST AddAppComponents', 'POST appmodules/appmoduleroles_association/$ref', 'POST appsettings', 'POST AddSolutionComponent', 'POST AddSolutionComponent']);
+  // The same writes as a create with no views: nothing was added to the sequence (the solution adds are the app, its sitemap and its two pages).
+  assert.deepStrictEqual(org.writeNames(), ['POST appmodules', 'POST sitemaps', 'POST AddAppComponents', 'POST appmodules/appmoduleroles_association/$ref', 'POST appsettings', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST AddSolutionComponent']);
   assert.deepStrictEqual(org.unexpected, []);
 });
 
@@ -407,7 +411,7 @@ test('REAL BUNDLE: two apps of one display name get two unique names, and the se
   assert.strictEqual(org.state.apps.length, 2, 'the refused create wrote nothing');
 });
 
-test('REAL BUNDLE: a system solution gets no AddSolutionComponent, and a normal one gets both, case aside', async () => {
+test('REAL BUNDLE: a system solution gets no AddSolutionComponent, and a normal one gets the app, its sitemap and its page, case aside', async () => {
   const system = createFakeAppsOrg({ solutions: [{ solutionid: '11111111-1111-4111-8111-111111111111', uniquename: 'Default', friendlyname: 'Default Solution', ismanaged: false }], pages: [{ id: PAGE_A, name: 'Overview' }] });
   const r = await createApp(args({ solution: 'default', publish: true }), client(system));
   assert.strictEqual(r.ok, true, JSON.stringify(r));
@@ -415,8 +419,26 @@ test('REAL BUNDLE: a system solution gets no AddSolutionComponent, and a normal 
   assert.ok(!system.writeNames().includes('POST AddSolutionComponent'));
   const org = orgWithPages();
   const lower = await createApp(args({ solution: 'CONTOSOCORE' }), client(org));
-  assert.deepStrictEqual([lower.solution, lower.addedToSolution, lower.inSolution, org.state.components.length], ['ContosoCore', true, ['app', 'sitemap'], 2]);
+  assert.deepStrictEqual([lower.solution, lower.addedToSolution, lower.inSolution, org.state.components.length], ['ContosoCore', true, ['app', 'sitemap', 'pages'], 3]);
   assert.ok(!('systemSolution' in lower), 'a solution of the author\u2019s own is not a system solution');
+  assert.ok(!system.requests.some((req) => /EntityDefinitions\(LogicalName='uxagentproject'\)/.test(req.path)), 'a system solution needs no page type: it is not read');
+});
+
+// The add of an app brings its sitemap, never the pages its navigation opens (AB#6443257): each page is added on its own, as a component of the type the environment
+// allocates for the page table — read, not assumed — and with its required components, which are its file rows.
+test('REAL BUNDLE: each page joins the solution after the app and its sitemap, as the page table\u2019s own component type with its files — the request the platform is sent', async () => {
+  const org = orgWithPages({ pageType: 10399 });
+  const result = await createApp(args({ pageIds: [PAGE_B, PAGE_A] }), client(org), seams);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
+  const typeRead = org.requests.findIndex((req) => req.method === 'GET' && req.path === "/EntityDefinitions(LogicalName='uxagentproject')?$select=ObjectTypeCode");
+  assert.ok(typeRead >= 0 && typeRead < org.requests.findIndex((req) => req.method !== 'GET'), 'the type is read, before the first write');
+  const adds = org.requests.filter((req) => req.path === '/AddSolutionComponent').map((req) => req.body);
+  assert.deepStrictEqual(adds.slice(2), [
+    { ComponentId: PAGE_B, ComponentType: 10399, SolutionUniqueName: 'ContosoCore', AddRequiredComponents: true },
+    { ComponentId: PAGE_A, ComponentType: 10399, SolutionUniqueName: 'ContosoCore', AddRequiredComponents: true },
+  ]);
+  assert.deepStrictEqual(adds.slice(0, 2).map((b) => b.ComponentType), [80, 62], 'the app and its sitemap first');
+  assert.deepStrictEqual(org.unexpected, []);
 });
 
 // --- create: refusals write nothing ------------------------------------------------------------------------------------
@@ -801,14 +823,14 @@ test('REAL BUNDLE: the SDK\u2019s own warning on the push — the role it could 
   assert.match(result.warnings[0], /^App roles: could not associate the 'System Administrator' role with the app .*role association refused.*not be visible or playable until a role is granted access to it\.$/);
 });
 
-test('REAL BUNDLE: a publish the platform refuses fails at the publish stage with the app and its sitemap already in the solution, and the app still a draft', async () => {
+test('REAL BUNDLE: a publish the platform refuses fails at the publish stage with the app, its sitemap and its page already in the solution, and the app still a draft', async () => {
   const org = orgWithPages({ answer: (req) => (req.path === '/PublishXml' ? json(400, { error: { code: '0x80040E14', message: 'another publish is running' } }) : undefined) });
   const result = await createApp(args({ publish: true }), client(org), seams);
   assert.strictEqual(result.ok, false);
   assert.deepStrictEqual([result.written, result.stage, result.addedToSolution, result.published, result.unpublishedChanges], [true, 'publish', true, false, true]);
-  assert.deepStrictEqual(result.inSolution, ['app', 'sitemap']);
+  assert.deepStrictEqual(result.inSolution, ['app', 'sitemap', 'pages']);
   assert.match(result.error, /another publish is running/);
-  assert.deepStrictEqual(org.state.components.map((c) => c.type), [80, 62]);
+  assert.deepStrictEqual(org.state.components.map((c) => c.type), [80, 62, 10372]);
 });
 
 test('REAL BUNDLE: a publish the platform took while its answer was lost reads as published — the read-back, not the failure, says what is there', async () => {
@@ -845,7 +867,7 @@ test('REAL BUNDLE: the SDK writes the app setting HeaderAndNavigationRefresh = 2
   assert.ok(org.requests.some((r) => r.method === 'GET' && /^\/appsettings\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?/.test(r.path)));
   // Written unpublished; the app's publish publishes it with the app.
   assert.deepStrictEqual(org.state.appSettings.map((s) => [s.parentappmoduleid, s.value, s.published]), [[result.appId, '2', true]]);
-  assert.deepStrictEqual(org.state.components.map((c) => c.type), [80, 62], 'the setting is not added to the solution: only the app and its sitemap are');
+  assert.deepStrictEqual(org.state.components.map((c) => c.type), [80, 62, 10372], 'the setting is not added to the solution: only the app, its sitemap and its page are');
 });
 
 test('REAL BUNDLE: a draft app made by the script has its setting only in the unpublished layer: a plain read of the settings finds none, the unpublished-aware read finds it', async () => {
@@ -940,10 +962,10 @@ test('END TO END: create --publish prints one JSON line, exits 0, and the platfo
   assert.strictEqual(r.lines.length, 1);
   const result = JSON.parse(r.lines[0]);
   assert.strictEqual(result.ok, true);
-  assert.deepStrictEqual([result.published, result.unpublishedChanges, result.inSolution], [true, false, ['app', 'sitemap']]);
+  assert.deepStrictEqual([result.published, result.unpublishedChanges, result.inSolution], [true, false, ['app', 'sitemap', 'pages']]);
   assert.deepStrictEqual(result.navigation.pages.map((p) => p.title), ['Overview', 'Details']);
   const writes = writesOf(r);
-  assert.deepStrictEqual(writes.filter((w) => /appmodules$|sitemaps$|AddSolutionComponent|PublishXml/.test(w)), ['POST appmodules', 'POST sitemaps', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST PublishXml']);
+  assert.deepStrictEqual(writes.filter((w) => /appmodules$|sitemaps$|AddSolutionComponent|PublishXml/.test(w)), ['POST appmodules', 'POST sitemaps', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST AddSolutionComponent', 'POST PublishXml']);
 });
 
 test('END TO END: a refusal prints its { ok: false, code } line, the reason on stderr, exits 1 — and nothing was written', () => {

@@ -19,7 +19,6 @@
     "Prefix discipline — solution alignment: If the env has a dominant non-system custom prefix (>=50% of custom tables AND >=3 such tables), the planner surfaces this in the solution question and ordered the option whose publisher prefix matches the dominant prefix FIRST as the recommended choice. If the user picks a different-prefix solution, the planner logged a one-line warning before proceeding.",
     "Phase 2a: Every applicable auth result is associated with its command; only the latest successful gate authorizes mutations, and final failures halt with bounded retry and advice",
     "Phase 1: Failed connector discovery returns needs_input and never creates a connection or reference",
-    "Phase 4.6: A populated Custom API plan never discovers, generates or uploads after a disabled or unreadable feature gate",
     "Phase 6.7: Packaging uses every deployed page id, the approved solution and discovered component types; invalid identities refuse before writes and results agree with read-back"
   ],
   "common_code_assertions": [
@@ -412,7 +411,7 @@
         "Phase 1 (Planner): Plan includes a datetime column for due date",
         "Phase 1 (Planner): Solution selection question is asked (because new entity will be created) and recorded in ## Environment",
         "Phase 2a: scripts/check-auth.js returns ok:true before entity-builder is invoked",
-        "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; picklist options include {value,label} pairs",
+        "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; each picklist option is written as its label, in the plan's order (numbered 100000000 + index)",
         "Phase 2b (Entity Builder): Priority picklist has 4 options starting at 100000000 (Low=100000000, Medium=100000001, High=100000002, Critical=100000003)",
         "Phase 2b (Entity Builder): Status picklist has 4 options starting at 100000000",
         "Phase 2b (Entity Builder): Solution is specified via provision-entities.js input JSON; verified through ## Environment → Solution: declaration",
@@ -552,8 +551,8 @@
     {
       "id": 24,
       "tier": "full",
-      "prompt": "Discover the bound Approve Order Action and global Summary Function, gate generation on Custom API support, use the exact binding names and parameter kinds, then preserve and explicitly clear bindings on separate updates.",
-      "data": { "fixture_kind": "synthetic", "custom_api_feature": "enabled", "declared_outputs": { "cnt_ApproveOrder": ["NewStatus"], "cnt_GetOrderSummary": ["Total"] } },
+      "prompt": "Discover the bound Approve Order Action and global Summary Function, use the exact binding names and parameter kinds, then preserve and explicitly clear bindings on separate updates.",
+      "data": { "fixture_kind": "synthetic", "declared_outputs": { "cnt_ApproveOrder": ["NewStatus"], "cnt_GetOrderSummary": ["Total"] } },
       "expectations": [
         "Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree"
       ]
@@ -565,6 +564,47 @@
       "data": { "fixture_kind": "synthetic", "package_into_solution": true },
       "expectations": [
         "Phase 6.7: Packaging uses every deployed page id, the approved solution and discovered component types; invalid identities refuse before writes and results agree with read-back"
+      ]
+    },
+    {
+      "id": 26,
+      "tier": "full",
+      "prompt": "Build a Customer Opportunities page for our existing opportunities. Show every opportunity that has a customer, whether an account or a contact, and let me search customer names by substring. From each opportunity I want to open the customer's record, change the opportunity's customer, and see the opportunities for this account.",
+      "data": {
+        "fixture_kind": "synthetic",
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "Dataverse entity: opportunity",
+          "specific_requirements": "Open the customer's record, change the customer, and show the opportunities for this account",
+          "account_scope": "Direct customer"
+        },
+        "app_selection": "user selects an existing app"
+      },
+      "expectations": [
+        "Phase 1 (Planner): The open account-scope question reaches the maker as needs_input with no default, the answer returns to the planner by its question id, and the written plan and the approved preview record it as a user-confirmed assumption before approval",
+        "Phase 1 (Planner): get-lookup-metadata.js reads opportunity's lookups before approval, its successful answer is the saved lookup-metadata.json, and every recorded lookup is observed with the complete targets and concrete paths it read",
+        "Phase 1 (Planner): The newly authored plan records its assumptions and every page's data semantics and lookup metadata, the approved preview carries the same records, and provenance is verified with --require-assumptions",
+        "Phase 4: RuntimeTypes.ts is generated for opportunity and types each recorded lookup's read property with exactly its recorded targets",
+        "Phase 5a: The page is generated only after provenance is verified with --require-assumptions --require-observed-lookups --lookup-metadata on this plan's records",
+        "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names"
+      ]
+    },
+    {
+      "id": 27,
+      "tier": "full",
+      "prompt": "Build an Order Approvals page for our existing sales orders: list the sales orders, show the one I select, and let me approve it with the existing Approve Order action.",
+      "data": {
+        "fixture_kind": "synthetic",
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "Dataverse entity: salesorder",
+          "specific_requirements": "Approve the selected order with the Approve Order action"
+        },
+        "app_selection": "user selects an existing app",
+        "declared_outputs": { "cnt_ApproveOrder": ["NewStatus"] }
+      },
+      "expectations": [
+        "Phase 1 (Planner): The newly authored plan records its assumptions and every page's data semantics and lookup metadata, the approved preview carries the same records, and provenance is verified with --require-assumptions"
       ]
     }
   ]

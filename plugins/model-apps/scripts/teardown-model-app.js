@@ -26,6 +26,7 @@ const { runTeardown } = require('./lib/sdk-teardown.js');
 const { classifyOps } = require('./lib/op-diff.js');
 const { checkWorkspaceClearable } = require('./lib/workspace-paths.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { openStandaloneManagedFence } = require('./lib/managed-standalone-fence.js');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const snapStore = require('./lib/apply-snapshot-store.js');
 const { checkPageOwnershipClearable } = require('./lib/page-ownership-records.js');
@@ -33,9 +34,10 @@ const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
-async function makeSdk(env) {
+// `publicationBarrier` (lib/managed-standalone-fence.js): the managed debt of the app's workspace, checked at every publish request the client sends.
+async function makeSdk(env, publicationBarrier) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
-  const httpClient = createAzHttpClient(env);
+  const httpClient = createAzHttpClient(env, publicationBarrier ? { request: publicationBarrier.gateRequest() } : {});
   // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
   // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.
   const sdkTempDir = makeTempWorkspace('teardown-');
@@ -120,6 +122,14 @@ async function teardownModelApp(spec, opts, deps) {
   // A workspace with NO snapshot gets a fresh tombstone too (a first changed-only build has none until it
   // finishes — see tombstoneSnapshot), creating the folder if it has to; `createdDir` is what to remove
   // again once the teardown is clean, so a folder that never had a workspace is left without one.
+  // The configuration kinds are never deleted by a teardown: nothing proves this app owns an environment variable, a connection reference,
+  // a Custom API or a duplicate rule (configurationTeardownNotes). Each declared item is named as kept — names only, never a value — and a
+  // Custom API bound to a table the spec makes is called out, because Dataverse refuses that table's delete while the API exists. Named
+  // before the fence below is taken, so nothing here can leave the fence or its heartbeat behind.
+  for (const note of require('./lib/configuration-artifacts.js').configurationTeardownNotes(spec)) warn(note);
+  // Nor is a field security profile deleted: users and teams can hold one beyond this app (fieldSecurityTeardownNotes). Each declared
+  // profile is named as kept the same way, by name only.
+  for (const note of require('./lib/field-security.js').fieldSecurityTeardownNotes(spec)) warn(note);
   let createdWorkspaceDir = null;
   let teardownId = null;
   let heartbeat = null;
@@ -142,7 +152,7 @@ async function teardownModelApp(spec, opts, deps) {
   }
   let r;
   try {
-    r = await runTeardown(spec, { apply: opts.apply, workspaceDir: opts.workspaceDir, env: opts.env }, { sdk: deps.sdk, emit, warn });
+    r = await runTeardown(spec, { apply: opts.apply, workspaceDir: opts.workspaceDir, env: opts.env, ...(opts.publicationBarrier ? { publicationBarrier: opts.publicationBarrier } : {}), ...(opts.managedFenceError ? { managedFenceError: opts.managedFenceError } : {}) }, { sdk: deps.sdk, emit, warn });
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     // Every teardown that FINISHES drops its entry from the tombstone's list of teardowns in flight — a
@@ -218,12 +228,22 @@ async function main() {
   const apply = flags.apply === true;
   const allowDestructive = flags['allow-destructive'] === true;
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const { sdk, cleanup } = await makeSdk(env);
+  // The managed debt a build of this app left in its workspace, read before the client exists so the client's transport is gated by it
+  // (lib/managed-standalone-fence.js); runTeardown withholds the resets' table publish it names. A store that cannot be read withholds every one.
+  let managed = {};
+  if (apply) {
+    try {
+      managed = { publicationBarrier: openStandaloneManagedFence({ environment: env, workspaceDir, spec }).barrier };
+    } catch (error) {
+      managed = { managedFenceError: error };
+    }
+  }
+  const { sdk, cleanup } = await makeSdk(env, managed.publicationBarrier);
   let r;
   let thrown = null;
   try {
     const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
-    r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir, env }, deps);
+    r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir, env, ...managed }, deps);
 
     // Clear the local workspace only after a clean apply — stale metadata there would make a
     // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.

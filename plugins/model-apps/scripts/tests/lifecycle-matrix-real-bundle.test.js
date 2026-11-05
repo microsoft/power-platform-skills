@@ -136,7 +136,7 @@ const BUILD_WRITES = {
   'POST roles': 1, // the persona's role
   'POST roles/Microsoft.Dynamics.CRM.ReplacePrivilegesRole': 1, // its privileges, converged
   'POST roles/Microsoft.Dynamics.CRM.AddPrivilegesRole': 1, // the grant on Basic User, added
-  'POST AddSolutionComponent': 16, // each component the build creates or reuses that the solution does not already hold
+  'POST AddSolutionComponent': 17, // each component the build creates or reuses that the solution does not already hold — the generative page among them, which no other add brings
   'POST PublishXml': 11, // see BUILD_PUBLISHES
 };
 // What each publish of the first build names, in order (an app or a page id is `app` / `page`, a web resource `webresource`).
@@ -211,7 +211,7 @@ const VERIFY_CHECKS = {
   entity: 3, column: 18, 'status-reason': 1, 'alternate-key': 1, relationship: 3,
   view: 3, 'view-columns': 3, 'view-filters': 3, 'view-sort': 1, chart: 1,
   form: 4, 'form-identities': 4, 'form-default': 2, 'form-order': 1, 'form-order-served': 1, 'form-timeline': 1,
-  dashboard: 1, command: 1,
+  dashboard: 1, command: 1, 'web-resource': 2,
   subarea: 4, 'subarea-dashboard-launcher': 1, 'app-table-component': 4, page: 1, 'page-subarea': 1,
   role: 1, 'app-role': 1, 'role-privileges': 1, 'role-grant': 1, 'role-grant-privileges': 1,
 };
@@ -319,6 +319,19 @@ test('lifecycle matrix: the build makes every feature of the kitchen-sink spec, 
   assert.deepEqual(publishesOfStage(run, 'build'), BUILD_PUBLISHES);
   assert.deepEqual(s.unpublished, [], 'nothing is left saved but not published');
   withinBudget(s, 'build');
+});
+
+// The add of the app brings its sitemap and never the pages its navigation opens (AB#6443257): the solution holds the page only because the build adds it, as a
+// component of the type the environment gives the page table (10200 in this fake) — so an export of the solution carries the page its navigation opens.
+test('lifecycle matrix: the build adds its generative page to the spec\u2019s solution, as the page table\u2019s own component type, and the rebuild keeps it there', async () => {
+  const run = await lifecycle();
+  stageOf(run, 'build');
+  assert.ok(run.ids.page, 'the page was built');
+  const pageType = 10200;
+  const held = (inventory) => inventory.solutionComponents.filter((row) => row.endsWith(` ${pageType} ${run.ids.page}`));
+  assert.equal(held(run.afterBuild).length, 1, 'the solution holds the page once');
+  assert.ok(held(run.afterBuild)[0].startsWith(run.afterBuild.rows.solutions.find((row) => row.endsWith(` ${run.spec.solution.uniqueName}`)).split(' ')[0]), 'and it is the spec\u2019s solution');
+  assert.equal(held(run.afterRebuild).length, 1, 'a rebuild keeps it there, without a second row');
 });
 
 test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothing, and sends only the writes the budget lists', async (t) => {
@@ -444,13 +457,15 @@ test('lifecycle matrix: the download writes the authored spec back, but for the 
   assert.deepEqual(sortRelationships(downloaded), sortRelationships(expectedDownload(run.spec, run.ids)));
   // The page's source comes back byte for byte.
   assert.equal(fs.readFileSync(path.join(dir, 'pages', run.ids.page, 'page.tsx'), 'utf8'), PAGE_SOURCE);
-  // What it does not carry, it names: the forms, views and charts of each table.
-  assert.deepEqual(emitted.payload.notRoundTripped.classes, [{ kind: 'forms', count: 5, label: 'form' }, { kind: 'views', count: 9, label: 'view' }, { kind: 'charts', count: 1, label: 'chart' }]);
+  // What it does not carry, it names: the forms, views and charts of each table, and the buttons of the command bar the build made on
+  // contoso_project (the button, the flyout and its child; the group the adapter put between them is a container, not a command).
+  assert.deepEqual(emitted.payload.notRoundTripped.classes, [{ kind: 'forms', count: 5, label: 'form' }, { kind: 'views', count: 9, label: 'view' }, { kind: 'charts', count: 1, label: 'chart' }, { kind: 'commands', count: 3, label: 'command' }]);
   assert.deepEqual(Object.fromEntries(Object.entries(descriptionInventory).map(([k, list]) => [k, list.map((x) => (x.entity ? `${x.entity}: ${x.name}` : x.name))])), {
     views: ['contoso_project: Active Projects', 'contoso_project: Inactive Projects', 'contoso_project: Open Projects', 'contoso_tag: Active Tag Catalog', 'contoso_tag: Inactive Tag Catalog', 'contoso_task: Active Task Items', 'contoso_task: Inactive Task Items', 'contoso_task: My Open Tasks', 'contoso_task: Open Tasks'],
     charts: ['contoso_project: Projects by Priority'],
     forms: ['contoso_project: Information', 'contoso_project: Project', 'contoso_tag: Information', 'contoso_task: Information', 'contoso_task: Task'],
     globalChoices: ['contoso_stage'],
+    commands: ['contoso_project: Approve', 'contoso_project: Escalate', 'contoso_project: More'],
   });
   // ...and it warns about the two losses a rebuild elsewhere would otherwise not show.
   const warningLines = stderr.split('\n').filter((l) => /^WARNING:/.test(l));

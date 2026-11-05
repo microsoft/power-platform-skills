@@ -50,6 +50,20 @@ const COLLECTION = {
   },
 };
 
+// The lookup-details read of a table's ManyToOne relationships (scripts/get-lookup-metadata.js, lib/lookup-metadata.js): the
+// default select plus the two scalars that say how a page reaches each target of a lookup — the target's key and the
+// navigation property of the referencing table. Still scalars only (no DisplayName / LocalizedLabels), and still no derived
+// ReferencingEntity (the collection is scoped to it; selecting it without a cast is a 400):
+//   GET /EntityDefinitions(LogicalName='opportunity')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingAttribute,
+//       ReferencedAttribute,ReferencingEntityNavigationPropertyName
+//   → 200 { "value": [ { "SchemaName": "opportunity_customer_accounts", "ReferencedEntity": "account", "ReferencingAttribute": "customerid",
+//            "ReferencedAttribute": "accountid", "ReferencingEntityNavigationPropertyName": "customerid_account" }, … ],
+//           "@odata.nextLink": "…" (when the platform pages the answer) }
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/onetomanyrelationshipmetadata
+// The SDK's fetchEntityMetadata projection keeps ReferencedEntity and ReferencedAttribute of these rows but neither the source
+// lookup column nor the navigation property, so this supplemental read exists; an SDK projection that carried both would retire it.
+const LOOKUP_DETAILS_SELECT = 'SchemaName,ReferencedEntity,ReferencingAttribute,ReferencedAttribute,ReferencingEntityNavigationPropertyName';
+
 function lc(v) {
   return String(v || '').toLowerCase();
 }
@@ -125,9 +139,13 @@ function mapCollectionRow(raw, kind, entityLogical) {
   };
 }
 
-async function readRelationshipsOf(client, entityLogical, kind, cache) {
+async function readRelationshipsOf(client, entityLogical, kind, cache, options) {
   const spec = COLLECTION[kind];
   if (!spec) return { ok: false, status: 0, error: `unknown relationship kind '${kind}'` };
+  if (options && options.lookupDetails) {
+    if (kind !== 'ManyToOne') return { ok: false, status: 0, error: `lookup details are read from ManyToOne relationships, not '${kind}'` };
+    return readLookupDetails(client, lc(entityLogical), cache);
+  }
   const logical = lc(entityLogical);
   // A plan probes many relationships on the same tables. Keyed by table and kind so the typed
   // probe and the case-insensitive fallback share one read.
@@ -150,6 +168,70 @@ async function readRelationshipsOf(client, entityLogical, kind, cache) {
   const value = res.body && res.body.value;
   if (!Array.isArray(value)) return finish({ ok: false, status: res.status, error: 'relationship collection response had no value array' });
   return finish({ ok: true, rows: value.filter(Boolean).map((raw) => mapCollectionRow(raw, kind, logical)) });
+}
+
+// readRelationshipsOf's lookup-details mode, for lookup discovery only. Differences from the default read, each deliberate:
+//   - every page of the collection is read (lib/app-components.js collectionRows: absolute continuations through getAbsolute, a
+//     repeated or malformed link and a failed or malformed page refused), because a lookup's candidate paths are proven complete
+//     only by the whole answer — one failed page fails the read, never a shorter list;
+//   - a 404 for the table is a FAILURE (`tableMissing: true` beside `ok: false`): the default read's "no such table, no
+//     relationships" answer would let discovery report a lookup with no targets;
+//   - every row must state the two added scalars, as non-empty strings: a service that omitted them would otherwise shrink the
+//     candidate paths silently;
+//   - its own cache key (`|lookup-details`), so a cached default read can never answer as a detailed one, or the reverse.
+// The answer is converted here as the default read's is: the service's own message from either envelope (`error` or `Error`),
+// its OData error riding along as `answered`.
+async function readLookupDetails(client, logical, cache) {
+  const cacheKey = cache && `${logical}|ManyToOne|lookup-details`;
+  if (cacheKey && cache.has(cacheKey)) return cache.get(cacheKey);
+  const finish = (result) => {
+    if (cacheKey) cache.set(cacheKey, result);
+    return result;
+  };
+  // Required here rather than at the top: only lookup discovery pages a relationship collection, and the default read's callers
+  // (the build, verify) need not load the app-component readers for it.
+  const { collectionRows } = require('./app-components.js');
+  // The last answer collectionRows was given, so a refusal is reported in the platform's words (both envelopes) and with its code.
+  let last = null;
+  const settle = async (request) => {
+    try {
+      last = (await request()) || { status: 0, body: null };
+    } catch (err) {
+      last = { status: (err && (err.statusCode || err.status)) || 0, body: null, thrown: err };
+    }
+    return last;
+  };
+  const recording = {
+    get: (p) => settle(() => (client && typeof client.get === 'function' ? client.get(p) : Promise.reject(new Error('no metadata client')))),
+    ...(client && typeof client.getAbsolute === 'function' ? { getAbsolute: (url) => settle(() => client.getAbsolute(url)) } : {}),
+    ...(client && typeof client.apiUrl === 'function' ? { apiUrl: (p) => client.apiUrl(p) } : {}),
+  };
+  const path = `/EntityDefinitions(LogicalName='${odataLit(logical)}')/${COLLECTION.ManyToOne.segment}?$select=${LOOKUP_DETAILS_SELECT}`;
+  let rows;
+  try {
+    rows = await collectionRows(recording, path, `the ManyToOne relationships of ${logical}`, { code: 'LOOKUP_RELATIONSHIPS_UNREADABLE' });
+  } catch (err) {
+    const refused = last && (last.thrown || !last.status || last.status < 200 || last.status >= 300);
+    const status = last ? last.status : 0;
+    const result = withAnswer({ ok: false, status, error: refused ? errorMessage(last) : String((err && err.message) || err) }, refused ? answeredOf(last) : undefined);
+    if (status === 404) result.tableMissing = true;
+    return finish(result);
+  }
+  const mapped = [];
+  for (const raw of rows) {
+    const row = raw && typeof raw === 'object' ? raw : {};
+    const missing = ['SchemaName', 'ReferencedEntity', 'ReferencingAttribute', 'ReferencedAttribute', 'ReferencingEntityNavigationPropertyName']
+      .filter((field) => typeof row[field] !== 'string' || !row[field]);
+    if (missing.length) {
+      return finish({ ok: false, status: last ? last.status : 200, error: `a ManyToOne relationship of ${logical} (${row.SchemaName || 'unnamed'}) does not state ${missing.join(', ')}` });
+    }
+    mapped.push({
+      ...mapCollectionRow(row, 'ManyToOne', logical),
+      referencedAttribute: row.ReferencedAttribute,
+      navigationProperty: row.ReferencingEntityNavigationPropertyName,
+    });
+  }
+  return finish({ ok: true, rows: mapped });
 }
 
 function castKind(body) {

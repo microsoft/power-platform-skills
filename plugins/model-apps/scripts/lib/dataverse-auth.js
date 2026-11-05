@@ -122,6 +122,14 @@ function getAuthToken(envUrl, opts = {}) {
   return readAzToken(resource, opts);
 }
 
+// The token this process has ALREADY read for the environment (the memo getAuthToken fills), or null. It never starts the Azure CLI:
+// for work that must not cost the user a CLI start of seconds — usage telemetry after a script's real work is done
+// (lib/telemetry/skill-completed.js) — and for which "no token yet" simply means "do without".
+function peekAuthToken(envUrl) {
+  const resource = dataverseOrigin(envUrl);
+  return resource && authTokenMemo.has(resource) ? authTokenMemo.get(resource) : null;
+}
+
 // The Azure CLI read behind every token this plugin uses — a Dataverse environment's (getAuthToken, above) and the Power Apps
 // service's (getPowerAppsToken, below) — so both share one memo, one failure record and one budget. `resource` is the `--resource` of
 // `az account get-access-token`; the callers decide which resources are allowed (a Dataverse origin is checked by dataverseOrigin, the
@@ -957,6 +965,7 @@ module.exports = {
   preflightAuth,
   azIdentity,
   getAuthToken,
+  peekAuthToken,
   getAuthTokenAsync,
   getPowerAppsToken,
   getPowerAppsTokenAsync,

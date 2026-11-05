@@ -449,6 +449,8 @@ function appsWorld(apps, { lookup = true, listFails = false } = {}) {
         });
         return { status: 200, body: { value } };
       }
+      // Every form, in both layers: a delete reads them for a form that embeds the page (lib/page-reference-guard.js, tests/page-reference-guard.test.js); none here does.
+      if (url.startsWith('/systemforms')) return { status: 200, body: { value: [] } };
       return { status: 404, body: null };
     },
   };
@@ -834,4 +836,50 @@ test('discardWorkspaces: each of the new operations is waited for while it runs 
     await discarding;
     assert.strictEqual(discarded, true, name);
   }
+});
+
+// ── solutionTarget / addToSolution: the solution a page joins (genpage-upload.js --solution) ─────────────────────────────────────────────
+// A page joins no solution on its own and the add of an app never brings it, so a page is added explicitly (lib/page-solution.js): the solution is read before the
+// page is written, as is the page table's component type, which the environment allocates; the add brings the page's file rows with it.
+
+const solutionSdk = ({ solutions = [{ solutionid: '55555555-0000-4000-8000-000000000055', uniquename: 'ContosoCore', ismanaged: false }], typeAnswer = { status: 200, body: { ObjectTypeCode: 10372 } } } = {}) => {
+  const sdk = new FakeSdk({
+    records: { solution: (options) => solutions.filter((s) => (options.filter || '').toLowerCase().includes(`'${s.uniquename.toLowerCase()}'`)) },
+    onGet: async (url) => (url === "/EntityDefinitions(LogicalName='uxagentproject')?$select=ObjectTypeCode" ? typeAnswer : { status: 404, body: null }),
+  });
+  sdk.addSolutionComponent = async (options) => { sdk.calls.push({ name: 'addSolutionComponent', args: [options] }); };
+  return sdk;
+};
+
+test('solutionTarget reads the unmanaged solution and the page table\u2019s component type, before anything is written; a system solution is answered from its name, with nothing read', async () => {
+  const sdk = solutionSdk({ typeAnswer: { status: 200, body: { ObjectTypeCode: 10380 } } });
+  const genpage = backend(sdk);
+  assert.deepStrictEqual(await genpage.solutionTarget(' contosocore '), { uniqueName: 'ContosoCore', systemSolution: false, componentType: 10380 });
+  assert.deepStrictEqual(sdk.calls.map((c) => c.name), ['queryRecords', 'dataverse.get']);
+  assert.strictEqual(sdk.calls[0].args[1].filter, "uniquename eq 'contosocore'");
+  const system = solutionSdk();
+  assert.deepStrictEqual(await backend(system).solutionTarget('Default'), { uniqueName: 'Default', systemSolution: true });
+  assert.deepStrictEqual(system.calls, [], 'a system solution is not read');
+});
+
+test('solutionTarget refuses a missing or managed solution, and a page table whose type the environment cannot say — each with its code', async () => {
+  await assert.rejects(backend(solutionSdk()).solutionTarget('Missing'), (e) => e.code === 'SOLUTION_NOT_FOUND' && /There is no solution with the unique name 'Missing'/.test(e.message));
+  await assert.rejects(backend(solutionSdk({ solutions: [{ uniquename: 'Managed', ismanaged: true }] })).solutionTarget('Managed'), (e) => e.code === 'SOLUTION_MANAGED');
+  await assert.rejects(backend(solutionSdk({ typeAnswer: { status: 503, body: { error: { message: 'busy' } } } })).solutionTarget('ContosoCore'),
+    (e) => e.code === 'GENPAGE_COMPONENT_TYPE_UNRESOLVED' && /could not be read \(HTTP 503: busy\)/.test(e.message));
+  await assert.rejects(backend(solutionSdk({ typeAnswer: { status: 200, body: { ObjectTypeCode: null } } })).solutionTarget('ContosoCore'),
+    (e) => e.code === 'GENPAGE_COMPONENT_TYPE_UNRESOLVED' && /did not return a valid ObjectTypeCode/.test(e.message));
+});
+
+test('addToSolution adds the page as the page table\u2019s type with its required components (its file rows); a system solution is not added to', async () => {
+  const sdk = solutionSdk();
+  const genpage = backend(sdk);
+  const target = await genpage.solutionTarget('ContosoCore');
+  assert.deepStrictEqual(await genpage.addToSolution(P1.toUpperCase(), target), { added: true });
+  assert.deepStrictEqual(sdk.of('addSolutionComponent').map((c) => c.args[0]), [{ componentId: P1, componentType: 10372, solutionUniqueName: 'ContosoCore', addRequiredComponents: true }]);
+  assert.deepStrictEqual(await genpage.addToSolution(P2, { uniqueName: 'Default', systemSolution: true }), { added: false });
+  assert.strictEqual(sdk.count('addSolutionComponent'), 1);
+  await assert.rejects(genpage.addToSolution('not-a-page', target), (e) => e.code === 'GENPAGE_ID_INVALID');
+  await assert.rejects(genpage.addToSolution(P2, { uniqueName: 'ContosoCore', systemSolution: false }), (e) => e.code === 'GENPAGE_COMPONENT_TYPE_UNRESOLVED');
+  assert.strictEqual(sdk.count('addSolutionComponent'), 1, 'nothing is sent without a page id and a component type');
 });

@@ -23,7 +23,7 @@ apart deliberately.
 - **All Dataverse access via the vendored headless SDK**; metadata cached under `<app-folder>/.maker-workspace/` for reuse.
 - Phase selection (`--only`/`--skip`/`--from`/`--to`), `[n/total]` narration, `BuildHalt` gate, dry-run by default, `--sample-data` / `--publish` opt-in.
 - Bounded-concurrency for independent ops; one publish round-trip per entity + the app. A rebuild that changes nothing writes almost nothing: an existing view or form is pushed only when it differs from what was last synced, under `--publish` the tables the build changed, the tables whose Main forms its own pushes of the app add (those of the navigation each push sends), and the tables whose forms or charts the app is known to hold, are published together in one round-trip before the app (a publish naming only the app, sent first, leaves a saved form's label changes unpublished, whoever saved them) instead of once per view and form — a table the app is not known to hold a form or chart of (declared only, a lookup column's target, read only by a page, or only pinned in `app.tables`) is not published by it — and a solution's membership is read once so only the components it lacks are added. `az`-token HttpClient with transient (429 / 5xx) retry, honouring `Retry-After` up to 60 s (a 429 is waited out inside the run's throttle budget, below); a record delete, or a change set of conditional deletes (an app and its sitemap), is sent once unless its answer proves it did not run: SQL rolled it back as a deadlock victim (`Sql Number: 1205` — the last SQL number the answer gives, so a name a maker chose that quotes it in front of another SQL error is not one; for a change set, on every operation it answers; re-sent up to three times), or the server refused to start it with a 429 (re-sent on the throttle schedule). A change set that only creates columns (a new table's ordinary columns) is re-sent on a 429 alone, because a change set can commit behind any other lost or failed answer. The SDK separately re-sends an app delete that meets the platform's search-index insert race (HTTP 400, SQL 547) — a different answer, so the two layers add and never multiply. A generative page's change set is not re-sent by the client at all (an update's writes carry `If-Match: *`, so a replay would skip the SDK's version check): the page backend (`lib/genpage-sdk.js`) waits out a 429 on it — the same schedule, or the answer's `Retry-After` when that is longer, whole — and sends it again, a push at a time and through the SDK's version check each time, because a refused change set committed nothing and the page's ids and the turn's identity were fixed before the first send; six sends at most, inside one budget of five minutes for the waiting a throttled page write costs a build run (the build's own waits before it runs a phase again count too, and so do the HTTP client's own waits for a throttled read, publish, delete or column create — the answer's `Retry-After` whole, past the client's cap of a minute — and a wait of the client's that does not fit is not taken: the 429 comes back as it came and the build stops with the budget's halt; a 5xx, a reset connection and a deadlock victim's re-send are not throttling and keep their own schedule; and a change set the service refuses as a whole — answered HTTP 200 with the one part that failed — is read the same way, when the answer is complete and well-formed: a 429 is waited out, a 400, 403 or 404 is final after one send, and an answer that is incomplete inside — or holds a part that declares a transfer coding, which is not read — stays an unknown outcome), and a throttle that outlasts them leaves the build to run the pages phase again after the wait the service asked for, or to stop with a `throttle-budget-exhausted` halt that says what it asked when the next wait does not fit. A failure of the transport is sent again only when it is a reset, a timeout, an answer cut off or a temporary DNS failure — decided by Node's own error code when it has one and by its words only when it has none: a certificate that does not verify returns at once, whatever names it quotes.
-- Guardrail lint (`spec-lint.js`) + hard validator (`app-spec.js`). 🧪 full `node:test` suite + the vendored SDK's Jest suite green (`node scripts/run-tests.js --with-sdk <ppux>`).
+- Guardrail lint (`spec-lint.js`) + hard validator (`app-spec.js`). 🧪 full `node:test` suite + the vendored SDK's Jest suite green (`node scripts/run-tests.js --with-sdk <sdk-repo>`).
 
 ### Data model (Tier 1) — ✅ verified live
 - All column types: Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime · Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer (with per-type options), incl. AutoNumber primary columns.
@@ -59,7 +59,9 @@ apart deliberately.
   that did not say what the author wrote. An environment that does not declare that member **cannot
   host business rules** — and that is the common case rather than an edge case. Where the member is
   declared, a rule can still fail with a server-side MissingMethodException, which is a platform
-  defect on that environment rather than a rule-shape problem. The build then skips them,
+  defect on that environment rather than a rule-shape problem. A production environment declares the
+  member but answers the first rule with HTTP 400 `0x80040216` ("An unexpected error occurred."),
+  a platform limit; nothing is created. The build then skips them,
   warns once naming the member, and builds everything else normally; `--verify` reports them as *not
   applicable on this environment* rather than missing, so the exit code, the deployed baseline and
   the `--changed-only` snapshot are unaffected.
@@ -145,11 +147,14 @@ apart deliberately.
   `None` — 6/6.
 
 ### App shell & navigation — ✅ verified live
-- App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order). The app is **self-contained for export/import**: its **sitemap** is added to the solution (componenttype 62), and its **tile icon** is an in-solution web resource — `app.icon` (a declared image web resource) or a generated default SVG — never an arbitrary external/managed icon.
+- App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order). The app is **self-contained for export/import**: its **sitemap** is added to the solution (componenttype 62), each **generative page** the build writes or keeps joins it too (as the page table's own component type, read from the environment — offline-tested; the add of the app never brings the pages), and its **tile icon** is an in-solution web resource — `app.icon` (a declared image web resource) or a generated default SVG — never an arbitrary external/managed icon.
 - **App membership (offline-tested; reference transport measured):** `app.tables` preserves hidden
   table components independently of navigation; `app.mainForms` selects active Main forms by name.
   Create is exact for Main membership; updates stop adding excluded forms but never remove existing
-  members. Build and download use the current layer; verify checks the published layer.
+  members unless `app.mainFormsOnUpdate: "exact"` asks for it (2.21.0, a removal from the app that
+  needs `--allow-destructive`; the app is published only once the published layer reads back the list).
+  `app.pinDeclaredArtifacts: true` (2.21.0) also pins the spec's own forms, views, charts and
+  dashboards, so a chart of a table outside the navigation joins the app. Build and download use the current layer; verify checks the published layer.
   Download carries both fields with a `2.13.0` capability floor, without adopting schema for
   hidden stock/unclassified type-1 tables even when an asset references them. Mixed SDK/current
   navigation and unresolved immutable identity are refused rather than emitted as a rebuildable spec. See
@@ -162,12 +167,50 @@ apart deliberately.
 - Modern command-bar buttons — functional **JS on-click** + static hidden/disabled, incl. **flyout / split-button menus**.
 - Web resources (JS / HTML / CSS) shipped + added to the solution; idempotent (reuse by name). One whose publication the SDK could not confirm (`WEB_RESOURCE_UNVERIFIED` — its publish refused under the customization lock, say) is still added to the solution, recorded in the build workspace, and written again by id on the next run, never created twice (`lib/web-resource-records.js`; `web-resource-unconfirmed.test.js`).
 
+### App theme and header logo (Preview) — 🧪 tested
+- `app.theme` sets the app's **modern theme** — a base palette colour (or explicit palette slots), header
+  colours, an optional font — and a **header logo** (an existing image web resource and its tooltip).
+  Declared only on an explicit branding request; see [the App Spec contract](../references/app-spec-schema.md)
+  for the fields. Floor `minimumPluginVersion: "2.21.0"`.
+- **Omitted vs `null`.** An omitted theme is never read or written: existing specs build exactly as before.
+  `null` removes the app's own override, and the app inherits the environment's theme again.
+- **What the build writes.** Through the SDK (`setAppTheme`, never with its own app publish): a content-named
+  version web resource `<prefix>_/apptheme/<hash>.xml` (published on its own, because the app reads it) and
+  the app's `CustomThemeDefinition` setting row as a draft. Both join the solution (component type 61 for the
+  web resource, plus the app setting). An equal theme writes nothing. Every theme read runs under a strict
+  read policy: a row the build cannot place, or a write whose outcome is unknown, ends the theme step as
+  `APP_THEME_INCOMPLETE`, which is never re-sent automatically, and a later run on the same SDK refuses to
+  touch that app's theme rather than guess.
+- **App-wide publication.** The theme is published with the **app**, by the build's single app publication
+  (no extra publish). An app publication publishes every pending change of the app, not only the theme, and a
+  withheld app publication (an exact Main-form list not yet proven) leaves the theme saved but owed.
+- **Proof after publication.** After the app publication that paid the theme is accepted, the build reads the
+  theme back once. An unresolved, unreadable or mismatching theme leaves the build incomplete
+  (`APP_THEME_UNVERIFIED`); what was saved is kept and the publish is not sent again — check it with
+  `--verify`, then re-run. `--verify` passes only a live theme, and says that this is **API state, not render
+  proof**: what a browser paints is checked in the app.
+- **Membership repair.** An unchanged theme whose records are missing from the solution is not repaired
+  silently: the build stops with `APP_THEME_MEMBERSHIP_MISSING` and names the repair (add the type 61 web
+  resource and the app setting to the solution, then run again).
+- **Retention.** Theme version web resources are never deleted (a version is shared by every app whose theme
+  has the same bytes). The logo is only referenced: a downloaded logo is `external: true` and teardown keeps
+  it, a logo that is only referenced is never touched, and a logo that is also declared in `webResources[]`
+  without `external` follows the normal `webResources` teardown rules.
+- **Download (opt-in, strict).** Only `--include-capabilities` reads the theme. A theme the spec cannot state
+  (the platform's "no theme" value, raw attributes, a logo that is gone or not an image, this publisher's
+  own logo that cannot be exported, or a logo not known to be another publisher's or managed — for example an
+  empty or vanished image when the app's publisher cannot be read) refuses the download **before anything is written**;
+  `--allow-lossy-download` writes the spec without `app.theme` and names the loss. This publisher's own logo
+  is exported as an `external: true` web resource; a logo known to be another publisher's or managed stays a reference
+  that must exist where the spec is built. A theme saved but not yet published is downloaded with a note.
+
 ### Generative-page management — three-authority, id-based — 🧪 tested
 - **Three-authority page identity.** IDENTITY = durable `<app>_pagemanifest` (key→pageId map), outranked by the spec's own `pages[].pageId` for a downloaded (edit-snapshot) spec. EXISTENCE = the environment's page list through the SDK — decides create-vs-reuse for crash-safe convergence (`enumerateEnv`, no `--app-id`). MEMBERSHIP = the app's sitemap `GenPageId` set, read fail-closed via `fetchSitemap` (`scripts/lib/sitemap-pages.js`) — drives placement, download enumeration, and verify. All page matching is by id, never by display name.
 - **Edit-snapshot `pageId`.** Download keeps each page's deployed `GenPageId` as `pages[].pageId` in the emitted spec. On rebuild, this highest-authority id is confirmed against EXISTENCE and reused — so a downloaded app (including Maker-added pages) rebuilds without creating duplicates.
 - **Validation: every page must be sitemap-placed.** A `pages[]` entry absent from the `appShell` sitemap is rejected; navigation-only (headless) pages are not supported. A "detail" page is a normal sitemap page receiving input via `pageInput`.
 - **Safety HALTs:** `pages-removed` (live page dropped from spec — re-add or `--allow-destructive` detaches the nav SubArea, page left deployed), `pages-shared-across-apps` (`--allow-destructive` does NOT bypass; detach the page from the other app with `scripts/genpage.js remove-from-app`, or in Maker), `pages-identity-conflict`, `pages-manifest-corrupt`, `pages-existence-failed`, `pages-sitemap-read-failed`, `pages-shared-check-failed`.
 - **Verify and download** match by id with exact set-equality (EXISTENCE + MEMBERSHIP); a manifest-uncorrelatable page surfaces `unableToRun`.
+- **Caller-held page turn ids.** `genpage-upload.js --turn-id <guid> --app-dir <folder>` lets a host retry one complete page edit after a lost answer without recording the turn twice; the id is bound to the complete request (content, binding mode, publication) in `<folder>/.maker-workspace/turns`, and a reuse asking for anything else is refused with nothing written. A host that lends the backend its own SDK passes `deps.turnBindings` (a retained store shared by every process that retries the turn, whose reads see every completed write) and `deps.turnCompilerIdentity`. Under a turn, a resumed create's placement is finished only when the app's published navigation is read and shows the page. The build never passes a turn id. A retry from another folder or machine, or after the store was erased, is unsupported and not detected.
 
 ### AI-first features — ✅ verified live
 - `ai` block → `ai-features` phase: form-fill, NL search, NL charts, M365 Copilot, and per-table Copilot **row summaries** with tailored `GptDynamicPrompt-2` prompts (auto-selected candidate tables; skips lookup/config/junction + D365-owned incident/lead/opportunity).

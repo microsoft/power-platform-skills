@@ -217,3 +217,101 @@ test('sameRelationship matches endpoints case-insensitively and rejects a differ
     },
   ), true);
 });
+
+// --- Lookup-details mode (lookup discovery: lib/lookup-metadata.js) ---------------------------------------------------------------
+// The default read above is unchanged; this mode adds two scalars, reads every page, and fails rather than shrinks.
+const DETAILS = 'SchemaName,ReferencedEntity,ReferencingAttribute,ReferencedAttribute,ReferencingEntityNavigationPropertyName';
+const DETAILS_PATH = `/EntityDefinitions(LogicalName='opportunity')/ManyToOneRelationships?$select=${DETAILS}`;
+const NEXT = 'https://contoso.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName=\'opportunity\')/ManyToOneRelationships?$select=x&$skiptoken=2';
+const ACCOUNT = { SchemaName: 'opportunity_customer_accounts', ReferencedEntity: 'account', ReferencingAttribute: 'customerid', ReferencedAttribute: 'accountid', ReferencingEntityNavigationPropertyName: 'customerid_account' };
+const CONTACT = { SchemaName: 'opportunity_customer_contacts', ReferencedEntity: 'contact', ReferencingAttribute: 'customerid', ReferencedAttribute: 'contactid', ReferencingEntityNavigationPropertyName: 'customerid_contact' };
+
+function pagedClient(pages) {
+  const paths = [];
+  const answer = (p) => {
+    paths.push(p);
+    const hit = pages[p];
+    if (hit === undefined) return { status: 404, body: { error: { code: '0x80060888', message: `no route for ${p}` } } };
+    if (hit instanceof Error) throw hit;
+    return hit;
+  };
+  return { paths, get: async (p) => answer(p), getAbsolute: async (url) => answer(url) };
+}
+
+test('lookup details: the added scalars, every page, and the rows keep them', async () => {
+  const c = pagedClient({
+    [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT], '@odata.nextLink': NEXT } },
+    [NEXT]: { status: 200, body: { value: [CONTACT] } },
+  });
+  const read = await readRelationshipsOf(c, 'Opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.deepStrictEqual(c.paths, [DETAILS_PATH, NEXT]);
+  assert.deepStrictEqual(read, { ok: true, rows: [
+    { schemaName: 'opportunity_customer_accounts', type: 'OneToMany', referencedEntity: 'account', referencingEntity: 'opportunity', referencingAttribute: 'customerid', referencedAttribute: 'accountid', navigationProperty: 'customerid_account' },
+    { schemaName: 'opportunity_customer_contacts', type: 'OneToMany', referencedEntity: 'contact', referencingEntity: 'opportunity', referencingAttribute: 'customerid', referencedAttribute: 'contactid', navigationProperty: 'customerid_contact' },
+  ] });
+  assert.ok(!c.paths.some((p) => /DisplayName|LocalizedLabels/.test(p)), 'still a label-free read');
+});
+
+test('lookup details: a failed, malformed or repeated page fails the whole read — never a shorter candidate list', async () => {
+  for (const [label, second] of [
+    ['a refused second page', { status: 503, body: { error: { code: '0x80040216', message: 'Service unavailable.' } } }],
+    ['a second page with no value list', { status: 200, body: {} }],
+    ['a second page that loops back', { status: 200, body: { value: [CONTACT], '@odata.nextLink': NEXT } }],
+    ['a transport failure', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })],
+  ]) {
+    const c = pagedClient({ [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT], '@odata.nextLink': NEXT } }, [NEXT]: second });
+    const read = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+    assert.equal(read.ok, false, label);
+    assert.equal(read.rows, undefined, `${label}: no partial rows`);
+  }
+  const refused = pagedClient({ [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT], '@odata.nextLink': NEXT } }, [NEXT]: { status: 503, body: { Error: { code: '0x80040216', message: 'Service unavailable.' } } } });
+  const read = await readRelationshipsOf(refused, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.equal(read.error, 'Service unavailable.', 'the service\'s words, from the capitalized envelope too');
+  assert.equal(read.status, 503);
+  const coded = pagedClient({ [DETAILS_PATH]: { status: 500, body: { error: { code: '0x80044151', message: 'SQL timeout expired.' } } } });
+  const timedOut = await readRelationshipsOf(coded, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.equal(timedOut.error, 'SQL timeout expired.');
+  assert.equal(timedOut.answered.code, '0x80044151', 'the OData error rides along for the retry policy');
+  assert.ok(!Object.keys(timedOut).includes('answered'), '…not enumerable');
+});
+
+test('lookup details: a missing table is a failure, not a table without lookups; the default read keeps its meaning', async () => {
+  const missing = { status: 404, body: { error: { code: '0x80060888', message: "EntityMetadata With Id = LogicalName='nosuch' does not exist." } } };
+  const c = pagedClient({});
+  c.get = async () => missing;
+  const detailed = await readRelationshipsOf(c, 'nosuch', 'ManyToOne', undefined, { lookupDetails: true });
+  assert.equal(detailed.ok, false);
+  assert.equal(detailed.tableMissing, true);
+  assert.match(detailed.error, /does not exist/);
+  assert.deepStrictEqual(await readRelationshipsOf(c, 'nosuch', 'ManyToOne'), { ok: true, rows: [], tableMissing: true });
+});
+
+test('lookup details: a row that does not state the added scalars fails the read', async () => {
+  for (const field of ['ReferencedAttribute', 'ReferencingEntityNavigationPropertyName', 'ReferencingAttribute']) {
+    const row = { ...ACCOUNT };
+    delete row[field];
+    const c = pagedClient({ [DETAILS_PATH]: { status: 200, body: { value: [CONTACT, row] } } });
+    const read = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', undefined, { lookupDetails: true });
+    assert.equal(read.ok, false, field);
+    assert.match(read.error, new RegExp(field), field);
+  }
+});
+
+test('lookup details and the default read never answer for each other from a shared cache', async () => {
+  const defaultPath = "/EntityDefinitions(LogicalName='opportunity')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingAttribute";
+  const c = pagedClient({
+    [defaultPath]: { status: 200, body: { value: [{ SchemaName: ACCOUNT.SchemaName, ReferencedEntity: 'account', ReferencingAttribute: 'customerid' }] } },
+    [DETAILS_PATH]: { status: 200, body: { value: [ACCOUNT] } },
+  });
+  const cache = new Map();
+  const narrow = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache);
+  const detailed = await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache, { lookupDetails: true });
+  assert.deepStrictEqual(c.paths, [defaultPath, DETAILS_PATH], 'two reads, one per mode');
+  assert.equal(narrow.rows[0].navigationProperty, undefined);
+  assert.equal(detailed.rows[0].navigationProperty, 'customerid_account');
+  assert.equal(await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache, { lookupDetails: true }), detailed, 'each mode is cached under its own key');
+  assert.equal(await readRelationshipsOf(c, 'opportunity', 'ManyToOne', cache), narrow);
+  assert.equal(c.paths.length, 2);
+  const other = await readRelationshipsOf(c, 'opportunity', 'OneToMany', undefined, { lookupDetails: true });
+  assert.equal(other.ok, false, 'lookup details are a ManyToOne read only');
+});

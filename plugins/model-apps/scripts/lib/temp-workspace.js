@@ -26,10 +26,24 @@
 //
 // WHO IS TRUSTED TO HAVE MADE THE FOLDER. On POSIX the plugin's folder must be a plain folder this user owns and nobody else can write to (uid and mode). Windows gives Node
 // no owner and no permissions, so an access list stands in (lib/windows-folder-acl.js): a folder this process MAKES is given an explicit, protected one before anything is put in it — only this
-// user, the system and the administrators, full control, inherited by every workspace and record made inside — and read back, and a folder that cannot be made so is removed and not used;
+// user, the system and the administrators, full control, inherited by every workspace and record made inside — and read back, and a folder that cannot be made so is removed (once other runs' holds have left it: removeUnprotectedParent) and not used;
 // an EXISTING folder is used only if it is this user's (or the administrators') and NO entry of its list, an inherit-only one too, lets anyone else add to it, write to it, delete it
-// or take it over. The answer is asked once per folder and process. A folder that Windows is still removing — the last handle on it has not closed — refuses a new
+// or take it over. The answer is asked once per folder and process (but a "no" about a folder another run made moments ago, and has not yet given its own list, is asked again: checkParent). A folder that Windows is still removing — the last handle on it has not closed — refuses a new
 // entry and cannot be read for a moment: the attempt is made again after short pauses, and one that is still refusing after the last is not used (WAITS_MS).
+//
+// A RUN HOLDS THE FOLDER WHILE IT JUDGES IT (Windows). Asking whether a folder that is there is private starts three programs (lib/windows-folder-acl.js) and takes about a second — more on a busy machine —
+// and the answer is about the folder that was asked about (its file id). Every run that ends with nothing left in the plugin's folder removes it (THE END OF A RUN, below), so while one run was being told about the
+// folder, another that ended took it away and a third made it again: the answer was about a folder that was no longer there, the run asked again about the new one, and that was replaced in its turn. With several
+// runs starting and ending at once — an agent runs scripts side by side, a test suite runs dozens — the answers kept coming too late, and a run that had asked MAKE_ATTEMPTS times made its workspace in the plain
+// temp folder, unrecorded and never swept (measured on one machine: about one run in twenty with three at a time, one in three with twelve; no folder refused an entry). So a run HOLDS the folder from the moment
+// it has made or found it until its workspace is in it: an empty file of its own, `.hold-<machine>-<pid>-<6 hex>`, which the `rmdir` of a run that ends refuses to remove (ENOTEMPTY), as it refuses a workspace. The folder
+// cannot go while it is judged, so the answer is about the folder the workspace is then made in. The hold is made after the access list of a folder this run made is set (nothing is put in a folder before that),
+// and only in a plain folder (not through a link). It holds nothing, and is removed before makeTempWorkspace returns, whatever happened — on success only once the workspace is recorded, since its
+// removal can wait on a scanner and a run killed in that wait must leave a workspace that a sweep can take; a hold that cannot be made leaves the run as it was without one (a full
+// disk, a folder that takes no file), and one a run was killed while holding is removed by a later sweep once that run's pid is gone, so that the folder can go when it is empty. A pid means something only on
+// the machine that gave it out, and a temp folder can be shared between machines (a network share, a profile that roams), so a hold names its machine — eight hex digits of a hash of the host name, the host
+// an owner record names (lib/process-owner.js) — and a sweep takes only a hold of its own machine: one of another machine stays, and so does every hold when a sweep cannot read its own host name. On POSIX the question is one
+// lstat, answered before anything could change: nothing is held, and a sweep there takes nothing for a hold (a file of that shape is an entry like any other, as it always was).
 //
 // A WORKSPACE LENT TO ANOTHER PROGRAM (`makeTempWorkspace(prefix, { lent: true })`). A path inside a workspace is sometimes given to a program of another make — pac, writing its settings file into the
 // scratch folder of solution-settings.js. That program is not the run: on POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that takes the folder because
@@ -72,7 +86,7 @@
 //   * A workspace of this process is named for its pid and six random characters, so no other run makes, opens or removes it. A sweep never opens a folder whose pid runs (on Linux it reads its record, and a run that is going
 //     is "alive" there), and this process runs until the last listener of its `exit` event has returned.
 //   * `rmdir` removes a folder only if it is empty, in one step. Another run's workspace in the plugin's folder — one that is there, or one `mkdtemp` is making that moment, which creates its entry in one step — makes it refuse
-//     (ENOTEMPTY), and the folder stays. A run that has made the folder and not yet its workspace in it has an empty folder for a moment, and CAN lose it: its `mkdtemp` then fails with ENOENT, which makeTempWorkspace answers by
+//     (ENOTEMPTY), and the folder stays; so does the hold of a run that is judging the folder (Windows: A RUN HOLDS THE FOLDER, above). A run that has made the folder and not yet its workspace in it has an empty folder for a moment, and CAN lose it: its `mkdtemp` then fails with ENOENT, which makeTempWorkspace answers by
 //     making the folder again (MAKE_ATTEMPTS times), and on Windows a folder that is being removed refuses for a moment instead, which it answers by waiting (WAITS_MS). So no run fails for it; the cost is one more mkdir.
 //   * The workspaces go first, so that the folder is looked at after this process has taken what is its own out of it.
 // What is NOT covered is a POSIX signal. The default action of SIGINT, SIGTERM and SIGHUP ends the process at once, and the `exit` event never runs: what the run left stays for the next run's sweep, and the folder goes with the next
@@ -87,6 +101,7 @@
 // folder, written whole, there only while the folder holds more than a sweep looks at); the next sweep — in this process or a later one — starts after that name and wraps round to the first. Every entry is looked at within
 // ceil(entries / MAX_EXAMINED) sweeps, whatever the first of them are. The cursor says where to start and nothing else: it cannot make a sweep take what it would not have taken, one that is missing, unreadable or not what was written
 // starts at the first entry, and the name in it is only ever compared with the names in the folder.
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -102,6 +117,15 @@ const REMOVING_SUFFIX = '.removing';
 // that was killed while it wrote the cursor leaves. Nothing else is the sweep's own: a file or a folder that only looks like these is an entry like any other, and is never removed.
 const CURSOR_FILE = '.sweep-cursor.json';
 const isCursorName = (name) => name === CURSOR_FILE || (name.startsWith(`${CURSOR_FILE}.`) && /^\.\d+\.[a-z0-9]*\.tmp$/.test(name.slice(CURSOR_FILE.length)));
+// What a run puts in the plugin's folder while it judges it (Windows: A RUN HOLDS THE FOLDER, at the top of this file): an empty FILE named for the machine and the run — `.hold-1f2e3d4c-4242-a1b2c3`: the
+// machine (machineOf), the pid and six hex digits — so a sweep can tell, from the name alone, whether the run that made it is gone. A workspace is a folder and a removal ends in `.removing`, so neither is
+// ever taken for a hold.
+const HOLD_PREFIX = '.hold-';
+const HOLD_NAME = /^\.hold-([0-9a-f]{8})-\d{1,10}-[0-9a-f]{6}$/;
+const isHoldName = (name) => HOLD_NAME.test(name);
+// The machine a host name is, as a hold's name says it: eight hex digits of its SHA-256. A hash and not the name, since a host name is not a safe part of a file name everywhere; it is only ever
+// compared, never read back. Null for a host name that could not be read: no machine can be told from it.
+const machineOf = (host) => (typeof host === 'string' && host !== '' ? crypto.createHash('sha256').update(host).digest('hex').slice(0, 8) : null);
 // What a prefix may be: a name, never a path. A prefix that is not one would put the folder outside the plugin's own.
 const SAFE_PREFIX = /^[A-Za-z0-9._-]+$/;
 // A record, or the cursor, is a few hundred bytes at most. One that is much larger is not one.
@@ -133,6 +157,18 @@ const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),
 const windowsRefusesForAMoment = (e, deps) => uidOf(deps) === null && !!e && TRANSIENT_CODES.has(e.code);
 // The code of the failure of a folder that this process made and could not make private (Windows): the folder is not used, and not tried again by this process (`refusing`, below).
 const NOT_PRIVATE = 'ENOTPRIVATE';
+// The code of a "no" about a folder that may yet be made private by the run that made it (Windows: checkParent): the attempt is made again after a pause, and a folder that is still saying it after the last is not used for
+// this workspace — but it is not refused for the life of the process either, as a folder that is not private by anyone's choice is.
+const NOT_YET_PRIVATE = 'ENOTYETPRIVATE';
+// How long after it was made a folder whose access list is still all it took from the one above may be one that its maker has not yet given a list of its own: the maker's icacls is given 10 s
+// (lib/windows-folder-acl.js), and a maker whose icacls did not answer in that time removes the folder. Measured: about 200 ms on average, and up to about a second on a busy machine.
+const PROTECT_WINDOW_MS = 15000;
+// How long a maker whose folder could not be made private waits for other runs' holds to leave it before it leaves it (removeUnprotectedParent), and how often it looks. A hold is kept for one judgement
+// (three programs: about a second, a few on a busy machine) and let go before every pause, so ten seconds covers several judgements back to back by several runs; a look is an lstat, an rmdir and a listing,
+// so looking every 20 ms costs nothing worth counting, and lands in the shortest pause of a judge (WAITS_MS: 25 ms). The wait happens only after a failed protection — the rare path this is for — and the
+// run then works in the plain temp folder, as it did.
+const REMOVE_PATIENCE_MS = 10000;
+const REMOVE_PAUSE_MS = 20;
 
 // The folder the plugin keeps its workspaces in, for the temp folder `deps.os` (the real one) names. Windows gives each user a temp folder of their
 // own (GetTempPath reads TMP, TEMP, then the profile: https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-gettemppatha), and so does
@@ -149,6 +185,11 @@ function workspaceParent(deps = {}) {
 //
 // That is read once per folder and process, whatever the answer (the cache below): a run that makes a workspace for each of forty dashboards would otherwise start three programs
 // forty times. The key names the folder itself — its place, device, file id and creation time — so a folder that is removed and made again by someone else is judged again.
+// The one "no" that is not remembered is one that may be about to change: a folder that another run made moments ago takes the access list of the temp folder it is in until that run's icacls
+// gives it one of its own (ensureParent), and where the temp folder lets others write — `TEMP` on a data drive gives Authenticated Users "modify" — a run that judges it in between is told
+// "not private" about a folder that is private a moment later, with the same identity. Remembered, that "no" sent every later workspace of the run to the plain temp folder, unrecorded, for the
+// rest of its life (measured: about one run in sixty, eight at a time, each making six). So a "no" about a list that is still only inherited (`inherited`, lib/windows-folder-acl.js), about a
+// folder made within PROTECT_WINDOW_MS, is not remembered: it is asked again after a pause (makeTempWorkspace). A "no" about a list somebody set, or about an older folder, is final, as before.
 // `created`: this call made the folder, gave it an access list of its own and read it back (ensureParent): it is not asked about again.
 // `deps.folderPrivacy` is a test seam for the Windows reader.
 const privacyVerdicts = new Map();
@@ -175,13 +216,18 @@ function checkParent(parent, deps, { created = false } = {}) {
     // A list that could not be got at all (the folder is being removed, most likely) is no answer either, and is not remembered: it is a refusal of the kind a folder being removed
     // gives, and the caller asks again after a pause.
     if (answer.unreadable) throw Object.assign(new Error(`${parent} could not be judged: ${answer.reason}`), { code: 'EBUSY' });
+    if (!answer.ok && answer.inherited === true && Math.abs(clockOf(deps)() - st.birthtimeMs) < PROTECT_WINDOW_MS) {
+      throw Object.assign(new Error(`${parent} can be changed by others, for now: ${answer.reason}`), { code: NOT_YET_PRIVATE });
+    }
     privacyVerdicts.set(key, answer);
   }
   const verdict = privacyVerdicts.get(key);
   if (!verdict.ok) throw new Error(`${parent} can be changed by others: ${verdict.reason}`);
 }
 
-function ensureParent(parent, deps) {
+// Makes the plugin's folder, or finds it, and judges it — holding it meanwhile where judging takes long (Windows: A RUN HOLDS THE FOLDER, at the top of this file). Answers the hold, which the caller releases
+// once its workspace is in the folder (null when nothing is held); a folder that is refused throws, with the hold already released.
+function ensureParent(parent, deps, stamp) {
   const fsx = deps.fs || fs;
   // Not `recursive`: a temp folder that is not there is the failure it always was (ENOENT, from the plain call this falls back to), not a folder this makes.
   let created = false;
@@ -195,7 +241,53 @@ function ensureParent(parent, deps) {
   // workspace and every owner record the sweep will believe is then made inside it and inherits that grant. So before anything is put in it the folder is given an access list of its own — only
   // this user, the system and the administrators, protected from the folder above — and the list is read back (lib/windows-folder-acl.js).
   if (created && uidOf(deps) === null) protectNewParent(parent, deps);
-  checkParent(parent, deps, { created });
+  const hold = holdParent(parent, deps, stamp);
+  try {
+    checkParent(parent, deps, { created });
+  } catch (e) {
+    releaseHold(hold, deps);
+    throw e;
+  }
+  return hold;
+}
+
+// This run's hold on the plugin's folder (A RUN HOLDS THE FOLDER, at the top of this file), or null: nothing is held on POSIX, nor where the hold cannot be made — a full disk, a folder that takes no new
+// file, a host name that cannot be read (the machine is part of the hold's name) — which leaves the run exactly as it was before holds. It is made only in a plain folder: a link is not followed (checkParent,
+// which runs next, refuses the folder), and it is opened with `wx`, which makes a NEW file — nothing is ever written into it — so that what is removed later is this run's own. ENOENT is thrown — the folder
+// went before the hold was in it — and the attempt is made again at once, as for any ENOENT; so is a refusal of the moment from the look at the folder (a folder Windows is removing cannot be opened), which
+// is asked again after a pause. `stamp` is the run's owner stamp (lib/process-owner.js): its host and its pid name the hold.
+function holdParent(parent, deps, stamp) {
+  const machine = machineOf(stamp.host);
+  if (uidOf(deps) !== null || machine === null) return null;
+  const fsx = deps.fs || fs;
+  if (!fsx.lstatSync(parent).isDirectory()) return null;
+  const file = path.join(parent, `${HOLD_PREFIX}${machine}-${stamp.pid}-${crypto.randomBytes(3).toString('hex')}`);
+  let fd;
+  try {
+    fd = fsx.openSync(file, 'wx', 0o600);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') throw e;
+    return null;
+  }
+  try { fsx.closeSync(fd); } catch { /* the file is made all the same, and is removed by its name */ }
+  return file;
+}
+
+// Removes a hold. A scanner that has just seen the new file can refuse its removal for a moment (Windows: EPERM, EACCES or EBUSY), and a hold that stayed would keep the plugin's folder from going when the run
+// ends, so the removal is asked again after the same short waits as a rename (writeWhole). It never throws: a hold that is gone already (a sweep that took this run for a dead one) is what was wanted, and one that
+// cannot be removed is a dead run's hold to the next sweep once this run has ended.
+function releaseHold(file, deps) {
+  if (file === null) return;
+  const fsx = deps.fs || fs;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fsx.unlinkSync(file);
+      return;
+    } catch (e) {
+      if (!windowsRefusesForAMoment(e, deps) || attempt >= WAITS_MS.length) return;
+      (deps.pause || pauseSync)(WAITS_MS[attempt]);
+    }
+  }
 }
 
 // A folder this process made that cannot be made private is not used: it is removed — it is empty, and this process made it — and the workspace goes in the plain temp folder, where it always
@@ -207,12 +299,48 @@ function protectNewParent(parent, deps) {
   let same = false;
   try { same = identityOf(parent, fsx.lstatSync(parent)) === before; } catch { /* gone: another process that ended with nothing in it removed it */ }
   if (answer.ok && same) return;
-  if (same) {
-    try { fsx.rmdirSync(parent); } catch { /* something is in it already, and it is not this call's to remove */ }
-  }
+  if (same) removeUnprotectedParent(parent, before, deps);
   // Gone, or replaced: ask again at once. A folder that icacls could not even open — Windows is removing it — asks again after a pause. Anything else is final for this process.
   if (!same) throw Object.assign(new Error(`${parent} was replaced while it was being made private`), { code: 'ENOENT' });
   throw Object.assign(new Error(`${parent} could not be made private: ${answer.reason}`), { code: answer.unreadable ? 'EBUSY' : NOT_PRIVATE });
+}
+
+// THE FOLDER A FAILED MAKER LEAVES (Windows). Removing the folder this run made and could not make private is refused while another run's hold is in it (ENOTEMPTY) — a run that found the folder
+// moments after it was made and is judging it — and a single `rmdir` then left it for good: an empty folder whose list is still the temp folder's, which no later run could use (its "no" is final once
+// the folder is older than PROTECT_WINDOW_MS) and none removes (only a run that used it prunes it). So the maker waits for the holds to go: it removes the folder as soon as it is empty, asking again
+// every REMOVE_PAUSE_MS for up to REMOVE_PATIENCE_MS. A judge holds the folder only while it judges it — a "not yet" lets go before it pauses (makeTempWorkspace) — so
+// the holds of runs that are waiting for this folder to be made private come and go, and the maker's `rmdir` lands between them; the judge then finds the folder gone (ENOENT) and makes one of its own.
+// It removes only what it made: right before every `rmdir` the folder at the path must still be a plain folder with the identity it had right after this run's mkdir (`made`), and the waiting stops
+// at once when it is not. `rmdir` removes only an empty folder, in one step — never a file, never a hold — so the most a folder swapped in between that look and the `rmdir` could lose is itself,
+// empty: the same as the single `rmdir` that was here before, and as the end of every run (prune), which removes the folder by its path alone. A folder whose listing shows anything but files named
+// as holds — a workspace, a record, a file of anyone's — is not waited for: it is in use, or not this run's to empty. A listing Windows refuses for a moment (EPERM, EACCES, EBUSY) shows nothing,
+// and is waited out like a hold: `rmdir` still removes only an empty folder, so the wait can cost time, never content. When the wait runs out, or this run is killed while it waits, the folder is
+// left, as it was before (the caller throws NOT_PRIVATE either way).
+function removeUnprotectedParent(parent, made, deps) {
+  const fsx = deps.fs || fs;
+  const clock = clockOf(deps);
+  const until = clock() + REMOVE_PATIENCE_MS;
+  for (;;) {
+    try {
+      const now = fsx.lstatSync(parent);
+      if (!now.isDirectory() || identityOf(parent, now) !== made) return;
+    } catch {
+      return; // gone: what was wanted
+    }
+    let refusal;
+    try {
+      fsx.rmdirSync(parent);
+      return;
+    } catch (e) {
+      refusal = e;
+    }
+    // ENOTEMPTY: something is in it. EPERM, EACCES or EBUSY (Windows): a hold that is being made or removed at that moment — a file whose removal is pending keeps its folder from going, and is not listed.
+    if (!(refusal && (refusal.code === 'ENOTEMPTY' || windowsRefusesForAMoment(refusal, deps)))) return;
+    let onlyHolds = false;
+    try { onlyHolds = fsx.readdirSync(parent, { withFileTypes: true }).every((entry) => entry.isFile() && isHoldName(entry.name)); } catch (e) { onlyHolds = windowsRefusesForAMoment(e, deps); }
+    if (!onlyHolds || clock() >= until) return;
+    (deps.pause || pauseSync)(REMOVE_PAUSE_MS);
+  }
 }
 
 // A file written WHOLE: to a file of its own name, then renamed over `file`, which is atomic — a reader (a sweep, which reads the record of a live run's folder on Linux) or a kill finds the file as it was or all of the
@@ -427,7 +555,7 @@ function windowOf(listing, parent, maxExamined, deps) {
 
 /**
  * Removes the workspaces in the plugin's folder whose owner is provably gone — and, for one that was lent to another program, only when it is old as well (LENT_KEEP_MS) — and finishes the
- * removals that an earlier sweep began and was killed in. Looks at no more than `maxExamined` entries and removes no more than `maxRemoved`, and the entries it looks at move on from one sweep to the next
+ * removals that an earlier sweep began and was killed in, and removes the holds of runs that are gone (Windows: A RUN HOLDS THE FOLDER, at the top of this file). Looks at no more than `maxExamined` entries and removes no more than `maxRemoved` workspaces, and the entries it looks at move on from one sweep to the next
  * (windowOf), so that none is out of reach for good. Never throws; never touches anything it cannot prove dead.
  * @param {object} [deps] test seams: fs, os, uid, owner (the process-owner.js seams: hostname, platform, pid, probe, now, …), limits ({ maxExamined, maxRemoved })
  * @returns {{ parent: string, removed: Array<{ name: string, stamp: object }>, failed: Array<{ name: string, stamp: object, error: string }>, kept: number }}
@@ -501,9 +629,35 @@ function sweepDeadWorkspaces(deps = {}) {
     return true;
   };
 
+  // A hold (Windows: A RUN HOLDS THE FOLDER, at the top of this file) that a run was killed while holding: an empty file, removed once its pid is gone, so that the plugin's folder can go when it is empty. Only a
+  // hold of THIS machine — its name says which, and a pid says nothing on another — and only when this machine can be told at all (its host name is read as an owner record reads it, once a sweep meets a hold).
+  // The hold of a run that is going — this one's own among them — is left, and so is a file of that name that is not empty: no run made it. Removing one says nothing (it held nothing) and costs no removal of the cap.
+  let here;
+  const thisMachine = () => {
+    if (here === undefined) {
+      try { here = machineOf(ownerStamp(deps.owner).host); } catch { here = null; }
+    }
+    return here;
+  };
+  const releaseDeadHold = (name) => {
+    const machine = thisMachine();
+    if (machine === null || HOLD_NAME.exec(name)[1] !== machine) return;
+    if (probe(pidOfName(name)) !== 'gone') return;
+    const file = path.join(parent, name);
+    try {
+      const st = fsx.lstatSync(file);
+      if (st.isFile() && st.size === 0) fsx.unlinkSync(file);
+    } catch { /* gone meanwhile, or held for a moment: the next sweep tries again */ }
+  };
+
   for (const entry of windowOf(listing, parent, maxExamined, deps)) {
     if (entry.isFile() && entry.name.endsWith(REMOVING_SUFFIX)) {
       if (!finishInterruptedRemoval(entry.name)) result.kept += 1;
+      continue;
+    }
+    // Only where holds are made (Windows: `uid` is null, as for holdParent): elsewhere a file of that shape is an entry like any other, and is left as it always was.
+    if (uidOf(deps) === null && entry.isFile() && isHoldName(entry.name)) {
+      releaseDeadHold(entry.name);
       continue;
     }
     // A link, a file, anything that is not a folder was not made by a workspace maker.
@@ -603,14 +757,25 @@ function makeTempWorkspace(prefix, deps = {}) {
       // always was. The plugin's folder is a courtesy to the next run, so a refusal of it is never this run's failure; an error is reported only if the plain call fails too, and then it
       // is that call's, with that call's path.
       let dir;
+      let hold = null;
       try {
-        ensureParent(parent, deps);
+        hold = ensureParent(parent, deps, stamp);
         // From here on the folder may be one this process made, so it is this process's to take away when it ends with nothing in it — also when the workspace below is refused (a full disk) and goes in the temp folder.
         prune(parent, deps);
         sweepOnce(parent, deps);
         dir = mkdtemp(path.join(parent, `${named}${stamp.pid}-`));
       } catch (e) {
+        releaseHold(hold, deps);
         if (e && e.code === 'ENOENT') continue;
+        if (e && e.code === NOT_YET_PRIVATE) {
+          // Its maker may not have given it its own list yet (checkParent): ask again after a pause. Still "no" after the last, it is not used for this workspace, and asked about again for the next.
+          // The hold is let go before the pause (ensureParent): a maker whose protection failed is waiting to remove the folder (removeUnprotectedParent), and must be able to.
+          if (attempt < MAKE_ATTEMPTS) {
+            (deps.pause || pauseSync)(WAITS_MS[attempt - 1]);
+            continue;
+          }
+          break;
+        }
         if (windowsRefusesForAMoment(e, deps)) {
           if (attempt < MAKE_ATTEMPTS) {
             (deps.pause || pauseSync)(WAITS_MS[attempt - 1]);
@@ -623,14 +788,17 @@ function makeTempWorkspace(prefix, deps = {}) {
         }
         break;
       }
+      // The workspace is in the folder now, and keeps it from going as the hold did. It is recorded and registered BEFORE the hold is let go: letting go can wait on a scanner that holds the
+      // new file (releaseHold), and a run that is killed in that wait must leave a workspace a sweep can prove dead, not an empty folder with no record, which no sweep ever takes.
       mark(dir, stamp, deps);
       // The end of the process removes what the run did not — unless it was lent: a program that was given a path in it may still be writing there (see THE END OF A RUN). A `mkdtempSync` seam that answers a
       // folder somewhere else is not the plugin's folder's, and is not touched.
       if (deps.lent !== true && path.dirname(dir) === parent) ownWorkspaces.set(dir, deps.fs || fs);
+      releaseHold(hold, deps);
       return dir;
     }
   }
   return mkdtemp(path.join((deps.os || os).tmpdir(), prefix));
 }
 
-module.exports = { PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, pruneWorkspaceParents };
+module.exports = { PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, HOLD_PREFIX, LENT_KEEP_MS, LIMITS: { MAX_EXAMINED, MAX_REMOVED }, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, pruneWorkspaceParents };

@@ -14,6 +14,9 @@ const { RESOLVED_PAGES, REFUSED_PAGES, HIDDEN_CLOSING_TAG_PAGES, TYPE_HEAD_PAGES
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES, FUNCTION_TYPE_CALL_LINE, LONG_KEY, lookBehindPage, runnable } = require('./helpers/misread-page.js');
 const { AMBIGUITY_KINDS } = require('../lib/source-literals.js');
 const { pageStructureProblems } = require('../lib/page-structure.js');
+// These tests hold the lexer to its own rules — what it reads for certain, what it reports as a guess, and what a guess costs a page — so they read pages with
+// the lexer alone. Where the lexer guesses, the gates ask the TypeScript parser (typescript-views.js), which parser-check.test.js tests.
+require('../lib/typescript-views.js').setParserCheck(false);
 const {
   extractNavTargets,
   navReferencedKeys,
@@ -561,7 +564,7 @@ test('reverse resolution reports an id in a call that reaches a frontier, though
 // comment that ends at the `*/` inside the string on the next line: the rest of that DOUBLE-quoted string is then read as code — a call, whose
 // single-quoted id was rewritten as "PAGEREF_detail", quotes and all, inside a string that the new quotes then ended.
 test('a single-quoted id inside a string the lexer read as code is not turned into a token', () => {
-  const code = ['const of = 12;', 'const count = of/2; const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GUID}'}) /*";`, ''].join('\n');
+  const code = ['const of = 12;', 'for (const x of of/2 + "") {} const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GUID}'}) /*";`, ''].join('\n');
   assert.deepStrictEqual(extractNavTargets(code).map((t) => [t.kind, t.quote, t.afterFrontier]), [['literal', "'", true]], 'the lexer does read the call out of the string');
   const report = reverseResolveNavIdsReport(code, REVERSE_IDS);
   assert.strictEqual(report.code, code, 'the string is intact');
@@ -1879,9 +1882,9 @@ test('only what lies at or after the earliest frontier is distrusted, and the ea
   const twice = `${OBJECT_DIVISION}\n${DETAIL_CALL}\n${OBJECT_DIVISION}\n${DETAIL_CALL.replace('detail', 'other')}\n`;
   assert.deepStrictEqual(strayPageRefs(twice).map((r) => [r.token, r.frontier.kind, r.frontier.line]), [['PAGEREF_detail', 'brace', 1], ['PAGEREF_other', 'brace', 1]]);
   // The earliest by OFFSET, not the first kind found or the commonest one.
-  const keywordFirst = `const of = 12; const count = of/2; const re = /x/;\n${OBJECT_DIVISION}\n${DETAIL_CALL}\n`;
+  const keywordFirst = `const yield = 12; const count = yield/2; const re = /x/;\n${OBJECT_DIVISION}\n${DETAIL_CALL}\n`;
   assert.deepStrictEqual(strayPageRefs(keywordFirst).map((r) => [r.frontier.kind, r.frontier.line]), [['keyword', 1]]);
-  const braceFirst = `${OBJECT_DIVISION}\nconst of = 12; const count = of/2; const re = /x/;\n${DETAIL_CALL}\n`;
+  const braceFirst = `${OBJECT_DIVISION}\nconst yield = 12; const count = yield/2; const re = /x/;\n${DETAIL_CALL}\n`;
   assert.deepStrictEqual(strayPageRefs(braceFirst).map((r) => [r.frontier.kind, r.frontier.line]), [['brace', 1]]);
 });
 
@@ -1890,7 +1893,7 @@ test('only what lies at or after the earliest frontier is distrusted, and the ea
 const FRONTIER_SNIPPETS = {
   brace: OBJECT_DIVISION,
   paren: `if (true /*${'x'.repeat(2100)}*/) /abc/.test(text);`,
-  keyword: 'const of = 12; const count = of/2; const re = /x/;',
+  keyword: 'const yield = 12; const count = yield/2; const re = /x/;',
   angle: 'const half = total as Types . Alias<number> / 2; const re = /x/;',
   identifier: 'var Al\\u0069as = 12;',
   operator: 'const m = [.../a/.exec("a")]; const n = /b/;',

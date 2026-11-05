@@ -16,9 +16,17 @@
 //     there can be another version than the page was made with: that one is read, and an operation it does not define is a warning — the call fails, it does not reach another service.
 // A read that fails is said — the bindings were not checked — and never read as "nothing is there"; a row that answers without a column the check needs (successful but incomplete) is said the same way, as
 // not checked, and never read as "compatible". Nothing is refused without evidence that contradicts the binding.
+//
+// BUILT-IN OPERATIONS. Two `actionBindings` names are not Custom APIs at all: WhoAmI and RetrieveVersion, the reviewed built-in Dataverse operations (lib/dataverse-operations.js). They are
+// messages the platform defines, not rows of `customapi`, so reading `customapi` for them could only answer "not there" and send the author to deploy what cannot be deployed. A binding whose name
+// is EXACTLY one of them leaves the Custom API read — before the names are folded in case and cut into requests, so `whoami` beside `WhoAmI` is still read under its own spelling — and nothing is
+// read in its place: whether the environment or its page player offers the operation, and whether the signed-in user may call it, is said as NOT CHECKED, never as "compatible". A binding of that
+// name whose own declarations do not explicitly say "an unbound Function with no inputs" is a warning, and it is written as the spec states it: never repaired, and never refused. Any other
+// spelling (`whoami`, `Microsoft.Dynamics.CRM.WhoAmI`) and any other operation is a Custom API name, read and judged as one.
 const { odataLit } = require('./odata.js');
 const { normalizePageSource } = require('./app-spec.js');
 const { PAGE_BINDINGS, statedPageBindings } = require('./page-bindings.js');
+const { getReviewedDataverseOperation } = require('./dataverse-operations.js');
 
 // A filter is bounded: the names of a long list are read in requests of this many, not in one URL.
 const CHUNK = 25;
@@ -93,17 +101,23 @@ function pagesLeftOutAsDeployed(spec, changedOnly) {
 }
 
 // The names the pages state for one kind of binding: each once, as the first page spells it (the service compares them without regard to case, and the match here is made in lower case).
+// A built-in operation's binding names no `customapi` row (see the header), so it is left out of the Custom API names — first, before the folding: WhoAmI and whoami would otherwise fold to one
+// name, and the one read would be WhoAmI's, leaving whoami unread.
 function namesOf(pages, kind) {
   const identity = PAGE_BINDINGS[kind];
   const names = new Map();
   for (const page of pages) {
     for (const entry of page[kind] || []) {
+      if (kind === 'actionBindings' && isBuiltInOperation(entry)) continue;
       const name = entry && typeof entry[identity] === 'string' ? entry[identity].trim() : '';
       if (name && !names.has(name.toLowerCase())) names.set(name.toLowerCase(), name);
     }
   }
   return [...names.values()];
 }
+
+// Whether an `actionBindings` entry names a reviewed built-in operation — by its EXACT name, as the catalogue matches it: `whoami` is a Custom API name.
+const isBuiltInOperation = (entry) => Boolean(entry && typeof entry === 'object' && getReviewedDataverseOperation(entry[PAGE_BINDINGS.actionBindings]));
 
 async function readNamed(provision, entity, select, column, names) {
   const rows = [];
@@ -194,7 +208,8 @@ function bindingReads() {
 //                  customConnectorId  the lower-cased GUID in `_customconnectorid_value`; absent, null or not a GUID leaves it out. A null lookup is NOT proof that the connector is not a custom one — a reference
 //                                     made through the Web API can leave it unset — so the operations through such a reference are reported as not checked, not as defined
 // SUCCESSFUL BUT INCOMPLETE: a read that answers 200 with a row that lacks a column is as much "not known" as a read that fails. Nothing here infers compatibility from a value that is not there.
-//   apis         Map<lower-cased unique name, { isFunction, boundEntity? }> of the Custom APIs (`customapi` rows) — or null likewise
+//   apis         Map<lower-cased unique name, { isFunction, boundEntity? }> of the Custom APIs (`customapi` rows) — or null likewise, and null when every action binding names a built-in operation,
+//                which is not read (see the header)
 //   definitions  Map<custom connector id, Set<operation id> | { problem }> (readDefinitions) of the custom connectors a binding that calls operations goes through — or null when there is none
 //   problems     { references?, apis? }: why a read failed, as the service said it. A failed read does not stop the other, and is never an empty answer.
 //   unread       { references?, apis? }: Map<lower-cased name, why> — present only beside answered names, which only an attempt's LATER check meets (below): the names an earlier read of the attempt could not
@@ -284,12 +299,42 @@ const joined = (names) => names.map(shown).join(', ');
 const plural = (names, one, many) => (names.length === 1 ? one : many);
 const pagesWords = (pages) => `${plural(pages, 'page', 'pages')} ${pages.map((page) => quoted(page.name)).join(', ')}`;
 
+// What is said of every built-in operation a page binds, after its name: nothing in the environment was read for it (see the header).
+const BUILT_IN_UNCHECKED = 'These are reviewed built-in operation names; their availability in this environment or player and the signed-in user\'s permissions were not checked.';
+// What is said of one whose declarations do not explicitly match the reviewed contract. It promises no runtime answer: whatever the player does with such a binding is the player's.
+const BUILT_IN_SHAPE = 'This binding does not explicitly match the reviewed unbound, zero-input Function contract. It was preserved; invocation may fail.';
+
+// How a built-in operation's binding departs from "an unbound Function with no inputs", or null when it states exactly that. The binding is a spec's, held to the shapes a spec states
+// (lib/page-bindings.js): `isFunction` a boolean, `boundEntityLogicalName` an identifier, `parameterKinds` a map of primitive kinds — or absent. An ABSENT declaration is what a binding written
+// before the declarations were required looks like (`{ "name": "WhoAmI" }`), and it is said apart from a declaration that CONTRADICTS the contract — an Action, a bound table, inputs.
+//   { declaration: 'omitted' | 'contradicted', words }   e.g. words: "declares inputs (Target, Depth)"
+function builtInShape(entry) {
+  const contradicted = [];
+  const omitted = [];
+  if (entry.isFunction === undefined) omitted.push(['its kind', 'isFunction']);
+  else if (entry.isFunction === false) contradicted.push('an Action (isFunction: false)');
+  else if (entry.isFunction !== true) contradicted.push('a kind that is not a Function');
+  if (text(entry.boundEntityLogicalName)) contradicted.push(`a bound table (${shown(entry.boundEntityLogicalName)})`);
+  const kinds = entry.parameterKinds;
+  if (kinds === undefined) omitted.push(['its inputs', 'parameterKinds']);
+  else if (!kinds || typeof kinds !== 'object' || Array.isArray(kinds)) contradicted.push('inputs');
+  else if (Object.keys(kinds).length) contradicted.push(`inputs (${joined(Object.keys(kinds))})`);
+  if (!contradicted.length && !omitted.length) return null;
+  const and = (parts) => (parts.length < 3 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`);
+  const said = [];
+  if (contradicted.length) said.push(`declares ${and(contradicted)}`);
+  if (omitted.length) said.push(`does not declare ${omitted.map(([what]) => what).join(' or ')} (${omitted.map(([, key]) => key).join(', ')})`);
+  return { declaration: contradicted.length ? 'contradicted' : 'omitted', words: said.join(', and ') };
+}
+
 // What `targets` says of the bindings `pages` state: { findings, unchecked }.
 //   findings   [{ severity: 'refuse' | 'warn', kind, page: { key, name }, text, … }], a page at a time, in the order a page lists its bindings: its connector conflicts, the references it has none of, the references it
-//              has with no connection, the operations a custom connector there does not define, the Custom APIs it has none of, the Custom APIs that are not as the binding says. `refuse` is a connector conflict
-//              and nothing else: a binding that is refused is not judged further.
+//              has with no connection, the operations a custom connector there does not define, the Custom APIs it has none of, the Custom APIs that are not as the binding says, and the built-in
+//              operations whose declarations do not explicitly match their contract (`dataverse-operation-shape`, with `binding` and `declaration`: 'omitted' or 'contradicted'). `refuse` is a connector
+//              conflict and nothing else: a binding that is refused is not judged further.
 //   unchecked  [{ what, text }] for what could not be checked, and why: a page at a time, what its references' rows did not say (their connector, whether they have a connection, which custom connector they
-//              are for), then the operations of a binding whose custom connector's definition could not be read, and the names of its bindings an earlier read of the attempt could not read (`unread`);
+//              are for), then the operations of a binding whose custom connector's definition could not be read, and the names of its bindings an earlier read of the attempt could not read (`unread`),
+//              then the built-in operations it binds ({ what: 'Dataverse operations', page, names, text }: nothing is read for them);
 //              then each read that failed. Missing evidence is never a finding and never "compatible".
 function judgeBindingTargets(pages, targets) {
   const findings = [];
@@ -306,7 +351,10 @@ function judgeBindingTargets(pages, targets) {
   for (const page of pages) {
     const at = { key: page.key, name: page.name };
     const connectors = (page.connectorBindings || []).filter((entry) => nameOf(entry, PAGE_BINDINGS.connectorBindings));
-    const actions = (page.actionBindings || []).filter((entry) => nameOf(entry, PAGE_BINDINGS.actionBindings));
+    const named = (page.actionBindings || []).filter((entry) => nameOf(entry, PAGE_BINDINGS.actionBindings));
+    // A built-in operation's binding is judged apart: no row was read for it (readBindingTargets), so it is never "missing" and never compared with one.
+    const builtIns = named.filter(isBuiltInOperation);
+    const actions = named.filter((entry) => !isBuiltInOperation(entry));
     const missingReferences = [];
     const disconnected = [];
     const undefinedOperations = [];
@@ -425,10 +473,25 @@ function judgeBindingTargets(pages, targets) {
     }
     for (const mismatch of mismatches) findings.push({ severity: 'warn', kind: 'api-mismatch', page: at, binding: mismatch.binding, text: mismatch.text });
     for (const [why, names] of apisUnread) unchecked.push({ what: 'Custom APIs', text: `could not read this environment's Custom APIs (${shown(why)}), so ${plural(names, 'Custom API binding', 'Custom API bindings')} ${names.map(quoted).join(', ')} of page ${quoted(page.name)} ${plural(names, 'was', 'were')} not checked against them` });
+    if (builtIns.length) {
+      for (const entry of builtIns) {
+        const shape = builtInShape(entry);
+        if (shape) {
+          findings.push({
+            severity: 'warn', kind: 'dataverse-operation-shape', page: at, binding: entry.name, declaration: shape.declaration,
+            text: `page ${quoted(page.name)}: built-in operation binding ${quoted(entry.name)} ${shape.words}. ${BUILT_IN_SHAPE}`,
+          });
+        }
+      }
+      const names = [...new Set(builtIns.map((entry) => entry.name))];
+      unchecked.push({ what: 'Dataverse operations', page: at, names, text: `page ${quoted(page.name)} binds the built-in ${plural(names, 'operation', 'operations')} ${joined(names)}. ${BUILT_IN_UNCHECKED}` });
+    }
   }
   const unread = (what, kind, problem, listed) => {
     if (!problem) return;
-    const affected = pages.filter((page) => (page[kind] || []).some((entry) => nameOf(entry, PAGE_BINDINGS[kind])));
+    // A page whose action bindings are all built-in operations had nothing in the Custom API read, so a failed read is not said of it.
+    const read = (entry) => nameOf(entry, PAGE_BINDINGS[kind]) && !(kind === 'actionBindings' && isBuiltInOperation(entry));
+    const affected = pages.filter((page) => (page[kind] || []).some(read));
     if (affected.length) unchecked.push({ what, text: `could not read this environment's ${what} (${shown(problem)}), so the ${listed} of ${pagesWords(affected)} were not checked against them` });
   };
   unread('connection references', 'connectorBindings', targets.problems && targets.problems.references, 'connector bindings');

@@ -229,32 +229,34 @@ test('single-page inline generation treats missing or malformed Custom API Bindi
 // Only the exact sentinel means "none" — a missing, empty or malformed section is a broken plan.
 test('the Custom API phase and the page builder never read a missing or malformed section as none', () => {
   const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
-  const phase = skill.slice(skill.indexOf("**If it prints `enabled`:** read the plan's `## Custom API Bindings`"));
-  assert.ok(phase.length > 0, 'the Custom API phase is where it was');
-  assert.match(phase.slice(0, 700), /only when its body is exactly `No custom API bindings\.`/);
-  assert.match(phase.slice(0, 700), /missing, empty, or malformed, \*\*halt\*\*/);
+  const start = skill.indexOf('### Phase 4.6: Custom API Bindings');
+  assert.ok(start > -1 && skill.indexOf('### Phase 4.6b:') > start, 'the Custom API phase is where it was');
+  const phase = skill.slice(start, skill.indexOf('### Phase 4.6b:'));
+  assert.match(phase, /only\s+when its body is exactly `No custom API bindings\.`/);
+  assert.match(phase, /missing, empty, or malformed, \*\*halt\*\*/);
   const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
   assert.match(builder, /That sentinel is the only way a plan says\s+"none"/);
   assert.match(builder, /\*\*stop and report it instead of writing the page\*\*/);
   assert.doesNotMatch(builder, /is missing entirely, or contains no binding row, the page has \*\*no Custom APIs\*\*/);
 });
 
-// A plan made while `custom-api` was ON still carries its binding table after the flag is turned OFF.
-// Page generation takes that table as permission to emit executeAction/executeFunction calls, while the
-// OFF branch drops actions.json and --actions — so skipping the phase "regardless of the plan" deployed
-// pages calling Custom APIs that were never bound. OFF with a real table must halt before generation.
-test('a disabled Custom API probe halts on a plan that still carries a binding table', () => {
+// Custom API support has no feature flag any more. The phase once probed `custom-api` and, with it OFF, halted on a plan that still carried a
+// binding table (a plan made while it was ON). With nothing to probe there is no OFF branch: the plan's table is always what the page binds,
+// and only a missing, empty or malformed section halts. Inline generation reads the Custom API guidance whenever the plan has a table — it
+// once did so only under an enabled probe.
+test('the Custom API phase probes no flag: the plan\'s table is read whatever was set, and only a broken section halts', () => {
   const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
-  const start = skill.indexOf("**If it prints `disabled`:** Custom API support is OFF.");
-  assert.ok(start > -1, 'the disabled branch of the Custom API phase is where it was');
-  const off = skill.slice(start, skill.indexOf("**If it prints `enabled`:** read the plan's `## Custom API Bindings`"));
-  assert.match(off, /actual binding table[\s\S]{0,200}\*\*halt before page generation\*\*/, 'a real table under a disabled probe halts');
-  assert.match(off, /only a body of exactly `No custom API bindings\.` continues/, 'only the sentinel lets a disabled run go on');
-  assert.match(off, /missing, empty, or malformed section halts too/, 'a broken section halts under a disabled probe as well');
-  assert.doesNotMatch(off, /regardless of what the\s+plan's/i, 'the disabled branch must not ignore the plan');
-  assert.doesNotMatch(off, /Any other section body/i, 'no body but the sentinel means "none"');
+  const start = skill.indexOf('### Phase 4.6: Custom API Bindings');
+  assert.ok(start > -1 && skill.indexOf('### Phase 4.6b:') > start, 'the Custom API phase is where it was');
+  const phase = skill.slice(start, skill.indexOf('### Phase 4.6b:'));
+  assert.match(phase, /Custom API support has no feature flag, so there is nothing to probe here\./);
+  assert.doesNotMatch(phase, /feature-flags\.js|If it prints `(?:enabled|disabled)`|\bcustom-api\b(?!\.md)/, 'no probe and no disabled branch is left');
+  assert.match(phase, /actual binding table/, 'a real table is what the phase reads');
+  assert.match(phase, /missing, empty, or malformed, \*\*halt\*\* before page generation/);
   const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
-  assert.match(fastPath, /3b\. Only when the Phase 4\.6 probe printed `enabled` \*\*and\*\*/, 'inline generation reads Custom API guidance only under an enabled probe');
+  assert.match(fastPath, /3b\. Only when the plan's `## Custom API Bindings` section contains an \*\*actual\s+binding table\*\*/,
+    'inline generation reads Custom API guidance whenever the plan has a table');
+  assert.doesNotMatch(fastPath, /Phase 4\.6 probe/, 'inline generation waits for no Custom API probe');
 });
 
 // The manifest generator exits 2 when an existing package.json lacks a package a requested feature needs
@@ -1125,4 +1127,110 @@ test('genpage stamps every page target before it is written, in both paths', () 
   // The plan's File values already end in `.tsx`, and every command appends it: `<filename>` is the stem.
   assert.match(fastPath, /`<filename>` is the page's `File` value from the plan without its `\.tsx`\s+extension/, 'the single-page path says what <filename> is');
   assert.match(multi, /`<filename>` and `\[filename\]` are each page's `File` value from the\s+plan without its `\.tsx` extension/, 'and so does the multi-page path');
+});
+
+// The create flow's provenance gates use the semantic options, and only flags the script declares: an unknown flag is a usage
+// error, so a documented flag the script does not know would halt every run — and, before flags were declared, was dropped silently.
+test('every genpage-plan-provenance.js command the genpage flows document uses only flags the script declares', () => {
+  const script = fs.readFileSync(path.join(PLUGIN, 'scripts', 'genpage-plan-provenance.js'), 'utf8');
+  const declared = new Set([...script.matchAll(/^const (?:VALUE|BOOLEAN)_FLAGS = \[([^\]]*)\]/gm)]
+    .flatMap((match) => [...match[1].matchAll(/'([^']+)'/g)].map((name) => name[1])));
+  for (const flag of ['plan', 'approved', 'require-assumptions', 'require-observed-lookups', 'lookup-metadata']) assert.ok(declared.has(flag), `the script declares --${flag}`);
+  let commands = 0;
+  for (const file of [path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md')]) {
+    for (const command of readDoc(file).matchAll(/genpage-plan-provenance\.js"\s+(prepare|verify)([^\n`]*)/g)) {
+      commands += 1;
+      for (const flag of command[2].matchAll(/--([a-z-]+)/g)) assert.ok(declared.has(flag[1]), `${rel(file)}: --${flag[1]} is not a flag the script declares`);
+    }
+  }
+  assert.ok(commands >= 5, `expected the create and edit flows to document their provenance commands, found ${commands}`);
+  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
+  assert.match(skill, /verify [^\n]*--require-assumptions/, 'the create flow verifies a newly authored plan with its semantic records');
+  assert.match(skill, /verify [^\n]*--require-observed-lookups --lookup-metadata/, 'and gates generation on observed lookups');
+  const editFlow = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'));
+  assert.doesNotMatch(editFlow, /--require-assumptions|--require-observed-lookups|--lookup-metadata/, 'neighbour: an edit plan keeps its own comparison');
+});
+
+// Iteration that another page compiler can lose (references/rules.md, Critical Rule 24 and Common Errors > 5). The SDK compiles a page to ES5
+// with iterator support, but a tool that compiles the page again without it (an older maker portal, pac) reads a Map, a Set or an iterator
+// by length and indices: the values disappear with a clean compile (scripts/tests/iteration-emit.test.js runs both emits). Nothing executes
+// these instructions, so as with the Griffel rule the one rule text is stated in the same words in every document that writes or edits a
+// page (whitespace aside), and the WRONG/CORRECT examples live in rules.md alone.
+const ITERATION_RULE = [
+  'Pages this plugin uploads are compiled with iterator support (ES5 with `downlevelIteration`), so a spread, a `for...of` loop or an array',
+  'destructure of a Map, Set, iterator, generator or string reads it as modern JavaScript does.',
+  'A tool that compiles the page again without that support — an older maker portal, or `pac` — reads length and indices instead:',
+  'values disappear, defaults replace them, and rest destructuring or a string spread throws, all with a clean compile.',
+  'Keep the page correct under every compiler: convert with `Array.from(...)` before spreading, looping or destructuring, for example',
+  '`[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and',
+  '`[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`.',
+  'Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays.',
+  'Rest destructuring of a non-iterable array-like without `slice` throws under every compiler.',
+  'A destructuring default must not write to the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old',
+  'value here, unlike modern JavaScript.',
+  'See **Common Errors > 5. Iteration that another page compiler can lose** in `references/rules.md` for the pairs.',
+].join(' ');
+const ITERATION_SECTION = '**Common Errors > 5. Iteration that another page compiler can lose**';
+
+test('every instruction that writes or edits a page states the iteration rule in the same words, where it reviews the page', () => {
+  const docs = griffelDocs();
+  for (const [name, text] of Object.entries(docs)) {
+    assert.ok(squash(text).includes(ITERATION_RULE), `${name} must state the iteration rule in the shared words`);
+  }
+  // rules.md: the section opens with it, after Common Errors 1-4, which keep their numbers.
+  const section = docs.rules.split('\n### 5. Iteration that another page compiler can lose\n');
+  assert.equal(section.length, 2, 'rules.md has one canonical section');
+  assert.ok(squash(section[1]).trimStart().startsWith(ITERATION_RULE), 'the section opens with the rule');
+  const errors = docs.rules.slice(docs.rules.indexOf('\n## Common Errors\n'));
+  const numbered = [...errors.matchAll(/^### (\d+)\. /gm)].map((match) => Number(match[1]));
+  assert.deepEqual(numbered, [1, 2, 3, 4, 5], 'Common Errors 1-4 keep their numbers and 5 follows them');
+  // Critical Rules 1-24, in order, ending with 24 before the separator.
+  const critical = docs.rules.slice(docs.rules.indexOf('\n## Critical Rules\n'), docs.rules.indexOf('\n## Supported Libraries\n'));
+  assert.deepEqual([...critical.matchAll(/^(\d+)\. \*\*/gm)].map((match) => Number(match[1])), Array.from({ length: 24 }, (_, i) => i + 1));
+  assert.match(critical, /\n22\. \*\*Consistent errors\*\*[^\n]*\n23\. \*\*Lookup identities\*\*[^\n]*\n24\. \*\*Convert iterables to arrays\*\*[^\n]*\n\n---\n/);
+  // The page-builder has no shell: its Step 2.7 gives the rule and a self-review, and no command.
+  const builderStep = docs['page-builder'].split('## Step 2.7 — Iteration that another page compiler can lose')[1].split('## Step 3')[0];
+  assert.ok(squash(builderStep).includes(ITERATION_RULE), 'the page-builder states it in its own step');
+  assert.ok(docs['page-builder'].indexOf('## Step 2.6') < docs['page-builder'].indexOf('## Step 2.7'), 'after the Griffel step');
+  assert.doesNotMatch(builderStep, /node\s+"\$\{PLUGIN_ROOT\}/, 'no command for a worker to run');
+  assert.match(squash(builderStep), /Do not return a file that spreads, loops over or array-destructures one directly\./);
+  // /genpage, one page: step 9 beside the Griffel teaching, before the completeness gate of step 10.
+  const fastPath = docs['create flow'].split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  const step9 = fastPath.split(/\n9\. /)[1].split(/\n10\. /)[0];
+  assert.ok(squash(step9).includes(ITERATION_RULE), 'single-page generation reviews the page it wrote');
+  // An edit: before Edit Phase 6, keeping the requested scope.
+  const edit = docs['edit flow'];
+  const editRule = squash(edit).indexOf(ITERATION_RULE);
+  assert.ok(editRule > 0 && editRule < squash(edit).indexOf('## Edit Phase 6: Deploy Updated Page'), 'an edited page is reviewed before it is uploaded');
+  assert.match(squash(edit), /Do not silently expand an unrelated edit: convert an existing form only when the requested change needs it or the user asks for it, and state any resulting behavior change in the summary\./);
+  assert.match(squash(edit), /`Array\.from` reads the whole iterable at once: where a loop stops early or a destructure reads only the first values of a generator or another iterator, the conversion reads the rest too/, 'converting an existing form is not said to be neutral');
+  assert.doesNotMatch(squash(edit), /changes nothing here/);
+  // /app-builder: Phase 1.5 step 5, before promote-intent-pages.js commits the pages.
+  const appBuilder = docs['app-builder'];
+  const appRule = squash(appBuilder).indexOf(ITERATION_RULE);
+  assert.ok(appRule > 0 && appRule < squash(appBuilder).indexOf('promote-intent-pages.js" \\'), 'generated pages are reviewed before they are promoted');
+});
+
+test('the multi-page, browser-fix and hand-edit paths point at the iteration rule, and only rules.md holds the examples', () => {
+  const docs = griffelDocs();
+  const multiPage = docs['create flow'].split(/#### 5c\. Multi-page/)[1].split(/### Phase 6: Deploy/)[0];
+  assert.ok(squash(multiPage).includes(ITERATION_SECTION), 'multi-page generation points at the rule');
+  const fix = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'verify-flow.md')).split('## 7.5 Fix and Re-deploy')[1];
+  assert.ok(squash(fix).includes(ITERATION_SECTION), 'a browser-verify fix points at the rule');
+  const editing = docs['app-builder'].split('## Editing a deployed app')[1].split('## What the builder does')[0];
+  const editStep = editing.split(/\n2\. /)[1].split(/\n3\. /)[0];
+  assert.ok(squash(editStep).includes(ITERATION_SECTION), 'a page edited by hand points at the rule');
+  for (const file of mdFiles()) {
+    if (rel(file) === 'references/rules.md') continue;
+    assert.ok(!readDoc(file).includes('// WRONG — the spread contributes no values'), `${rel(file)} must point at the rules.md examples, not copy them`);
+  }
+});
+
+test('the iteration teaching promises no checker, gate code or result field', () => {
+  for (const file of [...mdFiles(), path.join(PLUGIN, 'AGENTS.md')]) {
+    const text = readDoc(file);
+    for (const word of ['check-iteration', 'iteration-compile', 'iterationChecks']) {
+      assert.ok(!text.includes(word), `${rel(file)} names ${word}, which this plugin does not ship`);
+    }
+  }
 });

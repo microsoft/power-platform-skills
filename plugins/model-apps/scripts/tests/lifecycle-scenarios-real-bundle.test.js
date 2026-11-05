@@ -108,7 +108,8 @@ const DOWNLOADED_REBUILD_WRITES = {
 // either — and what declaring them adds: one read of the table's status column and one of its keys, for the one table that declares them.
 // (The status column read is the same request the view filter's label read of that table makes among its four; it is not shared, because
 // that read is made only for a table a view filters by a label, and sharing it would cost every other table three reads more.)
-const VERIFY_READS_WITHOUT = 74;
+// 76: the two web resources the spec declares are read once each, with their content, for the web-resource check.
+const VERIFY_READS_WITHOUT = 76;
 const VERIFY_READS_ADDED = [
   "GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)",
   "GET /EntityDefinitions(LogicalName='contoso_project')/Keys?$select=LogicalName,SchemaName,KeyAttributes",

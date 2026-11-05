@@ -24,13 +24,13 @@ const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges,
 const { pageStructureProblems } = require('../../../../plugins/model-apps/scripts/lib/page-structure.js');
 const { navigationProblems } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
-const { customApiProblems } = require('./custom-api-contract.js');
+const { gradeCustomApi } = require('./custom-api-contract.js');
 const { gradeEvidence } = require('./evidence-utils.js');
 const {
   reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
   translateCoverageProblems, choiceEnumProblems,
 } = require('./page-checks.js');
-const { nestedDefinitionProblems } = require('./tsx-structure.js');
+const { nestedDefinitionProblems, renderedSource, unreadableElementProblems } = require('./tsx-structure.js');
 const { columnProblems } = require('./column-contract.js');
 
 let _verifiedIcons = null;
@@ -532,7 +532,7 @@ const PHASE5_EXPECTATIONS = new Map();
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree',
-  ({ fixture, files }) => gradeEvidence(customApiProblems, { ...fixture, files })
+  ({ fixture, files }) => gradeCustomApi({ ...fixture, files })
 );
 
 PHASE5_EXPECTATIONS.set(
@@ -688,6 +688,10 @@ PHASE5_EXPECTATIONS.set(
 // Not currency: a bare `${x}` interpolation (its `$` is the template delimiter), an OData query
 // option such as '?$select=' + cols (`$` is followed by a name), and a `currency:` key outside a
 // `style: 'currency'` number format (e.g. a translation dictionary `{ currency: 'Devise' }`).
+// JSX text and JSX attribute strings are read as the page renders them (renderedSource): the compiler
+// decodes their character references, so `<Text>&euro;{total}</Text>` shows "€", `<Text>&#36;{total}</Text>`
+// a "$" before the amount and `MM&#47;dd&#47;yyyy` a date pattern, exactly as if written plainly. A
+// JavaScript string or template is not decoded: `'&euro;'` shows those characters as written.
 const DATE_PART = '(?:d{1,2}|D{1,2}|M{1,4}|y{2,4}|Y{2,4})';
 const DATE_PATTERN = new RegExp(`\\b${DATE_PART}([/.\\-])${DATE_PART}\\1${DATE_PART}\\b`);
 
@@ -754,7 +758,11 @@ function objectProperties(content, keep, isLiteral, name) {
   return out;
 }
 
+// A page with an element whose type arguments this reader cannot read (unreadableElementProblems) fails: its attribute
+// strings are not decoded, and which characters after it are text is the lexer's guess, so a symbol could hide there.
 function hardcodedFormatProblem(content) {
+  const [unreadable] = unreadableElementProblems(content);
+  if (unreadable) return unreadable;
   const keep = blankNonCodePreservingTemplateExpressions(content);
   const comment = new Uint8Array(content.length);
   for (const { start, end } of commentRanges(content)) comment.fill(1, start, end);
@@ -772,32 +780,38 @@ function hardcodedFormatProblem(content) {
     else if (!comment[i] && !/\s/.test(content[i])) opener = content[i];
   }
   const isText = (i) => isLiteral(i) && !inRegex[i];
-  const text = content.split('').map((ch, i) => (isText(i) ? ch : ' ')).join('');
+  // The symbol and date reads below run over the page as it renders (renderedSource): `shown` has the character
+  // references of its JSX text and JSX attribute strings decoded, and `shown[k]` comes from source offset `at[k]`, so
+  // which characters are text is still the lexer's reading of the source. A page whose JSX holds no reference is its own
+  // `shown`, at the same offsets.
+  const { shown, at } = renderedSource(content);
+  const isShownText = (k) => isText(at[k]);
+  const text = shown.split('').map((ch, k) => (isShownText(k) ? ch : ' ')).join('');
   // The code character next to a string literal's delimiter, skipping whitespace, in direction dir.
   const codeNeighbour = (from, dir) => {
     let k = from;
-    while (k >= 0 && k < content.length && /\s/.test(content[k])) k += dir;
-    return k >= 0 && k < content.length && !isText(k) ? content[k] : '';
+    while (k >= 0 && k < shown.length && /\s/.test(shown[k])) k += dir;
+    return k >= 0 && k < shown.length && !isShownText(k) ? shown[k] : '';
   };
   for (const m of text.matchAll(/[$\u20ac\u00a3\u00a5\u20b9]/g)) {
     const i = m.index;
     if (m[0] !== '$') return `hardcoded currency symbol "${m[0]}"`;
     let j = i + 1;
-    while (j < content.length && /[ \t]/.test(content[j])) j += 1;
-    const amount = /\d/.test(content[j] || '');
-    const templateCurrency = content[i + 1] === '$' && content[i + 2] === '{';
-    const jsxCurrency = content[j] === '{' && !isText(j);
+    while (j < shown.length && /[ \t]/.test(shown[j])) j += 1;
+    const amount = /\d/.test(shown[j] || '');
+    const templateCurrency = shown[i + 1] === '$' && shown[i + 2] === '{';
+    const jsxCurrency = shown[j] === '{' && !isShownText(j);
     // String-boundary currency: the `$` is the last text character before a closing quote that is
     // followed by `+`, or the first text character after an opening quote that is preceded by `+`.
     // Whitespace is skipped unconditionally: the text view blanks string contents to spaces, so a
     // space inside the string is indistinguishable from code here. Quote DELIMITERS stay visible in
-    // the code view (a quote inside text is blanked), which is what `!isText` tests below.
+    // the code view (a quote inside text is blanked), which is what `!isShownText` tests below.
     let end = i + 1;
-    while (end < content.length && /[ \t]/.test(content[end])) end += 1;
+    while (end < shown.length && /[ \t]/.test(shown[end])) end += 1;
     let start = i - 1;
-    while (start >= 0 && /[ \t]/.test(content[start])) start -= 1;
-    const prefixConcat = /['"`]/.test(content[end] || '') && !isText(end) && codeNeighbour(end + 1, 1) === '+';
-    const suffixConcat = start >= 0 && /['"`]/.test(content[start]) && !isText(start) && codeNeighbour(start - 1, -1) === '+';
+    while (start >= 0 && /[ \t]/.test(shown[start])) start -= 1;
+    const prefixConcat = /['"`]/.test(shown[end] || '') && !isShownText(end) && codeNeighbour(end + 1, 1) === '+';
+    const suffixConcat = start >= 0 && /['"`]/.test(shown[start]) && !isShownText(start) && codeNeighbour(start - 1, -1) === '+';
     if (amount || templateCurrency || jsxCurrency || prefixConcat || suffixConcat) return 'hardcoded "$" currency symbol';
   }
   const pattern = DATE_PATTERN.exec(text);

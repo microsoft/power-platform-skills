@@ -13,7 +13,8 @@ const { validateAppSpec } = require('../lib/app-spec.js');
 // Pin their request shape too, so an unrelated fallback cannot hide inside the total.
 // Component type 62 is Site Map:
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
-const DOWNLOAD_READS = 83;
+// The command-bar inventory adds two: the `appaction` entity-set lookup and one `appactions` read for up to 20 of the app's tables.
+const DOWNLOAD_READS = 85;
 
 const reason = { label: 'Review', state: 'Active', value: 100000042, color: '#336699' };
 const key = { schemaName: 'contoso_emailkey', displayName: 'Email Key', columns: ['contoso_email'] };

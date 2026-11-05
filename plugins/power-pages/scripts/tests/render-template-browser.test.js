@@ -66,6 +66,7 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.deepEqual(result, { status: 'ok', output: outputPath, opened: false });
   assert.match(html, /Browse Power Pages templates/);
   assert.match(html, /Company "Portal"/);
+  assert.match(html, /Company "Portal" <span class="nav-category">SPA<\/span>/);
   assert.match(html, /311 Portal/);
   assert.match(html, /home\.png/);
   assert.match(html, /detail\.png/);
@@ -178,6 +179,39 @@ test('renderTemplateBrowser accepts raw nested variant maps from the manifest', 
   // not just the "Available frameworks" chip row. Multiple variants collapse to
   // a count in the hero.
   assert.match(html, /template-framework">2 frameworks</);
+});
+
+test('renderTemplateBrowser shows non-SPA category and responsive previews', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dataPath = path.join(dir, 'non-spa.json');
+  const outputPath = path.join(dir, 'browser.html');
+  fs.writeFileSync(dataPath, JSON.stringify({
+    TEMPLATES_JSON: [{
+      id: 'starter-layout-1',
+      name: 'StarterLayout1',
+      displayName: 'Starter Layout 1',
+      description: 'Liquid starter layout',
+      kind: 'non-spa',
+      keywords: ['liquid'],
+      previews: [{
+        name: 'home',
+        displayName: 'Home page',
+        desktop: 'https://example.test/desktop.png',
+        mobile: 'https://example.test/mobile.png',
+      }],
+    }],
+  }));
+
+  renderTemplateBrowser({ templatesJsonPath: dataPath, outputPath, open: false });
+  const html = fs.readFileSync(outputPath, 'utf8');
+
+  assert.match(html, /Starter Layout 1 <span class="nav-category">Non-SPA<\/span>/);
+  assert.match(html, /template-category">Non-SPA</);
+  assert.match(html, /Liquid \+ Web Template/);
+  assert.match(html, /Home page - desktop/);
+  assert.match(html, /Home page - mobile/);
+  assert.doesNotMatch(html, /Available frameworks/);
 });
 
 test('renderTemplateBrowser shows a single object-map variant in the hero label', (t) => {

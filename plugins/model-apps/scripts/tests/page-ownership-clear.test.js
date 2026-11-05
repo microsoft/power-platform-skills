@@ -8,6 +8,8 @@ const ownership = require('../lib/page-ownership-records.js');
 const snapshots = require('../lib/apply-snapshot-store.js');
 const { loadCli } = require('./helpers/cli-harness.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { withPageType } = require('./helpers/page-component-type.js');
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const OTHER_ENV = 'https://fabrikam.crm.dynamics.com';
@@ -108,11 +110,13 @@ for (const outcome of ['deleted', 'confirmed absent']) {
         return [];
       },
       // The pages in their saved layer, which is where teardown looks for them; the navigation's saved layer is not modelled here, so reading it fails as it does without a client.
+      // The page table's component type is answered in front: the build's pages join the spec's solution (lib/page-solution.js).
       dataverse: {
-        get: async (url) => {
+        get: withPageType(async (url) => {
+          if (isFormScan(url)) return noFormRows();
           if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`not modelled: ${url}`);
           return { status: 200, body: { value: state.page ? [{ uxagentprojectid: ID, name: 'Overview', componentstate: 0 }] : [] } };
-        },
+        }),
       },
       createWebResource: async (o) => { state.manifest = Buffer.from(o.content, 'utf8').toString('base64'); return { id: 'manifest-id' }; },
       updateWebResource: async (id, o) => { state.manifest = Buffer.from(o.content, 'utf8').toString('base64'); },

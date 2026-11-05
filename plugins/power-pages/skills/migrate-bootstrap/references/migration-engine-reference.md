@@ -4,16 +4,16 @@ This reference documents the CLI engine the `/migrate-bootstrap` skill orchestra
 `pac pages bootstrap-migrate` does, what it produces, and how `pac pages upload`
 automatically flips the server-side Bootstrap 5 runtime flag.
 
-## Site type: classic only
+## Site type: non-SPA only
 
-This engine operates on **classic / native** Power Pages sites — the downloaded site
+This engine operates on **non-SPA / native** Power Pages sites — the downloaded site
 folder containing Liquid web templates and config:
 
 - `website.yml` (has `adx_websiteid`)
 - `sitesetting.yml`
 - `*.webtemplate.source.html`, `*.html`, `*.aspx`, `*.ascx`, `*.css`, `*.js`
 
-It does **not** apply to code sites (React/Vue/Angular/Astro), which have
+It does **not** apply to SPA sites (React/Vue/Angular/Astro), which have
 `powerpages.config.json` + a framework `package.json` and are never Bootstrap-3-based.
 
 ## `pac pages bootstrap-migrate`
@@ -24,7 +24,7 @@ pac pages bootstrap-migrate --path "<SITE_FOLDER>"
 
 | Argument | Alias | Required | Notes |
 |----------|-------|----------|-------|
-| `--path` | `-p` | Yes | Path to the downloaded classic site folder |
+| `--path` | `-p` | Yes | Path to the downloaded non-SPA site folder |
 
 ### Behavior (non-destructive)
 
@@ -100,7 +100,7 @@ any changes, else category (1).
 pac pages upload --path "<SITE_FOLDER>V5"
 ```
 
-`--modelVersion` defaults to `Standard` (correct for a classic site). Use `pac pages upload` —
+`--modelVersion` defaults to `Standard` (correct for a non-SPA site). Use `pac pages upload` —
 **not** `upload-code-site`.
 
 After uploading content, the upload verb runs an internal **Bootstrap V5 post-processor**
@@ -147,7 +147,7 @@ If either is absent, the flip silently no-ops even though the content uploads fi
 
 The skill depends on these verbs being present in the CLI build / tenant:
 
-- `pac pages download` — fetch a classic site locally.
+- `pac pages download` — fetch a non-SPA site locally.
 - `pac pages bootstrap-migrate` — the migration engine.
 - `pac pages upload` — upload + auto flag-flip.
 

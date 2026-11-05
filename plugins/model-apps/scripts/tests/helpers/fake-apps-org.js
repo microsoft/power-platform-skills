@@ -24,7 +24,10 @@
 //                                                                          not (a draft); `{ componentstate: 1, published: true }` is a published app with a
 //                                                                          saved edit, whose published row is still there
 //   sitemaps    [{ sitemapid, sitemapnameunique, sitemapname, sitemapxml }]
+//   forms       [{ formid, objecttypecode, name, type, formxml }]          the system forms (default none), in both layers: a page delete reads them all to refuse a
+//                                                                          page a form still embeds (lib/page-reference-guard.js)
 //   tables      [{ logicalName, schemaName, displayName, isCustom, entitySetName }]   the table definitions (`EntityDefinitions`)
+//   pageType    the page table's ObjectTypeCode, its solution component type (`options.pageType`, default 10372)
 //   components  [{ solution, objectid, type }]                             what AddSolutionComponent was given
 //   publishes   [appmoduleid]                                              what PublishXml named
 //   appSettings [{ appsettingid, parentappmoduleid, settingdefinitionid, value, published }]   the app settings the SDK wrote. A new row is in the
@@ -138,12 +141,14 @@ function createFakeAppsOrg(options = {}) {
     apps: (options.apps || []).map((app) => ({ description: null, componentstate: 0, ...app })),
     sitemaps: (options.sitemaps || []).map((sitemap) => ({ sitemapname: sitemap.sitemapnameunique, sitemapxml: '<SiteMap />', ...sitemap })),
     tables: options.tables || [],
+    forms: options.forms || [],
     baseLanguage: options.baseLanguage === undefined ? 1033 : options.baseLanguage,
     settingDefinitions: (options.settingDefinitions || ['HeaderAndNavigationRefresh']).map((uniquename) => ({ settingdefinitionid: randomUUID(), uniquename, displayname: uniquename })),
     appSettings: [],
     components: [],
     publishes: [],
     views: options.views || [],
+    pageType: options.pageType === undefined ? 10372 : options.pageType,
   };
   // The page backend reads a page through its own tables (project, files, conversation), which this fake answers by handing those requests to a stateful page fake seeded from `pages`:
   // every page has the four rows the maker lays out, holding its `dataSources` (none, by default) — unless it is `raw`, a project with no rows.
@@ -205,7 +210,17 @@ function createFakeAppsOrg(options = {}) {
       })));
     }
     const entity = /^\/EntityDefinitions\(LogicalName='([^']+)'\)/.exec(where);
-    if (entity) return json(200, { LogicalName: entity[1], MetadataId: randomUUID(), EntitySetName: ENTITY_SETS[entity[1]] || `${entity[1]}s` });
+    // A table's definition. The page table's carries its ObjectTypeCode — its solution component type, which the environment allocates (`options.pageType`;
+    // the value is an example): apps.js reads it to add an app's pages to the solution.
+    //   GET /EntityDefinitions(LogicalName='uxagentproject')?$select=ObjectTypeCode   ->   { "ObjectTypeCode": 10372, "MetadataId": "…", … }
+    if (entity) {
+      return json(200, {
+        LogicalName: entity[1],
+        MetadataId: randomUUID(),
+        EntitySetName: ENTITY_SETS[entity[1]] || `${entity[1]}s`,
+        ...(entity[1] === 'uxagentproject' ? { ObjectTypeCode: state.pageType } : {}),
+      });
+    }
     if (/^\/solutions\?/.test(where)) {
       const name = equalsText(filter, 'uniquename');
       return rows(state.solutions.filter((solution) => name === null || lc(solution.uniquename) === name));
@@ -217,6 +232,8 @@ function createFakeAppsOrg(options = {}) {
       const wanted = equalsGuids(filter, 'uxagentprojectid');
       return rows(state.pages.filter((page) => wanted.includes(lc(page.id))).map((page) => ({ uxagentprojectid: page.id, name: page.name, componentstate: page.componentstate })));
     }
+    // Every form of every table, published or saved — the scan a page delete makes before it deletes (no filter: lib/page-reference-guard.js).
+    if (/^\/systemforms(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\))?\?\$select=formid,objecttypecode,name,type,formxml$/.test(where)) return rows(state.forms);
     if (/^\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?/.test(where)) {
       const unique = equalsText(filter, 'uniquename');
       const ids = equalsGuids(filter, 'appmoduleid');

@@ -318,12 +318,6 @@ function refusalProblems(fixture) {
   if ((fixture.files || []).length || calls.some((call) => isGeneration(call.command) || isMutation(call))) {
     problems.push('refused workflow generated a page or attempted a mutation');
   }
-  if (stage === 'custom-api') {
-    // Loaded only while scoring this refusal to keep the shared evidence primitives independent
-    // of the API lifecycle module (which itself consumes those primitives).
-    const { customApiGateProblems } = require('./custom-api-contract.js');
-    return problems.concat(customApiGateProblems(fixture));
-  }
   // A run refused at Edit Phase 1b because the chosen app has no generative pages: its "gate" is the empty
   // page listing, and an auth call it made on the way (the edit flow captures its environment with
   // check-auth.js) must still be well formed.

@@ -50,6 +50,10 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { readTranslationLabels, isTranslationExport } = require('./lib/translation-labels.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readBaseline } = require('./lib/deployed-baseline.js');
+const { readVerifyManifest, readLiveForm } = require('./lib/declared-form-io.js');
+const { readLiveDashboard } = require('./lib/declared-dashboard-io.js');
+const { readLiveRule } = require('./lib/declared-rule-io.js');
+const { readLiveBpf } = require('./lib/declared-bpf-io.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
@@ -63,10 +67,14 @@ const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
 const { readStatusReasons, readAlternateKeys } = require('./lib/status-reasons-keys.js');
+const { readTableFlags } = require('./lib/schema-feature-contract.js');
+const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
+const { verifyFieldSecurity } = require('./lib/field-security.js');
 const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 // The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
 const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { uniqueKeys } = require('./lib/unique-keys.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
 //
@@ -81,11 +89,11 @@ const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // what got verified, and a forced refresh there could discard a concurrent writer's edit. A fresh workspace has no
 // local copy to read, discard or race with, and a fresh SDK no cached read to hand back. One per read, not per run:
 // a second read of the same dashboard must not come from the first one's cache.
-async function throwawaySdk(env, httpClient, prefix) {
+async function throwawaySdk(env, httpClient, prefix, sdkOptions) {
   const dir = makeTempWorkspace(prefix);
   const dispose = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } };
   try {
-    return { sdk: await makeProvision(env, dir, httpClient), dispose };
+    return { sdk: await makeProvision(env, dir, httpClient, sdkOptions), dispose };
   } catch (e) {
     dispose();
     throw e;
@@ -98,16 +106,18 @@ async function throwawaySdk(env, httpClient, prefix) {
 function isolatedReaderFor(env, opts = {}) {
   let client = opts.httpClient || null;
   const makeClient = opts.makeClient || createAzHttpClient;
-  return async () => throwawaySdk(env, client || (client = makeClient(env)), 'verify-dashboard-');
+  // sdkOptions.themeReads: the app theme's read (readerFor's appTheme) asks for an SDK made with the strict theme read policy
+  // (lib/app-theme-reads.js); every other read gets the SDK it always got.
+  return async (sdkOptions) => throwawaySdk(env, client || (client = makeClient(env)), sdkOptions && sdkOptions.themeReads ? 'verify-theme-' : 'verify-dashboard-', sdkOptions);
 }
 
-async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
+async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env), sdkOptions = {}) {
   // A link at the workspace root would make the SDK storage follow it. Refuse before the
   // factory runs. An explicit real directory is created if missing, then re-checked.
   // The module's own fs, not a second copy: a caller that replaced fs must see the same create.
   assertSafeOutputDir(workspaceDir, { create: true, fs });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
-  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient, ...(sdkOptions && sdkOptions.themeReads ? { themeReads: true } : {}) });
   await sdk.initWorkspace();
   // Only the SDK is returned. The raw `httpClient` used to come back with it because the role
   // privilege check had no SDK surface to read `EntityDefinitions(...)?$select=Privileges`; the
@@ -228,6 +238,13 @@ function readerFor(sdk, appUnique, opts) {
     // unfiltered read serves every findTable in this verify run. Caching a filtered page would
     // hide a later table whose name does not contain the first query.
     beginVerificationPass,
+    // The configuration kinds (lib/configuration-artifacts.js verifyConfiguration), read through this reader's SDK: each declared item's
+    // definition, its binding when the build was given one (--deployment-settings), a required variable's value, a Custom API's
+    // implementation, a rule's publication and the solution's version. Reads only.
+    configuration: async (spec, bindings) => {
+      const C = require('./lib/configuration-artifacts.js');
+      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName: spec && spec.solution && spec.solution.uniqueName }));
+    },
     findTable: async (logical) => {
       const l = String(logical).toLowerCase();
       const tables = await catalog();
@@ -268,11 +285,25 @@ function readerFor(sdk, appUnique, opts) {
       const items = await sdk.resolveArtifact('command', { entity: String(entity).toLowerCase() });
       return !!(items && items[0] && items[0].id);
     },
+    // webResource(name): the web resource of that name as a plain read answers it (its published layer), with its content — the same read
+    // the build makes before it reuses one — or null when there is none:
+    //   GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_/scripts/form.js'&$top=1
+    //   { "value": [ { "webresourceid": "…", "content": "dmFyIEZvcm0gPSB7…" } ] }
+    webResource: async (name) => {
+      const rows = await sdk.queryRecords('webresource', { select: ['webresourceid', 'content'], filter: `name eq '${odataLit(name)}'`, top: 1 });
+      const row = rows && rows[0];
+      return row && row.webresourceid ? { id: row.webresourceid, content: row.content } : null;
+    },
     // statusReasons(entity) / alternateKeys(entity): the table's status reasons, with their states, and its alternate keys, with their
     // columns — one narrow read each, made only for a table that declares any (lib/status-reasons-keys.js). They never throw: a read that
     // fails answers { state: 'error', why }, which verify reports on the checks it was for.
     statusReasons: (logical) => readStatusReasons(sdk.dataverse, logical),
     alternateKeys: (logical) => readAlternateKeys(sdk.dataverse, logical),
+    // Declared date behaviours, table flags and field security (lib/verify-spec.js asks only for what a spec declares). Each read
+    // answers what it could not read as unknown rather than throwing.
+    dateBehaviors: (logical) => readExistingDateBehaviors(sdk, logical),
+    tableFlags: (logical) => readTableFlags(sdk, logical),
+    fieldSecurity: (spec) => verifyFieldSecurity(spec, { sdk, provision: sdk }),
     // rolePrivileges(roleId): what the deployed role actually GRANTS, as [{ privilegeId, depth }].
     // The `roleprivileges` intersect row carries `privilegedepthmask` — a BITMASK (1 Basic /
     // 2 Local / 4 Deep / 8 Global), which is NOT the same encoding as the `Depth` name the SDK
@@ -416,6 +447,22 @@ function readerFor(sdk, appUnique, opts) {
     // like one with no FormXML.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
     // and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+    // appTheme(spec): app.theme (Preview) as lib/app-theme.js verifyAppTheme reads it — [{ key, ok, state, code?, reasons? }].
+    // Read on a throwaway SDK made with the strict theme read policy (opts.isolatedReader({ themeReads: true })): the
+    // policy belongs to the SDK's client, and the run's own SDK was not made with it. Asked only for a spec that declares a
+    // theme (lib/verify-spec.js), so a spec without one loads nothing and reads nothing more.
+    appTheme: async (spec) => {
+      if (!opts.isolatedReader) throw new Error('the app theme reader needs an isolated reader');
+      const appId = await appIdFor(sdk, appUnique);
+      if (!appId) throw new Error(`app ${appUnique} was not found`);
+      const reader = await opts.isolatedReader({ themeReads: true });
+      try {
+        const { verifyAppTheme } = require('./lib/app-theme.js');
+        return await verifyAppTheme(spec, { sdk: reader.sdk, appId, solution: spec.solution && spec.solution.uniqueName });
+      } finally {
+        reader.dispose();
+      }
+    },
     dashboardComponents: async (dashboardId) => {
       const publishedDashboard = async () => {
         const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
@@ -448,6 +495,60 @@ function readerFor(sdk, appUnique, opts) {
       }
       return art.components || [];
     },
+    // declaredForm (verify-spec verifyManagedForm): the form a committed managed form group binds, read by its id on a throwaway
+    // workspace (opts.isolatedReader), never the build's, whose local copy may hold edits not yet pushed and would let verify judge
+    // them instead of the service. With no isolated reader it throws, so the group is reported failed-to-read rather than passed.
+    declaredForm: async (formId) => {
+      if (!opts.isolatedReader) throw new Error('the declared form reader needs an isolated reader');
+      const reader = await opts.isolatedReader();
+      try {
+        const form = await readLiveForm(reader.sdk, formId);
+        if (!form) throw new Error(`form ${formId} was not found`);
+        return form;
+      } finally {
+        reader.dispose();
+      }
+    },
+    // declaredDashboard (verify-spec verifyManagedDashboard): the dashboard a committed managed dashboard group binds, read by its id on a
+    // throwaway workspace, like declaredForm, with the reading SDK's language (the label a tile's name is read in, as the build's proof
+    // read it). With no isolated reader it throws, so the group is reported failed-to-read rather than passed.
+    declaredDashboard: async (dashboardId) => {
+      if (!opts.isolatedReader) throw new Error('the declared dashboard reader needs an isolated reader');
+      const reader = await opts.isolatedReader();
+      try {
+        const artifact = await readLiveDashboard(reader.sdk, dashboardId);
+        if (!artifact) throw new Error(`dashboard ${dashboardId} was not found`);
+        return { artifact, languageCode: reader.sdk.languageCode };
+      } finally {
+        reader.dispose();
+      }
+    },
+    // declaredRule (verify-spec verifyManagedRule): the business rule a committed managed rule group binds, read by its id on a throwaway
+    // workspace, like declaredDashboard. With no isolated reader it throws, so the group is reported failed-to-read rather than passed.
+    declaredRule: async (ruleId) => {
+      if (!opts.isolatedReader) throw new Error('the declared business rule reader needs an isolated reader');
+      const reader = await opts.isolatedReader();
+      try {
+        const artifact = await readLiveRule(reader.sdk, ruleId);
+        if (!artifact) throw new Error(`business rule ${ruleId} was not found`);
+        return { artifact };
+      } finally {
+        reader.dispose();
+      }
+    },
+    // declaredBpf (verify-spec verifyManagedBpf): the business process flow a committed managed flow group binds, read by its id on a
+    // throwaway workspace, like declaredRule. With no isolated reader it throws, so the group is reported failed-to-read rather than passed.
+    declaredBpf: async (flowId) => {
+      if (!opts.isolatedReader) throw new Error('the declared business process flow reader needs an isolated reader');
+      const reader = await opts.isolatedReader();
+      try {
+        const artifact = await readLiveBpf(reader.sdk, flowId);
+        if (!artifact) throw new Error(`business process flow ${flowId} was not found`);
+        return { artifact };
+      } finally {
+        reader.dispose();
+      }
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
@@ -458,9 +559,9 @@ function readerFor(sdk, appUnique, opts) {
       if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
       return appComponentsP.get(key);
     },
-    appMainForms: (unique, tables) => {
-      const key = JSON.stringify([unique, tables]);
-      if (!appMainFormsP.has(key)) appMainFormsP.set(key, appMainFormsFor(sdk, unique || appUnique, tables));
+    appMainForms: (unique, tables, { strict = false } = {}) => {
+      const key = JSON.stringify([unique, tables, strict]);
+      if (!appMainFormsP.has(key)) appMainFormsP.set(key, appMainFormsFor(sdk, unique || appUnique, tables, { strict }));
       return appMainFormsP.get(key);
     },
     appRoleIds: () => appRoleIdsFor(sdk, appUnique),
@@ -591,6 +692,63 @@ function readerFor(sdk, appUnique, opts) {
   return base;
 }
 
+// `--inspect-components`: the spec's command controls as lib/feature-verify.js targets, one per table. Each control is asked
+// about on the surface its `location` deploys to — the SDK's own mapping (its command adapter: MainTab → Form, HomeTab →
+// HomePageGrid, ContextualTab → SubGridStandard) — and a flyout's or split button's children under its caption (the
+// inspection walks through the group the adapter puts between them).
+//
+// Identity. The build records no row id for a control, so every target here is DISCOVERY by caption: the inspection still
+// tells a missing, misplaced, hidden, disabled or duplicated control apart, but one it finds is `unverified` (CAPTION_ONLY)
+// and never a pass — a caption cannot tell the build's row from another solution's. That is deliberate, not a gap to
+// paper over: a control becomes verifiable only once its row id is recorded, and until then the flag answers what it can
+// and fails the run rather than pass on a caption. No `appModuleId` either: the build binds a command bar to its table,
+// not to an app. A key is the table and caption, made unique over the whole spec (lib/unique-keys.js: `#2`, `#3`, … on a
+// repeat, never a key another control already carries), so a line names the button the maker declared.
+const INSPECT_SURFACE = { MainTab: 'form', HomeTab: 'homeGrid', ContextualTab: 'subGrid' };
+const INSPECT_KIND = { Button: 'button', FlyoutAnchor: 'flyout', SplitButton: 'split' };
+
+function componentTargetsFor(spec) {
+  const all = [];
+  for (const c of (spec && spec.commands) || []) {
+    if (!c || !c.entity || !c.label) continue;
+    const entity = String(c.entity).toLowerCase();
+    const surface = INSPECT_SURFACE[c.location || 'MainTab'];
+    const type = c.type || 'Button';
+    all.push({ entity, control: { key: `${entity}:${c.label}`, surface, label: c.label, kind: INSPECT_KIND[type] || 'button' } });
+    if ((type === 'FlyoutAnchor' || type === 'SplitButton') && Array.isArray(c.children)) {
+      for (const ch of c.children) {
+        if (ch && ch.label) all.push({ entity, control: { key: `${entity}:${c.label} > ${ch.label}`, surface, label: ch.label, menuPath: [c.label], kind: INSPECT_KIND[ch.type || 'Button'] || 'button' } });
+      }
+    }
+  }
+  // Keys are allocated once every control is known, so a repeat cannot take a key a later control declares itself.
+  const keyed = uniqueKeys(all.map((a) => a.control));
+  const byEntity = new Map();
+  all.forEach((a, i) => {
+    if (!byEntity.has(a.entity)) byEntity.set(a.entity, []);
+    byEntity.get(a.entity).push(keyed[i]);
+  });
+  return [...byEntity].map(([entity, controls]) => ({ entity, controls }));
+}
+
+// Runs the inspection with the run's SDK (GETs of the tables' `appaction` rows only) and answers what verify prints: `ok`,
+// the counts and one line per control that did not pass. It never throws: an inspection that cannot run is a failed
+// requested check, reported by its code and HTTP status (findingOf — never the service's words). The helper is loaded only
+// here, so a verify without the flag reads nothing it did not read before.
+async function inspectComponents(sdk, spec) {
+  const commands = componentTargetsFor(spec);
+  if (!commands.length) return { ok: true, summary: { pass: 0, fail: 0, unverified: 0 }, problems: [], note: 'the spec declares no command controls, so there was nothing to inspect' };
+  const { verifyFeatures, describeFeatureCheck } = require('./lib/feature-verify.js');
+  try {
+    const fv = await verifyFeatures(sdk, { commands, dashboards: [] });
+    return { ok: fv.ok, summary: fv.summary, problems: fv.checks.filter((c) => c.status !== 'pass').map(describeFeatureCheck) };
+  } catch (err) {
+    const { findingOf } = require('./lib/readonly-operations.js');
+    const f = findingOf(err, 'INSPECTION_FAILED');
+    return { ok: false, summary: null, problems: [`UNVERIFIED component inspection could not run: ${f.code}${f.statusCode !== undefined ? ` (HTTP ${f.statusCode})` : ''}: ${f.message}`] };
+  }
+}
+
 // An agent reads the result off a console, and Windows PowerShell 5.1 decodes a child's stdout with the OEM code page: the UTF-8 bytes of an em dash in a warning reach it as three other
 // characters, and a Spanish label or a Japanese form name in a message as others still. `ascii` writes every character above U+007E as a `\uXXXX` escape instead — the same JSON to any
 // parser, and nothing a code page can garble (asciiJson in lib/dataverse-auth.js). It is for the result only: stderr is for people and is written as it is.
@@ -599,12 +757,12 @@ const RESULT_AS_ASCII = { ascii: true };
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--language-code|--languageCode <lcid>] [--workspace <dir>]';
+  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--language-code|--languageCode <lcid>] [--workspace <dir>] [--inspect-components]';
   // Reject an unknown or value-less flag before any network work: an unrecognised flag is dropped
   // by parseArgs AND swallows the token after it, so `--workspce x` would silently verify against
   // the default workspace and report drift the caller cannot explain.
   const flagError = validateFlags(argv, {
-    known: ['env', 'spec', 'workspace', 'language-code', 'languageCode'],
+    known: ['env', 'spec', 'workspace', 'language-code', 'languageCode', 'inspect-components'],
     needValue: ['env', 'spec', 'workspace', 'language-code', 'languageCode'],
   });
   if (flagError) {
@@ -645,7 +803,11 @@ async function main() {
   // `fieldOptionKeys: 'warn'` is the same arrangement for a key a form's `fieldOptions` entry does not take: the build refuses one, because it
   // would drop it and never apply the option, but a release before that check accepted it and built the form without the option — and
   // verification only reads that deployment. Every other finding about the entry stays an error.
-  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn' });
+  // `primaryAttributeKeys: 'warn'` is the same again for a key a table's `primaryAttribute` does not take: an earlier release accepted and
+  // ignored it, and the table was built without it.
+  // `declaredKeyCollisions: 'warn'` is the same for two declared views (or two declared charts) on one table with one name: a build refuses them,
+  // because one --authorize adopt:/overwrite: approval would name both, but verification takes no approval and only reads what was deployed.
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn', declaredKeyCollisions: 'warn' });
   // A warning is printed for a person and kept for the result JSON in one step, so the two cannot differ: a caller that reads only the JSON must not
   // lose what stderr says. The spec's are found before it is judged, so a spec that is refused reports the warnings it also has.
   const warnings = [];
@@ -675,6 +837,7 @@ async function main() {
   // must run against any environment the app is deployed to, whichever one that folder was built against.
   const session = await throwawaySdk(env, httpClient, 'verify-');
   let r;
+  let components;
   let genpage;
   try {
     // The page backend works in a throwaway workspace of its own, made when the first page is read (an app with no pages makes none) — not
@@ -686,7 +849,16 @@ async function main() {
     // kept because it was changed in the designer since then is not a failure (AB#6726727). It is keyed by
     // environment, so a folder built against another one yields none.
     const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
-    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode });
+    // The managed bindings recorded in the same workspace for this environment, app and solution (lib/managed-bindings.js), read only:
+    // a bound view or chart is held to its bound id by a fresh read, a bound declared form to its declaration and last proof (with the
+    // group's consumer state, readVerifyManifest), a bound declared dashboard, business rule or business process flow likewise, and a pending or unusable group is listed as unverified.
+    const managedManifest = spec.solution && spec.solution.uniqueName
+      ? readVerifyManifest({ workspaceDir, environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
+      : undefined;
+    // `appDir`: a web resource's `contentPath` is read relative to the spec's folder, as the build reads it, to compare its content.
+    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath), managedManifest });
+    // Only when asked, and before the SDK's workspace is disposed below.
+    if (flags['inspect-components'] === true) components = await inspectComponents(session.sdk, spec);
   } finally {
     // Before the result is printed: emitResult ends the process, so a cleanup placed after it never ran.
     // The backend first, and awaited: a page read the pass gave up on can still be running, and its workspace is closed and removed once the storage
@@ -707,7 +879,15 @@ async function main() {
   // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
   makeWritesBlocking(process.stdout, process.stderr);
   for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}${!c.present && c.detail ? ` — ${c.detail}` : ''}\n`);
-  process.stderr.write(`\n${r.ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
+  // `--inspect-components` adds its own requested checks: one that did not pass fails the run like a missing artifact. Without the flag
+  // `components` is undefined and every line and field below is what it was.
+  const ok = r.ok && (!components || components.ok);
+  if (components) {
+    process.stderr.write(`\n${components.ok ? '✓' : '✗'} component inspection (--inspect-components)${components.summary ? `: ${components.summary.pass} passed, ${components.summary.fail} failed, ${components.summary.unverified} unverified` : ''}${components.note ? ` — ${components.note}` : ''}\n`);
+    for (const p of components.problems) process.stderr.write(`  ✗ ${p}\n`);
+  }
+  const componentFailure = components && !components.ok ? `, ${components.problems.length} component check${components.problems.length === 1 ? '' : 's'} not passed` : '';
+  process.stderr.write(`\n${ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing${componentFailure}`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
   // What verify could not DECIDE is neither a pass nor a failure: listed beside the verdict, with its reason, so a green run never reads as
   // "everything the spec declares is deployed" while a label was not compared. It changes neither `ok` nor the exit status.
   const unverified = r.unverified || [];
@@ -719,11 +899,13 @@ async function main() {
   const missing = r.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`);
   // `warnings` repeats the `WARNING:` lines printed above for a caller that reads only this JSON. Like `unverified` it is left out when there is none, and it changes
   // neither `ok` nor the exit status.
-  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing, ...(unverified.length ? { unverified } : {}), ...(warnings.length ? { warnings } : {}) }, RESULT_AS_ASCII);
+  // `components` (only with --inspect-components) carries the inspection's counts and lines, and its lines join `errors` so the failure note counts them.
+  const componentProblems = components ? components.problems : [];
+  emitResult(ok, { ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: components ? [...missing, ...componentProblems] : missing, ...(unverified.length ? { unverified } : {}), ...(components ? { components: { ok: components.ok, summary: components.summary, problems: componentProblems, ...(components.note ? { note: components.note } : {}) } } : {}), ...(warnings.length ? { warnings } : {}) }, RESULT_AS_ASCII);
 }
 
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor, isolatedReaderFor };
+module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor, isolatedReaderFor, componentTargetsFor, inspectComponents };

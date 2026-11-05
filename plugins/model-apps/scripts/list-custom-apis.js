@@ -33,7 +33,6 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { exitIfCustomApiDisabled } = require('./lib/feature-flags');
 const { odataLit } = require('./lib/odata');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
@@ -219,10 +218,9 @@ function supportsApiParameters(api, envUrl) {
 }
 
 async function main() {
-  // Feature gate first (fail closed) — see lib/feature-flags.js. Exit 3 = "feature off", distinct
-  // from 1 = runtime/usage error, so a caller can tell "not released" from "it broke".
-  exitIfCustomApiDisabled();
-
+  // No feature gate: Custom API discovery is always available. The `custom-api` flag that once
+  // gated it here (exit 3 while OFF) was removed after releases shipped with it on, so
+  // GENPAGE_ENABLE_CUSTOM_API is ignored.
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE = 'Usage: node list-custom-apis.js <envUrl> [--entities <logicalName1,logicalName2>]';

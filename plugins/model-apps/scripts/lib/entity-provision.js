@@ -51,6 +51,11 @@ const { RETRY, retryPolicyFor, refusal, serviceFailure, serviceCodeOf } = requir
 // What the run's throttle budget says when it refuses a wait (the words of the build's own halt for it), for the step guard in makeRunner.
 const { waitDoesNotFit } = require('./throttle-budget.js');
 const { readStatusOptions, alternateKeyMatches, alternateKeyOverColumns, sameKeyColumnSet } = require('./table-schema-metadata.js');
+// Choice options may be written `{ value, label }` as well as a plain or localized label; one normalizer turns every form into what
+// the SDK takes, and keeps the positional `100000000 + index` numbering for the forms that do not state a value.
+const { choiceOptionsForSdk, choiceOptionLabels, declaredTableFlags, readTableFlags, planTableFlags, applyTableFlags } = require('./schema-feature-contract.js');
+const { readExistingDateBehaviors, planDateBehaviorRepairs, applyDateBehaviorRepairs, assertSchemaWriteReady } = require('./date-behavior.js');
+const { readColumnSecurity, planColumnSecurity, applyColumnSecurity } = require('./field-security.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -125,16 +130,22 @@ function localizedLabelLcidsInSpec(spec) {
     note(e && e.primaryAttribute && e.primaryAttribute.displayName, `${at} primaryAttribute.displayName`);
     for (const c of (e && e.columns) || []) {
       note(c && c.displayName, `${at} column ${c && c.schemaName} displayName`);
-      for (const o of (c && c.options) || []) note(o, `${at} column ${c && c.schemaName} option`);
+      for (const o of choiceOptionLabels(c && c.options)) note(o, `${at} column ${c && c.schemaName} option`);
     }
     for (const k of (e && e.alternateKeys) || []) note(k && k.displayName, `${at} alternate key ${k && k.schemaName}`);
   }
   for (const r of (spec && spec.relationships) || []) note(r && r.lookup && r.lookup.displayName, `relationship lookup ${r && r.lookup && r.lookup.schemaName}`);
   for (const g of (spec && spec.globalChoices) || []) {
     note(g && g.displayName, `globalChoice ${g && g.name} displayName`);
-    for (const o of (g && g.options) || []) note(o, `globalChoice ${g && g.name} option`);
+    for (const o of choiceOptionLabels(g && g.options)) note(o, `globalChoice ${g && g.name} option`);
   }
   return [...byLcid.entries()].sort(([a], [b]) => a - b).map(([lcid, where]) => ({ lcid, where }));
+}
+
+// Whether the entity carries any localized label: the one fact that decides whether an inconclusive existence probe of its table may be
+// settled by the broad, label-bearing table list (findExistingTable). Every caller that probes a table the build may go on to create asks it here.
+function entityHasLocalizedLabels(entity) {
+  return localizedLabelLcidsInSpec({ entities: [entity] }).length > 0;
 }
 
 // Halt when a LOCALIZED label names a language the organization has not provisioned. AB#6686428.
@@ -254,6 +265,9 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
   // skip and easy to forget — so the only reliable moment is the one where the column is authored.
   // Omitted when absent, so an existing column's description is never blanked by a rebuild.
   if (c.description) o.description = String(c.description);
+  // Only `true` is sent: `false` is the platform default, and an omitted value must never be read as a request to unsecure. A secured
+  // column is never put in a table's own create (the SDK refuses it there); this build adds columns after the table, so it is not.
+  if (c.isSecured === true) o.isSecured = true;
   // Which columns carry a `maxLength`, and what, is the ONE rule maxLengthSent (lib/app-spec.js) states: the build counts a key over a column at the
   // length this creates the column with (keyBytesAtLeast), so the two must not disagree.
   const maxLength = maxLengthSent(c);
@@ -272,7 +286,12 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
       // but the gate is Integer-only for the same reason, so keep both narrow together).
       if (c.type === 'Integer' && c.integerFormat !== undefined) o.integerFormat = c.integerFormat;
       break;
-    case 'DateTime': if (c.dateFormat) o.dateFormat = c.dateFormat; break;
+    case 'DateTime':
+      if (c.dateFormat) o.dateFormat = c.dateFormat;
+      // Omitted stays omitted: the SDK then sends UserLocal, as it always has. DateOnly implies the DateOnly format in the SDK, and
+      // validateSchemaFeatures refuses DateOnly beside dateFormat 'DateAndTime' before any request.
+      if (c.dateTimeBehavior !== undefined) o.dateTimeBehavior = c.dateTimeBehavior;
+      break;
     case 'Boolean':
       if (c.trueLabel) o.trueLabel = c.trueLabel;
       if (c.falseLabel) o.falseLabel = c.falseLabel;
@@ -316,7 +335,7 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
 }
 
 function choiceOptions(col) {
-  return (col.options || []).map((label, i) => ({ value: 100000000 + i, label }));
+  return choiceOptionsForSdk(col.options);
 }
 
 // What the table's create asks for as its primary name column's length when the spec gives none: 100 — what the previous release
@@ -1847,6 +1866,23 @@ const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-works
 // PRIMARY_COLUMN_REQUIRED_NOT_APPLIED: the table WAS created, but the required level asked of its name column could not be confirmed, and the
 // message ends with "Do NOT re-run the create" and the SDK call that sets the level. Running this build again is the fix: it finds the table (it
 // is not created twice) and sets the level the way it does for any existing column with an explicit `required`.
+//
+// DATETIME_BEHAVIOR_MISSING: the bundled SDK's diagnosis of a column, lookup or relationship refused with 400 0x80048550 on a table whose Date
+// and Time columns have no behaviour — what Dataverse stores for such a column created INSIDE a table's create (this build never makes one
+// that way: it adds columns by their own request or in a change set, which the platform gives UserLocal). The SDK names the columns and its
+// own repair call (`updateColumn(..., { dateTimeBehavior: 'UserLocal' })`), which an operator of this plugin cannot make, so the halt names the
+// maker's step. A run again meets the same refusal (the error is typed: never retried). The build's own preflight (guardExistingTableDates)
+// raises the same code BEFORE the first such request, with the same remedy; the maker's step can also be a spec that declares the column's
+// behaviour, which the build then sets through that SDK call. DATETIME_BEHAVIOR_UNVERIFIED is that preflight when its read was not conclusive.
+//
+// COMMAND_IMMUTABLE_COLUMN_CHANGED: the bundled SDK refuses, before any request, to push a command row whose location or type changed (the
+// platform ignored such an update while reporting it saved). The build never pushes an existing command bar — a bar that exists is reused,
+// and button edits are not reapplied (sdk-build.js, commands) — so only a push of a bar this build is creating could meet it, which has no
+// existing row; the remedy is said all the same, in case a later path pushes one.
+//
+// COMMAND_CHILD_LOCATION_MISMATCH (bundled from model-apps 2.21.0) has no remedy here: the SDK refuses, before any write, a NEW command that states a
+// Location other than its parent's, and the build states a Location only on a bar — every control, child or not, takes its bar's (sdk-build.js,
+// buildCommandControl) — so no build sends one. The SDK's own message names the fix if a later path ever does.
 function operatorRemedy(err) {
   // A create refused with the lag of a table this attempt just created, still refused when the bounded check ran out (createInLagWindow,
   // recoverRefusedBatch, drainLagStatuses). Recognised by the error object itself, never by its words: the event the step reported while the
@@ -1860,6 +1896,15 @@ function operatorRemedy(err) {
   }
   if (err && err.code === 'LOCAL_EDITS_WOULD_BE_LOST') {
     return ` — the environment's copy changed after this workspace copy was fetched, and the workspace copy holds edits no build pushed (an interrupted build, or one halted by a concurrent edit). A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then ${RESET_WORKSPACE}, and re-run.`;
+  }
+  if (err && err.code === 'DATETIME_BEHAVIOR_MISSING') {
+    return ' — nothing was created by the refused request. Those Date and Time columns were created without a behaviour (by a tool that put them in the table\'s own create), and Dataverse then refuses every new column or lookup on the table. To fix it, either declare each of them in the spec as a DateTime column with dateTimeBehavior \'UserLocal\' (the build then sets it) and run the build again, or do it by hand. Set the behaviour of each to User local — the one their values are already stored with — in the column\'s advanced options in Power Apps, then run the build again.';
+  }
+  if (err && err.code === 'DATETIME_BEHAVIOR_UNVERIFIED') {
+    return ' — nothing was changed on the table. The build reads the behaviour of the table\'s Date and Time columns before it adds a column, lookup or relationship to a table it did not create, and before it sets a behaviour the spec declares on a column the table has; that read gave no complete answer. Run the build again once the environment answers metadata reads.';
+  }
+  if (err && err.code === 'COMMAND_IMMUTABLE_COLUMN_CHANGED') {
+    return ' — nothing was written. A command\'s location and type cannot be changed on a row that exists (the platform ignores the change). Remove the command in Power Apps, then run the build again to create it as the spec says.';
   }
   return '';
 }
@@ -2176,6 +2221,83 @@ async function provisionDataModel(args) {
   // The status reasons a table this attempt created refused with its lag, read and sent again here for the same reason (drainLagStatuses).
   await drainLagStatuses(args, lag, result);
   return result;
+}
+
+// The Date and Time behaviour work on a table this build did NOT create (lib/date-behavior.js says what the read is and why it is narrow):
+//   - an explicit `dateTimeBehavior` on a column the table already has is reconciled whenever it is declared, with or without the
+//     preflight: the declared value is compared with the typed read, and only a difference is written (updateColumn, then a read-back);
+//   - the preflight (`preflight`, on when the caller asks for it) is the check that the table can take a new column at all, run only when
+//     this build is about to add one (`writes`): a column, a Customer column or a relationship's lookup. A Date and Time column with no
+//     behaviour makes Dataverse refuse every such add, so the build halts BEFORE the first one rather than after it.
+// Both share one read per table per attempt (`cache`), so a table costs at most one diagnostic GET, and one with neither costs none.
+// A refused change (permanent, not changeable, or one-way without consent) halts, as an unconfirmed one does, and so does an unreadable
+// answer whenever a declared behaviour or the preflight needs it. A table with neither is not read and nothing on it changes.
+async function guardExistingTableDates({ sdk, provision, runner, entity, logical, existingCols, writes, preflight, authorizedDestructive, cache, publication }) {
+  const declared = ((entity && entity.columns) || []).filter((c) => c && c.type === 'DateTime' && c.dateTimeBehavior !== undefined
+    && existingCols.has(String(c.schemaName).toLowerCase()));
+  const gate = preflight === true && writes === true;
+  if (!declared.length && !gate) return;
+  const evidence = await readExistingDateBehaviors(provision, logical, { cache });
+  const name = (entity && entity.schemaName) || logical;
+  if (declared.length) {
+    const plan = planDateBehaviorRepairs({ schemaName: logical, columns: declared }, evidence, { authorizedDestructive, known: existingCols });
+    if (plan.refused.length) {
+      const why = plan.refused.map((r) => `${r.target}: ${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (to make it, run the build again with --authorize ${r.key})` : ''}`).join('; ');
+      await runner.run('data-model', `date and time behaviour ${name}`, async () => {
+        throw refusal(`the declared Date and Time behaviour cannot be applied — ${why}. Nothing was changed.`, { code: plan.refused[0].code });
+      });
+    }
+    if (plan.unknown.length && (!gate || evidence.complete)) {
+      // A declared behaviour the read cannot confirm halts rather than reporting the column as built: what it holds is not known.
+      // (With the preflight on, its own check below halts on the same unread answer; a whole answer that does not list a column the
+      // table has would pass that check, so it halts here.)
+      await runner.run('data-model', `date and time behaviour ${name}`, async () => {
+        throw refusal(`could not read the Date and Time behaviour of ${logical} (${plan.unknown[0].reason}), so the declared behaviour of ${plan.unknown.map((u) => u.target).join(', ')} cannot be confirmed`, { code: 'DATETIME_BEHAVIOR_UNVERIFIED' });
+      });
+    }
+    for (const op of plan.operations) {
+      await runner.run('data-model', `date and time behaviour ${name}.${op.column} -> ${op.behavior}`, async () => {
+        const applied = await applyDateBehaviorRepairs({ operations: [op] }, { sdk, provision, publication }, { evidence });
+        if (applied.unknown.length) {
+          throw refusal(`the Date and Time behaviour of ${op.target} was sent as ${op.behavior}, but ${applied.unknown[0].reason}`, { code: 'DATETIME_BEHAVIOR_UNCONFIRMED' });
+        }
+      });
+    }
+  }
+  if (!gate) return;
+  const ready = assertSchemaWriteReady(evidence);
+  if (ready.ready) return;
+  await runner.run('data-model', `date and time behaviour check ${name}`, async () => {
+    if (ready.code === 'DATETIME_BEHAVIOR_MISSING') {
+      throw refusal(`table ${logical} has Date and Time columns with no behaviour (${ready.columns.join(', ')}), so Dataverse would refuse the new column, lookup or relationship`, { code: ready.code });
+    }
+    throw refusal(`could not tell whether table ${logical} can take a new column: the read of its Date and Time behaviours was not conclusive (${ready.reason})`, { code: ready.code });
+  });
+}
+
+// An explicit `isSecured` on columns the table already has (`targets`, lowercased): one scalar read, then one updateColumn per column
+// that differs. `true` is written whether or not the read answered (the write is the same either way); an unread `false` halts, as a
+// declaration the build cannot confirm, and so does an unsecure without consent. Columns that declare nothing are never read or written.
+async function reconcileColumnSecurity({ sdk, provision, runner, name, logical, columns, targets, authorizedDestructive }) {
+  if (!columns.some((c) => typeof c.isSecured === 'boolean' && targets.has(c.schemaName.toLowerCase()))) return;
+  const evidence = await readColumnSecurity(provision, logical);
+  const plan = planColumnSecurity({ schemaName: logical, columns }, targets, evidence, { authorizedDestructive });
+  if (plan.unknown.length) {
+    await runner.run('data-model', `column security ${name}`, async () => {
+      throw refusal(`could not read whether ${plan.unknown.map((u) => u.target).join(', ')} ${plan.unknown.length === 1 ? 'is' : 'are'} secured (${plan.unknown[0].reason}), so the declared isSecured: false cannot be confirmed. Nothing was changed; run the build again.`, { code: 'COLUMN_SECURITY_UNREAD' });
+    });
+  }
+  if (plan.refused.length) {
+    await runner.run('data-model', `column security ${name}`, async () => {
+      throw refusal(`the declared column security cannot be applied — ${plan.refused.map((r) => `${r.target}: ${r.reason} (to make it, run the build again with --authorize ${r.key})`).join('; ')}. Nothing was changed.`, { code: plan.refused[0].code });
+    });
+  }
+  for (const op of plan.operations) {
+    await runner.run('data-model', `column security ${name}.${op.column} -> ${op.isSecured ? 'secured' : 'not secured'}`, async () => {
+      const applied = await applyColumnSecurity({ operations: [op] }, { sdk });
+      if (applied.refused.length) throw refusal(`${op.target}: ${applied.refused[0].reason}. Nothing was changed.`, { code: applied.refused[0].code });
+    });
+  }
 }
 
 async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, logical, languageCode, window }, result, checkExisting = false) {
@@ -2563,7 +2685,7 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
 // `owed` is the Map provisionDataModel keeps (see there): this attempt's tables whose length is to be set, and those an earlier attempt
 // left unset. `carriedIn` is the set of the second kind as the phase found them; `waitingKeys` collects the alternate keys that wait for
 // a length step, for createWaitingKeys to make once the steps have run.
-async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier, createdTables, localizedLabelsChecked = false }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
   // `lookupLabels` records the label each spec lookup column carries once this phase is done
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
@@ -2579,14 +2701,27 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
 
   // Before any write: refuse a localized label naming a language this org has not provisioned.
   // Dataverse would accept it and silently keep only the provisioned label (live-measured), so this
-  // must run ahead of the first createTable rather than as a post-hoc verify.
-  await checkLocalizedLabelLanguages(spec, provisionedLanguages);
+  // must run ahead of the first createTable rather than as a post-hoc verify. A caller that also creates the
+  // publisher and the solution checks earlier still, before those (runSdkBuildPhases, provisionEntities), and
+  // says so with `localizedLabelsChecked`, so the language list is read once.
+  if (!localizedLabelsChecked) await checkLocalizedLabelLanguages(spec, provisionedLanguages);
 
   const globalChoiceIds = result.globalChoiceIds;
   // The declared tables (lower-case logical names) this run found already in the environment, as opposed
   // to the ones it created. A lookup to one that sets no displayName of its own is named by the
   // environment (lookupParentNeedsEnvironment), which only the table loop below can know.
   const reusedTables = new Set();
+  // The declared tables this build did not see itself create: the reused ones, and one whose create was answered "already exists" and
+  // that was then found. Each is guarded by the Date and Time preflight before a column or lookup is added to it (guardExistingTableDates).
+  const unprovenTables = new Set();
+  // The typed Date and Time reads of this attempt, one per table at most (guardExistingTableDates), and the tables whose definition a
+  // schema-feature change altered, published together at the end of the phase (publishChangedDefinitions).
+  const dateEvidence = new Map();
+  const changedDefinitions = new Set();
+  const publication = { queue: (scope) => { if (/^table:/.test(scope)) changedDefinitions.add(scope.slice('table:'.length)); } };
+  const guardDates = (e, logical, existingCols, writes) => guardExistingTableDates({
+    sdk, provision, runner, warn, entity: e, logical, existingCols, writes, preflight: dateBehaviorPreflight, authorizedDestructive, cache: dateEvidence, publication,
+  });
 
   // 2a. Global option sets (shared choices) — built before columns that bind to them. The SDK's
   // createGlobalOptionSet is now IDEMPOTENT: it probes by Name and REUSES an existing set (returning
@@ -2597,7 +2732,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
   // runner.run instead of being silently swallowed.
   for (const gc of spec.globalChoices || []) {
     await runner.run('data-model', `global choice ${gc.name}`, async () => {
-      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, ...(gc.description ? { description: gc.description } : {}), options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
+      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, ...(gc.description ? { description: gc.description } : {}), options: choiceOptionsForSdk(gc.options) });
       globalChoiceIds[gc.name] = r.metadataId;
     });
   }
@@ -2608,7 +2743,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // Whether THIS entity carries any localized label. It decides whether an inconclusive existence
     // probe may be resolved by the broad `findTables` read — safe for a plain-label entity, poisoning
     // for a localized one. See findExistingTable.
-    const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
+    const entityIsLocalized = entityHasLocalizedLabels(e);
     const hits = await findExistingTable(provision, e.schemaName, {
       hasLocalizedLabels: entityIsLocalized, includeKeys: !!(e.alternateKeys && e.alternateKeys.length),
     });
@@ -2639,6 +2774,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       reusedTables.add(logical);
+      unprovenTables.add(logical);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
       existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
@@ -2685,6 +2821,8 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           const t = await createNewTable(sdk, createOpts, { warn, askedLength });
           result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
           createdTable = t;
+          // Recorded the moment the create is acknowledged, before anything later in the phase can halt: the caller's set outlives this attempt, and a later attempt of the same build finds the table and reuses it.
+          if (createdTables instanceof Set) createdTables.add(logical);
         } catch (err) {
           // The SDK says of this refusal that the table WAS created. What its cause carries — a 409 from the update, a word in the platform's reason —
           // is no sign that the table's name is taken, so it is never taken for an already-exists answer and "rediscovered".
@@ -2697,8 +2835,18 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           if (!found) throw err;
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
           foundAfterCreate = true;
+          unprovenTables.add(logical);
         }
       }, { recoverable: true });
+      // A table found only after its create was answered "already exists" has its columns read now, as one the first lookup found does:
+      // the Date and Time guard below picks the declared repairs from them, so an authorized repair is made (and a refused one stops the
+      // build) BEFORE a column is added, in this build, and a column the table has is not sent again. The read is the same narrow one, and
+      // an unreadable answer leaves every declared column looking new, as before. A table that declares no column has nothing the read
+      // decides, so it is not read.
+      if (foundAfterCreate && buildable.length) {
+        existingColRows = await findExistingColumns(provision, logical, warn);
+        existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
+      }
     }
     // The primary name column's length, when the spec asks for one: one narrated step in every case (the plan counts it). For a
     // table this build created the step is queued here and runs at the end of the phase (provisionDataModel) — a label-bearing
@@ -2783,6 +2931,11 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
+    if (unprovenTables.has(logical)) await guardDates(e, logical, existingCols, toCreate.length > 0);
+    // A create the platform answers "already exists" for is skipped, not created — so it carried none of what the spec declares
+    // with it (a secured flag, a Date and Time behaviour). It happens when the table's columns could not be read, or another writer
+    // added the column first. Each such column is reconciled below as a column the table already has.
+    const skippedExisting = new Set();
     const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
       () => {
         const confirmed = inlineConfirmed.get(c);
@@ -2796,7 +2949,13 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           window, column: c, stop: stopIfRefused, warn, charge: !!inlineFallback && inlineFallback.columns.has(c),
         });
       },
-      { skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.column) }));
+      { skipIf: (err) => {
+        if (!isAlreadyExists(err, ALREADY_EXISTS_CODES.column)) return false;
+        skippedExisting.add(c.schemaName.toLowerCase());
+        return true;
+      } }));
+    // Only an explicit behaviour is reconciled, through the same cached read the existing-table guard uses (at most one per table).
+    if (skippedExisting.size) await guardDates(e, logical, skippedExisting, false);
     if (existingTable) {
       const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
       const requiredTargets = requiredDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
@@ -2895,6 +3054,12 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         );
       });
     }
+    // An explicit `isSecured` on a column the table already has — one the read found, or one whose create was skipped because it
+    // already existed (reconcileColumnSecurity). A secured column is secured in this phase, before any sample row is written. Never on a
+    // Customer column (validation refuses it: updateColumn refuses every change to one), and the required and capability updates above
+    // never carry it. A Lookup column is reconciled after the relationships that create it.
+    const securityTargets = (existingTable || foundAfterCreate) ? new Set([...existingCols, ...skippedExisting]) : skippedExisting;
+    await reconcileColumnSecurity({ sdk, provision, runner, name: e.schemaName, logical, columns: buildable.filter((c) => c.type !== 'Customer'), targets: securityTargets, authorizedDestructive });
     for (const c of requiredDeclared) {
       if (existingTable && existingCols.has(c.schemaName.toLowerCase())) continue;
       // A column's level is part of its own create request — except the primary name column's: it is asked in the table's create, which
@@ -3068,6 +3233,15 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // properties too, and makes the attributes of the table that holds its links, but no answer to its re-create has been captured, so its list
     // holds the name code only: those other answers are not observed for an N:N, not impossible.
     const alreadyExistsCodes = rel.type === 'OneToMany' ? ALREADY_EXISTS_CODES.oneToManyRelationship : ALREADY_EXISTS_CODES.manyToManyRelationship;
+    // A 1:N adds its lookup column to the referencing table, which the Date and Time preflight guards like any other added column when
+    // the build did not create that table (one it reused or found only after its create, or one the spec does not declare). An N:N adds
+    // no column to either table.
+    if (rel.type === 'OneToMany') {
+      const referencing = rel.referencing.toLowerCase();
+      if (unprovenTables.has(referencing) || !(spec.entities || []).some((x) => String(x.schemaName).toLowerCase() === referencing)) {
+        await guardDates({ schemaName: referencing, columns: [] }, referencing, new Set(), true);
+      }
+    }
     await runner.run('data-model', label, async () => {
       try {
         const res = await sdk.createRelationship(createOpts);
@@ -3148,13 +3322,52 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     }, { skipIf: (e) => isAlreadyExists(e, alreadyExistsCodes) && e.sameRelationshipExists === true });
   }
 
+  // An explicit `isSecured` on a Lookup column, now that the relationships that create lookups have run: the lookup create carries no
+  // security, and a lookup the table already had is not among the columns above. Same read and write as a scalar column's, before the
+  // field security profiles and any sample row. A lookup that declares nothing is never read.
+  for (const e of spec.entities) {
+    const logical = e.schemaName.toLowerCase();
+    const lookups = (e.columns || []).filter((c) => c && c.type === 'Lookup' && c.schemaName && typeof c.isSecured === 'boolean');
+    if (!lookups.length) continue;
+    await reconcileColumnSecurity({ sdk, provision, runner, name: e.schemaName, logical, columns: lookups, targets: new Set(lookups.map((c) => c.schemaName.toLowerCase())), authorizedDestructive });
+  }
+
   // A rebuild repairs a lookup column an older build labelled with its old default (opt-in: only the app
   // build budgets the steps this emits — see planFor).
   if (reconcileLookupLabels) {
-    await reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode: resolvedLanguageCode, createdLookups, readParentLabel, reusedTables, result });
+    await reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode: resolvedLanguageCode, createdLookups, readParentLabel, reusedTables, result, publicationBarrier });
   }
 
+  // 2d. Table flags (search, change tracking, duplicate detection), after schema and relationships, only for a table that declares
+  // one. One scalar read per such table, one updateTable when something differs; a refused flag halts, as a refused column does.
+  for (const e of spec.entities) {
+    if (!Object.keys(declaredTableFlags(e)).length) continue;
+    const logical = e.schemaName.toLowerCase();
+    const plan = planTableFlags(e, await readTableFlags(provision, logical), { authorizedDestructive });
+    for (const u of plan.unknown) if (typeof warn === 'function') warn(`could not read the current table flags of ${logical} — ${u.reason}`);
+    if (!plan.refused.length && !plan.operations.length) { runner.skip('data-model', `table flags ${e.schemaName} (already as declared)`); continue; }
+    await runner.run('data-model', `table flags ${e.schemaName}`, async () => {
+      const refusedOf = (list) => refusal(`the declared table flags of ${logical} cannot be applied — ${list.map((r) => `${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (to make it, run the build again with --authorize ${r.key})` : ''}`).join('; ')}`, { code: list[0].code });
+      // A refused flag stops the table before any of its flags is written, so a table is never left half as declared by this step.
+      if (plan.refused.length) throw refusedOf(plan.refused);
+      const applied = await applyTableFlags(plan, { sdk, provision, publication });
+      if (applied.refused.length) throw refusedOf(applied.refused);
+    });
+  }
+
+  // A changed column or table definition reaches model-driven apps only once its table is published (see publishRelabelledTables, which
+  // this follows: one envelope, best-effort, a warning that says how to show the change). Only tables a schema-feature change altered.
+  const defs = publicationBarrier ? publicationBarrier.allowTables([...changedDefinitions], 'definition change') : [...changedDefinitions];
+  if (defs.length) await publishChangedDefinitions(provision && provision.dataverse, defs, warn);
+
   return result;
+}
+
+async function publishChangedDefinitions(client, tables, warn) {
+  const outcome = await publishTablesXml(client, tables);
+  if (!outcome.ok && typeof warn === 'function') {
+    warn(`the definition change(s) on ${tables.length > 1 ? `tables ${tables.join(', ')}` : `table ${tables[0]}`} are saved but not published (${outcome.reason}): publish ${tables.length > 1 ? 'those tables' : 'that table'} in Power Apps`);
+  }
 }
 
 // The lookups whose label the build owns — the spec sets none (ADO 6691205). One predicate shared by
@@ -3201,7 +3414,7 @@ function relationshipsInCreateOrder(spec) {
 // Exactly one event per lookup the build owns, so the [n/total] the plan promised holds: planFor budgets
 // the same predicate (lookupsWithDefaultLabel). The labels are read once per CHILD TABLE, not once per
 // lookup, and only for the lookups this run did not just create.
-async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode, createdLookups, readParentLabel, reusedTables, result }) {
+async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode, createdLookups, readParentLabel, reusedTables, result, publicationBarrier }) {
   const client = provision && provision.dataverse;
   const owned = lookupsWithDefaultLabel(spec);
   // child -> the lookup columns of it that need reading, so one request answers for all of them.
@@ -3274,7 +3487,8 @@ async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, l
       relabelled.add(child);
     }, warn, `could not relabel lookup '${child}.${lookupLogical}' from its old default "${current}" to "${next}" — the rest of the build continues`);
   }
-  if (relabelled.size) await publishRelabelledTables(client, [...relabelled], warn);
+  const tables = publicationBarrier ? publicationBarrier.allowTables([...relabelled], 'lookup label repair') : [...relabelled];
+  if (tables.length) await publishRelabelledTables(client, tables, warn);
 }
 
 // A column's label is part of its table's definition, and a table or column definition change reaches model-driven apps
@@ -3567,4 +3781,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, ALREADY_EXISTS_CODES, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };
+module.exports = { makeRunner, entityHasLocalizedLabels, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, ALREADY_EXISTS_CODES, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };

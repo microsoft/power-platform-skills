@@ -1,6 +1,8 @@
 'use strict';
 
 const { blankNonCodePreservingTemplateExpressions } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { jsxElements, unreadableElements } = require('./tsx-structure.js');
+const { transparentBoundary } = require('./page-error-canonical.js');
 
 function groupEnd(mask, open) {
   const pairs = { '(': ')', '{': '}', '[': ']' };
@@ -66,8 +68,9 @@ function objectFields(text) {
   return fields;
 }
 
-function actionCalls(code) {
-  const mask = blankNonCodePreservingTemplateExpressions(code);
+// The named `function` declarations of a masked source, as the receiver proof reads them: their parameter list and
+// their body's braces.
+function namedScopes(mask) {
   const scopes = [];
   for (const match of mask.matchAll(/\b(?:async\s+)?function\s+([\w$]+)\s*\(/g)) {
     const paramsOpen = match.index + match[0].length - 1;
@@ -75,6 +78,12 @@ function actionCalls(code) {
     const body = mask.indexOf('{', paramsEnd);
     if (body !== -1) scopes.push({ name: match[1], start: match.index, paramsOpen, paramsEnd, body, end: groupEnd(mask, body) });
   }
+  return scopes;
+}
+
+function actionCalls(code) {
+  const mask = blankNonCodePreservingTemplateExpressions(code);
+  const scopes = namedScopes(mask);
   const calls = [];
   for (const match of mask.matchAll(/\.\s*(executeAction|executeFunction)\s*(?:\?\.\s*)?\(/g)) {
     const open = match.index + match[0].length - 1;
@@ -88,7 +97,7 @@ function actionCalls(code) {
     // receiver check fails it rather than guessing what it refers to.
     const chain = /([A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*)\s*\??$/.exec(mask.slice(0, match.index));
     const receiver = chain ? normalizeChain(chain[1]) : null;
-    calls.push({ method: match[1], start: match.index, end, scope, scopes, receiver, resultName: assignment[1], fields: objectFields(code.slice(open + 1, end)), mask });
+    calls.push({ method: match[1], start: match.index, end, scope, scopes, receiver, resultName: assignment[1], fields: objectFields(code.slice(open + 1, end)), mask, code });
   }
   return calls;
 }
@@ -177,8 +186,13 @@ function callSites(mask, name) {
 // function component already has a scope; an arrow component's body is found after its `=>`.
 function pageComponent(mask, scopes) {
   const exported = /\bexport\s+default\s+(?:async\s+)?(?:function\s+)?([A-Za-z_$][\w$]*)/.exec(mask);
-  if (!exported) return null;
-  const id = escapeRe(exported[1]);
+  return exported ? componentNamed(mask, scopes, exported[1]) : null;
+}
+
+// The component declared as `name` — `function name(…) {…}` or `const name = (…) => …` — read as pageComponent
+// reads the default export. The FIRST such declaration; forwardedPageBody refuses a name declared twice.
+function componentNamed(mask, scopes, name) {
+  const id = escapeRe(name);
   const decl = new RegExp(`(?:\\bfunction\\s+${id}\\s*|\\b(?:const|let|var)\\s+${id}\\s*(?::[^=;]+)?=\\s*(?:async\\s*)?)\\(`).exec(mask);
   if (!decl) return null;
   const open = decl.index + decl[0].length - 1;
@@ -191,13 +205,132 @@ function pageComponent(mask, scopes) {
     if (!arrow) return null;
     const body = close + 1 + arrow[0].length;
     const end = '({'.includes(mask[body]) ? groupEnd(mask, body) : (mask.indexOf(';', body) + 1 || mask.length);
-    scope = { name: exported[1], start: decl.index, paramsOpen: open, paramsEnd: close, body, end };
+    scope = { name, start: decl.index, paramsOpen: open, paramsEnd: close, body, end };
   }
   return {
     scope: { ...scope, isComponent: true },
     propsName: pattern ? null : (/^([A-Za-z_$][\w$]*)/.exec(first) || [])[1] || null,
     destructured: pattern ? destructuredNames(pattern[1]) : new Map(),
+    declaredAt: decl.index,
+    firstParameter: first,
   };
+}
+
+// The canonical page error wrapper (references/rules.md, "Missing Error Handling"):
+//   const GeneratedComponent = (props: GeneratedComponentProps) => (
+//     <PageErrorBoundary>
+//       <PageBody {...props} />
+//     </PageErrorBoundary>
+//   );
+//   export default GeneratedComponent;
+// React renders PageBody with exactly the object the default export received, so PageBody's first parameter IS the page
+// props, and PageBody — not the wrapper — is the component the receiver proofs start from. Only this bounded shape earns
+// that, so nothing but the real props can reach PageBody:
+//   - the default export's whole body is that one element: an arrow's expression (parenthesized or not), or a block
+//     holding only `return (…);`. Its own first parameter is a plain name the file never assigns again;
+//   - the root is PageErrorBoundary, given nothing, or only its telemetry prop (`appInsights={props.appInsights}`), and
+//     PageErrorBoundary is the documented class itself (page-error-canonical.js transparentBoundary: one top-level class
+//     equal to a documented form, string contents aside), named nowhere but its declaration and this element's two tags
+//     — a function or an altered class of that name (a second `render()` overrides the first) could clone its child with
+//     another dataApi;
+//   - that class extends the page's own React.Component (reactComponentBase): `extends React.Component<…>`, where React is
+//     the page's one import binding from 'react' and is otherwise only read through its members — a page-supplied base
+//     (a destructured or aliased `Component`, a rebound or patched React) can install an instance `render` that replaces
+//     the boundary's child, so the named `extends Component<…>` form proves nothing either;
+//   - its one child, and nothing else, is a self-closing PageBody whose only attribute is one spread of that parameter;
+//   - PageBody is declared once, at the top level of the module, with a plain first parameter (no destructuring and no
+//     default value), and is named nowhere else: a second JSX use, a call or a value hand-off could pass another object.
+// Anything else returns null, and the default export stays the component exactly as before the wrapper existed. A
+// failed proof is not evidence that a call is unrelated: what PageBody then receives is simply unproven. The proof reads
+// the source text as well as its mask (the import's module name is a string the mask blanks): without `code` it fails.
+// Type arguments of names only (`<PageBody<Props> {...props} />`) are erased before React renders, so they are read like
+// any tag; a page with an element whose type arguments are anything else (unreadableElements) proves nothing.
+const PAGE_BODY = 'PageBody';
+const PAGE_ERROR_BOUNDARY = 'PageErrorBoundary';
+function forwardedPageBody(mask, scopes, wrapper, code) {
+  if (typeof code !== 'string' || code.length !== mask.length) return null;
+  if (unreadableElements(mask).length) return null;
+  const propsName = wrapper?.propsName;
+  if (!propsName || reassigned(mask, propsName)) return null;
+  const { scope } = wrapper;
+  const bodyEnd = '({'.includes(mask[scope.body]) ? scope.end + 1 : scope.end;
+  const inside = jsxElements(mask).filter((element) => element.start >= scope.body && element.end <= bodyEnd);
+  if (!inside.length) return null;
+  const root = inside.reduce((first, element) => (element.start < first.start ? element : first));
+  const around = (mask.slice(scope.body, root.start) + mask.slice(root.end, bodyEnd)).replace(/\s+/g, '');
+  if (!['()', '();', '', ';', '{return();}', '{return()}', '{return;}', '{return}'].includes(around)) return null;
+  if (root.name !== PAGE_ERROR_BOUNDARY || root.selfClosing) return null;
+  const boundary = transparentBoundary(mask);
+  if (!boundary || !reactComponentBase(code, mask, boundary)) return null;
+  if ([...mask.matchAll(new RegExp(`(?<![\\w$.])${PAGE_ERROR_BOUNDARY}(?![\\w$])`, 'g'))].length !== 3) return null;
+  const rootAttrs = [...root.attrs.entries()];
+  if (rootAttrs.length > 1 || (rootAttrs.length === 1 && !(rootAttrs[0][0] === 'appInsights' && rootAttrs[0][1].kind === 'expression'
+    && normalizeChain(rootAttrs[0][1].value) === `${propsName}.appInsights`))) return null;
+  const children = inside.filter((element) => element !== root);
+  if (children.length !== 1) return null;
+  const [child] = children;
+  if (child.name !== PAGE_BODY || !child.selfClosing || child.attrs.size !== 1) return null;
+  const spread = child.attrs.get('...');
+  if (!spread || spread.value.replace(/\s+/g, '') !== `...${propsName}`) return null;
+  if ((mask.slice(root.childrenStart, child.start) + mask.slice(child.end, root.childrenEnd)).trim()) return null;
+  // Named exactly twice: its declaration and the child element. A type position (`typeof PageBody`) counts too, and refuses.
+  if ([...mask.matchAll(new RegExp(`(?<![\\w$.])${PAGE_BODY}(?![\\w$])`, 'g'))].length !== 2) return null;
+  const declarations = mask.match(new RegExp(`\\b(?:function|class|const|let|var)\\s+${PAGE_BODY}(?![\\w$])`, 'g')) || [];
+  if (declarations.length !== 1) return null;
+  const body = componentNamed(mask, scopes, PAGE_BODY);
+  if (!body?.propsName || !new RegExp(`^${escapeRe(body.propsName)}\\s*(?::[^=]*)?$`).test(body.firstParameter.trim())) return null;
+  if (moduleDepth(mask, body.declaredAt) !== 0) return null;
+  return body;
+}
+
+// Does the boundary class at `range` extend the page's own React.Component? Only this bounded form is accepted:
+//   import * as React from 'react';              (or `import React from 'react'`, or `import React, { useState } from 'react'`)
+//   class PageErrorBoundary extends React.Component<…> { … }
+// with that import the page's only import from 'react', no `require(…)` or `import(…)` that could reach the module another
+// way, and every other mention of React a member read (`React.useState(…)`, `React.ReactNode`, `<React.Fragment>`) — not
+// rebound, shadowed, destructured from or aliased (`const { Component } = React`, `const R = React`, a parameter named
+// React), handed on (`Object.assign(React, …)`), written through (`React.Component = …`), read computed, or reaching
+// `.prototype` or `React.Component` anywhere but the class header. Each of those can give the class another base, whose
+// constructor may install an instance `render` that replaces the boundary's child.
+function reactComponentBase(code, mask, range) {
+  const header = /^class\s+PageErrorBoundary\s+extends\s+(React)\s*\.\s*Component\s*</.exec(mask.slice(range.start));
+  if (!header) return false;
+  const headerAt = range.start + header[0].indexOf('React');
+  if (/(?<![\w$.])require\s*\(|(?<![\w$.])import\s*\(/.test(mask)) return false;
+  // `import <clause> from '<module>'` — the mask keeps the quotes and blanks the module name, so it is read from `code`.
+  const fromReact = [];
+  for (const match of mask.matchAll(/(?<![\w$.])import\b([^;'"]*?)\bfrom\s*(['"])/g)) {
+    const open = match.index + match[0].length - 1;
+    const close = mask.indexOf(match[2], open + 1);
+    if (close < 0 || literalString(code.slice(open, close + 1)) !== 'react') continue;
+    fromReact.push(match);
+  }
+  if (fromReact.length !== 1) return false;
+  const [only] = fromReact;
+  const clause = /^\s*(?:\*\s*as\s+React|React(?:\s*,\s*\{[^{}]*\})?)\s*$/.exec(only[1]);
+  if (!clause) return false;
+  const bindingAt = only.index + 'import'.length + only[1].indexOf('React');
+  for (const mention of mask.matchAll(/(?<![\w$.])React(?![\w$])/g)) {
+    if (mention.index === bindingAt) continue;
+    const rest = mask.slice(mention.index + 'React'.length);
+    const chain = /^(?:\s*\.\s*[A-Za-z_$][\w$]*)+/.exec(rest);
+    if (!chain) return false;
+    const members = chain[0].replace(/\s+/g, '').split('.').filter(Boolean);
+    if (members.includes('prototype') || (members[0] === 'Component' && mention.index !== headerAt)) return false;
+    if (/^\s*(?:(?:\*\*|<<|>>>?|\?\?|\|\||&&|[-+*/%&|^])?=(?![=>])|\+\+|--|\[|\?\.\s*\[)/.test(rest.slice(chain[0].length))) return false;
+    if (/(?:\bdelete|\+\+|--)\s*$/.test(mask.slice(Math.max(0, mention.index - 12), mention.index))) return false;
+  }
+  return true;
+}
+
+// How many brackets are open at `at`: 0 at the top level of the module.
+function moduleDepth(mask, at) {
+  let depth = 0;
+  for (let i = 0; i < at; i += 1) {
+    if ('({['.includes(mask[i])) depth += 1;
+    else if (')}]'.includes(mask[i])) depth -= 1;
+  }
+  return depth;
 }
 
 // A declaration's complete initializer, from `start` to the end of its statement: a `;`, a
@@ -489,8 +622,9 @@ function isDataApi(ctx, expr, at, depth = 0) {
 // where <props> is the page component's props parameter, a name destructured from those props or
 // assigned from such a name (casts allowed), or a parameter of an enclosing helper that every
 // outside call fills with one of those. Anything unresolvable fails.
-function sourceContext(mask, scopes) {
-  const component = pageComponent(mask, scopes);
+function sourceContext(mask, scopes, code) {
+  const exported = pageComponent(mask, scopes);
+  const component = forwardedPageBody(mask, scopes, exported, code) || exported;
   const named = component
     ? [...scopes.filter((scope) => scope.paramsOpen !== component.scope.paramsOpen), component.scope]
     : scopes;
@@ -500,8 +634,19 @@ function sourceContext(mask, scopes) {
   return { mask, scopes: all, component };
 }
 
-function receiverIsDataApi(mask, scopes, expr, at) {
-  return isDataApi(sourceContext(mask, scopes), expr, at);
+// `code` is the source `mask` was made from (actionCalls returns it as `call.code`); the boundary wrapper's proof needs it,
+// and without it PageBody's props are simply unproven.
+function receiverIsDataApi(mask, scopes, expr, at, code) {
+  return isDataApi(sourceContext(mask, scopes, code), expr, at);
+}
+
+// The PageBody the canonical page error wrapper forwards the page props to (forwardedPageBody), or null when the
+// default export is not exactly that wrapper. The built-in check (action-binding-union.js) asks this for where a page
+// renders, so its render roots and the props the receiver proofs trust are the same proof.
+function forwardedPageBodyOf(code) {
+  const mask = blankNonCodePreservingTemplateExpressions(code);
+  const scopes = namedScopes(mask);
+  return forwardedPageBody(mask, scopes, pageComponent(mask, scopes), code);
 }
 
 // Resolve only the identity-preserving forms already understood by the shared evidence reader.
@@ -635,10 +780,10 @@ function recordPropInput(ctx, expr, at, depth = 0) {
 // The bounded member form is a named helper's explicit record input, e.g.
 // `selectedAccount: { accountid: string }` supplied from the page's props. A local fabricated
 // record, an opaque type alias or an arbitrary chain is not evidence that an ID came from an input.
-function stringRecordMemberIsInput(mask, scopes, expr, at) {
+function stringRecordMemberIsInput(mask, scopes, expr, at, code) {
   const member = /^([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)$/.exec(expr.trim());
   if (!member) return false;
-  const ctx = sourceContext(mask, scopes);
+  const ctx = sourceContext(mask, scopes, code);
   // Conservatively refuse recognized writes anywhere on these value paths, including aliased
   // helpers declared later in the module. This is not an execution-order or general heap evaluator.
   if (recordValueWritten(ctx, member[1], at)) return false;
@@ -657,4 +802,7 @@ function stringRecordMemberIsInput(mask, scopes, expr, at) {
   });
 }
 
-module.exports = { groupEnd, literalString, objectFields, actionCalls, receiverIsDataApi, stringRecordMemberIsInput, escapeRe };
+module.exports = {
+  groupEnd, literalString, objectFields, actionCalls, receiverIsDataApi, stringRecordMemberIsInput, escapeRe, callSites, expressionEnd,
+  namedScopes, forwardedPageBodyOf,
+};

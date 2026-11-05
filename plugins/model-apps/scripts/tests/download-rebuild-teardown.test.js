@@ -15,6 +15,8 @@ const snapshotStore = require('../lib/apply-snapshot-store.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { withPageType } = require('./helpers/page-component-type.js');
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = '11111111-0000-4000-8000-000000000001';
@@ -106,7 +108,9 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     entitySetName: `${logical}s`, attributes: [], relationships: [{ schemaName: RELATIONSHIP }],
   });
   sdk.getSolution = async (uniqueName) => ({ uniqueName, publisherPrefix: 'contoso' });
-  sdk.dataverse = { get: async (url) => {
+  // The page table's solution component type is answered in front of the rest: a build adds the pages it writes to the spec's solution (helpers/page-component-type.js).
+  sdk.dataverse = { get: withPageType(async (url) => {
+    if (isFormScan(url)) return noFormRows();
     const logical = (url.match(/LogicalName='([^']+)'/) || [])[1];
     if (url.includes('/ManyToOneRelationships')) return { status: 200, body: { value: logical === 'contoso_task' ? [{
       SchemaName: RELATIONSHIP, ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task',
@@ -136,7 +140,7 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     }
     assert.ok(state.tables.has(logical), `only declared table metadata may be read: ${url}`);
     return { status: 200, body: { LogicalName: logical, EntitySetName: `${logical}s` } };
-  } };
+  }) };
   sdk.queryRecords = async (set, opts = {}) => {
     const filter = opts.filter || '';
     if (set === 'appmodule') {

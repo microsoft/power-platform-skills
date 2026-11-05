@@ -17,11 +17,15 @@ const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk
 const { makeAppComponentScope } = require('../lib/app-component-scope.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
-const { main: genpageVerbs } = require('../genpage.js');
-const { main: upload } = require('../genpage-upload.js');
+const genpageMain = require('../genpage.js').main;
+const uploadMain = require('../genpage-upload.js').main;
+// Both commands take the app's pages lease in a folder's .maker-workspace: this file's own folder, never the one the tests run in.
+const genpageVerbs = (argv, deps) => genpageMain(argv, { appDir: leaseDir(), ...deps });
+const upload = (argv, deps) => uploadMain(argv, { appDir: leaseDir(), ...deps });
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_ID, APP_EXISTING_PAGE_ID, APP_VIEW_ID } = require('./helpers/fake-genpage-server.js');
 const { withAppComponents } = require('./helpers/fake-app-components.js');
 const { effectiveContentLength } = require('./helpers/wire-framing.js');
+const { withPageType } = require('./helpers/page-component-type.js');
 
 const OTHER = '77777777-7777-4777-8777-777777777777';
 const ACCOUNT_ID = '88888888-8888-4888-8888-888888888888';
@@ -34,6 +38,8 @@ const SOURCE = "import * as React from 'react';\nexport default function Page() 
 const folders = [];
 test.after(() => { for (const folder of folders) fs.rmSync(folder, { recursive: true, force: true }); });
 const tmp = () => { const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'gp-edit-')); folders.push(folder); return folder; };
+let leaseFolder = null;
+const leaseDir = () => leaseFolder || (leaseFolder = tmp());
 
 // An app whose navigation opens `account` (and names a generative page), in which the maker took out one Main form, one public view and the chart of that table:
 //   forms   FORM_KEPT is the app's, FORM_EXCLUDED is active and was taken out
@@ -164,8 +170,10 @@ test('REAL BUNDLE: a pin the service refuses is a warning, as it was — the pag
     try {
       const placed = await genpage.placeInApp(APP_ID, { pages: [{ pageId: OTHER, title: 'Other' }], dataSources: ['account'], finishIfUnpublished: true });
       assert.deepStrictEqual([placed.added, placed.provedPublished], [[OTHER], true]);
-      assert.strictEqual(placed.warnings.length, 1);
+      assert.strictEqual(placed.warnings.length, 2, JSON.stringify(placed.warnings));
       assert.match(placed.warnings[0], /one or more components were not pinned \(.*HTTP 400.*The savedquery does not exist\./);
+      assert.deepStrictEqual(placed.pinnedViews, [], 'a view the service refused is not reported as pinned');
+      assert.match(placed.warnings[1], new RegExp(`^the default view ${APP_VIEW_ID} of the tables the pages read was not added to app ${APP_ID}`));
       assert.ok(namesPage(app.state.publishedXml, OTHER));
       assertMembership(world, { views: [] });
     } finally {
@@ -278,7 +286,8 @@ test('REAL BUNDLE: the build\'s pin of the tables its pages read — the pages p
       },
       updateWebResource: async (id, { content }) => { manifest = content; },
       addSolutionComponent: async () => {},
-      dataverse: { get: async () => ({ status: 200, body: { value: [row] } }) },
+      // The page joins the spec's solution, so the page table's component type is read first (lib/page-solution.js).
+      dataverse: { get: withPageType(async () => ({ status: 200, body: { value: [row] } })) },
     };
     const warnings = [];
     const built = await runSdkBuild(spec, {
@@ -555,3 +564,212 @@ for (const [label, sentAs] of SENT_AS) {
     }, { defaultViewPinned: false });
   });
 }
+
+// The bundled SDK's guarded pin (lib/app-component-scope.js, THE SDK'S GUARDED PIN). On the strict fake of a whole environment, an app the build made — app and sitemap with tokens of their own, so the
+// SDK's gate after the sitemap write finds the app token it holds — whose maker then took the table's forms and views out of it. The page backend pins the table's default view: the SDK then sends its
+// pin as a change set (guard, action, echo), which the page's transport does not send; the bundle sends its plain action instead, limited to that view, as every earlier release did.
+async function inBuiltApp(fn) {
+  const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
+  const { createLifecycleHarness } = require('./helpers/lifecycle-harness.js');
+  const org = createLifecycleOrg();
+  const harness = createLifecycleHarness(org, tmp());
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'ContosoPin', displayName: 'Contoso Pin', publisherPrefix: 'contoso' },
+    app: { name: 'Pin' },
+    entities: [{ schemaName: 'contoso_project', displayName: 'Project', pluralName: 'Projects', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+    pages: [{ key: 'overview', name: 'Overview', purpose: 'A page.', dataSources: ['contoso_project'], source: { kind: 'tsx', codeFile: 'KitchenPage.tsx' } }],
+    appShell: { areas: [{ label: 'Work', groups: [{ label: 'Records', subAreas: [{ entity: 'contoso_project', title: 'Projects' }, { page: 'overview', title: 'Overview' }] }] }] },
+  };
+  const made = await harness.build(spec);
+  assert.strictEqual(made.result.ok, true, JSON.stringify(made.result));
+  const appId = made.result.created.app;
+  const members = org.rowsOf('appmodulecomponents');
+  const removedForms = [...members.values()].filter((row) => row.data.componenttype === 60).map((row) => row.data.objectid);
+  for (const [id, row] of [...members]) if ([26, 60].includes(row.data.componenttype)) members.delete(id);
+  return fn({ org, harness, appId, removedForms });
+}
+const inApp = (org, type) => org.find('appmodulecomponents', (row) => row.componenttype === type).map((row) => String(row.objectid).toLowerCase());
+
+test('REAL BUNDLE: the default view a page edit pins is added when the SDK would send its pin as a guarded change set — only that view, by the plain action, the app published once, the forms the maker took out left out', async () => {
+  await inBuiltApp(async ({ org, harness, appId, removedForms }) => {
+    assert.ok(removedForms.length > 0, 'the app had a Main form the maker took out');
+    const genpage = makeGenpageSdk(org.origin, { httpClient: harness.client });
+    try {
+      const [wanted] = (await genpage.defaultViews(['contoso_project'])).views.map((view) => view.viewId);
+      const mark = org.mark();
+      const placed = await genpage.placeInApp(appId, { pages: [], dataSources: ['contoso_project'] });
+      assert.deepStrictEqual(org.unexpected, []);
+      assert.deepStrictEqual(inApp(org, 26), [wanted], 'the view is in the app');
+      assert.deepStrictEqual(inApp(org, 60), [], 'no Main form the maker took out came back');
+      assert.deepStrictEqual(org.writeCounts(mark), { 'PATCH sitemaps': 1, 'POST AddAppComponents': 1, 'POST PublishXml': 1 }, 'the sitemap, the one limited action and one publish — as before 2.20.6: no app-row write, no change set');
+      const posted = org.writes(mark).filter((write) => /AddAppComponents/.test(write.path));
+      assert.deepStrictEqual(posted.map((write) => [write.batched === true, write.body && write.body.Components]), [[false, [{ '@odata.type': 'Microsoft.Dynamics.CRM.savedquery', savedqueryid: wanted }]]]);
+      assert.deepStrictEqual([placed.pinnedViews, placed.warnings, placed.appEdited], [[wanted], [], true]);
+    } finally {
+      await genpage.dispose();
+    }
+  });
+});
+
+test('REAL BUNDLE: the same state reaches the SDK\'s guarded pin — through a transport no page edit limits, the bundle sends guard, action and echo in one change set', async () => {
+  await inBuiltApp(async ({ org, harness, appId }) => {
+    // A lent SDK keeps its lender's transport, so the edit through it is not limited (lib/genpage-sdk.js `deps.sdk`).
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(tmp()), instanceUrl: org.origin, httpClient: harness.client });
+    await sdk.initWorkspace();
+    const genpage = makeGenpageSdk(org.origin, { sdk });
+    try {
+      const mark = org.mark();
+      await genpage.placeInApp(appId, { pages: [], dataSources: ['contoso_project'] });
+      const batched = org.writes(mark).filter((write) => write.batched).map((write) => `${write.method} ${write.path.split('?')[0].replace(/\(.*\)/, '()')}`);
+      assert.deepStrictEqual(batched, ['PATCH /appmodules()', 'POST /AddAppComponents', 'PATCH /appmodules()'], 'the guarded change set the page edit above does not send');
+    } finally {
+      await genpage.dispose();
+    }
+  });
+});
+// The managed fence (lib/managed-standalone-fence.js): a page edit that names an app writes and publishes it, which puts live the saved forms the app
+// holds. While a build of the app's workspace left a managed change unproved (pending) or a publish of it sent and not confirmed (uncertain), each
+// such entry is refused before anything is written — no navigation write, no AddAppComponents, no publish. An app folder with no store is unchanged
+// (every test above).
+const { seedManagedDebt } = require('./helpers/managed-debt.js');
+const { applyWorkspaceOf } = require('../lib/app-operation-lease.js');
+
+function appFolderWithDebt(debt) {
+  const appDir = tmp();
+  fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify({ app: { uniqueName: 'contoso_edits' }, solution: { uniqueName: 'ContosoEdits' } }));
+  const workspaceDir = applyWorkspaceOf({ appDir });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  seedManagedDebt({ workspaceDir, environment: INSTANCE, appUniqueName: 'contoso_edits', solutionUniqueName: 'ContosoEdits' }, { table: 'account', ...debt });
+  return appDir;
+}
+
+for (const [debtName, debt] of [['an unproved change (pending)', {}], ['a publish sent and not confirmed (uncertain)', { uncertain: true }]]) {
+  test(`managed fence: \`genpage.js add-to-app\` and \`remove-from-app\` are refused with nothing written while the app's build left ${debtName}`, async () => {
+    await inWorld(async ({ app, world, makeBackend }) => {
+      const appDir = appFolderWithDebt(debt);
+      const xml = app.state.xml;
+      const run = (argv) => genpageVerbs(argv, { appDir, makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {} });
+      for (const argv of [['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], ['remove-from-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID]]) {
+        const out = await run(argv);
+        assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+      }
+      assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+      assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+      assert.deepStrictEqual(world.additions(), [], 'no AddAppComponents');
+    }, { defaultViewPinned: false });
+  });
+}
+
+test('managed fence: an upload that names an app is refused with nothing written while the app\'s build left a managed change unproved', async () => {
+  await inWorld(async ({ server, app, world, makeBackend }) => {
+    const appDir = appFolderWithDebt({});
+    const dir = tmp();
+    const file = path.join(dir, 'page.tsx');
+    fs.writeFileSync(file, SOURCE);
+    const pages = server.state.projects.size;
+    const out = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--app-dir', appDir, '--code-file', file, '--name', 'Fresh page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm', '--add-to-sitemap'], {
+      makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }),
+    });
+    assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+    assert.strictEqual(server.state.projects.size, pages, 'no page was created');
+    assert.strictEqual(server.requests.length, 0, 'nothing was sent at all');
+    assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+    assert.deepStrictEqual(world.additions(), []);
+  }, { defaultViewPinned: false });
+});
+// The fence that decides is read under the app's leases, not before them. Between the early read and the lease there is a window — the entry
+// reads the app's unique name to key the lease by — in which a build of the same workspace can run and leave debt; the build then lets its
+// lease go, and the entry takes it. Here that build runs inside the name read, under the real build lease, against a store that is absent at
+// the start and against one that is present and clean. The edit must see the debt it left and refuse with nothing written.
+const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+const { openManagedBindings } = require('../lib/managed-bindings.js');
+const { openStandaloneManagedFence } = require('../lib/managed-standalone-fence.js');
+
+// A store file with no debt in it: an attempt that never started, retired through the store's own operation.
+function cleanStore(args) {
+  const store = openManagedBindings(args);
+  const id = '11111111-2222-4333-8444-666666666666';
+  const token = store.prepareAttempt({ family: 'view', key: 'account/clean', root: { kind: 'view', key: 'account/clean', id }, baseGeneration: null, expected: null, knownScopes: [{ type: 'table', table: 'account' }], declarationSha256: 'b'.repeat(64) });
+  store.retireUnsentAttempt({ token, baseGeneration: null });
+}
+
+// The app folder of the app the world serves, named as the backend names it, and a backend factory whose name read lets a build in first.
+async function interleavingApp(genpage, makeBackend, { storeAtStart }) {
+  const unique = await genpage.appUniqueName(APP_ID);
+  const appDir = tmp();
+  fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify({ app: { uniqueName: unique }, solution: { uniqueName: 'ContosoEdits' } }));
+  const workspaceDir = applyWorkspaceOf({ appDir });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const args = { workspaceDir, environment: INSTANCE, appUniqueName: unique, solutionUniqueName: 'ContosoEdits' };
+  if (storeAtStart) cleanStore(args);
+  assert.strictEqual(openStandaloneManagedFence({ environment: INSTANCE, appDir }).absent, !storeAtStart);
+  let interleaved = 0;
+  const factory = (...a) => {
+    const backend = makeBackend(...a);
+    const read = backend.appUniqueName.bind(backend);
+    backend.appUniqueName = async (...x) => {
+      const found = await read(...x);
+      if (!interleaved++) await withAppBuildLease({ workspaceDir, appUniqueName: unique }, async () => { seedManagedDebt(args, { table: 'account' }); });
+      return found;
+    };
+    return backend;
+  };
+  return { appDir, workspaceDir, unique, factory, interleaved: () => interleaved };
+}
+
+for (const storeAtStart of [false, true]) {
+  const start = storeAtStart ? 'a clean store present at the start' : 'no store at the start';
+  test(`managed fence under the lease: \`genpage.js add-to-app\` and \`remove-from-app\` refuse the debt a build left while the edit read the app's name (${start})`, async () => {
+    for (const argv of [['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], ['remove-from-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID]]) {
+      await inWorld(async ({ app, world, genpage, makeBackend }) => {
+        const w = await interleavingApp(genpage, makeBackend, { storeAtStart });
+        const xml = app.state.xml;
+        const out = await genpageMain(argv, { appDir: w.appDir, makeGenpageSdk: w.factory, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {} });
+        assert.strictEqual(w.interleaved(), 1, 'the build ran inside the name read');
+        assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+        assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+        assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+        assert.deepStrictEqual(world.additions(), [], 'no AddAppComponents');
+      }, { defaultViewPinned: false });
+    }
+  });
+
+  test(`managed fence under the lease: an upload that names an app refuses the debt a build left while the upload read the app's name (${start})`, async () => {
+    await inWorld(async ({ server, app, world, genpage, makeBackend }) => {
+      const w = await interleavingApp(genpage, makeBackend, { storeAtStart });
+      const dir = tmp();
+      const file = path.join(dir, 'page.tsx');
+      fs.writeFileSync(file, SOURCE);
+      const pages = server.state.projects.size;
+      const xml = app.state.xml;
+      const out = await uploadMain(['--env', INSTANCE, '--app-id', APP_ID, '--app-dir', w.appDir, '--code-file', file, '--name', 'Fresh page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm', '--add-to-sitemap'], {
+        appDir: w.appDir, makeGenpageSdk: w.factory, emit: (ok, payload) => ({ ok, ...payload }),
+      });
+      assert.strictEqual(w.interleaved(), 1, 'the build ran inside the name read');
+      assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+      assert.strictEqual(server.state.projects.size, pages, 'no page was created');
+      assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+      assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+      assert.deepStrictEqual(world.additions(), []);
+    }, { defaultViewPinned: false });
+  });
+}
+
+// The build lease is held for the whole edit, with the pages lease: a build's views and charts phases — which leave managed debt — run outside its
+// pages lease, so the pages lease alone would not keep them out while the edit writes. A build of the app in the same workspace refuses the edit.
+test('managed fence under the lease: a page edit is refused with nothing written while a build of the app holds its build lease', async () => {
+  await inWorld(async ({ app, world, genpage, makeBackend }) => {
+    const w = await interleavingApp(genpage, makeBackend, { storeAtStart: false });
+    const xml = app.state.xml;
+    const out = await withAppBuildLease({ workspaceDir: w.workspaceDir, appUniqueName: w.unique }, () => genpageMain(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], {
+      appDir: w.appDir, makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {},
+    }));
+    assert.deepStrictEqual([out.ok, out.code, out.outcome, out.appId], [false, 'build-locked', 'nothing', APP_ID], JSON.stringify(out));
+    assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+    assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+    assert.deepStrictEqual(world.additions(), [], 'no AddAppComponents');
+    const after = await genpageMain(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], { appDir: w.appDir, makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {} });
+    assert.strictEqual(after.ok, true, `once the build is done the edit runs: ${JSON.stringify(after)}`);
+  }, { defaultViewPinned: false });
+});

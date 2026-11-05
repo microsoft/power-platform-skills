@@ -36,6 +36,9 @@ function tmp() {
   return d;
 }
 
+// The folder whose .maker-workspace holds the pages lease an upload with --app-id takes: one of this file's own, never the folder the tests run in.
+const LEASE_DIR = tmp();
+
 const ENV = 'https://contoso.crm.dynamics.com';
 const PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'; // the page the environment already holds, placed in APP
 const APP = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
@@ -89,6 +92,7 @@ function run(argv, backend, extra = {}) {
     uploadMod.main(argv, {
       makeGenpageSdk: (env, deps) => { made = make(env, deps); return made; },
       emit: (ok, payload) => resolve({ ok, payload, disposedAtEmit: made && made.disposed }),
+      appDir: LEASE_DIR,
       ...extra,
     }).catch(reject);
   });
@@ -962,6 +966,75 @@ test('a create that could not be placed leaves the page unfinished too — and t
   assert.strictEqual(readMarker(file).unfinished, undefined);
 });
 
+// ── --solution: the page joins the solution the run was given (AB#6443257) ──────────────────────────────────────────────────────────────
+// A page made through the SDK joins no solution on its own, and the add of an app brings its sitemap, never the pages its navigation opens: a run given a
+// solution left every page it made out of it. The solution is read before anything is written, and the page joins it last — once it is written, published and placed.
+
+test('a create with --solution adds the page to that solution last — after it is written, published and placed — and says so', async () => {
+  const genpage = environment();
+  const r = await run(createArgs(codeFile(), [...NAMED, '--add-to-sitemap', '--solution', 'contosocore']), genpage);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual(genpage.inSolution, [{ pageId: NEW_ID, solution: 'ContosoCore', componentType: 10372 }]);
+  assert.deepStrictEqual([r.payload.solution, r.payload.addedToSolution, 'systemSolution' in r.payload], ['ContosoCore', true, false]);
+  const order = genpage.calls.map((c) => c.method).filter((m) => ['solutionTarget', 'create', 'placeInApp', 'addToSolution'].includes(m));
+  assert.deepStrictEqual(order, ['solutionTarget', 'create', 'placeInApp', 'addToSolution'], 'read first, joined last');
+  assert.deepStrictEqual(only(genpage, 'solutionTarget'), ['contosocore']);
+});
+
+test('a solution that is not there, or is managed, refuses the upload before anything is written — the page is not made outside it', async () => {
+  for (const [solutions, code] of [[{ ContosoCore: {} }, 'SOLUTION_NOT_FOUND'], [{ Missing: { managed: true } }, 'SOLUTION_MANAGED']]) {
+    const genpage = environment({ solutions });
+    const r = await run(createArgs(codeFile(), [...NAMED, '--add-to-sitemap', '--solution', 'Missing']), genpage);
+    assert.strictEqual(r.ok, false, code);
+    assert.strictEqual(r.payload.code, code);
+    assert.match(r.payload.error, /^nothing was written: the solution "Missing" the page is to join cannot be used — /);
+    assert.deepStrictEqual(genpage.calls.map((c) => c.method), ['solutionTarget'], `${code}: nothing else was asked of the environment`);
+    assert.strictEqual(r.disposedAtEmit, 1);
+  }
+});
+
+test('a system solution holds every page already: the page is not added to it, and the result says why', async () => {
+  const genpage = environment();
+  const r = await run(createArgs(codeFile(), [...NAMED, '--add-to-sitemap', '--solution', 'Default']), genpage);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual([r.payload.solution, r.payload.addedToSolution, r.payload.systemSolution], ['Default', false, true]);
+  assert.deepStrictEqual(genpage.inSolution, []);
+});
+
+test('an add that fails once the page is made is a failure that carries the page\u2019s id and the command that adds it — never a second create', async () => {
+  const genpage = environment({ solutionAdd: () => { throw Object.assign(new Error('HTTP 503: the service is busy'), { code: 'CONNECTION_ERROR' }); } });
+  const r = await run(createArgs(codeFile(), [...NAMED, '--add-to-sitemap', '--solution', 'ContosoCore']), genpage);
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual([r.payload.code, r.payload.pageId, r.payload.appId, r.payload.solution, r.payload.addedToSolution], ['solution-add-failed', NEW_ID, APP, 'ContosoCore', false]);
+  assert.match(r.payload.error, new RegExp(`^page ${NEW_ID} was created and published and placed in app ${APP}'s navigation, but it was NOT added to solution ContosoCore: HTTP 503: the service is busy\\. `));
+  assert.match(r.payload.error, new RegExp(`Do not create it again: add it with node scripts/add-page-to-solution\\.js ${ENV.replace(/[.]/g, '\\.')} ContosoCore --page-ids ${NEW_ID} `));
+  assert.strictEqual(genpage.of('create').length, 1);
+  assert.strictEqual(genpage.of('placeInApp').length, 1, 'the page was placed before the add was tried');
+});
+
+test('a create that did not finish has not joined the solution yet — the same command again, with --page-id, finishes it and then joins it', async () => {
+  const file = codeFile();
+  let publishFails = true;
+  const genpage = environment({ pages: [], onCreate: () => (publishFails ? { publish: { kind: 'failed', detail: 'another publish is running' } } : undefined), onUpdate: () => undefined });
+  const args = ['--env', ENV, '--code-file', file, ...NAMED, '--solution', 'ContosoCore'];
+  const first = await run(args, genpage);
+  assert.strictEqual(first.ok, false);
+  assert.strictEqual(genpage.of('addToSolution').length, 0, 'a page that is not live is not added yet');
+  publishFails = false;
+  const second = await run([...args, ...adviceFor(first)], genpage);
+  assert.strictEqual(second.ok, true, JSON.stringify(second.payload));
+  assert.deepStrictEqual(genpage.inSolution, [{ pageId: NEW_ID, solution: 'ContosoCore', componentType: 10372 }]);
+  assert.strictEqual(genpage.of('create').length, 1);
+});
+
+test('an upload with no --solution asks nothing of any solution, as before', async () => {
+  const genpage = environment();
+  const r = await run(createArgs(codeFile(), [...NAMED, '--add-to-sitemap']), genpage);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.ok(!genpage.calls.some((c) => c.method === 'solutionTarget' || c.method === 'addToSolution'));
+  assert.ok(!('solution' in r.payload) && !('addedToSolution' in r.payload));
+});
+
 // A placement can be SAVED and not published: the app's navigation holds the page, and the publish of the app failed. The run that completes it finds the page in the saved
 // navigation, so a placement that only looks for what is missing has nothing to do — and used to answer "placed" while the app that runs did not show the page, and the marker
 // stopped saying the page was unfinished. Completing a placement is publishing the app and seeing the page in what runs.
@@ -1199,6 +1272,10 @@ function appWithPublishedLayer({ publishTakesEffect = true } = {}) {
       appmodulecomponent: () => [{ objectid: 'dddddddd-4444-4444-8444-dddddddddddd', componenttype: 62 }],
       sitemap: () => [{ sitemapxml: published.xml }],
     },
+    // The app's unique name, which names the pages lease the upload takes (lib/standalone-page-lease.js), read from the saved layer.
+    onGet: async (url) => (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')
+      ? { status: 200, body: { value: [{ appmoduleid: APP, uniquename: 'contoso_review' }] } }
+      : { status: 404, body: null }),
   }).seedApp({ id: APP, name: 'Review app', siteMap: { areas: [{ id: 'a', title: 'Main', groups: [{ id: 'g', title: 'Pages', subAreas: [] }] }] } });
   let failNext = true;
   const publishArtifact = sdk.publishArtifact.bind(sdk);
@@ -1954,6 +2031,8 @@ function realBackend(server, { navigation = {}, made = [], deps = {} } = {}) {
     const genpage = makeGenpageSdk(env, { httpClient: server.http(), mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; }, ...deps, ...fromScript });
     genpage.enumeratePages = async (appId) => { const pages = navigation[appId] || []; return { ok: true, pages, empty: pages.length === 0 }; };
     genpage.placeInApp = async () => ({ added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false });
+    // The name of the app's pages lease an upload with --app-id takes (lib/standalone-page-lease.js): one more app read.
+    genpage.appUniqueName = async () => 'contoso_review';
     return genpage;
   };
 }
@@ -2308,4 +2387,53 @@ test('a file that starts with two byte order marks reaches the backend as the te
   assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
   assert.strictEqual(only(updating, 'update')[1].source, text);
   assert.strictEqual(pageHash(only(updating, 'update')[1].source), readMarker(file).localSha256, 'and the recorded hash is of that same text');
+});
+
+// ── skill_completed telemetry (lib/telemetry/skill-completed.js) ───────────────────────────────────────────────────────────────
+// An upload that was ATTEMPTED reports once, before its result is printed, in the closed vocabulary: what happened to the page, never its
+// name, id, prompt or the environment's URL. A refusal of the command line or its files sends nothing.
+function reporter() {
+  const sent = [];
+  return { sent, reportCompletion: async (input) => { sent.push(input); return true; } };
+}
+
+test('skill_completed: a create reports success with page "created", the target environment and a duration', async () => {
+  const spy = reporter();
+  const r = await run(createArgs(codeFile()), environment(), spy);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(spy.sent.length, 1);
+  const [sent] = spy.sent;
+  assert.deepStrictEqual({ ...sent, durationMs: typeof sent.durationMs }, {
+    skillName: 'genpage', outcome: 'success', errorClass: undefined, envUrl: ENV, durationMs: 'number',
+    eventInfo: { operation: 'page-upload', page: 'created', placedInApp: false },
+  });
+});
+
+test('skill_completed: an update reports page "updated"', async () => {
+  const file = codeFile('export const n = 2;\n'); // an edit of the deployed TEXT: the same bytes would be "unchanged"
+  seedBase(file);
+  const spy = reporter();
+  const r = await run(updateArgs(file), environment(), spy);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual(spy.sent.map((s) => [s.outcome, s.eventInfo.page]), [['success', 'updated']]);
+});
+
+test('skill_completed: a command the script refuses before any upload reports nothing', async () => {
+  const spy = reporter();
+  const { factory } = untouchable();
+  const r = await run(['--env', ENV, '--app-id', APP, ...NAMED], factory, spy);
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(spy.sent, []);
+});
+
+test('skill_completed: uploadCompletion maps each result to its outcome and error class', () => {
+  const { uploadCompletion } = uploadMod;
+  assert.deepStrictEqual(uploadCompletion({ ok: true, payload: { ok: true, updated: true, unchanged: true, addedToSitemap: true, addedToSolution: true } }),
+    { outcome: 'success', eventInfo: { operation: 'page-upload', page: 'unchanged', placedInApp: true, addedToSolution: true } });
+  assert.deepStrictEqual(uploadCompletion({ ok: false, payload: { ok: false, code: 'griffel-shorthand', error: 'x' } }),
+    { outcome: 'failure', errorClass: 'invalid-input', eventInfo: { operation: 'page-upload' } });
+  assert.deepStrictEqual(uploadCompletion({ ok: false, payload: { code: 'solution-add-failed', addedToSolution: false } }),
+    { outcome: 'failure', errorClass: 'deploy-failed', eventInfo: { operation: 'page-upload', addedToSolution: false } });
+  assert.deepStrictEqual(uploadCompletion({ error: new Error('boom') }),
+    { outcome: 'failure', errorClass: 'unexpected', eventInfo: { operation: 'page-upload' } });
 });

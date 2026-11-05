@@ -4,6 +4,9 @@
 // SDK itself accepts what the backend sends, the rows it writes are the ones a page is made of, an untouched push writes nothing, an
 // update writes only the rows that changed, a page that does not compile writes nothing, and a lost response on the one atomic
 // change set leaves exactly the two states the backend's settling logic assumes — landed, or nothing.
+// This file checks where lib/temp-workspace.js makes a workspace, so it works in a temp folder of its own (helpers/own-temp-folder.js): in the
+// suite's shared one, other test processes make and remove the plugin's workspace folder. Required first, so every path below is inside it.
+require('./helpers/own-temp-folder.js');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -736,6 +739,13 @@ test('REAL BUNDLE: an update whose first send lands immediately before its resen
     assert.strictEqual(server.messagesOf(pageId).length, 4);
     assert.strictEqual(out.publish.kind, 'verified');
     assert.match(out.warnings.join('\n'), /had been written — so it was not sent again/);
+    // The bundled SDK names a push's versioning checkpoint after the turn it records (`uxagentproject_<turn id>`), so the resend of the
+    // same edit addresses the same checkpoint; the bundles before model-apps 2.20.6 minted a new one per send.
+    const checkpoints = server.batches.map((body) => [...new Set(String(body).match(/MSCRM\.VersioningChangeset: \S+/g) || [])]);
+    assert.strictEqual(checkpoints[1].length, 1, 'one checkpoint per change set');
+    assert.deepStrictEqual(checkpoints[2], checkpoints[1], 'the resend of the same turn names the same checkpoint');
+    assert.notDeepStrictEqual(checkpoints[1], checkpoints[0], 'another turn, another checkpoint');
+    assert.match(checkpoints[1][0], /^MSCRM\.VersioningChangeset: uxagentproject_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'lower case, no braces');
   });
 });
 

@@ -9,6 +9,8 @@ const { runTeardown: realRunTeardown } = require('../lib/sdk-teardown.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { loadCli } = require('./helpers/cli-harness.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { withPageType } = require('./helpers/page-component-type.js');
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 const { recordPageCreation, readPageOwnership, recordPagePending, readPendingCreations, checkPageOwnershipClearable, recordPageTeardown } = require('../lib/page-ownership-records.js');
 const { sha256 } = require('../lib/hash.js');
 
@@ -172,9 +174,11 @@ function sdkForPages(opts = {}) {
   // The app's CURRENT (saved, unpublished) layer, read through the Dataverse client as download reads it:
   // appmodules and sitemaps by RetrieveUnpublishedMultiple, e.g. { value: [{ appmoduleidunique, componentstate: 1 }] }.
   // By default it equals the published navigation (nothing pending), as on an environment with no unpublished edit.
+  // The page table's component type is answered in front of it, uncounted: the build's pages join the spec's solution (lib/page-solution.js).
   if (!opts.noDataverse) {
     sdk.dataverse = {
-      get: async (url) => {
+      get: withPageType(async (url) => {
+        if (isFormScan(url)) return noFormRows();
         // The pages in their saved layer, whichever of the rows the platform answers (see `rows` above). Not a read of the navigation, so it is not counted in `draftReads`.
         if (url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
           state.pageReads.push(url);
@@ -204,7 +208,7 @@ function sdkForPages(opts = {}) {
           return { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } };
         }
         throw new Error(`unexpected test read: ${url}`);
-      },
+      }),
     };
   }
   return { sdk, state };

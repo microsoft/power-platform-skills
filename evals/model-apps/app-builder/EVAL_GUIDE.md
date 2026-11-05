@@ -12,9 +12,10 @@
 | Stage | Oracle | Plugin primitive |
 |---|---|---|
 | **author** | `validateAppSpec(plan profile)` passes · no lint errors · artifact names are table/type-scoped · ASCII page-quote warnings stay visible without changing approved names. Other advisories remain non-fatal. | `app-spec.js`, `spec-lint.js` |
+| **author** (optional capabilities) | Off unless the prompt asks for them, on every fixture: `app.theme`, a configuration item (`environmentVariables`, `connectionReferences`, `customApis`, `duplicateDetectionRules`, `solution.version`) and a declared form, dashboard, business rule or process flow (`reconcile: "declared"`) are present only when `expect` says the prompt asked. What it asked for must be there, graded by kind and table only (`expect.declared`: names, stage labels, tile order and scope are not compared, and nothing in this check grades an artifact's shape), so removing the only declared artifact of an asked kind on a table, dropping its `reconcile`, a wrong table or an extra kind fails; with several declared artifacts of one kind on a table, only the count the prompt states is checked. A prompt that declines rules and flows (`expect.noBusinessLogic`) gets no plain rule or flow either. See "Optional capabilities". | `app-spec.js`, `assertions.js` |
 | **plan** | Every planned item targets a known engine phase | `sdk-build.js` `planFor` + `PHASES` |
 | **data** | Normalized data-model facts match the `expect.tables/relationships` block | `schema-facts.js` `schemaFacts` |
-| **ui** | View/chart names match `expect.views/charts` · explicit tab/section names, topology, percentage widths, display flags, field state and spans match authored input · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
+| **ui** | View/chart names match `expect.views/charts` · a filter the prompt names (`expect.viewFilters`, `{ entity, view, attr, op, value }`, written from the prompt) is among the view's compiled conditions, so a spelling the build ignores (`filter`, `column`, `operator`) fails · explicit tab/section names, topology, percentage widths, display flags, field state and spans match authored input · enriched **default views** keep parent lookups (#2) and drop `createdon` (#7) · each **sub-grid** is a full-width 1-column section titled by the child display name (#5) | `sdk-build.js` `viewDef` / `chartDef` / `compileFormIntent` / `defaultViewColumns` / `subgridLabel` · `artifact-intent.js` `subgridSectionIntent` |
 | **app** | Every sitemap subarea resolves to a concrete target · no dangling `navigatesTo` keys | `sdk-build.js` `appDef` |
 | **security** | Each declared persona maps to exactly one role · the role **injects** `appmodule` read for app-access personas (and only those) · every persona privilege on an **app-owned** table (the app's own publisher prefix) resolves to a provisioned entity (JTBD coverage) · the role grants **exactly** its jobs' declared privileges — no extra entity, access token, or inflated scope beyond the declared union + the documented `appmodule` injection (least privilege) | `sdk-build.js` `personaRoleSpecFor` |
 | **verify** | Required verification succeeds, reports no missing artifacts, and actually runs each applicable check kind. Fixture 7 supplies independent deployed XML and served Main form order instead of compiler-rendered XML. | `verify-spec.js` `verifySpec` |
@@ -37,9 +38,38 @@ does nothing. A business rule with a mis-shaped condition tree deploys, activate
 BPF step with no bound field is refused only at push time, on a live environment. Counting artifacts
 would stay green through both, so the assertions grade the **bindings** the pure def builders emit.
 
+### Optional capabilities
+
+`/app-builder` offers branding, configuration items, declared rules and flows, and declared form and dashboard layouts
+as questions (`references/authoring-flow.md`, Levels (a0) and (b)), and writes none of them by default. What these evals
+grade is the **spec**, in both directions, on every fixture:
+
+- A capability nobody asked for fails. With no expectation, a spec that carries `app.theme`, a configuration item or a
+  declared form, dashboard, rule or flow fails, so adding one to an ordinary fixture is caught.
+- A capability the prompt asked for must be there (`appTheme`, `configuration`, `declared` in `expect`). The check is
+  presence and absence by capability kind and table, nothing finer: the theme is present iff asked; each configuration
+  field is non-empty iff asked; for each declared kind (form, dashboard, business rule, process flow) the set of tables
+  carrying a `reconcile: "declared"` artifact equals the asked set, with at least `minCount` artifacts where the prompt
+  states a count. Removing the only declared artifact of an asked kind on a table, dropping its `reconcile: "declared"`,
+  putting it on another table, or adding an artifact of a kind or table nobody asked for fails; when a table carries several
+  declared artifacts of one kind, only the count the prompt states is checked. Names, stage labels, tile order and scope are
+  never compared here.
+- What grades a declared artifact's shape, and what does not. On every fixture the common assertions check that each
+  business rule binds only columns the spec creates and compiles at least one condition and one action, that each
+  process-flow step binds a field on the flow's table and each stage is scoped to that table, and that each declared
+  dashboard, rule and flow has a teardown step. Beyond that, among the fixtures 21-24 only fixture 21 has its own shape assertions (the authored
+  tab, form-column and section topology, and column and row spans). The shape of the declared dashboard (tiles) in
+  fixture 22, of the declared rules in fixture 23 (scope, conditions) and of the declared flow (stages) in fixture 24 is
+  **not graded yet**: removing a tile or a stage still passes. Grading those shapes is a follow-up.
+- A prompt that declines rules and flows (`expect.noBusinessLogic: true`) fails on any rule or flow, declared or not.
+
+Whether the agent makes the offer is **not** graded. That is a property of a conversation, and no offline harness records
+one; a hand-written record of an offer would only certify itself. Grading the offer needs a harness that captures a
+transcript of a real `/app-builder` run. That is a follow-up.
+
 ## Fixtures
 
-Each fixture lives in `fixtures/<id>-<slug>/` and contains `app-spec.json`.  
+Each fixture lives in `fixtures/<id>-<slug>/` and contains `app-spec.json`.
 Naming is numeric-prefix; `fixture-loader.js` matches `^(\d+)(?:-(.+))?$`.
 Optional `evidence.json` selects fixture evidence, `baseline-app-spec.json` supplies the prior spec,
 and `entity-edit-app-spec.json` supplies fixture 9's schema-only edit. FormXML file references are
@@ -57,7 +87,21 @@ confined to the fixture directory, including when the fixtures root is a junctio
 | 8 | `8-page-roundtrip` | PAC-stored escaped own name differs from navigation title; actual downloaded files preserve a valid model, keep an absent model absent, and omit an invalid one with loss diagnostics. |
 | 9 | `9-changed-only` | Baseline and edited `.tsx` bytes: only `overview` is a page-content fast change; adding a column is full with a data-model reason; identical spec and bytes are noop. Real hash, snapshot and classifier helpers run offline. |
 | 10 | `10-name-scope` | The same form/view/chart names on two tables do not collide. A straight double quote warns without a rename; apostrophe and typographic-quote controls do not. Same-table duplicates and missing/spurious warnings are negative unit probes, not red corpus fixtures. |
-
+| 11 | `11-portable-options-labels` | Option values a maker depends on: a global choice with values 1, 2, 10, sparse and mixed inline options, sample data by label and a view filtered by number. The spec asks for 2.21.0. |
+| 12 | `12-date-behavior` | Date and Time behaviours: DateOnly with and without a date format, TimeZoneIndependent, explicit UserLocal and an omitted behaviour. |
+| 13 | `13-secured-profile-principals` | Secured Money and Memo columns with explicit field security profiles: one assigned to a named team, one with no assignment, plus sample data. |
+| 14 | `14-app-exact-main-forms` | "Only the Summary form": `app.mainForms` lists it with `mainFormsOnUpdate: "exact"`; an "add the Summary form" ask must not get `exact` (negative unit probe). Verify must read an exact list strictly. The spec asks for 2.21.0. |
+| 15 | `15-app-pin-offnav-chart` | A new app with a chart of a table outside its navigation sets `app.pinDeclaredArtifacts: true`. |
+| 16 | `16-declared-search-join` | A new app declares every view and chart (`reconcile: "declared"`, none named like a stock view, no chart `title`), gives each new table search columns (`quickFind`: the primary name plus the identifiers the prompt names), and joins a related table only on the view that shows its column. No form or command carries `reconcile` or a command `key`. |
+| 17 | `17-declared-web-resource` | Fixture 5 with one HTML web resource marked `reconcile: "declared"` (the maker asked a rebuild to keep its content in step); the spec sets `minimumPluginVersion` `2.21.0`, which validation asks for, and no other kind but views, charts and web resources carries `reconcile` (the declared form layouts, dashboards, business rules and process flows are covered by fixtures 21–24). |
+| 18 | `18-configuration-items` | An app that names per-environment settings, a connector, an action and a duplicate check declares `environmentVariables[]` (the API key as `type: "secret"`), `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]` and `solution.version`, with no current value, secret value or connection id in the spec. The fixture's `deployment-settings.json` carries those, and a unit test proves it binds every declared reference and secret. The spec asks for 2.21.0. |
+| 19 | `19-modern-branding` | An explicit branding ask declares `app.theme` (Preview): a base colour, header colours and a logo that is a declared SVG web resource, never a URL. The spec asks for 2.21.0. An ordinary app ask must not get a theme; `--verify` reports API state, and the header is checked in a browser. |
+| 20 | `20-stable-identities` | A new-app ask writes `createIdentity: "stable-v1"` with `minimumPluginVersion` `2.21.0` and declares its view and chart, the only creates that get stable ids. A download prompt must not gain the field (negative unit probe). The `/app-builder` skill's `createIdentity` guidance must tell the maker that an unsent local edit stops the build (`create-completion-required`) and that running again does not merge it. |
+| 21 | `21-declared-form-layout` | A "lay out this form myself and keep it" ask declares the Main form with `reconcile: "declared"`: a full-width name (`colspan`), a two-row address (`rowspan`), field flags set both true and false, two sub-grids to different child tables, and an `onload` handler from a declared web resource. The runner checks the compiled topology and spans; the declared-form unit tests check that content the spec omits is kept and that a rebuild finds the same form and sends no form write. |
+| 22 | `22-declared-dashboard` | A "keep this dashboard's tiles the way the spec says" ask declares a global Standard dashboard with `reconcile: "declared"`, a `key` on it and on each tile (a two-column list, a chart, a tall iframe), and the app shell places it. The runner checks the plan, the sitemap target and its teardown; the declared-dashboard unit tests check that a keyed tile edit writes only that tile, an added tile goes after the last row, a tile made in Maker is kept, and a rebuild sends no write. |
+| 23 | `23-declared-business-rule` | A "keep these business rules the way the spec says" ask declares two business rules with `reconcile: "declared"`, a `key` on each rule, condition and action: one on the table (a required resolution and a locked field when closed), one on every form (`scope: "AllForms"`, an error message from a two-condition test). The runner checks that each compiles and binds only the spec's columns, and its teardown; the declared-rule unit tests check the Draft-first create, the conditional activation, that a rebuild sends no write, the typed adoption, verify and the managed download. |
+| 24 | `24-declared-bpf` | A "keep this process flow the way the spec says" ask declares one linear business process flow with `reconcile: "declared"`, a `key` on each stage and step (three stages, required and optional steps), a description, an order and an Active status. The runner checks that it compiles on its own table and binds only the spec's columns, and its teardown; the declared-flow unit tests check that every stage and step id is fixed before the Draft-first create, the conditional activation, that a rebuild sends no write, that an edit, omission or reorder is refused with no write, the typed adoption, verify and the managed download.
+| 25 | `25-no-optional-extras` | A new-app ask that says no to branding, outside services, per-environment settings, business rules, process flows and fixed layouts gets none of them: no `app.theme`, no configuration item, no declared form, dashboard, rule or flow, and no plain business rule or process flow either (`expect.noBusinessLogic`). |
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`), not its display name (`"Overview"`). The v2 validator requires keys, and the linter accepts valid key references; `key === name` is neither required nor used by this fixture.
 
 ## `evals.json`
@@ -65,7 +109,7 @@ confined to the fixture directory, including when the fixtures root is a junctio
 - `skill_name` — identifies this suite.
 - `eval_instructions` — description used by eval runners.
 - `common_stage_assertions` — run for every fixture; registered in `lib/assertions.js`.
-- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only and name-scope contracts.
+- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, view-filter, date-behaviour, field-security, app-membership and stable-identity contracts.
 - `evals[].expectations` — additional per-eval assertion texts (can be empty).
 - `evals[].tier` — `smoke` (fast subset) or `full`.
 

@@ -168,3 +168,29 @@ test('the runner adds no remedy to an SDK error it has none for', async () => {
       });
   }
 });
+
+// REAL BUNDLE: two refusals the bundled SDK raises before anything is written, each ending with an SDK call an operator cannot make. The halt
+// keeps the SDK's words and code, adds the maker's step, and is never run again (a run again meets the same refusal).
+test('REAL BUNDLE: a Date and Time column with no behaviour, and a command row whose location or type changed, halt with the maker\u2019s step and are never run again', async () => {
+  const bundle = require(BUNDLE);
+  const { isTransientHalt } = require('../build-model-app.js');
+  const runner = makeRunner({ emit: () => {}, total: 1 });
+  const dateTime = new bundle.DateTimeBehaviorMissingError('contoso_project', ['contoso_due']);
+  assert.strictEqual(dateTime.code, 'DATETIME_BEHAVIOR_MISSING');
+  await assert.rejects(() => runner.run('data-model', 'column contoso_project.contoso_notes', async () => { throw dateTime; }), (err) => {
+    assert.ok(err instanceof BuildHalt);
+    assert.strictEqual(err.code, 'DATETIME_BEHAVIOR_MISSING');
+    assert.ok(err.message.includes(dateTime.message), 'the SDK names the table and its columns');
+    assert.match(err.message, /nothing was created by the refused request\. .*Set the behaviour of each to User local .* in the column's advanced options in Power Apps, then run the build again\.$/);
+    assert.strictEqual(isTransientHalt(err), false, 'never run again');
+    return true;
+  });
+  const command = new bundle.SdkError(bundle.COMMAND_IMMUTABLE_COLUMN_CHANGED_CODE, "Refusing to push command 'contoso_project': app action 'x' changed its location.");
+  assert.strictEqual(command.code, 'COMMAND_IMMUTABLE_COLUMN_CHANGED');
+  await assert.rejects(() => runner.run('commands', 'command bar for contoso_project', async () => { throw command; }), (err) => {
+    assert.strictEqual(err.code, 'COMMAND_IMMUTABLE_COLUMN_CHANGED');
+    assert.match(err.message, /^commands failed: Refusing to push command .* — nothing was written\. .*Remove the command in Power Apps, then run the build again to create it as the spec says\.$/);
+    assert.strictEqual(isTransientHalt(err), false, 'never run again');
+    return true;
+  });
+});

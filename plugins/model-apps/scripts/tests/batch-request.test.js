@@ -137,3 +137,37 @@ test('a change set is one level down and made of requests: it declares its own b
   assert.match(problem(inner('--c', 'Content-Type: multipart/mixed; boundary=d', '', '--d', 'Content-Type: application/http', '', 'DELETE /x HTTP/1.1', '', '--d--', '--c--'), MIXED('b')), /not a request/);
   assert.match(problem(inner('--c', 'Content-Type: application/http', '', 'DELETE /x HTTP/1.1', ''), MIXED('b')), /--c-- is missing/);
 });
+
+// A Content-Type's parameters are read the way the media type grammar has them: text inside another parameter's quoted value is
+// never a boundary. Python's email parser and .NET's MediaTypeHeaderValue read `note="; boundary=decoy"; boundary=actual` as the
+// boundary `actual`, and the service runs the parts it delimits — a `decoy` multipart before them is preamble.
+test('the boundary is the boundary parameter, never text inside another parameter\'s quoted value, at the batch and at a change set', () => {
+  const misleading = 'multipart/mixed; note="; boundary=decoy"; boundary=actual';
+  const request = (target) => ['Content-Type: application/http', 'Content-Transfer-Encoding: binary', '', `PATCH ${target} HTTP/1.1`, 'Content-Type: application/json', '', '{}'];
+  const multipart = (boundary, target) => [`--${boundary}`, ...request(target), `--${boundary}--`];
+  const both = [...multipart('decoy', '/api/data/v9.0/appmodules(2)'), ...multipart('actual', '/api/data/v9.0/appmodules(1)')];
+  assert.deepStrictEqual(operations([...both, ''].join('\r\n'), misleading).map((op) => op.target), ['/api/data/v9.0/appmodules(1)']);
+  const outer = ['--b', `Content-Type: ${misleading}`, '', ...both, '--b--', ''].join('\r\n');
+  assert.deepStrictEqual(operations(outer, MIXED('b')).map((op) => op.target), ['/api/data/v9.0/appmodules(1)']);
+  // A quoted-pair is the character it quotes; `;`, `=` and spaces inside quotes are part of the value.
+  assert.strictEqual(operations([...multipart('a;b=c d', '/x'), ''].join('\r\n'), 'multipart/mixed; boundary="a\\;b=c d"').length, 1);
+  assert.strictEqual(operations([...multipart('actual', '/x'), ''].join('\r\n'), 'multipart/mixed; note="x \\" boundary=decoy"; boundary=actual').length, 1);
+});
+
+test('a Content-Type whose boundary is ambiguous, or whose parameters cannot be taken apart, is refused rather than read one way', () => {
+  const body = ['--a', 'Content-Type: application/http', '', 'DELETE /api/data/v9.0/appmodules(1) HTTP/1.1', '', '--a--', ''].join('\r\n');
+  for (const [contentType, reason] of [
+    ['multipart/mixed; boundary=a; boundary=a', /more than one boundary/],
+    ['multipart/mixed; boundary=a; BOUNDARY="b"', /more than one boundary/],
+    ['multipart/mixed; boundary=a; boundary*=UTF-8\'\'b', /extended form/],
+    ['multipart/mixed; note="; boundary=a', /not closed/],
+    ['multipart/mixed; boundary=a b', /not another parameter/],
+    ['multipart/mixed; boundary', /no value/],
+    ['multipart/mixed; =a', /no name/],
+    ['multipart/mixed"; boundary=a', /media type holds a quote/],
+  ]) assert.match(problem(body, contentType), reason, contentType);
+  const changeSet = (type) => ['--b', `Content-Type: ${type}`, '', '--a', 'Content-Type: application/http', '', 'DELETE /x HTTP/1.1', '', '--a--', '--b--', ''].join('\r\n');
+  assert.match(problem(changeSet('multipart/mixed; boundary=a; boundary=c'), MIXED('b')), /change set cannot be read: its own Content-Type declares more than one boundary/);
+  assert.match(problem(changeSet('multipart/mixed; note="; boundary=a'), MIXED('b')), /change set cannot be read/);
+  assert.strictEqual(operations(changeSet('multipart/mixed; boundary=a;; charset=utf-8;'), MIXED('b')).length, 1, 'empty parameters carry nothing');
+});

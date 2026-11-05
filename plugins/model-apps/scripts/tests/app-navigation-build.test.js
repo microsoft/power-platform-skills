@@ -637,21 +637,24 @@ const GOLDEN = {
   applyNewTable: { calls: 14, sha: '8d09d30f974d3189825ec14438bdf6d1c00eb75b42088816b4b2bd6edd180d3b' },
   applyNewUrl: { calls: 14, sha: 'c90699cef67fb3ec65692205fe42d3c8fe69e0018b96841cbc72c7b8e350a9e9' },
   dryLive: { calls: 2, sha: '4234a3bee2b8281a5346821c9eae1218743fae1213c841574d43e43b08e23698' },
-  applyNewBesidePages: { calls: 28, sha: '8ed8cfad18ed2b5eb59b29bc1ab9a9d023ad9c30ec8c7a69efe714ef14e7ab78' },
+  // Every build that writes a page adds it to the spec's solution (AB#6443257): one read of the page table's component type before the first page is written, and one AddSolutionComponent per
+  // page the build creates, after the page is written and recorded — in each sequence below that writes pages. Recaptured with that change and nothing else in a sequence moved.
+  applyNewBesidePages: { calls: 30, sha: '817f417836351b9077436fedc2061c778c6caeeead08e4f878e7d01a6b992711' },
   // An EXISTING app now takes a changed name and description, so its fetched copy is read once more to compare them: one `getArtifact`
   // (a read of the workspace copy — no request to the environment) after the sitemap write. Captured again with the fake's deployed
   // app carrying the spec's own header; no other call of the sequence differs, and a new app's is exactly what it was.
-  applyExistingBesidePages: { calls: 29, sha: '789bf9a2cdcc1c653fe49a6ff3f363ce73e7d9c255e916a5d810b74f57dd25e3' },
+  applyExistingBesidePages: { calls: 31, sha: 'daca63f3da7fa82a237370ec34a1946d827262939fd9b2d963c88fb0068bc6f7' },
   // The same one added read (see above), here before the app step's own push of its sitemap and header.
   applyExistingAppStep: { calls: 24, sha: 'c57951fa58f2709965565258ed26693f6567e067b3b0099f36f4e8a59a237749' },
   // An EXISTING app whose navigation is pages only — the whole build of it, and its dry run — captured on 2.17.0 with these fakes, before a NEW
   // app of pages only could be built: that build's order (pages first) must leave every request of an app that exists as it was.
-  applyExistingPagesOnly: { calls: 32, sha: '6ea352b91cba2f7af9d8f4ee784e9bf36cad729705a3965424c0b24f14029cfb' },
-  applyExistingPagesInTwoAreas: { calls: 32, sha: '130729c40df45020333dbc83b2d1b25244797a218276aa4dc8ef7ebf9c362515' },
-  applyExistingPagesBesideEmpty: { calls: 30, sha: '5948d0defa335ed58e1a54c498e9a92687663cbc35ae3bf60b65f187192589a5' },
+  // Its pages joining the solution are the only requests added since (see above).
+  applyExistingPagesOnly: { calls: 35, sha: '02cbecf7957c95084ffeadb18665c5248de44d190225e0ea05ce58cc9ff6e6e6' },
+  applyExistingPagesInTwoAreas: { calls: 35, sha: '0ccc11e4fa14c99305d09ab13a7f7d7b025d305a6b4918d103b6d4ec1529289d' },
+  applyExistingPagesBesideEmpty: { calls: 32, sha: '22632dff788436d328cd5bbe83d10fd791bf37035d6c66f682e7f4a2ba3c686b' },
   dryExistingPagesOnly: { calls: 2, sha: '4234a3bee2b8281a5346821c9eae1218743fae1213c841574d43e43b08e23698' },
   // A NEW app whose navigation is pages only, built by creating its pages first (no earlier release built one): every request of that order.
-  applyNewPagesOnly: { calls: 23, sha: '6a994ff4984da4a8d32c695a547ec037279af8c2d6ba0713b00bbf06dd0eecb1' },
+  applyNewPagesOnly: { calls: 26, sha: 'd061c6447aadc8645249fa60d1bcd865c6429fdd3ff3ae7f16960b29ea3446c9' },
 };
 
 const calledSameAs = (calls, golden, what) => {
@@ -694,7 +697,7 @@ test('a valid navigation — with pages beside the entry, a new app and an exist
 });
 
 // The order a NEW app of pages only is built in, request by request: the check's read and the app step's (no app), the icon, the pages — each create
-// recorded in the manifest, which joins the solution — and then the app, ONE create whose push carries the whole navigation, joining the solution with
+// recorded in the manifest, which joins the solution, and each page joining it too — and then the app, ONE create whose push carries the whole navigation, joining the solution with
 // its sitemap. No navigation is rewritten afterwards. (The page backend's own requests are its fake's, not the SDK's: they are not among these.)
 test('a new app whose navigation is pages only is built with exactly these requests: the pages first, then one create of the app', async () => {
   const shape = shapeNamed('a navigation of pages only');
@@ -705,7 +708,8 @@ test('a new app whose navigation is pages only is built with exactly these reque
     assert.deepStrictEqual(env.calls.map(([name, kind]) => (name === 'queryRecords' || name === 'findArtifact' || name === 'createArtifact' || name === 'pushArtifact' ? `${name}(${kind})` : name)), [
       'findArtifact(app)', 'queryRecords(solution)', 'queryRecords(publisher)', 'createSolution', 'queryRecords(organization)', 'dataverse.get', 'createTable',
       'queryRecords(webresource)', 'createWebResource', 'addSolutionComponent', 'findArtifact(app)',
-      'queryRecords(webresource)', 'createWebResource', 'queryRecords(solution)', 'addSolutionComponent', 'updateWebResource', 'addSolutionComponent', 'addSolutionComponent',
+      // The page table's component type is read before the first page is written; each page joins the solution once it is written and recorded.
+      'queryRecords(webresource)', 'dataverse.get', 'createWebResource', 'queryRecords(solution)', 'addSolutionComponent', 'addSolutionComponent', 'updateWebResource', 'addSolutionComponent', 'addSolutionComponent', 'addSolutionComponent',
       'createArtifact(app)', 'pushArtifact(app)', 'addSolutionComponent', 'queryRecords(sitemap)', 'addSolutionComponent',
     ]);
     calledSameAs(env.calls, GOLDEN.applyNewPagesOnly, 'new app, pages only');
@@ -823,5 +827,65 @@ test('an existing app with an appShell that has no areas is refused by the navig
     );
     assert.strictEqual(attempts, 1, 'the gate let the build through to the check, with no question about removals');
     assert.deepStrictEqual(writesIn(env.calls), [], 'and nothing was written');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// app.theme (Preview) on the two app-step shapes only this harness builds. lib/app-theme.js applyDeclaredAppTheme is
+// replaced by a recorder that queues the app's publication as the real one does, and verifyAppTheme (the build's read-back
+// after the paying publication) by one that records the call and answers live; app-theme-wiring.test.js has the rest.
+const appTheme = require('../lib/app-theme.js');
+function recordTheme(t, calls) {
+  t.mock.method(appTheme, 'applyDeclaredAppTheme', async (spec, ctx) => {
+    calls.push(['theme', ctx.appId]);
+    ctx.publication.queue({ kind: 'app', id: ctx.appId, reason: 'app.theme' });
+    return { saved: ['app.theme'], unchanged: [], pendingPublish: ['app.theme'], refused: [], unknown: [] };
+  });
+  t.mock.method(appTheme, 'verifyAppTheme', async (spec, ctx) => {
+    calls.push(['verifyTheme', ctx.appId]);
+    return [{ key: 'app.theme', ok: true, state: 'live' }];
+  });
+}
+const appPublishAfter = (calls, from) => calls.findIndex((c, i) => i > from && c[0] === 'publishArtifact' && c[1] === 'app');
+// The theme is read back once, after the last app publication of the run.
+function assertProvenAfterPublication(calls) {
+  const proofs = calls.map((c, i) => (c[0] === 'verifyTheme' ? i : -1)).filter((i) => i >= 0);
+  const lastPublish = calls.map((c, i) => (c[0] === 'publishArtifact' && c[1] === 'app' ? i : -1)).filter((i) => i >= 0).pop();
+  assert.strictEqual(proofs.length, 1, JSON.stringify(calls.map((c) => c[0])));
+  assert.ok(lastPublish < proofs[0], JSON.stringify(calls.map((c) => c[0])));
+}
+
+test('app.theme, new app of pages only: applied once the pages-first create has made the app, and paid by a later app publication', async (t) => {
+  const shape = shapeNamed('a navigation of pages only');
+  const appDir = appFolder(shape.pages);
+  try {
+    const env = pagesEnvironment({ existing: false });
+    recordTheme(t, env.calls);
+    const spec = specFor(shape);
+    spec.app.theme = { basePaletteColor: '#0f6cbd' };
+    const result = await runSdkBuild(spec, { sdk: env.sdk, apply: true, env: 'https://contoso.example', appDir, genpage: pageBackend(), phases: withPages });
+    assert.strictEqual(result.ok, true);
+    const create = env.calls.findIndex((c) => c[0] === 'createArtifact' && c[1] === 'app');
+    const themes = env.calls.map((c, i) => (c[0] === 'theme' ? i : -1)).filter((i) => i >= 0);
+    assert.strictEqual(themes.length, 1, 'once');
+    assert.ok(create >= 0 && create < themes[0], 'never before the app exists');
+    assert.strictEqual(env.calls[themes[0]][1], result.created.app);
+    assert.ok(appPublishAfter(env.calls, themes[0]) > themes[0], 'the create\'s own publication came before the theme, so a later one pays it');
+    assertProvenAfterPublication(env.calls);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('app.theme, existing app in a changed-only re-upload (no sitemap finalize): applied in the app step and still paid', async (t) => {
+  const shape = shapeNamed('a navigation of pages only');
+  const appDir = appFolder(shape.pages);
+  try {
+    const env = pagesEnvironment({ existing: true });
+    recordTheme(t, env.calls);
+    const spec = specFor(shape);
+    spec.app.theme = { basePaletteColor: '#0f6cbd' };
+    await runSdkBuild(spec, { sdk: env.sdk, apply: true, env: 'https://contoso.example', appDir, genpage: pageBackend(), phases: withPages, changedOnly: reupload });
+    const themes = env.calls.map((c, i) => (c[0] === 'theme' ? i : -1)).filter((i) => i >= 0);
+    assert.strictEqual(themes.length, 1);
+    assert.ok(appPublishAfter(env.calls, themes[0]) > themes[0], JSON.stringify(env.calls.map((c) => c[0])));
+    assertProvenAfterPublication(env.calls);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });

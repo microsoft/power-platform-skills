@@ -25,7 +25,13 @@
 //                   a `GENPAGE_DELETE_NOT_CONFIRMED` refusal that deletes nothing unless `options.allowDestructive` is exactly true
 //   types           a string, or (dataSources, options) => string | throw: what `runtimeTypes` answers; default `// types of <tables>`
 //   language        what `baseLanguage` answers (default 1033); `languageError`: an Error it throws instead
+//   solutions       the solutions the environment has, by unique name: { [name]: { managed } } (default ContosoCore, unmanaged). `solutionTarget` answers a system
+//                   solution (Default, Active, Basic) from its name, as the real backend does, refuses a missing or managed one with the real codes, and gives a
+//                   real one the page table's component type `pageType` (default 10372); `solutionTargetError`: an Error it throws instead
+//   solutionAdd     (pageId, target) => void | throw: what `addToSolution` does; default nothing. Every page it adds is in `backend.inSolution` ({ pageId, solution, componentType })
 //   left            the folders `dispose` answers it could not remove, as the real backend's `{ left }` (default none)
+//   appUniqueNames  { [appId]: name | null }: what `appUniqueName` answers (default 'contoso_app'; null: the app is not there). The read names the pages lease an
+//                   edit outside a build takes (lib/standalone-page-lease.js); it is no page operation, so it is kept out of `calls` and listed in `appNameReads`
 //   `describe` answers from `pages`: a page with `raw: true` is not editable and its tables are not known (`null`)
 const DEFAULT_SOURCE = 'export default function Page() { return null; }\n';
 const { sha256 } = require('../../lib/hash.js');
@@ -60,6 +66,7 @@ function fakeGenpage(options = {}) {
     of: (method) => calls.filter((c) => c.method === method),
     disposed: 0,
     disposeArgs: [],
+    inSolution: [],
 
     async enumerateEnv() {
       record('enumerateEnv', []);
@@ -141,10 +148,38 @@ function fakeGenpage(options = {}) {
       };
     },
 
+    appNameReads: [],
+    async appUniqueName(appId) {
+      backend.appNameReads.push(appId);
+      const names = options.appUniqueNames;
+      if (names && Object.prototype.hasOwnProperty.call(names, appId)) return names[appId];
+      return 'contoso_app';
+    },
+
     async baseLanguage() {
       record('baseLanguage', []);
       if (options.languageError) throw options.languageError;
       return options.language === undefined ? 1033 : options.language;
+    },
+
+    async solutionTarget(uniqueName) {
+      record('solutionTarget', [uniqueName]);
+      if (options.solutionTargetError) throw options.solutionTargetError;
+      const name = String(uniqueName).trim();
+      if (['default', 'active', 'basic'].includes(name.toLowerCase())) return { uniqueName: name, systemSolution: true };
+      const solutions = options.solutions || { ContosoCore: {} };
+      const known = Object.keys(solutions).find((s) => s.toLowerCase() === name.toLowerCase());
+      if (!known) throw fail('SOLUTION_NOT_FOUND', `There is no solution with the unique name '${name}' in this environment.`);
+      if (solutions[known].managed) throw fail('SOLUTION_MANAGED', `The solution '${known}' is managed, and a managed solution takes no new components. Use an unmanaged solution.`);
+      return { uniqueName: known, systemSolution: false, componentType: options.pageType === undefined ? 10372 : options.pageType };
+    },
+
+    async addToSolution(pageId, target) {
+      record('addToSolution', [pageId, target]);
+      if (!target || target.systemSolution) return { added: false };
+      if (options.solutionAdd) await options.solutionAdd(pageId, target);
+      backend.inSolution.push({ pageId: String(pageId).toLowerCase(), solution: target.uniqueName, componentType: target.componentType });
+      return { added: true };
     },
 
     async removeFromApp(appId, pageId, opts) {

@@ -40,7 +40,7 @@ registering both MCP configurations. The package's version remains independent o
 
 All runtime files and references stay inside the installed subtree, with no symlinks or
 root-shared dependencies. `server/mcp.mjs` follows the packaged MCP entry-point pattern.
-The bridge uses official `@modelcontextprotocol/sdk` 1.30.0 and Zod 4.6.5.
+The bridge uses official `@modelcontextprotocol/sdk` 1.32.1 and Zod 4.6.6.
 Build-only esbuild 0.28.2 produces one complete Node.js ESM runtime; the installed bundle
 needs no .NET, npm, node_modules or source. Azure CLI is an external prerequisite.
 `process.mjs` invokes supported commands with bounded output/cancellation/timeouts;
@@ -56,7 +56,7 @@ contains the selected environment and tenant for setup, unlike general diagnosti
 
 ## Build and checks
 
-From this plugin directory in a repository checkout, with Node.js 22 or 24 LTS
+From this plugin directory in a repository checkout, with Node.js 22+ (maintained LTS recommended)
 (tests use fake Azure CLI processes):
 
 ```powershell
@@ -67,7 +67,11 @@ npm test
 
 The same commands work on macOS/Linux. The plugin's path-filtered
 `process-intelligence-script-tests` CI workflow runs them on Windows, Linux and macOS with
-Node.js 22 and 24. It runs for plugin changes, its own workflow, the root `LICENSE` embedded
+Node.js 22, 24 and 26. Version-override regressions exercise rejection below 22 and acceptance
+at the minimum, on odd majors and on future majors in both source and the shipped bundle.
+Those overrides test only startup policy, not compatibility with the simulated runtimes.
+Keep the esbuild target at `node22`; accepting newer versions does not prove future compatibility.
+The workflow runs for plugin changes, its own workflow, the root `LICENSE` embedded
 by the build, and repository inputs asserted by tests: both marketplaces, root `README.md`,
 bug/feature issue templates and `shared/telemetry/README.md`. Repository-wide metadata checks
 remain separate. CI has read-only repository permissions and needs no secrets, Azure login or
@@ -253,7 +257,7 @@ wins and invalid selection never falls back to another profile.
 
 ## Dependency management and licenses
 
-`package.json` and `package-lock.json` pin MCP SDK 1.30.0, Zod 4.6.5 and build-only esbuild 0.28.2.
+`package.json` and `package-lock.json` pin MCP SDK 1.32.1, Zod 4.6.6 and build-only esbuild 0.28.2.
 When updating dependencies, review their licenses and upstream release notes, then regenerate
 the bundle and metadata together. The build includes full LICENSE/NOTICE texts for packages
 present in esbuild's output, plus the Microsoft MIT notice, in [server/mcp.mjs](../server/mcp.mjs).

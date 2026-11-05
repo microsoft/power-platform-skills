@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { makeSimpleMockSdk } = require('./mock-sdk.js');
 const { fakeGenpage } = require('./fake-genpage.js');
+const { withPageType } = require('./page-component-type.js');
 
 // Wrap every function reachable from `target` so a call is recorded as [name, ...args], nested objects (the raw
 // `dataverse` client) with a dotted name. Arguments are recorded as given, so a test can compare them.
@@ -122,13 +123,14 @@ function pagesEnvironment({ existing = false, existingSitemap = { areas: [] } } 
     pushArtifact: async (type, id) => ({ type, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
     addSolutionComponent: async () => undefined,
     publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
-    // The shared-page scan: the apps in the environment, and the saved navigation of each (only this one here).
+    // The shared-page scan: the apps in the environment, and the saved navigation of each (only this one here). And the page table's solution component type,
+    // which the pages phase reads to add the pages it writes to the spec's solution (helpers/page-component-type.js).
     dataverse: {
-      get: async (url) => {
+      get: withPageType(async (url) => {
         if (url.startsWith('/appmodules/')) return { status: 200, body: { value: [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: 'new_supportdesk', componentstate: 0 }] } };
         if (url.startsWith('/sitemaps/')) return { status: 200, body: { value: [] } };
         return { status: 404, body: null };
-      },
+      }),
     },
   };
   const calls = [];

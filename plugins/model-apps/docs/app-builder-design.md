@@ -358,6 +358,9 @@ the model-driven shell today. Scope honestly:
   token conformance (§13). We do **not** claim to write the app theme.
 - **Future (optional):** a supported `appDef` theme read/write mapping — deferred until the SDK
   exposes it; called out as an extension point, not v1 scope.
+- **Since 2.21.0 (Preview):** the app theme and header logo are written separately from `appDef`,
+  by the optional `app.theme` key (an explicit branding request only), through the SDK's theme
+  methods. `spec.design` still drives pages only; see `app-builder-capabilities.md` for the theme.
 
 ---
 

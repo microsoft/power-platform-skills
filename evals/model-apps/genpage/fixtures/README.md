@@ -35,6 +35,13 @@ digits are parsed as the eval id; the slug is purely cosmetic.
 - A current synthetic `fixture.json` declares contract version 2, provenance,
   source skill/reference sections, ordered `tool-results.json` and artifact paths.
   Nested snapshots are evidence, not additional generated pages.
+- A scenario that grades a newly authored plan names its evidence under
+  `fixture.json` `semantics` (each also listed in `artifacts`): `approvedPlan` (the
+  approved preview the run saved), and for eval 26 `lookupMetadata` (the saved
+  `get-lookup-metadata.js` answer), `interactions` (the ordered `needs_input`,
+  answer and approval of its semantic question) and `lookupRows` (synthetic lookup
+  values with the state the published normalizer gives each). Its expectations fail
+  — they do not skip — when a declared key or its file is missing.
 
 ## How to capture a real fixture from /genpage
 
@@ -90,7 +97,7 @@ Two rules for evidence files:
 
 ## Current state
 
-This directory has **33 fixtures, 37 top-level TSX files and 25 represented
+This directory has **35 fixtures, 39 top-level TSX files and 27 represented
 prompt IDs**. All are green under both runners. Directories listed in
 `contracts.json` are historical contract-1 evidence; every other directory is a
 current contract-2 synthetic. Registered prompts with no fixture:
@@ -133,6 +140,8 @@ of step with the fixtures.
 | `16-account-list/` | 16 | Current synthetic | green | Minimal single list page over an existing table; code-only, no solution question or auth gate |
 | `1-account-cards-verified-columns/` | 1 | Current synthetic | green | Account card gallery over an existing table; keeps the RuntimeTypes.ts it was written against, so every column its dataApi call names is checked against the schema |
 | `7-job-candidates-verified-columns/` | 7 | Current synthetic | green | Two new related tables (cr_jobrequisition, cr_candidate with a lookup and a status choice), auth gate, dependency-ordered provisioning, `$parent`/match sample data; keeps the RuntimeTypes.ts it generated, so the page's columns are checked against the schema |
+| `26-customer-lookup/` | 26 | Current synthetic | green | An opportunity's Customer (account or contact) normalized to its own table before it is opened, filtered by or written (the page's lookup code is not graded); the account-scope question asked with no default and its answer recorded as a user-confirmed assumption before approval; the lookup records built from the saved `get-lookup-metadata.js` read, typed in RuntimeTypes.ts and gated with `--require-observed-lookups`; synthetic customer values in `lookup-rows.json` |
+| `27-page-error-helper/` | 27 | Current synthetic | green | A newly authored plan with its assumptions, verified against the approved preview with `--require-assumptions`; its page follows the page error teaching — a cached list read, an awaited record read and a Custom API Action reporting through the canonical reporter inside the boundary — which is not graded |
 
 Historical captures remain compatibility/parser evidence, not proof of today's
 file transport, binding preservation or full skill compliance. Their current
@@ -153,3 +162,16 @@ permanently red: both full runners must exit 0. Refusal fixtures prove a failed
 gate and zero generation/mutations; recovery fixtures retain rejected snapshots
 only as nested evidence. Green replay does not mean an agent, TypeScript build,
 React UI, live connector/API, hosted upload or solution import was exercised.
+
+## Selected by name: `stable-turn-retry/`
+
+`stable-turn-retry/` is not one of the fixtures counted above, and neither default
+runner reads it: its name has no eval id, so the loader passes over it. It holds
+constructed evidence (every id, digest and answer a placeholder) of a host that
+retries one page upload under `genpage-upload.js --turn-id`: the id kept before the
+first send, the same command sent again from another process after a lost answer,
+one page and one history turn, a reuse for another binding list refused with
+nothing written and the connection kept, and an ordinary edit with no
+`--turn-id`. Run it with `node ../run-stable-turn-retry.js`
+(`tests/stable-turn-retry.test.js` does, in CI). Its own `.gitattributes` checks
+every file out verbatim, since each upload records the SHA-256 of the bytes it sent.

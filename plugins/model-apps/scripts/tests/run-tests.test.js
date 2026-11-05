@@ -7,6 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { pluginTestFiles, sdkTestSpec, summarize, runPluginSuite, reportStrayFolders, withTempDir } = require('../run-tests.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { PREVIOUS_RELEASE, BUNDLE_PATH } = require('./helpers/previous-bundle.js');
 
 test('pluginTestFiles discovers every *.test.js as a scripts/tests path, sorted', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtests-'));
@@ -276,6 +277,7 @@ const PCF_COPY_SYNC_PATHS = new Set([
   'plugins/pcf/scripts/lib/nearest-name.js',
   'plugins/pcf/scripts/lib/utf8-stream.js',
   'plugins/pcf/scripts/lib/cli-failure.js',
+  'plugins/pcf/scripts/lib/telemetry/skill-completed.js',
   'plugins/pcf/scripts/lib/telemetry/ikey.json',
   'plugins/pcf/scripts/lib/dataverse-auth.js',
   'plugins/pcf/scripts/check-auth.js',
@@ -387,6 +389,67 @@ test('the model-apps CI workflow runs the suite once with pinned TypeScript and 
     release = null;
   }
   if (release !== null) assert.strictEqual(JSON.parse(release).version, '2.13.0', 'the fetched commit is the 2.13.0 release');
+});
+
+// The upgrade tests (workspace-upgrade-*-real-bundle.test.js) need the previous release's SDK bundle, which a shallow checkout does not
+// have, and FAIL in CI without it: each job that runs the suite fetches that release by its hash and names the bundle — the same commit
+// helpers/previous-bundle.js checks the bundle's SHA-256 against, so the two cannot drift apart on a re-vendor.
+test('the model-apps CI workflow gives every suite run the previous release\'s SDK bundle the upgrade tests read', () => {
+  const { PREVIOUS_RELEASE, BUNDLE_PATH } = require('./helpers/previous-bundle.js');
+  const wf = fs.readFileSync(WORKFLOW, 'utf8');
+  for (const id of ['test-model-apps-scripts', 'test-model-apps-lexer-oracles']) {
+    const job = workflowJob(wf, id);
+    const fetchAt = job.indexOf(`git fetch --no-tags --depth=1 origin ${PREVIOUS_RELEASE}`);
+    assert.ok(fetchAt >= 0, `${id} fetches the previous release (${PREVIOUS_RELEASE}) by its hash`);
+    assert.ok(job.includes(`git cat-file blob FETCH_HEAD:${BUNDLE_PATH} > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"`), `${id} extracts its bundle under RUNNER_TEMP`);
+    assert.match(job, /echo "MODEL_APPS_PREVIOUS_BUNDLE=\$RUNNER_TEMP\/previous-cds-maker-sdk\.cjs" >> "\$GITHUB_ENV"/, `${id} names it to the later steps`);
+    assert.ok(fetchAt < job.search(/^ {14}run: node scripts\/run-tests\.js[ \t]*$/m), `${id} fetches it before the suite runs`);
+  }
+});
+
+// The eval tests and runners read committed fixtures, which a Windows checkout gives CRLF line ends, and the routing runner starts agent CLIs as
+// child processes (.cmd shims on Windows), so the eval job runs on every system and Node version the suite job runs on; the lexer's oracle
+// sweeps compare it with parsers whose identifier tables are not those of the Node version's engine, so they run on both Node versions. Text
+// assertions again: a list is read from the job's own `matrix:` block, in either form YAML writes it.
+//   matrix:
+//       os:
+//           - ubuntu-latest
+//       node: [20, 22]
+function workflowJob(wf, id) {
+  const start = wf.search(new RegExp(`^ {4}${id}:\\s*$`, 'm'));
+  assert.ok(start >= 0, `the workflow has a job ${id}`);
+  const rest = wf.slice(start).split(/\r?\n/).slice(1);
+  const end = rest.findIndex((line) => /^ {4}[a-z0-9-]+:\s*$/i.test(line));
+  return (end === -1 ? rest : rest.slice(0, end)).join('\n');
+}
+function matrixList(job, key) {
+  const lines = job.split('\n');
+  const at = lines.findIndex((line) => line.startsWith(`                ${key}:`));
+  if (at === -1) return null;
+  const inline = /\[([^\]]*)\]\s*$/.exec(lines[at]);
+  if (inline) return inline[1].split(',').map((item) => item.trim()).filter(Boolean);
+  const items = [];
+  for (const line of lines.slice(at + 1)) {
+    const item = /^ {20}- (\S+)\s*$/.exec(line);
+    if (!item) break;
+    items.push(item[1]);
+  }
+  return items;
+}
+test('the model-apps CI workflow runs the eval job on every system and Node version the suite job runs on, and the lexer oracles on both Node versions', () => {
+  const wf = fs.readFileSync(WORKFLOW, 'utf8');
+  const suite = workflowJob(wf, 'test-model-apps-scripts');
+  const evals = workflowJob(wf, 'test-model-apps-evals');
+  const oracles = workflowJob(wf, 'test-model-apps-lexer-oracles');
+  assert.deepStrictEqual(matrixList(suite, 'os'), ['ubuntu-latest', 'windows-latest', 'macos-latest']);
+  assert.deepStrictEqual(matrixList(suite, 'node'), ['20', '22']);
+  assert.deepStrictEqual(matrixList(evals, 'os'), matrixList(suite, 'os'), 'the eval job runs on every system the suite runs on');
+  assert.deepStrictEqual(matrixList(evals, 'node'), matrixList(suite, 'node'), 'and on every Node version');
+  assert.match(evals, /^ {8}runs-on: \$\{\{ matrix\.os \}\}[ \t]*$/m, 'on the system of its matrix entry');
+  assert.match(evals, /^ {18}node-version: \$\{\{ matrix\.node \}\}[ \t]*$/m, 'with the Node version of its matrix entry');
+  assert.match(evals, /^ {12}fail-fast: false[ \t]*$/m, 'and one entry that fails does not cancel the others');
+  assert.deepStrictEqual(matrixList(oracles, 'node'), matrixList(suite, 'node'), 'the lexer oracles run on every Node version');
+  assert.match(oracles, /^ {18}node-version: \$\{\{ matrix\.node \}\}[ \t]*$/m);
 });
 
 // --- committed lock files must not carry a registry URL ---------------------------------------

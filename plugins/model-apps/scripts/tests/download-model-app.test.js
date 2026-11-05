@@ -55,6 +55,20 @@ test('resolveAppId fails closed when a display name matches more than one app', 
   assert.match(r.error, /new_sales, contoso_sales/);
 });
 
+// A display name read twice by a paginating server is still one app; an answer that says more apps carry the name
+// than it returned does not prove the name unique, so it is refused like an ambiguous one.
+test('resolveAppId counts distinct apps, and refuses a display-name answer cut short', async () => {
+  const row = { appmoduleid: 'app-9', uniquename: 'new_smokeapp', name: 'Smoke App' };
+  const repeated = { queryRecords: async (_l, o) => (/uniquename eq/.test(o.filter) ? [] : [row, { ...row }]) };
+  assert.deepStrictEqual(await resolveAppId(repeated, 'Smoke App'), { appId: 'app-9', matchedBy: 'displayName', uniqueName: 'new_smokeapp' });
+  const partial = [row];
+  Object.defineProperty(partial, 'hasMore', { value: true, enumerable: false });
+  const cut = { queryRecords: async (_l, o) => (/uniquename eq/.test(o.filter) ? [] : partial) };
+  const r = await resolveAppId(cut, 'Smoke App');
+  assert.strictEqual(r.appId, undefined, 'one row of a cut-short answer is not "exactly one"');
+  assert.match(r.error, /could not prove unique/);
+  assert.match(r.error, /new_smokeapp/);
+});
 // A GUID is authoritative: resolving it must not cost a query, and must never reach the
 // display-name fallback (an app DISPLAY-named like a GUID could otherwise shadow a real id).
 test('resolveAppId issues no query for a GUID', async () => {
@@ -477,7 +491,7 @@ test('#564 GlobalOptionSet being present does NOT make a local set global (live-
   // set that does not exist, and the rebuild would bind the column to nothing.
   const sdk = sdkWithOptionSets({
     attributes: CHOICE_ATTRS,
-    picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[1, 'Open']], globalEcho: true })],
+    picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[100000000, 'Open']], globalEcho: true })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
@@ -501,13 +515,14 @@ test('#564 a GLOBAL-bound picklist emits a globalChoice reference instead of inl
   // app created (#587 item 6).
   const decls = new Map();
   collectGlobalChoices(meta, decls);
-  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Draft', 'Final'], existing: true }]);
+  // Numbered 1 and 2, not 100000000 + index: the declaration keeps the numbers, so a rebuild into a fresh environment numbers them alike.
+  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: [{ value: 1, label: 'Draft' }, { value: 2, label: 'Final' }], existing: true }]);
 });
 
 test('#564 a MultiSelect picklist downloads as MultiChoice', async () => {
   const sdk = sdkWithOptionSets({
     attributes: [{ logicalName: 'new_tags', displayName: 'Tags', attributeType: 'MultiSelectPicklist', isCustomAttribute: true }],
-    multiSelect: [picklistRow('new_tags', { name: 'new_ticket_new_tags', isGlobal: false, options: [[1, 'Urgent'], [2, 'Billable']] })],
+    multiSelect: [picklistRow('new_tags', { name: 'new_ticket_new_tags', isGlobal: false, options: [[100000000, 'Urgent'], [100000001, 'Billable']] })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
   const tags = e.columns.find((c) => c.schemaName === 'new_tags');
@@ -526,8 +541,8 @@ test('#564 inline options keep their localizations, but a global declaration is 
       { logicalName: 'new_stage', displayName: 'Stage', attributeType: 'Picklist', isCustomAttribute: true },
     ],
     picklist: [
-      picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[1, localized]] }),
-      picklistRow('new_stage', { name: 'shared_stage', isGlobal: true, options: [[1, localized]] }),
+      picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[100000000, localized]] }),
+      picklistRow('new_stage', { name: 'shared_stage', isGlobal: true, options: [[100000000, localized]] }),
     ],
   });
   const meta = await readEntityWithDescriptions(sdk, 'new_ticket');
@@ -1101,6 +1116,10 @@ const { enrichesDefaultViews } = require('../lib/sdk-build.js');
 const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
 const { OBJECT_DIVISION_PAGE, LONG_KEY, lookBehindPage } = require('./helpers/misread-page.js');
+// What a guess costs a page where the TypeScript parser does not settle it (lib/typescript-views.js): these tests read the page with the lexer alone.
+// parser-check.test.js holds what the parser settles.
+const { setParserCheck } = require('../lib/typescript-views.js');
+const lexerAlone = (t) => { setParserCheck(false); t.after(() => setParserCheck(true)); };
 
 test('runDownload translates a fail-closed app read into a graceful error, not a raw SDK throw', async () => {
   // An unresolved or shared sitemap is not a partial download: none of its navigation can be trusted
@@ -1361,12 +1380,13 @@ test('download turns back a double-quoted id only, leaves any other as the id, a
 // The id of a call the lexer reads by guess is left alone, whatever its quotes: the corruption was a single-quoted id inside a
 // double-quoted string, which the lexer read as code after a misread, and which was rewritten to "PAGEREF_detail" — quotes ending the string.
 // The call after it is hidden by the same misread, and its id stays too: each is reported.
-test('download leaves an id after a place the lexer reads by guess, and says where that is', async () => {
+test('download leaves an id after a place the lexer reads by guess, and says where that is', async (t) => {
+  lexerAlone(t);
   const deployed = (id) => [
     'export default function Overview() {',
     `  navigateTo({pageType:"generative",pageId:"${id}"});`,
     '  const of = 12;',
-    '  const count = of/2; const re = /\\/*$/;',
+    '  for (const x of of/2 + "") {} const re = /\\/*$/;',
     `  const note = "*/ navigateTo({pageType:'generative', pageId:'${id}'}) /*";`,
     `  navigateTo({pageType:"generative",pageId:"${id}"});`,
     '  return null;',
@@ -1389,7 +1409,8 @@ test('download leaves an id after a place the lexer reads by guess, and says whe
 
 // A call the lexer hid keeps its id, and no call it recognised holds it. The ids a download leaves are found by reading the result as text,
 // so the call is reported, and the warning fires: before, `left` was empty and nothing was said.
-test('download reports the id in a call the lexer hid, though no call it recognised holds it', async () => {
+test('download reports the id in a call the lexer hid, though no call it recognised holds it', async (t) => {
+  lexerAlone(t);
   const run = await downloadOverview((id) => OBJECT_DIVISION_PAGE.replaceAll('"PAGEREF_detail"', `"${id}"`));
   try {
     assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
@@ -1398,6 +1419,24 @@ test('download reports the id in a call the lexer hid, though no call it recogni
     assert.deepStrictEqual(run.downloaded.navIdsLeft.map((l) => [l.page, l.id, l.line, l.why, l.frontier.kind, l.frontier.line]), [['Overview', run.detailId, 5, 'frontier', 'brace', 4]]);
     assert.match(run.warned, /WARNING: 1 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 5, column \d+: after the "brace" ambiguity at line 4, column \d+\)/);
   } finally { run.cleanup(); }
+});
+
+// The same pages, read as the TypeScript parser reads them where the lexer guessed (lib/typescript-views.js): every call is seen, so every id in one is a token
+// again, and the page of twenty calls in an `if` head — whose tokens the lexer alone would read past its look-behind — is written with its tokens, and nothing is left.
+test('download turns the ids of a page the lexer misreads back into tokens, read as TypeScript parses it', async () => {
+  const run = await downloadOverview((id) => OBJECT_DIVISION_PAGE.replaceAll('"PAGEREF_detail"', `"${id}"`));
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.strictEqual(run.code, OBJECT_DIVISION_PAGE);
+    assert.ok(!('navIdsLeft' in run.downloaded), 'nothing left, nothing to report');
+  } finally { run.cleanup(); }
+  const deployed = (id) => `${lookBehindPage(id, 20)}export default function Overview() { return null; }\n`;
+  const long = await downloadOverview(deployed, LONG_KEY);
+  try {
+    assert.ok(long.downloaded.ok, JSON.stringify(long.downloaded));
+    assert.strictEqual(long.code, deployed(long.detailId).replaceAll(long.detailId, `PAGEREF_${LONG_KEY}`));
+    assert.ok(!('navIdsLeft' in long.downloaded), 'nothing left, nothing to report');
+  } finally { long.cleanup(); }
 });
 
 test('download reports an id that stays as data, with its place in the page it is written to, and says it can stay', async () => {
@@ -1417,7 +1456,8 @@ test('download reports an id that stays as data, with its place in the page it i
 // the lexer's 2,000-character look-behind with ids, outside it with tokens. Written as tokens the page would have a `paren` ambiguity before the
 // call after the statement, and the build would refuse it, with nothing said at the download. So the download writes none: the page is as it was
 // deployed, every id is reported with the reason and the ambiguity, and the warning fires.
-test('download keeps every id of a page whose tokens the build would refuse, and says why', async () => {
+test('download keeps every id of a page whose tokens the build would refuse, and says why', async (t) => {
+  lexerAlone(t);
   const deployed = (id) => `${lookBehindPage(id, 20)}export default function Overview() { return null; }\n`;
   const run = await downloadOverview(deployed, LONG_KEY);
   try {
@@ -2537,7 +2577,7 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   // SORTED, not in the order the mock returned them. `notRoundTripped` is compared between runs, so
   // it sorts at every level, and `descriptionInventory` below is ordered the same way (table, then
   // name, then id): the two lists carry the same forms in the same order.
-  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [], businessRules: [] }]);
+  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [], commands: [], businessRules: [] }]);
   // The spec on disk still carries them under descriptionInventory — the note's claim must be true.
   assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Dispatcher Form', 'Everyone Form']);
 });
@@ -2801,7 +2841,9 @@ test('#564 option ORDER is Dataverse display order, not Value order', async () =
     picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[9, 'Last'], [3, 'Middle'], [1, 'First']] })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
-  assert.deepStrictEqual(e.columns.find((c) => c.schemaName === 'new_status').options, ['Last', 'Middle', 'First']);
+  // Each option keeps its number too: 9, 3, 1 are not 100000000 + index, so the options are written as `{ value, label }` and a
+  // rebuild neither renumbers them nor reorders the picker.
+  assert.deepStrictEqual(e.columns.find((c) => c.schemaName === 'new_status').options, [{ value: 9, label: 'Last' }, { value: 3, label: 'Middle' }, { value: 1, label: 'First' }]);
 });
 test('#564 a MultiChoice column is NOT dropped even though Dataverse types it as "Virtual"', async () => {
   // LIVE-MEASURED on a real table. A MultiSelectPicklist attribute reports:
@@ -2820,7 +2862,7 @@ test('#564 a MultiChoice column is NOT dropped even though Dataverse types it as
       { logicalName: 'pp_tagsname', displayName: 'Tags Name', attributeType: 'Virtual', isCustomAttribute: true },
       { logicalName: 'pp_stagename', displayName: 'Stage Name', attributeType: 'Virtual', isCustomAttribute: true },
     ],
-    multiSelect: [picklistRow('pp_tags', { name: 'pp_item_pp_tags', isGlobal: false, options: [[1, 'Urgent'], [2, 'Billable']] })],
+    multiSelect: [picklistRow('pp_tags', { name: 'pp_item_pp_tags', isGlobal: false, options: [[100000000, 'Urgent'], [100000001, 'Billable']] })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_item'), 'pp_item');
   const tags = e.columns.find((c) => c.schemaName === 'pp_tags');
@@ -2830,6 +2872,20 @@ test('#564 a MultiChoice column is NOT dropped even though Dataverse types it as
   // The synthetic shadows must STILL be filtered out: emitting them would feed defaultViewColumns
   // and rewrite the table's default views with junk.
   assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['pp_tags']);
+});
+
+test('2.21.0: a secured column downloads with isSecured: true; an unsecured one carries no isSecured', async () => {
+  // IsSecured comes with the attribute row the SDK already reads, so it costs no read. false is the create default and is left out:
+  // written out, it would ask a rebuild to unsecure the column.
+  const sdk = sdkWithOptionSets({
+    attributes: [
+      { logicalName: 'new_salary', displayName: 'Salary', attributeType: 'String', isCustomAttribute: true, isSecured: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'String', isCustomAttribute: true, isSecured: false },
+    ],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'new_salary').isSecured, true);
+  assert.ok(!('isSecured' in e.columns.find((c) => c.schemaName === 'new_notes')));
 });
 
 test('#564 a Virtual attribute with NO option set is still filtered out', async () => {
@@ -2983,6 +3039,20 @@ test('duplicate PLAIN labels are still typed (they are a warning, not an error)'
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
   assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_status').type, 'Choice');
+});
+
+test('the untyped-column warning names a label clash as the cause where that is it, and words every other column as before', () => {
+  const { untypedColumnWarnings } = require('../download-model-app.js');
+  const before = 'WARNING: 1 column(s) were captured WITHOUT a type (pp_t.pp_unread) — most likely Choice/MultiChoice columns whose option set could not be read. Rebuilding this spec into an environment that already has the table is unaffected, but rebuilding into a FRESH environment would create them as single-line Text. Add the type and options[] (or a globalChoice reference) by hand before a cross-environment rebuild.\n';
+  assert.deepStrictEqual(untypedColumnWarnings(['pp_t.pp_unread']), [before], 'no clash: the warning it always was');
+  assert.deepStrictEqual(untypedColumnWarnings([]), []);
+  const clashes = new Map([['pp_t.pp_status', "'Open' names options[0] and options[1]"]]);
+  const lines = untypedColumnWarnings(['pp_t.pp_status', 'pp_t.pp_unread'], clashes);
+  assert.strictEqual(lines.length, 2);
+  assert.strictEqual(lines[0], before, 'the column the clash does not explain keeps its own warning');
+  assert.match(lines[1], /^WARNING: 1 Choice\/MultiChoice column\(s\) were captured WITHOUT a type because one text names two of their options \(pp_t\.pp_status: 'Open' names options\[0\] and options\[1\]\) and their two labels differ in at least one language/);
+  assert.match(lines[1], /Their option sets were read/);
+  assert.doesNotMatch(lines[1], /could not be read/);
 });
 
 test('a MultiChoice survives an unusable option label - untyped and NAMED, never dropped', async () => {

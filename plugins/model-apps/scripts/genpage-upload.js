@@ -28,6 +28,12 @@
 //   later (by the app that is built around it, or by a later `--add-to-sitemap` upload of another).
 //   An UPDATE (`--page-id`) needs it: the page must be proven to be in that app's navigation.
 //
+//   With `--app-id` the upload takes the app's pages lease (lib/standalone-page-lease.js) for the whole write and placement, in the app folder's
+//   .maker-workspace — `--app-dir <folder>`, default the current folder, as a build of the spec in that folder uses — so a build of the app, or another
+//   edit of it from that folder, refuses with `pages-locked` (exit 1, `outcome: "nothing"`) instead of interleaving its writes. It costs one read (the
+//   app's unique name, which names the lock); an app whose name cannot be read is `GENPAGE_APP_LEASE_UNRESOLVED`, nothing written. A single-machine
+//   advisory lock in that folder, not a compare-and-swap on the service. A create with no `--app-id` touches no app and takes no lease.
+//
 //   One update is different: `--page-id` for a page THIS TOOL created and did not finish — its publish failed, or the
 //   `--add-to-sitemap` placement it was asked for did — completes it. The base marker beside the code file records that
 //   (`unfinished`), the page is published and, with `--add-to-sitemap`, placed, and the proof of the page's place in the app's
@@ -44,10 +50,38 @@
 //   `--prompt` / `--agent-message` are accepted for short, shell-safe text, but `--prompt-file` is
 //   the documented path precisely because it cannot be mangled by a shell. `--compiled-code-file` is
 //   refused (see main): the page is compiled from the checked `--code-file` itself.
+//
+//   `--solution <unique name>` is the solution the page joins (AB#6443257). A page made through the SDK joins none on its own, and nothing
+//   else brings it into one — the add of an app brings its sitemap, never the pages its navigation opens — so a run that was given a
+//   solution and made pages left them out of it. The solution is read BEFORE anything is written (a name that is no unmanaged solution, or
+//   an environment that cannot say the page table's component type, refuses the upload with nothing made), and the page is added LAST,
+//   once it is written, published and placed: the result then says `solution` and `addedToSolution: true`. A system solution (Default,
+//   Active, Basic) holds every component already, so it is neither read nor added to (`addedToSolution: false`, `systemSolution: true`).
+//   An add that fails is a failure (exit 1, `code: "solution-add-failed"`, the page's id): the page works and is not in the solution, and
+//   the error names the one command that adds it (add-page-to-solution.js) — never a second create. An update may name it too: the page
+//   then joins the solution once it is saved, which is how a create that did not finish, run again with `--page-id`, still joins it.
+//
+//   `--draft` saves the page and publishes NOTHING (lib/genpage-sdk.js `publish: false`): the app that runs keeps serving what was published until a
+//   publish — a build, the designer, or the same upload without `--draft`. Every placement the upload makes is a draft too — the `--add-to-sitemap`
+//   entry, and the default views of the page's tables — so the app is neither published nor asked to publish anything before its write. The answer is
+//   the backend's: `draft: true`, `saved`, `pendingPublish` (null when nothing new was saved), `draftFingerprint` (never `fingerprint`: a draft is no
+//   proof of a publish, and nothing that records what was published is advanced from it), `publish: { kind: 'skipped', reason: 'draft' }` and, when it
+//   placed, `placementState`. A draft is finished as asked, so its base marker records no `unfinished` state; a placement that fails names
+//   `genpage.js add-to-app --draft`. A page this tool created and did not finish is completed by PUBLISHING it, so `--draft` is refused for it.
+//
+//   `--turn-id <guid>` (with `--app-dir`, whose `.maker-workspace\turns` holds the turn's record) names ONE complete intended upload, for a caller that retries it — a
+//   host that may lose an answer, or one that correlates the page's history turn. The id is kept before the first send and given again, with the same files and flags,
+//   when that upload is retried: the turn's record decides what the run is (a create it began stays that create, with or without `--page-id`), the page's history holds
+//   one turn, and anything the retry would do differently (content, title, tables, app, placement, draft or publish) is refused with nothing written. A resumed create's
+//   placement is reported finished only once the app's published navigation is seen to show the page (`GENPAGE_APP_PUBLISH_UNPROVEN` when it cannot be read). Without
+//   `--turn-id` nothing of this runs.
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
-const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf } = require('./lib/genpage-sdk.js');
+const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf, normalizeTurnId, readTurnRecord } = require('./lib/genpage-sdk.js');
+const { appTurnStore } = require('./lib/page-turn-store.js');
+const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
+const { openStandaloneAppWriteFence } = require('./lib/managed-standalone-fence.js');
 const { makeThrottleBudget } = require('./lib/throttle-budget.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
@@ -55,19 +89,21 @@ const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { emitSkillCompleted } = require('./lib/telemetry/skill-completed.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
-  'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed'];
+  'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed', 'solution', 'app-dir', 'draft', 'turn-id'];
 // Bare switches; every other flag carries a value.
-const SWITCHES = ['add-to-sitemap', 'clear-data-sources', 'overwrite-deployed'];
+const SWITCHES = ['add-to-sitemap', 'clear-data-sources', 'overwrite-deployed', 'draft'];
 const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 
 const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --code-file <path> '
   + '--prompt-file <path> --agent-message-file <path> [--app-id <guid>] [--page-id <guid>] [--name-file <path> | --name <text>] '
   + '[--data-sources <csv>] [--clear-data-sources] [--model <id>] '
-  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed]'
-  + ' (--app-id is required with --page-id and with --add-to-sitemap; --page-id alone finishes a page this tool created and did not finish)';
+  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed] [--solution <unique name>] [--app-dir <folder>] [--draft] [--turn-id <guid>]'
+  + ' (--app-id is required with --page-id and with --add-to-sitemap; --page-id alone finishes a page this tool created and did not finish;'
+  + ' --turn-id needs --app-dir: the turn record of a retried upload lives in that app folder)';
 
 // The skill writes these inputs — the prompt, agent-message and page-name files, connectors.json, actions.json —
 // into the working directory just before the upload, and a write through a link left at one of those names (a
@@ -238,14 +274,89 @@ async function writeObservedBase({ genpage, flags, pageId, base, warnings, check
 
 // The base marker of the page this upload is COMPLETING, or null. Only an update that names a page can be one, and only a marker that says `unfinished` for exactly that
 // page counts: another page's marker, a finished page's, none, or one that cannot be read is "not completing", and the ordinary rules apply, whatever they say.
-function completionMarker(flags, base) {
+// `strict` (a run that resumes a create under a turn) lets a read that THROWS reach the caller instead: see `main`.
+function completionMarker(flags, base, { strict = false } = {}) {
   if (!flags['page-id'] || typeof flags['code-file'] !== 'string' || !flags['code-file']) return null;
   let marker;
-  try { marker = base.readMarker(flags['code-file']); } catch { return null; }
+  try { marker = base.readMarker(flags['code-file']); } catch (e) { if (strict) throw e; return null; }
   return marker && marker.unfinished && marker.pageId === String(flags['page-id']).toLowerCase() ? marker : null;
 }
 
+// A turn's state that cannot be read (its id, its record): nothing was sent, and the answer keeps the turn and the store's code.
+const turnStateRefusal = (e, turnId) => ({ error: (e && e.message) || String(e), outcome: 'nothing', ...(e && typeof e.code === 'string' ? { code: e.code } : {}), ...(turnId ? { turnId } : {}) });
+
+// What a run IS: an update, a create, a create its turn resumes, or the completion of a page an earlier run created and left unfinished. It is read from the turn's
+// record (lib/page-turn-store.js) and the base marker beside --code-file. `main` reads it before anything is sent, so a command that cannot run is refused before the
+// service is asked anything, and a run under a turn reads it AGAIN once it holds the app's pages lease (see `main`): another run of the same turn may bind it, and
+// leave its page unfinished, while this one waits for that lease. Answers `{ refusal }` (a payload, nothing sent) or `{ resumesCreate, updating, completing }`.
+async function classifyRun({ flags, base, turnId }) {
+  // The record is read FIRST, because it says what this run is: an upload whose create answered with a page id and did not finish is told to run again with
+  // --page-id added, and under a turn that run is still the CREATE its record names — dispatched as an update it would be refused (a page create is not a page update).
+  let turnRecord = null;
+  if (turnId) {
+    try {
+      turnRecord = await readTurnRecord(appTurnStore(flags['app-dir']), turnId);
+    } catch (e) {
+      return { refusal: turnStateRefusal(e, turnId) };
+    }
+  }
+  // `updating` is what `flags['page-id']` meant before turns: without --turn-id the two are the same.
+  const resumesCreate = !!(turnRecord && /create$/.test(turnRecord.operation));
+  const updating = !!flags['page-id'] && !resumesCreate;
+  // An upload that CREATED a page and did not finish it — the publish failed, or the placement it was asked for did — leaves a base marker that says so
+  // (lib/genpage-base.js `unfinished`). Naming that page again with --page-id COMPLETES it: it is published and, with --add-to-sitemap, placed, without the proof an
+  // ordinary update makes that the page is in the app's navigation — an unfinished page is not in it yet, so that proof could never be made. The marker is for one
+  // page, so this is for that page alone; for any other the rules below apply as they always did.
+  // Under a turn, a run that resumes the create its record names completes THAT page whether or not --page-id is given: the same command run again as it was is the
+  // documented retry. The record only says which page; that this upload created the page and has not finished it is still what the base marker beside --code-file says,
+  // as for --page-id — the record grants nothing on its own (no ownership, no overwrite), and without a marker for that page nothing is being completed.
+  const resumedPageId = resumesCreate && !flags['page-id'] ? turnRecord.pageId : undefined;
+  // A marker that is missing, malformed or for another page is "not completing" here too, and the placement then asks the app itself (`provingPlacement`, in deploy) —
+  // no marker is ever read as proof that a placement is finished. A marker store that THROWS (a host's `deps.base`; lib/genpage-base.js answers null for every failure)
+  // refuses a resumed create before anything is sent: this run could not record what it leaves unfinished either, so it is the turn's state that is unavailable, with
+  // the same code and remedy as a turn store that cannot be read.
+  try {
+    const completing = completionMarker(resumedPageId ? { ...flags, 'page-id': resumedPageId } : flags, base, { strict: resumesCreate });
+    return { resumesCreate, updating, completing };
+  } catch (e) {
+    return {
+      refusal: {
+        error: `the base marker beside ${flags['code-file']}, which records whether the create of page ${flags['page-id'] || resumedPageId} under turn ${turnId} was finished, could not be read (${(e && e.message) || e}). Nothing was changed by this attempt. Do not run it without its turn id or under a new one; make the marker readable again and run the same command again.`,
+        outcome: 'nothing', code: 'GENPAGE_TURN_STATE_UNAVAILABLE', turnId,
+      },
+    };
+  }
+}
+
+// The refusals that follow from what a run IS (classifyRun), not from its flags alone; each answers its words, or null. `main` checks each where it always has, and a
+// run under a turn checks them all again, in this order, once it holds the app's pages lease — what the run is may have changed while it waited for it.
+const KIND_REFUSALS = {
+  // A create needs no app — a page is a row of its own, placed by whatever app names it — but an update must prove the page is in the app
+  // it names, and a placement is an edit of that app: both need the app's id. A page that was created with no app and is being completed needs none either.
+  updateWithoutApp: ({ flags, updating, completing }) => (updating && (typeof flags['app-id'] !== 'string' || !flags['app-id']) && !(completing && !completing.appId)
+    ? `--app-id is required with --page-id: an update must name the app the page is placed in\n${USAGE}` : null),
+  // A page created with no app is completed into an app only by placing it there: an app named without a placement would attach the page's tables to an app
+  // that does not hold the page, which is what an ordinary update proves it does not do.
+  completionWithoutPlacement: ({ flags, completing, addToSitemap }) => (completing && !completing.appId && typeof flags['app-id'] === 'string' && flags['app-id'] && !addToSitemap
+    ? `page ${flags['page-id'] || completing.pageId} was created with no app, so completing it into app ${flags['app-id']} needs --add-to-sitemap: the page is placed in that app, not merely attached to it. Pass --add-to-sitemap, or drop --app-id to only publish the page\n${USAGE}` : null),
+  // A page whose create was asked to place it is not finished until it is placed. The marker keeps that, and the run that completes it has to ask for it again — it is
+  // the one thing in the command that the marker cannot stand in for, and a run that left it out would clear the page's unfinished state with the placement undone,
+  // leaving a page no later update could prove is in the app.
+  placementLeftOut: ({ flags, completing, addToSitemap }) => (completing && completing.unfinished === 'place' && !addToSitemap
+    ? `page ${flags['page-id'] || completing.pageId} was created to be placed in app ${completing.appId || flags['app-id']}, and it is not finished until it is placed: run the same command again with --page-id ${flags['page-id'] || completing.pageId} added and --add-to-sitemap kept\n${USAGE}` : null),
+  // Completing a page this tool created and did not finish IS publishing it (and placing it, when that is what is left), and a draft publishes nothing: it would
+  // clear the marker that says the page is unfinished and leave the page unpublished, with nothing left to say so.
+  draftCompletion: ({ flags, completing, draft }) => (draft && completing
+    ? `page ${flags['page-id'] || completing.pageId} was created by this tool and is not finished: completing it publishes it${completing.unfinished === 'place' ? ' and places it in the app' : ''}, and a draft publishes nothing. Nothing was changed. Run the same command again with --page-id ${flags['page-id'] || completing.pageId} kept and drop --draft to finish it\n${USAGE}` : null),
+  // REFUSED, not silently dropped. An update cannot add a sitemap entry, and one that quietly discards
+  // the flag leaves the caller believing a placement happened. (Completing a page this tool created and did not finish is the one update that places it.)
+  placementOnUpdate: ({ updating, completing, addToSitemap }) => (addToSitemap && updating && !completing
+    ? '--add-to-sitemap cannot be combined with --page-id: an update cannot add a sitemap '
+      + 'entry, and the page it names is already placed. Drop one of the two.' : null),
+};
+
 async function main(argv = process.argv.slice(2), deps = {}) {
+  const startedAt = Date.now();
   const emit = deps.emit || emitResult;
   const readFile = deps.readFile || fs.readFileSync;
   const makeBackend = deps.makeGenpageSdk || makeGenpageSdk;
@@ -259,32 +370,41 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       return emit(false, { error: `--${required} is required\n${USAGE}` });
     }
   }
-  const base = deps.base || genpageBase;
-  // An upload that CREATED a page and did not finish it — the publish failed, or the placement it was asked for did — leaves a base marker that says so
-  // (lib/genpage-base.js `unfinished`). Naming that page again with --page-id COMPLETES it: it is published and, with --add-to-sitemap, placed, without the proof an
-  // ordinary update makes that the page is in the app's navigation — an unfinished page is not in it yet, so that proof could never be made. The marker is for one
-  // page, so this is for that page alone; for any other the rules below apply as they always did.
-  const completing = completionMarker(flags, base);
-  // A create needs no app — a page is a row of its own, placed by whatever app names it — but an update must prove the page is in the app
-  // it names, and a placement is an edit of that app: both need the app's id. A page that was created with no app and is being completed needs none either.
-  if (flags['page-id'] && (typeof flags['app-id'] !== 'string' || !flags['app-id']) && !(completing && !completing.appId)) {
-    return emit(false, { error: `--app-id is required with --page-id: an update must name the app the page is placed in\n${USAGE}` });
+  // A caller-held page turn id (lib/genpage-sdk.js, "A turn id the CALLER holds"): one id per complete intended upload, kept before the first send and given again, with
+  // the same files and flags, when that upload is retried; its record lives in the app folder's turn store (lib/page-turn-store.js), and it says what this run is
+  // (classifyRun). Without --turn-id nothing here runs.
+  // `--app-dir` alone is the folder of the app's pages lease (see the header), and it needs no turn; a turn id needs it, because the turn's record lives there.
+  let turnId;
+  if (flags['turn-id'] !== undefined) {
+    if (typeof flags['turn-id'] !== 'string' || typeof flags['app-dir'] !== 'string' || !flags['app-dir'].trim()) {
+      return emit(false, { error: `--turn-id and --app-dir go together: the turn's record lives in that app folder's turn store, so --turn-id needs --app-dir\n${USAGE}` });
+    }
+    try {
+      turnId = normalizeTurnId(flags['turn-id']);
+    } catch (e) {
+      return emit(false, turnStateRefusal(e, turnId));
+    }
   }
+  const base = deps.base || genpageBase;
+  const kind = await classifyRun({ flags, base, turnId });
+  if (kind.refusal) return emit(false, kind.refusal);
+  const { resumesCreate, updating, completing } = kind;
+  let refused = KIND_REFUSALS.updateWithoutApp({ flags, updating, completing });
+  if (refused) return emit(false, { error: refused });
   const addToSitemap = flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true';
   if (addToSitemap && (typeof flags['app-id'] !== 'string' || !flags['app-id'])) {
     return emit(false, { error: `--add-to-sitemap needs --app-id: the page is added to that app's navigation. Pass --app-id, or drop --add-to-sitemap to create the page with no app\n${USAGE}` });
   }
-  // A page created with no app is completed into an app only by placing it there: an app named without a placement would attach the page's tables to an app
-  // that does not hold the page, which is what an ordinary update proves it does not do.
-  if (completing && !completing.appId && typeof flags['app-id'] === 'string' && flags['app-id'] && !addToSitemap) {
-    return emit(false, { error: `page ${flags['page-id']} was created with no app, so completing it into app ${flags['app-id']} needs --add-to-sitemap: the page is placed in that app, not merely attached to it. Pass --add-to-sitemap, or drop --app-id to only publish the page\n${USAGE}` });
+  refused = KIND_REFUSALS.completionWithoutPlacement({ flags, completing, addToSitemap }) || KIND_REFUSALS.placementLeftOut({ flags, completing, addToSitemap });
+  if (refused) return emit(false, { error: refused });
+  // `--draft` is a switch, but `--draft=<value>` reaches here as the STRING value (parseArgs), as the other switches do. Only "true" and "false" are read as a yes or
+  // a no; anything else is refused, so a typo neither publishes a page that was meant to stay a draft nor holds back one that was meant to go live.
+  if (flags.draft !== undefined && flags.draft !== true && flags.draft !== 'true' && flags.draft !== 'false') {
+    return emit(false, { error: `--draft takes no value (got ${JSON.stringify(flags.draft)}): pass --draft to save the page without publishing it, or leave it out\n${USAGE}` });
   }
-  // A page whose create was asked to place it is not finished until it is placed. The marker keeps that, and the run that completes it has to ask for it again — it is
-  // the one thing in the command that the marker cannot stand in for, and a run that left it out would clear the page's unfinished state with the placement undone,
-  // leaving a page no later update could prove is in the app.
-  if (completing && completing.unfinished === 'place' && !addToSitemap) {
-    return emit(false, { error: `page ${flags['page-id']} was created to be placed in app ${completing.appId || flags['app-id']}, and it is not finished until it is placed: run the same command again with --page-id ${flags['page-id']} added and --add-to-sitemap kept\n${USAGE}` });
-  }
+  const draft = flags.draft === true || flags.draft === 'true';
+  refused = KIND_REFUSALS.draftCompletion({ flags, completing, draft });
+  if (refused) return emit(false, { error: refused });
   // Refused, not passed on. The page is compiled from the TypeScript in --code-file, which is what the Griffel check below reads; JavaScript
   // compiled elsewhere would be deployed in its place, and compiled output names makeStyles in ways the check does not read as Griffel's
   // (`(0, x.makeStyles)(…)` after a require), with nothing to tie the file to the source that was checked — so a page could ship a shorthand
@@ -343,14 +463,8 @@ async function main(argv = process.argv.slice(2), deps = {}) {
         + 'the other sets its bindings. Drop whichever you did not mean.',
     });
   }
-  // REFUSED, not silently dropped. An update cannot add a sitemap entry, and one that quietly discards
-  // the flag leaves the caller believing a placement happened. (Completing a page this tool created and did not finish is the one update that places it.)
-  if (addToSitemap && flags['page-id'] && !completing) {
-    return emit(false, {
-      error: '--add-to-sitemap cannot be combined with --page-id: an update cannot add a sitemap '
-        + 'entry, and the page it names is already placed. Drop one of the two.',
-    });
-  }
+  refused = KIND_REFUSALS.placementOnUpdate({ updating, completing, addToSitemap });
+  if (refused) return emit(false, { error: refused });
 
   // The two binding files are read here, as the page's `connectorBindings` / `actionBindings` (bare JSON arrays), and checked first for the
   // same reason as the text files (notPlainFile). An omitted flag leaves a page's bindings as they are; `[]` clears them.
@@ -393,36 +507,119 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     error: describeGriffelRefusal(problems, flags['code-file'], griffelWords),
     problems,
   });
-  if (styleProblems.length && !flags['page-id']) return emit(false, stylesRefusal(styleProblems));
+  if (styleProblems.length && !updating) return emit(false, stylesRefusal(styleProblems));
 
   // The waiting a run does for a throttled service is bounded at five minutes (lib/throttle-budget.js): this one budget is the page write's and the backend's HTTP client's alike — its reads and its publish wait out a throttle too. A wait of more
   // than a few seconds is announced on stderr — stdout carries the JSON result — so that a command that is silent for minutes is not mistaken for a hung one.
   const warn = (message) => process.stderr.write(`WARNING: ${message}\n`);
-  const genpage = makeBackend(flags.env, { warn, throttle: makeThrottleBudget({ warn }) });
+  // An upload that names an app writes in it and publishes it, which puts live the saved forms the app holds. So the managed debt of the app's workspace
+  // (lib/managed-standalone-fence.js) is read as a build reads it: while a build's managed change is unproved, or may have been sent and is not
+  // confirmed, the upload is refused with nothing written. It is read now, so an upload that cannot run builds no backend, and again under the app's
+  // leases before the deploy reads or writes anything (`underLease`, in `run` below) — the read that decides, and the one that fills the barrier the
+  // backend's transport is gated by. No store changes nothing.
+  let fence = null;
+  if (typeof flags['app-id'] === 'string' && flags['app-id']) {
+    try {
+      fence = openStandaloneAppWriteFence({ environment: flags.env, appDir: flags['app-dir'] || deps.appDir, appId: flags['app-id'] });
+    } catch (e) {
+      return emit(false, { ok: false, appId: flags['app-id'], code: (e && e.code) || 'managed-binding-store-unreadable', outcome: 'nothing', error: String((e && e.message) || e) });
+    }
+  }
+  const genpage = makeBackend(flags.env, { warn, throttle: makeThrottleBudget({ warn }), ...(turnId ? { turnBindings: appTurnStore(flags['app-dir']) } : {}), ...(fence && fence.barrier ? { publicationBarrier: fence.barrier } : {}) });
   // The backend's workspace is removed BEFORE anything is reported: emitResult calls process.exit, so a cleanup placed after an emit never
   // runs, and that workspace holds the page's source. dispose() answers when the storage calls the backend had under way have settled and the
   // folder is gone — or says, in `{ left }`, which folder is not (a handle a scanner holds), and that is reported with the result: a success that left
   // the page's source in the temp directory says so.
   let outcome;
   let leftOnDisk = null;
-  try {
-    outcome = await deploy({
-      flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal,
-      prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap,
+  // skill_completed telemetry covers an upload that was ATTEMPTED — from here on — not a refusal of the command line or its files above.
+  const report = deps.reportCompletion || emitSkillCompleted;
+  // An upload that names an app writes in it (its navigation, or the views of the page's tables), so the whole deploy runs under the app's pages lease.
+  // A refusal of the lease comes before the deploy reads or writes anything, and is a result like any other refusal (`entered` tells it from a deploy's throw).
+  let entered = false;
+  const appId = typeof flags['app-id'] === 'string' && flags['app-id'] ? flags['app-id'] : null;
+  const run = async ({ appUniqueName } = {}) => {
+    // Under the leases, before anything is read for the deploy or written: the managed fence that decides (see above). Its refusal comes before
+    // `entered`, so it is reported like the lease's own, with nothing done.
+    if (fence) fence.underLease({ appUniqueName });
+    entered = true;
+    // Under the lease, a run under a turn reads what it IS again (classifyRun), and takes its obligations — finishing a placement an earlier run saved, proving the
+    // page live in the app that runs — from what is held NOW. What was read above was read before the lease, and another run of the same turn may have bound it in
+    // between: created the page, saved its placement, failed to publish the app and let the lease go. The backend reads the turn's record again when it writes and
+    // resumes THAT create; a run that still took itself for a fresh create would place the page as an ordinary placement does — the saved navigation already shows
+    // it, so nothing is written or published — and report the page finished while the app that runs does not show it. Every refusal that follows from what the run
+    // is is checked again too: nothing has been read for the deploy or written yet, so one is a refusal with nothing done. Without a turn nothing is read again — no
+    // other run binds anything for it — and its requests are as they were.
+    let now = { resumesCreate, updating, completing };
+    if (turnId) {
+      now = await classifyRun({ flags, base, turnId });
+      if (now.refusal) return { ok: false, payload: { ok: false, ...now.refusal } };
+      const kindNow = { flags, ...now, addToSitemap, draft };
+      const again = Object.values(KIND_REFUSALS).map((refusal) => refusal(kindNow)).find(Boolean);
+      if (again) return { ok: false, payload: { ok: false, outcome: 'nothing', turnId, error: again } };
+      if (styleProblems.length && !now.updating) return { ok: false, payload: { ok: false, outcome: 'nothing', turnId, ...stylesRefusal(styleProblems) } };
+    }
+    return deploy({
+      flags, genpage, base, checkedText, styleProblems, griffelWords, stylesRefusal,
+      prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap, draft, turnId,
+      completing: now.completing, updating: now.updating, resumesCreate: now.resumesCreate,
     });
+  };
+  try {
+    outcome = appId ? await withStandalonePagesLease({ genpage, appId, appDir: flags['app-dir'] || deps.appDir, warn }, run) : await run();
+  } catch (e) {
+    // Before the deploy is entered nothing has been read for it or written: the lease was refused (`build-locked`, `pages-locked`), the app it is keyed by
+    // could not be named (GENPAGE_APP_LEASE_UNRESOLVED, which a failed read of that name is too), or the managed fence under the leases refused
+    // (`publication-withheld`, `managed-binding-store-unreadable`). Any such failure is a refusal with one JSON result, never a throw with
+    // nothing on stdout. A failure inside the deploy keeps its own handling: it may have written, so it is never relabelled "nothing".
+    if (!entered && appId) {
+      const code = e && typeof e.code === 'string' && e.code ? e.code : 'GENPAGE_APP_LEASE_UNRESOLVED';
+      outcome = { ok: false, payload: { ok: false, appId, code, outcome: 'nothing', error: String((e && e.message) || e) } };
+    } else {
+      await reportUpload(report, flags, startedAt, { error: e });
+      throw e;
+    }
   } finally {
     try { leftOnDisk = leftOnDiskWarning(await genpage.dispose()); } catch { /* the backend's own folder; nothing to say when it cannot even answer */ }
     // A deploy that threw has no result to carry it: that failure reaches the caller as it is, so the warning goes to stderr beside it.
     if (leftOnDisk && !outcome) process.stderr.write(`WARNING: ${leftOnDisk}\n`);
   }
   if (leftOnDisk) outcome.payload = { ...outcome.payload, warnings: [...(outcome.payload.warnings || []), leftOnDisk] };
+  await reportUpload(report, flags, startedAt, outcome);
   return emit(outcome.ok, outcome.payload);
+}
+
+// What an upload's result says, in the closed vocabulary of lib/telemetry/skill-completed.js — never a message, a name or an id.
+//   ok           → success; page created | updated | unchanged, placedInApp, addedToSolution
+//   code griffel-shorthand → invalid-input (the page was refused before anything was written)
+//   any other failed result → deploy-failed;   a throw → unexpected
+function uploadCompletion({ ok, payload, error } = {}) {
+  const eventInfo = { operation: 'page-upload' };
+  if (error) return { outcome: 'failure', errorClass: 'unexpected', eventInfo };
+  const p = payload || {};
+  if (ok) {
+    eventInfo.page = p.unchanged ? 'unchanged' : p.updated ? 'updated' : 'created';
+    eventInfo.placedInApp = p.addedToSitemap === true;
+    if (typeof p.addedToSolution === 'boolean') eventInfo.addedToSolution = p.addedToSolution;
+    return { outcome: 'success', eventInfo };
+  }
+  if (typeof p.addedToSolution === 'boolean') eventInfo.addedToSolution = p.addedToSolution;
+  return { outcome: 'failure', errorClass: p.code === 'griffel-shorthand' ? 'invalid-input' : 'deploy-failed', eventInfo };
+}
+
+async function reportUpload(report, flags, startedAt, result) {
+  try {
+    const { outcome, errorClass, eventInfo } = uploadCompletion(result);
+    await report({ skillName: 'genpage', outcome, errorClass, eventInfo, envUrl: flags.env, durationMs: Date.now() - startedAt });
+  } catch { /* telemetry never changes the upload's result */ }
 }
 
 // Everything after the flags and the files have been read and checked: an update's guards, the write, the base marker and the placement in an
 // app. It RETURNS what to report — { ok, payload } — instead of reporting it, so that main can remove the backend's workspace first.
 async function deploy(context) {
-  const { flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal, prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap } = context;
+  const { flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal, prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap, draft, turnId, updating, resumesCreate } = context;
+  // A draft asks the backend for a save and no publish, of the page and of every placement this upload makes (see the header).
+  const draftAsk = draft ? { publish: false } : {};
   const done = (ok, payload) => ({ ok, payload });
   let griffelWarnings = [];
   // The page's own checks, before anything is written. A CREATE has none left (its file was refused above if it was bad); an UPDATE reads the deployed page and compares.
@@ -431,7 +628,21 @@ async function deploy(context) {
   // The page's id as soon as it is known, kept outside the write's try: an update names it up front, and a create learns it from the backend — from its answer, or from the
   // error it raises once it has sent (`pageId`). Whatever fails after that, the failure carries it.
   let knownPageId = flags['page-id'] || null;
-  if (flags['page-id']) {
+  // The solution the page joins (--solution), read before anything is read for the update or written: a name that is no unmanaged solution, or an environment that
+  // cannot say the page table's component type, refuses the upload with nothing made. A system solution is not read (the backend answers it from its name).
+  let solutionTarget = null;
+  if (typeof flags.solution === 'string' && flags.solution.trim()) {
+    try {
+      solutionTarget = await genpage.solutionTarget(flags.solution);
+    } catch (e) {
+      return done(false, {
+        ok: false,
+        ...(e && typeof e.code === 'string' && e.code ? { code: e.code } : {}),
+        error: `nothing was written: the solution ${JSON.stringify(flags.solution.trim())} the page is to join cannot be used — ${(e && e.message) || e}`,
+      });
+    }
+  }
+  if (updating) {
     // An UPDATE must have a target that EXISTS, and it must be in the app it names: updating a real page through the wrong app would write
     // the page and attach its tables to an app that does not hold it. The page read is the existence proof — a page that is not there is a
     // 404, and an update of it is refused (it would never become a create, as an unknown id once did) — and the app's navigation is the
@@ -563,10 +774,48 @@ async function deploy(context) {
     }
   }
 
+  // Under a turn, everything this upload will do beyond the page — the app, the solution, overwriting a changed deployed page, and the placement with the title, tables
+  // and language it writes — is frozen HERE, after every gate and before the write, and bound with the page (lib/page-turn-intent.js turnContextOf): a retry that would
+  // do any of it differently is another request and is refused with nothing written. The placement below uses these values and reads nothing again. The base
+  // language a placement titles its entry in is read now, before the write, so a run that cannot read it writes nothing (without a turn it is read after the write).
+  const tableList = dataSourcesOf(clearDataSources ? [] : (flags['data-sources'] || (deployed && deployed.dataSources) || [])) || [];
+  const placing = addToSitemap && !!flags['app-id'];
+  let turnContext;
+  let envelopeTitle;
+  let envelopeLanguage;
+  if (turnId) {
+    envelopeTitle = pageName.value || (updating ? (deployed && deployed.name) : 'Generative page');
+    if (placing && (typeof envelopeTitle !== 'string' || !envelopeTitle.trim())) {
+      return done(false, { ok: false, outcome: 'nothing', turnId, error: `nothing was written: page ${flags['page-id']} has no name to title its entry in app ${flags['app-id']}'s navigation with. Pass --name.` });
+    }
+    if (placing) {
+      try {
+        envelopeLanguage = await genpage.baseLanguage();
+      } catch (e) {
+        return done(false, { ok: false, outcome: 'nothing', turnId, error: `nothing was written: the environment's base language, which the page's entry in app ${flags['app-id']}'s navigation is titled in, could not be read (${(e && e.message) || e}). Run the same command again, with the same --turn-id, once it can be read.` });
+      }
+    }
+    const tables = { explicit: clearDataSources || !!flags['data-sources'], value: tableList };
+    // A draft's placement is a draft too (see the header), so the navigation the turn binds is saved, not published: the same turn cannot later publish it.
+    const publication = draft ? 'draft' : 'publish';
+    turnContext = {
+      operation: updating ? 'upload-update' : 'upload-create',
+      appId: flags['app-id'] || null,
+      solution: solutionTarget ? solutionTarget.uniqueName : null,
+      overwriteDeployed,
+      navigation: !flags['app-id'] ? null : placing
+        ? { operation: 'place', title: { explicit: pageName.value !== undefined && pageName.value !== '', value: envelopeTitle }, tables, language: { explicit: false, value: envelopeLanguage }, publication }
+        : { operation: 'pin-views', title: null, tables, language: null, publication },
+    };
+  }
+  const turnArgs = turnId ? { turnId, turnContext } : {};
+  // The write's answer, outside the try: a failure after it still reports the turn it was made under.
+  let written;
+
   // The page is written from the bytes checked above — `checkedText` is what the Griffel check, the comparison with the deployed page and the base marker's hash were made on —
   // and never from a new read of the file, which may have been saved again since. There is no copy of it to stage for a process to read: the SDK takes the text.
   try {
-    const written = flags['page-id']
+    written = updating
       ? await genpage.update(flags['page-id'], {
         source: checkedText,
         name: pageName.value || undefined,
@@ -579,6 +828,8 @@ async function deploy(context) {
         caller: 'upload',
         appId: flags['app-id'],
         sourceFile: flags['code-file'],
+        ...draftAsk,
+        ...turnArgs,
       })
       : await genpage.create({
         source: checkedText,
@@ -588,17 +839,26 @@ async function deploy(context) {
         dataSources: flags['data-sources'] || undefined,
         model: flags.model || undefined,
         ...bindings,
+        ...draftAsk,
+        // A create resumed under its turn names the page its record holds; the library reads it before anything is sent.
+        ...turnArgs,
+        ...(turnId && flags['page-id'] ? { pageId: flags['page-id'] } : {}),
       });
     const pageId = (written && (written.pageId || written.id)) || null;
     knownPageId = pageId || knownPageId;
     const warnings = [...griffelWarnings, ...((written && written.warnings) || [])];
     // The page is written (and may be published): from here on a failure is reported WITH the page's id, so the caller can go on from it.
     // `pageId` is the one value a caller needs in order to continue (placing the page in an app, a follow-up edit).
-    const failed = (error) => ({ ok: false, pageId, ...(flags['app-id'] ? { appId: flags['app-id'] } : {}), error });
+    const failed = (error) => ({ ok: false, pageId, ...(flags['app-id'] ? { appId: flags['app-id'] } : {}), ...(written && written.turn ? { turn: written.turn } : {}), error });
     // An upload that CREATED the page, or is completing one that was created, is not finished until the page is published and — when it was asked to place it — placed.
     // Until then the base marker says what is left (`unfinished`: `place`, or `publish`), and that is what lets the page be completed by naming it again (completionMarker).
-    const creating = !flags['page-id'];
-    const finishing = creating || !!completing;
+    const creating = !updating;
+    // A draft is finished when it is saved, as asked: it is never an unfinished upload that naming the page again would complete — that completion publishes (main refuses it).
+    const finishing = !draft && (creating || !!completing);
+    // What the page now is, for a sentence that goes on to say what else is or is not done.
+    const writtenAs = `${creating ? 'created' : 'saved'} ${draft ? 'as a draft (not published)' : 'and published'}`;
+    // A draft placement that is not done is made by the page CLI's own draft placement: naming the page again would be refused (it is in no navigation yet).
+    const draftPlaceVerb = `node scripts/genpage.js add-to-app --env ${flags.env} --app-id ${flags['app-id']} --page-id ${pageId} --draft`;
     const publishFailed = !!(written && written.publish && written.publish.kind === 'failed');
     const placementWanted = addToSitemap && !!flags['app-id'];
     // After the write, not before it is reported: the readback inside recordObservedBase is a read like any other, and the backend is disposed only when this returns.
@@ -627,6 +887,13 @@ async function deploy(context) {
     // still to publish — so the backend is told to finish it: publish the app, and check that the page shows in the navigation that runs. It throws when it cannot
     // (the publish failed, or the published navigation does not show the page), and the marker is cleared only after it returns.
     const finishingPlacement = !!(completing && completing.unfinished === 'place' && addToSitemap && flags['app-id']);
+    // A run that resumes a create under a turn with NO completion marker for its page cannot tell from the marker whether an earlier run left the placement saved and
+    // unpublished: the marker's write may have failed, it may be gone or malformed — and it is just as absent when the earlier run never reached the placement (its whole
+    // answer was lost). An ordinary placement would find the page in the saved navigation, write nothing, publish nothing and report it placed. So this run asks the APP,
+    // as `add-to-app` does (`finishIfUnpublished`): the app is published, and proven, unless its published navigation already shows the page. The turn record only says
+    // which page; what is published is this request's own placement (its envelope binds the app, title, tables and publication), so the record grants nothing more.
+    // A draft resumed under its turn publishes nothing (its turn binds `publication: 'draft'`), so there is no publication to prove, and the backend refuses to finish a draft placement.
+    const provingPlacement = !!(resumesCreate && !draft && !completing && addToSitemap && flags['app-id']);
     if (pageId && flags['app-id'] && (addToSitemap || (dataSourcesOf(tables) || []).length)) {
       // The title of the page's entry in the navigation is written in the environment's BASE language: a title in a language the environment has not provisioned does not show, and the SDK
       // writes one in its own default, 1033, when it is told nothing — an English entry in a German-only environment, reported as a success. `genpage.js add-to-app` reads the language for the
@@ -636,7 +903,7 @@ async function deploy(context) {
       let languageCode;
       if (addToSitemap) {
         try {
-          languageCode = await genpage.baseLanguage();
+          languageCode = turnContext ? envelopeLanguage : await genpage.baseLanguage();
         } catch (e) {
           // The READ failed, not the placement: the app was never read or touched, so the only thing known of its navigation is that this run changed nothing in it, and that is all this says. "NOT added … add
           // the page in Maker" would be false for a page an earlier run already put in the app's saved navigation (its publish is what failed) or even in the published one, and it would send the user to add
@@ -646,35 +913,58 @@ async function deploy(context) {
           // (`HTTP 503 from …/organizations?$select=languagecode: …`) do not say what was being read or why it matters here.
           const left = finishingPlacement ? ', and did not look at what an earlier run saved or published there, so the page may already be in it' : '';
           const verb = `node scripts/genpage.js add-to-app --env ${flags.env} --app-id ${flags['app-id']} --page-id ${pageId}`;
-          const way = recorded
-            ? `To finish it, run the same command again with --page-id ${pageId} added and nothing else changed, once the language can be read: the page is already published, so only its placement is made, for this page only (the base marker beside ${flags['code-file']} records that it is not done). Or run ${verb}, which places the page, or finishes a placement that was saved, whichever is left.`
-            : `Once the language can be read, ${verb} places the page, or finishes a placement that was saved, whichever is left.`;
-          return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'} and published, but its placement in app ${flags['app-id']}'s navigation is unfinished: the environment's base language, which the entry's title is written in, could not be read (${(e && e.message) || e}); no other language is assumed in its place. This run changed nothing in the app's navigation${left}. ${way}`));
+          const way = draft
+            ? `Once the language can be read, ${draftPlaceVerb} places it as a draft.`
+            : recorded
+              ? `To finish it, run the same command again with --page-id ${pageId} added and nothing else changed, once the language can be read: the page is already published, so only its placement is made, for this page only (the base marker beside ${flags['code-file']} records that it is not done). Or run ${verb}, which places the page, or finishes a placement that was saved, whichever is left.`
+              : `Once the language can be read, ${verb} places the page, or finishes a placement that was saved, whichever is left.`;
+          return done(false, failed(`page ${pageId} was ${writtenAs}, but its placement in app ${flags['app-id']}'s navigation is unfinished: the environment's base language, which the entry's title is written in, could not be read (${(e && e.message) || e}); no other language is assumed in its place. This run changed nothing in the app's navigation${left}. ${way}`));
         }
       }
       try {
         placement = await genpage.placeInApp(flags['app-id'], {
-          pages: addToSitemap ? [{ pageId, title: (written && written.name) || pageName.value || (deployed && deployed.name) }] : [],
-          dataSources: tables,
+          pages: addToSitemap ? [{ pageId, title: turnContext ? envelopeTitle : (written && written.name) || pageName.value || (deployed && deployed.name) }] : [],
+          dataSources: turnContext ? tableList : tables,
           ...(languageCode === undefined ? {} : { languageCode }),
           ...(finishingPlacement ? { finish: true } : {}),
+          // Spelled out, not through draftAsk: genpage-sdk-draft.test.js scans every placeInApp call for a draft, to keep the build's own placement free of one.
+          ...(draft ? { publish: false } : {}),
+          ...(provingPlacement ? { finishIfUnpublished: true } : {}),
         });
         for (const w of placement.warnings || []) warnings.push(w);
+        // A resumed create's placement is finished only on proof that the app that RUNS shows the page. `placeInApp` publishes the app and then reads its published
+        // navigation; when that read fails it does not throw — it answers `provedPublished: false` with a warning (the publish was accepted and may yet take effect),
+        // which is enough for an ordinary completion but not for a turn, whose retry trusts that a finished answer is final. So under a resumed create that answer is an
+        // unfinished placement: coded, the marker this run wrote left at `unfinished: 'place'`, and the same command again reads the published navigation once more.
+        // An answer with no `provedPublished` at all is the backend's no-write return: it READ the published navigation and found the page there, which is the proof.
+        if (resumesCreate && (finishingPlacement || provingPlacement) && placement.provedPublished === false) {
+          return done(false, {
+            ...failed(`page ${pageId} was ${writtenAs}, and it is placed in app ${flags['app-id']}'s saved navigation, and the app was published, but its published navigation could not be read back to prove that the page shows in it, so the placement is not reported finished. To finish it, run the same command again with the same turn id and nothing else changed: the app's published navigation is read again, and the app is published again and checked unless it already shows the page.`),
+            code: 'GENPAGE_APP_PUBLISH_UNPROVEN',
+            ...(warnings.length ? { warnings } : {}),
+          });
+        }
       } catch (e) {
         if (addToSitemap) {
+          // Under a turn the failure carries the backend's code (`GENPAGE_APP_PUBLISH_FAILED`, `GENPAGE_APP_PUBLISH_UNPROVEN`, …), so a host that retries the turn can tell an
+          // unfinished placement from a finished one without reading the words. Without a turn the answer is as it was.
+          const coded = turnContext && e && typeof e.code === 'string' ? { code: e.code } : {};
           // A placement the backend SAVED and could not publish, or whose publish it could not see in what runs (`saved: true`), did not fail: the page is in the app's saved navigation, and the app's publish
           // is what is left. "NOT added … add the page in Maker" sent the user to add a page the navigation already holds.
           if (e && e.saved === true) {
+            // Under a turn with no marker written, the same command still finishes it: the resumed create asks the app (`provingPlacement`) instead of the marker.
             const finish = recorded && finishing
               ? ` To finish it, run the same command again with --page-id ${pageId} added and nothing else changed: the page is already published and placed, so only the app is published again and checked (the base marker beside ${flags['code-file']} records that it is not done).`
-              : '';
-            return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'} and published, and it is placed in app ${flags['app-id']}'s saved navigation, but the app's publish is not finished: ${(e && e.message) || e}.${finish}`));
+              : turnContext && finishing
+                ? ` To finish it, run the same command again with the same turn id and nothing else changed: the app's published navigation is read, and the app is published again and checked unless it already shows the page.`
+                : '';
+            return done(false, { ...failed(`page ${pageId} was ${writtenAs}, and it is placed in app ${flags['app-id']}'s saved navigation, but the app's publish is not finished: ${(e && e.message) || e}.${finish}`), ...coded });
           }
           const again = recorded && finishing
             ? `, or run the same command again with --page-id ${pageId} added and nothing else changed: the page is already published, so only its placement is made, for this page only (the base marker beside ${flags['code-file']} records that it is not done)`
             : '';
-          return done(false, failed(`page ${pageId} was ${creating ? 'created' : 'saved'} and published, but NOT added to app ${flags['app-id']}'s navigation: ${(e && e.message) || e}. `
-            + `Add the page to the app navigation with node scripts/genpage.js add-to-app --env ${flags.env} --app-id ${flags['app-id']} --page-id ${pageId}${again}.`));
+          return done(false, { ...failed(`page ${pageId} was ${writtenAs}, but NOT added to app ${flags['app-id']}'s navigation: ${(e && e.message) || e}. `
+            + `Add the page to the app navigation with node scripts/genpage.js add-to-app --env ${flags.env} --app-id ${flags['app-id']} --page-id ${pageId}${draft ? ' --draft' : ''}${again}.`), ...coded });
         }
         warnings.push(`the page was written, but its tables' default views could not be added to app ${flags['app-id']}'s components, so the maker's "/" picker may not list them (${(e && e.message) || e})`);
       }
@@ -685,14 +975,46 @@ async function deploy(context) {
         warnings.push(`could not clear the base marker's unfinished state (${(e && e.message) || e}) — running the same command with --page-id ${pageId} completes the page again, which changes nothing`);
       }
     }
+    // The solution the page joins, last: the page is written, published and placed by now, so an add that fails leaves a page that works and is not in the
+    // solution. That is a failure, said with the one command that adds the page — never a second create, which would make a second page.
+    let solutionFacts = {};
+    if (solutionTarget) {
+      const where = solutionTarget.uniqueName;
+      try {
+        const joined = await genpage.addToSolution(pageId, solutionTarget);
+        solutionFacts = { solution: where, addedToSolution: !!(joined && joined.added), ...(solutionTarget.systemSolution ? { systemSolution: true } : {}) };
+      } catch (e) {
+        const placedText = placement && placement.added && placement.added.length ? ` and placed in app ${flags['app-id']}'s navigation` : '';
+        return done(false, {
+          ...failed(`page ${pageId} was ${writtenAs}${placedText}, but it was NOT added to solution ${where}: ${(e && e.message) || e}. `
+            + `Do not create it again: add it with node scripts/add-page-to-solution.js ${flags.env} ${where} --page-ids ${pageId} (a page the solution already holds is accepted, so running it again changes nothing).`),
+          code: 'solution-add-failed',
+          solution: where,
+          addedToSolution: false,
+          ...(warnings.length ? { warnings } : {}),
+        });
+      }
+    }
     return done(true, {
       ok: true,
       pageId,
       ...(flags['app-id'] ? { appId: flags['app-id'] } : {}),
       ...(overwroteDeployed ? { overwroteDeployed: true } : {}),
-      updated: !!flags['page-id'],
+      updated: updating,
       ...(written && written.unchanged ? { unchanged: true } : {}),
       ...(placement && placement.added && placement.added.length ? { addedToSitemap: true } : {}),
+      // A draft's answer is the backend's, as it gave it (see the header): nothing here reads `draftFingerprint` as a publish, and no `fingerprint` is made from it.
+      // `pendingPublish` is the page's, or true when the page saved nothing new and the placement did save something that waits for a publish.
+      ...(draft ? {
+        draft: true,
+        publish: written && written.publish,
+        saved: !!(written && written.saved),
+        pendingPublish: placement && placement.pendingPublish === true ? true : (written ? written.pendingPublish : null),
+        draftFingerprint: written && written.draftFingerprint,
+        ...(placement && placement.placementState ? { placementState: placement.placementState } : {}),
+      } : {}),
+      ...solutionFacts,
+      ...(written && written.turn ? { turn: written.turn } : {}),
       ...(warnings.length ? { warnings } : {}),
     });
   } catch (e) {
@@ -704,6 +1026,7 @@ async function deploy(context) {
       ...(id ? { pageId: id, ...(flags['app-id'] ? { appId: flags['app-id'] } : {}) } : {}),
       ...(e && e.outcome ? { outcome: e.outcome } : {}),
       ...(e && typeof e.code === 'string' && e.code ? { code: e.code } : {}),
+      ...(written && written.turn ? { turn: written.turn } : turnId ? { turnId } : {}),
     });
   }
 }
@@ -715,4 +1038,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { main, resolveText, notPlainFile };
+module.exports = { main, resolveText, notPlainFile, uploadCompletion };

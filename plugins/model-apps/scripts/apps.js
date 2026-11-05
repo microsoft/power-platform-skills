@@ -38,15 +38,17 @@
 //           first page (it needs no app), then create the app with it.
 //
 //           Nothing is written until every check has passed, and each check that fails says why: no --page-id, a page id that is not
-//           a page in the environment, a solution that does not exist (or is managed, and takes no new components), a unique name
+//           a page in the environment, a solution that does not exist (or is managed, and takes no new components), a page table whose
+//           solution component type the environment cannot say (it is read only for a solution that is not a system one), a unique name
 //           that is taken (by an app, or by a site map an app was deleted without), a name or unique name the platform would refuse.
 //           A refusal prints { ok: false, code, error, written: false } and exits 1.
 //
 //           Writes, in order: the app row and its sitemap (the SDK's create and push — which also pin the sitemap as an app
 //           component, give the app the System Administrator role so it can be opened, and write one app setting: see below), then the app
-//           (component 80) and its sitemap (62) join the solution — adding the app module alone leaves its sitemap only in the default
-//           solution — and, only with --publish, the publish. A system solution (Default, Active, Basic) holds every component already, so
-//           nothing is added to it: the output says `systemSolution: true`, and `inSolution` is empty, which is not a failure.
+//           (component 80), its sitemap (62) and each of its pages join the solution — adding the app module alone leaves its sitemap only in
+//           the default solution, and neither the app's add nor the sitemap's brings the pages its navigation opens (lib/page-solution.js says
+//           how a page is added, and why) — and, only with --publish, the publish. A system solution (Default, Active, Basic) holds every
+//           component already, so nothing is added to it: the output says `systemSolution: true`, and `inSolution` is empty, which is not a failure.
 //
 //           The app setting. The SDK's create makes every new app with the new header and navigation ON (`headerAndNavigationRefresh` is
 //           true unless the definition says false; a public preview) and writes that as the app setting HeaderAndNavigationRefresh = 2:
@@ -103,7 +105,7 @@
 //   --env          the environment's https origin, e.g. https://contoso.crm.dynamics.com
 //   --search       list: keeps the apps whose name or unique name holds the text (any letter case)
 //   --name         create: the app's display name (at most 100 characters)
-//   --solution     create: the UNIQUE name of an existing unmanaged solution; the app and its sitemap join it
+//   --solution     create: the UNIQUE name of an existing unmanaged solution; the app, its sitemap and its pages join it
 //   --page-id      create: a generative page's id; repeat it, or comma-separate, for more pages (their order is the navigation's)
 //   --unique-name  create: the app's unique name, instead of the derived one
 //   --description  create: the app's description (at most 2000 characters)
@@ -113,7 +115,7 @@
 //   list    { "ok": true, "count": 1, "apps": [ { "id": "11111111-…", "name": "Contoso Sales", "uniqueName": "contoso_sales",
 //             "description": "", "published": true, "unpublishedChanges": false } ] }   `unpublishedChanges` is null when the platform did not say
 //   create  { "ok": true, "appId": "22222222-…", "uniqueName": "account_metrics_1a2b3c4d", "name": "Account Metrics", "published": false,
-//             "unpublishedChanges": true, "solution": "ContosoCore", "addedToSolution": true, "inSolution": ["app", "sitemap"],
+//             "unpublishedChanges": true, "solution": "ContosoCore", "addedToSolution": true, "inSolution": ["app", "sitemap", "pages"],
 //             "sitemapId": "33333333-…", "languageCode": 1033,
 //             "navigation": { "area": "Main", "group": "Pages", "pages": [ { "pageId": "44444444-…", "title": "Overview" } ] },
 //             "dataSources": ["account"], "pinnedViews": ["55555555-…"] }
@@ -143,8 +145,9 @@
 //             for. A read-back that cannot be made keeps what the run knows. A push the SDK reported as saved (stage "solution" or "publish")
 //             wrote both rows, and a row that a read found before a later read failed is there, so "written" is true then, with "left" saying what
 //             is known and null for the rest; "written" is null only when nothing is known to exist, and then "left" is absent (nothing was read)
-//             or has a false and a null. `inSolution` is each of "app" and "sitemap" as it joined (a failure between the two has ["app"];
-//             `addedToSolution` is true only when both did), `systemSolution` is as for a success, and the SDK's `warnings`, if it gave any, are
+//             or has a false and a null. `inSolution` is each of "app", "sitemap" and "pages" as it joined, in that order ("pages" once every page
+//             has: a failure among the pages has ["app", "sitemap"], and adding them again is safe — a component the solution holds already is
+//             accepted); `addedToSolution` is true only when all three did, `systemSolution` is as for a success, and the SDK's `warnings`, if it gave any, are
 //             also written to stderr.
 //   a failure before the push (in the workspace only this run sees): the same as a refusal, "written": false
 //
@@ -157,6 +160,7 @@ const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { pushFailed } = require('./lib/entity-provision.js');
 const { collectionRows, currentLayerRow, savedPageRows } = require('./lib/app-components.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
+const { readTargetSolution, readPageComponentType, pageComponent } = require('./lib/page-solution.js');
 const { odataLit } = require('./lib/odata.js');
 const { genPageSubArea } = require('./lib/genpage-subarea.js');
 const { makeGenpageSdk, unescapePacName } = require('./lib/genpage-sdk.js');
@@ -369,24 +373,8 @@ function inputRefusal(args) {
   return null;
 }
 
-/** The unmanaged solution named `uniqueName`, as the platform spells it; throws a Refusal when there is none. */
-async function readSolution(sdk, uniqueName) {
-  const rows = await sdk.queryRecords('solution', {
-    select: ['solutionid', 'uniquename', 'friendlyname', 'ismanaged'],
-    filter: `uniquename eq '${odataLit(uniqueName)}'`,
-    top: 1,
-  });
-  const solution = rows && rows[0];
-  if (!solution) {
-    throw new Refusal('SOLUTION_NOT_FOUND',
-      `There is no solution with the unique name '${uniqueName}' in this environment. --solution takes a solution's unique name, not its display name; `
-      + 'create the solution first (provision-solution.js) if it should exist.');
-  }
-  if (solution.ismanaged === true) {
-    throw new Refusal('SOLUTION_MANAGED', `The solution '${solution.uniquename}' is managed, and a managed solution takes no new components. Use an unmanaged solution.`);
-  }
-  return { uniqueName: solution.uniquename || uniqueName };
-}
+// The unmanaged solution named `uniqueName`, as the platform spells it, is read by lib/page-solution.js `readTargetSolution` — the one reading
+// genpage-upload.js --solution shares — which refuses, with SOLUTION_NOT_FOUND or SOLUTION_MANAGED, before anything is written.
 
 // The generative pages named by `ids`, as { id (lower-case), title } in the order of `ids`; a Refusal names every id that is no page.
 // The SDK reads the same collection to check a sitemap's pages when the app is pushed, and refuses a missing one then, but without saying
@@ -517,11 +505,14 @@ async function createApp(args, httpClient, seams = {}) {
     let writer;
     try {
       const readSdk = make();
-      const solution = await readSolution(readSdk, args.solution);
+      const solution = await readTargetSolution(readSdk, args.solution);
+      // The pages join the solution with the app (writeApp), as components of the page table's own type, which the environment allocates: read here, with the
+      // checks, so an environment that cannot say it refuses the create before anything is written. A system solution takes no add, so it needs no type.
+      const pageComponentType = isRestrictedSolution(solution.uniqueName) ? null : await readPageComponentType(readSdk.dataverse);
       const pages = await readPages(readSdk, args.pageIds);
       const uniqueName = args.uniqueName !== undefined ? args.uniqueName : deriveUniqueName(args.name, seams.randomHex);
       await assertUniqueNameFree(readSdk, uniqueName);
-      plan = { solution, pages, uniqueName, languageCode: await readBaseLanguage(readSdk) };
+      plan = { solution, pageComponentType, pages, uniqueName, languageCode: await readBaseLanguage(readSdk) };
       // Last of the reads: a page whose configuration cannot be read refuses the create like any other check, with nothing written.
       plan.pins = await readViewPins(args.env, httpClient, pages, seams.makeGenpageSdk || makeGenpageSdk);
       // The titles are written in the language the SDK instance is made with, which is why the writer is not the instance that read. It is made
@@ -592,17 +583,17 @@ async function readLeftovers(sdk, { uniqueName, sitemapId, appId, stage }) {
 }
 
 async function writeApp(sdk, args, plan, sitemapId) {
-  const { solution, pages, uniqueName, languageCode, pins } = plan;
+  const { solution, pageComponentType, pages, uniqueName, languageCode, pins } = plan;
   const systemSolution = isRestrictedSolution(solution.uniqueName);
   // What the run has done, for the output. `pushBegan`: the first request that can write has been sent, so something may exist, and a failure from
-  // then on reads the platform back. `inSolution` is each component as its AddSolutionComponent lands, so a failure between the two says which of
-  // them is in the solution; `warnings` are the SDK's notes on the push.
+  // then on reads the platform back. `inSolution` is each component as its AddSolutionComponent lands — "pages" once every page has — so a failure
+  // part-way says which of them is in the solution; `warnings` are the SDK's notes on the push.
   const made = { pushBegan: false, appId: undefined, inSolution: [], published: false, warnings: [] };
-  const bothInSolution = () => made.inSolution.includes('app') && made.inSolution.includes('sitemap');
+  const allInSolution = () => ['app', 'sitemap', 'pages'].every((joined) => made.inSolution.includes(joined));
   // What the output says about the solution, on a success as on a failure. A system solution (Default, Active, Basic) holds every component already,
   // so nothing is added to it and `inSolution` stays empty; `systemSolution` says that is why, which an empty list alone reads as the app being left out.
   const solutionFacts = () => ({
-    addedToSolution: bothInSolution(),
+    addedToSolution: allInSolution(),
     inSolution: [...made.inSolution],
     ...(systemSolution ? { systemSolution: true } : {}),
   });
@@ -635,6 +626,10 @@ async function writeApp(sdk, args, plan, sitemapId) {
       made.inSolution.push('app');
       await sdk.addSolutionComponent({ componentId: sitemapId, componentType: COMPONENT_TYPE_SITEMAP, solutionUniqueName: solution.uniqueName });
       made.inSolution.push('sitemap');
+      // The pages last, in the navigation's order: the app's add brings its sitemap, and nothing brings the pages the sitemap opens. A solution that holds the
+      // app without them exports a navigation that opens pages the target environment does not have.
+      for (const page of pages) await sdk.addSolutionComponent(pageComponent(page.id, pageComponentType, solution.uniqueName));
+      made.inSolution.push('pages');
     }
 
     if (args.publish) {

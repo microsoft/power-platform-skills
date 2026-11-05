@@ -23,7 +23,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 // An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
-const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { inOwnFolder, ownAppFolder } = require('./helpers/own-app-folder.js');
+const { recordBuildFailure, installBuildFailureDiagnostics } = require('./helpers/build-failure-diagnostics.js');
+installBuildFailureDiagnostics(test);
 const { runSdkBuild: runSdkBuildInPlace, settleOwedPublishes } = require('../lib/sdk-build.js');
 const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { createFakeDataverse } = require('./helpers/fake-dataverse.js');
@@ -99,7 +101,15 @@ function scenario(fakeOptions = {}) {
   async function build(spec, { publish = true, phases, sdk, warnings = [] } = {}) {
     const mark = fake.mark();
     const useSdk = sdk || await sdkOver();
-    const result = await runSdkBuild(spec, { sdk: useSdk, apply: true, publish, phases: phases || PHASES, warn: (w) => warnings.push(String(w)) });
+    // A build that throws is usually one the test provokes (a failed write) and checks with assert.rejects; the one-off failure
+    // of a build that should succeed (a file missing from the workspace) is diagnosed from the output alone, because the folder
+    // is gone afterwards. The error is rethrown as it was; what the two folders held is printed only if the test fails.
+    let result;
+    try {
+      result = await runSdkBuild(spec, { sdk: useSdk, apply: true, publish, phases: phases || PHASES, warn: (w) => warnings.push(String(w)) });
+    } catch (error) {
+      throw recordBuildFailure(error, [{ label: 'scenario workspace', dir }, { label: 'app folder', dir: ownAppFolder({ apply: true }).appDir }]);
+    }
     return { result, mark, writes: fake.writeCounts(mark), warnings, sdk: useSdk };
   }
   return { fake, dir, sdkOver, build };

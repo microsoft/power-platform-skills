@@ -75,7 +75,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - A recorded command is read as text, not as a shell (`lib/evidence-utils.js`, "How the graders read a recorded command"). The verb of `apps.js`, `genpage.js` and `solution-settings.js` is read the way the script reads it — `apps.js --env <url> create` is a `create`, as `apps.js create --env <url>` is; a switch just before the verb is taken to stand alone, an inference made on purpose (the script's own parser would take the verb as the switch's value) — and EVERY run of a script in a call counts, in its text and in an event's `argv`: `apps.js list …; apps.js create …` is a mutation, so it needs the latest successful auth gate, has a result event of its own, and breaks a refusal. The verbs that write are `apps.js create`, `genpage.js add-to-app | remove-from-app | delete` and `solution-settings.js import` (`template` only prints a settings file), beside the upload and the scripts that only write; `pac solution import`, which `solution-settings.js import` falls back to, is one too. Limits, by design: a command line handed to a wrapper as one string (`bash -c '…'`, `cmd /c "…"`, `pwsh -Command "…"`, `eval`) is one quoted word and is not read, a variable, an escape or a line continuation is not followed, and the text of a here-document is read as if it were commands; prose is not told from a command (a log line that names a write after a read is graded as the write); `;`, `&&` and `|` are not told apart, so a write in the same call as its gate is not judged against that gate and the environment compared with the gate is the call's last `--env`; a phase pattern also still matches its older raw-text form, so a run inside a wrapper's string can still credit a phase; and a listing that is not valid JSON lists nothing as an event's result, while on a log's `Result:` line it goes on to the PAC table reader, as before
 - Current upload commands use `genpage-upload.js` with file transport; the preservation fixture compares exact approved/forwarded text and before/after name, model and binding sets. `--app-id` is optional for a create — the first page of a new app has none, and no `--add-to-sitemap` — while a create that names an app includes `--add-to-sitemap`, and an update names its app and omits it (the update that completes a create that did not finish is the exception). `forwarded` records what the script hands the page backend: a flag an update leaves out forwards nothing, so the page keeps its own name, model and data sources, and a name with a straight `"`, a `%` or a `$(…)` is stored exactly
 - A divergence refusal (`no-base`, `deployed-changed`, `deployed-unreadable`) stops an update before the page backend writes (`ok: false`, no write, no forwarded args). `--overwrite-deployed` needs the `Choice:` line that upload command consumes to be exactly `Choice: Overwrite the deployed changes`. Each `genpage-upload.js` line consumes the pending choice, so one approval does not cover a later upload
-- Custom API discovery/gates/bindings/runtime/update stages agree; optional packaging names every deployed page and preserves failures/read-back evidence
+- Custom API discovery/bindings/runtime/update stages agree; optional packaging names every deployed page and preserves failures/read-back evidence
   When successful downloads are recorded, before-page evidence needs one identifiable producing output
   directory. Environment/app checks use that producer, not unrelated same-ID downloads elsewhere;
   unmatched or ambiguous producers refuse preservation rather than guessing a historical source.
@@ -85,6 +85,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - An edit keeps what its plan's Preservation Constraints promise: every identifier a constraint quotes in a code span and the downloaded page (`before/`) uses is still used by the edited page (comments do not count). Constraints written only in prose are left to a person
 - Sample data handed to `provision-entities.js` is realistic: no lorem ipsum, no placeholder word (`test`, `sample`, `TBD`, `N/A`…) or numbered table name (`Project 1`), and no table whose rows repeat one name
 - Per-eval discovery, provisioning, schema and deployment expectations compare structured evidence read by `lib/expectation-evidence.js` — `list-tables`/`list-languages`/the type generator/upload flags and their recorded results, the plan's entity blocks, the entity-creation transactions, and the choice enums in the captured `RuntimeTypes.ts` — on either upload transport. The plugin's own scripts are read as data: `scripts/list-tables.js` (a table exists when `tables` holds its exact logical name; `missing` names the terms with none; a failed read confirms nothing), `scripts/apps.js list` (`apps`), `scripts/genpage.js list` (`pages`, each with its `pageId` and `name`) and `scripts/list-languages.js` (`languages`; it is the only source, so a failed read detects nothing and a `pac model list-languages` after it is not credited). The type generator is `scripts/genpage.js types` and the edit flow's download `scripts/genpage.js download`; a capture made before the scripts records the `pac model list-tables`, `pac model list`, `pac model list-languages`, `pac model genpage list | download | generate-types` forms, and those are read too. The new-app expectations (eval 8) require the plugin's order: the first page uploaded with no app and no `--add-to-sitemap`, then `apps.js create --solution --page-id --publish` (which pins the first page's tables itself, so nothing has to follow it), and every upload after it naming the app it returned — `pac model create` does not satisfy them. These recognizers read a script's verb the way the mutation checks do, so a verb after its flags (`genpage.js --env <url> types …`) counts, and a "types … SKIPPED (mock data)" expectation fails for a run that generated types that way. A listing recorded as the JSON the scripts print — one line, as a parsed result, as text, or as a log's `Result: {…}` line — is read as data (`id`/`pageId`/`appId` and `name`); JSON that does not parse lists nothing, and only output that is not JSON (a PAC table, a log's bullets) goes to the older table reader
+- A newly authored plan's records (evals 26 and 27; `references/plan-schema.md` "Assumptions, data semantics and lookup metadata"): the written plan in required mode, the approved preview the run saved (`fixture.json` `semantics.approvedPlan`) holding the same assumptions, decisions and lookup records field by field, and the run's own `genpage-plan-provenance.js verify --require-assumptions` whose `semanticsHash` is the hash of exactly those records. Eval 26 adds the question it answered (`semantics.interactions`, in order: the planner's `needs_input` with several candidates and no default, the maker's `AskUserQuestion` answer handed back to the planner by question id, the plan approval), the user-confirmed assumption both documents keep for it, the `get-lookup-metadata.js` read made before approval whose successful answer is the saved `lookup-metadata.json` (`semantics.lookupMetadata`) and agrees with every observed lookup record, the lookup typed in `RuntimeTypes.ts` with exactly its recorded targets, and the Phase 5a gate — a passing `--require-observed-lookups --lookup-metadata` verification of these records before the page is written. A declared artifact or event that is missing fails rather than skips. These checks prove that a recorded run agrees with itself, not that a person answered or that the answer is what the request meant; older plans without the records are not graded by them
 
 **Runner:** `evals/model-apps/genpage/run-layer-1.js`
 **Library:** `lib/assertions-layer-1.js` (one check function per assertion text)
@@ -104,16 +105,19 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - Unsized Fluent icons only (e.g., `AddRegular`, not `Add24Regular`)
 - Every icon name in `@fluentui/react-icons` imports appears in `references/verified-icons.txt`
 - A `try`/`catch` marker for Dataverse awaits (not proof that every await is enclosed)
+- Whether every failure reaches the page's reporter is not graded yet: no check proves that each DataAPI failure of a page goes through `reportPageError` into a rendered `PageErrorBar` inside `PageErrorBoundary` (`references/rules.md` Critical Rule 22)
 - No `TODO`/`FIXME`/`...` placeholders
 - Lookup fields use `@OData.Community.Display.V1.FormattedValue` annotations
 - `<DataGrid>` usage imports `createTableColumn` + configures `columnSizingOptions` or `resizableColumns`
 - Every effective navigation target is checked with the production resolver; current before/after snapshots must differ by exact substitutions only, and only affected pages reupload
 - The production `pageStructureProblems` gate rejects truncated modules, including unfinished statements after valid exports
-- The Custom API lifecycle grades actual saved TSX, method/parameter/bound-record parity, sanitized result handling and preservation versus explicit clear
+- The Custom API lifecycle grades actual saved TSX, method/parameter/bound-record parity, sanitized result handling and preservation versus explicit clear. For a clear of a page that binds `WhoAmI` or `RetrieveVersion`, the grader reads the maker's `Clear choice:` line recorded right before each upload the clear covers; it does not check that the choice was made before the edit plan was approved, which the skill requires (`edit-flow.md`, Edit Phase 3).
 
-Plus per-eval `expectations` for **Phase 5, 5a, 5b and 5c**. `Edit Phase 5` entries remain Layer-1 expectations. The column-name expectations (eval 1's Phase 5b, in both layers, and eval 7's) are graded by `lib/column-contract.js` against the RuntimeTypes.ts a fixture kept: every column a page names in its dataApi calls — a `select` list, an `orderBy` or `filter` expression, the keys of a `createRow`/`updateRow` payload, an options object or select list written as a name it declares, and each `<column>@OData.Community.Display.V1.FormattedValue` key it reads — must be one the schema declares on that table (or a system column every user-owned table has and the type generator does not write, such as `createdon`). A fixture that kept no RuntimeTypes.ts reports `column-name verification requires RuntimeTypes.ts fixture`. Other unregistered expectations are reported as skips, not claimed as coverage. The API request scorer supports literal request objects in named helpers and scalar annotations; it is not a TypeScript compiler or a runtime execution oracle.
+Whether a page applies a style the maker asked for (a plan whose `Styling:` line starts with `Maker-requested:`) is not graded yet.
 
-**Structural page checks:** several per-eval expectations are graded from how a page is BUILT rather than whether a word appears in it — eval 4's review step showing every entered field before the submit, and a label on every form field (its own `aria-label`/`aria-labelledby`, or a Fluent `<Field label>` around it); eval 5's components and utilities kept top level (a nested PascalCase component, or a nested function that reads nothing from the one around it, fails; a handler that closes over state does not); eval 12's search box beside a filter toolbar; eval 13's shown text through the `translate` (or `t`) helper; and eval 15's choice values named after the RuntimeTypes.ts member they are. `lib/tsx-structure.js` reads elements, attributes, JSX text and function scopes from the plugin's lexer view, where strings, comments and JSX text are blanked at their offsets, and `lib/page-checks.js` holds the checks; each states what it does not judge, which stays with the Layer 3 rubric. Eval 4's step navigation ("step state management … and Next/Back navigation") is deliberately not graded: whether Next and Back move the step is the value the step's setter receives — an updater can compute the next step and return the old one — which a scan of the page's text cannot prove; it needs data-flow analysis, and the coverage baseline records it as unscored with that reason.
+Plus per-eval `expectations` for **Phase 5, 5a, 5b and 5c**. `Edit Phase 5` entries remain Layer-1 expectations. The column-name expectations (eval 1's Phase 5b, in both layers, and eval 7's) are graded by `lib/column-contract.js` against the RuntimeTypes.ts a fixture kept: every column a page names in its dataApi calls — a `select` list, an `orderBy` or `filter` expression, the keys of a `createRow`/`updateRow` payload, an options object or select list written as a name it declares, and each `<column>@OData.Community.Display.V1.FormattedValue` key it reads — must be one the schema declares on that table (or a system column every user-owned table has and the type generator does not write, such as `createdon`). A fixture that kept no RuntimeTypes.ts reports `column-name verification requires RuntimeTypes.ts fixture`. Lookup-identity use in page code is not graded yet: no check proves that a page reads, filters, retrieves, opens or writes a lookup only through its normalized table-and-id pair (`references/rules.md` Critical Rule 23) — eval 26 grades the question, the lookup metadata and the plan records behind its page, not the page's lookup code. Other unregistered expectations are reported as skips, not claimed as coverage. The API request scorer supports literal request objects in named helpers and scalar annotations; it is not a TypeScript compiler or a runtime execution oracle.
+
+**Structural page checks:** several per-eval expectations are graded from how a page is BUILT rather than whether a word appears in it — eval 4's review step showing every entered field before the submit, and a label on every form field (its own `aria-label`/`aria-labelledby`, or a Fluent `<Field label>` around it); eval 5's components and utilities kept top level (a nested PascalCase component, or a nested function that reads nothing from the one around it, fails; a handler that closes over state does not); eval 12's search box beside a filter toolbar; eval 13's shown text through the `translate` (or `t`) helper; and eval 15's choice values named after the RuntimeTypes.ts member they are. `lib/tsx-structure.js` reads elements, attributes, JSX text and function scopes from the plugin's lexer view, where strings, comments and JSX text are blanked at their offsets, and `lib/page-checks.js` holds the checks; each states what it does not judge, which stays with the Layer 3 rubric. JSX text and a JSX attribute's string are read as the page renders them: `lib/jsx-references.js` decodes their character references with the page compiler the plugin vendors, so to eval 13's checks `<Text>&#72;&#105;</Text>` is the hardcoded text "Hi" and `<Text>&euro;{total}</Text>` a hardcoded currency symbol, exactly as when written plainly, while a JavaScript string (`{'&euro;'}`) shows its references as written. A component's type arguments are read when they are names only, so `<DataGridRow<Row> title="&euro;" />` is graded like any tag; a tag whose type arguments are anything else (a function, string, template, object or other type) cannot be read for certain, and every check that reads elements or JSX text fails its page with the tag's line and column rather than pass what it could not see. Eval 4's step navigation ("step state management … and Next/Back navigation") is deliberately not graded: whether Next and Back move the step is the value the step's setter receives — an updater can compute the next step and return the old one — which a scan of the page's text cannot prove; it needs data-flow analysis, and the coverage baseline records it as unscored with that reason.
 
 **Bounded Custom API declaration tracking (Layers 1 and 2):** Potential-write checks
 distinguish a definite plain arrow parameter declaration, including a default, from an
@@ -149,11 +153,11 @@ still refuse lookup provenance.
 
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
-- `common_workflow_assertions`: **19** registered workflow checks, each passed or explicitly skipped when inapplicable.
+- `common_workflow_assertions`: **18** registered workflow checks, each passed or explicitly skipped when inapplicable.
 - `common_code_assertions`: **21** registered code checks.
-- `evals`: **25** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
+- `evals`: **27** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
-The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **33 fixture directories / 37 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
+The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **35 fixture directories / 39 top-level TSX files**, representing 27 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
 
 ### Enumerating registered and unmatched checks
 
@@ -211,7 +215,7 @@ Each eval in `evals.json` has a `tier` field for selective execution.
 | Tier | Count | When to run | Eval IDs |
 |------|------|-------------|----------|
 | `smoke` | 5 | **Every PR** that touches the skill, agents, rules, or evals | 1, 2, 3, 16, 17 |
-| `full` | 17 | Nightly or pre-release; covers core workflows | 4, 5, 6, 7, 8, 9, 11, 13, 15, 18–25 |
+| `full` | 19 | Nightly or pre-release; covers core workflows | 4, 5, 6, 7, 8, 9, 11, 13, 15, 18–27 |
 | `stress` | 3 | With full suite; edge cases (auth blockers, plan revisions, filename collisions) | 10, 12, 14 |
 
 **Recommended cadence:**
@@ -235,7 +239,7 @@ A fixture is a folder under `fixtures/<eval-id>-<slug>/` containing the artifact
 
 ### Synthetic fixtures
 
-Hand-built artifacts for specific contracts, not captured agent runs. The seven current additions declare `provenance: "synthetic"`, `contractVersion: 2` and the public skill/reference sections they exercise. They serve as deterministic positive/rejection/recovery controls. Historical synthetics retain their compatibility contract rather than being advertised as current compliant output.
+Hand-built artifacts for specific contracts, not captured agent runs. The current additions declare `provenance: "synthetic"`, `contractVersion: 2` and the public skill/reference sections they exercise. They serve as deterministic positive/rejection/recovery controls. Historical synthetics retain their compatibility contract rather than being advertised as current compliant output.
 
 Pros: deterministic, fast to build, no Dataverse dependency, fully under our control.
 Cons: can't catch agent drift (the synthetic fixture is what we *want* the agent to produce, not what it *does*).
@@ -278,6 +282,8 @@ The suite ships both kinds:
 | 12 | `12-account-plan-revision` (current plan revision) | — |
 | 14 | `14-account-list-edit-collision` (current filename collision) | — |
 | 16 | `16-account-list` (current minimal existing-table page) | — |
+| 26 | `26-customer-lookup` (current: an answered account-scope question and the lookup metadata read behind the plan's records; its page normalizes a Customer lookup, which is not graded) | — |
+| 27 | `27-page-error-helper` (current: a newly authored plan with its assumptions; its page follows the page error teaching on a cached read, an awaited read and a Custom API Action, which is not graded) | — |
 
 The mix gives:
 - A **green baseline** to catch runner regressions (synthetics)
@@ -290,7 +296,7 @@ The mix gives:
 
 `fixtures/contracts.json` explicitly labels the 13 existing directories as historical contract 1, without rewriting captured content. Raw PAC transport, legacy navigation spelling and missing transport/read-back artifacts are **not** certified as current compliant. Contract 2 uses a per-directory `fixture.json` and `tool-results.json`: one ordered record per command with its own result, plus `artifacts` listing the exact files to load. Artifact paths must stay inside the fixture and be plain files.
 
-The first seven contract-2 fixtures exercise these current contracts:
+These contract-2 fixtures exercise the current contracts below:
 
 | Fixture | Evidence/check | Negative control in scorer tests |
 |---------|----------------|----------------------------------|
@@ -299,10 +305,12 @@ The first seven contract-2 fixtures exercise these current contracts:
 | `21-discovery-failure` | Unreadable discovery returns `needs_input`, no setup | Failed discovery followed by connection/reference creation or upload |
 | `22-navigation-contract` | Actual before/after TSX and deployed ID map | Unknown/optional-call non-GUID target, runtime override, a `PAGEREF_` token anywhere but a navigation `pageId` — a comment included (the build refuses it), a page the checker cannot read for certain (it refuses every token at or after the first guess and every call that reaches it, a resolved id literal there included), collateral edit or extra reupload |
 | `23-worker-completeness` | Failed production gate, fresh regeneration, then upload | Valid export plus unfinished statement, stale/missing write or upload before acceptance |
-| `24-custom-api-lifecycle` | Discovery, re-probe, bare actions, runtime and config stages | Disabled/unreadable gate, invented kind/name/parameter, wrong method/bound record, unsafe response or lost bindings |
+| `24-custom-api-lifecycle` | Discovery, bare actions, runtime and config stages | Invented kind/name/parameter, wrong method/bound record, unsafe response or lost bindings |
 | `25-solution-package` | Explicit page IDs, dynamic types, app-first writes and read-back | Omitted page/wrong solution/type/order; invalid ID writes; partial failure reported as success |
+| `26-customer-lookup` | An attended run that asks which opportunities "this account" means (no default) and records the answer as a user-confirmed assumption before approval; lookup records built from the saved `get-lookup-metadata.js` read and gated with `--require-observed-lookups`; `lookup-rows.json` holds synthetic customer values with the state the published normalizer gives each (the page's lookup code is not graded) | A pre-settled default, a missing or unrecorded answer, an approval before the answer; a metadata read that is not the saved file or comes after approval, incomplete targets, a lookup left planned, a one-target type, a gate after generation |
+| `27-page-error-helper` | A newly authored plan whose records equal the approved preview's, verified with `--require-assumptions`; its page follows the page error teaching (not graded) | A plan verified without `--require-assumptions` or a preview whose assumption differs |
 
-Expected refusals are green **only when the recorded refusal contract is satisfied**. The refusal fixtures of evals 10 and 21, and `3-edit-no-pages-stop`, legitimately contain no generated TSX; Layer 2 grades their failed gate and absence of generation/mutations rather than manufacturing a page. A refusal declares its stage in `fixture.json` (`refusal.stage`): `auth` and `discovery` stop at a failed check-auth.js or list-connections.js result, `custom-api` at a disabled or unreadable feature gate, and `edit-pages` at an app whose `genpage.js list` succeeded with no page to offer — the user is told so and nothing is downloaded, planned or uploaded after the first such listing (a later read does not reset it), and the edit phases that would follow the page choice skip for that run. Fixture 23's rejected snapshot is nested evidence; the top-level page is the accepted regeneration. Expected-failure mutations live in unit tests, never unexplained red corpus directories.
+Expected refusals are green **only when the recorded refusal contract is satisfied**. The refusal fixtures of evals 10 and 21, and `3-edit-no-pages-stop`, legitimately contain no generated TSX; Layer 2 grades their failed gate and absence of generation/mutations rather than manufacturing a page. A refusal declares its stage in `fixture.json` (`refusal.stage`): `auth` and `discovery` stop at a failed check-auth.js or list-connections.js result, and `edit-pages` at an app whose `genpage.js list` succeeded with no page to offer — the user is told so and nothing is downloaded, planned or uploaded after the first such listing (a later read does not reset it), and the edit phases that would follow the page choice skip for that run. Fixture 23's rejected snapshot is nested evidence; the top-level page is the accepted regeneration. Expected-failure mutations live in unit tests, never unexplained red corpus directories.
 
 ---
 
@@ -324,7 +332,7 @@ Exit codes:
 
 ```bash
 node run-layer-1.js --tier smoke    # 8 stored fixtures, 5 prompt definitions
-node run-layer-1.js --tier full     # 19 stored fixtures, 17 prompt definitions
+node run-layer-1.js --tier full     # 21 stored fixtures, 19 prompt definitions
 node run-layer-1.js --tier stress   # 6 stored fixtures, 3 prompt definitions
 ```
 
@@ -349,6 +357,24 @@ For a side-by-side comparison or trial run:
 ```bash
 node run-layer-1.js --fixtures /path/to/alternate/fixtures
 ```
+
+### Selected by name: a host's retry under `--turn-id`
+
+`genpage-upload.js --turn-id` is for a host or script that retries one complete edit after losing its
+answer, not for the skill's ordinary flow, so its evidence is outside the default runs and their counts:
+
+```bash
+node evals/model-apps/genpage/run-stable-turn-retry.js                       # fixtures/stable-turn-retry
+node evals/model-apps/genpage/run-stable-turn-retry.js --fixtures <folder>   # another evidence folder
+```
+
+It grades one folder (`lib/turn-retry-contract.js`): the turn id is kept before the first send and never
+added after a lost answer; the retry is the same command with the same bytes from another process,
+under the same turn; the turn leaves one page and one history turn; a reuse of the turn for another
+request (another binding list) is refused `GENPAGE_TURN_ID_REUSED` with nothing written and the
+page's connection kept; and an ordinary edit passes no `--turn-id` — in the folder and in every upload
+the default corpus records. `--eval` and `--tier` are refused (exit 2). The evidence is constructed,
+not captured, and nothing is sent to a service.
 
 ### CI-style summary
 
@@ -439,17 +465,19 @@ Read this output as:
 - **Top of each subtest:** `# Subtest: <fixture-folder-name>` — which fixture is being graded.
 - **Per-assertion line:** `ok N - <assertion text>` (pass) or `not ok N - <assertion text>` (fail) or `ok N - <text> # SKIP <reason>` (not applicable).
 - **YAML block under `not ok`:** the `reason` field names the offending file and what specifically violated the assertion.
-- **Aggregate:** `ok N - <fixture-name>` (all assertions passed) or `not ok N - <fixture-name>` (at least one fail).
-- **Final summary:** `# tests <N>` / `# pass <N>` / `# fail <N>` / `# skip <N>` / `# fixtures <N> (pass X, fail Y)`.
+- **Aggregate:** `ok N - <fixture-name>` (at least one assertion graded, and none failed), `ok N - <fixture-name> # SKIP no expectation graded` (unscored: every assertion skipped, or there was none — nothing was graded, so it is not a pass) or `not ok N - <fixture-name>` (at least one fail).
+- **Final summary:** `# tests <N>` / `# pass <N>` / `# fail <N>` / `# skip <N>` / `# fixtures <N> (pass X, fail Y)`, then `# unscored fixtures <U>` only when U > 0. An unscored fixture is in neither X nor Y, so X + Y + U = N. The app-builder runner shares this reporter and prints the same lines.
 
 **Skipped vs failed:**
-- `# SKIP <reason>` — the assertion doesn't apply (e.g., "no Dataverse files in this fixture" for a mock-data assertion), or a registered check cannot grade the stored evidence yet (e.g., "column-name verification requires RuntimeTypes.ts fixture"). **Does not fail the fixture.**
-- `not ok` — actual failure. Fixture fails. Exit code becomes 1.
+- `# SKIP <reason>` — the assertion doesn't apply (e.g., "no Dataverse files in this fixture" for a mock-data assertion), or a registered check cannot grade the stored evidence yet (e.g., "column-name verification requires RuntimeTypes.ts fixture"). **Does not fail the fixture** — but a fixture whose every assertion skips is unscored, not passed.
+- `not ok` — actual failure. Fixture fails. Exit code becomes 1. An unscored fixture does not change the exit code.
 
 **Three common skip reasons in our suite:**
 1. `no Dataverse files / no <feature> detected` — the fixture doesn't exercise this code path
 2. `not graded yet` / `requires RuntimeTypes.ts fixture` — a check that cannot grade the stored evidence: a correct check would fail a historical fixture's real drift, or the capture did not keep what the check reads. `evals/model-apps/tests/eval-coverage-baseline.json` records the reason for each
 3. `no check registered for this expectation` — the assertion text in `evals.json` doesn't have a corresponding check in the runner library. Either add the check or accept the skip as documentation-only.
+
+Custom API support has no feature flag, so no rule grades a `custom-api` gate: a probe of that removed flag, recorded by an older run, is neither required nor refused, and a run that never probes it is not failed for it.
 
 ---
 
@@ -636,7 +664,8 @@ When a new rule is added to `rules.md` or a new phase requirement lands in `SKIL
 
 Currently red: **none**. Every fixture — synthetic and real capture alike — is green under both
 runners, and CI runs both runners on every PR that touches `evals/model-apps/**`
-(`.github/workflows/model-apps-script-tests.yml`, job `test-model-apps-evals`).
+(`.github/workflows/model-apps-script-tests.yml`, job `test-model-apps-evals`, on ubuntu, windows and
+macos with Node 20 and 22).
 
 **Aggregate state for CI gating:** every stored fixture must pass. Expected rejection is an explicit
 outcome with associated failed-gate/no-mutation evidence, not an excuse for a red fixture. Put bad

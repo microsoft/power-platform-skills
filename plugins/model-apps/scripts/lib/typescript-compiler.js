@@ -8,10 +8,10 @@
 // brotli-compressed (scripts/vendor/typescript/, built by _vendor-build/build-typescript.js; PROVENANCE.json pins the npm
 // tarball, the source file and every derived hash).
 //
-// Loaded LAZILY, once per process, and only when a page is compiled: unpacking takes ~15 ms and evaluating ~200 ms, with
-// ~20 MB of heap, which a run that compiles nothing should not pay. The unpacked bytes are checked against the provenance
-// before they are evaluated: a vendored file that was edited, truncated or swapped fails closed with its hash, rather than
-// compiling pages with an unknown compiler.
+// Loaded LAZILY, once per process, and only when a page is compiled — or read by the parser check (typescript-views.js), which asks it about a page on which the
+// lexer guessed: unpacking takes ~15 ms and evaluating ~200 ms, with ~20 MB of heap, which a run that compiles nothing and meets no such page should not pay. The
+// unpacked bytes are checked against the provenance before they are evaluated: a vendored file that was edited, truncated or swapped fails closed with its hash,
+// rather than compiling pages with an unknown compiler.
 //
 // Evaluated in THIS realm as the body of a function — the file is a plain script whose top-level `var ts` then becomes the
 // function's local, returned to the caller — rather than in a separate `vm` context: objects from another realm would make

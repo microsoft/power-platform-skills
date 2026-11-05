@@ -757,6 +757,16 @@ test('verify FAILS duplicates — users would be offered the same process twice'
   assert.match(c.detail, /2 process flows share this name/);
 });
 
+test('verify counts a flow the server repeats once, and never reads a read cut short as "deployed once"', async () => {
+  const same = { workflowid: 'w1', statecode: 1 };
+  assert.strictEqual(flowCheck(await verifySpec(flowSpec(), flowReader([same, { ...same }]))).present, true, 'one flow read twice is one flow');
+  // The SDK marks an answer that is not every row with a non-enumerable `hasMore`.
+  const partial = [same];
+  Object.defineProperty(partial, 'hasMore', { value: true, enumerable: false });
+  const r = await verifySpec(flowSpec(), flowReader(partial));
+  assert.strictEqual(flowCheck(r), undefined, 'neither a pass nor a failure');
+  assert.match((r.unverified || []).join('\n'), /^business-process-flow:new_ticket\..* \(the read answered 1 definition row\(s\) and said more exist/m);
+});
 test('verify FAILS an ACTIVE flow the spec asks to be Draft', async () => {
   const c = flowCheck(await verifySpec(flowSpec('Draft'), flowReader([{ workflowid: 'w1', statecode: 1 }])));
   assert.strictEqual(c.present, false);

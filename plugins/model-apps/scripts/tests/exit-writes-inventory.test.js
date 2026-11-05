@@ -168,7 +168,7 @@ const ALLOWED = {
   'scripts/generate-page-manifest.js': [1, '--help prints a constant help text (329 bytes)'],
   'scripts/launch-playwright-mcp.js': [2, 'the server\'s own end: a signal\'s name, or nothing (the server wrote its output itself)'],
   'scripts/lib/exit-cleanup.js': [2, `ends the process on a signal and ${NOTHING}`],
-  'scripts/lib/feature-flags.js': [3, 'the Custom API gate\'s constant message (440 bytes and its line break), the CLI\'s constant usage line, and "enabled" or "disabled"'],
+  'scripts/lib/feature-flags.js': [2, 'the CLI\'s constant usage line, and "enabled" or "disabled"'],
   'scripts/lib/telemetry/lib/emit-dispatcher.js': [1, `the detached dispatcher ${NOTHING}`],
   'scripts/lib/telemetry/lib/telemetry-config.js': [4, 'the shared telemetry library (shared/telemetry, copied into five plugins), which the telemetry skill runs without --plugin: constant sentences and the plugin\'s own name (about 1.2 KB measured), and the config folder\'s path once or twice; under the 4 KiB any pipe takes at once unless that path is over 1,400 characters'],
   'scripts/list-connections.js': [1, USAGE],
