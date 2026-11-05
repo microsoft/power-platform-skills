@@ -3330,9 +3330,22 @@ by part); one child removal is `configuration-protected-removal-unsupported`, an
 (`recoverPending` over `managed-create-context.js` `classify`): complete -> settled; proved unsent ->
 resumed under the same ids; otherwise `create-completion-required`, `create-ownership-required` (with each
 row's exact `adopt:` token in the message) or `managed-pending-intent-changed`. The original plan's rule
-state stays owed and is never sent again, so a rerun after a failed or lost initial publication does not
-publish, and a bound rule is never published. A pending EDIT is not recovered (its plan depends on the base
-it read) and stays `create-identity-unverified`. A bound environment variable's value clear (a settings
+state stays owed and an uncertain, failed or lost publish is never sent again; a bound rule is never published.
+The one exception (`unsentPublication`, `publishOnce`): a saved rule create (`acknowledgedRoot`) read
+unpublished whose `rule-state` effect is still `dispatched: false`, and which would commit (or need only
+ownership approvals, named first) if that publish had landed, sends `PublishDuplicateRule` once under a new
+epoch (`store.claimUnsentRowEffect`, through `ctx.claimEffect`), sealed dispatched before it leaves, then
+reads the rule a bounded number of times and settles. A pending EDIT is decided by
+the rows its attempt persisted (`settlePendingEdit`): complete -> committed read-only; proved unsent with the
+same rows -> resumed under its token, ids, parents and generation; rows changed -> retired while prepared,
+otherwise `create-identity-conflict`. Environment variable and connection reference updates (definition, first
+value, own value replacement) go through the protected port as one checked set over the item's plan; a value
+row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
+store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`
+regardless of the opt-in, the declarations or the phases): an undeclared pending or unusable protected record
+stops it with `managed-settlement-pending`. Before an overwriting fetch of a protected item (preflight, port and
+verify), a workspace copy with unsynced edits (`hasUnsyncedEdits`) stops it (`refuseLocalDraft`); a port send
+that did not settle puts the copy back (`withOwnCopy`). A bound environment variable's value clear (a settings
 `Value` of `null`, a DELETE of its value row) is refused in the preflight with
 `configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` asks the
 hookup the build hands over (`opts.protectedConfiguration.obligations`, `optInObligations`, a local store read

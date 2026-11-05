@@ -1293,13 +1293,36 @@ the field builds exactly as before.
   edits across builds, or make the change outside the plugin. Removals require maintenance outside the
   plugin." Every write names the row's exact id and its current version (`If-Match`). A change of
   `isPrivate` still needs `--authorize`.
-- **Environment variables and connection references** are edited as before, at their exact ids.
+- **Environment variables and connection references** are edited at their exact ids, each as one
+  checked change over the item's whole plan: a definition edit, the first value (created at the id the
+  spec fixes, then bound) or a new value for its own value row. A value row under a bound definition
+  that the binding does not hold is never overwritten or adopted, whatever `--authorize` tokens are
+  given: the build stops with `create-identity-conflict` before anything is sent. A bound value that the
+  deployment settings do not name in this run is kept, and nothing is sent for it.
+- **Local edits come first.** Before it reads a protected item into the workspace, the build checks the
+  workspace copy. If it holds edits the service has not seen (from an interrupted run, or made by hand),
+  the build stops before anything is sent, and verify stops too. The copy and its binding are kept.
+  Push or discard those edits yourself, then build again.
+- **Unfinished work is checked first, declared or not.** Before its first service change, every build
+  reads the binding store for protected items whose create or edit has not finished. If the App Spec no
+  longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
+  This applies with or without the field and whatever phases run. Declare the item again, with the
+  field, to finish it.
+  An item that finished before it was removed from the App Spec does not stop the build.
+- **An edit that did not finish.** The next build decides a Custom API, environment variable or
+  connection reference edit from what the first one recorded before sending. A complete edit is
+  recorded and never sent again. An edit that no request can have reached is sent once, at the same ids.
+  If its rows changed since then, it is dropped while nothing was sent; otherwise the build stops until
+  you restore them. Anything else keeps its stop.
 - **A create that did not finish.** The next build decides it from what the first one recorded before
   sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
   a create that is missing a row, its solution membership or the rule's initial state stops with
   `create-completion-required` — complete it under the same ids, then build again. An initial
   publication that failed or whose answer was lost is never sent again by the build: publish the rule
-  under the same id yourself. Rows that no answer proved this build's own are bound only after you check
+  under the same id yourself. The one exception is a rule whose content was saved, but whose publish
+  request the record proves was never sent (the run stopped first). The next build sends that publish
+  once, then binds the rule. If the rule's conditions still need your approval, the build asks for it
+  first. Rows that no answer proved this build's own are bound only after you check
   them and approve each one exactly: the stop (`create-ownership-required`) lists the tokens, such as
   `adopt:duplicateRule:<key>` and one per child. A declaration changed since the create was prepared
   stops with `managed-pending-intent-changed`: put the original declaration back, finish the create,
