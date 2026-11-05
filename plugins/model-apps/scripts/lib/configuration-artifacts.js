@@ -737,8 +737,9 @@ async function locate(ctx, kind, key, identity) {
       if (exactPort) await refuseLocalDraft(ctx.sdk, kind, resolved.id);
       const remote = await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true });
       // An exact port proved the row is this build's own create (its committed binding, read at the exact id): it is
-      // not adopted, so the adoption policy and the manifest's record are not asked — the binding store answers.
-      if (exactPort) return { id: resolved.id, remote, origin: 'resolved' };
+      // not adopted, so the adoption policy and the manifest's record are not asked — the binding store answers. A write
+      // the port still owes for it (an unsent pending edit) rides along: planOne never counts such an item unchanged.
+      if (exactPort) return { id: resolved.id, remote, origin: 'resolved', ...(resolved.owed ? { owed: resolved.owed } : {}) };
       return adoptionOf(managed, kind, key, resolved.id, remote, 'resolved');
     }
     if (!resolved || resolved.state !== 'absent') throw identityStop('create-identity-unverified');
@@ -794,6 +795,9 @@ async function planOne(ctx, kindPlan, entry, plan) {
   // A clear the maker asked for, with its exact token, is applied: the requirement is then a readiness result of
   // the row read back (ENVIRONMENT_VARIABLE_VALUE_MISSING stops the build), not a reason to keep the old value.
   if (missing && !(kindPlan.consentedClear && kindPlan.consentedClear(entry, compared, ctx))) return refuse(missing, found.id);
+  // An exact port still owes a write for this item (an unsent pending edit) that the comparison does not see: success
+  // here would leave that attempt pending behind a clean result, so the item stops, typed, before anything is sent.
+  if (found.owed && !compared.changes.length) return refuse(found.owed.code, found.id);
   const action = compared.changes.length ? 'update' : 'unchanged';
   const op = operation(kind, key, target, action, {
     id: found.id,
@@ -802,7 +806,7 @@ async function planOne(ctx, kindPlan, entry, plan) {
     destructive: compared.destructive === true,
     ...(compared.authorize && compared.authorize.length ? { authorize: compared.authorize } : {}),
   });
-  op.detail = { entry, identity: kindPlan.identity(entry), remote: found.remote, childIds: found.childIds, changes: compared.changes, singleWrite: compared.singleWrite === true, unrecorded: found.unrecorded === true };
+  op.detail = { entry, identity: kindPlan.identity(entry), remote: found.remote, childIds: found.childIds, changes: compared.changes, singleWrite: compared.singleWrite === true, unrecorded: found.unrecorded === true, ...(found.owed ? { owed: found.owed } : {}) };
   if (kindPlan.bound) op.detail.bound = kindPlan.bound(entry, found.remote);
   plan.operations.push(op);
   return op;
@@ -1847,7 +1851,7 @@ async function applyCreate(op, ctx, result, known) {
   let given = null;
   let answer;
   try {
-    answer = await creates.run({ kind, key: portKeyOf(kind, key), identity: op.detail.identity || op.target, childKeys: op.detail.childKeys }, async ({ id, childIds = {} }) => {
+    answer = await creates.run({ kind, key: portKeyOf(kind, key), identity: op.detail.identity || op.target, childKeys: op.detail.childKeys }, async ({ id, childIds = {}, ownCopy }) => {
       sent = true;
       given = { id, childIds: { ...childIds } };
       handle.ids = given;
@@ -1857,6 +1861,8 @@ async function applyCreate(op, ctx, result, known) {
         // createArtifact only writes the local workspace, so nothing left this machine.
         throw tagged(kind, key, codeOf(error), 'nothing');
       }
+      // An exact port is handed the copy it may later put back, exactly as it is pushed (configuration-protected.js).
+      if (typeof ownCopy === 'function') await ownCopy();
       let pushed;
       try {
         pushed = await withConfigurationWrite(() => ctx.sdk.pushArtifact(kind, id));
@@ -1950,13 +1956,15 @@ async function applyUpdate(op, ctx, result, known) {
   // How the item ends when a create of a child stops it short of the write.
   let stop = null;
 
-  // The write itself: every change into the workspace copy, then one push.
-  const write = async () => {
+  // The write itself: every change into the workspace copy, then one push. `ownCopy` (an exact port's) is handed the copy
+  // exactly as it is pushed, the only copy that port may later put back (configuration-protected.js).
+  const write = async (ownCopy) => {
     try {
       for (const change of changes) await ctx.sdk.updateElement(kind, id, change.pointer, change.value);
     } catch (error) {
       throw tagged(kind, key, codeOf(error), 'nothing');
     }
+    if (typeof ownCopy === 'function') await ownCopy();
     let pushed;
     try {
       pushed = await withConfigurationWrite(() => ctx.sdk.pushArtifact(kind, id));
@@ -2003,7 +2011,7 @@ async function applyUpdate(op, ctx, result, known) {
   const updateExactly = async () => {
     let entered = false;
     try {
-      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {} }) => {
+      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {}, ownCopy }) => {
         entered = true;
         for (const { change, child } of created) {
           const childId = plannedIds[child.slot];
@@ -2012,7 +2020,7 @@ async function applyUpdate(op, ctx, result, known) {
           childIds[child.slot] = childId;
         }
         handle.ids = { id, childIds: { ...childIds } };
-        return write();
+        return write(ownCopy);
       });
       return answer.result;
     } catch (error) {
@@ -2259,7 +2267,9 @@ async function applyConfiguration(plan, ctx) {
         if (!blocked && await typesUnreadable(['duplicateRuleCondition'], added.map((child) => child.key))) continue;
       }
     }
-    if (op.action === 'update' || (op.action === 'unchanged' && !stopped)) {
+    // An owed edit's membership is added by the port inside that edit's own attempt (configuration-protected.js update),
+    // never here outside it.
+    if ((op.action === 'update' && !(op.detail && op.detail.owed)) || (op.action === 'unchanged' && !stopped)) {
       const joined = await membership.ensure(op);
       if (joined) {
         pushFinding(result, joined.bucket, { kind, key, id: op.id, code: joined.code, unit: 'membership' });

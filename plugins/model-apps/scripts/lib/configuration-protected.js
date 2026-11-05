@@ -263,9 +263,13 @@ const pendingEditChanged = (planned) => ({
 
 /**
  * Settle or resume a pending EDIT of a bound item before anything is written for it (resolve), from recoverPending's
- * answer: a complete edit is committed read-only; an unsent one whose rows match is accepted read-only when its target
- * is already there (every row an update), and otherwise left to update(), which resumes it; an unsent one whose rows
- * changed is retired while it is only prepared. Answers nothing; throws a typed halt.
+ * answer. The answer is authoritative, never advice the caller may skip:
+ *   'settled'      a complete edit committed read-only, or an unsent one whose target is already there (made by hand,
+ *                  say) ACCEPTED read-only — its own acceptance verdict checked: a refusal throws its typed halt;
+ *   'retired'      an unsent one whose rows changed, retired while only prepared;
+ *   'needs-write'  an unsent one whose rows match and whose target is not there yet: its write is still owed, and only
+ *                  update() may send it, resuming the same attempt. The item must never be reported unchanged meanwhile.
+ * Anything else throws a typed halt.
  */
 async function settlePendingEdit(env, ctx, item, rec) {
   const { planned } = item;
@@ -273,20 +277,42 @@ async function settlePendingEdit(env, ctx, item, rec) {
   if (rec.verdict.action === 'commit') {
     const [settled] = ctx.settle([{ token: item.token, observation: rec.observation, declarationSha256: rec.declarationSha256 }]);
     if (settled.verdict.action !== 'commit') fail(settled.verdict);
-    return;
+    return 'settled';
   }
   if (rec.verdict.action !== 'resume') fail(rec.verdict);
   if (!rec.sameRows) {
     if (item.attempt.phase !== 'prepared') fail(pendingEditChanged(planned));
     env.store.retireUnsentAttempt({ token: item.token, baseGeneration: item.attempt.baseGeneration });
-    return;
+    return 'retired';
   }
-  if (!item.attempt.rowProtocol.rows.every((r) => r.mode === 'update') || !planned.plan.baseObservation) return;
-  // Already at its target (made by hand, say): accepted with no send. The capture is taken before the fresh read.
+  if (!readOnlyCandidate(item) || targetMissing(item.attempt.rowProtocol.rows, rec.observation)) return 'needs-write';
+  // Already at its target: accepted with no send. The capture is taken before the fresh read.
   if (item.attempt.phase === 'prepared') ctx.resume([{ token: item.token, claim: 'first', baseObservation: planned.plan.baseObservation }]);
   const [capture] = ctx.captureReadOnly([item.token]);
   const observation = await B.observe(env.dataverse, planned);
-  ctx.acceptReadOnly([{ token: item.token, observation, capture, declarationSha256: rec.declarationSha256 }]);
+  const [accepted] = ctx.acceptReadOnly([{ token: item.token, observation, capture, declarationSha256: rec.declarationSha256 }]);
+  if (!accepted || accepted.verdict.action !== 'commit') fail(accepted ? accepted.verdict : { code: UNVERIFIED_CODE });
+  return 'settled';
+}
+
+// An edit only a read-only acceptance can settle without a send: every row an update, with the base it was planned over.
+const readOnlyCandidate = (item) => item.attempt.rowProtocol.rows.every((r) => r.mode === 'update') && !!item.planned.plan.baseObservation;
+
+/**
+ * Whether an unsent edit still has its write to make: every row it planned read present, at its own id and parent, and
+ * at least one not at its target yet (its projection differs, or its private input reads different or masked — a masked
+ * value can be proved only by the edit's own send). Anything else is not a write to send: every row at its target is
+ * the read-only acceptance's to judge (an approval it needs, a membership the maker removed), and a row gone, moved or
+ * unreadable is that acceptance's typed halt too. observation: B.observe's { rows: [{ kind, key, state, id, parentId,
+ * projectionSha256, privateState? }] }.
+ */
+function targetMissing(rows, observation) {
+  const seen = new Map(((observation && observation.rows) || []).map((r) => [`${r.kind}\u0000${r.key}`, r]));
+  const read = rows.map((row) => ({ row, at: seen.get(`${row.kind}\u0000${row.key}`) }));
+  const placed = ({ row, at }) => at && at.state === 'present' && normalizeGuid(at.id) === row.id && (at.parentId ? normalizeGuid(at.parentId) : null) === row.parentId;
+  if (!read.length || !read.every(placed)) return false;
+  return read.some(({ row, at }) => at.projectionSha256 !== row.expectedSha256
+    || (row.sensitiveInput === true && (at.privateState === 'mismatch' || at.privateState === 'masked')));
 }
 
 /**
@@ -401,6 +427,13 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
         // A complete edit settles read-only (resolve): nothing more is written for it, so it is not judged as an edit.
         if (!item.edit || rec.verdict.action === 'commit') continue;
         if (!rec.sameRows && item.attempt.phase !== 'prepared') { halts.push(haltOf(kind, item.planned.key, pendingEditChanged(item.planned))); continue; }
+        // An unsent edit whose target is already there is not sent: resolve accepts it read-only. That acceptance is judged
+        // now, so a refusal (an approval it needs, a membership removed by hand) stops the build before anything is sent.
+        if (rec.sameRows && readOnlyCandidate(item) && !targetMissing(item.attempt.rowProtocol.rows, rec.observation)) {
+          const [judged] = ctx.judgeReadOnly([{ token: item.token, observation: rec.observation, declarationSha256: rec.declarationSha256 }]);
+          if (judged.verdict.action !== 'commit') halts.push(haltOf(kind, item.planned.key, judged.verdict));
+          continue;
+        }
         // An unsent edit is judged below like the bound item it edits: it is what this build would send.
       } else if (item.state !== 'bound') continue;
       // Clearing a bound variable's value (a deployment-settings Value of null) is a DELETE of its value row, a physical
@@ -437,19 +470,64 @@ async function addMissingMembers(dataverse, planned, scope) {
 }
 
 /**
+ * Whether every change a local copy still holds is one the build's own draft carries (withOwnCopy): `draft` is the copy
+ * as the build handed it over just before its push, `diff` the SDK's local comparison with the synced baseline
+ * (sdk.diffArtifact, a local read). A push that saved part of the draft rebases the copy on what was saved (a duplicate
+ * rule saved and its publish refused keeps only `/status`), so the draft is compared change by change, not as a whole:
+ *   { changes: [{ pointer: '', type: 'added', newValue: { …the whole artifact… } }] }       a create never taken: the draft
+ *   { changes: [{ pointer: '/description', type: 'modified', oldValue: 'A', newValue: 'B' }] } B is the draft's value there
+ *   { changes: [{ pointer: '/displayName', type: 'removed', oldValue: 'A' }] }                the draft holds nothing there
+ * Pointers are RFC 6901 (`~1` is '/', `~0` is '~'; an array step is its index); a null and an absent field are one value
+ * (canonicalJson). A pointer the draft cannot resolve, a
+ * value it does not hold, no change at all or a malformed answer is not the build's own: the copy is kept.
+ * See: https://www.rfc-editor.org/rfc/rfc6901
+ */
+function ownedDraft(draft, diff) {
+  if (!diff || !Array.isArray(diff.changes) || !diff.changes.length) return false;
+  return diff.changes.every((c) => {
+    if (!c || typeof c.pointer !== 'string') return false;
+    const at = valueAt(draft, c.pointer);
+    const held = at.found && at.value !== null;
+    if (c.type === 'removed') return !held;
+    return held ? sameJson(at.value, c.newValue) : c.newValue === null && c.pointer !== '';
+  });
+}
+function valueAt(doc, pointer) {
+  if (pointer === '') return { found: doc !== undefined, value: doc };
+  if (pointer[0] !== '/') return { found: false };
+  let cur = doc;
+  for (const raw of pointer.slice(1).split('/')) {
+    const step = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (cur === null || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, step)) return { found: false };
+    cur = cur[step];
+  }
+  return { found: true, value: cur };
+}
+// The SDK writes an absent optional field as an explicit null when it prepares a push (a condition's `characters: null`),
+// so a null and an absent key are the same value here; nothing else is equated.
+const canonicalJson = (v) => (Array.isArray(v) ? v.map(canonicalJson)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).filter((k) => v[k] !== null && v[k] !== undefined).sort().map((k) => [k, canonicalJson(v[k])])) : v);
+const sameJson = (a, b) => JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
+
+/**
  * The create port configuration-artifacts.js uses for the protected kinds (configurationAcceptsPort accepts it):
  *   protects(kind)                      the four configuration kinds;
- *   resolve({ kind, key })              { state: 'present', id } for a bound item (read at its exact id), or
+ *   resolve({ kind, key })              { state: 'present', id } for a bound item (read at its exact id) — with `owed`
+ *                                       ({ code, message }) when an unsent pending edit of it still owes its write, which
+ *                                       only update() sends — or
  *                                       { state: 'absent', id } with the derived id when nothing is bound and that id is
  *                                       free; anything else throws, typed — never a name lookup;
- *   run({ kind, key }, fn)              the mandatory complete namesake query, then ONE create set: fn({ id, childIds })
- *                                       pushes the artifact through the gate, the members are added, and the attempt is
+ *   run({ kind, key }, fn)              the mandatory complete namesake query, then ONE create set: fn({ id, childIds,
+ *                                       ownCopy }) pushes the artifact through the gate (calling ownCopy() just before
+ *                                       the push), the members are added, and the attempt is
  *                                       observed and settled into the store. Answers { outcome: 'created', id, childIds,
  *                                       result } only for a committed create; anything else throws, typed;
  *   exact                               true: configuration-artifacts.js skips its name lookup for a protected kind;
  *   updates(kind)                       true for a Custom API, an environment variable and a connection reference, whose
  *                                       supported edits go through update();
- *   update({ kind, key, id }, fn)       ONE checked set for a bound item's edit the preflight admitted: fn({ childIds })
+ *   update({ kind, key, id }, fn)       ONE checked set for a bound item's edit the preflight admitted: fn({ childIds,
+ *                                       ownCopy }) makes the SDK's element updates and ONE push (calling ownCopy() just
+ *                                       before it; one request, or one checked
  *                                       change set when apiBase is known, refused unsent otherwise), new children are
  *                                       added to the solution, and the attempt is observed and settled. Answers
  *                                       { outcome: 'updated', id, childIds, result }; anything else throws, typed.
@@ -459,20 +537,41 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
   const env = () => (envPromise = envPromise || environmentOf({ spec, store, dataverse, solution, bindings }));
   // A send this port ran that did not settle (a throw, a refused push, an answer that never came) can leave the build's OWN
   // change in the workspace copy, which the next build's preflight would refuse as an unsent edit, so the attempt could
-  // never be continued. The copy held nothing else (the preflight, or locate, proved it clean just before), so it is put
-  // back as the service holds it, as the declared forms do (form-layout-reconcile.js resetOwnCopy): re-read with overwrite
-  // (a read, which the send window does not count), or, for a create the service does not hold, removed (a local delete,
-  // no request). Best-effort: a reset that fails leaves the copy, and the next build refuses it rather than plan over it.
+  // never be continued. That copy is put back as the service holds it, as the declared forms do (form-layout-reconcile.js
+  // resetOwnCopy) — but only when it is provably the build's own draft: a clean copy before the send (the preflight, or
+  // locate, proved it) is not a certificate for the copy after it, since a local write can land while the send is
+  // awaited. So the send's caller hands its exact draft over just before the push (ownCopy, a locked read of the copy),
+  // and the copy is reset only while every change it still holds is one that draft carries (ownedDraft); any other copy —
+  // a maker's edit that arrived meanwhile, a draft never handed over, a copy that cannot be read — is kept, and the next
+  // build's preflight stops on it (DRAFT_CODE) for the maker to decide. The reset itself follows a fresh exact read of the
+  // service row: present, the copy is re-read with overwrite (a read, which the send window does not count); absent (a
+  // create the service never took), the copy is removed (a local delete, no request); unreadable, or a re-read that
+  // fails, keeps the copy — a failed read never proves the row is gone. The comparison is the last await before the
+  // reset, after a locked read that lets every write already queued through this SDK land first; the SDK serializes its
+  // own writes to one artifact, so a later one runs after the reset and is kept. A write by another process in between
+  // is not fenced: the SDK has no conditional overwrite.
   const withOwnCopy = async (kind, id, body) => {
+    let draft;
+    const ownCopy = async () => {
+      if (!sdk) return;
+      try { draft = await sdk.getArtifact(kind, id); } catch { draft = undefined; }
+    };
     try {
-      return await body();
+      return await body(ownCopy);
     } catch (error) {
-      if (sdk) {
+      if (sdk && draft !== undefined) {
         try {
           if (await hasUnsyncedEdits(sdk, kind, id)) {
-            try { await sdk.fetchArtifact(kind, id, { overwrite: true }); } catch { await sdk.deleteArtifact(kind, id); }
+            const row = await B.readConfigurationRow(dataverse, kind, id);
+            if (row.state === 'present' || row.state === 'absent') {
+              await sdk.getArtifact(kind, id);
+              if (ownedDraft(draft, await sdk.diffArtifact(kind, id))) {
+                if (row.state === 'present') await sdk.fetchArtifact(kind, id, { overwrite: true });
+                else await sdk.deleteArtifact(kind, id);
+              }
+            }
           }
-        } catch { /* see above */ }
+        } catch { /* the copy is kept: see above */ }
       }
       throw error;
     }
@@ -487,8 +586,12 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       if (item.state === 'bound') return { state: 'present', id: rootId };
       if (item.state === 'pending' && item.edit) {
         // The edit's bound row is there whatever the attempt's fate: settle (or retire) the attempt first, so the item is
-        // planned from a settled binding, or left for update() to resume.
-        await settlePendingEdit(await env(), ctx, item, await recoverPending(await env(), ctx, item));
+        // planned from a settled binding. An edit whose write is still owed is left for update() to resume, and says so:
+        // the plan may never count it unchanged (configuration-artifacts.js planOne) while its attempt is pending.
+        const settled = await settlePendingEdit(await env(), ctx, item, await recoverPending(await env(), ctx, item));
+        if (settled === 'needs-write') {
+          return { state: 'present', id: rootId, owed: { code: COMPLETION_CODE, message: `the ${kind} "${item.planned.key}" has an unsent pending edit whose write is still owed; only that edit is sent for it` } };
+        }
         return { state: 'present', id: rootId };
       }
       if (item.state === 'pending') {
@@ -535,8 +638,8 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult }, send);
       const id = planned.plan.rows[0].id;
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null).map((r) => [r.slot, r.id]));
-      return withOwnCopy(kind, id, async () => {
-        const pushed = await scope(() => fn({ id, childIds }), B.acceptResultFor(planned));
+      return withOwnCopy(kind, id, async (ownCopy) => {
+        const pushed = await scope(() => fn({ id, childIds, ownCopy }), B.acceptResultFor(planned));
         if (pushed.error) throw pushed.error;
         if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
         if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
@@ -583,8 +686,8 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult, ...batch }, send);
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && r.mode === 'create').map((r) => [r.slot, r.id]));
       const rootId = planned.plan.rows[0].id;
-      return withOwnCopy(kind, rootId, async () => {
-        const pushed = await scope(() => fn({ childIds }), B.acceptResultFor(planned));
+      return withOwnCopy(kind, rootId, async (ownCopy) => {
+        const pushed = await scope(() => fn({ childIds, ownCopy }), B.acceptResultFor(planned));
         if (pushed.error) throw pushed.error;
         if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
         if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });

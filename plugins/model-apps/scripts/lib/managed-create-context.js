@@ -487,22 +487,8 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       const results = [];
       const proposals = [];
       for (const { token, observation, capture, declarationSha256 } of items) {
-        const a = attemptOf(env, token);
-        const name = `the managed ${a.family} "${a.key}"`;
-        if (!a.rowProtocol || !a.expected || !a.expected.baseObservation || a.rowProtocol.rows.some((r) => r.mode !== 'update')) {
-          throw new TypeError(`${name} is not a plan of existing rows with a base observation; only such a plan is accepted without a send`);
-        }
-        if (!capture || capture.token !== token) throw new TypeError(`${name} has no capture taken before its fresh read (captureReadOnly)`);
-        const declared = declarationSha256 === undefined && begun.has(token) ? a.declarationSha256 : declarationSha256;
-        const group = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
-        let verdict;
-        if (declared !== a.declarationSha256) {
-          verdict = halt(CODES.intentChanged, `${name} has a pending attempt prepared for another declaration; restore the original declaration and run again`);
-        } else if (!attemptProvenUnsent(a, env.workflowEffects)) {
-          verdict = halt(STORE_CODES.pending, `${name} attempt may have sent something; it is recovered from its original expectation, never accepted read-only`);
-        } else {
-          verdict = judgeRows(a, observation, { approvals: approved, boundRecords: group ? group.records : [], notFoundCode, approvalTokenOf, readOnly: true });
-        }
+        const { a, verdict } = readOnlyVerdict(env, { token, observation, declarationSha256 });
+        if (!capture || capture.token !== token) throw new TypeError(`the managed ${a.family} "${a.key}" has no capture taken before its fresh read (captureReadOnly)`);
         results.push({ family: a.family, key: a.key, token, verdict });
         if (verdict.action === 'commit') proposals.push({ ...proposalOf(a, observation, verdict.rows, env), capture });
       }
@@ -511,7 +497,42 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       results.forEach((r, i) => { r.group = groups[i]; });
       return results;
     },
+    /**
+     * The verdict acceptReadOnly would give each item [{ token, observation, declarationSha256? }], judged exactly as it
+     * judges (the declaration, the zero dispatch, then rows 3-8 with no answer or receipt counted), WITHOUT committing
+     * anything: a read-only preflight names the halt before the build sends anything, and a commit here is only a
+     * forecast — the acceptance itself re-reads, re-captures and re-judges. Answers [{ family, key, token, verdict }].
+     */
+    judgeReadOnly(items) {
+      store.refresh();
+      const env = snapshot();
+      return items.map(({ token, observation, declarationSha256 }) => {
+        const { a, verdict } = readOnlyVerdict(env, { token, observation, declarationSha256 });
+        return { family: a.family, key: a.key, token, verdict };
+      });
+    },
   };
+
+  // One item of a read-only acceptance, judged (acceptReadOnly, judgeReadOnly). Throws when the attempt is not a plan of
+  // existing rows with a base observation: only such a plan is ever accepted without a send.
+  function readOnlyVerdict(env, { token, observation, declarationSha256 }) {
+    const a = attemptOf(env, token);
+    const name = `the managed ${a.family} "${a.key}"`;
+    if (!a.rowProtocol || !a.expected || !a.expected.baseObservation || a.rowProtocol.rows.some((r) => r.mode !== 'update')) {
+      throw new TypeError(`${name} is not a plan of existing rows with a base observation; only such a plan is accepted without a send`);
+    }
+    const declared = declarationSha256 === undefined && begun.has(token) ? a.declarationSha256 : declarationSha256;
+    const group = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+    let verdict;
+    if (declared !== a.declarationSha256) {
+      verdict = halt(CODES.intentChanged, `${name} has a pending attempt prepared for another declaration; restore the original declaration and run again`);
+    } else if (!attemptProvenUnsent(a, env.workflowEffects)) {
+      verdict = halt(STORE_CODES.pending, `${name} attempt may have sent something; it is recovered from its original expectation, never accepted read-only`);
+    } else {
+      verdict = judgeRows(a, observation, { approvals: approved, boundRecords: group ? group.records : [], notFoundCode, approvalTokenOf, readOnly: true });
+    }
+    return { a, verdict };
+  }
 }
 
 /**

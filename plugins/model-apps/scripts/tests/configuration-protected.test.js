@@ -695,6 +695,117 @@ test('an unsent protected Custom API edit whose declaration then changed is not 
   assert.equal(restored.sent.length, 1);
 });
 
+test('an unsent protected value edit already at its target asks for the exact approval of its private value: never reported unchanged while it is owed', async () => {
+  const h = await harness();
+  const spec = variableOnly();
+  const bindings = (Value) => readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value }] }, spec);
+  await created(h, spec, { configurationBindings: bindings('old-input') });
+  const group = committed(h, 'environmentVariable', 'contoso_apibase');
+  const types = await B.readComponentTypes(h.sdk.dataverse);
+  const bases = new Map();
+  for (const row of group.records) bases.set(row.id, await B.readConfigurationRow(h.sdk.dataverse, row.kind, row.id));
+  const root = group.records.find((r) => r.kind === 'environmentVariable');
+  const child = group.records.find((r) => r.kind === 'environmentVariableValue');
+  const next = bindings('next-input');
+  const planned = B.planOf(spec, { kind: 'environmentVariable', key: 'contoso_ApiBase', solution: SOL, bindings: next,
+    componentTypes: types.types, bases, boundSlots: ['value'], baseGeneration: group.generation, boundIdOf: () => root.id });
+  h.ctx.begin([planned.plan]);
+  // The target is made outside the plugin: the prepared edit has nothing left to write, but its private value is not the
+  // plugin's own until the maker approves it.
+  const manual = await h.org.request({ url: `${h.org.origin}/api/data/v9.0/environmentvariablevalues(${child.id})`, method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value: 'next-input' }) });
+  assert.ok(manual.statusCode < 300);
+  const destructive = new Set(['environmentVariableValue:contoso_apibase:value']);
+  const out = await pass(reopen(h), spec, { configurationBindings: next, authorizedDestructive: destructive });
+  assert.equal(out.halt && out.halt.code, 'create-ownership-required', out.halt && out.halt.message);
+  assert.match(out.halt.message, /given after checking those rows are yours: "adopt:environmentVariableValue:contoso_apibase\/value"\.$/);
+  assert.deepEqual(out.sent, []);
+  const held = h.store.readGroup('environmentVariable', 'contoso_apibase');
+  assert.ok(held.pending, 'the attempt stays owed');
+  assert.equal(held.committed.generation, group.generation);
+  // Without the preflight, the plan's own resolve stops on the same verdict: nothing is planned as unchanged.
+  const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration, configurationBindings: next, authorizedDestructive: destructive }, appUniqueName: 'contoso_configured' });
+  const mark = h.org.requests.length;
+  const step = await runtime.apply('data-model');
+  assert.deepEqual(step.halt && step.halt.items.map(({ kind, code }) => `${kind} ${code}`), ['environmentVariable create-ownership-required']);
+  assert.deepEqual(step.outcome.unchanged || [], []);
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), []);
+  assert.ok(h.store.readGroup('environmentVariable', 'contoso_apibase').pending);
+  // The exact approval accepts the same attempt read-only: nothing is sent.
+  const approved = await pass(reopen(h, ['adopt:environmentVariableValue:contoso_apibase/value']), spec, { configurationBindings: next, authorizedDestructive: destructive });
+  assert.equal(approved.halt, null, approved.halt && `${approved.halt.code}: ${approved.halt.message}`);
+  assert.deepEqual(approved.sent, []);
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_apibase').pending, null);
+});
+
+test('an unsent protected edit already at its target whose solution membership is gone stops: no membership is added outside its attempt', async () => {
+  const h = await harness();
+  await created(h, apiSpec());
+  const target = apiSpec(api({ description: 'Target already present' }));
+  const { rootId } = await beginUnsentApiEdit(h, target);
+  const manual = await h.org.request({ url: `${h.org.origin}/api/data/v9.0/customapis(${rootId})`, method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ description: 'Target already present' }) });
+  assert.ok(manual.statusCode < 300);
+  const membership = h.org.rows('solutioncomponents').find((r) => r.objectid === rootId);
+  assert.ok(membership);
+  const deleted = await h.org.request({ url: `${h.org.origin}/api/data/v9.0/solutioncomponents(${membership.solutioncomponentid})`, method: 'DELETE', headers: {} });
+  assert.ok(deleted.statusCode < 300);
+  const out = await pass(reopen(h), target);
+  assert.equal(out.halt && out.halt.code, 'create-completion-required', out.halt && out.halt.message);
+  assert.deepEqual(out.sent, []);
+  assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending, 'the attempt stays owed');
+  // Without the preflight: the same verdict from resolve, and no AddSolutionComponent.
+  const runtime = createConfigurationRuntime({ spec: target, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration }, appUniqueName: 'contoso_configured' });
+  const mark = h.org.requests.length;
+  const step = await runtime.apply('data-model');
+  assert.deepEqual(step.halt && step.halt.items.map(({ kind, code }) => `${kind} ${code}`), ['customApi create-completion-required']);
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), []);
+  assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending);
+});
+
+test('an unsent protected edit whose solution membership is gone adds it only inside its own attempt, after its write', async () => {
+  const h = await harness();
+  await created(h, apiSpec());
+  const edited = apiSpec(api({ description: 'Edited once' }));
+  const { rootId } = await beginUnsentApiEdit(h, edited);
+  const membership = h.org.rows('solutioncomponents').find((r) => r.objectid === rootId);
+  const deleted = await h.org.request({ url: `${h.org.origin}/api/data/v9.0/solutioncomponents(${membership.solutioncomponentid})`, method: 'DELETE', headers: {} });
+  assert.ok(deleted.statusCode < 300);
+  const runtime = createConfigurationRuntime({ spec: edited, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration }, appUniqueName: 'contoso_configured' });
+  const mark = h.org.requests.length;
+  const step = await runtime.apply('data-model');
+  assert.equal(step.halt, null, step.halt && JSON.stringify(step.halt.items));
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path.split('?')[0]}`),
+    [`PATCH /customapis(${rootId})`, 'POST /AddSolutionComponent']);
+  assert.equal(h.store.readGroup('customApi', 'contoso_calc').pending, null);
+});
+
+test('an unsent protected first value whose row was made at its id outside the plugin is never planned unchanged while its create is owed', async () => {
+  const h = await harness();
+  const spec = variableOnly();
+  await created(h, spec);
+  const group = committed(h, 'environmentVariable', 'contoso_apibase');
+  const types = await B.readComponentTypes(h.sdk.dataverse);
+  const bases = new Map();
+  for (const row of group.records) bases.set(row.id, await B.readConfigurationRow(h.sdk.dataverse, row.kind, row.id));
+  const root = group.records.find((r) => r.kind === 'environmentVariable');
+  const next = readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value: 'https://one.contoso.com' }] }, spec);
+  const planned = B.planOf(spec, { kind: 'environmentVariable', key: 'contoso_ApiBase', solution: SOL, bindings: next,
+    componentTypes: types.types, bases, boundSlots: [], baseGeneration: group.generation, boundIdOf: () => root.id });
+  const valueRow = planned.plan.rows.find((r) => r.kind === 'environmentVariableValue');
+  assert.equal(valueRow.mode, 'create');
+  h.ctx.begin([planned.plan]);
+  const manual = await h.org.request({ url: `${h.org.origin}/api/data/v9.0/environmentvariablevalues`, method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ environmentvariablevalueid: valueRow.id, value: 'https://one.contoso.com', schemaname: 'contoso_ApiBase', 'EnvironmentVariableDefinitionId@odata.bind': `/environmentvariabledefinitions(${root.id})` }) });
+  assert.ok(manual.statusCode < 300, String(manual.statusCode));
+  // Without the preflight, the plan's own resolve says the create is owed: the item is neither unchanged nor written.
+  const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration, configurationBindings: next }, appUniqueName: 'contoso_configured' });
+  const mark = h.org.requests.length;
+  const step = await runtime.apply('data-model');
+  assert.deepEqual(step.halt && step.halt.items.map(({ kind, code }) => `${kind} ${code}`), ['environmentVariable create-completion-required']);
+  assert.deepEqual(step.outcome.unchanged || [], []);
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), []);
+  assert.ok(h.store.readGroup('environmentVariable', 'contoso_apibase').pending);
+});
+
 test('a bound protected item whose workspace copy holds unsent edits is never read over: build and verify stop, the copy and its binding kept', async () => {
   const h = await harness();
   const spec = apiSpec();
@@ -729,6 +840,54 @@ test('a bound protected item whose workspace copy holds unsent edits is never re
   const again = await pass(reopen(h), spec);
   assert.equal(again.halt, null, again.halt && `${again.halt.code}: ${again.halt.message}`);
   assert.deepEqual(again.sent, []);
+});
+
+test('a failed protected send puts back only the exact copy it pushed: a local edit written while the push was pending is kept', async () => {
+  let reject = false;
+  const h = await harness({ intercept: ({ method, path }) => (reject && method === 'PATCH' && path.startsWith('/customapis(')
+    ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'refused edit' } } } : undefined) });
+  const spec = apiSpec();
+  await created(h, spec);
+  const id = committed(h, 'customApi', 'contoso_calc').records.find((r) => r.kind === 'customApi').id;
+  const push = h.sdk.pushArtifact.bind(h.sdk);
+  let injected = false;
+  h.sdk.pushArtifact = async (...args) => {
+    const result = await push(...args);
+    if (reject && args[0] === 'customApi') {
+      await h.sdk.updateElement('customApi', id, '/displayName', 'Maker draft arrived during push');
+      injected = true;
+    }
+    return result;
+  };
+  reject = true;
+  const out = await pass(h, apiSpec(api({ description: 'Build-owned edit' })));
+  assert.ok(injected);
+  assert.ok(out.halt);
+  assert.equal(out.sent.length, 1);
+  const diff = await h.sdk.diffArtifact('customApi', id);
+  assert.ok(JSON.stringify(diff).includes('Maker draft arrived during push'), 'the edit the build did not make is kept');
+  // The kept copy stops the next build before anything is sent, the maker's edit still there.
+  h.sdk.pushArtifact = push;
+  const next = await pass(reopen(h), apiSpec(api({ description: 'Build-owned edit' })));
+  assert.equal(next.halt && next.halt.code, 'create-completion-required', next.halt && next.halt.message);
+  assert.deepEqual(next.sent, []);
+  assert.ok(JSON.stringify(await h.sdk.diffArtifact('customApi', id)).includes('Maker draft arrived during push'));
+});
+
+test('a failed protected send never takes a failed read as proof that its copy may be removed', async () => {
+  const h = await harness({ intercept: ({ method, path }) => (method === 'POST' && path.startsWith('/customapis')
+    ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'refused create' } } } : undefined) });
+  const spec = apiSpec();
+  const fetch = h.sdk.fetchArtifact.bind(h.sdk);
+  // Every read of the Custom API into the workspace is refused, as a denied or failed read would be.
+  h.sdk.fetchArtifact = async (kind, ...rest) => {
+    if (kind === 'customApi') { const e = new Error('read denied'); e.code = 'HTTP_403'; throw e; }
+    return fetch(kind, ...rest);
+  };
+  const out = await pass(h, spec);
+  assert.ok(out.halt);
+  const listed = (await h.sdk.listArtifacts('customApi')).map((s) => s.id);
+  assert.equal(listed.length, 1, 'the copy of the refused create is kept, not deleted on a read that proves nothing');
 });
 
 // A rule create whose content the service saved and acknowledged, with its solution membership complete, whose initial
