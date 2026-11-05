@@ -385,6 +385,54 @@ test('the build runs the protected preflight before its first write: an earlier 
   assert.equal(h.org.rows('solutions').find((s) => s.uniquename === SOL).version, '1.0.0.0');
 });
 
+// A rule left pending: its initial publication was refused, so its attempt is unfinished in the binding store.
+async function pendingRule() {
+  const h = await harness({ intercept: ({ method, path }) => (method === 'POST' && /PublishDuplicateRule$/.test(path)
+    ? { statusCode: 400, body: { error: { code: '0x80040216', message: 'publish failed' } } } : undefined) });
+  assert.ok((await pass(h, configSpec({ environmentVariables: [], customApis: [] }))).halt);
+  assert.ok(h.store.readGroup('duplicateRule', 'email').pending);
+  return h;
+}
+
+test('dropping the declaration of a pending protected item never lets a build go on: with or without the opt-in, nothing is sent', async () => {
+  const h = await pendingRule();
+  const unrelated = configSpec({ customApis: [], duplicateDetectionRules: [], environmentVariables: [{ schemaName: 'contoso_Unrelated', type: 'string' }] });
+  const { configurationIdentity, ...plain } = unrelated;
+  for (const spec of [unrelated, plain]) {
+    const out = await pass(reopen(h), spec);
+    assert.equal(out.halt && out.halt.code, 'managed-settlement-pending', out.halt && out.halt.message);
+    assert.equal(out.halt.phase, 'preflight');
+    assert.match(out.halt.message, /duplicateRule email: .*no longer declares\. Restore its declaration, with configurationIdentity "stable-v1"/);
+    assert.deepEqual(out.sent, [], 'zero service mutations');
+    assert.ok(h.store.readGroup('duplicateRule', 'email').pending, 'the debt is kept: never retired or reset');
+  }
+  // A committed item the App Spec dropped is no debt: its rows simply stay.
+  const done = await harness();
+  await created(done);
+  const out = await pass(reopen(done), unrelated);
+  assert.equal(out.halt, null, out.halt && out.halt.message);
+  assert.ok(committed(done, 'customApi', 'contoso_calc'), 'its binding is kept');
+});
+
+test('a build whose App Spec declares no configuration item still stops on a pending protected attempt before its first write', async () => {
+  const h = await pendingRule();
+  // No configuration list and no solution version: the build makes no configuration runtime at all.
+  const { configurationIdentity, ...spec } = configSpec({ environmentVariables: [], customApis: [], duplicateDetectionRules: [] });
+  assert.deepEqual(validateAppSpec(spec).errors, []);
+  const mark = h.org.requests.length;
+  let caught;
+  try {
+    await runSdkBuild(spec, { sdk: h.sdk, apply: true, phases: STAGES.data, workspaceDir: makeTempDir('cfg-protected-ws-'), protectedConfiguration: reopen(h).protectedConfiguration, emit: () => {} });
+  } catch (error) {
+    caught = error;
+  }
+  assert.equal(caught && caught.code, 'managed-settlement-pending', caught && caught.message);
+  assert.equal(caught.phase, 'preflight');
+  assert.equal(caught.retry, RETRY.NEVER);
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), [], 'zero service mutations');
+  assert.ok(h.store.readGroup('duplicateRule', 'email').pending);
+});
+
 test('without the opt-in the hookup is ignored: no preflight read, and the plain path creates as before', async () => {
   const h = await harness();
   const { configurationIdentity, ...plain } = configSpec();

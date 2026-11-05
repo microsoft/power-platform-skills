@@ -181,7 +181,7 @@ const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 // the helper plans, applies and reads them back; the runtime closes over what only the build has (its create port, BuildHalt and
 // retry policy, the --authorize keys) so this file calls three methods and keeps no configuration state of its own.
 const { usesConfiguration, hasConfigurationDefinitions, configurationPlanItems } = require('./configuration-artifacts.js');
-const { createConfigurationRuntime } = require('./configuration-build.js');
+const { createConfigurationRuntime, sweepPendingConfiguration } = require('./configuration-build.js');
 // Declared forms (forms[].reconcile "declared", lib/form-layout-reconcile.js) are dispatched only while their enable flag is on
 // (lib/declared-features.js). With it off, no form is declared here — validation refuses `reconcile` on a form — so every form
 // takes the build's own path and every spec sends the requests it always sent.
@@ -4161,7 +4161,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const configurationRun = usesConfiguration(spec) ? createConfigurationRuntime({ spec, sdk, provision, opts, appUniqueName: appUniqueName(spec) }) : null;
   // Protected configuration (configurationIdentity "stable-v1") is checked whole and read-only here, before the first write below: an edit
   // the protected path cannot make stops the build with nothing sent (lib/configuration-build.js preflight; a no-op without the opt-in).
+  // The binding store's configuration debt is read first either way: an App Spec that dropped every configuration item (no runtime)
+  // still stops on an attempt an earlier build left unfinished (sweepPendingConfiguration), whatever phases this run selects.
   if (configurationRun) await configurationRun.preflight();
+  else sweepPendingConfiguration(spec, opts);
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
   // spec's web resources and the generated app icon are written again by id when they are in it, and the page manifest is written again by its id where
   // its published copy is not what the run wants (kept where it is: persistPageManifest). One per run of the phases, so the

@@ -54,6 +54,25 @@ function namedByPages(pages) {
   return { references, apis };
 }
 
+// Every stop before the build's first write: the same plan stops again, so it is RETRY.NEVER.
+const preflightHalt = (preflightCode, message) => new BuildHalt(message, { phase: 'preflight', code: preflightCode, recoverable: false, retry: RETRY.NEVER });
+
+/**
+ * The binding store's own configuration debt (lib/configuration-protected.js pendingSweep, answered by the build's hookup
+ * `opts.protectedConfiguration.sweep`), read before the build's first service change: an attempt an earlier build left
+ * unfinished for an item this App Spec no longer declares stops the build here, with nothing sent. It runs whatever the
+ * App Spec declares — sdk-build.js calls it directly for an App Spec that uses no configuration kind, and the runtime's
+ * preflight calls it first otherwise — so omitting a declaration never bypasses its debt. No hookup, nothing to read.
+ */
+function sweepPendingConfiguration(spec, opts = {}) {
+  const sweep = opts.protectedConfiguration && opts.protectedConfiguration.sweep;
+  if (typeof sweep !== 'function') return { halts: [] };
+  const { halts } = sweep({ spec });
+  if (!halts.length) return { halts };
+  const others = halts.slice(1).map((h) => `${h.kind} ${h.key}`);
+  throw preflightHalt(halts[0].code, `${halts[0].kind} ${halts[0].key}: ${halts[0].message}${others.length ? ` Also held: ${others.join(', ')}.` : ''}`);
+}
+
 /**
  * @param {object} parts
  * @param {object} parts.spec           the App Spec (normalized, validated)
@@ -134,7 +153,9 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
     // store the build handed over, if any (nothing is sent). Under it, an item the binding store cannot locate exactly, or an edit the protected path cannot
     // make, stops the build here with nothing sent; every such stop is RETRY.NEVER, as the same plan stops again.
     async preflight() {
-      const fail = (preflightCode, message) => new BuildHalt(message, { phase: 'preflight', code: preflightCode, recoverable: false, retry: RETRY.NEVER });
+      const fail = preflightHalt;
+      // The store's own debt first, whatever this App Spec still declares (sweepPendingConfiguration).
+      sweepPendingConfiguration(spec, opts);
       if (!protectedOptIn) {
         // Removing the opt-in is not a migration: a declared item the build's binding store still holds (committed, or an
         // attempt pending) would go back to name lookup, where a namesake could stand in for its bound row. A local store
@@ -215,4 +236,4 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   };
 }
 
-module.exports = { createConfigurationRuntime };
+module.exports = { createConfigurationRuntime, sweepPendingConfiguration };

@@ -484,11 +484,34 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
 }
 
 /**
+ * The binding store's own debt, read before ANY service change of a build — whatever the App Spec declares today, with or
+ * without the opt-in, whichever phases run: every unfinished attempt (or unusable group) of a protected configuration kind
+ * whose item the App Spec no longer declares. Omitting a declaration never lets a build go on past what an earlier one left
+ * pending: its rows may exist and its effects may be owed, and only its own declaration can settle it. Nothing is retired,
+ * deleted or reset here, and a committed group the App Spec dropped is not debt (its rows simply stay). A declared item is
+ * judged by the protected preflight (or, without the opt-in, by optInObligations), so it is not listed twice.
+ * A local store read only: nothing is sent. Answers { halts: [{ kind, key, code, message }] }.
+ */
+function pendingSweep({ spec, store }) {
+  if (!store || typeof store.snapshot !== 'function') return { halts: [] };
+  if (typeof store.refresh === 'function') store.refresh();
+  const declared = new Set(declaredItems(spec || {}).map(({ kind, key }) => `${kind}\u0000${A.portKeyOf(kind, key)}`));
+  const halts = [];
+  for (const unit of store.snapshot().units()) {
+    if (!KINDS.has(unit.family) || !(unit.attempt || unit.invalid) || declared.has(`${unit.family}\u0000${unit.key}`)) continue;
+    const what = unit.attempt ? 'an unfinished attempt' : 'a record it cannot use';
+    halts.push({ kind: unit.family, key: unit.key, code: PENDING_CODE, message: `the binding store holds ${what} for ${unit.family} "${unit.key}", which this App Spec no longer declares. `
+      + 'Restore its declaration, with configurationIdentity "stable-v1", so a build can settle it, then run again. No service changes were sent by this build.' });
+  }
+  return { halts };
+}
+
+/**
  * The build's configuration hookup: what the build calls with the binding store, the send-once gate bound to it and the
- * managed create context over both, once a protected feature is selected. Answers { preflight, port, obligations }: preflight
- * runs the read-only whole-plan pass, port is the create port the configuration runtime installs, and obligations is the
- * local store read a build without the opt-in runs (optInObligations). Nothing here creates a gate or
- * a store: the build owns them.
+ * managed create context over both, once a protected feature is selected. Answers { preflight, port, obligations, sweep }:
+ * preflight runs the read-only whole-plan pass, port is the create port the configuration runtime installs, obligations is
+ * the local store read a build without the opt-in runs (optInObligations), and sweep is the store-driven debt read every
+ * build runs before its first service change (pendingSweep). Nothing here creates a gate or a store: the build owns them.
  */
 function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {}) {
   if (!store || typeof store.readGroup !== 'function') throw new TypeError('createProtectedConfiguration needs the managed binding store');
@@ -501,6 +524,8 @@ function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {})
     port: ({ spec, dataverse, solution, bindings }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase }),
     // A build without the opt-in: what the store still holds for its declared items (optInObligations), read locally.
     obligations: ({ spec }) => optInObligations({ spec, store }),
+    // Every build, before its first service change: what the store still owes for items the App Spec no longer declares.
+    sweep: ({ spec }) => pendingSweep({ spec, store }),
   };
 }
 
@@ -587,6 +612,7 @@ module.exports = {
   configurationIdentityOf,
   editVerdict,
   optInObligations,
+  pendingSweep,
   preflightProtectedConfiguration,
   protectedConfigurationPort,
   protectedVerifyPort,
