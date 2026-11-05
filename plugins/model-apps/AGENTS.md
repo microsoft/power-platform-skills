@@ -3604,6 +3604,9 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   commands phase re-reads each row and sends one conditional flag-only PATCH per changed row. A refusal or unknown
   outcome is a `BuildHalt` with `retry: never`: a lost answer is never resent (`command-state-write-unknown`), and an
   ordinary retry of another halt starts a new attempt that re-reads and re-plans.
+- **Approval tokens stay off disk.** An approval halt's message names what is missing but not the token; the exact
+  `--authorize` lines ride on the halt as non-enumerable `approvalDisplay` (`withApprovalDisplay`), which the CLI prints
+  to the console only, so `build-log.jsonl` and `build-status.json` never hold a token or digest.
 - **Raw-request exception.** The SDK has no update of an `appaction` row's flags, so the row PATCH goes through
   `command-state-transport.js` `patchRow` on a raw az-token client `makeSdk` creates only for a spec that declares
   `commandStates`, behind the same publication barrier and write gate, sent once (`commandStateSendOnce`).

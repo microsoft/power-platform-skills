@@ -190,7 +190,8 @@ picked by its row id. Nothing else about the button changes, and a row is never 
   `--authorize publish:command-state-table:<table>/<sha256>`. An apply without every one of them
   writes nothing (`command-state-approval-required`, `command-state-publication-approval-required`);
   a row changed after its dry run needs a new token (`command-state-approval-stale`). There is no
-  wildcard and no blanket approval.
+  wildcard and no blanket approval. Such a halt prints the tokens it needs on the console, never into
+  the build's log or status files.
 - **Publishing a table publishes ALL saved customizations on it** (anyone's, not only these buttons),
   for every app that shows the table — which is why it has its own approval.
 - **One conditional write per row.** The build sends only the flags that differ, with `If-Match` on

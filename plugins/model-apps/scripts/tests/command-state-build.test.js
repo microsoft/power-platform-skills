@@ -46,12 +46,16 @@ function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPubli
   const client = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: org.request, sleep: async () => {}, sendOnce: commandStateSendOnce });
   const transport = createCommandStateTransport({ client, apiUrl: (p) => `${API}${p}` });
   const published = [];
-  const build = async (spec, opts = {}) => {
+  const mockSdk = () => {
     const { sdk, calls } = makeSimpleMockSdk();
     sdk.dataverse = {
       apiUrl: (p) => `${API}${p}`,
       post: async (url, body) => { published.push(tablesOf(body)); if (onPublish) onPublish(tablesOf(body)); return { status: publishStatus, body: null }; },
     };
+    return { sdk, calls };
+  };
+  const build = async (spec, opts = {}) => {
+    const { sdk, calls } = mockSdk();
     const warnings = [];
     const run = { sdk, env: ORIGIN, commandStateTransport: transport, emit: () => {}, warn: (w) => warnings.push(String(w)), ...opts };
     try {
@@ -68,7 +72,7 @@ function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPubli
     return { plan, approvals: { rows: new Set(plan.rows.map((r) => r.approval).filter(Boolean)), tables: new Set(plan.tables.map((t) => t.token)) } };
   };
   const patches = () => org.requests.filter((r) => r.method === 'PATCH');
-  return { org, build, approve, published, patches };
+  return { org, build, approve, published, patches, transport, mockSdk };
 }
 
 const APPLY = { apply: true, publish: true };
@@ -344,4 +348,91 @@ test('the final proof also fails a row that no longer holds the declared flags a
   assert.strictEqual(error && error.code, 'command-state-not-confirmed', error && error.message);
   assert.match(error.message, /nothing is rolled back: .*it now holds hidden false/);
   assert.strictEqual(h.patches().length, 1);
+});
+// The build's own entry (build-model-app.js buildModelApp) with its durable journal, for what a halt leaves on disk and says on the console.
+async function buildWithJournal(h, spec, approvals) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { buildModelApp } = require('../build-model-app.js');
+  const { openJournal } = require('../lib/build-journal.js');
+  const { makeTempDir } = require('./helpers/temp-dirs.js');
+  const engine = require('../lib/sdk-build.js').runSdkBuild;
+  const workspaceDir = makeTempDir('cs-journal-');
+  const journal = openJournal(path.join(workspaceDir, 'logs'));
+  const said = [];
+  const { sdk } = h.mockSdk();
+  let caught;
+  try {
+    await buildModelApp(spec, { apply: true, publish: true, env: ORIGIN, workspaceDir, commandStateApprovals: approvals }, {
+      sdk, journal, log: () => {}, warn: (m) => said.push(String(m)), sleep: async () => {},
+      runBuild: (s, o) => engine(s, { ...o, commandStateTransport: h.transport }),
+    });
+  } catch (error) {
+    caught = error;
+  }
+  return { caught, said: said.join('\n'), log: fs.readFileSync(journal.path, 'utf8'), status: fs.readFileSync(journal.statusPath, 'utf8') };
+}
+
+test('an approval halt keeps the exact tokens out of the build journal and says them on the console: missing and stale', async () => {
+  const cases = [
+    ['missing', () => ({ rows: [commandRow(ROW, T, MD)] }), () => {}, (approvals) => ({ rows: new Set(), tables: new Set() }), 'command-state-approval-required'],
+    ['stale at the preflight', () => ({ rows: [commandRow(ROW, T, MD)] }), (rows) => { rows[0]['@odata.etag'] = 'W/"1002"'; }, (approvals) => approvals, 'command-state-approval-stale'],
+  ];
+  for (const [what, setup, change, given, code] of cases) {
+    const options = setup();
+    const h = harness(options);
+    const spec = specFor();
+    const { approvals } = await h.approve(spec);
+    change(options.rows);
+    const fresh = await h.approve(spec);
+    const tokens = [...fresh.approvals.rows, ...fresh.approvals.tables, ...approvals.rows];
+    const out = await buildWithJournal(h, spec, given(approvals));
+    assert.strictEqual(out.caught && out.caught.code, code, what);
+    assert.deepStrictEqual(h.org.writes(), [], `${what}: nothing written`);
+    for (const token of tokens) {
+      const digest = token.slice(token.lastIndexOf('/') + 1);
+      assert.ok(!out.log.includes(digest), `${what}: no token digest in build-log.jsonl`);
+      assert.ok(!out.status.includes(digest), `${what}: no token digest in build-status.json`);
+      assert.ok(!out.caught.message.includes(digest), `${what}: nor in the halt's message`);
+    }
+    assert.match(out.log, new RegExp(code), `${what}: the journal still records the halt and its code`);
+    assert.match(out.caught.message, /printed with this halt, and by a dry run/, `${what}: the message says where the tokens are`);
+    for (const token of [...fresh.approvals.rows, ...fresh.approvals.tables].filter((tk) => !given(approvals).rows.has(tk) && !given(approvals).tables.has(tk))) {
+      assert.ok(out.said.includes(`--authorize ${token}`), `${what}: the console shows ${token}`);
+      assert.ok(out.caught.approvalDisplay.includes(`--authorize ${token}`), `${what}: a direct caller reads it on the halt`);
+    }
+    assert.deepStrictEqual(Object.keys(out.caught).filter((k) => /approval/i.test(k)), [], `${what}: the display is not enumerable`);
+  }
+});
+
+test('a row that changes between the commands-phase read and its write halts stale with the new token on the console only', async () => {
+  const rows = [commandRow(ROW, T, MD)];
+  let armed = false;
+  let reads = 0;
+  // Read at the preflight, again before any write, then once more right before its own write: it changes at that last read.
+  const overrides = (req) => {
+    if (armed && req.method === 'GET' && req.path.startsWith(`/appactions(${ROW})`) && ++reads === 3) rows[0]['@odata.etag'] = 'W/"1003"';
+    return undefined;
+  };
+  const h = harness({ rows, overrides });
+  const spec = specFor();
+  const { approvals } = await h.approve(spec);
+  armed = true;
+  const out = await buildWithJournal(h, spec, approvals);
+  assert.strictEqual(out.caught && out.caught.code, 'command-state-approval-stale', out.caught && out.caught.message);
+  assert.match(out.caught.message, /the row changed since it was approved; it was not written/);
+  assert.deepStrictEqual(h.org.writes(), []);
+  const token = out.caught.approvalDisplay.match(/--authorize (\S+)/)[1];
+  const digest = token.slice(token.lastIndexOf('/') + 1);
+  assert.ok(!out.log.includes(digest) && !out.status.includes(digest) && !out.caught.message.includes(digest), 'the new token is not stored');
+  assert.ok(out.said.includes(`--authorize ${token}`), 'and is said on the console');
+});
+test('with the feature off the journal and the console carry nothing of command states', async () => {
+  const h = harness();
+  const out = await buildWithJournal(h, specFor(null), undefined);
+  assert.ifError(out.caught);
+  assert.deepStrictEqual(h.org.requests, []);
+  for (const [where, text] of [['build-log.jsonl', out.log], ['build-status.json', out.status], ['the console', out.said]]) {
+    assert.doesNotMatch(text, /commandState|command-state|--authorize/, `${where} is unchanged by the feature`);
+  }
 });

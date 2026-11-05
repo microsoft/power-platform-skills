@@ -65,6 +65,12 @@ const REMEDY = Object.freeze({
   'command-state-spec-invalid': 'correct the commandStates entries named above (or leave commandStates out)',
 });
 
+// The approval display: each change and the exact token that approves it, e.g.
+//   commandStates — approve to apply (pass every --authorize back to the build):
+//     new_ticket MainTab button "Go" (row <rowId>, ...): hidden false -> true
+//       --authorize overwrite:command-state:new_ticket/MainTab/<rowId>/<sha256>
+const approvalDisplayOf = (lines) => `commandStates — approve to apply (pass every --authorize back to the build):\n${lines.map(([what, token]) => `  ${what}\n    --authorize ${token}`).join('\n')}`;
+
 const sameSet = (a, b) => Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i]);
 const flagWords = (flags) => Object.entries(flags).map(([key, value]) => `${SPEC_FLAG[key]} ${value}`).join(', ');
 
@@ -103,7 +109,22 @@ function commandStateHalt(error, phase) {
   if (!(error instanceof CommandStateError)) return error;
   const { BuildHalt } = require('./entity-provision.js');
   const { RETRY } = require('./retry-policy.js');
-  return new BuildHalt(`${error.code}: ${error.message}`, { phase, code: error.code, recoverable: false, retry: RETRY.NEVER, cause: error });
+  const halt = new BuildHalt(`${error.code}: ${error.message}`, { phase, code: error.code, recoverable: false, retry: RETRY.NEVER, cause: error });
+  if (error.approvalDisplay) withApprovalDisplay(halt, error.approvalDisplay);
+  return halt;
+}
+
+/**
+ * The exact --authorize tokens an approval halt asks for, kept OFF the error's message: a halt's message reaches the generic build journal
+ * (build-log.jsonl, build-status.json), where an exact approval token or row digest must not be stored. They ride on the error as a
+ * non-enumerable `approvalDisplay` (so no serialization carries them either), which build-model-app.js prints to the maker with the halt, on
+ * the console only; a direct caller reads it there. A dry run prints the same tokens.
+ */
+function withApprovalDisplay(error, text) {
+  try {
+    Object.defineProperty(error, 'approvalDisplay', { value: text, enumerable: false, configurable: true, writable: true });
+  } catch { /* a frozen error keeps its message; a dry run still prints every token */ }
+  return error;
 }
 
 /**
@@ -319,18 +340,22 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
       const prefix = item.approvalKey.slice(0, item.approvalKey.lastIndexOf('/') + 1);
       const stale = [...rowApprovals].some((token) => token.startsWith(prefix));
       codes.add(stale ? CODES.approvalStale : CODES.approvalRequired);
-      lines.push(`${describe(item)}${stale ? ' — the approval given was for another version of this row or another intent' : ''}\n    --authorize ${item.approvalKey}`);
+      lines.push([`${describe(item)}${stale ? ' — the approval given was for another version of this row or another intent' : ''}`, item.approvalKey]);
     }
     if (publish) {
       for (const table of p.tables) {
         if (tableApprovals.has(table.token)) continue;
         codes.add(CODES.publicationApprovalRequired);
-        lines.push(`publish table ${table.entity}: publishes ALL saved customizations on it (anyone's), not only these buttons\n    --authorize ${table.token}`);
+        lines.push([`publish table ${table.entity}: publishes ALL saved customizations on it (anyone's), not only these buttons`, table.token]);
       }
     }
     if (!lines.length) return;
     const code = [CODES.approvalStale, CODES.approvalRequired, CODES.publicationApprovalRequired].find((c) => codes.has(c));
-    throw fail(code, `commandStates: ${lines.length} approval${lines.length === 1 ? '' : 's'} needed before this build writes anything:\n  ${lines.join('\n  ')}\n`);
+    // The message names what needs approval; the tokens themselves go only to the approval display (withApprovalDisplay).
+    throw withApprovalDisplay(
+      fail(code, `commandStates: ${lines.length} approval${lines.length === 1 ? '' : 's'} needed before this build writes anything (the exact --authorize tokens are printed with this halt, and by a dry run):\n  ${lines.map(([what]) => what).join('\n  ')}\n`),
+      approvalDisplayOf(lines),
+    );
   }
 
   // Each declared flag, read back: identity and every flag the entry sets.
@@ -353,7 +378,10 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
       return;
     }
     if (!rowApprovals.has(fresh.approvalKey)) {
-      throw fail(CODES.approvalStale, `${label(item)}: the row changed since it was approved; it was not written:\n  ${describe(fresh)}\n    --authorize ${fresh.approvalKey}\n`);
+      throw withApprovalDisplay(
+        fail(CODES.approvalStale, `${label(item)}: the row changed since it was approved; it was not written (its new --authorize token is printed with this halt, and by a dry run):\n  ${describe(fresh)}\n`),
+        approvalDisplayOf([[describe(fresh), fresh.approvalKey]]),
+      );
     }
     const changed = Object.keys(fresh.delta).map((key) => SPEC_FLAG[key]);
     if (observer) observer.noteRowWrite(item.entity);

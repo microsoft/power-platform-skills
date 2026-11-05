@@ -1348,9 +1348,13 @@ function printCommandStateResult(states, log) {
 
 // What a halt leaves of the command states (sdk-build.js runSdkBuildAttempt: not enumerable, so never in a serialized error or the journal):
 // moved onto the halt this run reports when that is another error, then said — which rows were written, and which tables are saved and not
-// published. The halt's own code, message and retry policy are left as they are.
+// published. The halt's own code, message and retry policy are left as they are. An approval halt's exact --authorize tokens are not in its
+// message, which the build journal stores; they ride on it as `approvalDisplay` (lib/command-state-run.js withApprovalDisplay) and are said
+// here, to the console only.
 function reportCommandStatesOfHalt(err, halted, say) {
   if (!err || typeof err !== 'object') return;
+  const display = err.approvalDisplay || (halted && typeof halted === 'object' ? halted.approvalDisplay : undefined);
+  if (display) say(display);
   const states = err.commandStates;
   const publication = err.commandStatePublicationError;
   if (!states && !publication) return;
