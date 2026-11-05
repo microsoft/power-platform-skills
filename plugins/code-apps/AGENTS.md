@@ -25,6 +25,13 @@ agents/
   code-app-architect.md           <- Agent persona for architecture decisions
 com.github.copilot/agents/
   code-app-architect.agent.md     <- Native Copilot copy with adjusted relative links
+com.github.copilot/hooks/
+  hooks.json                     <- Native Copilot hooks for the portable package
+hooks.json                        <- Native Copilot CLI preToolUse hook
+hooks/
+  hooks.json                      <- Claude Code PreToolUse hook
+  set-cli-origin.js               <- Narrow leading-invocation attribution (Node only)
+  README.md                       <- Hook contracts and limitations
 shared/
   shared-instructions.md          <- Cross-cutting concerns (Windows CLI, safety, planning, memory bank)
   connector-reference.md          <- Connector patterns and generated service usage
@@ -103,6 +110,16 @@ Always use generated services for data access.
 
 The Power Apps CLI (`@microsoft/power-apps-cli`) is installed locally via `npm install` as part of the app template. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
 
+Shell hooks automatically supply `PA_CLI_ORIGIN=plugin/<host-agent>` for recognized
+CLI invocations without replacing explicit user values. Do not manually export
+attribution in skills. Keep both host hook configurations in sync; native Copilot
+events preserve shell identity, whereas its Claude-compatible `Bash` alias does
+not distinguish Bash from PowerShell. See [hooks/README.md](./hooks/README.md).
+Keep detection conservative and tokenizer-free: match supported single-line
+leading invocations and simple output captures, not arbitrary shell programs.
+Leave PowerShell `using` preambles unchanged. Handled hook/launcher failures must
+report stderr diagnostics but complete successfully without rewriting the call.
+
 ```bash
 pa app push                   # Deploy app
 pa app add data-source --connector ... # Add connector
@@ -125,11 +142,14 @@ Run these checks from the repository root:
 node scripts/validate-code-apps.js
 node scripts/validate-legacy-compatibility.js
 node --test scripts/tests/validate-legacy-compatibility.test.js
+node --test plugins/code-apps/scripts/tests/*.test.js
 ```
 
 The Code Apps workflow runs these checks on Windows and Ubuntu.
 Package checks do not prove that a client can install, update, or execute skills.
 Check those actions separately before claiming runtime support.
+The path-filtered `code-apps-script-tests` workflow exercises Bash and PowerShell
+on Windows and Linux with local CLI stubs. These tests never transmit telemetry.
 
 ## Portable Package Rules
 
@@ -140,4 +160,5 @@ Check those actions separately before claiming runtime support.
 - Keep the native Copilot architect equal to the legacy architect, except for relative resource paths.
 - The repository's `.agents/plugins/marketplace.json` exposes Code Apps only. Do not add unadapted sibling plugins.
 - Preserve user approvals when replacing client-specific tools with equivalent capabilities.
-- This plugin has no hooks. Do not copy Managed Apps attribution variables or agent detection into it.
+- Keep `com.github.copilot/hooks/hooks.json` equal to the legacy root `hooks.json`.
+- Preserve the existing Code Apps attribution hooks. Do not copy Managed Apps attribution variables or agent detection into them.

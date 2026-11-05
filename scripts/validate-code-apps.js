@@ -57,6 +57,10 @@ function validate() {
   const native = readPackageFile(path.join(PLUGIN, 'com.github.copilot', 'agents', `${agent}.agent.md`));
   assert.equal(native, legacy.replaceAll('../shared/', '../../shared/').replaceAll('../skills/', '../../skills/'),
     'the Copilot architect must match the legacy architect except for relative paths');
+  assert.deepEqual(
+    JSON.parse(readPackageFile(path.join(PLUGIN, 'com.github.copilot', 'hooks', 'hooks.json'))),
+    JSON.parse(readPackageFile(path.join(PLUGIN, 'hooks.json'))),
+    'portable Copilot hooks must preserve the existing native hook configuration');
 
   function checkResources(directory) {
     assert.ok(fs.lstatSync(directory).isDirectory(), `${directory} must be a regular directory`);

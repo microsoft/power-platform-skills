@@ -58,12 +58,13 @@ The portable manifest alone does not establish client runtime support.
 | Shared skills | [skills](./skills) | The same 15 workflows for all clients |
 | Legacy architect | [agents/code-app-architect.md](./agents/code-app-architect.md) | Architecture guidance in legacy clients |
 | Native Copilot architect | [com.github.copilot/agents/code-app-architect.agent.md](./com.github.copilot/agents/code-app-architect.agent.md) | Copilot-specific agent discovery |
+| Native Copilot hooks | [com.github.copilot/hooks/hooks.json](./com.github.copilot/hooks/hooks.json) | Existing CLI attribution in portable clients |
 
 Skills retain their existing tool declarations, model preferences, and invocation settings.
 Client-specific metadata support varies. These settings do not establish strict Agent Skills conformance.
 Resource links resolve relative to each document, so they do not require client-specific variable expansion.
 The architect agent is client-specific, not a portable Agent Plugins component.
-The package does not include hooks or MCP servers.
+The package retains the existing Code Apps attribution hooks. It does not include MCP servers.
 
 ## Available Skills
 
@@ -109,6 +110,24 @@ codex plugin marketplace upgrade power-platform-skills
 
 Start a new client session after updating.
 Use the documented update action for other clients.
+
+## CLI attribution
+
+Before recognized Power Apps CLI shell commands, the plugin supplies
+`PA_CLI_ORIGIN=plugin/<host-agent>` (`claude-code`, `copilot-cli`, or `unknown`).
+It supports Bash and PowerShell, both `npx --no-install pa` and the
+`npx --no-install power-apps` fallback, direct binaries, and the resolved `$PA`
+prefix, plus simple Bash and PowerShell output captures. Detection is limited to
+leading invocations on a single line (optionally after a simple `cd`); complex
+scripts and PowerShell `using` preambles are left unchanged. Existing
+parent-environment values and inline assignments take precedence. Unrelated
+commands are not rewritten; no model information is collected.
+
+CLI versions that support `PA_CLI_ORIGIN` record the complete value in the existing
+`cliSource` telemetry common property (queried as `customDimensions.cliSource`),
+not a new `cliOrigin` column. This plugin does not send its own telemetry or change
+the CLI's telemetry consent settings. Older CLI versions ignore the variable.
+See [hook behavior and limitations](hooks/README.md).
 
 ## Uninstall
 
