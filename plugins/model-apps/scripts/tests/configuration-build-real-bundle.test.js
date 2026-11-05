@@ -1316,3 +1316,62 @@ test('protected configuration through the build command: a label edit refused be
   assert.equal(org.rows('customapirequestparameters').find((p) => p.uniquename === 'A').displayname, 'A', 'the refused label was never written');
   assert.deepEqual(org.unexpected, []);
 });
+
+// A maker may change a bound reference's prompting behaviour in the portal. The build never writes that column, and an
+// edit of the row is planned over the value its fresh base read found there: the edit completes and keeps it, a rerun
+// sends nothing, and a value changed again while the edit is written leaves the edit unfinished, never proved.
+test('protected configuration through the build command: a bound connection reference whose prompting behaviour was changed outside the plugin takes a supported edit and keeps that value', async () => {
+  const spec = { ...makeSpec({ configuration: false }), solution: makeSpec().solution, configurationIdentity: 'stable-v1',
+    connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] };
+  const pending = (out) => {
+    const store = openManagedBindings({ workspaceDir: path.join(out.appDir, '.maker-workspace'), environment: out.org.origin,
+      appUniqueName: spec.app.uniqueName, solutionUniqueName: 'ContosoSol' });
+    return !!store.readGroup('connectionReference', 'contoso_sp').pending;
+  };
+  const named = (name) => ({ ...spec, connectionReferences: [{ ...spec.connectionReferences[0], name }] });
+
+  const out = await runCommand(spec, { org: liveOrg() });
+  succeeded(out, 'the create');
+  const [row] = out.org.rows('connectionreferences');
+  row.promptingbehavior = 1;
+  let mark = out.org.requests.length;
+  succeeded(await runAgain(spec, out), 'the unchanged rebuild');
+  assert.deepEqual(out.org.writes(mark), []);
+
+  mark = out.org.requests.length;
+  succeeded(await runAgain(named('Reviewed reference'), out), 'the name edit');
+  assert.equal(out.org.writes(mark).length, 1, JSON.stringify(out.org.writes(mark)));
+  assert.equal(row.connectionreferencedisplayname, 'Reviewed reference');
+  assert.equal(row.promptingbehavior, 1, 'the value set outside the plugin is kept');
+  assert.equal(pending(out), false, 'the edit is complete');
+  assert.ok(!out.org.requests.slice(mark).some((r) => r.method !== 'GET' && /promptingbehavior/i.test(JSON.stringify(r.body || {}))), 'the column is never sent');
+  mark = out.org.requests.length;
+  succeeded(await runAgain(named('Reviewed reference'), out), 'the rerun');
+  assert.deepEqual(out.org.writes(mark), []);
+  // Back at the platform default, an edit is planned over that state as well.
+  row.promptingbehavior = null;
+  mark = out.org.requests.length;
+  succeeded(await runAgain(named('Third name'), out), 'the edit over an empty value');
+  assert.equal(out.org.writes(mark).length, 1);
+  assert.equal(pending(out), false);
+  assert.deepEqual(out.org.unexpected, []);
+
+  // Changed again while the edit is written: the read-back does not hold what the edit was planned over.
+  let drifted = null;
+  drifted = commandOrg({ liveRowShape: true, intercept: (req) => {
+    if (req.method === 'PATCH' && /^\/connectionreferences\(/.test(req.path)) drifted.rows('connectionreferences')[0].promptingbehavior = 2;
+    return undefined;
+  } });
+  const made = await runCommand(spec, { org: drifted });
+  succeeded(made, 'the second create');
+  drifted.rows('connectionreferences')[0].promptingbehavior = 1;
+  const stopped = await runAgain(named('Reviewed reference'), made);
+  assert.notEqual(stopped.exitCode, 0);
+  assert.match(String(stopped.thrown && stopped.thrown.message), /connectionReference contoso_sp \(create-identity-conflict\)/);
+  assert.equal(pending(made), true, 'the edit is not proved');
+  mark = drifted.requests.length;
+  const next = await runAgain(named('Reviewed reference'), made);
+  assert.notEqual(next.exitCode, 0);
+  assert.deepEqual(drifted.writes(mark), [], 'the next build sends nothing for it');
+  assert.deepEqual(drifted.unexpected, []);
+});

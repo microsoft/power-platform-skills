@@ -1303,7 +1303,10 @@ the field builds exactly as before.
   spec fixes, then bound) or a new value for its own value row. A value row under a bound definition
   that the binding does not hold is never overwritten or adopted, whatever `--authorize` tokens are
   given: the build stops with `create-identity-conflict` before anything is sent. A bound value that the
-  deployment settings do not name in this run is kept, and nothing is sent for it.
+  deployment settings do not name in this run is kept, and nothing is sent for it. A connection
+  reference's prompting behaviour is never sent: a new one is expected to hold the platform's default,
+  and one changed outside the plugin after it was bound is kept, as a Custom API's implementation is
+  (an edit is complete only while the row still holds the value it was planned over).
 - **Local copy.** Before it reads a protected item into the workspace, the build checks the workspace
   copy. A protected item whose local copy differs from the server's (an edit an earlier run did not send,
   or one made by hand), or cannot be compared with it, is refused before anything is written

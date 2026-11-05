@@ -103,10 +103,17 @@ function optionalCode(table) {
 }
 // A column this build never writes. It may only be empty: a value there was put by someone else.
 const UNMODELLED = 'unmodelled';
-// A column this build never writes that the platform fills on create with a known default: a read may find it empty or
-// holding exactly that default; any other value, and any body that carries the column at all, is unmodelled as above.
-// Dataverse stores 0 in a connection reference's `promptingbehavior` when the create omits it (a live read shows
-// `"promptingbehavior": 0` on every reference the build made), so a closed map that expected it empty never proved one.
+// A column this build never writes that the platform fills on create with a known default, and that may be changed
+// outside the plugin once the row exists. Dataverse stores 0 in a connection reference's `promptingbehavior` when the
+// create omits it (a live read shows `"promptingbehavior": 0` on every reference the build made), so a closed map that
+// expected it empty never proved one; a maker can later set it in the portal.
+//   - A body that carries the column at all, an explicit null included, is unmodelled: no request this build planned
+//     writes it, and a null would clear what the platform or a maker put there.
+//   - A read that finds it empty or holding exactly the default reports nothing: the two are the same platform state.
+//   - A read that finds any other value keeps it as preserved bound-row state (decoded.preserved), as PRESERVED below: a
+//     create expects none, so a fresh row holding it is still a conflict; an update expects exactly what its fresh base
+//     read held (planOf), so an edit of a row changed outside the plugin is planned over that value, never writes it,
+//     and is proved only while the row still holds it.
 const defaulted = (value) => Object.freeze({ defaulted: value });
 const isDefaulted = (spec) => isPlain(spec) && has(spec, 'defaulted');
 // A column this build never writes but a BOUND row may hold, set outside the plugin: a Custom API's implementation (its
@@ -240,7 +247,8 @@ function boundGuid(value, set) {
  *   'create'  a create body: an omitted column takes its create default, an omitted required column is not the plan;
  *   'patch'   a PATCH body: only what it carries.
  * Answers { fields, unmodelled, preserved, parentId, private: { present, value }, state } or null (unreadable / not this
- * kind's); `preserved` maps each filled PRESERVED column to its GUID, and only a read has any.
+ * kind's); `preserved` maps each filled PRESERVED column to its GUID and each defaulted column holding another value than
+ * its default to that value, and only a read has any.
  * A body's keys outside the map (other than the primary key, an allowed bind and the navigations the caller takes
  * out) make it null: a column this build does not model is not part of any create it planned.
  */
@@ -282,7 +290,15 @@ function decode(kind, raw, mode) {
     const present = has(wire, col);
     const v = wire[col];
     if (spec === UNMODELLED) { if (present && v !== null) unmodelled.push(col); continue; }
-    if (isDefaulted(spec)) { if (present && v !== null && !(mode === 'read' && v === spec.defaulted)) unmodelled.push(col); continue; }
+    if (isDefaulted(spec)) {
+      if (!present) continue;
+      if (mode !== 'read') { unmodelled.push(col); continue; }
+      if (v === null || v === spec.defaulted) continue;
+      // The only values a preserved column holds are JSON scalars a projection can hash; anything else is unreadable.
+      if (typeof v !== 'number' && typeof v !== 'string' && typeof v !== 'boolean') return null;
+      preserved[col] = v;
+      continue;
+    }
     if (spec === PRESERVED) {
       if (!present) continue;
       // Never written: even an explicit null would clear the implementation someone else registered.
