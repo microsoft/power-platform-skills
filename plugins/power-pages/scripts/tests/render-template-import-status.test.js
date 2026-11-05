@@ -402,6 +402,37 @@ test('SPA previews show mobile only when mobile-prefixed screenshots are availab
   });
   const emptyPage = runStatusPage(fs.readFileSync(emptyOutputPath, 'utf8'));
   assert.equal(emptyPage.elements.get('previewViewControls').hidden, true);
+  assert.match(fs.readFileSync(emptyOutputPath, 'utf8'), /\.segmented\[hidden\]\s*\{\s*display:\s*none;\s*\}/);
+});
+
+test('unprefixed previews with the same basename remain separate', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const model = buildModel({
+    templateName: 'Supplier Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath: path.join(dir, 'import.html'),
+    previewImages: [
+      'https://example.com/overview/screenshot.png',
+      'https://example.com/details/screenshot.png',
+    ],
+    solutionCount: 1,
+  });
+
+  assert.deepEqual(model.template.previews.map(({ displayName, desktop, mobile }) => ({
+    displayName, desktop, mobile,
+  })), [
+    {
+      displayName: 'screenshot.png',
+      desktop: 'https://example.com/overview/screenshot.png',
+      mobile: null,
+    },
+    {
+      displayName: 'screenshot.png',
+      desktop: 'https://example.com/details/screenshot.png',
+      mobile: null,
+    },
+  ]);
 });
 
 test('SPA image policy allows only the supplied remote preview origins', (t) => {
