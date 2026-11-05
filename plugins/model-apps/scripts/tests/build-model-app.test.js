@@ -76,6 +76,19 @@ test('rejects an invalid spec before any build', async () => {
   assert.strictEqual(calls.length, 0, 'no SDK writes on a bad spec');
 });
 
+test('a view written with `filter` is refused on load, before any SDK call, while the same view written with `filters` is built', async () => {
+  const withKey = (key) => { const s = jclone(desk); s.views.find((v) => v.name === 'Active Tickets')[key] = [{ attr: 'new_status', op: 'eq', value: 1 }]; return s; };
+  const refused = mockSdk();
+  const r = await buildModelApp(withKey('filter'), { apply: true, env: 'https://x' }, { sdk: refused.sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /^view 'Active Tickets': unknown key 'filter' — did you mean 'filters'\?/.test(e)), JSON.stringify(r.errors));
+  assert.strictEqual(refused.calls.length, 0, 'no SDK writes on a spec whose view would be built without its filter');
+  const built = mockSdk();
+  const ok = await buildModelApp(withKey('filters'), { apply: true, env: 'https://x' }, { sdk: built.sdk });
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+  assert.ok(built.calls.length > 0, 'the control spec is built');
+});
+
 // The web-resources phase reads contentPath files after the solution and tables are written, so a
 // missing source must be caught here, with the page sources, before the first SDK call.
 test('a web resource whose contentPath file is missing halts before any SDK call', async (t) => {

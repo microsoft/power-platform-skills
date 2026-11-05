@@ -153,7 +153,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/lint-app-spec.js`** — the CLI surface for both gates, for a headless author or a CI
   job (#560). Runs `migrateAppSpec` → `validateAppSpec` (what the build runs on load) → `lintAppSpec`
   (guardrails the builder does **not** run), and exits non-zero on errors (`--strict` also fails on
-  warnings, including the one for an unknown key on a `views[]` entry or its filters). Prefer it over calling the library through `node -e`: linting the file **as written**
+  warnings). An unknown key on a `views[]` entry or its filters is an error (#827), not a warning. Prefer it over calling the library through `node -e`: linting the file **as written**
   rather than the migrated shape is what let a spec pass the lint and then fail the build (#545).
   `--profile` defaults to **`plan`**, not `deploy`, because the authoring flow runs this while pages
   are still intents — a deploy default rejects a normal work-in-progress spec. `plan` relaxes only
@@ -2069,9 +2069,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
   builds. It validates the spec first under the `deploy` profile, with five compatibility downgrades
-  (`relationshipCollisions: 'warn'`, `columnValues: 'warn'`, `fieldOptionKeys: 'warn'`, `primaryAttributeKeys: 'warn'` and `declaredKeyCollisions: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
+  (`relationshipCollisions: 'warn'`, `columnValues: 'warn'`, `fieldOptionKeys: 'warn'`, `primaryAttributeKeys: 'warn'`, `viewKeys: 'warn'` and `declaredKeyCollisions: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
   that share a schema name, an AutoNumber column with no format, a `required` that is not `true`, `false` or `"recommended"`, a key a form's
-  `fieldOptions` entry does not take, a key a table's `primaryAttribute` does not take, two declared views (or two declared charts) with one name on one table — is verified, with a warning that names the fix, and is never refused before anything is read (the
+  `fieldOptions` entry does not take, a key a table's `primaryAttribute` does not take, a key a `views[]` entry or one of its filters does not take, two declared views (or two declared charts) with one name on one table — is verified, with a warning that names the fix, and is never refused before anything is read (the
   build, the lint and the provisioning gate keep these as errors). **Every `WARNING:` line it prints on stderr — those findings, the spec's other warnings, and a page
   workspace it could not remove — is also in the result JSON's optional `warnings` array** (the same messages, without the prefix, in the order
   printed; left out when there is none, as `unverified` is), so a caller that reads only the JSON loses none of them. It is there on a failed

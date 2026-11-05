@@ -811,9 +811,11 @@ async function main() {
   // verification only reads that deployment. Every other finding about the entry stays an error.
   // `primaryAttributeKeys: 'warn'` is the same again for a key a table's `primaryAttribute` does not take: an earlier release accepted and
   // ignored it, and the table was built without it.
+  // `viewKeys: 'warn'` is the same for a key a `views[]` entry or one of its filters does not take: the build refuses one, because it would
+  // drop it and build the view without that part, but an earlier release accepted it — and verification only reads that deployment.
   // `declaredKeyCollisions: 'warn'` is the same for two declared views (or two declared charts) on one table with one name: a build refuses them,
   // because one --authorize adopt:/overwrite: approval would name both, but verification takes no approval and only reads what was deployed.
-  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn', declaredKeyCollisions: 'warn' });
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn', viewKeys: 'warn', declaredKeyCollisions: 'warn' });
   // A warning is printed for a person and kept for the result JSON in one step, so the two cannot differ: a caller that reads only the JSON must not
   // lose what stderr says. The spec's are found before it is judged, so a spec that is refused reports the warnings it also has.
   const warnings = [];

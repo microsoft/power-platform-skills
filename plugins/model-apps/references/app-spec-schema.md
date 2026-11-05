@@ -966,11 +966,12 @@ why they need naming here at all.
   front, naming the view and the offending entry.
 - **A view takes only these keys:** `entity`, `name`, `description`, `columns`, `sort`, `filters`, `activeOnly`, and — on a view
   with `"reconcile": "declared"` — `key`, `viewId`, `linkEntities`. A filter item takes `attr`, `op`, `value`, `values` and
-  `relatedEntity`. Any other key is **ignored by the build**, so validation warns about it and names the key it most likely meant
-  (`filter` → `filters`, `column` → `attr`, `operator` → `op`); a view written with `filter` would otherwise be built without its
-  filter. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is still
-  accepted without a warning. These are warnings, never errors — but `lint-app-spec.js --strict` fails on them, so a view with a
-  misspelled key stops a `--strict` pipeline instead of building without its filter.
+  `relatedEntity`. Any other key is **refused** (a validation error, so the lint exits 1 without `--strict` and the build stops before it
+  writes anything): the build reads only those keys, so a view written with `filter` would otherwise be built without its filter and list
+  every active row. The message names the key it most likely meant (`filter` → `filters`, `column` → `attr`, `operator` → `op`) and
+  the allowed keys. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is
+  still accepted without a message. Teardown, preview and `verify-model-app.js` only read a spec that an earlier release may have built, so
+  they report the same finding as a warning.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).

@@ -1158,11 +1158,11 @@ function reportUnknownAppShellKeys(node, level, where, errors) {
 // The keys the build READS on a `views[]` entry (viewDef in sdk-build.js; compileViewIntent in view-reconcile.js, which also reads `key`,
 // `viewId` and `linkEntities` of a declared view; `description` is written to the view by both) and on each of its filter items
 // (`attr`, `op`, `value`, `values`; `relatedEntity` scopes a condition to a declared join). Any other key is dropped without a trace,
-// so a view written with `filter` instead of `filters` was built WITHOUT its filter and listed every active row (#799). Frozen, in the
+// so a view written with `filter` instead of `filters` was built WITHOUT its filter and listed every active row (#799, #827). Frozen, in the
 // order the messages list them.
 const VIEW_KEYS = Object.freeze(['entity', 'name', 'description', 'columns', 'sort', 'filters', 'activeOnly', 'reconcile', 'key', 'viewId', 'linkEntities']);
 const VIEW_FILTER_KEYS = Object.freeze(['attr', 'op', 'value', 'values', 'relatedEntity']);
-// Keys no code reads that are nevertheless accepted without a warning, because the docs and samples of earlier releases showed them
+// Keys no code reads that are nevertheless accepted without a message, because the docs and samples of earlier releases showed them
 // and they never changed what is built. Frozen: the list is closed, a new entry needs the same reason.
 const IGNORED_VIEW_KEYS = Object.freeze(['type']);
 
@@ -1170,10 +1170,9 @@ const IGNORED_VIEW_KEYS = Object.freeze(['type']);
 // and `activeonly` are caught by the single-edit matcher). Prototype-less for the reason ENTITY_KEY_HINTS is: the lookup key comes from the
 // spec.
 //
-// `type` is deliberately not warned about (see IGNORED_VIEW_KEYS): older docs and the shipped
-// samples put it on a view, it never had an effect (a view is always a public view of its table), and a spec written from them must keep
-// passing `lint-app-spec.js --strict`, which fails on any warning. The keys that DO warn are the ones whose silent loss changes the view
-// (a misspelled `filters` drops the filter), so `--strict` failing on those is intended.
+// `type` is deliberately not reported (see IGNORED_VIEW_KEYS): older docs and the shipped samples put it on a view, it never had an effect
+// (a view is always a public view of its table), and a spec written from them must keep validating. The keys that ARE reported are the
+// ones whose silent loss changes the view (a misspelled `filters` drops the filter).
 const VIEW_KEY_HINTS = Object.assign(Object.create(null), {
   where: " — did you mean 'filters'?",
   conditions: " — did you mean 'filters'?",
@@ -1194,12 +1193,14 @@ const VIEW_FILTER_KEY_HINTS = Object.assign(Object.create(null), {
   entity: " — did you mean 'relatedEntity'? Only a condition on a declared join takes one",
 });
 
-// The warnings for the keys of one `views[]` entry and of its filter items (`filters[]`, and the `filters[]` of each `linkEntities[]` join, which are
+// The findings for the keys of one `views[]` entry and of its filter items (`filters[]`, and the `filters[]` of each `linkEntities[]` join, which are
 // the same shape), each with `vlabel` in front: one per unknown key, naming the key it most likely meant (a written hint first, then the shared
-// single-edit matcher, which also settles a casing slip). A WARNING, not an error: the build has always ignored such a key, so a spec that
-// carries one still builds as before, and one a release before this check validated clean must keep validating. Only a plain object is
-// inspected — a non-object entry or filter is reported by the shape checks — and enumeration is guarded because the spec comes from the caller.
-function viewKeyWarnings(v, vlabel) {
+// single-edit matcher, which also settles a casing slip). The caller decides whether they are errors or warnings (see `viewKeyFindings`): every
+// profile that builds or plans a build refuses them. They were warnings (#799), but a key the build drops silently changes what is built — a view
+// written with `filter` listed every active row while the author told the maker it was filtered — and a warning among the advisory ones was not
+// acted on, so the build now stops before it writes anything (#827), as it does for an unknown key of a form's `fieldOptions` entry. Only a plain
+// object is inspected — a non-object entry or filter is reported by the shape checks — and enumeration is guarded because the spec comes from the caller.
+function viewKeyProblems(v, vlabel) {
   const unknown = (obj, allowed, hints, where, accepted = []) => {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
     let keys;
@@ -1215,7 +1216,7 @@ function viewKeyWarnings(v, vlabel) {
         const meant = near && allowed.find((a) => a.toLowerCase() === near);
         hint = meant ? ` — did you mean '${meant}'?` : '';
       }
-      return `${vlabel}: ${where ? `${where}: ` : ''}unknown key '${k}'${hint}; the build ignores it (allowed: ${allowed.join(', ')})`;
+      return `${vlabel}: ${where ? `${where}: ` : ''}unknown key '${k}'${hint}; the build does not read it, so it is refused rather than built without it (allowed: ${allowed.join(', ')})`;
     });
   };
   const out = unknown(v, VIEW_KEYS, VIEW_KEY_HINTS, '', IGNORED_VIEW_KEYS);
@@ -2782,6 +2783,11 @@ function validateAppSpec(spec, opts = {}) {
   // accepted and built a spec carrying one — so the structural profile and read-only verification (`primaryAttributeKeys: 'warn'`) take it
   // as a warning in the same words.
   const primaryAttributeKeyFindings = profile === 'structural' || opts.primaryAttributeKeys === 'warn' ? warnings : errors;
+  // Where an unknown key of a `views[]` entry or of one of its filter items goes (viewKeyProblems), by the same arrangement again: the build
+  // drops such a key, so every profile that builds or plans a build keeps it an error, while a release before the check accepted and built a
+  // spec carrying one (the view without its filter) — so the structural profile and read-only verification (`viewKeys: 'warn'`) take it as a
+  // warning in the same words, and an app built from such a spec can still be torn down, previewed and verified.
+  const viewKeyFindings = profile === 'structural' || opts.viewKeys === 'warn' ? warnings : errors;
   if (!VALIDATION_PROFILES.includes(profile)) {
     return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings };
   }
@@ -3463,7 +3469,7 @@ function validateAppSpec(spec, opts = {}) {
       else v.filters.forEach((f, i) => attrRef(f && f.attr, `filters[${i}].attr`));
     }
     if (v && v.reconcile !== undefined && v.reconcile !== 'declared') errors.push(`${vlabel}: reconcile must be "declared" (or left out)`);
-    warnings.push(...viewKeyWarnings(v, vlabel));
+    viewKeyFindings.push(...viewKeyProblems(v, vlabel));
     if (isDeclaredView(v)) {
       // compileViewIntent walks columns, sort, filters and joins as lists; a non-list one is already reported above (or by
       // the shape normalization), so it is not walked again into a TypeError.
