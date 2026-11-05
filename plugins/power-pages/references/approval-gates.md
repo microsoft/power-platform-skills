@@ -471,9 +471,12 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ### 6.13 `create-site` (21 gates)
 
+Gate markers now live in the focused `skills/create-site/references/*-workflow.md` resources linked directly from its entry.
+The non-SPA compatibility router retains disclosure, invariants and stage order; its six gates are owned by the corresponding non-SPA reference workflows.
+
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
+| `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear - collect site name, purpose and audience before path-specific framework/location questions | nothing |
 | `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Confirm the resolved target environment before template install preflights | template-cache |
 | `create-site:1.5.unblock-js` | gate | consent | 1.5 | Approve removing `.js` from the target environment's blocked attachments before uploading website code | attachment-block-modified |
 | `create-site:1.5.template-import` | gate | consent | 1.5 | Confirm installing the selected template in the current environment | template-cache |

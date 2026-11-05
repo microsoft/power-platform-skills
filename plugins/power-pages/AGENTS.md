@@ -232,7 +232,9 @@ references/                    ← Shared reference docs used by multiple skills
 skills/
   create-site/
     SKILL.md                   ← Routes SPA and Enhanced-only non-SPA creation
-    workflows/non-spa-site.md ← Environment-backed non-SPA provisioning and download workflow
+    workflows/non-spa-site.md ← Non-SPA disclosure, invariants and ordered-stage router
+    references/*-workflow.md ← Focused SPA and non-SPA stages, loaded from the entry's resource map
+    assets/plan-labels.example.json ← Complete localizable HTML-plan label dictionary
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Compatibility pointer to the shared principles and SPA adapter
     scripts/list-site-templates.js ← Curated Create Website template metadata and model-toggle disclosure
@@ -611,12 +613,14 @@ Checks `docs/alm/last-deploy.json` marker for required fields (`pipelineId`, `st
 
 ## Skill Development Guide
 
-### Setup-auth portability pilot
+### Portable skill rollout
 
-`setup-auth` uses only standard `name` and `description` metadata and capability-based instructions instead of host-specific tool names.
-Keep its entry under 500 lines and approximately 5,000 tokens, with direct conditional links to provider, framework, and optional-feature resources.
+`setup-auth` and `create-site` use only standard `name` and `description` metadata and capability-based instructions instead of host-specific tool names.
+Keep their entries under 500 lines and approximately 5,000 tokens, with direct conditional links to focused branch resources.
 Use `Ask the user:` for prompt introductions and preserve approval markers and catalog IDs in the owning `references/*-workflow.md`.
 Run `validate-auth.js --complete` from the site root because host hooks are not available in every agent.
+For `create-site`, retain the non-SPA compatibility router and run `validate-site.js` explicitly with the selected locale/direction for SPAs or project/model evidence for non-SPAs.
+Its source-contract tests follow the ordered resource maps rather than requiring workflows to remain inline.
 The conventions below remain the defaults for skills not yet converted.
 
 All skills in this plugin follow a consistent set of patterns. When creating a new skill, follow every convention below to maintain consistency across the plugin.

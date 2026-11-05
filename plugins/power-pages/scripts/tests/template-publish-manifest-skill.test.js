@@ -2,10 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const { readCreateSiteGuidance } = require('./helpers/create-site-guidance');
 
-const skill = fs.readFileSync(path.join(__dirname, '../../skills/create-site/SKILL.md'), 'utf8');
+const skill = readCreateSiteGuidance('spa');
 
 test('selected solution publication metadata reaches variant download', () => {
   assert.match(skill, /--solutionSettingsJson '<JSON\.stringify\(SELECTED_TEMPLATE\.solutions \|\| \[\]\)>'/);
@@ -19,7 +18,9 @@ test('template import uses the PAC wrapper and manifest publish flag', () => {
   assert.ok(packing !== -1 && importing > packing && provisioning > importing);
   assert.match(skill, /--publishChanges "<CURRENT_TEMPLATE_SOLUTION\.publishChanges>"/);
   assert.match(skill, /pac solution import --publish-changes/);
-  assert.match(skill, /run_in_background: true/);
+  assert.match(skill, /background work when supported, otherwise synchronously/);
+  assert.match(skill, /must return the wrapper's complete JSON result/);
+  assert.match(skill, /Do not start the next solution import until the current command returns `ok: true`/);
   assert.match(skill, /Importing solution <CURRENT_TEMPLATE_SOLUTION\.uniqueName>/);
   assert.match(skill, /other pending customizations/);
 });
