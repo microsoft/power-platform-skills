@@ -1150,3 +1150,59 @@ test('protected configuration through the build command: the same root edit of a
     assert.deepEqual(out.org.unexpected, []);
   }
 });
+
+// A protected item with no binding yet is a first create at its derived ids. Its exact-id read and its complete namesake query run
+// in the build's read-only preflight, so a create that cannot be made stops the build before its first write (here the solution
+// version PATCH), not after it.
+test('protected configuration through the build command: a first create whose namesake or derived id is taken stops before the first write', async () => {
+  const versioned = (spec) => ({ ...spec, solution: { ...spec.solution, version: '1.3.0.0' } });
+  const solutionVersion = (org) => org.rows('solutions').find((s) => s.uniquename === 'ContosoSol').version;
+
+  // Opting in over an API the build made without the opt-in: a namesake at another id.
+  const plain = apiSpec();
+  delete plain.configurationIdentity;
+  const made = await runCommand(plain);
+  succeeded(made, 'the ordinary create');
+  for (const argv of [undefined, DATA, CHANGED_ONLY]) {
+    const mark = made.org.requests.length;
+    const stopped = await runCommand(versioned(apiSpec()), { org: made.org, appDir: made.appDir, ...(argv ? { argv } : {}) });
+    const label = argv ? argv.join(' ') : 'default';
+    assert.equal(stopped.thrown && stopped.thrown.code, 'create-identity-conflict', `${label}: ${stopped.thrown && stopped.thrown.message}`);
+    assert.equal(stopped.thrown.phase, 'preflight', label);
+    assert.match(stopped.thrown.message, /customApi contoso_calc/, label);
+    assert.notEqual(stopped.exitCode, 0, label);
+    assert.deepEqual(made.org.writes(mark), [], `${label}: nothing is written`);
+  }
+  assert.equal(solutionVersion(made.org), '1.2.0.0');
+  assert.deepEqual(made.org.unexpected, []);
+
+  // The derived id taken by a row no binding of this folder holds (the same App Spec built from another folder).
+  const first = await runCommand(apiSpec());
+  succeeded(first, 'the protected create');
+  const elsewhere = path.join(makeTempDir('config-command-'), 'app');
+  const mark = first.org.requests.length;
+  const taken = await runCommand(versioned(apiSpec()), { org: first.org, appDir: elsewhere });
+  assert.equal(taken.thrown && taken.thrown.code, 'create-identity-conflict', taken.thrown && taken.thrown.message);
+  assert.equal(taken.thrown.phase, 'preflight');
+  assert.deepEqual(first.org.writes(mark), []);
+  assert.equal(solutionVersion(first.org), '1.2.0.0');
+  assert.deepEqual(first.org.unexpected, []);
+});
+
+test('protected configuration through the build command: a first create whose namesake query cannot be completed stops before the first write', async () => {
+  let failing = false;
+  const org = commandOrg({ intercept: (req) => (failing && req.method === 'GET' && /^\/customapis\?/.test(req.path) && /\$filter=uniquename/.test(decodeURIComponent(req.path))
+    ? { statusCode: 500, body: { error: { code: '0x80040216', message: 'unavailable' } } } : undefined) });
+  const solutionVersion = () => org.rows('solutions').find((s) => s.uniquename === 'ContosoSol').version;
+  const base = await runCommand({ ...makeSpec({ configuration: false }), solution: makeSpec().solution }, { org });
+  succeeded(base, 'the solution');
+  failing = true;
+  const mark = org.requests.length;
+  const stopped = await runCommand(apiSpec({ solution: { ...makeSpec().solution, version: '1.3.0.0' } }), { org, appDir: base.appDir });
+  assert.equal(stopped.thrown && stopped.thrown.code, 'create-identity-unverified', stopped.thrown && stopped.thrown.message);
+  assert.equal(stopped.thrown.phase, 'preflight');
+  assert.deepEqual(org.writes(mark), []);
+  assert.equal(solutionVersion(), '1.2.0.0');
+  assert.equal(org.rows('customapis').length, 0);
+  assert.deepEqual(org.unexpected, []);
+});

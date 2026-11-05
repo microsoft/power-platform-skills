@@ -225,6 +225,32 @@ async function childVerdict(env, planned, shape) {
 }
 
 /**
+ * The verdict on a first create (an unbound item, or a create proved never applied that is sent again), or null when it
+ * can be made. Read only, the same reads resolve/run make at dispatch, moved before the build's first write:
+ *   the root's derived id (exactId): absent is free; a row there that no binding holds is create-identity-conflict (it is
+ *     never adopted silently); an answer that is not exact is create-identity-unverified;
+ *   the complete namesake query of every row the plan creates (readConfigurationConflicts, every page followed): a
+ *     namesake at another id is create-identity-conflict, a query that does not complete is create-identity-unverified.
+ */
+async function firstCreateVerdict(dataverse, planned, { exactId }) {
+  const rootId = planned.plan.rows[0].id;
+  if (exactId) {
+    const read = await B.readConfigurationRow(dataverse, planned.kind, rootId);
+    if (read.state === 'present') return { id: rootId, code: CONFLICT_CODE, message: `the ${planned.kind} "${planned.key}" derived id ${rootId} is taken by a row no binding holds; it is not adopted, and no service changes were sent by this build` };
+    if (read.state !== 'absent') return { id: rootId, code: UNVERIFIED_CODE, message: `the ${planned.kind} "${planned.key}" derived id ${rootId} could not be read; no service changes were sent by this build` };
+  }
+  const conflicts = await B.readConfigurationConflicts(dataverse, planned);
+  if (conflicts.state === 'clear') return null;
+  const ids = conflicts.rows.flatMap((r) => r.ids || []);
+  return {
+    code: conflicts.code || UNVERIFIED_CODE,
+    message: conflicts.state === 'conflict'
+      ? `the ${planned.kind} "${planned.key}" has a namesake at another id (${ids.join(', ')}); a protected create never binds a namesake, and no service changes were sent by this build`
+      : `the ${planned.kind} "${planned.key}" namesake query could not be completed; nothing is created on a read that may have missed a namesake, and no service changes were sent by this build`,
+  };
+}
+
+/**
  * A pending attempt is decided from its OWN persisted expectation (managed-create-context.js classifyRecovery), read-only,
  * never re-planned from today's rows. For a create that is what keeps the original plan's completion owed: a duplicate
  * rule created without an explicit status owes its initial publication, and a rerun after a partial create proves the
@@ -424,7 +450,8 @@ async function replaceLocalCopy(dataverse, sdk, kind, id) {
 /**
  * The whole-plan, read-only preflight: every declared protected item located by its binding and its edit judged — a
  * bound Custom API or duplicate rule by its supported shapes (editVerdict), a bound environment variable or connection
- * reference by its complete root/child plan (childVerdict), and a bound variable's value clear is a removal and refused.
+ * reference by its complete root/child plan (childVerdict), a bound variable's value clear is a removal and refused, and a
+ * first create (unbound, or proved never applied) by its derived id and its complete namesake query (firstCreateVerdict).
  * Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
  * the build may continue. A read that cannot be completed is a halt (`create-identity-unverified`), never "no change".
  */
@@ -468,7 +495,12 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
           continue;
         }
         // A complete edit settles read-only (resolve): nothing more is written for it, so it is not judged as an edit.
-        if (!item.edit || rec.verdict.action === 'commit') continue;
+        if (!item.edit) {
+          // A create proved never applied is sent again at its own ids (run), after the same namesake query a first create runs.
+          if (rec.verdict.action === 'resume') { const v = await firstCreateVerdict(env.dataverse, item.planned, { exactId: false }); if (v) halts.push({ kind, key: item.planned.key, ...v }); }
+          continue;
+        }
+        if (rec.verdict.action === 'commit') continue;
         if (!rec.sameRows && item.attempt.phase !== 'prepared') { halts.push(haltOf(kind, item.planned.key, pendingEditChanged(item.planned))); continue; }
         // An unsent edit whose target is already there is not sent: resolve accepts it read-only. That acceptance is judged
         // now, so a refusal (an approval it needs, a membership removed by hand) stops the build before anything is sent.
@@ -478,6 +510,13 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
           continue;
         }
         // An unsent edit is judged below like the bound item it edits: it is what this build would send.
+      } else if (item.state === 'unbound') {
+        // A first create: its reserved ids and its namesakes are judged here, before the build's first write (the solution
+        // version PATCH included), so a create that cannot be made stops the build with nothing sent. resolve/run check
+        // both again at dispatch, since a row can appear between this read and the create.
+        const verdict = await firstCreateVerdict(env.dataverse, item.planned, { exactId: true });
+        if (verdict) halts.push({ kind, key: item.planned.key, ...verdict });
+        continue;
       } else if (item.state !== 'bound') continue;
       // Clearing a bound variable's value (a deployment-settings Value of null) is a DELETE of its value row, a physical
       // removal the protected path does not make, authorized or not. A settings entry that leaves the value alone ("" or

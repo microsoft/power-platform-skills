@@ -472,8 +472,11 @@ test('a namesake at another id before the first protected create stops it as a c
   const h = await harness();
   const foreign = await insertRow(h.org, 'environmentvariabledefinitions', VARIABLE_ROW);
   const out = await pass(h, variableOnly());
-  assert.equal(out.halt && out.halt.code, 'configuration-incomplete', out.halt && out.halt.message);
-  assert.deepEqual(out.step.halt.items, [{ kind: 'environmentVariable', key: 'contoso_ApiBase', code: 'create-identity-conflict' }]);
+  // Judged by the read-only preflight, before any step runs: the build stops before its first write.
+  assert.equal(out.halt && out.halt.code, 'create-identity-conflict', out.halt && out.halt.message);
+  assert.equal(out.halt.phase, 'preflight');
+  assert.match(out.halt.message, new RegExp(`environmentVariable contoso_apibase: .*namesake at another id \\(${foreign}\\)`));
+  assert.equal(out.step, null, 'no step is applied');
   assert.deepEqual(out.sent, [], 'nothing is sent');
   assert.deepEqual(h.org.rows('environmentvariabledefinitions').map((r) => r.environmentvariabledefinitionid), [foreign], 'the namesake is not adopted, and nothing is created beside it');
   const group = h.store.readGroup('environmentVariable', 'contoso_apibase');
@@ -490,12 +493,61 @@ test('a namesake query that cannot be read whole stops the first protected creat
     return { statusCode: 200, body: { value: [], '@odata.nextLink': 'https://contoso.crm.dynamics.com/api/data/v9.0/environmentvariabledefinitions?$select=environmentvariabledefinitionid,schemaname&$skiptoken=1' } };
   } });
   const out = await pass(h, variableOnly());
-  assert.equal(out.halt && out.halt.code, 'configuration-incomplete', out.halt && out.halt.message);
-  assert.deepEqual(out.step.halt.items, [{ kind: 'environmentVariable', key: 'contoso_ApiBase', code: 'create-identity-unverified' }]);
+  assert.equal(out.halt && out.halt.code, 'create-identity-unverified', out.halt && out.halt.message);
+  assert.equal(out.halt.phase, 'preflight');
+  assert.equal(out.step, null, 'no step is applied');
   assert.ok(h.org.requests.some((r) => /\$skiptoken=/.test(r.path)), 'the continuation was followed');
   assert.deepEqual(out.sent, [], 'nothing is sent');
   assert.deepEqual(h.org.rows('environmentvariabledefinitions'), []);
   assert.equal(h.store.readGroup('environmentVariable', 'contoso_apibase').committed, null);
+});
+
+test('a namesake or a row at the derived id that appears after the preflight is still caught at dispatch: nothing is created or bound', async () => {
+  for (const at of ['namesake', 'derived id']) {
+    const h = await harness();
+    const runtime = createConfigurationRuntime({ spec: variableOnly(), sdk: h.sdk, opts: { protectedConfiguration: h.protectedConfiguration }, appUniqueName: 'contoso_configured' });
+    await runtime.preflight();
+    const mark = h.org.requests.length;
+    // The derived id the preflight read exactly: GET /environmentvariabledefinitions(<id>)?$select=...
+    const derived = h.org.requests.map((r) => /^\/environmentvariabledefinitions\(([0-9a-f-]{36})\)/i.exec(r.path)).find(Boolean)[1];
+    const row = at === 'namesake' ? VARIABLE_ROW : { ...VARIABLE_ROW, environmentvariabledefinitionid: derived };
+    const foreign = await insertRow(h.org, 'environmentvariabledefinitions', row);
+    const step = await runtime.apply('data-model');
+    // The row seeded at the derived id holds a column value this build cannot read, so its exact read is unknown
+    // (unverified); the namesake is a conflict. The preflight of a next build says the same, before any write.
+    const code = at === 'namesake' ? 'create-identity-conflict' : 'create-identity-unverified';
+    assert.deepEqual(step.halt && step.halt.items, [{ kind: 'environmentVariable', key: 'contoso_ApiBase', code }], at);
+    assert.deepEqual(h.org.requests.slice(mark + 1).filter((r) => r.method !== 'GET'), [], `${at}: nothing is sent`);
+    assert.deepEqual(h.org.rows('environmentvariabledefinitions').map((r) => r.environmentvariabledefinitionid), [foreign], `${at}: nothing is created`);
+    assert.equal(h.store.readGroup('environmentVariable', 'contoso_apibase').committed, null, at);
+    const next = await pass(h, variableOnly());
+    assert.equal(next.halt && next.halt.code, code, `${at}: ${next.halt && next.halt.message}`);
+    assert.equal(next.halt.phase, 'preflight', at);
+    assert.deepEqual(next.sent, [], `${at}: the next build sends nothing`);
+  }
+});
+
+test('a create proved never sent meets the same namesake query before the first write; without a namesake it is sent once', async () => {
+  for (const namesake of [true, false]) {
+    const h = await harness();
+    const types = await B.readComponentTypes(h.sdk.dataverse);
+    const planned = B.planOf(variableOnly(), { kind: 'environmentVariable', key: 'contoso_ApiBase', solution: SOL, componentTypes: types.types });
+    // An attempt prepared and never dispatched: its recovery proves nothing was sent, so the rerun sends it again.
+    h.ctx.begin([planned.plan]);
+    const foreign = namesake ? await insertRow(h.org, 'environmentvariabledefinitions', VARIABLE_ROW) : null;
+    const out = await pass(reopen(h), variableOnly());
+    if (namesake) {
+      assert.equal(out.halt && out.halt.code, 'create-identity-conflict', out.halt && out.halt.message);
+      assert.equal(out.halt.phase, 'preflight');
+      assert.deepEqual(out.sent, [], 'nothing is sent');
+      assert.deepEqual(h.org.rows('environmentvariabledefinitions').map((r) => r.environmentvariabledefinitionid), [foreign]);
+      assert.ok(h.store.readGroup('environmentVariable', 'contoso_apibase').pending, 'the attempt stays pending');
+    } else {
+      assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+      assert.deepEqual(out.sent.filter((r) => r.path.startsWith('/environmentvariabledefinitions')).map((r) => r.method), ['POST'], 'sent once');
+      assert.ok(committed(h, 'environmentVariable', 'contoso_apibase'));
+    }
+  }
 });
 
 test('clearing a protected variable\'s value would delete its value row: even authorized, it stops in preflight with nothing sent', async () => {

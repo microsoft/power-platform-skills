@@ -1269,8 +1269,10 @@ the field builds exactly as before.
   binding store) fails with `create-identity-unverified`, and an item whose create is still being
   settled is reported unverified. Keep the build workspace with the binding store where verify runs.
 - **Checked before anything is sent.** Every declared protected item is read and judged before the
-  build's first service change, the solution version included. An edit the plugin does not make stops
-  the whole build there, with nothing sent (`configuration-edit-unsupported`).
+  build's first service change, the solution version included: a first create's reserved id and its
+  namesake lookup too, so a create that would stop with `create-identity-conflict` or
+  `create-identity-unverified` stops the whole build with nothing sent. An edit the plugin does not
+  make stops the whole build there, with nothing sent (`configuration-edit-unsupported`).
 - **Duplicate rules: create only.** A protected duplicate rule is created with its conditions, completes
   its initial publication/state, and is then only verified; later edits are outside the plugin. A
   later change of its fields, conditions or state stops with: "This protected duplicate rule can be
