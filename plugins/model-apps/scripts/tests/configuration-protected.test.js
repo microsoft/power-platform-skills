@@ -543,8 +543,8 @@ test('a value made outside the plugin under a bound protected variable is never 
   const edited = await pass(reopen(h), { ...spec, environmentVariables: [{ ...spec.environmentVariables[0], description: 'Edited' }] });
   assert.equal(edited.halt && edited.halt.code, 'create-identity-conflict', edited.halt && edited.halt.message);
   assert.deepEqual(edited.sent, []);
-  // The write itself checks again, against the plan made from fresh reads: a step run without the preflight still never
-  // PATCHes a value row the binding does not hold.
+  // The write itself is held to the plan made from fresh reads (its create set admits only the rows the plan holds): a
+  // step run without the preflight still never PATCHes a value row the binding does not hold.
   const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration, configurationBindings: bindings, authorizedDestructive }, appUniqueName: 'contoso_configured' });
   const mark = h.org.requests.length;
   const step = await runtime.apply('data-model').catch((error) => ({ error }));

@@ -305,8 +305,7 @@ async function addMissingMembers(dataverse, planned, scope) {
  *   exact                               true: configuration-artifacts.js skips its name lookup for a protected kind;
  *   updates(kind)                       true for a Custom API, an environment variable and a connection reference, whose
  *                                       supported edits go through update();
- *   update({ kind, key, id }, fn)       ONE checked set for a bound item's edit the preflight admitted: fn({ childIds,
- *                                       rowIds }) pushes the edit through the gate (a multi-request edit as one
+ *   update({ kind, key, id }, fn)       ONE checked set for a bound item's edit the preflight admitted: fn({ childIds })
  *                                       change set when apiBase is known, refused unsent otherwise), new children are
  *                                       added to the solution, and the attempt is observed and settled. Answers
  *                                       { outcome: 'updated', id, childIds, result }; anything else throws, typed.
@@ -373,11 +372,11 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
     /**
      * A bound item's edit (configuration-artifacts.js applyUpdate) — a Custom API, an environment variable (its definition,
      * a first value or a replacement of its own value) or a connection reference: the plan is made again from fresh reads
-     * of the bound rows at their exact ids (never a name), and `fn({ childIds, rowIds })` — the SDK's own element updates
+     * of the bound rows at their exact ids (never a name), and `fn({ childIds })` — the SDK's own element updates
      * and ONE push — runs inside that plan's create set: a single request on its own, or the one checked change set the
      * SDK sends for the root PATCH with new children or for new children only (`batch`). The new children take the plan's
-     * derived ids (`childIds`); `rowIds` names every child row the plan holds by slot, so the caller can refuse to write a
-     * row the plan does not (a value the SDK found under the definition at another id). Answers { outcome: 'updated', id,
+     * derived ids (`childIds`); the set's classifier admits a write only to a row the plan holds, so a value the SDK found
+     * under the definition at another id is never PATCHed. Answers { outcome: 'updated', id,
      * childIds, result } only for a committed edit; anything else throws, typed. The build's preflight has already refused
      * every shape the protected path cannot make, before anything was sent.
      */
@@ -396,9 +395,8 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const batch = apiBase ? { batch: { apiBase, solution: planned.solution } } : {};
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult, ...batch }, send);
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && r.mode === 'create').map((r) => [r.slot, r.id]));
-      const rowIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && !r.kept).map((r) => [r.slot, r.id]));
       const rootId = planned.plan.rows[0].id;
-      const pushed = await scope(() => fn({ childIds, rowIds }), B.acceptResultFor(planned));
+      const pushed = await scope(() => fn({ childIds }), B.acceptResultFor(planned));
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });

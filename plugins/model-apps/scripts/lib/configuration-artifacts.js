@@ -1992,20 +1992,13 @@ async function applyUpdate(op, ctx, result, known) {
   const updateExactly = async () => {
     let entered = false;
     try {
-      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {}, rowIds = {} }) => {
+      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {} }) => {
         entered = true;
         for (const { change, child } of created) {
           const childId = plannedIds[child.slot];
           if (!childId) throw tagged(child.kind, key, 'create-identity-unverified', 'nothing');
           placeChild(change, child, childId);
           childIds[child.slot] = childId;
-        }
-        // The value row the SDK would PATCH must be the variable's own bound value: a row it found under the definition
-        // at any other id was made outside the plugin and is never overwritten (the preflight refuses it first; this is
-        // the last check before the write, against the plan made from fresh reads).
-        for (const change of changes) {
-          if (change.pointer !== '/currentValue' || !change.value || typeof change.value !== 'object') continue;
-          if (!change.value.id || !rowIds.value || ref(change.value.id) !== ref(rowIds.value)) throw tagged(kind, key, 'create-identity-conflict', 'nothing');
         }
         handle.ids = { id, childIds: { ...childIds } };
         return write();
