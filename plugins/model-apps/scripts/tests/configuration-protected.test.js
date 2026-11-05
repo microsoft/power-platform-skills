@@ -63,7 +63,7 @@ const API = { uniqueName: 'contoso_Calc', isFunction: true, requestParameters: [
 const RULE = { key: 'email', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] };
 function configSpec(over = {}) {
   return {
-    // The 2.23.0 floor the opt-in asks for is a lint warning; this plugin is older than the release that ships it.
+    // The opt-in asks for a 2.23.0 floor; this older floor only adds a lint warning, which these tests do not judge.
     minimumPluginVersion: '2.21.0', configurationIdentity: 'stable-v1',
     solution: { uniqueName: SOL, displayName: 'Contoso', publisherPrefix: 'contoso' },
     app: { name: 'Configured', uniqueName: 'contoso_configured' }, schemaVersion: 2, entities: [],

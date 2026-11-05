@@ -1,5 +1,6 @@
 'use strict';
-// The send-once request boundary of a protected create set (configuration rows, keyed commands).
+// The send-once request boundary of a protected create set (configuration rows; also keyed commands, which are not
+// shipped in this release).
 //
 // The plugin's HTTP client is made once per invocation (build-model-app.js makeSdk) and asks ONE gate before every
 // request (lib/sdk-http-client.js createAzHttpClient `workflowEffectGate.screen`):

@@ -2,8 +2,9 @@
 
 // The protected create driver of the four configuration families — environment variables, connection references,
 // Custom APIs and duplicate detection rules — over the managed create lifecycle (managed-create-context.js) and its
-// send-once gate (managed-create-transport.js). Not wired into the build yet: this module answers the questions a
-// protected create must ask, and nothing here sends a write.
+// send-once gate (managed-create-transport.js). The build uses it under the `configurationIdentity` opt-in, through the
+// protected port (configuration-protected.js); this module answers the questions a protected create must ask, and
+// nothing here sends a write.
 //   planOf(spec, opts)                   the row plan of one artifact (buildRowPlan input) at its derived ids
 //   createClassifier(entries)            the gate's classifier: which planned row (or completion effect) a request is
 //   classifyConstituent(entries, req)    the same, for one constituent of a $batch change set (a bound Custom API's edit)

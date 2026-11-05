@@ -2991,8 +2991,9 @@ function configurationTeardownNotes(spec) {
 }
 
 // ---- An injected stable-id create port, as this module would take it ----
-// Not used by the plugin in this release: the configuration kinds use the plain create path (defaultCreates), and no
-// stable-id module is part of the plugin. These adapters run only for a caller that injects the stable-id functions
+// Not used by the plugin in this release: without the protected opt-in the configuration kinds use the plain create path
+// (defaultCreates), and under it the protected port (configuration-protected.js); no injected stable-id module is part of
+// the plugin. These adapters run only for a caller that injects the stable-id functions
 // itself (configurationContext `fence`: `intentFor`, `resolveProtectedTarget`, `createCreatesPortForSpec`), so this
 // module loads none of them; configurationStableCreates (below) composes them into the configuration kinds' own port.
 //
@@ -3080,7 +3081,8 @@ function configurationCreates(port, { resolveProtectedTarget, provision, spec, b
 // forms, charts, ...) like their call sites, and these kinds are keyed here (portKeyOf, the value slot that only the
 // deployment settings decide), so only this module can say what each create is. A build port that already protects
 // every configuration kind AND resolves (configurationAcceptsPort) is used as is; any other is set aside, never half
-// used. The build's port in this release is the plain pass-through, which never qualifies.
+// used. The build's port in this release is the plain pass-through, which never qualifies; under the protected opt-in the
+// build hands this step the protected port (configuration-protected.js), which does.
 //
 // Every configuration kind is protected as a NEW feature declaration (the injected port's `featureKinds`), with or
 // without the spec's `createIdentity` option: `shippedKinds` would leave them unprotected for a spec without the
@@ -3097,8 +3099,8 @@ const CONFIGURATION_CREATE_KINDS = Object.freeze(['environmentVariable', 'connec
 const STANDALONE_SOLUTION = 'Default';
 
 // The stable-id functions for one context: only the ones a caller injects (`ctx.fence`), never a module of the plugin.
-// The configuration kinds use the plain create path in this release, so nothing here loads a stable-id module; a
-// context without `fence` (every build and every standalone run) gets the plain pass-through (defaultCreates).
+// No injected stable-id module is part of the plugin, so nothing here loads one; a context without `fence` (every build
+// and every standalone run) gets the plain pass-through (defaultCreates) unless the build hands it the protected port.
 const fenceOf = (ctx) => ctx.fence || null;
 
 // Whether a port the build hands over can stand in for this module's own: it protects every configuration kind and

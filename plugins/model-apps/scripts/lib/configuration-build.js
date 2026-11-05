@@ -101,8 +101,8 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
     // The build's create port only when it can stand in for the configuration kinds' own (it protects every one of
     // them and resolves: C.configurationAcceptsPort). The build's port protects the kinds of its own catalog or none
     // (the plain pass-through), and half using it would send these creates under random ids; otherwise the helper
-    // uses its default, the plain pass-through (lib/creates-passthrough.js): the configuration kinds load no
-    // stable-id module in this release. Ordinary creation never depends on a port being supplied. Under the
+    // uses its default, the plain pass-through (lib/creates-passthrough.js): without the protected opt-in the
+    // configuration kinds load no stable-id module. Ordinary creation never depends on a port being supplied. Under the
     // protected opt-in the port is the protected one, always: exact ids from the binding store, never a name.
     creates: protectedPort || (C.configurationAcceptsPort(opts.creates) ? opts.creates : undefined),
     managed: opts.managed,

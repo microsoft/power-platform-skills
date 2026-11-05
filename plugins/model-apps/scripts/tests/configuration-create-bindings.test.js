@@ -1,6 +1,6 @@
 'use strict';
-// The protected create driver of the configuration families (lib/configuration-create-bindings.js), not wired into the
-// build yet: its plan, its exact and namesake reads, its classifier of the SDK's own requests, and one full create set
+// The protected create driver of the configuration families (lib/configuration-create-bindings.js), which the build uses
+// under the opt-in: its plan, its exact and namesake reads, its classifier of the SDK's own requests, and one full create set
 // through the real SDK, the real send-once gate and the real binding store against the fake org.
 const test = require('node:test');
 const assert = require('node:assert/strict');
