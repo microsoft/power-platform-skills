@@ -48,7 +48,7 @@ const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('.
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes, appSourceFileErrors } = require('./lib/content-hash.js');
 const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('./lib/deployed-baseline.js');
-const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
+const { runChangedOnlyApply, resolveLiveIdentity, PROTECTED_CONFIGURATION_FULL } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
 const { navigationHolds } = require('./lib/app-navigation.js');
@@ -2121,7 +2121,12 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
       // dashboard write that creates a tile (dashboard-reconcile.js tileCaptionLanguages).
       provisionedLanguages: () => readProvisionedLanguages(env),
     };
-    if (changedOnly && opts.apply) {
+    // Protected configuration in play (the managed-create gate exists) takes no changed-only shortcut: its debt sweep, its opt-in-removed
+    // stop and its read-only preflight run in the engine before the build's first service change, and the snapshot a no-op or a fast
+    // apply would trust does not describe the configuration rows (an unreadable store, a bound row deleted, an edit the protected path
+    // refuses all leave it as it was). So such a --changed-only apply is the full build below, which also applies the edits; a pending
+    // obligation stops it, never a success.
+    if (changedOnly && opts.apply && !managedCreateGate) {
       // #changed-only: the flow decides fast (pages-only via the sdk-build seams) vs full, gated on the
       // persisted snapshot's eligibility + a live identity check (WhoAmI orgId + app discovery). It calls
       // buildModelApp itself (injected) and manages the snapshot lifecycle (invalidate-before-write +
@@ -2153,7 +2158,9 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
       // contention from a concurrent run, an unwritable workspace), that later run certifies pre-apply
       // state and can skip work this apply just made necessary.
       if (opts.apply) assertSnapshotInvalidated(applySnapshotStore, workspaceDir);
+      if (changedOnly && opts.apply) deps.log(`▸ changed-only: FULL — ${PROTECTED_CONFIGURATION_FULL}`);
       r = await buildModelApp(spec, opts, deps);
+      if (changedOnly && opts.apply && r && typeof r === 'object') r = { ...r, changedOnly: { decision: 'full', reason: PROTECTED_CONFIGURATION_FULL } };
     }
   } finally {
     cleanup();

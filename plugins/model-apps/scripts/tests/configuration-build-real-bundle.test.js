@@ -432,7 +432,7 @@ const commandOrg = (extra = {}) => createConfigOrg({
 });
 
 // `--allow-destructive` skips the read-only collision check, whose reads (app modules, forms) this org does not model; nothing here deletes.
-function runCommand(spec, { org = commandOrg(), apply = true, appDir = path.join(makeTempDir('config-command-'), 'app'), argv = ['--stage', 'data', '--allow-destructive'] } = {}) {
+function runCommand(spec, { org = commandOrg(), apply = true, appDir = path.join(makeTempDir('config-command-'), 'app'), argv = ['--stage', 'data', '--allow-destructive'], liveIdentity } = {}) {
   const { loadCli } = require('./helpers/cli-harness.js');
   const fs = require('node:fs');
   const realHttp = require('../lib/sdk-http-client.js');
@@ -448,6 +448,8 @@ function runCommand(spec, { org = commandOrg(), apply = true, appDir = path.join
     env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
     requires: {
       './lib/dataverse-auth.js': { ...authCli.exports, preflightAuth: async () => ({ ok: true }) },
+      // The changed-only flow's live identity (a WhoAmI and an app lookup this org does not model): none unless the test gives one.
+      './lib/changed-only-flow.js': { ...require('../lib/changed-only-flow.js'), resolveLiveIdentity: async () => (typeof liveIdentity === 'function' ? liveIdentity() : liveIdentity || null) },
       './lib/entity-provision.js': { ...require('../lib/entity-provision.js'), resolveAuthoringLanguage: async () => 1033 },
       './lib/sdk-http-client.js': {
         ...realHttp,
@@ -790,6 +792,117 @@ test('protected configuration through the build command: an App Spec that droppe
   assert.deepEqual(org.unexpected, []);
 });
 
+// A --changed-only apply over an ELIGIBLE snapshot that says nothing changed: the envelope the production writer leaves after an eligible
+// apply of `spec` (lib/apply-snapshot.js, written by lib/apply-snapshot-store.js), with the live identity that matches it. Without
+// protected configuration this is the flow's no-op, which sends nothing and calls no engine. `calls.n` counts the flow's identity lookups.
+const liveIdentityOf = (org) => ({ orgId: '11111111-2222-4333-8444-555555555555', envUrl: org.origin, appUniqueName: 'contoso_configprobe', appId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' });
+function seedEligibleSnapshot(appDir, spec, live) {
+  const snap = require('../lib/apply-snapshot.js');
+  const baseline = snap.makeEnvelope(live);
+  baseline.priorSpec = require('../lib/content-hash.js').annotateContentHashes(spec, () => null);
+  snap.markEligible(baseline);
+  require('../lib/apply-snapshot-store.js').writeSnapshotAtomic(path.join(appDir, '.maker-workspace'), baseline);
+}
+const CHANGED_ONLY = ['--changed-only', '--allow-destructive'];
+function changedOnlyAgain(spec, base, { argv = CHANGED_ONLY, calls } = {}) {
+  const liveIdentity = () => {
+    if (calls) calls.n += 1;
+    return liveIdentityOf(base.org);
+  };
+  return runCommand(spec, { org: base.org, appDir: base.appDir, argv, liveIdentity });
+}
+
+const NOOP_BYPASS = [
+  ['an unreadable binding store', 'managed-binding-store-unreadable', (out) => {
+    const fs = require('node:fs');
+    const ws = path.join(out.appDir, '.maker-workspace');
+    fs.writeFileSync(path.join(ws, fs.readdirSync(ws).find((f) => f.startsWith('managed-bindings.'))), '{');
+  }],
+  ['the opt-in removed', 'create-identity-opt-in-required', (out, next) => { delete next.configurationIdentity; }],
+  ['a bound row deleted', 'configuration-row-not-found', (out) => { out.org.sets.get('customapis').clear(); }],
+  ['an edit the protected path refuses', 'configuration-edit-unsupported', (out, next) => { next.duplicateDetectionRules[0].name = 'Changed rule label'; }],
+];
+for (const [variant, code, change] of NOOP_BYPASS) {
+  test(`protected configuration through the build command: a changed-only apply whose snapshot says nothing changed still stops on ${variant}, before any write`, async () => {
+    const spec = protectedSpec();
+    const out = await runCommand(spec);
+    assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+    seedEligibleSnapshot(out.appDir, spec, liveIdentityOf(out.org));
+    const next = structuredClone(spec);
+    change(out, next);
+    const mark = out.org.requests.length;
+    const calls = { n: 0 };
+    const stopped = await changedOnlyAgain(next, out, { calls });
+    assert.equal(stopped.thrown && stopped.thrown.code, code, `${stopped.thrown && stopped.thrown.message} ${JSON.stringify(stopped.payload)}`);
+    assert.notEqual(stopped.payload && stopped.payload.noop, true, 'never the no-op success');
+    assert.deepEqual(out.org.writes(mark), []);
+    // The command took no changed-only decision at all: the flow (and its identity lookup) never ran.
+    assert.equal(calls.n, 0, 'the changed-only flow was not entered');
+    assert.match(stopped.stderr, /changed-only: FULL — protected configuration is in play/);
+    assert.deepEqual(out.org.unexpected, []);
+  });
+}
+
+// The fake org models the configuration endpoints only, so a whole build, which a protected --changed-only apply is, ends at the first
+// phase past them: the web-resources phase's read of the webresource table (a 404 here). Reaching it proves the apply ran whole, past
+// every configuration step, instead of the flow's no-op.
+const reachedWebResources = (r) => /EntityDefinitions\(LogicalName='webresource'\)/.test(String(r.thrown && r.thrown.message));
+test('protected configuration through the build command: a changed-only apply runs the whole build, so an approved edit is applied and the rerun sends nothing', async () => {
+  const spec = protectedSpec();
+  const out = await runCommand(spec);
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  seedEligibleSnapshot(out.appDir, spec, liveIdentityOf(out.org));
+  // Nothing changed: still the whole build (its checks run), which finds every configuration row as declared and writes nothing.
+  let mark = out.org.requests.length;
+  const unchanged = await changedOnlyAgain(spec, out);
+  assert.ok(reachedWebResources(unchanged), `${unchanged.thrown && unchanged.thrown.message} ${JSON.stringify(unchanged.payload)}`);
+  assert.match(unchanged.stderr, /changed-only: FULL — protected configuration is in play/);
+  assert.deepEqual(out.org.writes(mark), []);
+  // An edit is refused without its approval and applied, at the bound id, with it.
+  const edited = protectedSpec({ customApis: [{ ...CONFIGURATION_FIELDS.customApis[0], isPrivate: true }] });
+  const refused = await changedOnlyAgain(edited, out);
+  assert.match(String(refused.thrown && refused.thrown.message), /approve with --authorize customApi:contoso_calc:isPrivate/);
+  assert.deepEqual(out.org.writes(mark), []);
+  const id = out.org.rows('customapis')[0].customapiid;
+  const done = await changedOnlyAgain(edited, out, { argv: [...CHANGED_ONLY, ...authorize(['customApi:contoso_Calc:isPrivate'])] });
+  assert.ok(reachedWebResources(done), done.thrown && done.thrown.message);
+  assert.deepEqual(out.org.writes(mark), [`PATCH /customapis(${id})`]);
+  assert.equal(out.org.rows('customapis')[0].isprivate, true);
+  mark = out.org.requests.length;
+  const again = await changedOnlyAgain(edited, out);
+  assert.ok(reachedWebResources(again), again.thrown && again.thrown.message);
+  assert.deepEqual(out.org.writes(mark), []);
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+// Every way an apply can narrow itself still meets the protected checks before its first write, or is refused before it: none of them is an
+// exit that reports success over a pending obligation. The whole build, --stage data and --changed-only stop on the obligation; every other
+// phase range is refused by the apply's partial-range guard before anything is sent; a dry run plans and sends nothing.
+test('protected configuration through the build command: no phase selection, changed-only or dry run gets past a pending obligation', async () => {
+  const out = await runCommand(protectedSpec());
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  seedEligibleSnapshot(out.appDir, protectedSpec(), liveIdentityOf(out.org));
+  out.org.sets.get('customapis').clear();
+  const mark = out.org.requests.length;
+  // --changed-only first, while the snapshot still says nothing changed (a stopped build marks it ineligible).
+  for (const argv of [CHANGED_ONLY, ['--allow-destructive'], DATA]) {
+    const stopped = await changedOnlyAgain(protectedSpec(), out, { argv });
+    assert.equal(stopped.thrown && stopped.thrown.code, 'configuration-row-not-found', `${argv.join(' ')}: ${stopped.thrown && stopped.thrown.message}`);
+    assert.deepEqual(out.org.writes(mark), [], argv.join(' '));
+  }
+  const ranges = [['--stage', 'ui'], ['--stage', 'app'], ['--stage', 'publish'], ['--only', 'pages'], ['--skip', 'data-model'], ['--only', 'sample-data', '--sample-data'], ['--from', 'views']];
+  for (const range of ranges) {
+    const refused = await changedOnlyAgain(protectedSpec(), out, { argv: [...range, '--allow-destructive'] });
+    assert.equal(refused.exitCode, 1, `${range.join(' ')}: ${refused.thrown && refused.thrown.message}`);
+    assert.equal(refused.payload && refused.payload.ok, false, range.join(' '));
+    assert.match(String(refused.payload.errors), /refusing to apply a partial phase range/, range.join(' '));
+    assert.deepEqual(out.org.writes(mark), [], range.join(' '));
+  }
+  await runCommand(protectedSpec(), { org: out.org, appDir: out.appDir, apply: false, argv: ['--stage', 'data'] });
+  assert.deepEqual(out.org.writes(mark), [], 'a dry run sends nothing');
+  assert.deepEqual(out.org.unexpected, []);
+});
+
 test('a build without the opt-in and without stored configuration rows loads no protected module and sends what it always sent', async () => {
   const spec = makeSpec();
   delete spec.connectionReferences;
@@ -806,5 +919,23 @@ test('a build without the opt-in and without stored configuration rows loads no 
   const again = await protectedModulesLoadedBy(() => runAgain(spec, out));
   assert.deepEqual(again.requested, []);
   assert.equal(again.result.exitCode, 0);
+  assert.deepEqual(out.org.unexpected, []);
+
+  // Its changed-only apply over an eligible snapshot that says nothing changed is still the flow's no-op: no engine, no request, no
+  // protected module. A configuration item changed since that snapshot is a full build, never that no-op (lib/phase-diff.js).
+  seedEligibleSnapshot(out.appDir, spec, liveIdentityOf(out.org));
+  const mark = out.org.requests.length;
+  const calls = { n: 0 };
+  const noop = await protectedModulesLoadedBy(() => changedOnlyAgain(spec, out, { calls }));
+  assert.deepEqual(noop.requested, []);
+  assert.equal(noop.result.exitCode, 0, noop.result.thrown && noop.result.thrown.message);
+  assert.equal(noop.result.payload.noop, true);
+  assert.equal(calls.n, 1, 'the flow decided');
+  assert.equal(out.org.requests.length, mark, 'nothing was sent');
+  const edited = { ...spec, customApis: [{ ...spec.customApis[0], displayName: 'Calculate again' }] };
+  const full = await protectedModulesLoadedBy(() => changedOnlyAgain(edited, out));
+  assert.deepEqual(full.requested, []);
+  assert.notEqual(full.result.payload && full.result.payload.noop, true, 'a configuration edit is never the no-op');
+  assert.match(full.result.stderr, /changed-only: FULL — full build — data-model: changed/);
   assert.deepEqual(out.org.unexpected, []);
 });

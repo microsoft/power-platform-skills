@@ -338,6 +338,24 @@ test('run: NOOP does not call buildModelApp and reports up-to-date', async () =>
   } finally { rm(dir); }
 });
 
+// Protected configuration's checks and edits run only in the full build (build-model-app.js, which never enters this flow while its
+// managed-create gate exists): any caller that hands the flow that gate gets a full build, never a no-op or a fast apply.
+test('run: with protected configuration in play (a managed-create gate) neither a NOOP nor a FAST apply is taken — the full build runs', async () => {
+  for (const content of ['v1', 'v2']) {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(baseSpec(), 'v1'));
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: { ...baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor(content) }), managedCreateGate: {} } });
+      assert.notStrictEqual(r.noop, true, content);
+      assert.strictEqual(r.changedOnly.decision, 'full', content);
+      assert.strictEqual(r.changedOnly.reason, flow.PROTECTED_CONFIGURATION_FULL, content);
+      assert.strictEqual(record.length, 1, `${content}: the full build ran`);
+      assert.strictEqual(record[0].phases, undefined, `${content}: every phase`);
+    } finally { rm(dir); }
+  }
+});
+
 test('run: FULL baseline (fresh app, appId null at start) writes an ELIGIBLE snapshot', async () => {
   const dir = ws();
   try {
