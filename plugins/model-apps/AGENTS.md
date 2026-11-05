@@ -3349,12 +3349,19 @@ row the binding does not hold is `create-identity-conflict`. Before any service 
 store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`
 regardless of the opt-in, the declarations or the phases): an undeclared pending or unusable protected record
 stops it with `managed-settlement-pending`. Before an overwriting fetch of a protected item (preflight, port and
-verify), a workspace copy with unsynced edits (`hasUnsyncedEdits`) stops it (`refuseLocalDraft`); a port send
-that did not settle puts the copy back (`withOwnCopy`) only when it proves the copy is still exactly the draft
-that send pushed (captured by `ownCopy` just before the push, compared change by change with `ownedDraft` over
-the SDK diff after a locked read) and a fresh exact read of the service row answers present (overwrite fetch) or
-absent (local delete); a changed copy, a failed read or any other answer keeps the copy, and the next build stops
-on it. A bound environment variable's value clear (a settings
+verify), a workspace copy with unsynced edits (`hasUnsyncedEdits`) stops it. The build never resets or deletes
+that copy on its own, a failed or uncertain send included: the copy is shared with the maker, the SDK diff is not
+locked and there is no conditional overwrite, so no check can prove a reset discards only the build's own change
+(a maker edit made while the build prepares its push, or just after any comparison, would be lost). After such a
+send the copy is kept as it is and the pending attempt is still recovered read-only from what it persisted. The
+next build's preflight stops on the copy before any write with `workspace-copy-unsent-edits` (the declared views'
+and charts' code, `sdk-build.js` `refuseUnsentCopy`) and prints the one approval that replaces it,
+`--authorize overwrite:<kind>:<key>` (`overwriteKey`: the configuration kind and the port key — a name in lower
+case, a rule's key exactly; read by `configurationAuthorizationKeys` into `opts.authorizedOverwrite`, only under
+the opt-in). Under that approval only, `replaceLocalCopy` reads the service row exactly: present -> overwrite
+fetch; absent (a create never taken) -> local delete; a denied or failed read or any other answer keeps the copy
+and stops. Nothing else discards it; the port's and verify's own exact reads (`refuseLocalDraft`) stop on it too
+(`create-completion-required`). A bound environment variable's value clear (a settings
 `Value` of `null`, a DELETE of its value row) is refused in the preflight with
 `configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` asks the
 hookup the build hands over (`opts.protectedConfiguration.obligations`, `optInObligations`, a local store read

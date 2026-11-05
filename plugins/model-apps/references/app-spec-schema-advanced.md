@@ -1299,12 +1299,21 @@ the field builds exactly as before.
   that the binding does not hold is never overwritten or adopted, whatever `--authorize` tokens are
   given: the build stops with `create-identity-conflict` before anything is sent. A bound value that the
   deployment settings do not name in this run is kept, and nothing is sent for it.
-- **Local edits come first.** Before it reads a protected item into the workspace, the build checks the
-  workspace copy. If it holds edits the service has not seen (from an interrupted run, or made by hand),
-  the build stops before anything is sent, and verify stops too. The copy and its binding are kept.
-  Push or discard those edits yourself, then build again. When a protected send fails, the build puts
-  the workspace copy back only if it is still exactly the copy that send pushed. A copy edited in the
-  meantime, or one whose row the build cannot read, is kept, and the next build stops on it.
+- **Local copy.** Before it reads a protected item into the workspace, the build checks the workspace
+  copy. A protected item whose local copy differs from the server's (an edit an earlier run did not send,
+  or one made by hand), or cannot be compared with it, is refused before anything is written
+  (`workspace-copy-unsent-edits`), and verify stops too; the copy and its binding are kept. Put any change
+  to keep into the spec, then approve replacing the local copy with the server's: the `overwrite:` key the
+  refusal prints, `--authorize overwrite:<kind>:<key>` (for example
+  `--authorize overwrite:customApi:contoso_calc`; the kind is `customApi`, `environmentVariable`,
+  `connectionReference` or `duplicateRule`). With that key the build reads the server's row and puts it in
+  place of the local copy (a create the server never took leaves no copy); if it cannot read that row,
+  it keeps the copy and stops. The key is read only with `configurationIdentity: "stable-v1"`.
+  The build never replaces or discards the local copy on its own, also when a protected send fails or its
+  answer is lost: the copy is kept with every edit in it, including one made while the build was sending,
+  and the next build stops on it until you give that key. Nothing else discards it. The unfinished send
+  itself is still decided from what the build recorded before sending (below); giving the key never sends
+  it again.
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
