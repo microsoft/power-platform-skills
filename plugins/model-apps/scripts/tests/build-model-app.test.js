@@ -76,17 +76,48 @@ test('rejects an invalid spec before any build', async () => {
   assert.strictEqual(calls.length, 0, 'no SDK writes on a bad spec');
 });
 
+// An SDK double that counts EVERY method the build calls, not only the ones mockSdk() logs: several writes (createPublisher, pushArtifact, updateRecord,
+// addSolutionComponent, publishArtifact) are not in its `calls`, so a count of `calls` alone would miss a build that wrote before it validated.
+function countingSdk() {
+  const { sdk } = mockSdk();
+  const touched = [];
+  return { sdk: new Proxy(sdk, { get: (target, name) => (typeof target[name] === 'function' ? (...args) => { touched.push(String(name)); return target[name](...args); } : target[name]) }), touched };
+}
+
 test('a view written with `filter` is refused on load, before any SDK call, while the same view written with `filters` is built', async () => {
   const withKey = (key) => { const s = jclone(desk); s.views.find((v) => v.name === 'Active Tickets')[key] = [{ attr: 'new_status', op: 'eq', value: 1 }]; return s; };
-  const refused = mockSdk();
+  const refused = countingSdk();
   const r = await buildModelApp(withKey('filter'), { apply: true, env: 'https://x' }, { sdk: refused.sdk });
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /^view 'Active Tickets': unknown key 'filter' — did you mean 'filters'\?/.test(e)), JSON.stringify(r.errors));
-  assert.strictEqual(refused.calls.length, 0, 'no SDK writes on a spec whose view would be built without its filter');
-  const built = mockSdk();
+  assert.deepStrictEqual(refused.touched, [], 'no SDK method is called on a spec whose view would be built without its filter');
+  const built = countingSdk();
   const ok = await buildModelApp(withKey('filters'), { apply: true, env: 'https://x' }, { sdk: built.sdk });
   assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
-  assert.ok(built.calls.length > 0, 'the control spec is built');
+  assert.ok(built.touched.length > 0, 'the control spec is built');
+});
+
+// The structural profile reads a spec to tear it down or preview it and lets an unknown view key through as a warning; a build that applied under it would
+// write the view without that part. So an apply refuses it, with no SDK call, whatever the spec holds — and the same spec under it is still accepted to read.
+test('an apply asked to validate under the structural profile is refused before any SDK call, on a spec with a typo and on one without', async () => {
+  const withKey = (key) => { const s = jclone(desk); s.views.find((v) => v.name === 'Active Tickets')[key] = [{ attr: 'new_status', op: 'eq', value: 1 }]; return s; };
+  for (const [label, spec] of [['with `filter`', withKey('filter')], ['with `filters`', withKey('filters')]]) {
+    const refused = countingSdk();
+    const r = await buildModelApp(spec, { apply: true, env: 'https://x', profile: 'structural' }, { sdk: refused.sdk });
+    assert.strictEqual(r.ok, false, label);
+    assert.ok(r.errors.some((e) => /cannot validate under the 'structural' profile/.test(e)), `${label}: ${JSON.stringify(r.errors)}`);
+    assert.deepStrictEqual(refused.touched, [], `${label}: no SDK method is called`);
+  }
+  const structural = validateAppSpec(withKey('filter'), { profile: 'structural' });
+  assert.strictEqual(structural.ok, true, 'a spec read to tear it down or preview it is still accepted');
+  assert.ok(structural.warnings.some((w) => /unknown key 'filter'/.test(w)));
+  for (const profile of ['plan', 'deploy']) {
+    const refused = countingSdk();
+    const r = await buildModelApp(withKey('filter'), { apply: true, env: 'https://x', profile }, { sdk: refused.sdk });
+    assert.strictEqual(r.ok, false, profile);
+    assert.ok(r.errors.some((e) => /unknown key 'filter'/.test(e)), `${profile}: ${JSON.stringify(r.errors)}`);
+    assert.deepStrictEqual(refused.touched, [], `${profile}: no SDK method is called`);
+  }
 });
 
 // The web-resources phase reads contentPath files after the solution and tables are written, so a

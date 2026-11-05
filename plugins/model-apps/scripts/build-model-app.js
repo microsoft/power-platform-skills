@@ -624,8 +624,19 @@ function stoppedAfterEarlierAttempts(err, attempt, owedPublishes, owedLengths, w
   return halt;
 }
 
+// The validation every build runs on load, with the profile its caller asked for. An APPLY never validates under the structural profile: that profile
+// is for reading a spec (teardown, preview), and it takes the findings an earlier release accepted — an unknown key on a view, which the build drops —
+// as warnings, so a build under it would write the view without that part. The same gate runs before a --changed-only apply may report a success
+// without building (see main), so a spec a build refuses is never certified by a no-op.
+function validateForBuild(spec, opts) {
+  if (opts.apply && opts.profile === 'structural') {
+    return { ok: false, errors: ["a build that applies cannot validate under the 'structural' profile, which reads a spec to tear it down or preview it and lets findings through that a build must refuse: use 'plan' or 'deploy'"] };
+  }
+  return validateAppSpec(spec, { profile: opts.profile || 'deploy' });
+}
+
 async function buildModelApp(spec, opts, deps) {
-  const v = validateAppSpec(spec, { profile: opts.profile || 'deploy' });
+  const v = validateForBuild(spec, opts);
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
@@ -2133,7 +2144,13 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
       // persisted snapshot's eligibility + a live identity check (WhoAmI orgId + app discovery). It calls
       // buildModelApp itself (injected) and manages the snapshot lifecycle (invalidate-before-write +
       // re-bless-on-success). readContent + WhoAmI are injected so the flow is testable offline.
-      r = await runChangedOnlyApply({
+      // The flow can end in a success that never calls buildModelApp (a no-op over an unchanged spec), and an earlier release accepted specs
+      // that the build now refuses (a view written with `filter`): validate first, as the build does, so such a spec is refused here rather
+      // than certified by a baseline written for it. Only a refusal returns; a spec that passes is validated again by the build it reaches,
+      // which is the one that narrates the warnings.
+      const gate = validateForBuild(spec, opts);
+      if (!gate.ok) r = { ok: false, errors: gate.errors };
+      else r = await runChangedOnlyApply({
         spec, opts,
         deps: {
           ...deps,

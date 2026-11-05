@@ -2068,7 +2068,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dropped and counted in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
-  builds. It validates the spec first under the `deploy` profile, with five compatibility downgrades
+  builds. It validates the spec first under the `deploy` profile, with six compatibility downgrades
   (`relationshipCollisions: 'warn'`, `columnValues: 'warn'`, `fieldOptionKeys: 'warn'`, `primaryAttributeKeys: 'warn'`, `viewKeys: 'warn'` and `declaredKeyCollisions: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
   that share a schema name, an AutoNumber column with no format, a `required` that is not `true`, `false` or `"recommended"`, a key a form's
   `fieldOptions` entry does not take, a key a table's `primaryAttribute` does not take, a key a `views[]` entry or one of its filters does not take, two declared views (or two declared charts) with one name on one table — is verified, with a warning that names the fix, and is never refused before anything is read (the

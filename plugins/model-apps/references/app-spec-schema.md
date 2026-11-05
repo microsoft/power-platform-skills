@@ -970,8 +970,9 @@ why they need naming here at all.
   writes anything): the build reads only those keys, so a view written with `filter` would otherwise be built without its filter and list
   every active row. The message names the key it most likely meant (`filter` → `filters`, `column` → `attr`, `operator` → `op`) and
   the allowed keys. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is
-  still accepted without a message. Teardown, preview and `verify-model-app.js` only read a spec that an earlier release may have built, so
-  they report the same finding as a warning.
+  still accepted without a message. Teardown and preview only read a spec that an earlier release may have built, so they accept one with
+  such a key; `verify-model-app.js` reads it too, and reports the finding as a warning. A `--changed-only` apply validates the spec before
+  it decides anything, so an unchanged spec with such a key is refused as well, not reported as nothing to apply.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
