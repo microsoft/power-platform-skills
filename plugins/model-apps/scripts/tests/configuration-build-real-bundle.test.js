@@ -14,7 +14,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const { fork } = require('node:child_process');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { runCommand: runCommandIn } = require('./helpers/configuration-command.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const { createConfigOrg } = require('./helpers/fake-config-org.js');
@@ -431,63 +434,9 @@ const commandOrg = (extra = {}) => createConfigOrg({
   solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' },
 });
 
-// `--allow-destructive` skips the read-only collision check, whose reads (app modules, forms) this org does not model; nothing here deletes.
-function runCommand(spec, { org = commandOrg(), apply = true, appDir = path.join(makeTempDir('config-command-'), 'app'), argv = ['--stage', 'data', '--allow-destructive'], liveIdentity } = {}) {
-  const { loadCli } = require('./helpers/cli-harness.js');
-  const fs = require('node:fs');
-  const realHttp = require('../lib/sdk-http-client.js');
-  const realMakerSdk = require('../lib/maker-sdk.js');
-  fs.mkdirSync(appDir, { recursive: true });
-  const specPath = path.join(appDir, 'app-spec.json');
-  fs.writeFileSync(specPath, JSON.stringify(spec));
-  const sdks = [];
-  const scripts = path.join(__dirname, '..');
-  const authCli = loadCli(path.join(scripts, 'lib', 'dataverse-auth.js'));
-  const cli = loadCli(path.join(scripts, 'build-model-app.js'), {
-    argv: ['--env', org.origin, '--spec', `@${specPath}`, ...(apply ? ['--apply'] : []), '--non-interactive', ...argv],
-    env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
-    requires: {
-      './lib/dataverse-auth.js': { ...authCli.exports, preflightAuth: async () => ({ ok: true }) },
-      // The changed-only flow's live identity (a WhoAmI and an app lookup this org does not model): none unless the test gives one.
-      './lib/changed-only-flow.js': { ...require('../lib/changed-only-flow.js'), resolveLiveIdentity: async () => (typeof liveIdentity === 'function' ? liveIdentity() : liveIdentity || null) },
-      './lib/entity-provision.js': { ...require('../lib/entity-provision.js'), resolveAuthoringLanguage: async () => 1033 },
-      './lib/sdk-http-client.js': {
-        ...realHttp,
-        createAzHttpClient: (env, o = {}) => realHttp.createAzHttpClient(env, { ...o, getToken: () => 'test-token-0123456789abcdef', request: (req) => org.request(req), sleep: async () => {} }),
-      },
-      './lib/maker-sdk.js': {
-        ...realMakerSdk,
-        createMakerSdk: (o) => {
-          const sdk = realMakerSdk.createMakerSdk(o);
-          const seen = { scoped: !!o.solutionUniqueName, inits: 0, requestsAtInit: [] };
-          const init = sdk.initWorkspace.bind(sdk);
-          sdk.initWorkspace = async () => {
-            seen.inits += 1;
-            const before = org.requests.length;
-            await init();
-            seen.requestsAtInit.push(org.requests.length - before);
-          };
-          sdks.push(seen);
-          return sdk;
-        },
-      },
-      './lib/genpage-sdk.js': { ...require('../lib/genpage-sdk.js'), makeGenpageSdk: () => ({ dispose: async () => ({ left: [] }) }) },
-      './lib/telemetry/skill-completed.js': { ...require('../lib/telemetry/skill-completed.js'), emitSkillCompleted: async () => {} },
-    },
-  });
-  return (async () => {
-    let exitCode;
-    let thrown;
-    try {
-      await cli.main();
-    } catch (e) {
-      if (e && e.exitCode !== undefined) exitCode = e.exitCode;
-      else thrown = e;
-    }
-    let payload;
-    try { payload = JSON.parse(authCli.stdoutText()); } catch { payload = undefined; }
-    return { org, appDir, sdks, exitCode, thrown, payload, stderr: [...cli.stderr, ...authCli.stderr].join('') };
-  })();
+// One invocation of the command (helpers/configuration-command.js) over `org` and the app folder `appDir`, a new one of each by default.
+function runCommand(spec, { org = commandOrg(), appDir = path.join(makeTempDir('config-command-'), 'app'), ...options } = {}) {
+  return runCommandIn(spec, { org, appDir, ...options });
 }
 
 test('the build command creates a declared environment variable through the SDK it makes itself, and prepares that SDK\u2019s workspace without a request', async () => {
@@ -938,4 +887,134 @@ test('a build without the opt-in and without stored configuration rows loads no 
   assert.notEqual(full.result.payload && full.result.payload.noop, true, 'a configuration edit is never the no-op');
   assert.match(full.result.stderr, /changed-only: FULL — full build — data-model: changed/);
   assert.deepEqual(out.org.unexpected, []);
+});
+
+// The build command in separate OS processes over one app folder (helpers/configuration-command-child.js): only what reached the disk
+// (the binding store under the app folder) carries a build's state to the next, never anything a process held in memory. The service is
+// the strict org in this process, which every child reaches over its IPC channel. Each child's temporary folder (TEMP/TMP) is this test's
+// own folder, so the throwaway SDK workspace each command makes is made there and must be gone when the command ends.
+function processCommands() {
+  const root = makeTempDir('config-process-');
+  const env = { ...process.env, TEMP: root, TMP: root, TMPDIR: root, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' };
+  delete env.NODE_TEST_CONTEXT;
+  const pids = [];
+  let runs = 0;
+  const command = (org, spec, { argv } = {}) => new Promise((resolve, reject) => {
+    const n = ++runs;
+    const logFile = path.join(root, `child-${n}.log`);
+    const log = fs.openSync(logFile, 'w');
+    const child = fork(path.join(__dirname, 'helpers', 'configuration-command-child.js'), [], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', log, log, 'ipc'] });
+    let result;
+    child.on('message', async (m) => {
+      if (m.request) {
+        try {
+          child.send({ reply: m.request, answer: await org.request(m.req) });
+        } catch (e) {
+          child.kill();
+          reject(e);
+        }
+      } else if (m.result) {
+        result = m.result;
+      }
+    });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      fs.closeSync(log);
+      if (code !== 0 || !result) return reject(new Error(`command ${n} exited ${code}: ${fs.readFileSync(logFile, 'utf8').slice(-1500)}`));
+      pids.push(result.pid);
+      assert.ok(result.workspaceDirs.length > 0 && result.workspacesRemoved, `command ${n} removed the throwaway SDK workspace it made: ${result.workspaceDirs}`);
+      assert.ok(result.workspaceDirs.every((dir) => path.resolve(dir).startsWith(path.resolve(root))), `command ${n} made its SDK workspace in the test's folder`);
+      resolve(result);
+    });
+    child.send({ start: { origin: org.origin, spec, appDir: path.join(root, 'app'), argv } });
+  });
+  return { root, appDir: path.join(root, 'app'), pids, command };
+}
+
+test('protected configuration in fresh processes: a whole-build retry keeps every id, and a later process reopening the folder sends nothing', async () => {
+  const p = processCommands();
+  let refused = 0;
+  const org = commandOrg({ intercept: ({ method, path: at }) => {
+    if (/^\/EntityDefinitions\(LogicalName='contact'\)\/Attributes/.test(at)) return { statusCode: 200, body: { value: [] } };
+    if (method !== 'POST' || !/^\/contacts\//.test(at)) return undefined;
+    refused += 1;
+    return refused === 1
+      ? { statusCode: 400, body: { error: { code: '0x80071151', message: 'CustomizationLockException: another operation is running, try again later' } } }
+      : { statusCode: 200, body: { Ids: ['11111111-2222-3333-4444-555555555555'] } };
+  } });
+  const spec = protectedSpec({ entities: [{ schemaName: 'contact', displayName: 'Contact', existing: true, primaryAttribute: { schemaName: 'fullname', displayName: 'Full Name' } }], sampleData: { contact: [{ lastname: 'Probe' }] } });
+  const first = await p.command(org, spec, { argv: [...DATA, '--sample-data'] });
+  assert.equal(first.thrown, null, first.stderr.slice(-900));
+  assert.equal(first.exitCode, 0, first.stderr.slice(-900));
+  assert.match(first.stderr, /transient error in sample-data — retrying \(attempt 1\/3\)/);
+  assert.equal(refused, 2, 'the sample data was sent by two attempts');
+  // Both attempts used the same ids: one create per root, at the id the binding store holds.
+  assert.deepEqual(rootCreates(org).sort(), ['POST /customapis', 'POST /duplicaterules', 'POST /environmentvariabledefinitions', 'POST /environmentvariabledefinitions']);
+  // The retried attempt is the one reported: it found every row unchanged at the id the first attempt created it with.
+  const bound = first.payload.created.configuration.unchanged;
+  assert.equal(bound.length, 4, JSON.stringify(first.payload.created.configuration));
+  const idOf = (kind, key) => bound.find((b) => b.kind === kind && b.key === key).id;
+  assert.equal(org.rows('customapis')[0].customapiid, idOf('customApi', 'contoso_Calc'));
+  assert.equal(org.rows('duplicaterules')[0].duplicateruleid, idOf('duplicateRule', 'email'));
+  const ids = PROTECTED_ROWS.map((set) => org.rows(set).map((r) => JSON.stringify(r)).sort());
+
+  const mark = org.requests.length;
+  const again = await p.command(org, spec);
+  assert.equal(again.thrown, null, again.thrown && again.thrown.message);
+  assert.equal(again.exitCode, 0, again.stderr.slice(-900));
+  assert.deepEqual(org.writes(mark), [], 'the reopened folder found every row at its bound id');
+  assert.deepEqual(PROTECTED_ROWS.map((set) => org.rows(set).map((r) => JSON.stringify(r)).sort()), ids);
+  assert.equal(new Set(p.pids).size, 2, 'two OS processes');
+  assert.ok(!p.pids.includes(process.pid));
+  assert.deepEqual(org.unexpected, []);
+});
+
+test('protected configuration in fresh processes: a create whose answer was lost is completed, approved and bound across four processes, and sent once', async () => {
+  const p = processCommands();
+  let org = null;
+  let sends = 0;
+  let replaying = false;
+  org = commandOrg({ intercept: async (req) => {
+    if (replaying || req.method !== 'POST' || req.path.split('?')[0] !== '/customapis') return undefined;
+    sends += 1;
+    if (sends > 1) return undefined;
+    replaying = true;
+    try {
+      await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    } finally {
+      replaying = false;
+    }
+    return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } });
+  const first = await p.command(org, protectedSpec());
+  assert.match(String(first.thrown && first.thrown.message), /customApi contoso_Calc \(create-outcome-unknown\)/);
+  assert.equal(sends, 1);
+
+  let mark = org.requests.length;
+  const blocked = await p.command(org, protectedSpec());
+  assert.equal(blocked.thrown && blocked.thrown.code, 'create-completion-required', blocked.thrown && blocked.thrown.message);
+  assert.deepEqual(org.writes(mark), []);
+
+  // The maker completes the row's solution membership, reading the members the earlier process stored on disk.
+  const store = openManagedBindings({ workspaceDir: path.join(p.appDir, '.maker-workspace'), environment: org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' });
+  const inSolution = new Set(org.rows('solutioncomponents').map((c) => c.objectid));
+  for (const m of store.readGroup('customApi', 'contoso_calc').pending.rowProtocol.completion.members) {
+    if (inSolution.has(m.id)) continue;
+    await org.request({ url: `${org.origin}/api/data/v9.2/AddSolutionComponent`, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ SolutionUniqueName: 'ContosoSol', ComponentId: m.id, ComponentType: m.componentType, AddRequiredComponents: false }) });
+  }
+
+  mark = org.requests.length;
+  const asked = await p.command(org, protectedSpec());
+  assert.equal(asked.thrown && asked.thrown.code, 'create-ownership-required', asked.thrown && asked.thrown.message);
+  assert.deepEqual(org.writes(mark), []);
+  const tokens = JSON.parse(`[${/given after checking those rows are yours: (.*)\.$/.exec(asked.thrown.message)[1]}]`);
+  assert.equal(tokens.length, 3);
+
+  const done = await p.command(org, protectedSpec(), { argv: [...DATA, ...authorize(tokens)] });
+  assert.equal(done.thrown, null, done.thrown && done.thrown.message);
+  assert.equal(done.exitCode, 0, done.stderr.slice(-900));
+  assert.equal(sends, 1, 'the Custom API was sent once, by the first process');
+  assert.equal(org.rows('customapis').length, 1);
+  assert.equal(new Set(p.pids).size, 4, 'four OS processes');
+  assert.deepEqual(org.unexpected, []);
 });
