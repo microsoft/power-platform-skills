@@ -5,6 +5,19 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.23.0]
+
+- **Configuration identities (opt-in):** with `configurationIdentity: "stable-v1"`, environment variables, connection references, Custom APIs and duplicate-detection rules, with their children, are created at reserved ids and bound; a create whose answer was lost is never sent again (#807).
+- **Before its first write, whatever `--stage` or `--changed-only` selects,** a build checks every protected item; a lost create is bound only after each printed `--authorize adopt:` token (a root's approval never covers its children).
+- **Protected rows** are verified by id. A namesake at another id halts `create-identity-conflict`; deletes and value clears halt `configuration-protected-removal-unsupported`; removing the opt-in while rows are bound halts `create-identity-opt-in-required`.
+- **Custom APIs (opt-in):** a root-field edit with new request parameters or response properties is sent as one checked change set; other multi-part edits halt `configuration-edit-unsupported`.
+- **Duplicate-detection rules (opt-in)** are published once, then only verified; later edits halt `configuration-edit-unsupported`. A first publication that may have been sent is never resent: publish the rule by hand (#808).
+- **`--changed-only`** now applies a spec whose only change is a configuration item instead of reporting nothing to apply. Builds without the opt-in are otherwise unchanged.
+
+### Limits
+
+- Rows created before opting in are not migrated (#807 stays open). Make later duplicate-rule edits outside the plugin. Keyed command bars (show or hide buttons on rebuild) are not in this release (#812).
+
 ## [2.22.0]
 
 - **Teardown:** a table's only Main form, refused with `0x8004F661`, settles with its table: one run removes the solution (#806).
