@@ -1,12 +1,16 @@
 # Plugin UX & Reliability
 
-## Setup-auth portability pilot
+## Portable skill rollout
 
-`setup-auth` expresses the phase, verification, approval and progress requirements below without binding them to a particular agent's tools or model.
-Its frontmatter contains only `name` and `description`; its entry links directly to focused resources loaded for the selected branch.
+`setup-auth` and `create-site` express the phase, verification, approval and progress requirements below without binding them to a particular agent's tools or model.
+Both keep `name` and `description` in frontmatter; `create-site` also retains `argument-hint: Optional site description` for clients that display invocation hints.
+Their entries link directly to focused resources loaded for the selected branch.
 Introduce prompts with `Ask the user:` and retain the existing gate markers, human-readable blocks and catalog IDs.
-Run its validator explicitly with `--complete` from the site root rather than relying on host-specific hooks.
+Run the setup-auth validator explicitly with `--complete` from the site root rather than relying on host-specific hooks.
 Completion mode requires finished artifacts and the report; the hook still permits instruction-loading and in-progress runs.
+For `create-site`, use the existing direct validator arguments: canonical expected locale/direction for SPAs, or explicit project and downloaded-site evidence for non-SPAs.
+Keep cloud approval gates, accepted-operation resume behavior, single-owner status and join-before-activation semantics when splitting its workflows.
+Where background workers are unavailable, execute sequentially without changing these dependencies.
 Other skills retain their current conventions until converted.
 
 ## Why This Matters

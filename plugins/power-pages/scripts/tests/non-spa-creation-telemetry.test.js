@@ -310,7 +310,8 @@ Module._load=function(name,...rest){
 
 test('non-SPA workflow emits at selection and verified baseline boundaries without modifying SPA entry points', () => {
   const root = path.resolve(__dirname, '..', '..');
-  const workflow = fs.readFileSync(path.join(root, 'skills', 'create-site', 'workflows', 'non-spa-site.md'), 'utf8');
+  const { readCreateSiteGuidance } = require('./helpers/create-site-guidance');
+  const workflow = readCreateSiteGuidance('non-spa');
   const selectedAt = workflow.indexOf('--eventName template_used');
   assert.ok(selectedAt > workflow.indexOf('## Phase 2:'));
   assert.ok(selectedAt < workflow.indexOf('## Phase 3:'));

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readCreateSiteGuidance } = require('./helpers/create-site-guidance');
 
 const pluginRoot = path.join(__dirname, '..', '..');
 const classicReferences = new Map([
@@ -14,6 +15,12 @@ const classicReferences = new Map([
 ]);
 
 function read(relativePath) {
+  if (relativePath === path.join('skills', 'create-site', 'SKILL.md')) {
+    return readCreateSiteGuidance('spa');
+  }
+  if (relativePath === path.join('skills', 'create-site', 'workflows', 'non-spa-site.md')) {
+    return readCreateSiteGuidance('non-spa');
+  }
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
@@ -356,7 +363,8 @@ test('new non-SPA creation is Enhanced-only while customization remains model-ne
     path.join('skills', 'edit-site', 'references', 'customization-plan-contract.md'),
   );
 
-  assert.match(skill, /allowed-tools: [^\n]*\bSkill\b/);
+  assert.doesNotMatch(skill, /^allowed-tools:|^model:/m);
+  assert.match(workflow, /invoke `\/edit-site` using the available skill-invocation capability/);
   assert.doesNotMatch(skill, /create-site:non-spa-1-select-model/);
   assert.match(skill, /Which frontend framework\?[\s\S]*Non-SPA \(Liquid \+ Web Template\)/);
   assert.match(workflow, /create-site:non-spa-8-customize/);
@@ -376,7 +384,7 @@ test('new non-SPA creation is Enhanced-only while customization remains model-ne
   assert.match(workflow, /--modelVersion "<MODEL_VERSION>"/);
   assert.match(workflow, /verify the site reports `MODEL_VERSION`/);
   assert.match(workflow, /Would you like to customize the downloaded non-SPA template now\?/);
-  assert.match(workflow, /invoke `\/edit-site` through the `Skill` tool/);
+  assert.match(workflow, /invoke `\/edit-site` using the available skill-invocation capability/);
   assert.match(workflow, /validated, committed baseline/);
   assert.match(workflow, /Customization success is not a prerequisite/);
   assert.match(workflow, /Suggest `\/setup-datamodel` only when/);
