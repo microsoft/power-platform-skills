@@ -1325,6 +1325,13 @@ the field builds exactly as before.
   This applies with or without the field and whatever phases run. Declare the item again, with the
   field, to finish it.
   An item that finished before it was removed from the App Spec does not stop the build.
+- **`--changed-only` runs the whole build.** While the field is set, or the binding store holds
+  configuration state, a `--changed-only` apply runs the full build and prints
+  `changed-only: FULL — protected configuration is in play`. Its record of the last apply does not cover
+  these rows, so it cannot tell that one was deleted, that an edit is refused or that the store cannot
+  be read; the full build checks them before its first service change and stops instead. With or without
+  the field, a change to an environment variable, connection reference, Custom API or duplicate-detection
+  rule also makes a `--changed-only` apply a full build.
 - **An edit that did not finish.** The next build decides a Custom API, environment variable or
   connection reference edit from what the first one recorded before sending. A complete edit is
   recorded and never sent again. An edit that no request can have reached is sent once, at the same ids.

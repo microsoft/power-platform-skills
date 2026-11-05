@@ -12,7 +12,9 @@
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
 //
 // Protected configuration (`configurationIdentity: "stable-v1"`, references/app-spec-schema-advanced.md) is checked before the
-// build's first service change, whatever --stage/--only/--changed-only selects; each of these stops sends nothing:
+// build's first service change. An apply is a full build or exactly --stage data (every other range is refused before anything
+// is sent), and while protected configuration is in play --changed-only runs the full build too, never its no-op or pages-only
+// apply (its snapshot does not describe the configuration rows). Each of these stops sends nothing:
 //   configuration-edit-unsupported               an edit the protected path does not make (make it outside the plugin)
 //   configuration-protected-removal-unsupported  a removal (a Custom API child, a bound value's clear)
 //   create-identity-opt-in-required              the opt-in was removed while the binding store holds a declared item

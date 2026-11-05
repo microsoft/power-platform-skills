@@ -3325,8 +3325,15 @@ workspace's binding store holds configuration row state — a local file read th
 read counts as in play, so the preflight stops on it), and installs it on the one HTTP client (`makeSdk`,
 `composeWriteGates` with the workflow effect gate). `runSdkBuildPhases` binds it to the store and builds the hookup
 over it (`protectedConfigurationFor`, `apiBase` `<env>/api/data/v9.0`) before any service change, whatever
-`--stage`/`--phase`/`--changed-only` selects. Otherwise no gate is made and no protected module is loaded, so a
-build without protected configuration sends, prints and loads exactly what it did before. The whole-build
+`--stage`/`--phase` selects. While the gate exists `--changed-only` takes no shortcut: `runBuildCommand` runs the
+full build instead of `changed-only-flow.js` (which forces `full` too when handed the gate,
+`PROTECTED_CONFIGURATION_FULL`), because the apply snapshot a no-op or pages-only apply trusts does not describe the
+configuration rows (a deleted bound row, an unreadable store or a refused edit leave it as it was). Any other partial
+range on `--apply` is refused before anything is sent (`buildModelApp`), so no early exit reports success over a
+pending obligation. Otherwise no gate is made and no protected module is loaded, so a build without protected
+configuration sends, prints and loads what it did before, with one deliberate change: the configuration fields are now
+in `phase-diff.js`'s `data-model` slice, so a `--changed-only` apply whose only change is one of them runs the full
+build instead of reporting nothing to do (an unchanged spec is still the no-op). The whole-build
 retry runs the same command again over the same store, so it finds the rows at the ids the first attempt
 bound (a lost or uncertain create stops as `create-outcome-unknown`, never retried). The `adopt:` approvals a
 stop prints are read by `configurationAuthorizationKeys` (`adopt:<kind>:<port key>`,
