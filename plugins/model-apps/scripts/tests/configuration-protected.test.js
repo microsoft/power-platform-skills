@@ -554,6 +554,99 @@ test('a value made outside the plugin under a bound protected variable is never 
   assert.equal(committed(h, 'environmentVariable', 'contoso_apibase').records.length, 1, 'nothing is adopted');
 });
 
+// A pending edit of a bound item, judged from what its attempt persisted. `lostAfterApply` answers the Custom API PATCH with a
+// failure after the org applied it (an answer lost after the change); `refuse` answers it with a failure the org never applied.
+function editHarness() {
+  const mode = { now: null };
+  let org;
+  const ready = harness({ intercept: async (req) => {
+    if (!mode.now || req.method !== 'PATCH' || !req.path.startsWith('/customapis(')) return undefined;
+    const how = mode.now;
+    mode.now = null;
+    if (how === 'lostAfterApply') await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: req.method, headers: req.headers, body: JSON.stringify(req.body) });
+    return { statusCode: 400, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } }).then((h) => { org = h.org; return h; });
+  return { ready, mode };
+}
+const apiSpec = (over = {}) => configSpec({ environmentVariables: [], duplicateDetectionRules: [], ...over });
+// The edit a build would begin for the bound Custom API (as the port's locate plans it), begun here and never sent.
+async function beginUnsentApiEdit(h, spec) {
+  const types = await B.readComponentTypes(h.sdk.dataverse);
+  const group = committed(h, 'customApi', 'contoso_calc');
+  const bases = new Map();
+  for (const r of group.records) bases.set(r.id, await B.readConfigurationRow(h.sdk.dataverse, r.kind, r.id));
+  const root = group.records.find((r) => r.kind === 'customApi');
+  const planned = B.planOf(spec, { kind: 'customApi', key: 'contoso_Calc', solution: SOL, componentTypes: types.types, bases,
+    boundSlots: ['request:a', 'response:r'], baseGeneration: group.generation, boundIdOf: (k) => (k === 'customApi' ? root.id : undefined) });
+  const [attempt] = h.ctx.begin([planned.plan]);
+  return { attempt, rootId: root.id };
+}
+
+test('a protected Custom API edit whose answer was lost after it applied commits read-only on the rerun: nothing is sent again', async () => {
+  const { ready, mode } = editHarness();
+  const h = await ready;
+  await created(h, apiSpec());
+  const before = committed(h, 'customApi', 'contoso_calc');
+  const edited = apiSpec(api({ description: 'Edited once' }));
+  mode.now = 'lostAfterApply';
+  const first = await pass(h, edited);
+  assert.ok(first.halt, 'the lost answer stops the build');
+  assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending, 'the edit is kept pending');
+  assert.equal(h.org.rows('customapis')[0].description, 'Edited once');
+  const again = await pass(reopen(h), edited);
+  assert.equal(again.halt, null, again.halt && `${again.halt.code}: ${again.halt.message}`);
+  assert.deepEqual(again.sent, [], 'the edit is proved from its own expectation, never sent twice');
+  const group = h.store.readGroup('customApi', 'contoso_calc');
+  assert.equal(group.pending, null);
+  assert.notEqual(group.committed.generation, before.generation, 'the proved edit is the new baseline');
+  assert.equal(group.committed.records.find((r) => r.kind === 'customApi').id, before.records.find((r) => r.kind === 'customApi').id);
+  assert.deepEqual((await pass(reopen(h), edited)).sent, []);
+});
+
+test('a protected Custom API edit refused by the org stays owed: the rerun never replays it and nothing is sent', async () => {
+  const { ready, mode } = editHarness();
+  const h = await ready;
+  await created(h, apiSpec());
+  const edited = apiSpec(api({ description: 'Edited once' }));
+  mode.now = 'refuse';
+  assert.ok((await pass(h, edited)).halt);
+  assert.notEqual(h.org.rows('customapis')[0].description, 'Edited once', 'the org never applied it');
+  for (let i = 0; i < 2; i += 1) {
+    const again = await pass(reopen(h), edited);
+    assert.ok(again.halt, 'an edit that may have been sent is never replayed');
+    assert.deepEqual(again.sent, []);
+    assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending, 'its debt is kept');
+  }
+});
+
+test('a protected Custom API edit proved unsent is resumed under its own attempt and sent exactly once', async () => {
+  const h = await harness();
+  await created(h, apiSpec());
+  const edited = apiSpec(api({ description: 'Edited once' }));
+  const { attempt, rootId } = await beginUnsentApiEdit(h, edited);
+  assert.equal(h.store.readGroup('customApi', 'contoso_calc').pending.token, attempt.token);
+  const out = await pass(reopen(h), edited);
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent.map((r) => `${r.method} ${r.path.split('?')[0]}`), [`PATCH /customapis(${rootId})`]);
+  assert.equal(h.org.rows('customapis')[0].description, 'Edited once');
+  assert.equal(h.store.readGroup('customApi', 'contoso_calc').pending, null);
+  assert.deepEqual((await pass(reopen(h), edited)).sent, [], 'settled: the rerun sends nothing');
+});
+
+test('an unsent protected Custom API edit whose declaration then changed is not sent: it stays owed until restored', async () => {
+  const h = await harness();
+  await created(h, apiSpec());
+  const edited = apiSpec(api({ description: 'Edited once' }));
+  await beginUnsentApiEdit(h, edited);
+  const other = await pass(reopen(h), apiSpec(api({ description: 'Edited twice' })));
+  assert.equal(other.halt && other.halt.code, 'managed-pending-intent-changed');
+  assert.deepEqual(other.sent, []);
+  assert.ok(h.store.readGroup('customApi', 'contoso_calc').pending);
+  const restored = await pass(reopen(h), edited);
+  assert.equal(restored.halt, null, restored.halt && `${restored.halt.code}: ${restored.halt.message}`);
+  assert.equal(restored.sent.length, 1);
+});
+
 test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {
   const { configurationIdentity, ...plain } = configSpec();
   assert.equal(configurationIdentity, 'stable-v1');

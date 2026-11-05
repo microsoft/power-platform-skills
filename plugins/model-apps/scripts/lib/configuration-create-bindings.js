@@ -609,7 +609,7 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
   const planRows = rows.map(({ kind: k, key: rk, id, parentId, mode, expectedSha256, sensitiveInput }) => ({ kind: k, key: rk, id, parentId, mode, expectedSha256, sensitiveInput }));
   const plan = {
     family: kind, key: portKey,
-    declarationSha256: sha({ kind, key: portKey, declaration: A.portableIntent(kind, entry), solution: sol, rows: planRows, ruleState }),
+    declarationSha256: declarationSha256Of(spec, { kind, key, solution: sol, rows: planRows, ruleState }),
     rows: planRows, members, ruleState,
     effects: [...members.map((m) => ({ kind: 'membership', id: m.id })), ...(publishes ? [{ kind: 'rule-state', id: rootId }] : [])],
     ...(baseObservation ? { baseObservation } : {}),
@@ -618,6 +618,20 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
   const planned = deepFreeze({ kind, key: portKey, solution: sol, plan, rows });
   PRIVATE_INPUTS.set(planned, { artifact, secrets });
   return planned;
+}
+
+/**
+ * The declaration digest of a plan of `kind` `key` (planOf's plan.declarationSha256): today's declaration of the item,
+ * the solution, the plan rows ({ kind, key, id, parentId, mode, expectedSha256, sensitiveInput }; any other field is
+ * ignored) and the rule state. Given a pending attempt's OWN persisted rows and rule state, it is the digest that attempt
+ * was prepared with exactly when today's declaration is the one it was prepared for — so recovery judges the attempt by
+ * its original expectation, never by rows re-derived from today's reads.
+ */
+function declarationSha256Of(spec, { kind, key, solution, rows, ruleState = null }) {
+  const entry = A.configurationIntentOf(spec, kind, key);
+  const portKey = A.portKeyOf(kind, entry[PLAN_KEY_FIELD[kind]]);
+  const planRows = rows.map(({ kind: k, key: rk, id, parentId, mode, expectedSha256, sensitiveInput }) => ({ kind: k, key: rk, id, parentId, mode, expectedSha256, sensitiveInput: sensitiveInput === true }));
+  return sha({ kind, key: portKey, declaration: A.portableIntent(kind, entry), solution, rows: planRows, ruleState: ruleState === undefined ? null : ruleState });
 }
 
 function deepFreeze(o) {
@@ -1371,6 +1385,7 @@ module.exports = {
   PRIVATE_MISMATCH,
   KINDS,
   planOf,
+  declarationSha256Of,
   artifactFor,
   acceptResultFor,
   createClassifier,

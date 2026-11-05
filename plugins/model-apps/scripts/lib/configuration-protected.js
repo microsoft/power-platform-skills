@@ -102,7 +102,7 @@ async function locateItem(env, kind, key) {
   const { spec, store, dataverse, solution, bindings, componentTypes } = env;
   const fresh = B.planOf(spec, { kind, key, bindings, solution, componentTypes });
   const group = store.readGroup(kind, fresh.key);
-  if (group.pending) return { state: 'pending', planned: fresh, token: group.pending.token, edit: !!group.committed };
+  if (group.pending && !group.committed) return { state: 'pending', planned: fresh, token: group.pending.token, edit: false, attempt: group.pending, declaredKey: key };
   if (!group.committed) return { state: 'unbound', planned: fresh };
   const records = group.committed.records || [];
   const root = records.find((r) => r.kind === kind && r.key === fresh.key);
@@ -148,6 +148,9 @@ async function locateItem(env, kind, key) {
     const row = planned.rows.find((x) => x.kind === r.kind && x.key === r.key);
     if (row && row.id !== normalizeGuid(r.id)) throw stop(UNVERIFIED_CODE, `the binding of ${kind} "${fresh.key}" names another ${r.kind} than the declaration derives`, { kind, key: fresh.key });
   }
+  // A pending EDIT is located like the bound item it edits — at the exact ids its binding holds — and is then decided
+  // from the expectation the attempt itself persisted (recoverPending), never from this plan's.
+  if (group.pending) return { state: 'pending', planned, token: group.pending.token, edit: true, attempt: group.pending, declaredKey: key };
   return { state: 'bound', planned };
 }
 
@@ -209,16 +212,70 @@ async function childVerdict(env, planned, shape) {
  * rows and that state at the same ids — it commits only when the rule is published (by the original send, or by the
  * maker under the same id), and it never sends the publication again: an uncertain or failed publish is not replayed,
  * it stays a create-completion-required halt. A declaration changed since the attempt is managed-pending-intent-changed.
- * A pending EDIT of a bound row is not recovered here (its plan depends on the base it read): it stays unverified.
- * Answers { verdict, observation }.
+ *
+ * A pending EDIT of a bound item is judged the same way, by the attempt's own persisted rows: its declaration digest is
+ * recomputed from today's declaration over THOSE rows (B.declarationSha256Of), and each row is read at its bound id and
+ * compared with the expectation the attempt persisted (observe projects only the field set of the expectation, so
+ * today's values never replace it). A complete edit commits read-only — its PATCH is never repeated; an incomplete or
+ * uncertain one keeps its typed halt. An edit proved unsent (prepared, or sending with nothing dispatched) is resumed
+ * under its own token, ids, parents and generation (`sameRows`: the plan made from today's reads holds exactly the rows
+ * it persisted, so the conditional base read now is the one the resumed send carries); one whose rows no longer match
+ * is retired when only prepared, and otherwise halts until they are restored.
+ * Answers { verdict, observation, declarationSha256?, sameRows? }.
  */
 async function recoverPending(env, ctx, item) {
   const { planned } = item;
-  if (item.edit || !ctx) {
+  if (!ctx) {
     return { verdict: { action: 'halt', code: UNVERIFIED_CODE, message: `the ${planned.kind} "${planned.key}" has a pending ${item.edit ? 'edit' : 'attempt'} that this build cannot recover; nothing is sent for it` } };
   }
+  if (!item.edit) {
+    const observation = await B.observe(env.dataverse, planned);
+    return { observation, verdict: ctx.classify(item.token, observation, { declarationSha256: planned.plan.declarationSha256 }) };
+  }
+  const protocol = item.attempt && item.attempt.rowProtocol;
+  if (!protocol) return { verdict: { action: 'halt', code: UNVERIFIED_CODE, message: `the ${planned.kind} "${planned.key}" pending edit keeps no row expectation; nothing is sent for it` } };
+  const declarationSha256 = B.declarationSha256Of(env.spec, { kind: planned.kind, key: item.declaredKey, solution: planned.solution, rows: protocol.rows, ruleState: protocol.completion.ruleState });
   const observation = await B.observe(env.dataverse, planned);
-  return { observation, verdict: ctx.classify(item.token, observation, { declarationSha256: planned.plan.declarationSha256 }) };
+  const verdict = ctx.classify(item.token, observation, { declarationSha256 });
+  return { observation, verdict, declarationSha256, sameRows: sameRows(planned.plan.rows, protocol.rows) };
+}
+
+// A plan row as an attempt persists it (managed-create-context.js buildRowPlan); its row version is not part of it.
+const rowSignature = (r) => JSON.stringify([r.kind, r.key, normalizeGuid(r.id), r.parentId ? normalizeGuid(r.parentId) : null, r.mode, r.expectedSha256, r.sensitiveInput === true]);
+const sameRows = (a, b) => a.length === b.length && a.map(rowSignature).sort().join('\n') === b.map(rowSignature).sort().join('\n');
+
+const pendingEditChanged = (planned) => ({
+  action: 'halt', code: CONFLICT_CODE,
+  message: `the ${planned.kind} "${planned.key}" has an unsent pending edit whose rows changed since it was prepared; nothing is sent for it. `
+    + 'Restore the rows to what they were when the edit was prepared (or make the edit outside the plugin), then run again',
+});
+
+/**
+ * Settle or resume a pending EDIT of a bound item before anything is written for it (resolve), from recoverPending's
+ * answer: a complete edit is committed read-only; an unsent one whose rows match is accepted read-only when its target
+ * is already there (every row an update), and otherwise left to update(), which resumes it; an unsent one whose rows
+ * changed is retired while it is only prepared. Answers nothing; throws a typed halt.
+ */
+async function settlePendingEdit(env, ctx, item, rec) {
+  const { planned } = item;
+  const fail = (verdict) => { const h = haltOf(planned.kind, planned.key, verdict); throw stop(h.code, h.message, h); };
+  if (rec.verdict.action === 'commit') {
+    const [settled] = ctx.settle([{ token: item.token, observation: rec.observation, declarationSha256: rec.declarationSha256 }]);
+    if (settled.verdict.action !== 'commit') fail(settled.verdict);
+    return;
+  }
+  if (rec.verdict.action !== 'resume') fail(rec.verdict);
+  if (!rec.sameRows) {
+    if (item.attempt.phase !== 'prepared') fail(pendingEditChanged(planned));
+    env.store.retireUnsentAttempt({ token: item.token, baseGeneration: item.attempt.baseGeneration });
+    return;
+  }
+  if (!item.attempt.rowProtocol.rows.every((r) => r.mode === 'update') || !planned.plan.baseObservation) return;
+  // Already at its target (made by hand, say): accepted with no send. The capture is taken before the fresh read.
+  if (item.attempt.phase === 'prepared') ctx.resume([{ token: item.token, claim: 'first', baseObservation: planned.plan.baseObservation }]);
+  const [capture] = ctx.captureReadOnly([item.token]);
+  const observation = await B.observe(env.dataverse, planned);
+  ctx.acceptReadOnly([{ token: item.token, observation, capture, declarationSha256: rec.declarationSha256 }]);
 }
 
 const haltOf = (kind, key, verdict) => ({
@@ -254,11 +311,13 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
     try {
       const item = await locateItem(env, kind, key);
       if (item.state === 'pending') {
-        const { verdict } = await recoverPending(env, ctx, item);
-        if (verdict.action === 'halt') halts.push(haltOf(kind, item.planned.key, verdict));
-        continue;
-      }
-      if (item.state !== 'bound') continue;
+        const rec = await recoverPending(env, ctx, item);
+        if (rec.verdict.action === 'halt') { halts.push(haltOf(kind, item.planned.key, rec.verdict)); continue; }
+        // A complete edit settles read-only (resolve): nothing more is written for it, so it is not judged as an edit.
+        if (!item.edit || rec.verdict.action === 'commit') continue;
+        if (!rec.sameRows && item.attempt.phase !== 'prepared') { halts.push(haltOf(kind, item.planned.key, pendingEditChanged(item.planned))); continue; }
+        // An unsent edit is judged below like the bound item it edits: it is what this build would send.
+      } else if (item.state !== 'bound') continue;
       // Clearing a bound variable's value (a deployment-settings Value of null) is a DELETE of its value row, a physical
       // removal the protected path does not make, authorized or not. A settings entry that leaves the value alone ("" or
       // none) or replaces it is not a clear; those keep the ordinary path and its authorization.
@@ -321,6 +380,12 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const item = await locateItem(await env(), kind, key);
       const rootId = item.planned.plan.rows[0].id;
       if (item.state === 'bound') return { state: 'present', id: rootId };
+      if (item.state === 'pending' && item.edit) {
+        // The edit's bound row is there whatever the attempt's fate: settle (or retire) the attempt first, so the item is
+        // planned from a settled binding, or left for update() to resume.
+        await settlePendingEdit(await env(), ctx, item, await recoverPending(await env(), ctx, item));
+        return { state: 'present', id: rootId };
+      }
       if (item.state === 'pending') {
         const { verdict, observation } = await recoverPending(await env(), ctx, item);
         if (verdict.action === 'commit') {
@@ -343,7 +408,7 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
     async run({ kind, key }, fn) {
       const item = await locateItem(await env(), kind, key);
       let resumed = null;
-      if (item.state === 'pending') {
+      if (item.state === 'pending' && !item.edit) {
         const { verdict } = await recoverPending(await env(), ctx, item);
         if (verdict.action !== 'resume') throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" pending attempt is not one to send again`, { kind, key: item.planned.key });
         resumed = { token: item.token, claim: verdict.claim };
@@ -384,12 +449,21 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
     async update({ kind, key, id }, fn) {
       const item = await locateItem(await env(), kind, key);
       const { planned } = item;
-      if (item.state !== 'bound' || planned.plan.rows[0].id !== normalizeGuid(id)) throw stop(UNVERIFIED_CODE, `the ${kind} "${planned.key}" is not bound at ${normalizeGuid(id)}`, { kind, key: planned.key });
+      const at = (item.state === 'bound' || (item.state === 'pending' && item.edit)) && planned.plan.rows[0].id === normalizeGuid(id);
+      if (!at) throw stop(UNVERIFIED_CODE, `the ${kind} "${planned.key}" is not bound at ${normalizeGuid(id)}`, { kind, key: planned.key });
+      let resumed = null;
+      if (item.state === 'pending') {
+        // Only an edit proved unsent whose rows are still the ones it persisted is sent again, under its own token.
+        const rec = await recoverPending(await env(), ctx, item);
+        if (rec.verdict.action !== 'resume') { const h = haltOf(kind, planned.key, rec.verdict); throw stop(h.code, h.message, h); }
+        if (!rec.sameRows) { const h = haltOf(kind, planned.key, pendingEditChanged(planned)); throw stop(h.code, h.message, h); }
+        resumed = { token: item.token, claim: rec.verdict.claim, baseObservation: planned.plan.baseObservation || null };
+      }
       if (planned.rows.some((r) => r.mode === 'create')) {
         const conflicts = await B.readConfigurationConflicts(dataverse, planned);
         if (conflicts.state !== 'clear') throw stop(conflicts.code || UNVERIFIED_CODE, `the ${kind} "${planned.key}" namesake query answered ${conflicts.state}`, { kind, key: planned.key });
       }
-      const [attempt] = ctx.begin([planned.plan]);
+      const [attempt] = resumed ? ctx.resume([resumed]) : ctx.begin([planned.plan]);
       const classify = B.createSetClassifier([{ token: attempt.token, planned }]);
       const label = `configuration edit ${kind} ${planned.key}`;
       const batch = apiBase ? { batch: { apiBase, solution: planned.solution } } : {};
