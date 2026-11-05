@@ -483,13 +483,18 @@ const PLAN_KEY_FIELD = Object.freeze({ environmentVariable: 'schemaName', connec
 const ROW_VERSION = /^W\/"\d+"$/;
 
 // The fresh base read of one row a plan UPDATES: a readConfigurationRow answer, present, of that kind at that id, under
-// the planned parent, with a row version. Anything else throws: an update prepared from no read, a stale read of another
-// row or a read without a version would let a PATCH through with no condition the plan holds.
+// the planned parent and, for a kind a plan can PATCH, with a row version. Anything else throws: an update prepared from
+// no read, a stale read of another row or a PATCH-able read without a version would let a PATCH through with no
+// condition the plan holds. A duplicate rule and its conditions are never PATCHed under the opt-in (a changed rule stops
+// with configuration-edit-unsupported), so a bound rule is planned and verified by its exact id and content projection
+// alone — and Dataverse answers `duplicaterules` rows without `@odata.etag`, so requiring one there left a bound rule
+// that could never be rebuilt or verified.
 function baseOf(bases, kind, id, parentId) {
   const b = bases instanceof Map ? bases.get(id) : isPlain(bases) && has(bases, id) ? bases[id] : undefined;
-  if (!isPlain(b) || b.state !== 'present' || b.kind !== kind || b.id !== id || typeof b.rowVersion !== 'string' || !ROW_VERSION.test(b.rowVersion)
+  const versioned = !PATCHABLE.has(kind) || (isPlain(b) && typeof b.rowVersion === 'string' && ROW_VERSION.test(b.rowVersion));
+  if (!isPlain(b) || b.state !== 'present' || b.kind !== kind || b.id !== id || !versioned
     || (parentId !== null && b.parentId !== parentId) || !isPlain(b.decoded) || !isPlain(b.decoded.fields)) {
-    throw new TypeError(`planOf: the ${kind} ${id} is planned as an update but has no fresh base read with a row version (readConfigurationRow)`);
+    throw new TypeError(`planOf: the ${kind} ${id} is planned as an update but has no fresh base read${PATCHABLE.has(kind) ? ' with a row version' : ''} (readConfigurationRow)`);
   }
   return b;
 }

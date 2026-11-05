@@ -1242,3 +1242,43 @@ test('protected configuration through the build command: a connection reference 
   assert.match(String(stopped.thrown && stopped.thrown.message), /connectionReference contoso_sp \(create-identity-conflict\)/);
   assert.deepEqual(other.unexpected, []);
 });
+
+test('protected configuration through the build command: a duplicate rule answered without a row version is created, verified and rebuilt with no write, and a change to it is unsupported', async () => {
+  const spec = { ...makeSpec({ configuration: false }), solution: makeSpec().solution, configurationIdentity: 'stable-v1',
+    duplicateDetectionRules: structuredClone(CONFIGURATION_FIELDS.duplicateDetectionRules) };
+  const org = liveOrg();
+  const out = await runCommand(spec, { org, argv: [...DATA, '--verify'] });
+  succeeded(out, 'the create');
+  noUnexpectedError(out, 'the create');
+  assert.doesNotMatch(out.stderr, /✗ configuration/, out.stderr.slice(-900));
+  assert.match(out.stderr, /✓ verify PASS/, 'the build verified the rule');
+  const [rule] = org.rows('duplicaterules');
+  assert.deepEqual([rule.statecode, rule.statuscode], [1, 2], 'published once');
+  let mark = org.requests.length;
+  const again = await runAgain(spec, out);
+  succeeded(again, 'the unchanged rebuild');
+  noUnexpectedError(again, 'the unchanged rebuild');
+  assert.deepEqual(org.writes(mark), [], 'never published again');
+  // The build's own verify checks the bound rule at its id, through the same plan, and finds it as made.
+  mark = org.requests.length;
+  const verified = await runAgain(spec, out, [...DATA, '--verify']);
+  succeeded(verified, 'the verified rebuild');
+  noUnexpectedError(verified, 'the verified rebuild');
+  assert.doesNotMatch(verified.stderr, /✗ configuration/, verified.stderr.slice(-900));
+  assert.match(verified.stderr, /✓ verify PASS/);
+  assert.deepEqual(org.writes(mark), []);
+
+  for (const [what, change] of [
+    ['a field', (s) => { s.duplicateDetectionRules[0].name = 'Contacts with the same email'; }],
+    ['a condition', (s) => { s.duplicateDetectionRules[0].conditions[0].match = 'firstCharacters'; s.duplicateDetectionRules[0].conditions[0].characters = 3; }],
+  ]) {
+    const edited = structuredClone(spec);
+    change(edited);
+    mark = org.requests.length;
+    const refused = await runAgain(edited, out);
+    assert.equal(refused.thrown && refused.thrown.code, 'configuration-edit-unsupported', `${what}: ${refused.thrown && refused.thrown.message}`);
+    assert.equal(refused.thrown.phase, 'preflight', what);
+    assert.deepEqual(org.writes(mark), [], what);
+  }
+  assert.deepEqual(org.unexpected, []);
+});
