@@ -435,6 +435,25 @@ test('unprefixed previews with the same basename remain separate', (t) => {
   ]);
 });
 
+test('device previews pair by page name when image extensions differ', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const model = buildModel({
+    templateName: 'Supplier Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath: path.join(dir, 'import.html'),
+    previewImages: [
+      'https://example.com/previews/desktop-home.png',
+      'https://example.com/previews/mobile-home.jpg',
+    ],
+    solutionCount: 1,
+  });
+
+  assert.equal(model.template.previews.length, 1);
+  assert.equal(model.template.previews[0].desktop, 'https://example.com/previews/desktop-home.png');
+  assert.equal(model.template.previews[0].mobile, 'https://example.com/previews/mobile-home.jpg');
+});
+
 test('SPA image policy allows only the supplied remote preview origins', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

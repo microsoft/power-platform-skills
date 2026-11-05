@@ -94,7 +94,7 @@ function buildModel({ templateName, templateDescription, statusPath, outputPath,
     const deviceMatch = filename.match(/^(desktop|mobile)-(.+)$/i);
     const displayName = deviceMatch ? deviceMatch[2] : filename;
     const key = deviceMatch
-      ? `device:${displayName.toLowerCase()}`
+      ? `device:${path.parse(displayName).name.toLowerCase()}`
       : `image:${index}`;
     let preview = previewGroups.get(key);
     if (!preview) {
