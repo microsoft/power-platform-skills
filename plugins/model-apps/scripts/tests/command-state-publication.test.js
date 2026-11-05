@@ -87,3 +87,23 @@ test('an observation that cannot be made never throws and confirms nothing', () 
   assert.doesNotThrow(() => o.attachFailure(undefined));
   assert.deepStrictEqual(o.unconfirmed(), ['new_a']);
 });
+
+test('the publication message says what each table\'s rows are known to hold, never "saved" for a write that is not known to have landed', () => {
+  const wording = (rows) => {
+    const o = observerWith('new_a');
+    o.trackRows(() => rows.map(([outcome, entity = 'new_a'], i) => ({ entity, rowId: `r${i}`, outcome })));
+    const error = new Error('halted');
+    o.attachFailure(error);
+    assert.strictEqual(error.commandStatePublicationError.code, CODES.publishUnconfirmed);
+    assert.match(error.commandStatePublicationError.message, /required table publication was not confirmed; run the build again with publishing\.$/, 'the code\'s remedy is kept');
+    return error.commandStatePublicationError.message.split(' — ')[0];
+  };
+  assert.strictEqual(wording([['acknowledged']]), 'new_a: saved, not published');
+  assert.strictEqual(wording([['observed-matching-after-unknown-send']]), 'new_a: saved, not published', 'a lost answer whose row was read back holding the flags');
+  assert.strictEqual(wording([['unknown']]), 'new_a: write outcome unknown, not published');
+  assert.strictEqual(wording([['refused']]), 'new_a: not written, not published');
+  assert.strictEqual(wording([['planned']]), 'new_a: not written, not published', 'a row the attempt never reached');
+  assert.strictEqual(wording([['unchanged']]), 'new_a: already held the declared flags, not published by this build');
+  assert.strictEqual(wording([['acknowledged'], ['unknown'], ['planned'], ['acknowledged', 'new_other']]), 'new_a: 3 rows (1 saved, 1 outcome unknown, 1 not written), not published', 'mixed rows are counted, per table');
+  assert.strictEqual(wording([]), 'new_a: publication not confirmed', 'no row results: no claim about the rows');
+});

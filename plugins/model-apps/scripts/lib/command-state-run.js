@@ -134,6 +134,28 @@ function createCommandStatePublicationObserver() {
   };
   const unconfirmedEntries = () => [...tables.values()].filter((t) => t.outcome !== 'confirmed');
   let rowsOf = () => [];
+  // What each unconfirmed table's rows are known to hold, from their outcomes, so a halt never says "saved" for a write whose outcome is
+  // unknown or that was never sent: "saved" only for a write read back holding the flags; "already held" for a row this attempt did not need
+  // to write (an earlier save may be the unpublished one); "outcome unknown"; "not written" for a refusal or a row never reached.
+  const KIND = Object.freeze({
+    acknowledged: 'saved', 'observed-matching-after-unknown-send': 'saved', unchanged: 'already held', unknown: 'outcome unknown',
+    refused: 'not written', planned: 'not written',
+  });
+  const WHOLE = Object.freeze({
+    saved: 'saved, not published', 'already held': 'already held the declared flags, not published by this build',
+    'outcome unknown': 'write outcome unknown, not published', 'not written': 'not written, not published',
+  });
+  const describeTable = (entry) => {
+    let rows = [];
+    try { rows = (rowsOf() || []).filter((r) => r && lc(r.entity) === entry.entity); } catch { rows = []; }
+    if (!rows.length) return `${entry.entity}: publication not confirmed`;
+    const counts = new Map();
+    for (const r of rows) { const kind = KIND[r.outcome] || 'outcome unknown'; counts.set(kind, (counts.get(kind) || 0) + 1); }
+    if (counts.size === 1) return `${entry.entity}: ${WHOLE[[...counts.keys()][0]]}`;
+    const order = ['saved', 'already held', 'outcome unknown', 'not written'];
+    return `${entry.entity}: ${rows.length} rows (${order.filter((k) => counts.has(k)).map((k) => `${counts.get(k)} ${k}`).join(', ')}), not published`;
+  };
+  const describeUnconfirmed = () => unconfirmedEntries().sort((a, b) => (a.entity < b.entity ? -1 : a.entity > b.entity ? 1 : 0)).map(describeTable).join('; ');
   const snapshot = () => [...tables.values()].sort((a, b) => (a.entity < b.entity ? -1 : a.entity > b.entity ? 1 : 0)).map((t) => ({
     entity: t.entity,
     outcome: t.outcome,
@@ -183,6 +205,8 @@ function createCommandStatePublicationObserver() {
       } catch { /* as above */ }
     },
     unconfirmed: () => unconfirmedEntries().map((t) => t.entity).sort(),
+    /** Each unconfirmed table with what its rows are known to hold, e.g. `new_ticket: saved, not published`. */
+    describeUnconfirmed,
     /**
      * What a halt carries for this feature (not enumerable: it never reaches a serialized error, the journal or a retry's reading of the
      * error): `commandStates`, the rows and tables as they stand, and — while a declared table's publication is unconfirmed —
@@ -197,7 +221,7 @@ function createCommandStatePublicationObserver() {
         if (!open.length) return;
         const names = open.map((t) => t.entity).sort();
         Object.defineProperty(error, 'commandStatePublicationError', {
-          value: { code: CODES.publishUnconfirmed, tables: names, message: `${names.join(', ')}: saved, not published — required table publication was not confirmed; ${REMEDY[CODES.publishUnconfirmed]}.` },
+          value: { code: CODES.publishUnconfirmed, tables: names, message: `${describeUnconfirmed()} — required table publication was not confirmed; ${REMEDY[CODES.publishUnconfirmed]}.` },
           enumerable: false, configurable: true, writable: true,
         });
       } catch { /* a frozen error carries nothing */ }
@@ -379,6 +403,23 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     throw fail(CODES.writeUnknown, `${label(item)}: the write of ${flagWords(fresh.delta)} got ${why}; ${seen}`);
   }
 
+  // The final proof (assertComplete): a fresh app context, then every declared row read and judged against it and its flags compared.
+  async function recheckAtCompletion() {
+    const lateNote = 'checked again at the end of the build, after its app work; the rows it wrote stay written and nothing is rolled back';
+    try {
+      requireTransport({ write: false });
+      const context = await resolveCommandStateContext(transport, { appUniqueName: spec.app.uniqueName, entities: [...new Set(states.map((s) => s.entity))] });
+      for (const s of states) {
+        const { row } = await readJudged(context, s);
+        if (!matches(s, row)) {
+          throw fail(CODES.notConfirmed, `${label(s)}: it now holds hidden ${row.hidden}, disabled ${row.disabled}`);
+        }
+      }
+    } catch (error) {
+      if (!(error instanceof CommandStateError)) throw error;
+      throw new CommandStateError(error.code, `${lateNote}: ${error.message}`, error.detail);
+    }
+  }
   // A step's refusal, as the build halt it ends the build with.
   async function step(phase, run) {
     try {
@@ -444,11 +485,17 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     }),
     /** The tables this attempt's rows are on. */
     requiredTables: () => [...new Set(states.map((s) => s.entity))].sort(),
-    /** After the build's shared work: every declared table's publication confirmed, or exit 1. */
+    /**
+     * After the build's shared work: every declared row judged again against the app and its tables as they are NOW, and every declared
+     * table's publication confirmed, or exit 1. The context the commands phase resolved is not proof here: the build's own app work runs
+     * after it and can take a table out of the app, so membership is resolved afresh. A refusal this late does not undo anything: the rows
+     * already written stay written and a publication already sent stands, and each row's outcome stays what was observed.
+     */
     assertComplete: () => step('publish', async () => {
       if (!observer) return;
+      await recheckAtCompletion();
       const open = observer.unconfirmed();
-      if (open.length) throw fail(CODES.publishUnconfirmed, `${open.join(', ')}: saved, not published — required table publication was not confirmed`);
+      if (open.length) throw fail(CODES.publishUnconfirmed, `${observer.describeUnconfirmed()} — required table publication was not confirmed`);
     }),
     result,
   };

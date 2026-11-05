@@ -3611,7 +3611,10 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   into its existing before-app set; the one publication observer per invocation records whether that plain
   request, or the managed publisher's flush for a managed table (the supported overlap: the existing publisher
   publishes it, the observer reads its `published` list), named each table after its latest row write. An apply
-  succeeds only when every declared table is confirmed; otherwise it halts with `command-state-publish-unconfirmed`,
+  succeeds only when, after the build's app work, every declared row judged against a freshly resolved app
+  context still holds its flags (the commands phase's context is not membership proof; a late refusal rolls
+  nothing back) and every declared table is confirmed; otherwise it halts with `command-state-publish-unconfirmed`
+  (worded per table from the row outcomes: saved / already held / write outcome unknown / not written),
   carried on the halt as non-enumerable `commandStates` / `commandStatePublicationError` (never in the journal or a
   retry's reading). There is no store and no cross-run fence: a sent publish can complete after a halt or after an
   entry is removed, and the next publishing run requests the table only because the spec still names it. Existing

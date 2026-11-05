@@ -41,7 +41,7 @@ function specFor(states = [HIDE], extra = {}) {
 // The tables a PublishXml body names: { "ParameterXml": "<importexportxml><entities><entity>new_ticket</entity></entities></importexportxml>" }
 const tablesOf = (body) => [...String((body && body.ParameterXml) || '').matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1]);
 
-function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, ...orgOptions } = {}) {
+function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPublish, ...orgOptions } = {}) {
   const org = createCommandStateOrg({ writable: true, tables: { [T]: { metadataId: MD } }, rows, ...orgOptions });
   const client = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: org.request, sleep: async () => {}, sendOnce: commandStateSendOnce });
   const transport = createCommandStateTransport({ client, apiUrl: (p) => `${API}${p}` });
@@ -50,7 +50,7 @@ function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, ...orgO
     const { sdk, calls } = makeSimpleMockSdk();
     sdk.dataverse = {
       apiUrl: (p) => `${API}${p}`,
-      post: async (url, body) => { published.push(tablesOf(body)); return { status: publishStatus, body: null }; },
+      post: async (url, body) => { published.push(tablesOf(body)); if (onPublish) onPublish(tablesOf(body)); return { status: publishStatus, body: null }; },
     };
     const warnings = [];
     const run = { sdk, env: ORIGIN, commandStateTransport: transport, emit: () => {}, warn: (w) => warnings.push(String(w)), ...opts };
@@ -318,4 +318,30 @@ test('every row is read again before the first write: one changed after the pref
   assert.strictEqual(error && error.code, 'command-state-approval-stale');
   assert.ok(reads >= 2, `the row was read at the preflight and again before any write (${reads})`);
   assert.deepStrictEqual(h.patches(), [], 'no row was written, not even the one that did not change');
+});
+
+test('the final proof resolves the app afresh after the build\'s app work: a table no longer in the app fails the apply, and the written row stays reported as written', async () => {
+  const tables = { [T]: { metadataId: MD } };
+  // The before-app publication is the last shared step before the final proof; the table leaves the app there, after the commands phase.
+  const h = harness({ tables, onPublish: () => { tables[T].inApp = false; } });
+  const spec = specFor();
+  const { approvals } = await h.approve(spec);
+  const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
+  assert.strictEqual(error && error.code, 'command-state-context-unverified', error && error.message);
+  assert.match(error.message, /checked again at the end of the build, after its app work; the rows it wrote stay written and nothing is rolled back/);
+  assert.strictEqual(h.patches().length, 1, 'the row was written once and is never written again or undone');
+  assert.deepStrictEqual(error.commandStates.rows.map((r) => [r.rowId, r.outcome]), [[ROW, 'acknowledged']], 'the row outcome is what was observed');
+  assert.deepStrictEqual(error.commandStates.publication.map((p) => [p.entity, p.outcome]), [[T, 'confirmed']], 'and the publication that ran stands');
+  assert.strictEqual(error.commandStatePublicationError, undefined);
+});
+
+test('the final proof also fails a row that no longer holds the declared flags after the publication', async () => {
+  const rows = [commandRow(ROW, T, MD)];
+  const h = harness({ rows, onPublish: () => { rows[0].hidden = false; } });
+  const spec = specFor();
+  const { approvals } = await h.approve(spec);
+  const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
+  assert.strictEqual(error && error.code, 'command-state-not-confirmed', error && error.message);
+  assert.match(error.message, /nothing is rolled back: .*it now holds hidden false/);
+  assert.strictEqual(h.patches().length, 1);
 });
