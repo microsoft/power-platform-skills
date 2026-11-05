@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createCommandStateTransport } = require('../lib/command-state-transport.js');
-const { resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, listCommandStateRows } = require('../lib/command-state-read.js');
+const { resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, listCommandStateRows, verifyCommandStates } = require('../lib/command-state-read.js');
 const { REASONS, codeForReasons, canonicalRowId, ROW_SELECT } = require('../lib/command-state-contract.js');
 const { createCommandStateOrg, commandRow, json, ORIGIN, APP_ID, OTHER_APP_ID, SELECT_ALL } = require('./helpers/command-state-org.js');
 
@@ -340,10 +340,19 @@ test('a page that fails, an answer that is no list, a repeated or foreign contin
 
 // --- the transport ------------------------------------------------------------------------------------------------
 
-test('the transport reads only the feature\u2019s resources, under the SDK\u2019s API root, and has no write', async () => {
+test('the transport reads only the feature\u2019s resources, under the SDK\u2019s API root, and writes only one row\u2019s flags', async () => {
   const org = createCommandStateOrg({ tables: TABLES });
   const reader = readerFor(org);
-  assert.deepStrictEqual(Object.keys(reader).sort(), ['apiUrl', 'get', 'getAbsolute']);
+  assert.deepStrictEqual(Object.keys(reader).sort(), ['apiUrl', 'get', 'getAbsolute', 'patchRow']);
+  // The one write refuses, before sending, anything but a row id, a row version and a body of only hidden/isdisabled booleans.
+  for (const [rowId, ifMatch, body] of [
+    ['not-a-guid', 'W/"1"', { hidden: true }], [id(1).toUpperCase(), 'W/"1"', { hidden: true }], [id(1), '*', { hidden: true }], [id(1), undefined, { hidden: true }],
+    [id(1), 'W/"1"', {}], [id(1), 'W/"1"', { hidden: 'true' }], [id(1), 'W/"1"', { hidden: true, visibilitytype: 0 }], [id(1), 'W/"1"', { name: 'x' }], [id(1), 'W/"1"', [true]],
+  ]) {
+    await assert.rejects(reader.patchRow(rowId, ifMatch, body), { code: 'command-state-transport-unavailable' }, JSON.stringify([rowId, ifMatch, body]));
+  }
+  const readOnly = createCommandStateTransport({ client: { get() {} }, apiUrl: (p) => `${API}${p}` });
+  assert.strictEqual(readOnly.patchRow, undefined, 'a client that cannot PATCH gives a transport that cannot write');
   for (const path of ['/systemusers?$select=fullname', '/appactions', `/appactions(${id(1)})`, "/EntityDefinitions(LogicalName='x')?$select=Privileges($select=Name)", '/$batch', 'appactions?$select=name', `${API}/appactions?$select=name`]) {
     await assert.rejects(reader.get(path), { code: 'command-state-transport-unavailable' }, path);
   }
@@ -355,4 +364,44 @@ test('the transport reads only the feature\u2019s resources, under the SDK\u2019
   assert.throws(() => createCommandStateTransport({ client: { get() {} } }), { code: 'command-state-transport-unavailable' });
   assert.throws(() => createCommandStateTransport({ client: { get() {} }, apiUrl: () => 'not a url' }), { code: 'command-state-transport-unavailable' });
   assert.throws(() => createCommandStateTransport({ client: { get() {} }, apiUrl: () => 'http://contoso.crm.dynamics.com/api/data/v9.0/' }), { code: 'command-state-transport-unavailable' });
+});
+
+// --- verification --------------------------------------------------------------------------------------------------
+
+test('verify reads each declared row and checks only the flags it declares, by their spec names; it never writes', async () => {
+  const org = createCommandStateOrg({ tables: TABLES, rows: [ticketRow(1, { hidden: true }), ticketRow(2, { isdisabled: true }), ticketRow(3), ticketRow(4, { _appmoduleid_value: APP_ID }), ticketRow(5, { location: 1 })] });
+  const spec = {
+    app: { uniqueName: 'contoso_Support' },
+    commandStates: [
+      { entity: 'contoso_ticket', location: 'MainTab', scope: 'table', rowId: id(1), hidden: true },
+      { entity: 'contoso_ticket', location: 'MainTab', scope: 'table', rowId: id(2), disabled: true, hidden: false },
+      { entity: 'contoso_ticket', location: 'MainTab', scope: 'table', rowId: id(3), disabled: true },
+      { entity: 'contoso_ticket', location: 'MainTab', scope: 'table', rowId: id(4), hidden: false },
+      { entity: 'contoso_ticket', location: 'MainTab', scope: 'table', rowId: id(5), hidden: false },
+      { entity: 'contoso_ticket', location: 'MainTab', scope: 'table', rowId: id(6), hidden: true },
+    ],
+  };
+  const checks = await verifyCommandStates(readerFor(org), spec);
+  assert.deepStrictEqual(checks.map((c) => [c.name, c.present]), [
+    [`contoso_ticket MainTab row ${id(1)}`, true], [`contoso_ticket MainTab row ${id(2)}`, true], [`contoso_ticket MainTab row ${id(3)}`, false],
+    [`contoso_ticket MainTab row ${id(4)}`, false], [`contoso_ticket MainTab row ${id(5)}`, false], [`contoso_ticket MainTab row ${id(6)}`, false],
+  ]);
+  assert.match(checks[1].detail, /^hidden false, disabled true \(stored flags of the exact row; how the button renders is not checked\)$/);
+  assert.match(checks[2].detail, /^disabled is false, declared true/);
+  assert.match(checks[3].detail, /not the declared row: app-scoped/);
+  assert.match(checks[4].detail, /not the declared row: location-mismatch/);
+  assert.match(checks[5].detail, /^the row does not exist/);
+  assert.deepStrictEqual(org.writes(), []);
+  assert.deepStrictEqual(await verifyCommandStates(readerFor(org), { app: {} }), [], 'no command states: nothing to verify');
+});
+
+test('verify fails every entry, never passes or skips one, when the app context or a row cannot be read', async () => {
+  const spec = { app: { uniqueName: 'contoso_Missing' }, commandStates: [{ entity: 'contoso_ticket', location: 'MainTab', scope: 'table', rowId: id(1), hidden: true }] };
+  const noApp = await verifyCommandStates(readerFor(createCommandStateOrg({ tables: TABLES, rows: [ticketRow(1, { hidden: true })] })), spec);
+  assert.deepStrictEqual(noApp.map((c) => c.present), [false]);
+  assert.match(noApp[0].detail, /^could not be read: /);
+  const odd = createCommandStateOrg({ tables: TABLES, overrides: (req) => (req.path.startsWith('/appactions(') ? json(503, {}) : undefined) });
+  const unreadable = await verifyCommandStates(readerFor(odd), { ...spec, app: { uniqueName: 'contoso_Support' } });
+  assert.deepStrictEqual(unreadable.map((c) => c.present), [false]);
+  assert.match(unreadable[0].detail, /^could not be read: /);
 });

@@ -74,6 +74,8 @@ const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 // The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
 const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { createCommandStateTransport } = require('./lib/command-state-transport.js');
+const { verifyCommandStates } = require('./lib/command-state-read.js');
 const { uniqueKeys } = require('./lib/unique-keys.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
@@ -185,6 +187,8 @@ function singleFlightFirstReads(sdk) {
 
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
+  // The command rows are read with the run's raw client (opts.commandStateClient) at the SDK's own api root, as list-command-states.js reads them.
+  const commandStateRoot = sdk && sdk.dataverse && typeof sdk.dataverse.apiUrl === 'function' ? (path) => sdk.dataverse.apiUrl(path) : null;
   sdk = singleFlightFirstReads(sdk);
   // The page backend (lib/genpage-sdk.js): the environment's pages and one page's source. It reads by page id, so no app id is needed.
   const genpage = opts.genpage;
@@ -295,6 +299,11 @@ function readerFor(sdk, appUnique, opts) {
     // the build makes before it reuses one — or null when there is none:
     //   GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_/scripts/form.js'&$top=1
     //   { "value": [ { "webresourceid": "…", "content": "dmFyIEZvcm0gPSB7…" } ] }
+    // commandStates(spec): each declared commandStates[] entry checked against its row's stored flags (lib/command-state-read.js). Only when
+    // the run gave its raw client: without one the capability is absent and verify fails every declared entry rather than pass it.
+    ...(opts.commandStateClient && commandStateRoot ? {
+      commandStates: async (spec) => verifyCommandStates(createCommandStateTransport({ client: opts.commandStateClient, apiUrl: commandStateRoot }), spec),
+    } : {}),
     webResource: async (name) => {
       const rows = await sdk.queryRecords('webresource', { select: ['webresourceid', 'content'], filter: `name eq '${odataLit(name)}'`, top: 1 });
       const row = rows && rows[0];
@@ -864,7 +873,7 @@ async function main() {
       ? readVerifyManifest({ workspaceDir, environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
       : undefined;
     // `appDir`: a web resource's `contentPath` is read relative to the spec's folder, as the build reads it, to compare its content.
-    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath), managedManifest });
+    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, commandStateClient: httpClient, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath), managedManifest });
     // Only when asked, and before the SDK's workspace is disposed below.
     if (flags['inspect-components'] === true) components = await inspectComponents(session.sdk, spec);
   } finally {

@@ -114,9 +114,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   takes no arguments. **Without a parameter the function is invoked with no arguments**, so
   `primaryControl` is `undefined` and the button appears to do nothing — the error is visible only
   in the browser console, and the build, the deployed rows and `--verify` all still look correct.
-- **Button edits are not applied on rebuild.** The command phase is discover-then-skip: it creates a
-  bar only when none exists. To change a deployed button, delete the entity's commands (or tear down)
-  and rebuild.
+- **Button edits in `commands[]` are not applied on rebuild.** The command phase is discover-then-skip: it creates a
+  bar only when none exists. To change a deployed button's label, script or other properties, delete the entity's commands (or tear down)
+  and rebuild. To only show, hide, enable or disable an existing button, use `commandStates[]` (below).
 - **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
 - **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
   visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
@@ -150,6 +150,63 @@ It only reads; a write flag is a usage error.
   where.
 - A failed or incomplete read prints `{ "ok": false, "code": "command-state-…", "error" }` with
   exit 1 — never a shorter list.
+
+## commandStates[] (optional — show or hide existing buttons)
+```jsonc
+"minimumPluginVersion": "2.24.0",            // required: an older plugin refuses the spec instead of ignoring it
+"app": { "uniqueName": "new_support", ... },  // required: the app the buttons are checked against
+"commandStates": [
+  { "entity": "new_ticket", "location": "MainTab", "scope": "table",
+    "rowId": "11111111-1111-4111-8111-111111111111",   // from list-command-states.js — never invented
+    "hidden": true },                                  // and/or "disabled": true|false
+  { "entity": "new_ticket", "location": "HomeTab", "scope": "table",
+    "rowId": "22222222-2222-4222-8222-222222222222", "hidden": false, "disabled": false }
+]
+```
+Sets the stored **hidden** and **disabled** flags of a modern command button that already exists,
+picked by its row id. Nothing else about the button changes, and a row is never created.
+- **Fields are closed and exact.** `entity` is a table declared in `entities[]`; `location` is exactly
+  `MainTab`, `HomeTab` or `ContextualTab` and must be the row's bar; `scope` is exactly `"table"`;
+  `rowId` is the lower- or upper-case id `list-command-states.js` prints (no braces, not all zeros), one
+  entry per row; set `hidden`, `disabled` or both. A flag you leave out is not read, sent or checked;
+  `false` is an instruction, not "unset". An unknown field (for example `isdisabled`) is refused with
+  `command-state-spec-invalid`.
+- **Table-scoped buttons only.** `scope: "app"` is refused with `command-state-app-scope-unverified`,
+  and so is a row that turns out to be scoped to an app.
+- **Only candidates are written:** an active, unmanaged, customizable, top-level plain button with no
+  Power Fx visibility or on-select formula, on the declared table and bar, that the platform keeps row
+  versions for — the listing's `candidate: true`. A button with an empty (null) `visibilitytype` and
+  every visibility-formula field empty — what `commands[]` writes — counts as static; the build never
+  writes `visibilitytype`.
+- **Only a full build with `--publish` applies them.** A partial range, a changed-only fast apply or an
+  apply without `--publish` is refused before anything is read (`command-state-phase-unsupported`,
+  `command-state-publish-required`); exactly `--stage data` leaves them alone. A spec that also has
+  keyed `commands[]` (`key`) is refused (`command-state-keyed-unsupported`), and so is `commands[]` that
+  would create a new bar on a table whose existing button `commandStates` edits
+  (`command-state-legacy-create-conflict`): create the button in one build, add its state in a later one.
+- **Exact approvals, printed by a dry run.** A dry run reads each row and prints, for every row that
+  needs a change, `--authorize overwrite:command-state:<table>/<bar>/<rowId>/<sha256>` — one version of
+  one row under one intent in one environment — and for every declared table
+  `--authorize publish:command-state-table:<table>/<sha256>`. An apply without every one of them
+  writes nothing (`command-state-approval-required`, `command-state-publication-approval-required`);
+  a row changed after its dry run needs a new token (`command-state-approval-stale`). There is no
+  wildcard and no blanket approval.
+- **Publishing a table publishes ALL saved customizations on it** (anyone's, not only these buttons),
+  for every app that shows the table — which is why it has its own approval.
+- **One conditional write per row.** The build sends only the flags that differ, with `If-Match` on
+  the version it read. A row changed in between is refused (`command-state-version-conflict`) and never
+  overwritten. A write whose answer was lost is never sent again (`command-state-write-unknown`): read
+  the row with `list-command-states.js` before building again.
+- **Success needs the table's publication.** The build publishes each declared table with the tables
+  it publishes before the app; until that publication is seen to succeed after the row's write, the
+  build reports `command-state-publish-unconfirmed` ("saved, not published") — the rows hold the flags,
+  but the button may still show its old state.
+- **Delayed publication is not fenced.** A table publish that was sent can still complete after a
+  halt, or after you remove the entry. This release keeps no record across runs: the next publishing
+  run requests the table again only because `commandStates` still names it.
+- **`--verify` checks stored flags** of each declared row — not how the button renders. A changed-only
+  apply of a spec with `commandStates` always runs the full build. Removing an entry, or a teardown,
+  does not restore a flag, and download does not write `commandStates` back into a spec.
 
 ## businessRules[] (optional — declarative form logic, no code)
 

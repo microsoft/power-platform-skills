@@ -23,7 +23,7 @@ const { collectionRows, currentAppLayer, appComponentRows, tableRefs, TABLE_NAME
 const { odataLit } = require('./odata.js');
 const { compareText } = require('./compare-text.js');
 const {
-  BAR_BY_LOCATION, UNSUPPORTED_BAR, ROW_VERSION, ROW_SELECT, REASONS, CommandStateError, guidOf,
+  BAR_BY_LOCATION, UNSUPPORTED_BAR, ROW_VERSION, ROW_SELECT, REASONS, CommandStateError, guidOf, normalizeCommandStates, SPEC_FLAG,
 } = require('./command-state-contract.js');
 
 const CONTEXT_UNVERIFIED = 'command-state-context-unverified';
@@ -338,4 +338,66 @@ async function listCommandStateRows(reader, context, { location } = {}) {
   return out;
 }
 
-module.exports = { resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, listCommandStateRows, errorCode, NOT_FOUND };
+// The reasons that say a row is not the one declared, or cannot be read as it — each fails the check. The others (managed, a formula, no row
+// version, ...) say only that a build would refuse to write the row; they do not change what its stored flags are.
+const NOT_THE_DECLARED_ROW = new Set([
+  'shape-unreadable', 'flags-unreadable', 'id-mismatch', 'context-not-table', 'context-mismatch', 'table-not-in-app',
+  'location-unsupported', 'location-mismatch', 'app-scoped',
+]);
+const STORED_ONLY = 'stored flags of the exact row; how the button renders is not checked';
+
+/**
+ * Whether each declared `commandStates[]` entry holds in the environment: its row exists, is the table-scoped row of the declared table and bar
+ * in this app, and stores every flag the entry declares. A flag the entry leaves out is not checked. Read only: no approval is needed.
+ * Anything that cannot be read fails the entry's check — never a pass, never left out.
+ * @param {object} reader - lib/command-state-transport.js
+ * @param {object} spec
+ * @returns {Promise<Array<{ name: string, present: boolean, detail: string }>>} one per declared entry, in spec order
+ */
+async function verifyCommandStates(reader, spec) {
+  const states = normalizeCommandStates(spec);
+  if (!states.length) return [];
+  const nameOf = (s) => `${s.entity} ${s.bar} row ${s.rowId}`;
+  let context;
+  try {
+    context = await resolveCommandStateContext(reader, {
+      appUniqueName: spec && spec.app && spec.app.uniqueName, entities: [...new Set(states.map((s) => s.entity))],
+    });
+  } catch (error) {
+    return states.map((s) => ({ name: nameOf(s), present: false, detail: `could not be read: ${reasonOf(error)}` }));
+  }
+  const out = [];
+  for (const s of states) {
+    let failure = null;
+    let flags = '';
+    try {
+      const read = await readCommandStateRow(reader, s.rowId);
+      if (!read.found) {
+        failure = 'the row does not exist';
+      } else {
+        const table = context.tables.get(s.entity);
+        const decoded = decodeCommandStateRow(read.body, {
+          rowId: s.rowId, entity: s.entity, metadataId: table.metadataId, appId: context.appId, inApp: table.inApp, location: s.location,
+        });
+        const wrong = decoded.reasons.filter((reason) => NOT_THE_DECLARED_ROW.has(reason));
+        if (wrong.length) {
+          failure = `not the declared row: ${wrong.join(', ')}${decoded.details.length ? ` (${decoded.details.join('; ')})` : ''}`;
+        } else {
+          // `desired` is by column name (hidden, isdisabled); the decoded row and the spec say `disabled`.
+          const stored = (wire) => decoded.row[SPEC_FLAG[wire]];
+          const differ = Object.keys(s.desired).filter((wire) => stored(wire) !== s.desired[wire]);
+          flags = Object.keys(s.desired).map((wire) => `${SPEC_FLAG[wire]} ${stored(wire)}`).join(', ');
+          if (differ.length) failure = differ.map((wire) => `${SPEC_FLAG[wire]} is ${stored(wire)}, declared ${s.desired[wire]}`).join('; ');
+        }
+      }
+    } catch (error) {
+      failure = `could not be read: ${reasonOf(error)}`;
+    }
+    out.push({ name: nameOf(s), present: !failure, detail: failure ? `${failure} (${STORED_ONLY})` : `${flags} (${STORED_ONLY})` });
+  }
+  return out;
+}
+
+module.exports = {
+  resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, listCommandStateRows, verifyCommandStates, errorCode, NOT_FOUND,
+};

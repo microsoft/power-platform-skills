@@ -1,6 +1,7 @@
 'use strict';
-// The one way the command-state feature talks to Dataverse: reads of the few resources it needs, by a path below the API root. (A later
-// change adds the one write it makes; this file exposes no other.)
+// The one way the command-state feature talks to Dataverse: reads of the few resources it needs, by a path below the API root, and the one
+// write it makes — a conditional PATCH of one command row's `hidden` / `isdisabled` (`patchRow`). It exposes no other write: no POST, no
+// PublishXml, no DELETE, no `$batch`; publication stays on the build's own clients.
 //
 // It is built over the plugin's raw az-token client (`createAzHttpClient`, lib/sdk-http-client.js), which takes ABSOLUTE urls on the
 // environment's origin and refuses any other, and over the SDK's own `dataverse.apiUrl(path)`, which says what the API root is — so the root
@@ -13,7 +14,20 @@
 // Only the paths below are read, so a bug elsewhere cannot turn this into a general reader of the environment, and a continuation the platform
 // gives must be under the same API root and name one of the same resources: a link anywhere else is refused before it is sent.
 
-const { CommandStateError } = require('./command-state-contract.js');
+const { CommandStateError, ROW_VERSION, guidOf } = require('./command-state-contract.js');
+
+// The one write: PATCH <root>/appactions(<row id>), nothing after the parenthesis — no $select, no query.
+const ROW_PATCH = /\/appactions\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)$/;
+
+/**
+ * The `sendOnce` of the raw client this feature writes with (createAzHttpClient's `deps.sendOnce`): the row PATCH is sent exactly once, whatever
+ * answers it. A conditional PATCH answered 503 is otherwise sent again by the client (measured on the fake transport: two sends), and a second send
+ * of a write that may have committed is refused 412 against the version the first one made, which reads exactly like another maker's edit.
+ * Every read keeps the client's ordinary retries.
+ */
+function commandStateSendOnce(method, url) {
+  return String(method).toUpperCase() === 'PATCH' && ROW_PATCH.test(String(url));
+}
 
 // The resources the feature reads, as the path below the API root starts.
 const READ_PATHS = [
@@ -32,7 +46,8 @@ function unavailable(what) {
 
 /**
  * @param {object} options
- * @param {{ get: Function }} options.client - the raw client: absolute same-origin urls, `{ status, headers, body }` answers
+ * @param {{ get: Function, patch?: Function }} options.client - the raw client: absolute same-origin urls, `{ status, headers, body }` answers.
+ *   Without `patch` the transport has no `patchRow`, and a build that needs one refuses before it writes anything.
  * @param {(path: string) => string} options.apiUrl - the SDK's `dataverse.apiUrl`: a path below the API root -> its absolute url
  */
 function createCommandStateTransport({ client, apiUrl } = {}) {
@@ -60,7 +75,26 @@ function createCommandStateTransport({ client, apiUrl } = {}) {
     if (typeof url !== 'string' || !url.startsWith(`${root}/`) || !allowed(url.slice(root.length))) throw refuse(url);
     return client.get(url);
   };
-  return Object.freeze({ get, getAbsolute, apiUrl: (path) => `${root}${path}` });
+  const surface = { get, getAbsolute, apiUrl: (path) => `${root}${path}` };
+  if (typeof client.patch === 'function') {
+    // PATCH /appactions(<rowId>) with If-Match: the exact observed version, and a body of only the flags that change, e.g.
+    //   If-Match: W/"4893215"
+    //   {"hidden":true}
+    // No upsert: with If-Match the platform answers 412 rather than create a row
+    // (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api).
+    // No MSCRM.SolutionUniqueName header: this must never put a reused row into a solution.
+    surface.patchRow = async (rowId, ifMatch, body) => {
+      const id = guidOf(rowId);
+      const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
+      if (!id || id !== rowId) throw new CommandStateError('command-state-transport-unavailable', `command-state transport: '${rowId}' is not a row id`);
+      if (typeof ifMatch !== 'string' || !ROW_VERSION.test(ifMatch)) throw new CommandStateError('command-state-transport-unavailable', `command-state transport: '${ifMatch}' is not a row version`);
+      if (!keys.length || keys.some((k) => (k !== 'hidden' && k !== 'isdisabled') || typeof body[k] !== 'boolean')) {
+        throw new CommandStateError('command-state-transport-unavailable', 'command-state transport: a row write carries hidden and/or isdisabled, as true or false, and nothing else');
+      }
+      return client.patch(`${root}/appactions(${id})`, { ...body }, { headers: { 'If-Match': ifMatch } });
+    };
+  }
+  return Object.freeze(surface);
 }
 
-module.exports = { createCommandStateTransport, READ_PATHS };
+module.exports = { createCommandStateTransport, commandStateSendOnce, READ_PATHS };

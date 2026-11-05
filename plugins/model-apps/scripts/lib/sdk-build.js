@@ -175,6 +175,8 @@ const { isDeclaredView, declaredViewKey, planViewReconcile, applyViewReconcile }
 const { isDeclaredChart, declaredChartKey, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
 const { openManagedContext, isStoreEnvironment, attemptProvenUnsent, discoverManagedStore, ROW_FAMILIES } = require('./managed-bindings.js');
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
+const { commandStateMode, createCommandStateRun, createCommandStatePublicationObserver, CODES: COMMAND_STATE_CODES, REMEDY: COMMAND_STATE_REMEDY } = require('./command-state-run.js');
+const { createCommandStateTransport } = require('./command-state-transport.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 // The configuration kinds (environment variables, connection references, Custom APIs, duplicate rules) and the solution's version:
@@ -3470,6 +3472,9 @@ async function runSdkBuildAttempt(spec, opts = {}) {
   // (oweTablePublish). lengths: table logical -> { table, column, asked, tried, tableId, columnId? } of a name column whose
   // length is owed.
   const owed = { tables: new Map(), paid: false, lengths: new Map(), barrier: opts.publicationBarrier || createPublicationBarrier() };
+  // commandStates (lib/command-state-run.js): whether this invocation's table publication covered each table a command row was written on is
+  // recorded by one observer for the whole invocation — build-model-app.js hands every attempt the same one; a direct caller's attempt makes its own.
+  owed.commandStateObserver = commandStateModeOf(spec, opts).mode === 'apply' ? (opts.commandStateObserver || createCommandStatePublicationObserver()) : null;
   // A record this attempt was handed is a debt it has not tried to pay yet, whatever an earlier attempt did with it.
   let carriedIn = 0;
   for (const debt of Array.isArray(opts.owedLengths) ? opts.owedLengths : []) {
@@ -3493,8 +3498,39 @@ async function runSdkBuildAttempt(spec, opts = {}) {
         Object.defineProperty(err, 'owedLengths', { value: [...owed.lengths.values()], enumerable: false, configurable: true, writable: true });
       } catch { /* a frozen error carries nothing; a run that finds the table leaves its name column as it is, which the warning said */ }
     }
+    // What the halt leaves of the command states: the rows' results and, while a declared table is not seen published, why (not enumerable).
+    if (owed.commandStateObserver) owed.commandStateObserver.attachFailure(err);
     throw err;
   }
+}
+
+// How this run treats the spec's commandStates (lib/command-state-run.js commandStateMode): the changed-only fast path is never a full apply.
+function commandStateModeOf(spec, opts) {
+  return commandStateMode(spec, { apply: !!opts.apply, publish: !!opts.publish, phases: opts.phases || PHASES, changedOnlyFast: !!(opts.changedOnly && opts.changedOnly.fastApply) });
+}
+
+// The command rows' reader and writer: the caller's own (a test), or one over the raw client build-model-app.js made for command rows alone (its
+// row PATCH is never resent: commandStateSendOnce), rooted at the SDK's API root. Null when there is none: the run then stops before it reads.
+function commandStateTransportFor(opts, sdk) {
+  if (opts.commandStateTransport) return opts.commandStateTransport;
+  if (!opts.commandStateClient) return null;
+  try {
+    return createCommandStateTransport({ client: opts.commandStateClient, apiUrl: (path) => sdk.dataverse.apiUrl(path) });
+  } catch {
+    return null;
+  }
+}
+
+// A dry run's command states: read-only, and only with the commands phase. A live plan reads every row and prints the exact approvals an apply
+// would need; a plan asked not to read the environment (or with no reader) says the rows are unverified and prints no token. A row the live plan
+// cannot plan stops the dry run (exit 1): an approval printed for a row that cannot be written would be a token for nothing.
+async function planCommandStatesForDryRun(spec, opts, sdk, has) {
+  if (commandStateModeOf(spec, opts).mode === 'off') return undefined;
+  if (!has('commands')) return { status: 'skipped', reason: 'the commands phase is not selected: command states are neither read nor applied' };
+  const transport = opts.livePlan === false ? null : commandStateTransportFor(opts, sdk);
+  if (!transport) return { status: 'unverified', reason: 'the rows were not read (offline plan), so no approval token is printed; run a live dry run for them' };
+  const run = createCommandStateRun({ spec, transport, origin: opts.env, approvals: opts.commandStateApprovals, publish: true });
+  return { status: 'planned', ...(await run.plan()) };
 }
 
 // A run with sample data and without the data-model phase (`--phases sample-data`) never secures a column: the data-model phase does that,
@@ -3668,6 +3704,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         preview = { ok: false, allEvaluated: false, error: findingOf(err, 'PREVIEW_FAILED') };
       }
     }
+    const commandStatePlan = await planCommandStatesForDryRun(spec, opts, provision, has);
     return {
       ok: true,
       dryRun: true,
@@ -3676,7 +3713,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
       planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}),
         ...(p.op ? { op: p.op, destructive: p.destructive, description: p.description, publication: p.publication } : {}) })),
       ...(preview ? { pushPreview: preview } : {}),
+      ...(commandStatePlan ? { commandStatePlan } : {}),
     };
+  }
+
+  // commandStates: a partial apply, an apply without --publish, or one with keyed commands[] is refused here, before anything is read or written.
+  // Exactly --stage data leaves the rows alone (no read, no approval) and says so.
+  const commandStateModeOfRun = commandStateModeOf(spec, opts);
+  if (commandStateModeOfRun.mode === 'error') {
+    throw new BuildHalt(`${commandStateModeOfRun.code}: ${commandStateModeOfRun.message}`, { phase: 'preflight', code: commandStateModeOfRun.code, recoverable: false, retry: RETRY.NEVER });
+  }
+  if (commandStateModeOfRun.mode === 'data-stage' && typeof opts.warn === 'function') {
+    opts.warn('commandStates: not applied by --stage data (no command row is read or written); a full build with --publish applies them');
   }
 
   // Capture the attempt's checkpoint before best-effort preflight reads can swallow a refused throttle wait as unchecked metadata. The same runner then stops before any mutation, without counting refusals from earlier attempts.
@@ -4217,6 +4265,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // still stops on an attempt an earlier build left unfinished (sweepPendingConfiguration), whatever phases this run selects.
   if (configurationRun) await configurationRun.preflight();
   else sweepPendingConfiguration(spec, configurationOpts);
+  // commandStates (lib/command-state-run.js), before the first write too: every declared row read and judged and every approval present, or
+  // the build stops having written nothing. Only a full apply with --publish gets here with a run (commandStateModeOf, above).
+  const commandStateRun = commandStateModeOfRun.mode === 'apply'
+    ? createCommandStateRun({ spec, transport: commandStateTransportFor(opts, provision), origin: opts.env, approvals: opts.commandStateApprovals, publish: true, observer: owed.commandStateObserver })
+    : null;
+  if (commandStateRun) await commandStateRun.preflight();
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
   // spec's web resources and the generated app icon are written again by id when they are in it, and the page manifest is written again by its id where
   // its published copy is not what the run wants (kept where it is: persistPageManifest). One per run of the phases, so the
@@ -4472,19 +4526,32 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const verdict = owed.barrier.checkAppWrite({ added, held: appHolds.unread ? undefined : [...(appHolds.tables || []), ...appAdded], existingApp: !!existingAppId, addedDashboards: Object.values(result.created.dashboards || {}).filter(Boolean) });
         if (!verdict.ok) throw new BuildHalt(describeWithheldApp(verdict), { phase: 'app-shell', code: 'publication-withheld', recoverable: true, retry: RETRY.NEVER });
       }
+      // commandStates (lib/command-state-run.js): the observer only records what this path answers; it sends nothing and never throws.
+      const commandStateObserver = owed.commandStateObserver;
       if (!publish || !client || typeof client.post !== 'function') {
         for (const logical of added || []) appAdded.add(logical);
         await publishReconciledTables();
-        if (managedTables) await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
+        if (managedTables) {
+          const flushed = await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
+          if (commandStateObserver) commandStateObserver.observeManaged(flushed);
+        }
         return undefined;
       }
       await readHoldings();
       for (const logical of added) appAdded.add(logical);
-      const wanted = owed.barrier.allowTables(preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables }), 'tables published before the app');
+      const preApp = preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables });
+      // A table whose command row the build edits is published in the same envelope, before the app: its rows are served once it is.
+      const askedBeforeApp = commandStateObserver ? [...new Set([...preApp, ...commandStateObserver.declaredTables()])].sort() : preApp;
+      const wanted = owed.barrier.allowTables(askedBeforeApp, 'tables published before the app');
       // A routed table is left out of the request above and remembered as wanted: the managed publisher sends it first.
-      if (managedTables) await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
+      if (managedTables) {
+        const flushed = await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
+        if (commandStateObserver) commandStateObserver.observeManaged(flushed);
+      }
       const tables = wanted.filter((logical) => !namedBeforeApp.has(logical));
       const outcome = await publishTablesXml(client, tables);
+      // Only a non-empty list answered ok confirms, and only the names it carried (an empty list answers ok without a request).
+      if (commandStateObserver) commandStateObserver.observePlain(tables, outcome);
       for (const logical of tables) namedBeforeApp.add(logical);
       if (outcome.ok) {
         reconciledTables.clear();
@@ -8552,6 +8619,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   }
 
   if (has('commands')) {
+    // commandStates: everything read again before the first row write; a row that changed since its approval stops the build here.
+    if (commandStateRun) await commandStateRun.recheckAll();
+    const commandStateTables = new Set(commandStateRun ? commandStateRun.requiredTables() : []);
     for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
       if (isManagedEntity(cmds)) {
         // A keyed command bar (commands[].key, lib/command-reconcile.js): one fetch, a push only when something changed.
@@ -8576,6 +8646,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
         result.created.commands[entityLogical] = existingId;
         continue;
       }
+      // A new command bar on a table whose existing buttons commandStates edits in the same build: refused before it is created, so one build
+      // never both creates buttons on a table and edits that table's rows (the state rows were judged before the bar existed).
+      if (commandStateTables.has(String(entityLogical).toLowerCase())) {
+        throw new BuildHalt(`${COMMAND_STATE_CODES.legacyCreateConflict}: commands[] for ${entityLogical}: ${COMMAND_STATE_REMEDY[COMMAND_STATE_CODES.legacyCreateConflict]}`,
+          { phase: 'commands', code: COMMAND_STATE_CODES.legacyCreateConflict, recoverable: false, retry: RETRY.NEVER });
+      }
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
         const art = await provision.createArtifact('command', def);
@@ -8583,6 +8659,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         result.created.commands[entityLogical] = pushed.id;
       });
     }
+    // Then the rows, one at a time, before the commands phase ends: the before-app table publication that follows covers them.
+    if (commandStateRun) await commandStateRun.applyRows();
   }
 
   // 6c. Dashboards. createArtifact('dashboard') seeds a dashboard; each chart/list/iframe/webresource
@@ -10969,6 +11047,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // Not enumerable, like owedPublishes: it rides along for the caller, never into a serialized error or the journal.
     Object.defineProperty(halt, 'incomplete', { value: incomplete, enumerable: false, configurable: true, writable: true });
     throw halt;
+  }
+  // commandStates, after all the shared work: every declared table's publication confirmed for its latest row write, or exit 1
+  // (command-state-publish-unconfirmed). Its rows' results are on the result either way (the halt carries them: runSdkBuildAttempt).
+  if (commandStateRun) {
+    await commandStateRun.assertComplete();
+    result.commandStates = commandStateRun.result();
   }
   return result;
 }

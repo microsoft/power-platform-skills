@@ -167,6 +167,22 @@ apart deliberately.
 - Modern command-bar buttons — functional **JS on-click** + static hidden/disabled, incl. **flyout / split-button menus**.
 - Web resources (JS / HTML / CSS) shipped + added to the solution; idempotent (reuse by name). One whose publication the SDK could not confirm (`WEB_RESOURCE_UNVERIFIED` — its publish refused under the customization lock, say) is still added to the solution, recorded in the build workspace, and written again by id on the next run, never created twice (`lib/web-resource-records.js`; `web-resource-unconfirmed.test.js`).
 
+### Existing command button state (`commandStates[]`) — 🧪 tested; served state not yet browser-verified
+- `list-command-states.js` (read-only) lists the modern command buttons of an app's tables by row id, with
+  their bar, scope, stored `hidden` / `disabled` and whether each is a candidate (and every reason it is not).
+- `commandStates[]` (`minimumPluginVersion: "2.24.0"`) sets the stored `hidden` / `disabled` flags of an
+  existing **table-scoped** button, picked by that row id, with one conditional flag-only update per changed
+  row — only in a full build with `--publish`, and only with the exact approvals a dry run prints (one per row
+  version and intent, one per table to publish). App-scoped buttons, other button properties and creating a
+  button are out of scope; keyed `commands[]` cannot be combined with it.
+- Measured against the platform API: a row read straight after the update returns the saved flags and a new
+  row version before any publish; a stale version is refused (412) and the newer content kept; the table
+  publication the build already makes answers success. `--verify` checks those stored flags only.
+- **Not yet verified:** that the app *shows* the new state after the table publication (a browser check of
+  the served command bar before and after publishing). Until that check passes, treat a build's success as
+  "saved and table published", not "the button now looks this way".
+- Tests: `scripts/tests/command-state-*.test.js`, `list-command-states.test.js`.
+
 ### App theme and header logo (Preview) — 🧪 tested
 - `app.theme` sets the app's **modern theme** — a base palette colour (or explicit palette slots), header
   colours, an optional font — and a **header logo** (an existing image web resource and its tooltip).

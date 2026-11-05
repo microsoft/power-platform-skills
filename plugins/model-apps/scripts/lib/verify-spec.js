@@ -49,6 +49,7 @@ const { verifyDateBehaviors } = require('./date-behavior.js');
 const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
 const { expectedQuickFindProjection } = require('./quick-find.js');
 const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
+const { usesCommandStates, normalizeCommandStates } = require('./command-state-contract.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -1378,6 +1379,26 @@ async function verifySpec(spec, read, opts = {}) {
       try { present = !!(await read.commandBar(entity)); } catch { present = false; }
       add('command', `${entity} command bar`, present);
     }
+    });
+  }
+
+  // Command states: each declared commandStates[] entry's row holds the flags it declares (verifyCommandStates, lib/command-state-read.js). Unlike
+  // the existence check above this is not best-effort: a spec that declares states asked for them to be checked, so a reader that cannot read
+  // command rows, or a read that fails, fails every entry — never a pass and never left out. Only stored flags are checked, not how the button renders.
+  if (usesCommandStates(spec)) {
+    plan.each([spec], async ({ add }) => {
+      const label = (s) => `${s.entity} ${s.bar} row ${s.rowId}`;
+      let checks;
+      if (typeof read.commandStates !== 'function') {
+        checks = normalizeCommandStates(spec).map((s) => ({ name: label(s), present: false, detail: 'this reader cannot read command rows' }));
+      } else {
+        try {
+          checks = await read.commandStates(spec);
+        } catch (error) {
+          checks = normalizeCommandStates(spec).map((s) => ({ name: label(s), present: false, detail: `could not be read: ${(error && error.message) || error}` }));
+        }
+      }
+      for (const c of checks) add('command-state', c.name, c.present, c.detail);
     });
   }
 

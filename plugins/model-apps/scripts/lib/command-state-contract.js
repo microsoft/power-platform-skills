@@ -111,7 +111,243 @@ class CommandStateError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// The App Spec's `commandStates[]`: the hidden / disabled state of an EXISTING table-scoped modern command, named by its row id.
+//   { "entity": "contoso_order", "location": "MainTab", "scope": "table", "rowId": "11111111-1111-4111-8111-111111111111", "hidden": true }
+// The first four keys are required, and at least one of `hidden` / `disabled`. A flag left out keeps what the row stores; `false` is an
+// instruction. `disabled` is the row's `isdisabled` column.
+
+const COMMAND_STATES_MIN_VERSION = '2.24.0';
+const SPEC_INVALID = 'command-state-spec-invalid';
+const APP_SCOPE_UNVERIFIED = 'command-state-app-scope-unverified';
+const ENTRY_KEYS = Object.freeze(['entity', 'location', 'scope', 'rowId', 'hidden', 'disabled']);
+// The App Spec's flag name -> the row's column.
+const WIRE_FLAG = Object.freeze({ hidden: 'hidden', disabled: 'isdisabled' });
+const SPEC_FLAG = Object.freeze({ hidden: 'hidden', isdisabled: 'disabled' });
+// Keys an author may reach for from `commands[]` or the row itself. Each is an unknown field here; `isdisabled` names its spelling.
+const FIELD_HINTS = Object.freeze({ isdisabled: 'use disabled' });
+
+const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const show = (value) => {
+  try { return JSON.stringify(value); } catch { return String(value); }
+};
+
+/** True when the spec declares at least one command state. Absent and `[]` are the feature switched off. */
+function usesCommandStates(spec) {
+  return !!spec && typeof spec === 'object' && Array.isArray(spec.commandStates) && spec.commandStates.length > 0;
+}
+
+// A row id an author wrote, in the one spelling this feature uses: hex in either case is taken and lower-cased; braces, whitespace and the
+// all-zero id are not.
+const authoredRowId = (value) => (typeof value === 'string' ? canonicalRowId(value.toLowerCase()) : null);
+
+/**
+ * Offline checks of `spec.commandStates`. Absent: nothing to check. Every finding is one line that starts with its stable code and names the
+ * entry and the reason:
+ *   command-state-spec-invalid: commandStates[1].location (location-invalid): ...
+ *   command-state-app-scope-unverified: commandStates[0].scope: ...
+ * @returns {{ errors: string[], findings: { code: string, subreason: string|null, path: string, message: string }[] }}
+ */
+function validateCommandStates(spec) {
+  const findings = [];
+  const add = (code, subreason, path, message) => findings.push({ code, subreason, path, message });
+  const invalid = (subreason, path, message) => add(SPEC_INVALID, subreason, path, message);
+  const out = () => ({
+    findings,
+    errors: findings.map((f) => `${f.code}: ${f.path}${f.subreason ? ` (${f.subreason})` : ''}: ${f.message}`),
+  });
+  if (!spec || typeof spec !== 'object' || !own(spec, 'commandStates') || spec.commandStates === undefined) return out();
+  const states = spec.commandStates;
+  if (!Array.isArray(states)) {
+    invalid('array-required', 'commandStates', `must be an array of command states (or left out); got ${show(states)}`);
+    return out();
+  }
+  if (!states.length) return out();
+  // The App Spec's declared tables by logical name (the schema name in lower case), the way commands[] and the build name them.
+  const declared = new Set();
+  for (const e of Array.isArray(spec.entities) ? spec.entities : []) {
+    if (e && typeof e.schemaName === 'string' && e.schemaName.trim()) declared.add(e.schemaName.toLowerCase());
+  }
+  const seen = new Map();
+  states.forEach((entry, i) => {
+    const at = `commandStates[${i}]`;
+    if (!isRecord(entry)) {
+      invalid('object-required', at, `must be an object; got ${Array.isArray(entry) ? 'an array' : show(entry)}`);
+      return;
+    }
+    for (const key of Object.keys(entry)) {
+      if (ENTRY_KEYS.includes(key)) continue;
+      const hint = FIELD_HINTS[key] ? ` (${FIELD_HINTS[key]})` : '';
+      invalid('unknown-field', `${at}.${key}`, `is not a command-state field${hint}; a command state takes only ${ENTRY_KEYS.join(', ')}. `
+        + 'It changes the hidden or disabled state of an existing button and nothing else about it');
+    }
+    if (typeof entry.entity !== 'string' || !declared.has(entry.entity.toLowerCase())) {
+      invalid('entity-undeclared', `${at}.entity`, `must name a table declared in entities[]; got ${show(entry.entity)}`);
+    }
+    if (typeof entry.location !== 'string' || !own(LOCATION_BY_BAR, entry.location)) {
+      invalid('location-invalid', `${at}.location`, `must be exactly MainTab, HomeTab or ContextualTab; got ${show(entry.location)}`);
+    }
+    if (entry.scope === 'app') {
+      add(APP_SCOPE_UNVERIFIED, null, `${at}.scope`, 'app-scoped command rows are not supported in this version; only scope "table" is');
+    } else if (entry.scope !== 'table') {
+      invalid('scope-invalid', `${at}.scope`, `must be exactly "table"; got ${show(entry.scope)}`);
+    }
+    const rowId = authoredRowId(entry.rowId);
+    if (!rowId) {
+      invalid('row-id-invalid', `${at}.rowId`, `must be a row id like 11111111-1111-4111-8111-111111111111 (no braces, not all zeros); got ${show(entry.rowId)}. `
+        + 'List the app\'s buttons with list-command-states.js to find it');
+    } else if (seen.has(rowId)) {
+      invalid('row-id-duplicate', `${at}.rowId`, `names the same row as commandStates[${seen.get(rowId)}]; give each row one entry with all its flags`);
+    } else {
+      seen.set(rowId, i);
+    }
+    for (const flag of ['hidden', 'disabled']) {
+      if (own(entry, flag) && typeof entry[flag] !== 'boolean') invalid('boolean-required', `${at}.${flag}`, `must be true or false; got ${show(entry[flag])}`);
+    }
+    if (!own(entry, 'hidden') && !own(entry, 'disabled')) invalid('flags-required', at, 'must set hidden, disabled or both');
+  });
+  if (!spec.app || typeof spec.app.uniqueName !== 'string' || !spec.app.uniqueName.trim()) {
+    invalid('app-unique-name-required', 'app.uniqueName', 'commandStates needs the app\'s unique name, which is how the build finds the app the buttons are checked against');
+  }
+  // Required here, not at the top: app-spec.js loads this module lazily from inside validateAppSpec, so its exports are complete by now.
+  const { isPluginVersion, compareVersions } = require('./app-spec.js');
+  const floor = spec.minimumPluginVersion;
+  if (!isPluginVersion(floor) || compareVersions(floor, COMMAND_STATES_MIN_VERSION) < 0) {
+    invalid('version-floor-required', 'minimumPluginVersion', `must be '${COMMAND_STATES_MIN_VERSION}' or newer when commandStates is used, so an older plugin refuses the spec rather than ignoring it`);
+  }
+  return out();
+}
+
+/**
+ * One valid entry in the form the build uses. Call only on a spec validateCommandStates found nothing wrong with.
+ * @returns {{ entity: string, bar: string, location: number, scope: 'table', rowId: string, desired: { hidden?: boolean, isdisabled?: boolean } }}
+ */
+function normalizeCommandState(entry) {
+  return {
+    entity: entry.entity.toLowerCase(),
+    bar: entry.location,
+    location: LOCATION_BY_BAR[entry.location],
+    scope: 'table',
+    rowId: authoredRowId(entry.rowId),
+    desired: wireDesired(entry),
+  };
+}
+
+/** Every entry, normalized, in the spec's order; [] when the feature is off. */
+function normalizeCommandStates(spec) {
+  return usesCommandStates(spec) ? spec.commandStates.map(normalizeCommandState) : [];
+}
+
+/** The flags an entry sets, by the row's column name: { hidden?: boolean, isdisabled?: boolean }. A flag left out is not in it. */
+function wireDesired(entry) {
+  const desired = {};
+  for (const flag of ['hidden', 'disabled']) if (own(entry, flag) && typeof entry[flag] === 'boolean') desired[WIRE_FLAG[flag]] = entry[flag];
+  return desired;
+}
+
+/**
+ * The PATCH body: only the declared flags whose stored value differs, by column name. `false` is kept: it is an instruction.
+ * @param {{ hidden?: boolean, isdisabled?: boolean }} desired
+ * @param {{ hidden: boolean, isdisabled: boolean }} stored
+ */
+function diffCommandFlags(desired, stored) {
+  const delta = {};
+  for (const key of ['hidden', 'isdisabled']) if (own(desired, key) && desired[key] !== stored[key]) delta[key] = desired[key];
+  return delta;
+}
+
+// The environment's origin as an approval names it: https and the host in lower case, no path. Anything else is no origin.
+function canonicalOrigin(value) {
+  let url;
+  try { url = new URL(String(value)); } catch { return null; }
+  return url.protocol === 'https:' ? url.origin.toLowerCase() : null;
+}
+
+function digest(value) {
+  const { canonicalJson } = require('./reconcile-common.js');
+  const { sha256 } = require('./hash.js');
+  return sha256(canonicalJson(value));
+}
+
+const ROW_TOKEN_PREFIX = 'overwrite:command-state:';
+const TABLE_TOKEN_PREFIX = 'publish:command-state-table:';
+
+/**
+ * The approval for one row-state change: one observed version of one row under one intent.
+ *   overwrite:command-state:<entity>/<bar>/<rowId>/<sha256>
+ * The digest is the SHA-256 of the canonical JSON of
+ *   { contract: "command-state-v1", origin, appId, tableId, entity, location: 0|1|2, scope: "table", rowId, ifMatch, desired }
+ * so a new version of the row, another environment, app or table incarnation, or another intent each needs a new approval.
+ */
+function commandStateApprovalKey({ origin, appId, tableId, entity, location, rowId, ifMatch, desired }) {
+  const hash = digest({
+    contract: 'command-state-v1',
+    origin: canonicalOrigin(origin),
+    appId: guidOf(appId),
+    tableId: guidOf(tableId),
+    entity: String(entity).toLowerCase(),
+    location,
+    scope: 'table',
+    rowId: guidOf(rowId),
+    ifMatch,
+    desired: { ...desired },
+  });
+  return `${ROW_TOKEN_PREFIX}${String(entity).toLowerCase()}/${BAR_BY_LOCATION[location]}/${guidOf(rowId)}/${hash}`;
+}
+
+/**
+ * The approval to publish a table's saved customizations — ALL of them, not one row:
+ *   publish:command-state-table:<entity>/<sha256 of { contract: "command-table-publish-v1", origin, appId, tableId, entity }>
+ */
+function commandTablePublishApprovalKey({ origin, appId, tableId, entity }) {
+  const hash = digest({
+    contract: 'command-table-publish-v1', origin: canonicalOrigin(origin), appId: guidOf(appId), tableId: guidOf(tableId), entity: String(entity).toLowerCase(),
+  });
+  return `${TABLE_TOKEN_PREFIX}${String(entity).toLowerCase()}/${hash}`;
+}
+
+const ROW_TOKEN = /^overwrite:command-state:([a-z][a-z0-9_]*)\/(MainTab|HomeTab|ContextualTab)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([0-9a-f]{64})$/;
+const TABLE_TOKEN = /^publish:command-state-table:([a-z][a-z0-9_]*)\/([0-9a-f]{64})$/;
+
+/** True for a `--authorize` value this feature claims: the two families above, spelled any way, so a malformed one is refused rather than read as a view's. */
+const isCommandStateToken = (token) => typeof token === 'string'
+  && (token.toLowerCase().startsWith(ROW_TOKEN_PREFIX) || token.toLowerCase().startsWith(TABLE_TOKEN_PREFIX));
+
+/**
+ * Claims this feature's `--authorize` values out of `raw` and checks each one's grammar against the spec's declarations. Exact tokens only:
+ * no wildcard, no blanket approval, no token that names no declared row or table.
+ * @returns {{ rows: Set<string>, tables: Set<string>, rest: string[], problems: string[] }}
+ */
+function commandStateAuthorizationKeys(raw, spec) {
+  const rows = new Set();
+  const tables = new Set();
+  const rest = [];
+  const problems = [];
+  const states = (validateCommandStates(spec).errors.length ? [] : normalizeCommandStates(spec));
+  const declaredRows = new Set(states.map((s) => `${s.entity}/${s.bar}/${s.rowId}`));
+  const declaredTables = new Set(states.map((s) => s.entity));
+  for (const token of raw) {
+    if (!isCommandStateToken(token)) { rest.push(token); continue; }
+    const row = ROW_TOKEN.exec(token);
+    const table = row ? null : TABLE_TOKEN.exec(token);
+    if (row) {
+      if (!declaredRows.has(`${row[1]}/${row[2]}/${row[3]}`)) problems.push(`'${token}' names a command row that no commandStates entry declares`);
+      else rows.add(token);
+    } else if (table) {
+      if (!declaredTables.has(table[1])) problems.push(`'${token}' names a table that no commandStates entry declares`);
+      else tables.add(token);
+    } else {
+      problems.push(`'${token}' is not overwrite:command-state:<table>/<bar>/<row id>/<64 hex> or publish:command-state-table:<table>/<64 hex>, exactly as the build prints it`);
+    }
+  }
+  return { rows, tables, rest, problems };
+}
+
 module.exports = {
   LOCATION_BY_BAR, BAR_BY_LOCATION, UNSUPPORTED_BAR, ROW_VERSION, ROW_SELECT, REASONS, CODE_BY_REASON,
   codeForReasons, canonicalRowId, guidOf, CommandStateError,
+  COMMAND_STATES_MIN_VERSION, WIRE_FLAG, SPEC_FLAG,
+  usesCommandStates, validateCommandStates, normalizeCommandState, normalizeCommandStates, wireDesired, diffCommandFlags, canonicalOrigin,
+  commandStateApprovalKey, commandTablePublishApprovalKey, commandStateAuthorizationKeys, isCommandStateToken,
 };

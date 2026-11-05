@@ -41,6 +41,9 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { resolveAuthoringLanguage, BuildHalt, findExistingTable, entityHasLocalizedLabels } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
 const { createPublicationBarrier, describeWithheld } = require('./lib/publication-barrier.js');
+const { usesCommandStates, commandStateAuthorizationKeys } = require('./lib/command-state-contract.js');
+const { commandStateMode, createCommandStatePublicationObserver } = require('./lib/command-state-run.js');
+const { commandStateSendOnce } = require('./lib/command-state-transport.js');
 const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
 const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
@@ -143,6 +146,13 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // variable value's create, a duplicate rule's publication) are screened as well. Inert outside a protected create set.
   const writeGate = managedCreateGate ? require('./lib/managed-create-transport.js').composeWriteGates(workflowEffectGate, managedCreateGate) : workflowEffectGate;
   const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest(sendObserver ? sendObserver.wrap() : undefined) } : {}), ...(writeGate ? { workflowEffectGate: writeGate } : {}) });
+  // commandStates (lib/command-state-run.js): a client of their own, made only for a spec that declares them, through which nothing but the
+  // command-state transport sends (lib/command-state-transport.js: the appaction reads and one row PATCH). Its row PATCH is sent once, whatever
+  // answers it (commandStateSendOnce): a conditional write sent again after an unseen answer would hide whether the first one landed. It is
+  // screened by the same publication barrier and write gate as the client above.
+  const commandStateClient = usesCommandStates(spec)
+    ? createAzHttpClient(env, { throttle, sendOnce: commandStateSendOnce, ...(publicationBarrier ? { request: publicationBarrier.gateRequest(sendObserver ? sendObserver.wrap() : undefined) } : {}), ...(writeGate ? { workflowEffectGate: writeGate } : {}) })
+    : undefined;
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -242,7 +252,7 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // is the same client wrapped read-only, so it can be given out without the bypass above: a write through it is
   // refused before it is sent. Undefined otherwise, so a run without the flag gets nothing it did not get before.
   const previewHttpClient = previewPush ? require('./lib/readonly-operations.js').readOnlyHttpClient(httpClient).client : undefined;
-  return { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient };
+  return { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient, commandStateClient };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -742,6 +752,18 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       return { ok: false, errors: [msg] };
     }
   }
+  // commandStates (lib/command-state-run.js commandStateMode): an apply that cannot apply them — a partial range, no --publish, keyed
+  // commands[] — is refused here, before anything is read. The engine refuses the same (sdk-build.js), for a caller that does not come this way.
+  const commandStateModeOfRun = commandStateMode(spec, { apply: !!opts.apply, publish: !!opts.publish, phases: opts.phases || PHASES, changedOnlyFast: !!(opts.changedOnly && opts.changedOnly.fastApply) });
+  if (commandStateModeOfRun.mode === 'error') {
+    const msg = `${commandStateModeOfRun.code}: ${commandStateModeOfRun.message}`;
+    log(`\n✗ ${msg}`);
+    if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'command-state-mode', detail: commandStateModeOfRun.code });
+    return { ok: false, errors: [msg] };
+  }
+  // One publication observer for the whole invocation, handed to every attempt: a table published by an earlier attempt stays confirmed until a
+  // later attempt writes a row on it again.
+  const commandStateObserver = commandStateModeOfRun.mode === 'apply' ? createCommandStatePublicationObserver() : null;
 
   // Pre-flight safety gate (apply only). Recomputed here — immediately before the write loop — so it
   // reflects live state (TOCTOU). Best-effort discovery (reads only): if there is no provision client or
@@ -824,7 +846,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
         // --authorize names one change it consents to and never approves a removal on this list, so a run that was given one is
         // told so: otherwise "without --allow-destructive" reads as if the key it was given had been ignored.
-        const authorizeGiven = [opts.authorizedDestructive, opts.authorizedAdoption, opts.authorizedOverwrite, opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite, opts.publicationRisk, opts.configurationApprovals]
+        const authorizeGiven = [opts.authorizedDestructive, opts.authorizedAdoption, opts.authorizedOverwrite, opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite, opts.publicationRisk, opts.configurationApprovals,
+          ...(opts.commandStateApprovals ? [opts.commandStateApprovals.rows, opts.commandStateApprovals.tables] : [])]
           .some((s) => s && s.size > 0);
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive${authorizeGiven ? ' (the --authorize keys given approve none of them)' : ''}:\n${lines.join('\n')}`;
         if (opts.workspaceDir) {
@@ -982,6 +1005,10 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         // to this store and builds the configuration hookup over, and the maker's adopt:<configuration kind>:... row approvals.
         ...(deps.managedCreateGate ? { managedCreateGate: deps.managedCreateGate } : {}),
         ...(opts.configurationApprovals ? { configurationApprovals: opts.configurationApprovals } : {}),
+        // commandStates: the exact --authorize tokens of the feature, the raw client its rows are read and written through, and the invocation's observer.
+        ...(opts.commandStateApprovals ? { commandStateApprovals: opts.commandStateApprovals } : {}),
+        ...(deps.commandStateClient ? { commandStateClient: deps.commandStateClient } : {}),
+        ...(commandStateObserver ? { commandStateObserver } : {}),
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         owedLengths,
@@ -1109,6 +1136,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       // A managed publish no fresh read can settle: say what the maker may decide, for the next run (offerPublicationRisk). Nothing
       // is recorded here: an approval is accepted only as a run starts (acceptPublicationRiskAtStart). The halt stands.
       offerPublicationRisk(halted, { say: deps.warn || log });
+      reportCommandStatesOfHalt(err, halted, deps.warn || log);
       if (journal) journal.close({ status: 'halt', phase: halted && halted.phase, code: halted && halted.code, recoverable: !!(halted && halted.recoverable), message: String((halted && halted.message) || halted), ...counts });
       throw halted;
     }
@@ -1138,9 +1166,11 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). ${closing}`
       : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan)${wouldHalt ? `, ${wouldHalt} would stop the build` : ''}${removing ? `, ${removing}` : ''}. ${closing}`);
     if (r.pushPreview) printPushPreview(r.pushPreview, log);
+    if (r.commandStatePlan) printCommandStatePlan(r.commandStatePlan, log);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
+    if (r.commandStates) printCommandStateResult(r.commandStates, log);
     // Auto-verify: reconcile the spec against what actually deployed so a silent partial build
     // (an artifact created but not wired, or a phase that quietly produced nothing) surfaces now
     // instead of only when the user opens the app. Read-only; injected (deps.verify) so tests drive it.
@@ -1279,6 +1309,51 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
 // result (it can quote a record value), and a failure's `error` is already reduced to its code, HTTP status and
 // fixed words (readonly-operations.js findingOf). Every item the preview did not answer is printed, by its reason,
 // and a preview that did not answer them all says so — it must never read as covering the plan when it does not.
+// commandStates, as a dry run plans them (sdk-build.js planCommandStatesForDryRun): each row's stored and declared flags, and every exact
+// --authorize token an apply would need — a row token for each change, and a table token for each table the apply publishes.
+function printCommandStatePlan(plan, log) {
+  if (plan.status !== 'planned') {
+    log(`\n▢ command states — ${plan.status}: ${plan.reason}`);
+    return;
+  }
+  const changes = plan.rows.filter((row) => row.approval);
+  log(`\n▢ command states — ${plan.rows.length} row(s), ${changes.length} to change, ${plan.tables.length} table(s) to publish (an apply needs --publish)`);
+  for (const row of plan.rows) {
+    log(`  ${row.approval ? '~' : '='} ${row.description}${row.approval ? `\n      --authorize ${row.approval}${row.approved ? ' (given)' : ''}` : ' (no change)'}`);
+  }
+  for (const table of plan.tables) {
+    log(`  publish table ${table.entity}: publishes ALL saved customizations on it (anyone's), not only these buttons\n      --authorize ${table.token}${table.approved ? ' (given)' : ''}`);
+  }
+}
+
+// commandStates after an apply: each row's outcome and each declared table's publication, in fixed words.
+function printCommandStateResult(states, log) {
+  for (const row of states.rows || []) {
+    log(`  command state ${row.entity}/${row.location}/${row.rowId}: ${row.outcome}${row.changed && row.changed.length ? ` (${row.changed.join(', ')})` : ''}${row.code ? ` [${row.code}]` : ''}`);
+  }
+  for (const table of states.publication || []) {
+    log(`  command-state table ${table.entity}: publication ${table.outcome}${table.reason ? ` (${table.reason})` : ''}`);
+  }
+}
+
+// What a halt leaves of the command states (sdk-build.js runSdkBuildAttempt: not enumerable, so never in a serialized error or the journal):
+// moved onto the halt this run reports when that is another error, then said — which rows were written, and which tables are saved and not
+// published. The halt's own code, message and retry policy are left as they are.
+function reportCommandStatesOfHalt(err, halted, say) {
+  if (!err || typeof err !== 'object') return;
+  const states = err.commandStates;
+  const publication = err.commandStatePublicationError;
+  if (!states && !publication) return;
+  if (halted && typeof halted === 'object' && halted !== err) {
+    try {
+      if (states) Object.defineProperty(halted, 'commandStates', { value: states, enumerable: false, configurable: true, writable: true });
+      if (publication) Object.defineProperty(halted, 'commandStatePublicationError', { value: publication, enumerable: false, configurable: true, writable: true });
+    } catch { /* a frozen halt carries nothing; the lines below still say it */ }
+  }
+  if (states) printCommandStateResult(states, say);
+  if (publication) say(`${publication.code}: ${publication.message}`);
+}
+
 const PREVIEW_REASON_WORDS = Object.freeze({
   noTypedTarget: 'the build has no typed change for it to preview',
   livePlanUnknown: 'its live state could not be read',
@@ -1429,7 +1504,10 @@ function authorizationKeys(argv, spec) {
   // back as the one argument a hint asks for; it is refused by name here rather than read as a view or chart name by the patterns below.
   const hasNul = (k) => typeof k === 'string' && k.includes('\u0000');
   const nulKeys = raw.filter(hasNul);
-  const configuration = configurationAuthorizationKeys(raw.filter((k) => !hasNul(k)), spec);
+  // commandStates' tokens (overwrite:command-state:..., publish:command-state-table:...) are claimed before them, and a token in either
+  // family that names no declared row or table is refused (lib/command-state-contract.js); the rest go on exactly as before.
+  const commandStates = commandStateAuthorizationKeys(raw.filter((k) => !hasNul(k)), spec);
+  const configuration = configurationAuthorizationKeys(commandStates.rest, spec);
   const keys = new Set(configuration.keys);
   const adopt = new Set();
   // overwrite:<configuration kind>:<declared key> (a protected item's local copy, lib/configuration-protected.js) is claimed and checked
@@ -1444,6 +1522,7 @@ function authorizationKeys(argv, spec) {
         : code === 'CONFIGURATION_ADOPT_INVALID'
           ? `'${token}' is not adopt:<kind>:<declared key> or adopt:<child kind>:<declared key>/<declared child>, as a configuration stop prints it`
           : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
+  problems.push(...commandStates.problems);
   // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
   // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick
   // Find view's (entities[].quickFind, lib/quick-find.js) is its table, in lower case.
@@ -1687,7 +1766,7 @@ function authorizationKeys(argv, spec) {
     const i = problems.findIndex((p) => p.startsWith(`'${key}' `));
     if (i >= 0) problems[i] += ` — ${hint}`;
   }
-  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, publicationRisk, configurationApprovals: configuration.rowApprovals || new Set(), error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
+  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, publicationRisk, configurationApprovals: configuration.rowApprovals || new Set(), commandStateRows: commandStates.rows, commandStateTables: commandStates.tables, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
 }
 
 function parseLanguageCode(value) {
@@ -1915,6 +1994,7 @@ async function main() {
     ...(authorization.webResourceOverwrite.size ? { authorizedWebResourceOverwrite: authorization.webResourceOverwrite } : {}),
     ...(authorization.publicationRisk.size ? { publicationRisk: authorization.publicationRisk } : {}),
     ...(authorization.configurationApprovals.size ? { configurationApprovals: authorization.configurationApprovals } : {}),
+    ...(authorization.commandStateRows.size || authorization.commandStateTables.size ? { commandStateApprovals: { rows: authorization.commandStateRows, tables: authorization.commandStateTables } } : {}),
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     languageCode,
     appDir: path.dirname(specPath),
@@ -2051,7 +2131,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // is loaded, so such a build sends, prints and loads exactly what it did before. The engine binds it to the binding store.
   const managedCreateGate = opts.apply && protectedConfigurationInPlay(spec, { apply: true, env, workspaceDir, appDir: opts.appDir })
     ? require('./lib/managed-create-transport.js').createDeferredManagedCreateGate() : null;
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver, ...(workflowEffectGate ? { workflowEffectGate } : {}), ...(managedCreateGate ? { managedCreateGate } : {}) });
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient, commandStateClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver, ...(workflowEffectGate ? { workflowEffectGate } : {}), ...(managedCreateGate ? { managedCreateGate } : {}) });
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -2107,6 +2187,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal, throttle, stepTally, publicationBarrier, sendObserver,
+    ...(commandStateClient ? { commandStateClient } : {}),
       ...(workflowEffectGate ? { workflowEffectGate } : {}),
       ...(managedCreateGate ? { managedCreateGate } : {}),
       ...(previewHttpClient ? { previewHttpClient } : {}),

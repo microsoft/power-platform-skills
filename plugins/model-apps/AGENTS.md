@@ -3585,6 +3585,46 @@ SDK reads some joined-table columns back without their join; a declared column c
 refused (`view-related-column-unrepresentable`). A chart title can be written only to a chart that
 already has one.
 
+### Command states (`commandStates[]`, 2.24.0)
+
+Sets the stored `hidden` / `isdisabled` flags of existing table-scoped modern command rows (`appaction`), picked by
+row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the two never share an entry, legacy
+`commands[]` edits are still not applied, and keyed `commands[]` in the same spec is refused
+(`command-state-keyed-unsupported`). Spec contract and maker workflow: `references/app-spec-schema-advanced.md`.
+
+- **Flow** (`lib/command-state-run.js`, wired in `sdk-build.js`): `commandStateMode` refuses any apply that is not
+  a full build with `--publish` before anything is read (exactly `--stage data` leaves them alone; a dry run plans
+  them read-only and prints every token). Each attempt's earliest preflight — before the build's first write —
+  resolves the app context, reads every declared row with the shared decoder and checks the exact approvals
+  (`overwrite:command-state:…` per changed row version, `publish:command-state-table:…` per declared table). The
+  commands phase re-reads each row and sends one conditional flag-only PATCH per changed row. A refusal or unknown
+  outcome is a `BuildHalt` with `retry: never`: a lost answer is never resent (`command-state-write-unknown`), and an
+  ordinary retry of another halt starts a new attempt that re-reads and re-plans.
+- **Raw-request exception.** The SDK has no update of an `appaction` row's flags, so the row PATCH goes through
+  `command-state-transport.js` `patchRow` on a raw az-token client `makeSdk` creates only for a spec that declares
+  `commandStates`, behind the same publication barrier and write gate, sent once (`commandStateSendOnce`).
+- **Publication** adds no SDK push and no second publish request. `publishTablesBeforeApp` unions the declared tables
+  into its existing before-app set; the one publication observer per invocation records whether that plain
+  request, or the managed publisher's flush for a managed table (the supported overlap: the existing publisher
+  publishes it, the observer reads its `published` list), named each table after its latest row write. An apply
+  succeeds only when every declared table is confirmed; otherwise it halts with `command-state-publish-unconfirmed`,
+  carried on the halt as non-enumerable `commandStates` / `commandStatePublicationError` (never in the journal or a
+  retry's reading). There is no store and no cross-run fence: a sent publish can complete after a halt or after an
+  entry is removed, and the next publishing run requests the table only because the spec still names it. Existing
+  managed-artifact fences still apply on their own.
+- **Shared decoder contract** (`command-state-read.js`): a missing column is not a null and a null flag is not
+  `false`; static visibility is a present `visibilitytype` of null or 0 with every visibility-formula column present
+  and empty (the null `commands[]` leaves is static); `visibilitytype` is never written; only a table-scoped row is a
+  candidate.
+- **Verify** (`verifyCommandStates`, `verify-spec.js` kind `command-state`): each declared entry's exact row stores
+  each declared flag — stored state only, not what the app renders. A reader without command-row access, or a
+  failed read, fails every entry.
+- **Changed-only**: the `commands` slice includes `commandStates` (by row id) only when some are declared; any change
+  is a full build with no debt (`classify-changes.js`), and a spec that declares them never takes a no-op or fast
+  apply (`COMMAND_STATES_FULL`, `changed-only-flow.js`).
+- **Teardown and download** do not read or restore command states: teardown validates them under the structural
+  profile (findings are warnings), and download never writes `commandStates`.
+
 ## Local Development
 
 Test this plugin locally:
@@ -3705,9 +3745,10 @@ scripts/
     dataverse-operations.js    ← The reviewed built-in operation catalogue (frozen, revision 1): exact-name lookup, the four-key actionBindings projection (toActionBinding) and the new-row check; no I/O, not gated
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase). Every way it pushes or publishes the app is one of `appWriters`, which first awaits `publishTablesBeforeApp` (the one request that publishes, before the app, the tables whose forms or charts its publish ships)
     app-components.js          ← shared current/published app layers (`currentLayerRows`, and `currentLayerRow` — the authored layer wins — for a listing), component inventory (`readAppComponentInventory`: the download's read, with two opt-ins the build's pre-app proof makes — `savedLayer`, which looks the tables of the form and chart components up in the SAVED layer, and `requireIdentified`, which reads the answer strictly: a row counts for an id the list asked about, two tables for one id or a value no table has make the read incomplete, and a row of the component list that cannot be placed — no record, no GUID objectid, another component type — makes the list unreadable), hidden-table pin/proof, Main-form resolution/membership and push directives, `collectionRows`, the one reader of a paged collection, and `savedPageRows`, the one reader of the generative-page rows in the SAVED layer (RetrieveUnpublishedMultiple, 50 ids a read): a plain read of the page table answers the published layer only, so a page that was created and never published is "not found" by it — `apps.js` and teardown read pages here
-    command-state-contract.js  ← the vocabulary of a modern command's row state, shared by its readers: the bars (`LOCATION_BY_BAR`; any other stored location is `unsupported`), the columns a row is read with (`ROW_SELECT`), the fixed reasons a row is not a candidate (`REASONS`) and the refusal code each stands for (`codeForReasons`), `canonicalRowId`, `CommandStateError`
-    command-state-transport.js ← `createCommandStateTransport({ client, apiUrl })`: the GET-only reader `list-command-states.js` reads through — the raw az-token client under the SDK's API root, limited to the app, layer, component, table-definition and `appactions` paths the feature reads (`READ_PATHS`); a continuation is read only on that origin and root
-    command-state-read.js      ← `resolveCommandStateContext` (one app by unique name, its current layer and complete table list, `appaction`'s `IsOptimisticConcurrencyEnabled`), `readCommandStateRow` (one row by id; only a 404 with `0x80040217` is "no row"), `decodeCommandStateRow` (strict: a missing column is not a null, a null flag is not `false`, a number spelled as text is unreadable; every reason, never the first only) and `listCommandStateRows` (every page of each table's commands by `contextvalue`; a repeated row id or a row that is no record fails the read; `sameCaption`; a fixed order)
+    command-state-contract.js  ← the vocabulary of a modern command's row state, shared by its readers: the bars (`LOCATION_BY_BAR`; any other stored location is `unsupported`), the columns a row is read with (`ROW_SELECT`), the fixed reasons a row is not a candidate (`REASONS`) and the refusal code each stands for (`codeForReasons`), `canonicalRowId`, `CommandStateError`; and the App Spec's `commandStates[]` (2.24.0): `validateCommandStates` (closed fields, table scope only — `scope: "app"` is `command-state-app-scope-unverified` — and the `minimumPluginVersion` floor), `normalizeCommandStates` (desired flags by column name, `hidden` / `isdisabled`), `diffCommandFlags`, the two exact approval tokens (`commandStateApprovalKey`: one row version under one intent in one environment; `commandTablePublishApprovalKey`: one table) and `commandStateAuthorizationKeys`, which claims both families out of `--authorize` and refuses a malformed or undeclared one
+    command-state-transport.js ← `createCommandStateTransport({ client, apiUrl })`: the reader `list-command-states.js` and the build read through — the raw az-token client under the SDK's API root, limited to the app, layer, component, table-definition and `appactions` paths the feature reads (`READ_PATHS`); a continuation is read only on that origin and root. Its one write, `patchRow` (only on a client with `patch`: the build's own), is a conditional flag-only PATCH of one `appactions` row (`If-Match` the read version, a body of `hidden` / `isdisabled` only). It is the feature's raw-request exception to "every write goes through the SDK": the SDK has no update of an `appaction` row's flags. That client is made only for a spec that declares `commandStates` (`build-model-app.js` `makeSdk`), behind the same publication barrier and write gate, and sends its PATCH once whatever answers it (`commandStateSendOnce`)
+    command-state-read.js      ← `resolveCommandStateContext` (one app by unique name, its current layer and complete table list, `appaction`'s `IsOptimisticConcurrencyEnabled`), `readCommandStateRow` (one row by id; only a 404 with `0x80040217` is "no row"), `decodeCommandStateRow` (strict: a missing column is not a null, a null flag is not `false`, a number spelled as text is unreadable; every reason, never the first only) and `listCommandStateRows` (every page of each table's commands by `contextvalue`; a repeated row id or a row that is no record fails the read; `sameCaption`; a fixed order). Static visibility is a PRESENT `visibilitytype` of null or 0 with every visibility-formula column present and empty — the null the platform stores on a button `commands[]` wrote is static; nothing ever writes `visibilitytype`. Only a table-scoped row is a candidate (`app-scoped` otherwise). `verifyCommandStates` is `--verify`'s check of each declared entry: its exact row, on the declared table and bar, stores each declared flag (stored flags only, never how the button renders; a read that fails fails the entry)
+    command-state-run.js       ← the build's `commandStates` writer. `commandStateMode` (off / plan for a dry run / data-stage / apply = a full build with `--publish`; anything else is refused before a read), `createCommandStateRun` (per attempt: the earliest preflight reads the app context and every declared row and checks the exact approvals before the build's first write; the commands phase re-reads each row and sends one conditional flag-only PATCH per changed row, never resent — a 412 is `command-state-version-conflict`, a lost answer `command-state-write-unknown`; a refusal or unknown outcome is a `BuildHalt` with `retry: never`) and `createCommandStatePublicationObserver` (one per invocation: records whether the existing before-app table publication — plain, or the managed publisher's flush — named each declared table after its latest row write; an apply succeeds only when every declared table is confirmed, else `command-state-publish-unconfirmed`; it adds no store and no cross-run fence)
     app-pin-recovery.js        ← settles an app push whose component pin answered `APP_PIN_OUTCOME_UNKNOWN` (`pinIntentOf`, `pinWarningOf`, `reconcileUnconfirmedPin`): confirm from a read, repair with one more push of the same writer, or report it unconfirmed; never a second repair
     app-publication-policy.js  ← the build's app-publication port (`createAppPublication`): a pass-through of `appWriters.publish` until an exact Main-form list owes a publication; then a guarded publish, settled only by a read of the published layer, and `flush()` / `unsettled()` for what is still owed
     solution-membership.js     ← one read of a solution's components (the types the build adds, plus its tables: a table held with all its subcomponents vouches for its views, forms and charts, which have no rows of their own), so a rebuild adds just what the solution is not PROVEN to hold; every doubt reads as "add"

@@ -9,8 +9,11 @@
 //   GET /EntityDefinitions(LogicalName='appaction')?$select=IsOptimisticConcurrencyEnabled
 //   GET /appactions?$select=...&$filter=contextvalue eq '<table>'      pages of `pageSize` rows, continued by an ABSOLUTE @odata.nextLink
 //   GET /appactions(<id>)?$select=...                                 one row, or 404 with 0x80040217
-// Every request is recorded (method, the decoded path below the API root, the absolute url, the headers); a request it has no answer for is
-// recorded in `unexpected` and answered 400. `overrides(req)` may answer a request first (return a `{ statusCode, body }` or undefined).
+//   PATCH /appactions(<id>)  (only with `writable`)                  If-Match must equal the row's version, else 412 0x80060882; a missing row
+//                                                                    is 404 0x80040217; the flags are stored, the version goes up by one, 204
+// Every request is recorded (method, the decoded path below the API root, the absolute url, the headers, the body); a request it has no answer for
+// is recorded in `unexpected` and answered 400. `overrides(req)` may answer a request first (return a `{ statusCode, body }` or undefined), and
+// `afterPatch(req, row)` may replace the answer to a PATCH that was stored (e.g. a cut connection or a 503 after the commit).
 
 const ORIGIN = 'https://contoso.crm.dynamics.com';
 const APP_ID = '11111111-1111-4111-8111-111111111111';
@@ -68,9 +71,11 @@ const notFound = () => json(404, { error: { code: '0x80040217', message: 'appact
  * @param {boolean|null|'omit'} [options.concurrency] - IsOptimisticConcurrencyEnabled; 'omit' leaves it out of the answer
  * @param {number} [options.pageSize]
  * @param {(req: object) => object|undefined} [options.overrides]
+ * @param {boolean} [options.writable] - answer the row PATCH
+ * @param {(req: object, row: object) => object|undefined} [options.afterPatch]
  */
 function createCommandStateOrg({
-  apps = [{ appmoduleid: APP_ID, uniquename: 'contoso_Support' }], tables = {}, rows = [], concurrency = true, pageSize = 2, overrides,
+  apps = [{ appmoduleid: APP_ID, uniquename: 'contoso_Support' }], tables = {}, rows = [], concurrency = true, pageSize = 2, overrides, writable = false, afterPatch,
 } = {}) {
   const requests = [];
   const unexpected = [];
@@ -86,7 +91,9 @@ function createCommandStateOrg({
     const apiAt = url.pathname.search(/\/api\/data\/v9\.\d+/);
     const prefix = apiAt === -1 ? '' : /\/api\/data\/v9\.\d+/.exec(url.pathname)[0];
     const pathOnly = apiAt === -1 ? url.pathname : url.pathname.slice(apiAt + prefix.length);
-    const req = { method: opts.method, url: opts.url, origin: url.origin, path: decodeURIComponent(pathOnly + url.search), headers: opts.headers || {}, body: opts.body };
+    let body = opts.body;
+    if (typeof body === 'string' || Buffer.isBuffer(body)) { try { body = JSON.parse(String(body)); } catch { /* kept as sent */ } }
+    const req = { method: opts.method, url: opts.url, origin: url.origin, path: decodeURIComponent(pathOnly + url.search), headers: opts.headers || {}, body };
     requests.push(req);
     if (overrides) {
       const answer = await overrides(req);
@@ -94,6 +101,18 @@ function createCommandStateOrg({
     }
     const p = req.path;
     let m;
+    if (writable && req.method === 'PATCH' && (m = /^\/appactions\(([0-9a-f-]{36})\)$/.exec(p))) {
+      const row = rows.find((r) => r.appactionid === m[1]);
+      if (!row) return notFound();
+      const ifMatch = Object.entries(req.headers).find(([k]) => k.toLowerCase() === 'if-match');
+      if (!ifMatch || ifMatch[1] !== row['@odata.etag']) return json(412, { error: { code: '0x80060882', message: 'The version of the existing record does not match the RowVersion property provided.' } });
+      const keys = req.body && typeof req.body === 'object' ? Object.keys(req.body) : [];
+      if (!keys.length || keys.some((k) => k !== 'hidden' && k !== 'isdisabled')) { unexpected.push(req); return json(400, { error: { code: '0x0', message: 'unexpected body' } }); }
+      for (const k of keys) row[k] = req.body[k];
+      row['@odata.etag'] = `W/"${Number(/\d+/.exec(row['@odata.etag'])[0]) + 1}"`;
+      const replaced = afterPatch ? await afterPatch(req, row) : undefined;
+      return replaced || { statusCode: 204, headers: {}, body: '' };
+    }
     if (req.method !== 'GET') { unexpected.push(req); return json(400, { error: { code: '0x0', message: 'unexpected write' } }); }
     if ((m = /^\/appmodules\?\$select=appmoduleid,uniquename&\$filter=uniquename eq '(.*)'$/.exec(p))) {
       const name = m[1].replace(/''/g, "'").toLowerCase();
