@@ -127,6 +127,28 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   supported (it needs a parent command-bar row the SDK doesn't synthesize from scratch). The command
   lands in the Default solution but is entity-scoped, so it shows on the entity's command bar.
 
+### Listing the existing buttons — `list-command-states.js` (read-only)
+```bash
+node scripts/list-command-states.js --env <envUrl> --app <uniqueName> [--entity <logical>] [--location MainTab|HomeTab|ContextualTab]
+```
+Prints every modern command button of the app's tables (or of the one `--entity`), each with its
+`rowId`, `bar`, `scope` (`table`, `app`, `other-app`), stored `hidden` / `disabled`, and `candidate`.
+It only reads; a write flag is a usage error.
+- **Pick a button by `rowId`, never by caption.** Two buttons with the same caption on one bar each
+  name the other in `sameCaption`; an unlabelled button has `caption: null`.
+- **Excluded buttons are listed, not left out**, each with every reason it is not a candidate:
+  `shape-unreadable`, `id-mismatch`, `context-not-table`, `context-mismatch`, `table-not-in-app`,
+  `location-unsupported`, `location-mismatch`, `other-app`, `scope-mismatch`, `not-standard-button`
+  (a flyout or split container, or a group), `nested` (a menu item), `not-default-origin` (migrated
+  or system), `inactive`, `managed`, `not-customizable`, `flags-unreadable`, `visibility-formula`
+  (Power Fx visibility), `formula-action` (a Power Fx on-select), `version-unavailable` (the
+  platform keeps no row versions for commands, or the row has none).
+- A bar the App Spec has no name for (a stored location other than 0, 1, 2) is `bar: "unsupported"`.
+- **`candidate` describes the row's shape only.** It does not prove the app renders the button, or
+  where.
+- A failed or incomplete read prints `{ "ok": false, "code": "command-state-…", "error" }` with
+  exit 1 — never a shorter list.
+
 ## businessRules[] (optional — declarative form logic, no code)
 
 ```jsonc
