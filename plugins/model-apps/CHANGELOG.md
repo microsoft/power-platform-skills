@@ -12,7 +12,8 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 - **Protected rows** are verified by id. A namesake at another id halts `create-identity-conflict`; deletes and value clears halt `configuration-protected-removal-unsupported`; removing the opt-in while rows are bound halts `create-identity-opt-in-required`.
 - **Custom APIs (opt-in):** a root-field edit with new request parameters or response properties is sent as one checked change set; other multi-part edits halt `configuration-edit-unsupported`.
 - **Duplicate-detection rules (opt-in)** are published once, then only verified; later edits halt `configuration-edit-unsupported`. A first publication that may have been sent is never resent: publish the rule by hand (#808).
-- **`--changed-only`** now applies a spec whose only change is a configuration item instead of reporting nothing to apply. Builds without the opt-in are otherwise unchanged.
+- **`--changed-only`** now applies a spec whose only change is a configuration item instead of reporting nothing to apply. Builds without the opt-in are otherwise unchanged, apart from the view check below.
+- **Views:** a view or view filter written with a key the build does not read (for example `filter` instead of `filters`) is refused, naming the key to write, instead of being built without it; teardown and verify only warn (#827).
 
 ### Limits
 
