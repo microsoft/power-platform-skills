@@ -3,9 +3,8 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
 const { runCliSync, CliLaunchError } = require('./process-runner');
-const { unpack, verifyInstalledOfflineSdk } = require('./mobile-package-artifacts');
+const { unpack, hashFile, readOfflineContract, verifyInstalledOfflineSdk } = require('./mobile-package-artifacts');
 const {
   exactVersion, declarationSpec, dependencySections, isRuntimePackage, readProjectRequirements, validateRelease,
   readProject, readPlatformContext, validateProjectAgainstRelease, summarizeRelease, validHostIntegrity,
@@ -13,6 +12,7 @@ const {
 
 const HOST = '@microsoft/power-apps-native-host';
 const TEMPLATE = '@microsoft/power-apps-native-template';
+const OFFLINE = '@microsoft/power-apps-native-offline';
 const PLATFORMS = ['android', 'ios'];
 const SRI = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
@@ -88,8 +88,8 @@ function createSource(options = {}) {
       return versions;
     },
     read(name, version) {
-      requireValue([HOST, TEMPLATE].includes(name) && exactVersion(version, true),
-        'Select an exact stable host or template package version, not a release id, range, URL or tag.');
+      requireValue([HOST, TEMPLATE, OFFLINE].includes(name) && exactVersion(version, true),
+        'Select an exact stable host or template package version, or its locked offline SDK version; not a release id, range, URL or tag.');
       const key = `${name}@${version}`;
       if (cache.has(key)) return cache.get(key);
       if (options.readPackage) {
@@ -118,10 +118,10 @@ function createSource(options = {}) {
         const archive = path.join(directory, packed[0].filename);
         requireValue(fs.lstatSync(archive).isFile() && !fs.lstatSync(archive).isSymbolicLink(),
           'Downloaded package must be a regular archive.');
-        const bytes = fs.readFileSync(archive);
         const algorithm = integrity.slice(0, integrity.indexOf('-'));
-        requireValue(`${algorithm}-${createHash(algorithm).update(bytes).digest('base64')}` === integrity
-          && `sha512-${createHash('sha512').update(bytes).digest('base64')}` === packed[0].integrity,
+        const packedIntegrity = `sha512-${hashFile(archive, 'sha512', 'base64')}`;
+        const registryIntegrity = algorithm === 'sha512' ? packedIntegrity : `${algorithm}-${hashFile(archive, algorithm, 'base64')}`;
+        requireValue(registryIntegrity === integrity && packedIntegrity === packed[0].integrity,
         'Downloaded package bytes do not match the published integrity.');
         const root = unpack(archive, directory, execute);
         const pkg = readJson(path.join(root, 'package.json'), 'packed package manifest');
@@ -138,13 +138,15 @@ function createSource(options = {}) {
             return readJson(path.join(root, 'compatibility/migrations', `${id}.json`), 'published host migration');
           });
           result = { publication, pkg, profile, migrations };
-        } else {
+        } else if (name === TEMPLATE) {
           result = {
             publication, pkg,
             app: readJson(path.join(root, 'template/app.json'), 'published template state'),
             manifest: readJson(path.join(root, 'template/package.json'), 'published template dependencies'),
             lock: readJson(path.join(root, 'template/package-lock.json'), 'published template lock'),
           };
+        } else {
+          result = { publication, pkg, contract: readOfflineContract(root) };
         }
         cache.set(key, result);
         return result;
@@ -310,14 +312,14 @@ function projectContract(projectRoot, project, options = {}) {
   'Installed host and recorded template/native state differ. Run check-updates to preview the host migration; do not rewrite the app metadata.');
   const host = source.read(HOST, requirements.hostVersion);
   assertInstalledProfile(projectRoot, host.profile, host.pkg, project.lock,
-    source.read(TEMPLATE, contract.template.version).lock);
+    source.read(TEMPLATE, contract.template.version).lock, source.read);
   return contract;
 }
 
-function assertInstalledProfile(projectRoot, profile, host, lock, referenceLock) {
+function assertInstalledProfile(projectRoot, profile, host, lock, referenceLock, readPackage) {
   const installed = readJson(path.join(projectRoot, 'node_modules', HOST, 'compatibility/current.json'), 'installed host compatibility profile');
   requireValue(same(installed, profile), 'Installed host compatibility metadata differs from its published package.');
-  verifyInstalledOfflineSdk(projectRoot, profile, host, lock, referenceLock);
+  verifyInstalledOfflineSdk(projectRoot, profile, host, lock, referenceLock, readPackage);
 }
 
 function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
@@ -364,7 +366,7 @@ function planPublishedUpdate(projectRoot, hostVersion, options = {}) {
   const hostInstallRequired = sourceRequirements.hostVersion !== hostVersion;
   if (!migrationRequired && !hostInstallRequired) {
     const project = readProject(projectRoot, readPlatformContext());
-    assertInstalledProfile(projectRoot, host.profile, host.pkg, project.lock, template.lock);
+    assertInstalledProfile(projectRoot, host.profile, host.pkg, project.lock, template.lock, source.read);
     validateProjectAgainstRelease(project, contractFromPackages(host, template, project));
   }
   return {

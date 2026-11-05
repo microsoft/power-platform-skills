@@ -12,7 +12,7 @@ const {
   readSourceRequirements, projectContract, planPublishedUpdate,
 } = require('../lib/mobile-published-packages');
 const { acquireHost } = require('../mobile-template-lifecycle');
-const { readProject, readPlatformContext, validateProjectAgainstRelease } = require('../lib/mobile-release');
+const { readProject, readPlatformContext, validateProjectAgainstRelease, resolveProjectRelease } = require('../lib/mobile-release');
 const { fixtureRelease, writeProject, writeJson, modifyJson, addDependency } = require('./helpers/mobile-release-fixture');
 
 function fixture(t) {
@@ -268,6 +268,56 @@ test('current-state admission rejects a locally altered host profile', (t) => {
   assert.throws(() => planPublishedUpdate(f.projectRoot, '1.0.0', f.options), /metadata differs/);
 });
 
+test('project admission and current-version planning both verify offline files against the selected SDK publication', t => {
+  const offline = '@microsoft/power-apps-native-offline';
+  const entry = `node_modules/${offline}`;
+  for (const mode of ['admit', 'current']) {
+    const f = fixture(t);
+    const host = f.packages.get(`${HOST}@1.0.0`);
+    const template = f.packages.get(`${TEMPLATE}@1.0.0`);
+    Object.assign(host.profile, { expoSdk: 1, runtimeFamily: 'fixture-native-family', offlineContractVersion: 1 });
+    host.profile.managedDependencies[offline] = '0.2.0';
+    host.pkg.peerDependencies = { [offline]: '^0.2.0' };
+    writeJson(path.join(f.projectRoot, 'node_modules', HOST, 'compatibility/current.json'), host.profile);
+    const pkg = {
+      name: offline, version: '0.2.0', peerDependencies: { [HOST]: '^1.0.0', 'react-native': '1.0.0' },
+    };
+    const contract = {
+      schemaVersion: 2, complete: true, sourceDirty: false, packageVersion: pkg.version,
+      reactNativeVersion: '1.0.0', expoSdkVersion: '1', runtimeFamily: host.profile.runtimeFamily,
+      offlineContractVersion: 1, engine: 'hermes', hostPeerRange: pkg.peerDependencies[HOST],
+      platformArchitectures: { android: ['new'], ios: ['new'] },
+      artifacts: { 'android/runtime.aar': createHash('sha256').update('native fixture').digest('hex') },
+    };
+    const publication = {
+      package: offline, version: pkg.version, integrity: `sha512-${Buffer.alloc(64, 2).toString('base64')}`,
+    };
+    f.packages.set(`${offline}@0.2.0`, { publication, pkg, contract });
+    addDependency(f.projectRoot, offline, pkg.version);
+    const sdk = path.join(f.projectRoot, entry);
+    writeJson(path.join(sdk, 'package.json'), pkg);
+    writeJson(path.join(sdk, 'compatibility.json'), contract);
+    fs.mkdirSync(path.join(sdk, 'android'));
+    fs.writeFileSync(path.join(sdk, 'android/runtime.aar'), 'native fixture');
+    modifyJson(path.join(f.projectRoot, 'package-lock.json'), lock => {
+      lock.packages[entry].integrity = publication.integrity;
+    });
+    template.manifest.dependencies[offline] = pkg.version;
+    template.lock.packages[''].dependencies[offline] = pkg.version;
+    template.lock.packages[entry] = { version: pkg.version, integrity: publication.integrity };
+    const verify = () => mode === 'admit'
+      ? resolveProjectRelease(f.projectRoot, undefined, undefined, f.options)
+      : planPublishedUpdate(f.projectRoot, '1.0.0', f.options);
+    assert.doesNotThrow(verify);
+    assert.equal(f.requests.filter(request => request === `${offline}@0.2.0`).length, 1);
+    fs.writeFileSync(path.join(sdk, 'android/runtime.aar'), 'altered native fixture');
+    modifyJson(path.join(sdk, 'compatibility.json'), metadata => {
+      metadata.artifacts['android/runtime.aar'] = createHash('sha256').update('altered native fixture').digest('hex');
+    });
+    assert.throws(verify, /metadata differs from its integrity-verified published archive/);
+  }
+});
+
 test('metadata cannot substitute the wrong template lock or core runtime', (t) => {
   const f = fixture(t);
   const template = f.packages.get(`${TEMPLATE}@1.0.0`);
@@ -364,6 +414,47 @@ test('host acquisition is isolated, script-disabled, integrity-bound and cannot 
   assert.equal(fs.readFileSync(path.join(f.projectRoot, 'package.json'), 'utf8'), before);
   assert.throws(() => acquireHost(f.projectRoot, '1.0.0', options), /existing apps are never overwritten/);
   assert.throws(() => acquireHost(destination, '1.0.0', options), /existing apps are never overwritten/);
+});
+
+test('host acquisition from an empty child cwd captures the parent npm context before creating a manifest', t => {
+  const f = fixture(t);
+  const context = '@microsoft:registry=https://packages.example.invalid/\n'
+    + '//packages.example.invalid/:_authToken=synthetic-parent-token\n';
+  fs.writeFileSync(path.join(f.projectRoot, '.npmrc'), context);
+  const parentManifest = fs.readFileSync(path.join(f.projectRoot, 'package.json'));
+  const parentLock = fs.readFileSync(path.join(f.projectRoot, 'package-lock.json'));
+  for (const fail of [false, true]) {
+    const destination = path.join(f.projectRoot, fail ? 'failed-tooling' : 'tooling');
+    fs.mkdirSync(destination);
+    const action = () => acquireHost(destination, '1.0.0', {
+      ...f.options,
+      cwd: destination,
+      run(command, args, cwd, invocation) {
+        assert.equal(command, 'npm');
+        assert.equal(cwd, fs.realpathSync.native(destination));
+        assert.equal(invocation.env.npm_config_prefix, destination);
+        assert.equal(args[args.indexOf('--prefix') + 1], destination);
+        assert.equal(fs.readFileSync(path.join(destination, '.npmrc'), 'utf8'), context,
+          'Use the same parent registry/auth context as package inspection');
+        assert.equal(JSON.parse(fs.readFileSync(path.join(destination, 'package.json'), 'utf8')).name, 'mobile-upgrade-tooling');
+        if (fail) throw new Error('Synthetic isolated install failure');
+        const hostRoot = path.join(destination, 'node_modules', HOST);
+        writeJson(path.join(hostRoot, 'package.json'), { name: HOST, version: '1.0.0', bin: { 'upgrade-template': 'scripts/upgrade.js' } });
+        fs.mkdirSync(path.join(hostRoot, 'scripts'));
+        fs.writeFileSync(path.join(hostRoot, 'scripts/upgrade.js'), '// fixture; never executed\n');
+        writeJson(path.join(destination, 'package-lock.json'), { packages: {
+          [`node_modules/${HOST}`]: { version: '1.0.0', integrity: f.packages.get(`${HOST}@1.0.0`).publication.integrity },
+        } });
+        return '';
+      },
+    });
+    if (fail) assert.throws(action, /Synthetic isolated install failure/);
+    else assert.equal(action().installedDependencies, true);
+    assert.equal(fs.existsSync(path.join(destination, '.npmrc')), false);
+    assert.equal(fs.readFileSync(path.join(f.projectRoot, '.npmrc'), 'utf8'), context);
+    assert.deepEqual(fs.readFileSync(path.join(f.projectRoot, 'package.json')), parentManifest);
+    assert.deepEqual(fs.readFileSync(path.join(f.projectRoot, 'package-lock.json')), parentLock);
+  }
 });
 
 test('older hosts do not accidentally select a newer template baseline', (t) => {

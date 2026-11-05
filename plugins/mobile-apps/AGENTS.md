@@ -52,7 +52,10 @@ local archive, a bundled template or a Git checkout for a missing publication.
 Preserve normal approvals, telemetry checkpoints and app-owned offline profiles,
 imports, settings and data.
 The installed offline SDK must match the selected host's runtime family, peer
-requirements, offline-contract version and declared native artifact hashes.
+requirements and offline-contract version. Obtain its expected metadata and
+complete declared native artifact inventory from the integrity-verified SDK
+archive selected by the immutable template lock, never from mutable installed
+hashes alone.
 Metadata checks do not certify offline synchronization or database migration.
 Never patch, fork or locally rewrite a first-party package to work around a defect.
 

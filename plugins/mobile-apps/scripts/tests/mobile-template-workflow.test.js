@@ -2,8 +2,10 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -71,4 +73,68 @@ test('creation resolves immutable published package metadata before planning or 
   const readme = read('README.md');
   assert.ok(readme.indexOf('copilot plugin install') < readme.indexOf('resolve-mobile-release.js'));
   assert.ok(readme.indexOf('export PLUGIN_ROOT=') < readme.indexOf('resolve-mobile-release.js'));
+});
+
+test('README creation never installs after failed resolution, acquisition or directory entry', t => {
+  const commands = [...read('README.md').matchAll(/```sh\n([\s\S]*?)```/g)]
+    .map(match => match[1]).find(block => block.includes('--destination ./my-mobile-app'));
+  assert.ok(commands);
+  const bashPaths = process.platform === 'win32'
+    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
+    : [];
+  const bash = bashPaths.find(entry => /[\\/]Git[\\/]/i.test(entry)) || 'bash';
+  const stubs = `
+node() {
+  case "$1" in
+    */resolve-mobile-release.js) [ "$FAILURE_STAGE" != resolution ] ;;
+    */mobile-template-lifecycle.js)
+      [ "$FAILURE_STAGE" != acquisition ] || return 1
+      [ "$FAILURE_STAGE" != directory ] || return 0
+      "$REAL_NODE" -e 'require("node:fs").mkdirSync("my-mobile-app")'
+      ;;
+    *) return 99 ;;
+  esac
+}
+npm() {
+  [ "$1" = ci ] || return 98
+  "$REAL_NODE" -e 'const fs=require("node:fs"); fs.writeFileSync("install-ran.txt", fs.realpathSync.native(process.cwd()))'
+}
+`;
+  for (const failure of ['resolution', 'acquisition', 'directory', 'none']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mobile creation owner's "));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const destination = path.join(directory, 'my-mobile-app');
+    if (failure === 'acquisition') {
+      fs.mkdirSync(destination);
+      fs.writeFileSync(path.join(destination, 'customer.txt'), 'preserve customer content');
+    }
+    const result = spawnSync(bash, ['-s'], {
+      cwd: directory, input: `${stubs}\n${commands}`, encoding: 'utf8', timeout: 10000,
+      env: {
+        ...process.env, FAILURE_STAGE: failure, PLUGIN_ROOT: '/fixture plugin',
+        REAL_NODE: process.execPath.replaceAll('\\', '/'),
+      },
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status === 0, failure === 'none', result.stderr);
+    assert.equal(fs.existsSync(path.join(directory, 'install-ran.txt')), false);
+    assert.equal(fs.existsSync(path.join(destination, 'install-ran.txt')), failure === 'none');
+    if (failure === 'none') {
+      assert.equal(fs.readFileSync(path.join(destination, 'install-ran.txt'), 'utf8'), fs.realpathSync.native(destination));
+    }
+    if (failure === 'acquisition') {
+      assert.equal(fs.readFileSync(path.join(destination, 'customer.txt'), 'utf8'), 'preserve customer content');
+    }
+  }
+});
+
+test('deployment instructions require all three actual selected-base values', () => {
+  const commands = [...lifecycle.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)]
+    .map(match => match[1]).find(block => block.includes('--base-version'));
+  assert.ok(commands);
+  for (const option of ['version', 'fingerprint', 'runtime-version']) {
+    assert.ok(commands.includes(`--base-${option} "<actual-base-${option}>"`));
+  }
+  assert.match(lifecycle, /Obtain all three values[\s\S]*from the selected deployment target/);
+  assert.match(lifecycle, /not by copying expected policy values just to pass/);
 });

@@ -121,7 +121,14 @@ For hosts advertising a versioned offline contract, the installed SDK's exact
 version and integrity must match the selected published template lock. Its host
 and React Native peers, runtime family, offline-contract version, Hermes/New
 Architecture declarations and native artifact hashes must agree with the
-published host. Historical hosts without that contract retain their existing
+published host. Read the expected SDK contract and complete declared native
+artifact inventory from its integrity-verified registry archive, bound to the
+immutable template lock's SHA-512 integrity. Compare the installed metadata and
+every declared artifact against that reference; editing a local manifest or
+removing one of its entries cannot authorize changed native files. Archive
+inspection never installs packages or runs their lifecycle scripts. Missing or
+unverifiable publication evidence blocks admission rather than trusting local
+hashes. Historical hosts without that contract retain their existing
 native admission rules; do not invent new metadata for them.
 Do not delete profiles, disable offline or remove SDK imports to make validation
 pass. Preserve app-owned source, settings, overrides, database contents and pending
@@ -271,12 +278,14 @@ again before push if anything changed:
 ```bash
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" \
   --project-root '<working_dir>' --platform android \
-  --base-version "<actual-base-version>" --base-fingerprint "<actual-base-fingerprint>"
+  --base-version "<actual-base-version>" --base-fingerprint "<actual-base-fingerprint>" \
+  --base-runtime-version "<actual-base-runtime-version>"
 ```
 
-Use `ios` independently for iOS. Obtain both values from the selected deployment
-target, not by copying expected policy values just to pass. If the target
-cannot expose a verifiable version/fingerprint, block native deployment rather
+Use `ios` independently for iOS. Obtain all three values (base version, native
+fingerprint and native runtime counter) from the selected deployment target,
+not by copying expected policy values just to pass. If the target cannot expose
+a verifiable version, fingerprint and runtime counter, block native deployment rather
 than infer it from Hermes bytecode or the npm host. Preserve deployment approval,
 first-app-ID regeneration, and offline reconciliation gates.
 `--platform` always requires `--project-root`: inspecting a catalogue default

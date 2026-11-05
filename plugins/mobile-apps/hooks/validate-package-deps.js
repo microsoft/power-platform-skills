@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  resolveProjectRelease, dependencySections, inspectInstalledPackages, isRuntimePackage, resolveInstalledDependency, npmAliasTarget,
+  resolveProjectReleaseWithInventory, dependencySections, inspectInstalledPackages, isRuntimePackage, resolveInstalledDependency, npmAliasTarget,
 } = require('../scripts/lib/mobile-release');
 
 const FORBIDDEN_DEPS = {
@@ -152,12 +152,16 @@ function main(input) {
   }
   const explicit = toolInput.validation_mode === 'explicit-mobile-workflow';
   let baseline;
+  let installed;
   if (explicit) {
-    const release = resolveProjectRelease(projectRoot);
+    const resolved = resolveProjectReleaseWithInventory(projectRoot);
+    const { release } = resolved;
+    installed = resolved.installed;
     baseline = packageDeps(release.managedDependencies);
+  } else {
+    installed = inspectInstalledPackages(projectRoot);
+    baseline = legacyBaseline(toolName, toolInput, content, projectRoot, installed);
   }
-  const installed = inspectInstalledPackages(projectRoot);
-  if (!explicit) baseline = legacyBaseline(toolName, toolInput, content, projectRoot, installed);
   const approved = approvedJsDependencies(toolInput);
   const unchangedPeers = new Set(Object.entries(baseline).filter(([name, version]) => dependencies[name] === version
     && installed.has(`node_modules/${name}`)).map(([name]) => `node_modules/${name}`));

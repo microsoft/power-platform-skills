@@ -35,6 +35,45 @@ test('allows the version-matched release and its shipped haptics, not a snapshot
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('explicit validation reuses one installed inventory per invocation without missing new native code', t => {
+  const fixture = createFixture(t);
+  addDependency(fixture.projectRoot, 'ordinary-wrapper', '1.0.0');
+  const plugin = path.resolve(__dirname, '../..');
+  const instrumented = `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const root = process.argv[1];
+    const plugin = process.argv[2];
+    const release = JSON.parse(fs.readFileSync(process.argv[3], 'utf8')).releases[0];
+    require(path.join(plugin, 'scripts/lib/mobile-published-packages.js')).projectContract = () => release;
+    const original = fs.readdirSync;
+    let scans = 0;
+    fs.readdirSync = function (directory, ...args) {
+      if (path.resolve(directory) === path.join(root, 'node_modules')) scans++;
+      return original.call(this, directory, ...args);
+    };
+    process.on('exit', () => fs.writeSync(1, String(scans)));
+    require(path.join(plugin, 'hooks/validate-package-deps.js'));
+  `;
+  const invoke = () => spawnSync(process.execPath, [
+    '-e', instrumented, fixture.projectRoot, plugin, path.join(fixture.pluginRoot, 'shared/fixture-contracts.json'),
+  ], {
+    cwd: fixture.projectRoot, encoding: 'utf8',
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+    input: JSON.stringify({ tool_name: 'Write', tool_input: {
+      file_path: path.join(fixture.projectRoot, 'package.json'),
+      validation_mode: 'explicit-mobile-workflow',
+    } }),
+  });
+  const initial = invoke();
+  assert.equal(initial.status, 0, initial.stderr);
+  assert.equal(initial.stdout, '1');
+  fs.writeFileSync(path.join(fixture.projectRoot, 'node_modules/ordinary-wrapper/Bridge.swift'), 'import Foundation\n');
+  const changed = invoke();
+  blocked(changed, /Native\/runtime dependency|Unreviewed native/);
+  assert.equal(changed.stdout, '1', 'Fresh validation must rescan once rather than retain stale package evidence');
+});
+
 test('blocks a new ambiguous dependency without exact plan approval', (t) => {
   const fixture = createFixture(t);
   addDependency(fixture.projectRoot, 'react-native-calendars', '1.1314.0');

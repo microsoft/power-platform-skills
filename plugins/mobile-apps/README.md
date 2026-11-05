@@ -42,21 +42,28 @@ connector wiring.
     export PLUGIN_ROOT='/absolute/path/to/installed/mobile-app'
     ```
 
-2. Select an exact published template version and create a new app from that immutable package:
+2. Discover published template versions:
 
     ```sh
     npm view @microsoft/power-apps-native-template dist-tags --json
-    node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --template-version "<exact-template-version>"
+    ```
+
+    Select an exact version. After approving acquisition and dependency installation,
+    run this guarded sequence from the intended parent directory:
+
+    ```sh
+    node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --template-version "<exact-template-version>" &&
     node "${PLUGIN_ROOT}/scripts/mobile-template-lifecycle.js" acquire \
-      --template-version "<exact-template-version>" --destination ./my-mobile-app
-    cd my-mobile-app
+      --template-version "<exact-template-version>" --destination ./my-mobile-app &&
+    cd -- ./my-mobile-app &&
     npm ci
     ```
 
     `${PLUGIN_ROOT}` is the installed mobile-app plugin directory. Acquisition
     and dependency installation require approval. The helper checks the exact
     package version, integrity, and compatibility manifest and never overwrites
-    a non-empty target. Use existing npm user/environment authentication; it
+    a non-empty target. A failed resolution, acquisition or directory change stops
+    before installation. Use existing npm user/environment authentication; it
     does not provision registry credentials.
 
     **Package compatibility:** the helpers inspect published host/template metadata
@@ -70,8 +77,9 @@ connector wiring.
     The former local diagnostic artifact mode is retired. Missing published
     packages block creation/adoption; there is no Git, bundled-template or local
     archive fallback. Existing offline profiles and data remain app-owned.
-    Versioned offline SDK contracts are checked against the published host,
-    template lock and installed native artifact hashes. This is not an offline
+    Versioned offline SDK contracts and native files are checked against the
+    published host and the SDK archive's contract and artifact inventory, verified
+    with the immutable template lock's integrity. This is not an offline
     synchronization or database-upgrade test.
 
 3. Open the template folder in VS Code and run the skill from Copilot Chat:

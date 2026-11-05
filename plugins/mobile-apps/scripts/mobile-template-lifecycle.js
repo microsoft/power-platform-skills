@@ -220,13 +220,15 @@ function acquireHost(destination, version, options = {}) {
   const execute = options.run || run;
   assertEmptyDestination(target);
   fs.mkdirSync(target, { recursive: true });
-  fs.writeFileSync(path.join(target, 'package.json'), `${JSON.stringify({
-    name: 'mobile-upgrade-tooling', private: true, dependencies: { [HOST]: version },
-  }, null, 2)}\n`, { flag: 'wx' });
-  withNpmContext(options.cwd || process.cwd(), target, (env, cwd) => execute('npm', [
-    'install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund',
-    '--prefix', target,
-  ], cwd, { env }));
+  withNpmContext(options.cwd || process.cwd(), target, (env, cwd) => {
+    fs.writeFileSync(path.join(target, 'package.json'), `${JSON.stringify({
+      name: 'mobile-upgrade-tooling', private: true, dependencies: { [HOST]: version },
+    }, null, 2)}\n`, { flag: 'wx' });
+    return execute('npm', [
+      'install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund',
+      '--prefix', target,
+    ], cwd, { env });
+  });
   const hostRoot = path.join(target, 'node_modules', HOST);
   const installed = readJson(path.join(hostRoot, 'package.json'));
   const locked = readJson(path.join(target, 'package-lock.json')).packages?.[`node_modules/${HOST}`];

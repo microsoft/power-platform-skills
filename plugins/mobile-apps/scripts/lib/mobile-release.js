@@ -517,6 +517,10 @@ function selectProjectRelease(projectRoot, catalog) {
 }
 
 function resolveProjectRelease(projectRoot, catalog, platformContext = readPlatformContext(), options) {
+  return resolveProjectReleaseWithInventory(projectRoot, catalog, platformContext, options).release;
+}
+
+function resolveProjectReleaseWithInventory(projectRoot, catalog, platformContext = readPlatformContext(), options) {
   if (catalog !== undefined) reviewedProjectCatalog(catalog);
   requireValue(keys(platformContext, ['os', 'cpu', 'libc']) && typeof platformContext.os === 'string'
     && /^[a-z0-9_-]+$/.test(platformContext.os) && typeof platformContext.cpu === 'string'
@@ -527,7 +531,7 @@ function resolveProjectRelease(projectRoot, catalog, platformContext = readPlatf
     const release = require('./mobile-published-packages').projectContract(projectRoot, project, options);
     validateRelease(release);
     validateProjectAgainstRelease(project, release);
-    return release;
+    return { release, installed: project.installed };
   }
   const candidates = matchingProjectRequirements(project.metadata, catalog);
   const matches = [];
@@ -543,7 +547,7 @@ function resolveProjectRelease(projectRoot, catalog, platformContext = readPlatf
   }
   if (matches.length === 0) throw mismatch;
   requireValue(matches.length === 1, 'The project matches multiple reviewed releases. A maintainer must disambiguate the release policy.');
-  return matches[0];
+  return { release: matches[0], installed: project.installed };
 }
 
 function summarizeRelease(release) {
@@ -575,7 +579,7 @@ function summarizeRelease(release) {
 }
 
 module.exports = {
-  selectRelease, resolveProjectRelease, validateRelease, summarizeRelease,
+  selectRelease, resolveProjectRelease, resolveProjectReleaseWithInventory, validateRelease, summarizeRelease,
   readProjectRequirements, selectProjectRelease,
   // Shared by the backwards-compatible write validator; not a release bypass.
   dependencySections, inspectInstalledPackages, isRuntimePackage, resolveInstalledDependency, readPlatformContext, npmAliasTarget,

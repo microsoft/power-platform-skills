@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const semver = require('../vendor/semver.cjs');
 
 const HOST = '@microsoft/power-apps-native-host';
@@ -57,38 +58,68 @@ function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    requireValue(false, 'Cannot read the installed offline SDK contract; restore the verified package.');
+    requireValue(false, 'Cannot read the offline SDK metadata; restore the verified package.');
   }
 }
 
-function digest(file) {
-  const hash = createHash('sha256');
+function hashFile(file, algorithm = 'sha256', encoding = 'hex') {
+  const hash = createHash(algorithm);
   const fd = fs.openSync(file, 'r');
   try {
     const buffer = Buffer.alloc(1024 * 1024);
     let size;
     while ((size = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, size));
-    return hash.digest('hex');
+    return hash.digest(encoding);
   } finally {
     fs.closeSync(fd);
   }
 }
 
-function verifyInstalledOfflineSdk(projectRoot, profile, host, lock, referenceLock) {
+function verifyOfflineArtifacts(root, contract) {
+  requireValue(contract?.artifacts && typeof contract.artifacts === 'object'
+    && !Array.isArray(contract.artifacts) && Object.keys(contract.artifacts).length > 0,
+  'Offline compatibility metadata is missing native artifact hashes.');
+  for (const [file, hash] of Object.entries(contract.artifacts)) {
+    requireValue(typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash)
+      && hashFile(packageFile(root, file)) === hash,
+    'Offline native artifact hash differs from the selected SDK contract.');
+  }
+}
+
+function readOfflineContract(root) {
+  const contract = readJson(packageFile(root, 'compatibility.json'));
+  verifyOfflineArtifacts(root, contract);
+  return contract;
+}
+
+function verifyInstalledOfflineSdk(projectRoot, profile, host, lock, referenceLock, readPackage) {
   // Historical hosts have no versioned offline contract; preserve their existing admission rules.
   if (profile.offlineContractVersion === undefined) return;
   const version = profile.managedDependencies?.[OFFLINE];
   const entry = `node_modules/${OFFLINE}`;
   const locked = lock.packages?.[entry];
+  const expected = referenceLock.packages?.[entry];
   if (version === undefined && !locked) return;
   requireValue(semver.valid(version) && !semver.prerelease(version) && locked?.version === version
-    && SRI.test(locked.integrity || '') && referenceLock.packages?.[entry]?.integrity === locked.integrity,
+    && !locked.link && expected?.version === version && !expected.link
+    && SRI.test(locked.integrity || '') && expected.integrity === locked.integrity,
   'Offline SDK version and integrity must match the selected published template lock.');
+  requireValue(typeof readPackage === 'function', 'Offline admission requires an integrity-verified published SDK archive.');
+  const reference = readPackage(OFFLINE, version);
+  requireValue(reference?.publication?.package === OFFLINE && reference.publication.version === version
+    && reference.publication.integrity === expected.integrity
+    && reference.pkg?.name === OFFLINE && reference.pkg.version === version,
+  'Published offline SDK archive does not match the immutable template lock integrity.');
   const root = packageFile(projectRoot, entry, true);
-  const pkg = readJson(packageFile(root, 'package.json'));
-  const contract = readJson(packageFile(root, 'compatibility.json'));
+  const installed = readJson(packageFile(root, 'package.json'));
+  const contract = reference.contract;
+  const pkg = reference.pkg;
+  requireValue(installed.name === pkg.name && installed.version === pkg.version
+    && isDeepStrictEqual(installed.peerDependencies, pkg.peerDependencies)
+    && isDeepStrictEqual(readJson(packageFile(root, 'compatibility.json')), contract),
+  'Installed offline SDK metadata differs from its integrity-verified published archive.');
   requireValue(pkg.name === OFFLINE && pkg.version === version
-    && contract.schemaVersion === 2 && contract.complete === true && contract.sourceDirty === false
+    && contract?.schemaVersion === 2 && contract.complete === true && contract.sourceDirty === false
     && contract.packageVersion === version && contract.reactNativeVersion === profile.managedDependencies['react-native']
     && Number(contract.expoSdkVersion) === profile.expoSdk
     && typeof contract.runtimeFamily === 'string' && contract.runtimeFamily.length > 0
@@ -105,13 +136,7 @@ function verifyInstalledOfflineSdk(projectRoot, profile, host, lock, referenceLo
     && semver.satisfies(contract.reactNativeVersion, pkg.peerDependencies['react-native'])
     && semver.satisfies(version, host.peerDependencies[OFFLINE]),
   'Offline SDK, published host peers and native runtime contract disagree.');
-  requireValue(contract.artifacts && typeof contract.artifacts === 'object'
-    && !Array.isArray(contract.artifacts) && Object.keys(contract.artifacts).length > 0,
-  'Offline compatibility metadata is missing native artifact hashes.');
-  for (const [file, hash] of Object.entries(contract.artifacts)) {
-    requireValue(/^[a-f0-9]{64}$/.test(hash) && digest(packageFile(root, file)) === hash,
-      'Offline native artifact hash differs from the selected SDK contract.');
-  }
+  verifyOfflineArtifacts(root, contract);
 }
 
-module.exports = { unpack, verifyInstalledOfflineSdk };
+module.exports = { unpack, hashFile, readOfflineContract, verifyInstalledOfflineSdk };
