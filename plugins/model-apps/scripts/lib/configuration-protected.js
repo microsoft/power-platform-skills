@@ -116,18 +116,31 @@ async function locateItem(env, kind, key) {
   };
   const bases = new Map([[rootId, await read(root)]]);
   // Only the children the declaration still names are bound children of the plan; a bound child it no longer names is
-  // left to the complete child graph (editShapeOf), where it is a removal — never deleted, never adopted.
+  // left to the complete child graph (editShapeOf), where it is a removal — never deleted, never adopted. The one
+  // exception is a variable's bound value its deployment settings do not name this run (and do not clear): it is still
+  // the variable's own row, so the plan keeps it at its bound id, sends nothing for it, and an edit of the definition is
+  // not judged a conflict over it. A kept value read absent is no longer there to keep (it was deleted outside the
+  // plugin); nothing is planned for it, and settings that name a value again find its binding gone (not found).
   const declaredSlots = new Set(fresh.rows.filter((r) => r.slot !== null).map((r) => r.slot));
   const boundSlots = [];
+  const keptChildren = {};
   for (const r of records) {
     if (r === root) continue;
     const slot = slotOf(r);
-    if (slot === null || !declaredSlots.has(slot)) continue;
+    if (slot === null) continue;
+    if (!declaredSlots.has(slot)) {
+      if (kind !== 'environmentVariable' || slot !== 'value' || clearsValue(bindings, fresh.key)) continue;
+      const got = await B.readConfigurationRow(dataverse, r.kind, normalizeGuid(r.id));
+      if (got.state === 'absent') continue;
+      if (got.state !== 'present') throw stop(UNVERIFIED_CODE, `the bound ${r.kind} of ${kind} "${fresh.key}" could not be read`, { kind, key: fresh.key, id: normalizeGuid(r.id) });
+      keptChildren[slot] = normalizeGuid(r.id);
+      continue;
+    }
     bases.set(normalizeGuid(r.id), await read(r));
     boundSlots.push(slot);
   }
   const planned = B.planOf(spec, {
-    kind, key, bindings, solution, componentTypes, bases, boundSlots, baseGeneration: group.committed.generation,
+    kind, key, bindings, solution, componentTypes, bases, boundSlots, keptChildren, baseGeneration: group.committed.generation,
     // Only this item is bound in its own plan: another item of the kind is planned (and judged) on its own.
     boundIdOf: (k, pk) => (k === kind && pk === fresh.key ? rootId : undefined),
   });
@@ -164,6 +177,32 @@ function editVerdict(kind, shape) {
 }
 
 /**
+ * The verdict on a bound environment variable's or connection reference's update, or null when the protected path can
+ * make it (protectedConfigurationPort update: one checked set over the item's complete root/child plan). Read only:
+ *   a row under the root that its binding does not hold (a value made outside the plugin) is neither overwritten nor
+ *     adopted when this run would write the item — whatever destructive authorization the maker gave, which approves
+ *     replacing the item's OWN value, never taking over another row: create-identity-conflict;
+ *   a child the update would create (a first value) runs its complete namesake query first: any value already under
+ *     the definition is a conflict, and a query that does not complete is create-identity-unverified.
+ * A run that writes nothing for the item (no definition change, no value or connection named) is not judged: a value a
+ * maker set in the environment by hand does not stop a build that leaves the variable alone.
+ */
+async function childVerdict(env, planned, shape) {
+  const { bindings, dataverse } = env;
+  const named = planned.kind === 'environmentVariable'
+    ? !!(bindings && bindings.environmentVariables instanceof Map && bindings.environmentVariables.get(planned.key))
+    : !!(bindings && bindings.connectionReferences instanceof Map && bindings.connectionReferences.get(planned.key));
+  if (!shape.rootChanged && !shape.creates.length && !shape.fixedEdits.length && !named) return null;
+  if (shape.removals.length) {
+    return { code: CONFLICT_CODE, message: `the ${planned.kind} "${planned.key}" has a row under it that its binding does not hold (${shape.removals.join(', ')}); it is neither overwritten nor adopted, and no service changes were sent by this build. Remove or reconcile that row outside the plugin, then run again` };
+  }
+  if (!shape.creates.length) return null;
+  const conflicts = await B.readConfigurationConflicts(dataverse, planned);
+  if (conflicts.state === 'clear') return null;
+  return { code: conflicts.code || UNVERIFIED_CODE, message: `the ${planned.kind} "${planned.key}" namesake query for its new row answered ${conflicts.state}; no service changes were sent by this build` };
+}
+
+/**
  * A pending attempt is decided from its OWN persisted expectation (managed-create-context.js classifyRecovery), read-only,
  * never re-planned from today's rows. For a create that is what keeps the original plan's completion owed: a duplicate
  * rule created without an explicit status owes its initial publication, and a rerun after a partial create proves the
@@ -196,8 +235,10 @@ async function environmentOf({ spec, store, dataverse, solution, bindings }) {
 }
 
 /**
- * The whole-plan, read-only preflight: every declared protected item located by its binding and, for a bound Custom API
- * or duplicate rule, its edit judged; a bound environment variable's value clear is a removal and refused. Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
+ * The whole-plan, read-only preflight: every declared protected item located by its binding and its edit judged — a
+ * bound Custom API or duplicate rule by its supported shapes (editVerdict), a bound environment variable or connection
+ * reference by its complete root/child plan (childVerdict), and a bound variable's value clear is a removal and refused.
+ * Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
  * the build may continue. A read that cannot be completed is a halt (`create-identity-unverified`), never "no change".
  */
 async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings }) {
@@ -222,12 +263,13 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       // removal the protected path does not make, authorized or not. A settings entry that leaves the value alone ("" or
       // none) or replaces it is not a clear; those keep the ordinary path and its authorization.
       const clears = kind === 'environmentVariable' && clearsValue(bindings, item.planned.key);
-      if (kind !== 'customApi' && kind !== 'duplicateRule' && !clears) continue;
       const shape = await B.editShapeOf(dataverse, item.planned);
       if (shape.state !== 'complete') { halts.push({ kind, key: item.planned.key, code: UNVERIFIED_CODE, message: `the ${kind} "${item.planned.key}" could not be read completely` }); continue; }
       if (shape.missing.length) { halts.push({ kind, key: item.planned.key, id: shape.missing[0].id, code: B.NOT_FOUND_CODE, message: `a bound row of ${kind} "${item.planned.key}" is gone; it is not replaced by a namesake` }); continue; }
       // A clear plans no value row, so a value row under the definition is the removal the clear would send.
-      const verdict = clears ? (shape.removals.length ? { code: B.DELETE_CODE, message: VALUE_REMOVAL_MESSAGE } : null) : editVerdict(kind, shape);
+      const verdict = clears ? (shape.removals.length ? { code: B.DELETE_CODE, message: VALUE_REMOVAL_MESSAGE } : null)
+        : kind === 'customApi' || kind === 'duplicateRule' ? editVerdict(kind, shape)
+          : await childVerdict(env, item.planned, shape);
       if (verdict) halts.push({ kind, key: item.planned.key, ...verdict });
     } catch (error) {
       halts.push({ kind, key, ...(error.id ? { id: error.id } : {}), code: error.code || UNVERIFIED_CODE, message: error.message });
@@ -261,9 +303,10 @@ async function addMissingMembers(dataverse, planned, scope) {
  *                                       observed and settled into the store. Answers { outcome: 'created', id, childIds,
  *                                       result } only for a committed create; anything else throws, typed;
  *   exact                               true: configuration-artifacts.js skips its name lookup for a protected kind;
- *   updates(kind)                       true for a Custom API, whose supported edits go through update();
- *   update({ kind, key, id }, fn)       ONE checked set for a bound Custom API edit the preflight admitted: fn({ id,
- *                                       childIds }) pushes the edit through the gate (a multi-request edit as one
+ *   updates(kind)                       true for a Custom API, an environment variable and a connection reference, whose
+ *                                       supported edits go through update();
+ *   update({ kind, key, id }, fn)       ONE checked set for a bound item's edit the preflight admitted: fn({ childIds,
+ *                                       rowIds }) pushes the edit through the gate (a multi-request edit as one
  *                                       change set when apiBase is known, refused unsent otherwise), new children are
  *                                       added to the solution, and the attempt is observed and settled. Answers
  *                                       { outcome: 'updated', id, childIds, result }; anything else throws, typed.
@@ -328,14 +371,17 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       return { outcome: 'created', id, childIds, result: pushed.value };
     },
     /**
-     * A bound Custom API's edit (configuration-artifacts.js applyUpdate): the plan is made again from fresh reads of the
-     * bound rows at their exact ids (never a name), and `fn({ childIds })` — the SDK's own element updates and ONE push —
-     * runs inside that plan's create set: a single request on its own, or the one checked change set the SDK sends for
-     * the root PATCH with new children or for new children only (`batch`). The new children take the plan's derived ids.
-     * Answers { outcome: 'updated', id, childIds, result } only for a committed edit; anything else throws, typed. The
-     * build's preflight has already refused every shape the protected path cannot make, before anything was sent.
+     * A bound item's edit (configuration-artifacts.js applyUpdate) — a Custom API, an environment variable (its definition,
+     * a first value or a replacement of its own value) or a connection reference: the plan is made again from fresh reads
+     * of the bound rows at their exact ids (never a name), and `fn({ childIds, rowIds })` — the SDK's own element updates
+     * and ONE push — runs inside that plan's create set: a single request on its own, or the one checked change set the
+     * SDK sends for the root PATCH with new children or for new children only (`batch`). The new children take the plan's
+     * derived ids (`childIds`); `rowIds` names every child row the plan holds by slot, so the caller can refuse to write a
+     * row the plan does not (a value the SDK found under the definition at another id). Answers { outcome: 'updated', id,
+     * childIds, result } only for a committed edit; anything else throws, typed. The build's preflight has already refused
+     * every shape the protected path cannot make, before anything was sent.
      */
-    updates: (kind) => kind === 'customApi',
+    updates: (kind) => kind === 'customApi' || kind === 'environmentVariable' || kind === 'connectionReference',
     async update({ kind, key, id }, fn) {
       const item = await locateItem(await env(), kind, key);
       const { planned } = item;
@@ -350,8 +396,9 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const batch = apiBase ? { batch: { apiBase, solution: planned.solution } } : {};
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult, ...batch }, send);
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && r.mode === 'create').map((r) => [r.slot, r.id]));
+      const rowIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && !r.kept).map((r) => [r.slot, r.id]));
       const rootId = planned.plan.rows[0].id;
-      const pushed = await scope(() => fn({ childIds }), B.acceptResultFor(planned));
+      const pushed = await scope(() => fn({ childIds, rowIds }), B.acceptResultFor(planned));
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });

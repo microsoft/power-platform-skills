@@ -503,13 +503,14 @@ function pinApiLabels(artifact, rootMode, slotModes, bases) {
 
 /**
  * The protected create plan of ONE declared configuration artifact, at the ids the create port derives for it:
- *   planOf(spec, { kind, key, bindings?, solution?, intentFor?, boundIdOf?, componentTypes?, boundSlots?, bases?, baseGeneration? })
+ *   planOf(spec, { kind, key, bindings?, solution?, intentFor?, boundIdOf?, componentTypes?, boundSlots?, keptChildren?, bases?, baseGeneration? })
  * `kind` is a root kind and `key` its declared key (schema name, logical name, unique name, rule key). `bindings` are
  * the deployment bindings (readDeploymentBindings): a bound value adds the value row, a bound connection makes the
  * reference's connection a private input. `solution` is the run's solution (else the spec's, else Default); in a
  * restricted solution (Default, Active) no membership is planned. `componentTypes` is readComponentTypes' `types`,
  * needed whenever membership is. `boundIdOf(kind, portKey)` is a recorded binding's id (the root is then an update);
- * `boundSlots` names children that already exist under it (updates, not creates). `bases` (a Map or an object, by row
+ * `boundSlots` names children that already exist under it (updates, not creates). `keptChildren` ({ value: <id> }, a
+ * bound variable only) is a bound value the deployment settings do not name this run: held at its id, never sent. `bases` (a Map or an object, by row
  * id) holds the fresh readConfigurationRow answer of every row the plan updates with a PATCH: its row version is the only
  * If-Match the classifier admits for that row, and a Custom API row's labels the App Spec leaves out are kept from it.
  * `baseGeneration` is the committed group's generation (the binding store's readGroup) an update is planned from: the
@@ -519,7 +520,7 @@ function pinApiLabels(artifact, rootMode, slotModes, bases) {
  * (`expected`), for a child its slot, and for a PATCHed row its held row version (`ifMatch`). No private input is in
  * either.
  */
-function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [], bases, baseGeneration } = {}) {
+function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [], keptChildren, bases, baseGeneration } = {}) {
   if (!ROOT_KINDS.has(kind)) throw new TypeError(`planOf: ${kind} is not a configuration root kind`);
   const entry = A.configurationIntentOf(spec, kind, key);
   const sol = nonEmpty(solution) ? solution : spec && isPlain(spec.solution) && nonEmpty(spec.solution.uniqueName) ? spec.solution.uniqueName : 'Default';
@@ -568,9 +569,19 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     if (childKind === 'environmentVariableValue') secrets.set(rowKey(childKind, row.key), artifact.currentValue.value);
     rows.push(row);
   }
+  // A bound variable's value the declaration leaves alone this run (its deployment settings name no value): the bound
+  // row is still the variable's own child, so the plan holds it — present, under its definition, at its bound id — and
+  // an edit of the definition is not judged a conflict over it. Nothing can be sent for it: it holds no row version (a
+  // PATCH needs one: classifyPatch) and no private input (a value carried for it is refused: sendRow).
+  for (const [slot, rawId] of Object.entries(keptChildren || {})) {
+    if (kind !== 'environmentVariable' || slot !== 'value' || has(got.childIds, slot) || rootMode !== 'update') throw new TypeError(`planOf: ${kind} "${portKey}" cannot keep a bound ${slot} child`);
+    const id = normalizeGuid(rawId);
+    if (!id) throw new TypeError(`planOf: the kept ${slot} child of ${kind} "${portKey}" has no id`);
+    rows.push({ kind: 'environmentVariableValue', key: JSON.stringify([portKey, slot]), id, parentId: rootId, slot, mode: 'update', kept: true, expected: {}, sensitiveInput: false });
+  }
   for (const r of rows) {
     r.expectedSha256 = projectionOf(r.kind, r.expected, r.expected);
-    if (r.mode === 'update' && PATCHABLE.has(r.kind)) r.ifMatch = baseOf(bases, r.kind, r.id, r.parentId).rowVersion;
+    if (r.mode === 'update' && !r.kept && PATCHABLE.has(r.kind)) r.ifMatch = baseOf(bases, r.kind, r.id, r.parentId).rowVersion;
   }
   // An update of a bound root records the versions it was prepared from (the binding store's baseObservation); they stay
   // out of the declaration, which a later fresh read must not change.

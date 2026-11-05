@@ -110,8 +110,8 @@ async function pass(h, spec, opts = {}) {
   }
   return { halt, step, sent: h.org.requests.slice(mark).filter((r) => r.method !== 'GET') };
 }
-async function created(h, spec = configSpec()) {
-  const first = await pass(h, spec);
+async function created(h, spec = configSpec(), opts = {}) {
+  const first = await pass(h, spec, opts);
   assert.equal(first.halt, null, first.halt && `${first.halt.code}: ${first.halt.message}`);
   return first;
 }
@@ -470,6 +470,88 @@ test('clearing a protected variable\'s value would delete its value row: even au
   assert.equal(legacy.halt, null, legacy.halt && `${legacy.halt.code}: ${legacy.halt.message}`);
   assert.deepEqual(legacy.sent.map((r) => r.method), ['DELETE']);
   assert.deepEqual(p.org.rows('environmentvariablevalues'), []);
+});
+
+test('a first value of a bound protected variable is created at its derived id inside the variable\'s own protected set, and bound', async () => {
+  const h = await harness();
+  const spec = variableOnly();
+  await created(h, spec);
+  const before = committed(h, 'environmentVariable', 'contoso_apibase');
+  const bindings = readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value: 'https://one.contoso.com' }] }, spec);
+  const out = await pass(h, spec, { configurationBindings: bindings });
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent.map((r) => `${r.method} ${r.path.split('?')[0]}`), ['POST /environmentvariablevalues']);
+  const after = committed(h, 'environmentVariable', 'contoso_apibase');
+  assert.equal(after.records.length, before.records.length + 1);
+  const valueRecord = after.records.find((r) => r.kind === 'environmentVariableValue');
+  assert.deepEqual(h.org.rows('environmentvariablevalues').map((r) => r.environmentvariablevalueid), [valueRecord.id]);
+  const again = await pass(reopen(h), spec, { configurationBindings: bindings });
+  assert.equal(again.halt, null, again.halt && again.halt.message);
+  assert.deepEqual(again.sent, []);
+});
+
+test('a protected variable\'s definition edit commits a new proved baseline, and keeps its bound value without sending it', async () => {
+  const h = await harness();
+  const spec = variableOnly();
+  const valueOf = (Value) => readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value }] }, spec);
+  await created(h, spec);
+  await created(h, spec, { configurationBindings: valueOf('https://one.contoso.com') });
+  const before = committed(h, 'environmentVariable', 'contoso_apibase');
+  const valueId = before.records.find((r) => r.kind === 'environmentVariableValue').id;
+  // The settings do not name the value this run: the definition edit is made, the value row is neither sent nor dropped.
+  const next = { ...spec, environmentVariables: [{ ...spec.environmentVariables[0], description: 'Updated definition' }] };
+  const out = await pass(h, next);
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent.map((r) => `${r.method} ${r.path.split('(')[0]}`), ['PATCH /environmentvariabledefinitions']);
+  assert.equal(h.org.rows('environmentvariabledefinitions')[0].description, 'Updated definition');
+  const after = committed(h, 'environmentVariable', 'contoso_apibase');
+  assert.notEqual(after.generation, before.generation, 'the edit is proved and committed as the new baseline');
+  assert.notEqual(after.records[0].intentSha256, before.records[0].intentSha256);
+  assert.equal(after.records.find((r) => r.kind === 'environmentVariableValue').id, valueId, 'the bound value stays bound');
+  assert.deepEqual(h.org.rows('environmentvariablevalues').map((r) => [r.environmentvariablevalueid, r.value]), [[valueId, 'https://one.contoso.com']]);
+  // An authorized replacement of the variable's own value is a conditional PATCH of that row.
+  const authorizedDestructive = new Set(['environmentVariableValue:contoso_apibase:value']);
+  const replaced = await pass(h, next, { configurationBindings: valueOf('https://two.contoso.com'), authorizedDestructive });
+  assert.equal(replaced.halt, null, replaced.halt && `${replaced.halt.code}: ${replaced.halt.message}`);
+  assert.deepEqual(replaced.sent.map((r) => `${r.method} ${r.path.split('?')[0]}`), [`PATCH /environmentvariablevalues(${valueId})`]);
+  assert.match(String(Object.entries(replaced.sent[0].headers).find(([k]) => k.toLowerCase() === 'if-match')?.[1]), /^W\/"\d+"$/);
+  assert.notEqual(committed(h, 'environmentVariable', 'contoso_apibase').generation, after.generation);
+});
+
+test('a value made outside the plugin under a bound protected variable is never overwritten or adopted, authorized or not', async () => {
+  const h = await harness();
+  const spec = variableOnly();
+  await created(h, spec);
+  const rootId = committed(h, 'environmentVariable', 'contoso_apibase').records[0].id;
+  const foreignId = await insertRow(h.org, 'environmentvariablevalues', {
+    value: 'foreign-value-before',
+    'EnvironmentVariableDefinitionId@odata.bind': `/environmentvariabledefinitions(${rootId})`,
+  });
+  // A rerun that writes nothing for the variable is not stopped by a value a maker set by hand.
+  const quiet = await pass(reopen(h), spec);
+  assert.equal(quiet.halt, null, quiet.halt && quiet.halt.message);
+  assert.deepEqual(quiet.sent, []);
+  const bindings = readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value: 'current-value-after' }] }, spec);
+  const authorizedDestructive = new Set(['environmentVariableValue:contoso_apibase:value']);
+  for (const opts of [{ configurationBindings: bindings, authorizedDestructive }, { configurationBindings: bindings }]) {
+    const out = await pass(reopen(h), spec, opts);
+    assert.equal(out.halt && out.halt.code, 'create-identity-conflict', out.halt && out.halt.message);
+    assert.equal(out.halt.phase, 'preflight');
+    assert.deepEqual(out.sent, []);
+  }
+  // A definition edit would write the variable too: the row it does not hold still stops it.
+  const edited = await pass(reopen(h), { ...spec, environmentVariables: [{ ...spec.environmentVariables[0], description: 'Edited' }] });
+  assert.equal(edited.halt && edited.halt.code, 'create-identity-conflict', edited.halt && edited.halt.message);
+  assert.deepEqual(edited.sent, []);
+  // The write itself checks again, against the plan made from fresh reads: a step run without the preflight still never
+  // PATCHes a value row the binding does not hold.
+  const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration, configurationBindings: bindings, authorizedDestructive }, appUniqueName: 'contoso_configured' });
+  const mark = h.org.requests.length;
+  const step = await runtime.apply('data-model').catch((error) => ({ error }));
+  assert.ok(step.error || JSON.stringify(step).includes('create-identity-conflict'), JSON.stringify(step).slice(0, 400));
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), []);
+  assert.deepEqual(h.org.rows('environmentvariablevalues').map((r) => [r.environmentvariablevalueid, r.value]), [[foreignId, 'foreign-value-before']]);
+  assert.equal(committed(h, 'environmentVariable', 'contoso_apibase').records.length, 1, 'nothing is adopted');
 });
 
 test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {
