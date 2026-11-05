@@ -3364,7 +3364,13 @@ or a membership removed by hand stops the build, never a no-op success); proved 
 same rows and a target not there yet -> resumed under its token, ids, parents and generation (`resolve` answers
 `owed`, so `planOne` never plans it `unchanged` and its membership is added only inside its attempt); rows
 changed -> retired while prepared,
-otherwise `create-identity-conflict`. Environment variable and connection reference updates (definition, first
+otherwise `create-identity-conflict`. A create or edit whose push the run did not check is released by that
+same run when its record proves nothing left (`ctx.release` -> `store.retireProvenUnsentAttempt`: at the
+run's own epoch, `attemptProvenUnsent`, the group still at the attempt's base generation, no effect a read
+found made): an operation the SDK refused before its first request (`CUSTOM_API_LABELS_UNSUPPORTED` on an
+environment with more than one language) must not hold the group, or every later declaration — the earlier
+one, another edit, the same one — stops on a pending attempt prepared for another declaration. Anything that
+may have been sent keeps the attempt, and the run's own stop stands either way. Environment variable and connection reference updates (definition, first
 value, own value replacement) go through the protected port as one checked set over the item's plan; a value
 row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
 store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`

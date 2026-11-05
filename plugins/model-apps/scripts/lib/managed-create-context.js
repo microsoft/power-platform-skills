@@ -403,6 +403,24 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
     facts(token) {
       return (facts.get(token) || []).slice();
     },
+    /**
+     * Release `attempt` (what begin/resume answered) after its run stopped before anything left — the operation was refused
+     * before its first request — so it does not hold its group for a declaration that is never sent (store
+     * retireProvenUnsentAttempt: only at the epoch this run holds, and only while the attempt's own record proves nothing
+     * it may have sent can land). Best effort: answers true when it was released, false when the store kept it (it may
+     * have been sent, another run claimed it, or the store could not be written), so it stays on its recovery path and
+     * the caller's own stop stands.
+     */
+    release(attempt) {
+      try {
+        store.retireProvenUnsentAttempt({ token: attempt.token, epoch: attempt.epoch });
+        begun.delete(attempt.token);
+        facts.delete(attempt.token);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     /** classifyRecovery for the persisted attempt `token`, with this context's approvals, answers and bindings. */
     classify(token, observation, { declarationSha256 } = {}) {
       store.refresh();

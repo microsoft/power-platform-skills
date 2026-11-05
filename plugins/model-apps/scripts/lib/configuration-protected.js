@@ -645,6 +645,9 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const id = planned.plan.rows[0].id;
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null).map((r) => [r.slot, r.id]));
       const pushed = await scope(() => fn({ id, childIds }), B.acceptResultFor(planned));
+      // An operation refused before its first request (nothing counted, nothing dispatched) leaves no attempt behind;
+      // one that may have sent anything keeps it for recovery (ctx.release refuses it). The stop below stands either way.
+      if (!pushed.checked) ctx.release(attempt);
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
@@ -691,6 +694,10 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && r.mode === 'create').map((r) => [r.slot, r.id]));
       const rootId = planned.plan.rows[0].id;
       const pushed = await scope(() => fn({ childIds }), B.acceptResultFor(planned));
+      // As in run(): an edit the SDK refused before its first request — a Custom API label edit on an environment with
+      // more than one language (CUSTOM_API_LABELS_UNSUPPORTED) — is released, so the next build plans from the committed
+      // group whatever it declares; kept, it held the group for a declaration that is never sent.
+      if (!pushed.checked) ctx.release(attempt);
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });

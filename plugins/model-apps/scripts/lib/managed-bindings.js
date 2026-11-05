@@ -2722,8 +2722,10 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * based on `baseGeneration`, which must still be the group's generation. One write removes only that attempt and
      * the effects it owns; the committed group, its publication debt and every other attempt and effect stay. Then,
      * and only after the write, its own hold ends — a quarantine or an uncertain-send block is never cleared.
-     * A `sending` attempt is never retired (it may have reached the service; runManagedFeature recovers or resumes it),
-     * and a later read that finds nothing is not evidence that nothing started: `managed-settlement-pending`.
+     * A `sending` attempt is never retired here (it may have reached the service; runManagedFeature recovers or resumes it),
+     * and a later read that finds nothing is not evidence that nothing started: `managed-settlement-pending`. The one
+     * exception is retireProvenUnsentAttempt: a configuration attempt whose own record proves nothing was sent, released by
+     * the run that holds it, at its epoch.
      * Answers { retired: true, effects } (the count of effect records removed with it).
      */
     retireUnsentAttempt({ token, baseGeneration } = {}) {
@@ -2735,6 +2737,43 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       });
       // The write is durable and read back (mutate): only now may the attempt's own hold end. A store opened without the
       // barrier has no hold to end; the caller releases its own.
+      if (barrier) barrier.release(token);
+      return { retired: true, effects: removed };
+    },
+    /**
+     * Release the configuration attempt `token` that the run holding it at `epoch` just stopped before anything left: the
+     * SDK refused the operation before its first request (a Custom API label edit on an environment with more than one
+     * language, CUSTOM_API_LABELS_UNSUPPORTED), so the attempt is `sending` but its own record proves nothing it may have
+     * sent can land (attemptProvenUnsent: a send window that counted no possible send, no row or effect dispatched, no
+     * acknowledgement or saved observation). Kept, it would hold its group for a declaration that will never be sent:
+     * every later build — the earlier declaration, any other edit, even the same one — would stop on a pending attempt
+     * prepared for another declaration. Under the record lease the file is reread, and the attempt must keep a row
+     * protocol, still be at `epoch` (another run that claimed it since owns it), still prove nothing was sent, still be
+     * based on its group's generation, and own no workflow effect a read found made. One write removes only that attempt
+     * and the effects it owns; then its own hold ends. Anything else is refused with nothing written, and the attempt
+     * stays on its recovery path. A later read that finds nothing is never this proof: only the attempt's own record is.
+     * Answers { retired: true, effects }.
+     */
+    retireProvenUnsentAttempt({ token, epoch } = {}) {
+      if (typeof token !== 'string' || !token) throw storeError(CODES.notSettled, 'retireProvenUnsentAttempt needs the attempt token');
+      if (!Number.isInteger(epoch)) throw storeError(CODES.notSettled, 'retireProvenUnsentAttempt needs the send window epoch its run holds');
+      let removed = 0;
+      mutate((env, disk) => {
+        const a = requireAttempt(env, disk, token);
+        const name = `the managed ${a.family} "${a.key}"`;
+        if (!isRowFamily(a.family) || !a.rowProtocol) throw storeError(CODES.notSettled, `${name} attempt keeps no row protocol; it is not released here`);
+        if (!a.sendWindow || a.sendWindow.epoch !== epoch) throw storeError(CODES.pending, `${name} attempt was claimed by another run since this send began; it is not released`);
+        if (!attemptProvenUnsent(a, env.workflowEffects)) throw storeError(CODES.pending, `${name} attempt may have been sent; it is recovered, never released`);
+        const g = env.groups.find((x) => x.family === a.family && x.key === a.key);
+        if ((g ? g.generation : null) !== a.baseGeneration) throw storeError(CODES.conflict, `${name} changed since the attempt was prepared`);
+        const owned = env.workflowEffects.filter((e) => e.attemptToken === a.token);
+        // A fulfilled effect never left either, but it records that its target was reached: it settles only with a commit.
+        if (owned.some((e) => e.state !== 'definitely-unsent' || e.dispatchToken !== null)) throw storeError(CODES.pending, `${name} attempt has a change a read found already made; it is never released`);
+        env.attempts = env.attempts.filter((x) => x !== a);
+        env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== a.token);
+        removed = owned.length;
+      });
+      // As retireUnsentAttempt: only after the durable write does the attempt's own hold end.
       if (barrier) barrier.release(token);
       return { retired: true, effects: removed };
     },

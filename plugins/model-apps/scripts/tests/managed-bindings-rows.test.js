@@ -94,6 +94,41 @@ test('an attempt that sent nothing is claimed again under a new epoch, which fen
   store.sealRowDispatch({ token, epoch, rows: SEALED });
 });
 
+// The run that holds an attempt releases it after the operation was refused before its first request: only at its own
+// epoch and only while the attempt's own record proves nothing it may have sent can land. Anything else keeps it.
+test('retireProvenUnsentAttempt releases only a sending attempt that sent nothing, at the epoch of the run that holds it', () => {
+  const sendingObserved = (store) => {
+    const [token] = store.prepareAttemptSet([apiPlan()]);
+    return store.markAttemptSetSending([{ token, expected: apiExpected() }], { claim: 'first', observed: true })[0];
+  };
+  const kept = [
+    ['a counted send', (store, { token, epoch }) => store.noteAttemptDispatch(token, epoch)],
+    ['a sealed row', (store, { token, epoch }) => store.sealRowDispatch({ token, epoch, rows: [SEALED[0]] })],
+    ['a dispatched effect', (store, { token, epoch }) => store.markRowEffectDispatch({ token, epoch, kind: 'membership', id: REQ })],
+    ['a claim by a later run', (store, { token }) => store.markAttemptSetSending([{ token, expected: apiExpected() }], { claim: 'continue', observed: true })],
+  ];
+  for (const [what, move] of kept) {
+    const store = open(dirOf());
+    const held = sendingObserved(store);
+    move(store, held);
+    const before = text(store);
+    assert.equal(codeOf(() => store.retireProvenUnsentAttempt(held)), CODES.pending, what);
+    assert.equal(text(store), before, `${what}: nothing is written`);
+    assert.ok(store.readGroup('customApi', API_KEY).pending, `${what}: the attempt stays for recovery`);
+  }
+  const prepared = open(dirOf());
+  const [token] = prepared.prepareAttemptSet([apiPlan()]);
+  assert.equal(codeOf(() => prepared.retireProvenUnsentAttempt({ token, epoch: 1 })), CODES.pending, 'a prepared attempt has no send window to prove anything');
+  assert.equal(codeOf(() => prepared.retireProvenUnsentAttempt({ token })), CODES.notSettled, 'the epoch is required');
+
+  const store = open(dirOf());
+  const held = sendingObserved(store);
+  assert.deepEqual(store.retireProvenUnsentAttempt(held), { retired: true, effects: 0 });
+  const group = store.readGroup('customApi', API_KEY);
+  assert.ok(!group.pending, 'the attempt is gone');
+  assert.throws(() => store.sealRowDispatch({ token: held.token, epoch: held.epoch, rows: [SEALED[0]] }), 'the released run sends nothing more under it');
+});
+
 test('ownership is proved row by row: a root acknowledgement never mints a child, and a child adoption names it exactly', () => {
   const dir = dirOf();
   const store = open(dir);

@@ -1345,6 +1345,10 @@ the field builds exactly as before.
   membership was removed stops, and is never reported unchanged.
   If its rows changed since then, it is dropped while nothing was sent; otherwise the build stops until
   you restore them. Anything else keeps its stop.
+  An edit or create the SDK refuses before its first request (for example a Custom API label edit on an
+  environment with more than one language, `CUSTOM_API_LABELS_UNSUPPORTED`) stops that build and leaves
+  nothing unfinished: the next build is judged on what the App Spec then declares, the earlier
+  declaration, another edit or the same one.
 - **A create that did not finish.** The next build decides it from what the first one recorded before
   sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
   a create that is missing a row, its solution membership or the rule's initial state stops with

@@ -1282,3 +1282,37 @@ test('protected configuration through the build command: a duplicate rule answer
   }
   assert.deepEqual(org.unexpected, []);
 });
+
+// A Custom API label edit is refused by the SDK before anything is sent when the environment has more than one language. The
+// refused edit leaves nothing pending, so the build that follows — the earlier declaration, another edit or the same one — is
+// judged on its own.
+test('protected configuration through the build command: a label edit refused before any send leaves nothing pending, so the next declaration is built', async () => {
+  const org = commandOrg({ languages: [1033, 1036] });
+  const spec = apiSpec();
+  const out = await runCommand(spec, { org });
+  succeeded(out, 'the create');
+  const labelled = withApi(spec, { requestParameters: [{ ...spec.customApis[0].requestParameters[0], displayName: 'Alpha' }] });
+  const refused = async (what) => {
+    const mark = org.requests.length;
+    const r = await runAgain(labelled, out);
+    assert.notEqual(r.exitCode, 0, what);
+    assert.match(String(r.thrown && r.thrown.message), /CUSTOM_API_LABELS_UNSUPPORTED/, `${what}: ${r.thrown && r.thrown.message}`);
+    assert.doesNotMatch(String(r.thrown && r.thrown.message), /another declaration/, what);
+    assert.deepEqual(org.writes(mark), [], `${what}: nothing is sent`);
+    assert.deepEqual(apiGroup(out), { committed: true, pending: false }, `${what}: nothing is left pending`);
+  };
+  await refused('the label edit');
+
+  let mark = org.requests.length;
+  succeeded(await runAgain(spec, out), 'the earlier declaration');
+  assert.deepEqual(org.writes(mark), []);
+
+  await refused('the label edit again');
+  const extended = withRequest(spec, 'B');
+  mark = org.requests.length;
+  succeeded(await runAgain(extended, out), 'another declaration');
+  assert.deepEqual(org.writes(mark), ['POST /customapirequestparameters', 'POST /AddSolutionComponent']);
+  assert.deepEqual(apiGroup(out), { committed: true, pending: false });
+  assert.equal(org.rows('customapirequestparameters').find((p) => p.uniquename === 'A').displayname, 'A', 'the refused label was never written');
+  assert.deepEqual(org.unexpected, []);
+});
