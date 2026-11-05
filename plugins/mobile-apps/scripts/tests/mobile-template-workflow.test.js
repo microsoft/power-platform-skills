@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
+const { shellBlocks } = require('./helpers/markdown-shell-blocks');
 
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -75,9 +76,17 @@ test('creation resolves immutable published package metadata before planning or 
   assert.ok(readme.indexOf('export PLUGIN_ROOT=') < readme.indexOf('resolve-mobile-release.js'));
 });
 
+test('release workflow command extraction accepts LF and Windows CRLF checkouts', () => {
+  for (const [file, language] of [['README.md', 'sh'], ['shared/references/mobile-release-lifecycle.md', 'bash']]) {
+    const normalized = read(file).replace(/\r\n/g, '\n');
+    const commands = shellBlocks(normalized, language);
+    assert.ok(commands.length > 0);
+    assert.deepEqual(shellBlocks(normalized.replace(/\n/g, '\r\n'), language), commands);
+  }
+});
+
 test('README creation never installs after failed resolution, acquisition or directory entry', t => {
-  const commands = [...read('README.md').matchAll(/```sh\n([\s\S]*?)```/g)]
-    .map(match => match[1]).find(block => block.includes('--destination ./my-mobile-app'));
+  const commands = shellBlocks(read('README.md'), 'sh').find(block => block.includes('--destination ./my-mobile-app'));
   assert.ok(commands);
   const bashPaths = process.platform === 'win32'
     ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
@@ -129,8 +138,7 @@ npm() {
 });
 
 test('deployment instructions require all three actual selected-base values', () => {
-  const commands = [...lifecycle.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)]
-    .map(match => match[1]).find(block => block.includes('--base-version'));
+  const commands = shellBlocks(lifecycle).find(block => block.includes('--base-version'));
   assert.ok(commands);
   for (const option of ['version', 'fingerprint', 'runtime-version']) {
     assert.ok(commands.includes(`--base-${option} "<actual-base-${option}>"`));
