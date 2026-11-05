@@ -147,6 +147,37 @@ test('readWebsiteYml: extracts id + name, strips quotes, ignores other keys', ()
   }
 });
 
+test('readWebsiteYml: falls back to the adx_websiteid / adx_name keys pac pages download writes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yml-test-'));
+  const p = path.join(dir, 'website.yml');
+  // Shape of a real `pac pages download` (Enhanced data model) website.yml.
+  fs.writeFileSync(p, [
+    'adx_defaultlanguage: 2956df54-0000-4000-8000-000000000001',
+    'adx_name: Contoso EDM',
+    "adx_websiteid: '11111111-2222-4333-8444-555555555555' # PAC identity",
+    'statecode: 0',
+    '',
+  ].join('\r\n'));
+  try {
+    assert.deepEqual(readWebsiteYml(p), { id: '11111111-2222-4333-8444-555555555555', name: 'Contoso EDM' });
+    // `id` / `name` win when both spellings are present.
+    fs.writeFileSync(p, 'adx_websiteid: adx-guid\nid: plain-guid\nadx_name: Adx Name\nname: Plain Name\n');
+    assert.deepEqual(readWebsiteYml(p), { id: 'plain-guid', name: 'Plain Name' });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('detectProjectContext resolves identity for a pac-downloaded non-SPA site', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, '.portalconfig/manifest.yml', 'x: 1\n');
+  writeProjectFile(projectRoot, 'website.yml', 'adx_name: Downloaded Site\nadx_websiteid: 11111111-2222-4333-8444-555555555555\n');
+  const result = detectProjectContext({ projectRoot });
+  assert.equal(result.siteType, 'non-spa');
+  assert.equal(result.siteName, 'Downloaded Site');
+  assert.equal(result.websiteRecordId, '11111111-2222-4333-8444-555555555555');
+});
+
 test('detectProjectContext returns siteName and websiteRecordId from config', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'powerpages.config.json', JSON.stringify({
