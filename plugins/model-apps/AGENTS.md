@@ -3592,6 +3592,10 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
 `commands[]` edits are still not applied, and keyed `commands[]` in the same spec is refused
 (`command-state-keyed-unsupported`). Spec contract and maker workflow: `references/app-spec-schema-advanced.md`.
 
+- **Engine-boundary check**: `runSdkBuild` first runs the App Spec's own offline check (`commandStateSpecHalt`),
+  before the lease, the mode choice or any request, so a direct caller or a structural-profile run (where these
+  findings are only warnings) cannot skip it: app scope is `command-state-app-scope-unverified`, any other invalid
+  value (`null` included; only absent or `[]` means none) is `command-state-spec-invalid`.
 - **Flow** (`lib/command-state-run.js`, wired in `sdk-build.js`): `commandStateMode` refuses any apply that is not
   a full build with `--publish` before anything is read (exactly `--stage data` leaves them alone; a dry run plans
   them read-only and prints every token). Each attempt's earliest preflight — before the build's first write —

@@ -16,7 +16,7 @@
 
 const {
   usesCommandStates, normalizeCommandStates, diffCommandFlags, commandStateApprovalKey, commandTablePublishApprovalKey, codeForReasons, canonicalOrigin,
-  CommandStateError, SPEC_FLAG,
+  CommandStateError, SPEC_FLAG, validateCommandStates,
 } = require('./command-state-contract.js');
 const { resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, errorCode, NOT_FOUND } = require('./command-state-read.js');
 const { PHASES, STAGES } = require('./stages.js');
@@ -62,6 +62,7 @@ const REMEDY = Object.freeze({
   'command-state-target-mismatch': 'the row is not the declared table\'s button on the declared bar: list the app\'s buttons and correct the entry',
   'command-state-target-unsupported': 'this kind of button is not edited in this version (only active, unmanaged, top-level plain buttons with no visibility formula are)',
   'command-state-app-scope-unverified': 'app-scoped command rows are not edited in this version; only table-scoped rows are',
+  'command-state-spec-invalid': 'correct the commandStates entries named above (or leave commandStates out)',
 });
 
 const sameSet = (a, b) => Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i]);
@@ -103,6 +104,20 @@ function commandStateHalt(error, phase) {
   const { BuildHalt } = require('./entity-provision.js');
   const { RETRY } = require('./retry-policy.js');
   return new BuildHalt(`${error.code}: ${error.message}`, { phase, code: error.code, recoverable: false, retry: RETRY.NEVER, cause: error });
+}
+
+/**
+ * The offline check of the spec's commandStates (lib/command-state-contract.js validateCommandStates), as the build halt the engine throws
+ * before it does anything else, or null when the declaration is absent, empty or valid. The engine runs it itself because a direct caller
+ * (or the CLI with a structural profile, where these findings are only warnings) never passed through the App Spec validator: a supplied
+ * value that is not valid (null, an object, an entry with a commands[] field or app scope) is refused, never treated as absent. Any
+ * malformed entry makes it command-state-spec-invalid; app scope alone is command-state-app-scope-unverified.
+ */
+function commandStateSpecHalt(spec) {
+  const { findings, errors } = validateCommandStates(spec);
+  if (!findings.length) return null;
+  const code = findings.some((f) => f.code === 'command-state-spec-invalid') ? 'command-state-spec-invalid' : 'command-state-app-scope-unverified';
+  return commandStateHalt(fail(code, `the App Spec's commandStates is not valid: ${errors.join('; ')}`), 'preflight');
 }
 
 /**
@@ -440,5 +455,5 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
 }
 
 module.exports = {
-  CODES, REMEDY, commandStateMode, commandStateHalt, createCommandStateRun, createCommandStatePublicationObserver,
+  CODES, REMEDY, commandStateMode, commandStateHalt, commandStateSpecHalt, createCommandStateRun, createCommandStatePublicationObserver,
 };

@@ -258,6 +258,35 @@ test('a spec without commandStates builds as before: no command row is read and 
   assert.strictEqual(res.commandStates, undefined);
   const dry = await h.build(specFor(null), { apply: false });
   assert.strictEqual(dry.res.commandStatePlan, undefined);
+  const empty = harness();
+  const out = await empty.build(specFor([]), APPLY);
+  assert.ifError(out.error);
+  assert.strictEqual(out.res.ok, true, 'an empty list is the feature switched off, as absent is');
+  assert.deepStrictEqual(empty.org.requests, []);
+  assert.strictEqual(out.res.commandStates, undefined);
+});
+
+test('the engine checks commandStates itself: a direct caller with an app-scoped or malformed declaration is stopped before any request', async () => {
+  for (const [what, commandStates, code] of [
+    ['app scope', [{ ...HIDE, scope: 'app' }], 'command-state-app-scope-unverified'],
+    ['null', null, 'command-state-spec-invalid'],
+    ['an object, not a list', { ...HIDE }, 'command-state-spec-invalid'],
+    ['a commands[] field', [{ ...HIDE, label: 'Go' }], 'command-state-spec-invalid'],
+    ['app scope and a malformed flag', [{ ...HIDE, scope: 'app', hidden: 'yes' }], 'command-state-spec-invalid'],
+  ]) {
+    for (const mode of ['apply', 'dry run']) {
+      const h = harness();
+      // Exact approvals for the valid declaration: the bad one must not ride on them.
+      const { approvals } = await h.approve(specFor());
+      const mark = h.org.requests.length;
+      const { error, calls } = await h.build({ ...specFor(), commandStates }, mode === 'apply' ? { ...APPLY, commandStateApprovals: approvals } : { apply: false });
+      assert.strictEqual(error && error.code, code, `${what} (${mode})`);
+      assert.match(error.message, /commandStates/, `${what} (${mode}): the halt names the field`);
+      assert.deepStrictEqual(h.org.requests.slice(mark), [], `${what} (${mode}): no command row is read or written`);
+      assert.deepStrictEqual(calls, [], `${what} (${mode}): the SDK is not called`);
+      assert.deepStrictEqual(h.published, [], `${what} (${mode}): nothing is published`);
+    }
+  }
 });
 
 test('two rows on one table: each is written once, and one publish of the table confirms both', async () => {

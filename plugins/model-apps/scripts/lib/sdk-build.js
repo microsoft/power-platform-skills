@@ -175,7 +175,7 @@ const { isDeclaredView, declaredViewKey, planViewReconcile, applyViewReconcile }
 const { isDeclaredChart, declaredChartKey, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
 const { openManagedContext, isStoreEnvironment, attemptProvenUnsent, discoverManagedStore, ROW_FAMILIES } = require('./managed-bindings.js');
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
-const { commandStateMode, createCommandStateRun, createCommandStatePublicationObserver, CODES: COMMAND_STATE_CODES, REMEDY: COMMAND_STATE_REMEDY } = require('./command-state-run.js');
+const { commandStateMode, commandStateSpecHalt, createCommandStateRun, createCommandStatePublicationObserver, CODES: COMMAND_STATE_CODES, REMEDY: COMMAND_STATE_REMEDY } = require('./command-state-run.js');
 const { createCommandStateTransport } = require('./command-state-transport.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
@@ -3451,6 +3451,10 @@ function protectedConfigurationFor(gate, store, { env, approvals } = {}) {
 // second apply of the same app in the same workspace is refused before anything is read or written, so two builds cannot both find the app's icon,
 // the app or a page missing and both create it. A dry run reads only, and takes no lease.
 async function runSdkBuild(spec, opts = {}) {
+  // commandStates (lib/command-state-run.js commandStateSpecHalt): checked here, at the engine's public entry, before the lease, the mode
+  // choice or any request, so a direct caller gets the same refusal as the CLI and a bad value is never read as absent.
+  const commandStateSpecError = commandStateSpecHalt(spec);
+  if (commandStateSpecError) throw commandStateSpecError;
   if (!opts.apply) return runSdkBuildAttempt(spec, opts);
   return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: opts.warn }, () => runSdkBuildAttempt(spec, opts));
 }

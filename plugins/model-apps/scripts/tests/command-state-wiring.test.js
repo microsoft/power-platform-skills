@@ -106,3 +106,26 @@ test('an apply that cannot apply command states is refused before the build runs
   await buildModelApp(spec(), { apply: true, workspaceDir: makeTempDir('cs-mode-') }, { runBuild, ...quiet });
   assert.strictEqual(runs.length, 2, 'no command states: the build runs as before');
 });
+
+test('the wrapper refuses an invalid commandStates too, and the engine refuses it when the wrapper only warns', async () => {
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const quiet = { log: () => {}, warn: () => {} };
+  for (const [what, value, code] of [['app scope', [state(ROW, { scope: 'app' })], 'command-state-app-scope-unverified'], ['null', null, 'command-state-spec-invalid']]) {
+    const bad = { ...spec(), commandStates: value };
+    const runs = [];
+    const stub = async (s, o) => { runs.push(o); return { ok: true, dryRun: !o.apply, created: {} }; };
+    const deployed = await buildModelApp(bad, { apply: true, publish: true, workspaceDir: makeTempDir('cs-spec-') }, { runBuild: stub, ...quiet });
+    assert.strictEqual(deployed.ok, false, what);
+    assert.ok(deployed.errors.some((e) => e.startsWith(`${code}: `)), `${what}: ${deployed.errors.join(' | ')}`);
+    assert.strictEqual(runs.length, 0, `${what}: nothing ran`);
+    // A structural profile leaves these findings as warnings, so the spec reaches the engine, which must refuse it before any request.
+    let outcome;
+    try {
+      outcome = await buildModelApp(bad, { profile: 'structural', workspaceDir: makeTempDir('cs-spec-') }, { runBuild: (s, o) => runSdkBuild(s, o), ...quiet });
+    } catch (e) {
+      outcome = { thrown: e };
+    }
+    const said = outcome.thrown ? `${outcome.thrown.code}: ${outcome.thrown.message}` : (outcome.errors || []).join(' | ');
+    assert.ok(outcome.thrown ? outcome.thrown.code === code : outcome.ok === false && said.includes(code), `${what} (structural): ${said}`);
+  }
+});
