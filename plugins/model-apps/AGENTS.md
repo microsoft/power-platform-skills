@@ -3360,7 +3360,10 @@ and charts' code, `sdk-build.js` `refuseUnsentCopy`) and prints the one approval
 case, a rule's key exactly; read by `configurationAuthorizationKeys` into `opts.authorizedOverwrite`, only under
 the opt-in). Under that approval only, `replaceLocalCopy` reads the service row exactly: present -> overwrite
 fetch; absent (a create never taken) -> local delete; a denied or failed read or any other answer keeps the copy
-and stops. Nothing else discards it; the port's and verify's own exact reads (`refuseLocalDraft`) stop on it too
+and stops. Only a collection holding the exact key approves (`approvesOverwrite`): the shared `isAuthorized`'s
+blanket `true` approves nothing here. The key names the item, not a revision: it replaces the copy as it is when
+the approved build runs, edits made after the stop was printed included (the views' and charts' contract).
+Nothing else discards it; the port's and verify's own exact reads (`refuseLocalDraft`) stop on it too
 (`create-completion-required`). A bound environment variable's value clear (a settings
 `Value` of `null`, a DELETE of its value row) is refused in the preflight with
 `configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` asks the

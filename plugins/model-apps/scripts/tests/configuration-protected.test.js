@@ -853,6 +853,9 @@ test('a bound protected item whose workspace copy differs from the server\'s is 
   // An approval for another item, or another family's key of the same spelling, replaces nothing.
   assertCopyStop(await pass(reopen(h), spec, { authorizedOverwrite: new Set(['customApi:contoso_other', 'view:contoso_calc', 'environmentVariable:contoso_calc']) }), 'customApi', 'contoso_calc');
   assert.equal(await dirty(), true);
+  // A blanket programmatic `true` names no item, so it approves no replacement either.
+  assertCopyStop(await pass(reopen(h), spec, { authorizedOverwrite: true }), 'customApi', 'contoso_calc');
+  assert.equal(await dirty(), true, 'a blanket boolean never discards the draft');
   // The maker's decision, the exact approval: the copy is replaced with the server's, and the build goes on and sends
   // nothing for an unchanged item.
   const again = await pass(reopen(h), spec, overwriteCopy('customApi', 'contoso_calc'));

@@ -54,6 +54,10 @@ const VALUE_REMOVAL_MESSAGE = 'Clearing the value of a protected environment var
 // case, a duplicate rule's key byte for byte). build-model-app.js reads it into opts.authorizedOverwrite without its verb
 // (configuration-artifacts.js configurationAuthorizationKeys), so it approves only this item's copy.
 const overwriteKey = (kind, key) => approvalKey(kind, A.portKeyOf(kind, key));
+// Only the exact typed key approves a replacement. The shared isAuthorized also accepts a blanket `true` (an older
+// programmatic form some view callers still pass); here that would discard a protected copy no maker named, so a
+// boolean, or anything that is not a collection of keys, approves nothing.
+const approvesOverwrite = (approved, key) => (approved instanceof Set || Array.isArray(approved)) && isAuthorized(approved, key);
 const draftMessage = (kind, key, id) => `the local copy of the ${kind} "${key}" (${id}) in the workspace differs from the server's (an edit an earlier run did not send, `
   + 'or one made by hand), or could not be compared; nothing was read over it or written, and the copy was kept. '
   + 'Put any change you want to keep into the App Spec, then approve replacing the local copy with the server\'s: '
@@ -444,7 +448,7 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       if (item.state !== 'unbound' && sdk) {
         const id = item.planned.plan.rows[0].id;
         if (await hasUnsyncedEdits(sdk, kind, id)) {
-          if (!isAuthorized(authorizedOverwrite, overwriteKey(kind, item.planned.key))) {
+          if (!approvesOverwrite(authorizedOverwrite, overwriteKey(kind, item.planned.key))) {
             halts.push({ kind, key: item.planned.key, id, code: DRAFT_CODE, message: draftMessage(kind, item.planned.key, id), overwrite: `overwrite:${overwriteKey(kind, item.planned.key)}` });
             continue;
           }

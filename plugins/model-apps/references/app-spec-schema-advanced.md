@@ -1308,7 +1308,10 @@ the field builds exactly as before.
   `--authorize overwrite:customApi:contoso_calc`; the kind is `customApi`, `environmentVariable`,
   `connectionReference` or `duplicateRule`). With that key the build reads the server's row and puts it in
   place of the local copy (a create the server never took leaves no copy); if it cannot read that row,
-  it keeps the copy and stops. The key is read only with `configurationIdentity: "stable-v1"`.
+  it keeps the copy and stops. The key names the item, not a version of its copy: it replaces the local
+  copy as it is when the approved build runs, including any edit made after the stop was printed, as the
+  views' and charts' `overwrite:` key does. Check the copy again before you give it, and do not edit the
+  copy while that build runs. The key is read only with `configurationIdentity: "stable-v1"`.
   The build never replaces or discards the local copy on its own, also when a protected send fails or its
   answer is lost: the copy is kept with every edit in it, including one made while the build was sending,
   and the next build stops on it until you give that key. Nothing else discards it. The unfinished send
