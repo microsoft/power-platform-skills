@@ -196,6 +196,7 @@ test('buildModel uses an Open website result instead of automatic redirect metad
 
 function runStatusPage(html, saved = {}) {
   const elements = new Map();
+  const viewButtons = [];
   function element(id) {
     return {
       dataset: {},
@@ -208,6 +209,13 @@ function runStatusPage(html, saved = {}) {
       remove() { elements.delete(id); },
     };
   }
+  for (const [, view, text] of html.matchAll(/<button\b[^>]*\bdata-view="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)) {
+    const button = element(`view-${view}`);
+    button.dataset.view = view;
+    button.textContent = text;
+    elements.set(`view-${view}`, button);
+    viewButtons.push(button);
+  }
   for (const [, id] of html.matchAll(/\bid="([^"]+)"/g)) elements.set(id, element(id));
   let polls = 0;
   const context = vm.createContext({
@@ -217,7 +225,7 @@ function runStatusPage(html, saved = {}) {
         return elements.get(id);
       },
       createElement: () => element(),
-      querySelectorAll: () => [],
+      querySelectorAll: (selector) => selector === '[data-view]' ? viewButtons : [],
     },
     location: { pathname: '/import.html' },
     sessionStorage: {
@@ -318,8 +326,71 @@ test('SPA previews retain original filenames after localization and filtering', 
   assert.deepEqual(model.template.previews.map(({ displayName }) => displayName), [
     'Home page.png', 'Service requests.png',
   ]);
+  assert.equal(model.template.previews[0].mobile, null);
   assert.equal(model.template.previews[0].desktop, 'preview-images/preview-02.png');
   assert.equal(model.template.description, 'Track requests and manage supplier accounts.');
+});
+
+test('SPA previews show mobile only when mobile-prefixed screenshots are available', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outputPath = path.join(dir, 'import.html');
+  const pairedOutputPath = path.join(dir, 'paired.html');
+  const model = buildModel({
+    templateName: 'Supplier Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath,
+    previewImages: [
+      'https://example.com/previews/desktop-home.png',
+      'https://example.com/previews/mobile-home.png',
+    ],
+    solutionCount: 1,
+  });
+
+  assert.equal(model.template.previews.some(({ mobile }) => Boolean(mobile)), true);
+  assert.deepEqual(model.template.previews, [{
+    name: 'preview-1',
+    displayName: 'home.png',
+    desktop: 'https://example.com/previews/desktop-home.png',
+    mobile: 'https://example.com/previews/mobile-home.png',
+  }]);
+
+  const desktopOnly = buildModel({
+    templateName: 'Supplier Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath: path.join(dir, 'desktop-only.html'),
+    previewImages: ['https://example.com/previews/desktop-home.png'],
+    solutionCount: 1,
+  });
+  assert.equal(desktopOnly.template.previews.some(({ mobile }) => Boolean(mobile)), false);
+  assert.equal(desktopOnly.template.previews[0].mobile, null);
+
+  renderTemplateImportStatus({
+    templateName: 'Supplier Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath: pairedOutputPath,
+    previewImages: [
+      'https://example.com/previews/desktop-home.png',
+      'https://example.com/previews/mobile-home.png',
+    ],
+    solutionCount: 1,
+  });
+  const responsivePage = runStatusPage(fs.readFileSync(pairedOutputPath, 'utf8'));
+  const mobileButton = responsivePage.elements.get('view-mobile');
+  assert.equal(mobileButton.hidden, false);
+  mobileButton.listeners.click();
+  assert.equal(responsivePage.elements.get('previewImage').src, 'https://example.com/previews/mobile-home.png');
+
+  renderTemplateImportStatus({
+    templateName: 'Supplier Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath,
+    previewImages: ['https://example.com/previews/desktop-home.png'],
+    solutionCount: 1,
+  });
+  const page = runStatusPage(fs.readFileSync(outputPath, 'utf8'), { view: 'mobile' });
+  assert.equal(page.elements.get('view-mobile').hidden, true);
+  assert.equal(page.elements.get('previewImage').src, 'https://example.com/previews/desktop-home.png');
 });
 
 test('SPA image policy allows only the supplied remote preview origins', (t) => {
@@ -330,11 +401,14 @@ test('SPA image policy allows only the supplied remote preview origins', (t) => 
     templateName: 'Supplier Portal',
     statusPath: path.join(dir, 'status.json'),
     outputPath,
-    previewImages: ['https://images.example.com/Home.png', 'https://images.example.com/Requests.png'],
+    previewImages: [
+      'https://images.example.com/desktop-home.png',
+      'https://mobile.example.com/mobile-home.png',
+    ],
   });
   const html = fs.readFileSync(outputPath, 'utf8');
   const policy = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1]
     .replace(/&#39;/g, "'");
-  assert.match(policy, /img-src 'self' data: https:\/\/images\.example\.com;/);
+  assert.match(policy, /img-src 'self' data: https:\/\/images\.example\.com https:\/\/mobile\.example\.com;/);
   assert.match(policy, /connect-src 'self';/);
 });
