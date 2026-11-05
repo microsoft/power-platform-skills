@@ -3614,14 +3614,17 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   into its existing before-app set; the one publication observer per invocation records whether that plain
   request, or the managed publisher's flush for a managed table (the supported overlap: the existing publisher
   publishes it, the observer reads its `published` list), named each table after its latest row write. An apply
-  succeeds only when, after the build's app work, every declared row judged against a freshly resolved app
-  context still holds its flags (the commands phase's context is not membership proof; a late refusal rolls
-  nothing back) and every declared table is confirmed; otherwise it halts with `command-state-publish-unconfirmed`
-  (worded per table from the row outcomes: saved / already held / write outcome unknown / not written),
-  carried on the halt as non-enumerable `commandStates` / `commandStatePublicationError` (never in the journal or a
-  retry's reading). There is no store and no cross-run fence: a sent publish can complete after a halt or after an
-  entry is removed, and the next publishing run requests the table only because the spec still names it. Existing
-  managed-artifact fences still apply on their own.
+  succeeds only when both final checks pass. First, after the build's app work, every declared row is judged against
+  a freshly resolved app context (the commands phase's context is not membership proof) and must still hold its
+  flags; a failure keeps its own code, `command-state-context-unverified` or `command-state-not-confirmed` (a row
+  that no longer matches is worded from what this run did to it, never as an accepted write it did not make), and
+  rolls nothing back. Second, every declared table must be confirmed published; only that failure halts with
+  `command-state-publish-unconfirmed` (worded per table from the row outcomes: saved / already held / write outcome
+  unknown / not written). Any such halt carries non-enumerable `commandStates` and, while a table's publication is
+  unconfirmed, `commandStatePublicationError` (never in the journal or a retry's reading).
+  There is no store and no cross-run fence: a sent publish can complete after a halt or after an entry is removed,
+  and the next publishing run requests the table only because the spec still names it. Existing managed-artifact
+  fences still apply on their own.
 - **Shared decoder contract** (`command-state-read.js`): a missing column is not a null and a null flag is not
   `false`; static visibility is a present `visibilitytype` of null or 0 with every visibility-formula column present
   and empty (the null `commands[]` leaves is static); `visibilitytype` is never written; only a table-scoped row is a
