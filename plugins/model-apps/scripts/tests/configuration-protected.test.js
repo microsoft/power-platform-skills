@@ -695,6 +695,42 @@ test('an unsent protected Custom API edit whose declaration then changed is not 
   assert.equal(restored.sent.length, 1);
 });
 
+test('a bound protected item whose workspace copy holds unsent edits is never read over: build and verify stop, the copy and its binding kept', async () => {
+  const h = await harness();
+  const spec = apiSpec();
+  await created(h, spec);
+  const before = committed(h, 'customApi', 'contoso_calc');
+  const id = before.records.find((r) => r.kind === 'customApi').id;
+  await h.sdk.updateElement('customApi', id, '/description', 'Retained maker draft');
+  const { hasUnsyncedEdits } = require('../lib/unsynced-edits.js');
+  const dirty = () => hasUnsyncedEdits(h.sdk, 'customApi', id);
+  assert.equal(await dirty(), true);
+  const out = await pass(reopen(h), spec);
+  assert.equal(out.halt && out.halt.code, 'create-completion-required', out.halt && out.halt.message);
+  assert.equal(out.halt.phase, 'preflight');
+  assert.match(out.halt.message, /local copy of the customApi "contoso_calc" .* the copy was kept\. Put any change you want to keep into the App Spec, refresh the local copy from the server, then run again/);
+  assert.deepEqual(out.sent, []);
+  assert.equal(await dirty(), true, 'the draft is kept');
+  // Without the preflight, the plan's own exact read stops on it too (typed, the id named), before any fetch over it.
+  const runtime = createConfigurationRuntime({ spec, sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration }, appUniqueName: 'contoso_configured' });
+  const mark = h.org.requests.length;
+  const step = await runtime.apply('data-model');
+  assert.deepEqual(step.halt && step.halt.items.map(({ kind, code }) => `${kind} ${code}`), ['customApi create-completion-required']);
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), []);
+  assert.equal(await dirty(), true);
+  // Verify reads it at its exact id too, and does not read over the draft either.
+  const checks = await readerFor(h.sdk, 'contoso_configured').configuration(spec, undefined, managedManifestView(h.store.snapshot()));
+  assert.equal(checks.find((c) => c.kind === 'customApi' && c.name === 'definition').code, 'create-completion-required');
+  assert.equal(await dirty(), true);
+  assert.deepEqual(committed(h, 'customApi', 'contoso_calc'), before, 'the binding is kept as it was');
+  // The maker's decision: the copy refreshed from the server. The next build goes on, and sends nothing for an unchanged item.
+  await h.sdk.fetchArtifact('customApi', id, { overwrite: true });
+  assert.equal(await dirty(), false);
+  const again = await pass(reopen(h), spec);
+  assert.equal(again.halt, null, again.halt && `${again.halt.code}: ${again.halt.message}`);
+  assert.deepEqual(again.sent, []);
+});
+
 test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {
   const { configurationIdentity, ...plain } = configSpec();
   assert.equal(configurationIdentity, 'stable-v1');

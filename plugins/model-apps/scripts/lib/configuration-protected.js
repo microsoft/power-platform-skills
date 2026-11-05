@@ -24,12 +24,16 @@
 const B = require('./configuration-create-bindings.js');
 const A = require('./configuration-artifacts.js');
 const { normalizeGuid } = require('./reconcile-common.js');
+const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 
 const IDENTITY = 'stable-v1';
 const EDIT_CODE = 'configuration-edit-unsupported';
 const UNVERIFIED_CODE = 'create-identity-unverified';
 const CONFLICT_CODE = 'create-identity-conflict';
 const OPT_IN_CODE = 'create-identity-opt-in-required';
+// A local workspace copy with edits the service has not seen: the code (and the steps) of the declared forms' same stop
+// (form-layout-reconcile.js, category workspace-copy-unsent-edits).
+const DRAFT_CODE = 'create-completion-required';
 // The store's own code for a group whose attempt is not settled yet.
 const PENDING_CODE = require('./managed-bindings.js').CODES.pending;
 
@@ -43,6 +47,9 @@ const REMOVAL_MESSAGE = 'Removing a child of a protected Custom API is not suppo
   + 'Removals require maintenance outside the plugin.';
 const VALUE_REMOVAL_MESSAGE = 'Clearing the value of a protected environment variable deletes its value row, which is not supported. '
   + 'No service changes were sent by this build. Removals require maintenance outside the plugin.';
+const draftMessage = (kind, key, id) => `the local copy of the ${kind} "${key}" (${id}) in the workspace differs from the server's (an edit an earlier run did not send, `
+  + 'or one made by hand), or could not be compared; nothing was read over it or written, and the copy was kept. '
+  + 'Put any change you want to keep into the App Spec, refresh the local copy from the server, then run again';
 
 // The declared lists of the protected kinds, in the order configuration-artifacts.js applies them.
 const LISTS = Object.freeze([
@@ -298,7 +305,7 @@ async function environmentOf({ spec, store, dataverse, solution, bindings }) {
  * Sends nothing. Answers { halts: [{ kind, key, id?, code, message }] } — empty when
  * the build may continue. A read that cannot be completed is a halt (`create-identity-unverified`), never "no change".
  */
-async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings }) {
+async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk = null }) {
   if (!configurationIdentityOf(spec)) return { halts: [] };
   const halts = [];
   let env;
@@ -310,6 +317,13 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
   for (const { kind, key } of declaredItems(spec)) {
     try {
       const item = await locateItem(env, kind, key);
+      // Every later step of a bound or pending item reads its row into the workspace over the local copy (locate's
+      // overwrite fetch); a copy with edits the service has not seen stops it first, kept. The proofs above and below
+      // read the service directly (B.readConfigurationRow / B.observe), never the workspace copy.
+      if (item.state !== 'unbound' && sdk) {
+        const id = item.planned.plan.rows[0].id;
+        if (await hasUnsyncedEdits(sdk, kind, id)) { halts.push({ kind, key: item.planned.key, id, code: DRAFT_CODE, message: draftMessage(kind, item.planned.key, id) }); continue; }
+      }
       if (item.state === 'pending') {
         const rec = await recoverPending(env, ctx, item);
         if (rec.verdict.action === 'halt') { halts.push(haltOf(kind, item.planned.key, rec.verdict)); continue; }
@@ -369,9 +383,29 @@ async function addMissingMembers(dataverse, planned, scope) {
  *                                       added to the solution, and the attempt is observed and settled. Answers
  *                                       { outcome: 'updated', id, childIds, result }; anything else throws, typed.
  */
-function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase = null }) {
+function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase = null, sdk = null }) {
   let envPromise = null;
   const env = () => (envPromise = envPromise || environmentOf({ spec, store, dataverse, solution, bindings }));
+  // A send this port ran that did not settle (a throw, a refused push, an answer that never came) can leave the build's OWN
+  // change in the workspace copy, which the next build's preflight would refuse as an unsent edit, so the attempt could
+  // never be continued. The copy held nothing else (the preflight, or locate, proved it clean just before), so it is put
+  // back as the service holds it, as the declared forms do (form-layout-reconcile.js resetOwnCopy): re-read with overwrite
+  // (a read, which the send window does not count), or, for a create the service does not hold, removed (a local delete,
+  // no request). Best-effort: a reset that fails leaves the copy, and the next build refuses it rather than plan over it.
+  const withOwnCopy = async (kind, id, body) => {
+    try {
+      return await body();
+    } catch (error) {
+      if (sdk) {
+        try {
+          if (await hasUnsyncedEdits(sdk, kind, id)) {
+            try { await sdk.fetchArtifact(kind, id, { overwrite: true }); } catch { await sdk.deleteArtifact(kind, id); }
+          }
+        } catch { /* see above */ }
+      }
+      throw error;
+    }
+  };
   return {
     // The binding store is the authority on these kinds: locate asks this port before any other record (configuration-artifacts.js).
     exact: true,
@@ -424,15 +458,17 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult }, send);
       const id = planned.plan.rows[0].id;
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null).map((r) => [r.slot, r.id]));
-      const pushed = await scope(() => fn({ id, childIds }), B.acceptResultFor(planned));
-      if (pushed.error) throw pushed.error;
-      if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
-      if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
-      const added = await addMissingMembers(dataverse, planned, scope);
-      if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id });
-      const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
-      if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
-      return { outcome: 'created', id, childIds, result: pushed.value };
+      return withOwnCopy(kind, id, async () => {
+        const pushed = await scope(() => fn({ id, childIds }), B.acceptResultFor(planned));
+        if (pushed.error) throw pushed.error;
+        if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
+        if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
+        const added = await addMissingMembers(dataverse, planned, scope);
+        if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id });
+        const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
+        if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
+        return { outcome: 'created', id, childIds, result: pushed.value };
+      });
     },
     /**
      * A bound item's edit (configuration-artifacts.js applyUpdate) — a Custom API, an environment variable (its definition,
@@ -470,15 +506,17 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const scope = (send, acceptResult) => ctx.run({ attempts: [attempt], classify, deleteCode: B.DELETE_CODE, label, acceptResult, ...batch }, send);
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null && r.mode === 'create').map((r) => [r.slot, r.id]));
       const rootId = planned.plan.rows[0].id;
-      const pushed = await scope(() => fn({ childIds }), B.acceptResultFor(planned));
-      if (pushed.error) throw pushed.error;
-      if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
-      if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });
-      const added = await addMissingMembers(dataverse, planned, scope);
-      if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id: rootId });
-      const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
-      if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" edit was not proved`, { kind, key: planned.key, id: rootId });
-      return { outcome: 'updated', id: rootId, childIds, result: pushed.value };
+      return withOwnCopy(kind, rootId, async () => {
+        const pushed = await scope(() => fn({ childIds }), B.acceptResultFor(planned));
+        if (pushed.error) throw pushed.error;
+        if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
+        if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });
+        const added = await addMissingMembers(dataverse, planned, scope);
+        if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id: rootId });
+        const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
+        if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" edit was not proved`, { kind, key: planned.key, id: rootId });
+        return { outcome: 'updated', id: rootId, childIds, result: pushed.value };
+      });
     },
   };
 }
@@ -520,8 +558,8 @@ function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {})
     store,
     gate,
     ctx,
-    preflight: ({ spec, dataverse, solution, bindings }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings }),
-    port: ({ spec, dataverse, solution, bindings }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase }),
+    preflight: ({ spec, dataverse, solution, bindings, sdk }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk }),
+    port: ({ spec, dataverse, solution, bindings, sdk }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase, sdk }),
     // A build without the opt-in: what the store still holds for its declared items (optInObligations), read locally.
     obligations: ({ spec }) => optInObligations({ spec, store }),
     // Every build, before its first service change: what the store still owes for items the App Spec no longer declares.

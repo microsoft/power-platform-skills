@@ -93,7 +93,8 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   // preflight stops the build before any write (create-identity-unverified) rather than fall back to name lookup.
   const protectedOptIn = spec.configurationIdentity === 'stable-v1';
   const hookup = protectedOptIn && opts.protectedConfiguration && typeof opts.protectedConfiguration.port === 'function' ? opts.protectedConfiguration : null;
-  const protectedArgs = () => ({ spec, dataverse: sdk.dataverse, solution: spec.solution && spec.solution.uniqueName, bindings: opts.configurationBindings });
+  // `sdk` is the workspace the build reads protected rows into: the preflight refuses to read over a local copy with edits.
+  const protectedArgs = () => ({ spec, dataverse: sdk.dataverse, solution: spec.solution && spec.solution.uniqueName, bindings: opts.configurationBindings, sdk });
   const protectedPort = hookup ? hookup.port(protectedArgs()) : null;
   const ctx = C.configurationContext({
     sdk,

@@ -652,6 +652,16 @@ function identityStop(code, id) {
   return error;
 }
 
+// Under an exact port the row its binding names is read into the workspace with a fetch that OVERWRITES the local copy.
+// A copy that holds edits the service has not seen (an earlier run's unsent change, or one made by hand) is the maker's to
+// keep or drop, never this read's: it stops typed, the copy kept (the protected preflight names it first, with the steps
+// to take). Only a diff (lib/unsynced-edits.js), no request; a copy the workspace does not hold reads clean, and a diff
+// that cannot be made reads as edits, so a doubtful copy is kept too.
+async function refuseLocalDraft(sdk, kind, id) {
+  const { hasUnsyncedEdits } = require('./unsynced-edits.js');
+  if (await hasUnsyncedEdits(sdk, kind, id)) throw identityStop('create-completion-required', id);
+}
+
 // The id a typed stop is about, when it names one, so a maker can inspect the row the next run could not read. The
 // stops of a stable port's resolver carry the create they stop, e.g.
 //   { code: 'create-identity-unverified', message: '... could not be read (HTTP 503: ...)', create: { kind, key, id } }
@@ -724,6 +734,7 @@ async function locate(ctx, kind, key, identity) {
       throw identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error));
     }
     if (resolved && resolved.state === 'present' && typeof resolved.id === 'string' && resolved.id) {
+      if (exactPort) await refuseLocalDraft(ctx.sdk, kind, resolved.id);
       const remote = await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true });
       // An exact port proved the row is this build's own create (its committed binding, read at the exact id): it is
       // not adopted, so the adoption policy and the manifest's record are not asked — the binding store answers.
@@ -2793,6 +2804,7 @@ const typedCodeOf = (error) => (error && typeof error.code === 'string' && TYPED
 async function locateExactly(ctx, port, kind, key) {
   const resolved = await port.resolve({ kind, key: portKeyOf(kind, key) });
   if (!resolved || resolved.state !== 'present' || typeof resolved.id !== 'string' || !resolved.id) throw identityStop('create-identity-unverified');
+  await refuseLocalDraft(ctx.sdk, kind, resolved.id);
   return { id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved' };
 }
 
