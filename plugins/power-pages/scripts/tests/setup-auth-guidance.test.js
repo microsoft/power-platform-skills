@@ -15,6 +15,22 @@ const templateRuntime = {
   skip: typeof stripTypeScriptTypes !== 'function' && 'Template execution requires Node 22.13+; the workflow runs it in a separate Node 22 step.',
 };
 
+function typescriptBlocks(text) {
+  // Windows checkouts can use CRLF: normalize before matching Markdown fences
+  // so executable template coverage cannot silently lose all exported functions.
+  text = text.replace(/\r\n/g, '\n');
+  return [...text.matchAll(/```typescript\n([\s\S]*?)\n```/g)].map((match) => match[1]);
+}
+
+test('executable Markdown templates are extracted identically with LF and CRLF', () => {
+  for (const file of ['references/framework-react.md', 'references/external-confirmation.md']) {
+    const lf = read(file).replace(/\r\n/g, '\n');
+    const expected = typescriptBlocks(lf);
+    assert.ok(expected.length > 0, file);
+    assert.deepEqual(typescriptBlocks(lf.replace(/\n/g, '\r\n')), expected, file);
+  }
+});
+
 test('setup-auth has portable metadata and bounded activation context', () => {
   const metadata = entry.split(/^---\r?$/m)[1];
   assert.deepEqual([...metadata.matchAll(/^([a-z-]+):/gm)].map((m) => m[1]), ['name', 'description']);
@@ -112,7 +128,7 @@ test('conditional examples agree with registration, callback and secret contract
 });
 
 test('React auth refresh reaches separate profile and header hook consumers', templateRuntime, () => {
-  let source = read('references/framework-react.md').match(/```typescript\n([\s\S]*?)\n```/)[1];
+  let source = typescriptBlocks(read('references/framework-react.md'))[0];
   source = source.replace(/import[\s\S]*?from ['"][^'"]+['"];?/g, '');
   const updates = new Map();
   const cleanups = [];
@@ -179,8 +195,8 @@ function service({ local = false, profile = false, terms = false, external = fal
   if (profile) source += '\n' + read('assets/user-profile-auth-service-additions.ts.template');
   if (terms) source += '\n' + read('assets/terms-auth-service-termsrequirederror-and-acceptterms.ts.template');
   if (external) {
-    const blocks = [...read('references/external-confirmation.md').matchAll(/```typescript\n([\s\S]*?)\n```/g)];
-    source += '\n' + blocks.slice(0, 2).map((match) => match[1]).join('\n');
+    const blocks = typescriptBlocks(read('references/external-confirmation.md'));
+    source += '\n' + blocks.slice(0, 2).join('\n');
   }
   const names = [...source.matchAll(/^export (?:async )?(?:function|const|class) (\w+)/gm)].map((m) => m[1]);
   // Node's built-in type stripping parses the real template, without adding a
