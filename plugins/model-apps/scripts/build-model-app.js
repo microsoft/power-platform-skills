@@ -10,6 +10,21 @@
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
+//
+// Protected configuration (`configurationIdentity: "stable-v1"`, references/app-spec-schema-advanced.md) is checked before the
+// build's first service change, whatever --stage/--only/--changed-only selects; each of these stops sends nothing:
+//   configuration-edit-unsupported               an edit the protected path does not make (make it outside the plugin)
+//   configuration-protected-removal-unsupported  a removal (a Custom API child, a bound value's clear)
+//   create-identity-opt-in-required              the opt-in was removed while the binding store holds a declared item
+//   create-identity-unverified                   the binding store or a namesake lookup cannot be used
+//   create-identity-conflict                     a namesake or a row the binding does not hold stands where a row would go
+//   create-completion-required                   an earlier create is incomplete: complete it under the same ids
+//   create-ownership-required                    rows to bind: pass each printed --authorize adopt:<kind>:... after checking it
+//   configuration-row-not-found                  a bound row is gone (never replaced by a namesake)
+//   managed-pending-intent-changed               the declaration changed while its create was unfinished
+//   managed-settlement-pending                   an unfinished item the App Spec no longer declares
+//   managed-binding-store-unreadable             the binding store cannot be read
+//   workspace-copy-unsent-edits                  a local copy differs from the server's: --authorize overwrite:<kind>:<key>
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
