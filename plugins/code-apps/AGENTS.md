@@ -21,6 +21,11 @@ claude --plugin-dir /path/to/plugins/power-apps
 AGENTS.md                         <- Plugin guidance for AI agents (this file)
 agents/
   code-app-architect.md           <- Agent persona for architecture decisions
+hooks.json                        <- Native Copilot CLI preToolUse hook
+hooks/
+  hooks.json                      <- Claude Code PreToolUse hook
+  set-cli-origin.js               <- Narrow leading-invocation attribution (Node only)
+  README.md                       <- Hook contracts and limitations
 shared/
   shared-instructions.md          <- Cross-cutting concerns (Windows CLI, safety, planning, memory bank)
   connector-reference.md          <- Connector patterns and generated service usage
@@ -99,6 +104,16 @@ Always use generated services for data access.
 
 The Power Apps CLI (`@microsoft/power-apps-cli`) is installed locally via `npm install` as part of the app template. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
 
+Shell hooks automatically supply `PA_CLI_ORIGIN=plugin/<host-agent>` for recognized
+CLI invocations without replacing explicit user values. Do not manually export
+attribution in skills. Keep both host hook configurations in sync; native Copilot
+events preserve shell identity, whereas its Claude-compatible `Bash` alias does
+not distinguish Bash from PowerShell. See [hooks/README.md](./hooks/README.md).
+Keep detection conservative and tokenizer-free: match supported single-line
+leading invocations and simple output captures, not arbitrary shell programs.
+Leave PowerShell `using` preambles unchanged. Handled hook/launcher failures must
+report stderr diagnostics but complete successfully without rewriting the call.
+
 ```bash
 pa app push                   # Deploy app
 pa app add data-source --connector ... # Add connector
@@ -116,6 +131,11 @@ npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
 ## Testing Changes
 
 After modifying this plugin:
+
+Run `node --test plugins/code-apps/scripts/tests/*.test.js` from the repository
+root. The path-filtered `code-apps-script-tests` workflow exercises Bash and
+PowerShell execution on Windows and Linux; these tests use local CLI stubs and
+never transmit telemetry.
 
 1. Run `claude --debug` to see plugin loading details
 2. Test skill invocation with `/create-code-app`
