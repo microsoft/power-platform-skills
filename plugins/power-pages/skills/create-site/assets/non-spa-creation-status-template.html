@@ -584,7 +584,7 @@
         </div>
         <div class="slide-controls" id="slideControls" role="tablist" aria-label="Template page preview"></div>
         <div class="preview-controls">
-          <div class="segmented" role="group" aria-label="Preview size">
+          <div class="segmented" id="previewViewControls" role="group" aria-label="Preview size">
             <button class="active" data-view="desktop" data-focus-key="view-desktop" aria-pressed="true">Desktop</button>
             <button data-view="mobile" data-focus-key="view-mobile" aria-pressed="false">Mobile</button>
           </div>
@@ -674,9 +674,11 @@
       if (!preview) {
         document.getElementById("previewCard").hidden = true;
         document.getElementById("slideControls").hidden = true;
+        document.getElementById("previewViewControls").hidden = true;
         return;
       }
 
+      document.getElementById("previewViewControls").hidden = false;
       if (!preview[currentView]) {
         currentView = preview.desktop ? "desktop" : "mobile";
       }

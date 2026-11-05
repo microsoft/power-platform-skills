@@ -391,6 +391,17 @@ test('SPA previews show mobile only when mobile-prefixed screenshots are availab
   const page = runStatusPage(fs.readFileSync(outputPath, 'utf8'), { view: 'mobile' });
   assert.equal(page.elements.get('view-mobile').hidden, true);
   assert.equal(page.elements.get('previewImage').src, 'https://example.com/previews/desktop-home.png');
+
+  const emptyOutputPath = path.join(dir, 'empty.html');
+  renderTemplateImportStatus({
+    templateName: 'Supplier Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath: emptyOutputPath,
+    previewImages: [],
+    solutionCount: 1,
+  });
+  const emptyPage = runStatusPage(fs.readFileSync(emptyOutputPath, 'utf8'));
+  assert.equal(emptyPage.elements.get('previewViewControls').hidden, true);
 });
 
 test('SPA image policy allows only the supplied remote preview origins', (t) => {
