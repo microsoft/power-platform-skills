@@ -3336,8 +3336,13 @@ unpublished whose `rule-state` effect is still `dispatched: false`, and which wo
 ownership approvals, named first) if that publish had landed, sends `PublishDuplicateRule` once under a new
 epoch (`store.claimUnsentRowEffect`, through `ctx.claimEffect`), sealed dispatched before it leaves, then
 reads the rule a bounded number of times and settles. A pending EDIT is decided by
-the rows its attempt persisted (`settlePendingEdit`): complete -> committed read-only; proved unsent with the
-same rows -> resumed under its token, ids, parents and generation; rows changed -> retired while prepared,
+the rows its attempt persisted (`settlePendingEdit`, answering `settled`, `retired` or `needs-write`): complete
+-> committed read-only; already at its target -> accepted read-only only when that acceptance commits (its
+verdict is judged in the preflight by `judgeReadOnly` and again by `resolve`, so an ownership approval it needs
+or a membership removed by hand stops the build, never a no-op success); proved unsent with the
+same rows and a target not there yet -> resumed under its token, ids, parents and generation (`resolve` answers
+`owed`, so `planOne` never plans it `unchanged` and its membership is added only inside its attempt); rows
+changed -> retired while prepared,
 otherwise `create-identity-conflict`. Environment variable and connection reference updates (definition, first
 value, own value replacement) go through the protected port as one checked set over the item's plan; a value
 row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
@@ -3345,7 +3350,11 @@ store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.j
 regardless of the opt-in, the declarations or the phases): an undeclared pending or unusable protected record
 stops it with `managed-settlement-pending`. Before an overwriting fetch of a protected item (preflight, port and
 verify), a workspace copy with unsynced edits (`hasUnsyncedEdits`) stops it (`refuseLocalDraft`); a port send
-that did not settle puts the copy back (`withOwnCopy`). A bound environment variable's value clear (a settings
+that did not settle puts the copy back (`withOwnCopy`) only when it proves the copy is still exactly the draft
+that send pushed (captured by `ownCopy` just before the push, compared change by change with `ownedDraft` over
+the SDK diff after a locked read) and a fresh exact read of the service row answers present (overwrite fetch) or
+absent (local delete); a changed copy, a failed read or any other answer keeps the copy, and the next build stops
+on it. A bound environment variable's value clear (a settings
 `Value` of `null`, a DELETE of its value row) is refused in the preflight with
 `configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` asks the
 hookup the build hands over (`opts.protectedConfiguration.obligations`, `optInObligations`, a local store read

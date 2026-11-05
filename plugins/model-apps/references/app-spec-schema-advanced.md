@@ -1302,7 +1302,9 @@ the field builds exactly as before.
 - **Local edits come first.** Before it reads a protected item into the workspace, the build checks the
   workspace copy. If it holds edits the service has not seen (from an interrupted run, or made by hand),
   the build stops before anything is sent, and verify stops too. The copy and its binding are kept.
-  Push or discard those edits yourself, then build again.
+  Push or discard those edits yourself, then build again. When a protected send fails, the build puts
+  the workspace copy back only if it is still exactly the copy that send pushed. A copy edited in the
+  meantime, or one whose row the build cannot read, is kept, and the next build stops on it.
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
@@ -1312,6 +1314,9 @@ the field builds exactly as before.
 - **An edit that did not finish.** The next build decides a Custom API, environment variable or
   connection reference edit from what the first one recorded before sending. A complete edit is
   recorded and never sent again. An edit that no request can have reached is sent once, at the same ids.
+  If its target is already there, nothing is sent, and the edit is recorded only if its rows are
+  exactly what the plugin would make: one that needs an approval (a private value) or whose solution
+  membership was removed stops, and is never reported unchanged.
   If its rows changed since then, it is dropped while nothing was sent; otherwise the build stops until
   you restore them. Anything else keeps its stop.
 - **A create that did not finish.** The next build decides it from what the first one recorded before
