@@ -234,6 +234,19 @@ function validate(root = ROOT) {
       assert.ok(fs.existsSync(legacyManifestPath), 'missing legacy plugin manifest');
       assertJsonMirror(legacyManifestPath, openManifestPath);
     });
+
+    const portableManifestPath = path.join(pluginDirectory, 'plugin.json');
+    if (fs.existsSync(portableManifestPath)) {
+      check(`${plugin.name} portable plugin manifest`, () => {
+        const { $schema, ...metadata } = readJson(portableManifestPath);
+        assert.equal($schema, 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json');
+        assert.deepEqual(metadata, readJson(openManifestPath));
+        const fields = ['name', 'version', 'description', 'author', 'homepage', 'repository', 'license', 'keywords'];
+        for (const key of Object.keys(metadata)) {
+          assert.ok(fields.includes(key), `unsupported portable manifest field "${key}"`);
+        }
+      });
+    }
   }
 
   for (const legacyPluginName of legacyPlugins.keys()) {

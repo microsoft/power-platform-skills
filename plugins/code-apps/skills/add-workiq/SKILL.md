@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Add Work IQ (M365 Copilot Search)
 
@@ -24,11 +24,11 @@ Work IQ is accessed through the dedicated **Work IQ Copilot MCP** connector (`sh
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md).
 
 ### Step 2: Add Connector
 
-The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)) creates the connection and generates the typed service itself. Make sure the CLI is installed (`npm install`) and you are signed in (`pa auth status`, or `power-apps auth-status` on `power-apps`-only projects; it shares the same auth as the rest of the code-app skills).
+The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](../../shared/cli-binary.md)) creates the connection and generates the typed service itself. Make sure the CLI is installed (`npm install`) and you are signed in (`pa auth status`, or `power-apps auth-status` on `power-apps`-only projects; it shares the same auth as the rest of the code-app skills).
 
 #### Find or Create the Connection
 

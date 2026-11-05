@@ -17,7 +17,9 @@ The Power Apps CLI (`@microsoft/power-apps-cli`) is installed automatically as p
 
 ## Required Permissions (allowedPrompts)
 
-When using plan mode, include these in `allowedPrompts`:
+Include these in `allowedPrompts` when the client supports that field.
+Otherwise, present the operations in the plan and use the client's permission controls.
+The final deployment still requires separate confirmation.
 
 ```json
 {

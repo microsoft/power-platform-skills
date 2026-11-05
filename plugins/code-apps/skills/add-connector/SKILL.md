@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Add Connector (Generic)
 
@@ -29,7 +29,7 @@ Fallback skill for any connector not covered by a specific `/add-*` skill. For c
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md).
 
 ### Step 2: Identify Connector
 
@@ -61,7 +61,7 @@ Common connector API names:
 
 ### Step 3: Add Connector
 
-**First, find the connection ID** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
+**First, find the connection ID** (see [connector-reference.md](../../shared/connector-reference.md)):
 
 Run the `/list-connections` skill. Find the connector in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 

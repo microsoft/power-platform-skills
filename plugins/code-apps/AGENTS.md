@@ -1,6 +1,6 @@
-# AGENTS.md — Power Apps Plugin
+# AGENTS.md — Code Apps Plugin
 
-This file provides guidance to AI Agents when working with the **power-apps** plugin.
+This file provides guidance to AI agents that work on the **code-apps-preview** plugin in `plugins/code-apps`.
 
 ## What This Plugin Is
 
@@ -11,16 +11,20 @@ A plugin for building and deploying Power Apps code apps using React + Vite + Ty
 Test this plugin locally:
 
 ```bash
-claude --plugin-dir /path/to/plugins/power-apps
+claude --plugin-dir /path/to/plugins/code-apps
 ```
 
 ## Architecture
 
 ```
 .plugin/plugin.json               <- Open Plugins metadata (name, version, keywords)
+.claude-plugin/plugin.json        <- Legacy mirror for existing installations
+plugin.json                       <- Agent Plugins 1.0.0 manifest
 AGENTS.md                         <- Plugin guidance for AI agents (this file)
 agents/
   code-app-architect.md           <- Agent persona for architecture decisions
+com.github.copilot/agents/
+  code-app-architect.agent.md     <- Native Copilot copy with adjusted relative links
 shared/
   shared-instructions.md          <- Cross-cutting concerns (Windows CLI, safety, planning, memory bank)
   connector-reference.md          <- Connector patterns and generated service usage
@@ -115,9 +119,25 @@ npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
 
 ## Testing Changes
 
-After modifying this plugin:
+Run these checks from the repository root:
 
-1. Run `claude --debug` to see plugin loading details
-2. Test skill invocation with `/create-code-app`
-3. Verify connector-first guardrails are enforced
-4. Test CLI commands (`pa app push`, `pa app add data-source`, etc.)
+```bash
+node scripts/validate-code-apps.js
+node scripts/validate-legacy-compatibility.js
+node --test scripts/tests/validate-legacy-compatibility.test.js
+```
+
+The Code Apps workflow runs these checks on Windows and Ubuntu.
+Package checks do not prove that a client can install, update, or execute skills.
+Check those actions separately before claiming runtime support.
+
+## Portable Package Rules
+
+- Preserve the plugin name `code-apps-preview` and both legacy manifests.
+- Keep root `plugin.json` metadata equal to the legacy metadata, except for its required `$schema`.
+- Keep all 15 skills in one shared set. Preserve their existing tool declarations, model preferences, and invocation settings.
+- Use document-relative links in skills, agents, and shared instructions. Do not depend on `${PLUGIN_ROOT}` expansion in Markdown.
+- Keep the native Copilot architect equal to the legacy architect, except for relative resource paths.
+- The repository's `.agents/plugins/marketplace.json` exposes Code Apps only. Do not add unadapted sibling plugins.
+- Preserve user approvals when replacing client-specific tools with equivalent capabilities.
+- This plugin has no hooks. Do not copy Managed Apps attribution variables or agent detection into it.

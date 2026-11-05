@@ -6,7 +6,7 @@ allowed-tools: Bash
 model: haiku
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
 
 # List Connections
 
@@ -20,7 +20,7 @@ Lists all Power Platform connections in the current environment using the Power 
 
 ### Step 1: Fetch Connections
 
-> Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA connection list` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps list-connections`.
+> Resolve the CLI first (see [cli-binary.md](../../shared/cli-binary.md)): run as `$PA connection list` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps list-connections`.
 
 ```bash
 pa connection list
