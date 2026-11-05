@@ -122,8 +122,9 @@ test('React auth refresh reaches separate profile and header hook consumers', te
     window: new EventTarget(), Event,
     useState: (initial) => {
       const key = slot++;
-      updates.set(key, initial);
-      return [initial, (value) => updates.set(key, value)];
+      const value = typeof initial === 'function' ? initial() : initial;
+      updates.set(key, value);
+      return [value, (value) => updates.set(key, value)];
     },
     useCallback: (callback) => callback,
     useEffect: (effect) => cleanups.push(effect()),
@@ -136,6 +137,8 @@ test('React auth refresh reaches separate profile and header hook consumers', te
   };
   vm.runInNewContext(stripTypeScriptTypes(source).replace(/^export /gm, '') + '\nglobalThis.hook = useAuth;', context);
   const profile = context.hook();
+  assert.equal(profile.user.firstName, 'Before');
+  assert.equal(profile.isLoading, false);
   context.hook();
   user.firstName = 'After';
   profile.refresh();
@@ -157,7 +160,7 @@ test('report distinguishes an unknown terms prerequisite from a missing solution
   assert.match(context.note({ termsAndConditions: true, termsEnforced: true, termsPrerequisiteStatus: 'detected' }), /solution detected/i);
 });
 
-function service({ local = false, profile = false, terms = false, fetch, user, DOMParser, document } = {}) {
+function service({ local = false, profile = false, terms = false, external = false, fetch, user, DOMParser, document } = {}) {
   let source = read('assets/auth-service.ts.template');
   if (local) {
     source = source.replace(
@@ -175,6 +178,10 @@ function service({ local = false, profile = false, terms = false, fetch, user, D
   }
   if (profile) source += '\n' + read('assets/user-profile-auth-service-additions.ts.template');
   if (terms) source += '\n' + read('assets/terms-auth-service-termsrequirederror-and-acceptterms.ts.template');
+  if (external) {
+    const blocks = [...read('references/external-confirmation.md').matchAll(/```typescript\n([\s\S]*?)\n```/g)];
+    source += '\n' + blocks.slice(0, 2).map((match) => match[1]).join('\n');
+  }
   const names = [...source.matchAll(/^export (?:async )?(?:function|const|class) (\w+)/gm)].map((m) => m[1]);
   // Node's built-in type stripping parses the real template, without adding a
   // compiler dependency. Runtime assertions below do not claim a framework build.
@@ -331,4 +338,100 @@ test('registration parses the server action, ViewState and full Web Forms contro
   assert.equal(posted.get('ctl00$ContentContainer$PasswordTextBox'), 'test-only');
   assert.equal(posted.has('Password'), false);
   assert.ok(calls[0].url.includes('invitationCode=invite-1'));
+});
+
+test('reset success is not an auth error, while actual errors remain visible', templateRuntime, () => {
+  const api = service();
+  api.window.location.search = '?message=password_reset_success';
+  assert.equal(api.getAuthError(), undefined);
+  api.window.location.search = '?message=password_reset_success&error=invalid_password';
+  assert.ok(api.getAuthError());
+  api.window.location.search = '?message=unknown_failure';
+  assert.match(api.getAuthError(), /authentication error/);
+});
+
+for (const flow of ['forgotPassword', 'resetPassword']) test(`${flow} HTTP failures never report success or navigate, even after redirects`, templateRuntime, async () => {
+  class Parser {
+    parseFromString() { return { querySelectorAll: () => [] }; }
+  }
+  for (const status of [403, 500]) {
+    for (const redirected of [false, true]) {
+      const api = service({
+        local: true, DOMParser: Parser,
+        fetch: async (_url, options) => options
+          ? { ok: false, status, redirected, text: async () => '<h1>Request failed</h1>' }
+          : { ok: true, text: async () => '<input value="csrf-test">' },
+      });
+      const request = flow === 'forgotPassword'
+        ? api.forgotPassword('maker@contoso.com')
+        : api.resetPassword('contact-id', 'reset-code', 'test-only', 'test-only');
+      await assert.rejects(request, new RegExp(String(status)));
+      assert.equal(api.window.location.href, '/');
+    }
+  }
+});
+
+test('successful password requests retain their confirmation and navigation behavior', templateRuntime, async () => {
+  class Parser {
+    parseFromString() { return { querySelectorAll: () => [] }; }
+  }
+  for (const redirected of [false, true]) {
+    const api = service({
+      local: true, DOMParser: Parser,
+      fetch: async (_url, options) => options
+        ? { ok: true, status: 200, redirected, text: async () => 'confirmation' }
+        : { ok: true, text: async () => '<input value="csrf-test">' },
+    });
+    await api.forgotPassword('maker@contoso.com');
+    assert.equal(api.window.location.href, '/');
+    await api.resetPassword('contact-id', 'reset-code', 'test-only', 'test-only');
+    assert.equal(api.window.location.href, '/login?message=password_reset_success');
+  }
+});
+
+test('external confirmation refetch preserves callback context and encoding', templateRuntime, async () => {
+  let requested;
+  class Parser {
+    parseFromString() {
+      return { querySelector: (selector) => selector === 'form'
+        ? { getAttribute: () => `./ExternalLoginCallback${requested.split('ExternalLoginCallback')[1]}` }
+        : { value: 'claim-value' } };
+    }
+  }
+  const api = service({
+    external: true, DOMParser: Parser,
+    fetch: async (url) => {
+      requested = url;
+      return { ok: true, text: async () => 'confirmation form' };
+    },
+  });
+  api.window.location.search = '?ReturnUrl=%2Forders%3Ftab%3Dopen&InvitationCode=invite%2B1';
+  const details = await api.fetchExternalLoginDetails();
+  assert.equal(requested, '/Account/Login/ExternalLoginCallback' + api.window.location.search);
+  assert.equal(details.returnUrl, '/orders?tab=open');
+});
+
+test('username registration form submits separate required email with the chosen username', templateRuntime, async () => {
+  const template = read('assets/local-auth-react-registerform-component-local-auth-only.tsx.template');
+  const prefix = template.slice(template.indexOf('export function RegisterForm'), template.indexOf('\n  return ('));
+  let submitted;
+  let slot = 0;
+  const states = [...prefix.matchAll(/const \[(\w+),[^\]]+\] = useState/g)].map((match) => match[1]);
+  const values = {
+    credential: 'maker', email: 'maker@contoso.com',
+    password: 'test-only', confirmPassword: 'test-only', error: '', isSubmitting: false,
+  };
+  const context = {
+    useState: () => [values[states[slot++]], () => {}],
+    useEffect: () => {},
+    getAuthProvider: () => ({ loginByEmail: false }),
+    register: async (fields) => { submitted = fields; },
+    window: { location: { search: '' } }, URLSearchParams,
+  };
+  vm.runInNewContext(stripTypeScriptTypes(prefix + '\nreturn handleSubmit;\n}').replace(/^export /gm, '') + '\nglobalThis.submit = RegisterForm();', context);
+  await context.submit({ preventDefault() {} });
+  assert.equal(submitted.username, 'maker');
+  assert.equal(submitted.email, 'maker@contoso.com');
+  assert.equal(submitted.password, 'test-only');
+  assert.match(template, /!isEmailMode &&[\s\S]*?type="email"[\s\S]*?required/);
 });

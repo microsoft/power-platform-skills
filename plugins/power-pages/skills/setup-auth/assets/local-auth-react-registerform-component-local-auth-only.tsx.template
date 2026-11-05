@@ -4,6 +4,7 @@ import './LocalLoginForm.css';
 
 export function RegisterForm() {
   const [credential, setCredential] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
@@ -36,7 +37,7 @@ export function RegisterForm() {
       await register(
         isEmailMode
           ? { email: credential, password, confirmPassword }
-          : { username: credential, password, confirmPassword },
+          : { username: credential, email, password, confirmPassword },
         '/',
         invitationCode
       );
@@ -62,6 +63,19 @@ export function RegisterForm() {
           autoComplete={isEmailMode ? 'email' : 'username'}
         />
       </div>
+      {!isEmailMode && (
+        <div className="form-field">
+          <label htmlFor="email">Email</label>
+          <input
+            id="email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoComplete="email"
+          />
+        </div>
+      )}
       <div className="form-field">
         <label htmlFor="password">Password</label>
         <input

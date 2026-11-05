@@ -151,7 +151,9 @@ export async function fetchExternalLoginDetails(): Promise<ExternalLoginDetails>
     };
   }
 
-  const response = await fetch('/Account/Login/ExternalLoginCallback', {
+  // The shell preserves callback context such as ?ReturnUrl=%2Forders&InvitationCode=abc.
+  // Forward the query unchanged so the server can render the original confirmation action.
+  const response = await fetch('/Account/Login/ExternalLoginCallback' + window.location.search, {
     credentials: 'same-origin',
   });
 

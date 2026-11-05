@@ -290,8 +290,9 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
 export function getAuthError(): string | undefined {
   if (typeof window === 'undefined') return undefined;
   const params = new URLSearchParams(window.location.search);
-  const message = params.get('message') || params.get('error');
+  const message = params.get('error') || params.get('message');
   if (!message) return undefined;
+  if (!params.get('error') && message === 'password_reset_success') return undefined;
   return AUTH_ERROR_MESSAGES[message] || 'An authentication error occurred. Please try again.';
 }
 

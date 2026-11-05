@@ -34,8 +34,13 @@ interface UseAuthReturn {
 }
 
 export function useAuth(): UseAuthReturn {
-  const [user, setUser] = useState<PowerPagesUser | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<PowerPagesUser | undefined>(() => {
+    // The server snapshot is synchronous; an empty first render would disagree
+    // with checkAuth() and make profile consumers report a missing contact.
+    const current = getCurrentUser();
+    return current ? { ...current } : undefined;
+  });
+  const [isLoading, setIsLoading] = useState(false);
 
   const loadUser = useCallback(() => {
     // Each hook owns state. Clone the mutable server snapshot for this consumer
