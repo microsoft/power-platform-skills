@@ -4,8 +4,12 @@
 // solution.version, end to end: buildModelApp -> runSdkBuild -> the configuration runtime (lib/configuration-build.js)
 // -> the REAL maker-SDK bundle -> the strict in-memory org (tests/helpers/fake-config-org.js), which answers only the
 // requests it models and lists every other one in `unexpected`. The build's own create port is the plain pass-through
-// (lib/creates-passthrough.js); every build runs with the stable-id create modules made unloadable, so a request for
-// one fails the test (tests/helpers/no-stable-create-modules.js).
+// (lib/creates-passthrough.js); every build of a spec without `configurationIdentity` runs with the stable-id create
+// modules made unloadable, so a request for one fails the test (tests/helpers/no-stable-create-modules.js).
+//
+// The `protected configuration through the build command` tests opt in (`configurationIdentity: "stable-v1"`) and run
+// the production command (main) with the real bundle: the command makes the managed create gate itself, and one app
+// directory carries the binding store from one run to the next, as the maker's workspace does between processes.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -17,6 +21,7 @@ const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { withoutStableCreateModules } = require('./helpers/no-stable-create-modules.js');
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
 const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+const { openManagedBindings } = require('../lib/managed-bindings.js');
 const { buildModelApp, isTransientHalt, authorizationKeys } = require('../build-model-app.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
@@ -420,7 +425,8 @@ test('a spec without the configuration fields sends no configuration request and
 // engine an SDK they prepared, so they never meet the solution-scoped instance the command builds. Only what reaches outside the process
 // is a double: the transport (the strict org above, behind the plugin's own az-token client), the identity check, the language read, the
 // page backend and telemetry. Each SDK the command makes is watched for `initWorkspace`, which reads and writes local files only.
-const commandOrg = () => createConfigOrg({
+const commandOrg = (extra = {}) => createConfigOrg({
+  ...extra,
   tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }],
   solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' },
 });
@@ -530,5 +536,275 @@ test('the build command leaves the solution-scoped SDK\u2019s workspace unprepar
   assert.equal(scoped.length, 1);
   assert.equal(scoped[0].inits, 0, 'nothing is prepared that the spec does not use');
   assert.deepEqual(out.org.requests.filter((r) => CONFIGURATION_PATH.test(String(r.path))).map((r) => `${r.method} ${r.path}`), []);
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+// Protected configuration identities (configurationIdentity "stable-v1") through the build COMMAND: the deferred managed-create gate
+// the command makes for them, bound to the app folder's binding store, and the configuration hookup the engine builds over both. Each
+// runCommand is a new invocation (a new gate, context, SDK and throwaway SDK workspace) over the same app folder, so the binding store
+// carries over between them as it does between processes; the org lives on. Nothing here reaches outside the process.
+const PROTECTED_ROWS = ['environmentvariabledefinitions', 'customapis', 'customapirequestparameters', 'customapiresponseproperties', 'duplicaterules', 'duplicateruleconditions'];
+const PROTECTED_MODULE = /(^|[\\/])(managed-create-(transport|context|batch)|configuration-protected|configuration-create-bindings)(\.js)?$/;
+function protectedSpec(over = {}) {
+  const spec = { ...makeSpec(), configurationIdentity: 'stable-v1', ...over };
+  // A connection reference's binding is proven through the Power Apps service, which this command reaches outside the process.
+  delete spec.connectionReferences;
+  return spec;
+}
+const rowCounts = (org) => Object.fromEntries(PROTECTED_ROWS.map((set) => [set, org.rows(set).length]));
+// The root creates (a Custom API's and a rule's children ride in their root's body): `org.writes` lists `METHOD path` without the query.
+const rootCreates = (org, since = 0) => org.writes(since).filter((w) => /^POST \/(environmentvariabledefinitions|environmentvariablevalues|customapis|duplicaterules)$/.test(w));
+const runAgain = (spec, base, argv) => runCommand(spec, { org: base.org, appDir: base.appDir, ...(argv ? { argv } : {}) });
+const DATA = ['--stage', 'data', '--allow-destructive'];
+const authorize = (tokens) => tokens.flatMap((t) => ['--authorize', t]);
+// Every module the run asked for by a protected name, cached or not (Module.prototype.require sees both).
+async function protectedModulesLoadedBy(fn) {
+  const Module = require('node:module');
+  const requested = [];
+  const original = Module.prototype.require;
+  Module.prototype.require = function recordProtected(id) {
+    if (typeof id === 'string' && PROTECTED_MODULE.test(id)) requested.push(id);
+    return original.apply(this, arguments);
+  };
+  try {
+    return { result: await fn(), requested };
+  } finally {
+    Module.prototype.require = original;
+  }
+}
+
+test('protected configuration through the build command: every root and child create carries its derived id, the ids are bound, and a later run sends no create', async () => {
+  const out = await runCommand(protectedSpec());
+  assert.equal(out.thrown && out.thrown.message, undefined, 'the build did not halt');
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  const bound = out.payload.created.configuration.managedBindings;
+  assert.deepEqual(bound.map((b) => `${b.kind}:${b.key}:${b.origin}`).sort(),
+    ['customApi:contoso_Calc:created', 'duplicateRule:email:created', 'environmentVariable:contoso_ApiBase:created', 'environmentVariable:contoso_ApiKey:created']);
+  const of = (kind, key) => bound.find((b) => b.kind === kind && b.key === key);
+  const posted = (set) => out.org.requests.filter((r) => r.method === 'POST' && String(r.path).split('?')[0] === `/${set}`).map((r) => r.body);
+  assert.deepEqual(posted('environmentvariabledefinitions').map((b) => b.environmentvariabledefinitionid).sort(),
+    [of('environmentVariable', 'contoso_ApiBase').id, of('environmentVariable', 'contoso_ApiKey').id].sort());
+  const [api] = posted('customapis');
+  assert.equal(api.customapiid, of('customApi', 'contoso_Calc').id);
+  assert.equal(api.CustomAPIRequestParameters[0].customapirequestparameterid, of('customApi', 'contoso_Calc').childIds['request:a']);
+  assert.equal(api.CustomAPIResponseProperties[0].customapiresponsepropertyid, of('customApi', 'contoso_Calc').childIds['response:r']);
+  const [rule] = posted('duplicaterules');
+  assert.equal(rule.duplicateruleid, of('duplicateRule', 'email').id);
+  assert.equal(rule.DuplicateRule_DuplicateRuleConditions[0].duplicateruleconditionid, of('duplicateRule', 'email').childIds.e);
+  // The rows are where the bindings say.
+  assert.equal(out.org.rows('customapis')[0].customapiid, api.customapiid);
+  assert.equal(out.org.rows('duplicaterules')[0].duplicateruleid, rule.duplicateruleid);
+  // The ids are derived, not minted: the same App Spec on another org at the same address gets the same ones.
+  const elsewhere = await runCommand(protectedSpec());
+  assert.deepEqual(elsewhere.payload.created.configuration.managedBindings.map((b) => b.id), bound.map((b) => b.id));
+
+  const mark = out.org.requests.length;
+  const again = await runAgain(protectedSpec(), out);
+  assert.equal(again.thrown && again.thrown.message, undefined, 'the rerun did not halt');
+  assert.equal(again.exitCode, 0, again.stderr.slice(-600));
+  assert.deepEqual(out.org.writes(mark), [], 'an unchanged rerun writes nothing');
+  assert.deepEqual(rowCounts(out.org), { environmentvariabledefinitions: 2, customapis: 1, customapirequestparameters: 1, customapiresponseproperties: 1, duplicaterules: 1, duplicateruleconditions: 1 });
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+test('protected configuration through the build command: a create whose answer was lost is never sent again, and its rows are bound only under their exact approvals', async () => {
+  let org = null;
+  let sends = 0;
+  let replaying = false;
+  // The service applies the Custom API's first create, and its answer is lost on the way back (a gateway's 503). `sends` counts the
+  // creates the build sent; the intercept's own replay of that one request into the org is not one of them.
+  org = commandOrg({ intercept: async (req) => {
+    if (replaying || req.method !== 'POST' || req.path.split('?')[0] !== '/customapis') return undefined;
+    sends += 1;
+    if (sends > 1) return undefined;
+    replaying = true;
+    try {
+      await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    } finally {
+      replaying = false;
+    }
+    return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } });
+  const first = await runCommand(protectedSpec(), { org });
+  assert.match(String(first.thrown && first.thrown.message), /customApi contoso_Calc \(create-outcome-unknown\)/);
+  assert.equal(sends, 1, 'sent once, never re-sent on the 503');
+  assert.deepEqual(rowCounts(org), { environmentvariabledefinitions: 2, customapis: 1, customapirequestparameters: 1, customapiresponseproperties: 1, duplicaterules: 0, duplicateruleconditions: 0 });
+
+  // A fresh invocation never creates it again: the row has no proof yet, so it must first be completed under the same ids.
+  let mark = org.requests.length;
+  const rerun = await runAgain(protectedSpec(), first);
+  assert.equal(rerun.thrown && rerun.thrown.code, 'create-completion-required', rerun.thrown && rerun.thrown.message);
+  assert.deepEqual(org.writes(mark), []);
+
+  // The maker completes it (its children's solution membership), as the stop asks.
+  const store = openManagedBindings({ workspaceDir: path.join(first.appDir, '.maker-workspace'), environment: org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' });
+  const inSolution = new Set(org.rows('solutioncomponents').map((c) => c.objectid));
+  for (const m of store.readGroup('customApi', 'contoso_calc').pending.rowProtocol.completion.members) {
+    if (inSolution.has(m.id)) continue;
+    await org.request({ url: `${org.origin}/api/data/v9.2/AddSolutionComponent`, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ SolutionUniqueName: 'ContosoSol', ComponentId: m.id, ComponentType: m.componentType, AddRequiredComponents: false }) });
+  }
+
+  // No answer proved those rows this build's own: the next run asks for each row's exact approval and sends nothing.
+  mark = org.requests.length;
+  const asked = await runAgain(protectedSpec(), first);
+  assert.equal(asked.thrown && asked.thrown.code, 'create-ownership-required', asked.thrown && asked.thrown.message);
+  assert.deepEqual(org.writes(mark), []);
+  const quoted = /given after checking those rows are yours: (.*)\.$/.exec(asked.thrown.message);
+  assert.ok(quoted, asked.thrown.message);
+  const tokens = JSON.parse(`[${quoted[1]}]`);
+  assert.deepEqual(tokens.slice().sort(), ['adopt:customApi:contoso_calc', 'adopt:customApiRequestParameter:contoso_calc/request%3Aa', 'adopt:customApiResponseProperty:contoso_calc/response%3Ar']);
+
+  // A root's approval does not cover its children, and a mistyped or unprotected token is refused before anything is read.
+  mark = org.requests.length;
+  const partial = await runAgain(protectedSpec(), first, [...DATA, ...authorize(['adopt:customApi:contoso_Calc'])]);
+  assert.equal(partial.thrown && partial.thrown.code, 'create-ownership-required');
+  assert.deepEqual(org.writes(mark), []);
+  const typo = await runAgain(protectedSpec(), first, [...DATA, ...authorize(['adopt:customApiRequestParameter:contoso_calc/request%3Ab'])]);
+  assert.equal(typo.exitCode, 1, typo.stderr.slice(-600));
+  assert.match(`${typo.stderr} ${JSON.stringify(typo.payload)}`, /adopt:customApiRequestParameter:contoso_calc\/request%3Ab/);
+  assert.deepEqual(org.writes(mark), []);
+
+  // The printed approvals, typed in the App Spec's own case, bind those rows: nothing is created again; the rule left behind is made.
+  const typed = tokens.map((t) => t.replace('contoso_calc', 'contoso_Calc'));
+  const done = await runAgain(protectedSpec(), first, [...DATA, ...authorize(typed)]);
+  assert.equal(done.thrown && done.thrown.message, undefined, 'the approved run did not halt');
+  assert.equal(done.exitCode, 0, done.stderr.slice(-600));
+  assert.equal(sends, 1, 'the Custom API is never sent again');
+  assert.deepEqual(rootCreates(org, mark), ['POST /duplicaterules']);
+  assert.deepEqual(rowCounts(org), { environmentvariabledefinitions: 2, customapis: 1, customapirequestparameters: 1, customapiresponseproperties: 1, duplicaterules: 1, duplicateruleconditions: 1 });
+  // The approved rows are this build's now, in the binding store, at the ids they were created with.
+  const reread = openManagedBindings({ workspaceDir: path.join(first.appDir, '.maker-workspace'), environment: org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' });
+  const group = reread.readGroup('customApi', 'contoso_calc');
+  assert.equal(group.pending, null);
+  assert.deepEqual(group.committed.records.map((r) => r.id).sort(), [org.rows('customapis')[0].customapiid, org.rows('customapirequestparameters')[0].customapirequestparameterid, org.rows('customapiresponseproperties')[0].customapiresponsepropertyid].sort());
+  assert.deepEqual(org.unexpected, []);
+});
+
+test('protected configuration through the build command: a later phase\u2019s transient failure runs the whole build again and the configuration rows stay where they are', async () => {
+  let refused = 0;
+  // The sample data's first create meets a customization lock, which the build retries whole; the second succeeds.
+  const org = commandOrg({ intercept: ({ method, path: p }) => {
+    if (/^\/EntityDefinitions\(LogicalName='contact'\)\/Attributes/.test(p)) return { statusCode: 200, body: { value: [] } };
+    if (method !== 'POST' || !/^\/contacts\//.test(p)) return undefined;
+    refused += 1;
+    return refused === 1
+      ? { statusCode: 400, body: { error: { code: '0x80071151', message: 'CustomizationLockException: another operation is running, try again later' } } }
+      : { statusCode: 200, body: { Ids: ['11111111-2222-3333-4444-555555555555'] } };
+  } });
+  const spec = protectedSpec({ entities: [{ schemaName: 'contact', displayName: 'Contact', existing: true, primaryAttribute: { schemaName: 'fullname', displayName: 'Full Name' } }], sampleData: { contact: [{ lastname: 'Probe' }] } });
+  const out = await runCommand(spec, { org, argv: [...DATA, '--sample-data'] });
+  assert.equal(out.thrown && out.thrown.message, undefined, out.stderr.slice(-900));
+  assert.equal(out.exitCode, 0, out.stderr.slice(-900));
+  assert.match(out.stderr, /transient error in sample-data — retrying \(attempt 1\/3\)/);
+  assert.equal(refused, 2, 'the sample data was sent by two attempts');
+  // The second attempt found every configuration row at its bound id: one create each, over both attempts.
+  assert.deepEqual(rootCreates(org).sort(), ['POST /customapis', 'POST /duplicaterules', 'POST /environmentvariabledefinitions', 'POST /environmentvariabledefinitions']);
+  assert.equal(org.writes().filter((w) => /PublishDuplicateRule$/.test(w)).length, 1, 'the rule is published once');
+  assert.deepEqual(rowCounts(org), { environmentvariabledefinitions: 2, customapis: 1, customapirequestparameters: 1, customapiresponseproperties: 1, duplicaterules: 1, duplicateruleconditions: 1 });
+  // The second attempt changed nothing: it found each row at the id the first one bound.
+  const outcome = out.payload.created.configuration;
+  assert.deepEqual(outcome.saved, []);
+  assert.deepEqual(outcome.unchanged.map((u) => u.id).sort(), [...org.rows('environmentvariabledefinitions').map((r) => r.environmentvariabledefinitionid), org.rows('customapis')[0].customapiid, org.rows('duplicaterules')[0].duplicateruleid].sort());
+});
+
+test('protected configuration through the build command: an edit needs its exact field approval, and a field the approval does not name stays refused', async () => {
+  const out = await runCommand(protectedSpec());
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  const edited = protectedSpec({ customApis: [{ ...CONFIGURATION_FIELDS.customApis[0], isPrivate: true }] });
+  let mark = out.org.requests.length;
+  for (const argv of [DATA, [...DATA, ...authorize(['customApi:contoso_Calc:executePrivilegeName'])]]) {
+    const refused = await runAgain(edited, out, argv);
+    assert.match(String(refused.thrown && refused.thrown.message), /customApi contoso_Calc \(DESTRUCTIVE_CHANGE_UNAUTHORIZED\) \(approve with --authorize customApi:contoso_calc:isPrivate\)/);
+    assert.deepEqual(out.org.writes(mark), []);
+  }
+  const id = out.org.rows('customapis')[0].customapiid;
+  const done = await runAgain(edited, out, [...DATA, ...authorize(['customApi:contoso_Calc:isPrivate'])]);
+  assert.equal(done.exitCode, 0, done.stderr.slice(-600));
+  assert.deepEqual(out.org.writes(mark), [`PATCH /customapis(${id})`], 'the one approved field, at the bound id');
+  assert.equal(out.org.rows('customapis')[0].isprivate, true);
+  mark = out.org.requests.length;
+  assert.equal((await runAgain(edited, out)).exitCode, 0);
+  assert.deepEqual(out.org.writes(mark), []);
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+test('protected configuration through the build command: removing the opt-in, a missing bound row or an unreadable store stops the build before any write, whatever it selects', async () => {
+  const out = await runCommand(protectedSpec());
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  const withoutOptIn = protectedSpec();
+  delete withoutOptIn.configurationIdentity;
+  // The version change would be the build's first write; it is not sent.
+  withoutOptIn.solution = { ...withoutOptIn.solution, version: '1.3.0.0' };
+  let mark = out.org.requests.length;
+  for (const argv of [DATA, ['--changed-only', '--allow-destructive']]) {
+    const stopped = await runAgain(withoutOptIn, out, argv);
+    assert.equal(stopped.thrown && stopped.thrown.code, 'create-identity-opt-in-required', `${argv.join(' ')}: ${stopped.thrown && stopped.thrown.message}`);
+    assert.match(stopped.thrown.message, /restore configurationIdentity "stable-v1"/);
+    assert.deepEqual(out.org.writes(mark), [], argv.join(' '));
+  }
+
+  // A bound row deleted outside the plugin is not replaced by a namesake.
+  const id = out.org.rows('customapis')[0].customapiid;
+  await out.org.request({ url: `${out.org.origin}/api/data/v9.2/customapis(${id})`, method: 'DELETE', headers: {} });
+  mark = out.org.requests.length;
+  const gone = await runAgain(protectedSpec({ solution: withoutOptIn.solution }), out);
+  assert.match(String(gone.thrown && gone.thrown.message), /the bound customApi of customApi "contoso_calc" \(.*\) is gone; it is not replaced by a namesake/);
+  assert.deepEqual(out.org.writes(mark), []);
+  assert.equal(out.org.rows('customapis').length, 0);
+
+  // A binding store the build cannot read stops it, with or without the opt-in.
+  const fs = require('node:fs');
+  const ws = path.join(out.appDir, '.maker-workspace');
+  const files = fs.readdirSync(ws).filter((f) => f.startsWith('managed-bindings.'));
+  assert.equal(files.length, 1);
+  fs.writeFileSync(path.join(ws, files[0]), '{');
+  for (const spec of [protectedSpec(), withoutOptIn]) {
+    const unreadable = await runAgain(spec, out);
+    assert.equal(unreadable.thrown && unreadable.thrown.code, 'managed-binding-store-unreadable', unreadable.thrown && unreadable.thrown.message);
+    assert.deepEqual(out.org.writes(mark), []);
+  }
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+test('protected configuration through the build command: an App Spec that dropped an unfinished item still stops on it, whatever it selects', async () => {
+  let org = null;
+  let lose = true;
+  org = commandOrg({ intercept: async (req) => {
+    if (!lose || req.method !== 'POST' || req.path.split('?')[0] !== '/customapis') return undefined;
+    lose = false;
+    await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } });
+  const first = await runCommand(protectedSpec(), { org });
+  assert.match(String(first.thrown && first.thrown.message), /create-outcome-unknown/);
+  // Neither the opt-in nor any configuration item is left, and the version would be the first write.
+  const dropped = { ...makeSpec({ configuration: false }), solution: { ...makeSpec().solution, version: '1.3.0.0' } };
+  const mark = org.requests.length;
+  for (const argv of [DATA, ['--changed-only', '--allow-destructive']]) {
+    const stopped = await runAgain(dropped, first, argv);
+    assert.ok(stopped.thrown, `${argv.join(' ')}: the build stopped`);
+    assert.match(stopped.thrown.message, /customApi/, stopped.thrown.message);
+    assert.equal(stopped.thrown.phase, 'preflight', stopped.thrown.message);
+    assert.deepEqual(org.writes(mark), [], argv.join(' '));
+  }
+  assert.deepEqual(org.unexpected, []);
+});
+
+test('a build without the opt-in and without stored configuration rows loads no protected module and sends what it always sent', async () => {
+  const spec = makeSpec();
+  delete spec.connectionReferences;
+  const { result: out, requested } = await protectedModulesLoadedBy(() => runCommand(spec));
+  assert.deepEqual(requested, [], 'no protected configuration module is loaded');
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  // The plain path: the server mints each id (no id in the create's body).
+  const [api] = out.org.requests.filter((r) => r.method === 'POST' && String(r.path).split('?')[0] === '/customapis').map((r) => r.body);
+  // The plain path: the ids are minted at random (version 4), not derived from the item (the protected path's name-based version 5).
+  const saved = out.payload.created.configuration.saved;
+  assert.equal(saved.length, 4);
+  for (const s of saved) assert.match(s.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4/, `${s.kind} ${s.key}`);
+  assert.ok(!/configurationIdentity|managed-create|adopt:/.test(out.stderr));
+  const again = await protectedModulesLoadedBy(() => runAgain(spec, out));
+  assert.deepEqual(again.requested, []);
+  assert.equal(again.result.exitCode, 0);
   assert.deepEqual(out.org.unexpected, []);
 });

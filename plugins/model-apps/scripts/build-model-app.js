@@ -15,7 +15,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
-const { runSdkBuild, openBuildBindingGroups, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
+const { runSdkBuild, openBuildBindingGroups, protectedConfigurationInPlay, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
 const { authorizeFlag } = require('./lib/cli-failure.js');
 const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
@@ -103,7 +103,7 @@ function assertWorkspaceDir(workspaceDir, { create }) {
 //                  which environment it belongs to, and the answer comes back as `folderNote` so the
 //                  preview can warn that an --apply would stop. Construction is offline (no token
 //                  until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false, publicationBarrier, sendObserver, workflowEffectGate } = {}) {
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false, publicationBarrier, sendObserver, workflowEffectGate, managedCreateGate } = {}) {
   // A link at the workspace root would make the provision SDK's storage follow it. Refuse
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
@@ -120,7 +120,12 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // A declared business rule's or process flow's workflow write is screened by the gate of the store that holds its effect
   // (lib/deferred-workflow-gate.js): main() makes the gate only when one of those features is on, and the build binds it to its
   // store; with no gate the client is made exactly as before.
-  const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest(sendObserver ? sendObserver.wrap() : undefined) } : {}), ...(workflowEffectGate ? { workflowEffectGate } : {}) });
+  // Protected configuration's deferred managed-create gate (lib/managed-create-transport.js), made by main() only while protected
+  // configuration is in play, shares that one slot with it through composeWriteGates: both screen every request, and one both claim is
+  // refused unsent. It is installed on this one client, so the requests the SDK sends without the solution header (an environment
+  // variable value's create, a duplicate rule's publication) are screened as well. Inert outside a protected create set.
+  const writeGate = managedCreateGate ? require('./lib/managed-create-transport.js').composeWriteGates(workflowEffectGate, managedCreateGate) : workflowEffectGate;
+  const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest(sendObserver ? sendObserver.wrap() : undefined) } : {}), ...(writeGate ? { workflowEffectGate: writeGate } : {}) });
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -791,7 +796,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
         // --authorize names one change it consents to and never approves a removal on this list, so a run that was given one is
         // told so: otherwise "without --allow-destructive" reads as if the key it was given had been ignored.
-        const authorizeGiven = [opts.authorizedDestructive, opts.authorizedAdoption, opts.authorizedOverwrite, opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite, opts.publicationRisk]
+        const authorizeGiven = [opts.authorizedDestructive, opts.authorizedAdoption, opts.authorizedOverwrite, opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite, opts.publicationRisk, opts.configurationApprovals]
           .some((s) => s && s.size > 0);
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive${authorizeGiven ? ' (the --authorize keys given approve none of them)' : ''}:\n${lines.join('\n')}`;
         if (opts.workspaceDir) {
@@ -945,6 +950,10 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         ...(deps.sendObserver ? { sendObserver: deps.sendObserver } : {}),
         // The client's workflow effect gate (lib/deferred-workflow-gate.js), which the engine binds to this store.
         ...(deps.workflowEffectGate ? { workflowEffectGate: deps.workflowEffectGate } : {}),
+        // Protected configuration's managed-create gate (made only while protected configuration is in play), which the engine binds
+        // to this store and builds the configuration hookup over, and the maker's adopt:<configuration kind>:... row approvals.
+        ...(deps.managedCreateGate ? { managedCreateGate: deps.managedCreateGate } : {}),
+        ...(opts.configurationApprovals ? { configurationApprovals: opts.configurationApprovals } : {}),
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         owedLengths,
@@ -1342,6 +1351,10 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //   overwrite:<kind>:<declared key>     replacing a protected configuration item's local copy (configurationIdentity "stable-v1";
 //                                       kind customApi, environmentVariable, connectionReference or duplicateRule) that differs
 //                                       from the server's (lib/configuration-protected.js; read by configurationAuthorizationKeys)
+//   adopt:<kind>:<declared key>         binding the row of a protected configuration item that an earlier, unfinished build may have
+//   adopt:<child kind>:<key>/<child>    created and whose answer was lost (child kind environmentVariableValue, customApiRequestParameter,
+//                                       customApiResponseProperty or duplicateRuleCondition; both parts percent-encoded), exactly as
+//                                       the stop printed it; one row each, a root's never covers its children (configurationApprovals)
 // The family is part of the key because ids collide across families: a view and a chart may share <table>/<name>, and a view
 // may be named "quickFind". Each approval is stored under its family-typed id (reconcile-common.js approvalKey, the flag minus
 // its verb) and each guard asks only for its own family, so consent to one artifact never reaches another. The untyped form
@@ -1398,7 +1411,11 @@ function authorizationKeys(argv, spec) {
     ? `'${token}' names a configuration item the spec does not declare`
     : code === 'CONFIGURATION_OVERWRITE_UNPROTECTED'
       ? `'${token}' replaces a protected configuration item's local copy, and the spec does not set configurationIdentity "stable-v1", so there is no such copy to replace`
-      : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
+      : code === 'CONFIGURATION_ADOPT_UNPROTECTED'
+        ? `'${token}' binds a row of a protected configuration item, and the spec does not set configurationIdentity "stable-v1", so there is no such row to bind`
+        : code === 'CONFIGURATION_ADOPT_INVALID'
+          ? `'${token}' is not adopt:<kind>:<declared key> or adopt:<child kind>:<declared key>/<declared child>, as a configuration stop prints it`
+          : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
   // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
   // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick
   // Find view's (entities[].quickFind, lib/quick-find.js) is its table, in lower case.
@@ -1642,7 +1659,7 @@ function authorizationKeys(argv, spec) {
     const i = problems.findIndex((p) => p.startsWith(`'${key}' `));
     if (i >= 0) problems[i] += ` — ${hint}`;
   }
-  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, publicationRisk, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
+  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, publicationRisk, configurationApprovals: configuration.rowApprovals || new Set(), error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
 }
 
 function parseLanguageCode(value) {
@@ -1869,6 +1886,7 @@ async function main() {
     ...(authorization.webResourceAdopt.size ? { authorizedWebResourceAdoption: authorization.webResourceAdopt } : {}),
     ...(authorization.webResourceOverwrite.size ? { authorizedWebResourceOverwrite: authorization.webResourceOverwrite } : {}),
     ...(authorization.publicationRisk.size ? { publicationRisk: authorization.publicationRisk } : {}),
+    ...(authorization.configurationApprovals.size ? { configurationApprovals: authorization.configurationApprovals } : {}),
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     languageCode,
     appDir: path.dirname(specPath),
@@ -1999,7 +2017,13 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // The workflow effect gate of declared business rules and process flows, bound to the managed binding store once the build opens
   // it (lib/deferred-workflow-gate.js). Made only while one of those features is on, so with both off the client is unchanged.
   const workflowEffectGate = declaredFeatureOn('rules') || declaredFeatureOn('bpf') ? require('./lib/deferred-workflow-gate.js').createDeferredWorkflowGate() : null;
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver, ...(workflowEffectGate ? { workflowEffectGate } : {}) });
+  // Protected configuration's deferred managed-create gate, made only for an apply where protected configuration is in play: the App
+  // Spec sets configurationIdentity "stable-v1", or the workspace's binding store still holds configuration state after the opt-in was
+  // removed (sdk-build.js protectedConfigurationInPlay, a local read that sends nothing). Otherwise none is made and no protected module
+  // is loaded, so such a build sends, prints and loads exactly what it did before. The engine binds it to the binding store.
+  const managedCreateGate = opts.apply && protectedConfigurationInPlay(spec, { apply: true, env, workspaceDir, appDir: opts.appDir })
+    ? require('./lib/managed-create-transport.js').createDeferredManagedCreateGate() : null;
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver, ...(workflowEffectGate ? { workflowEffectGate } : {}), ...(managedCreateGate ? { managedCreateGate } : {}) });
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -2056,6 +2080,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal, throttle, stepTally, publicationBarrier, sendObserver,
       ...(workflowEffectGate ? { workflowEffectGate } : {}),
+      ...(managedCreateGate ? { managedCreateGate } : {}),
       ...(previewHttpClient ? { previewHttpClient } : {}),
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to

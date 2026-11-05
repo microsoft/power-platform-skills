@@ -1521,6 +1521,46 @@ test('--authorize overwrite:<configuration kind>:<key> approves replacing exactl
   }
 });
 
+test('--authorize adopt:<configuration kind>:... approves binding exactly the one protected row it names, as the stop printed it, only under the opt-in', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'String' }], responseProperties: [{ uniqueName: 'Total', type: 'Integer' }] }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', value: 'x' }],
+    duplicateDetectionRules: [{ key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', 'adopt:customApi:CONTOSO_CALC', '--authorize=adopt:customApiRequestParameter:contoso_calc/request%3AA',
+    '--authorize', 'adopt:customApiResponseProperty:Contoso_Calc/response%3Atotal', '--authorize', 'adopt:environmentVariableValue:contoso_apibase/value',
+    '--authorize', 'adopt:duplicateRuleCondition:Email%20rule/e'], spec());
+  assert.strictEqual(ok.error, null);
+  // Stored in the stop's own spelling (a name and a parameter in lower case, a rule's and a condition's key byte for byte, both parts
+  // percent-encoded), one row each: the root's approval covers none of its children.
+  assert.deepStrictEqual([...ok.configurationApprovals].sort(), [
+    'adopt:customApi:contoso_calc', 'adopt:customApiRequestParameter:contoso_calc/request%3Aa', 'adopt:customApiResponseProperty:contoso_calc/response%3Atotal',
+    'adopt:duplicateRuleCondition:Email%20rule/e', 'adopt:environmentVariableValue:contoso_apibase/value',
+  ]);
+  assert.strictEqual(ok.adopt.size, 0, 'a configuration row approval adopts no view or chart');
+  assert.strictEqual(ok.overwrite.size, 0);
+  assert.strictEqual(ok.keys.size, 0);
+  for (const [key, over, why] of [
+    ['adopt:customApi:contoso_Other', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiRequestParameter:contoso_calc/request%3Ab', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiResponseProperty:contoso_calc/request%3Aa', {}, /names a configuration item the spec does not declare/],
+    ['adopt:duplicateRuleCondition:email%20rule/e', {}, /names a configuration item the spec does not declare/],
+    ['adopt:environmentVariableValue:contoso_apibase/default', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiRequestParameter:contoso_calc', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApiRequestParameter:contoso_calc/request%3Aa/x', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApiRequestParameter:contoso_calc/%E0%A4%A', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApi:contoso_Calc', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+    ['adopt:duplicateRuleCondition:Email%20rule/e', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.configurationApprovals.size, 0, key);
+  }
+});
+
 test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets, under its family', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   const spec = {

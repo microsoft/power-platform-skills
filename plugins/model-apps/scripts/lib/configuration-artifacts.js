@@ -2608,31 +2608,91 @@ const TOKEN_ROOTS = Object.freeze({
 // Sort the `--authorize` tokens the maker passed: those of this module's kinds are checked against the App Spec
 // (the root must be declared; the field must be one a plan can ask for) and normalized exactly as a plan writes them
 // (lower-cased names and child names; a rule's key and a condition's key byte for byte). Tokens of other kinds are
-// answered unclaimed, for their own grammar. `{keys: Set, overwrite: Set, problems: [{token, code}], unclaimed: [token]}`.
+// answered unclaimed, for their own grammar. `{keys: Set, overwrite: Set, rowApprovals: Set, problems: [{token, code}], unclaimed: [token]}`.
 // `overwrite:<kind>:<declared key>` (e.g. overwrite:customApi:contoso_Calc) is the one approval that replaces a protected
 // item's local workspace copy with the server's (lib/configuration-protected.js, the preflight's stop on a copy that
 // differs). It names a whole root item, matched as the other tokens are (a duplicate rule's key exactly), and is read only
 // under `configurationIdentity: "stable-v1"`: the ordinary path never stops on a configuration copy, so the token would
 // approve nothing. It lands in `overwrite` as `<kind>:<port key>` (the flag minus its verb, reconcile-common.js approvalKey).
 const OVERWRITE_TOKEN = /^overwrite:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)$/;
+// `adopt:<kind>:<declared key>` and `adopt:<child kind>:<root key>/<slot>` approve binding ONE row that an earlier,
+// unfinished protected create may have made and whose answer was lost (lib/managed-create-context.js judgeRows). The
+// preflight prints them in the context's spelling (defaultApprovalToken): a root as adopt:<kind>:<port key>, a child as
+// adopt:<child kind>:<encodeURIComponent(port key)>/<encodeURIComponent(slot)>, e.g.
+//   adopt:duplicateRule:email
+//   adopt:environmentVariableValue:contoso_apibase/value
+//   adopt:customApiRequestParameter:contoso_calc/request%3Aa
+//   adopt:duplicateRuleCondition:email/e
+// Read only under the opt-in, checked against the App Spec (the root and the child must be declared) and normalized back
+// to that spelling, so a key typed in another case still names the one row; a root's approval never covers its children.
+const ADOPT_ROOT_TOKEN = /^adopt:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)$/;
+const ADOPT_CHILD_TOKEN = /^adopt:(environmentVariableValue|customApiRequestParameter|customApiResponseProperty|duplicateRuleCondition):([\s\S]+)$/;
+const ADOPT_CHILD_PARENT = Object.freeze({
+  environmentVariableValue: 'environmentVariable', customApiRequestParameter: 'customApi', customApiResponseProperty: 'customApi', duplicateRuleCondition: 'duplicateRule',
+});
 function configurationAuthorizationKeys(tokens, spec) {
   const keys = new Set();
   const overwrite = new Set();
+  const rowApprovals = new Set();
   const problems = [];
   const unclaimed = [];
   const declaredRoots = (kind) => {
     const [list, field] = TOKEN_ROOTS[kind];
     return Array.isArray(spec && spec[list]) ? spec[list].filter(isObject).map((e) => e[field]).filter(nonEmptyString) : [];
   };
+  const declaredEntry = (kind, root) => {
+    const [list, field] = TOKEN_ROOTS[kind];
+    return (Array.isArray(spec && spec[list]) ? spec[list] : []).find((e) => isObject(e) && e[field] === root) || null;
+  };
+  const rootOf = (kind, name) => declaredRoots(kind).find((n) => (kind === 'duplicateRule' ? n === name : lower(n) === lower(name)));
+  const decode = (text) => {
+    try { return decodeURIComponent(text); } catch { return null; }
+  };
+  // The child's slot as the protected plan keys it (configuration-create-bindings.js planOf), or null when the App Spec
+  // declares no such child: an environment variable's one value, a Custom API parameter or property by its lower-cased
+  // unique name, a duplicate rule's condition by its key exactly.
+  const slotOf = (childKind, entry, slot) => {
+    if (childKind === 'environmentVariableValue') return slot === 'value' ? 'value' : null;
+    if (childKind === 'duplicateRuleCondition') return (Array.isArray(entry.conditions) ? entry.conditions : []).some((c) => isObject(c) && c.key === slot) ? slot : null;
+    const [prefix, list] = childKind === 'customApiRequestParameter' ? ['request:', entry.requestParameters] : ['response:', entry.responseProperties];
+    const name = lower(slot).startsWith(prefix) ? lower(slot).slice(prefix.length) : null;
+    return name && (Array.isArray(list) ? list : []).some((c) => isObject(c) && lower(c.uniqueName) === name) ? `${prefix}${name}` : null;
+  };
+  const protectedSpec = isObject(spec) && spec.configurationIdentity === 'stable-v1';
   for (const token of tokens || []) {
     const text = typeof token === 'string' ? token : '';
     const replace = OVERWRITE_TOKEN.exec(text);
     if (replace) {
       const [, kind, name] = replace;
-      const root = declaredRoots(kind).find((n) => (kind === 'duplicateRule' ? n === name : lower(n) === lower(name)));
+      const root = rootOf(kind, name);
       if (!root) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
-      else if (!isObject(spec) || spec.configurationIdentity !== 'stable-v1') problems.push({ token: text, code: 'CONFIGURATION_OVERWRITE_UNPROTECTED' });
+      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_OVERWRITE_UNPROTECTED' });
       else overwrite.add(`${kind}:${portKeyOf(kind, root)}`);
+      continue;
+    }
+    const adoptRoot = ADOPT_ROOT_TOKEN.exec(text);
+    if (adoptRoot) {
+      const [, kind, name] = adoptRoot;
+      const root = rootOf(kind, name);
+      if (!root) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
+      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
+      else rowApprovals.add(`adopt:${kind}:${portKeyOf(kind, root)}`);
+      continue;
+    }
+    const adoptChild = ADOPT_CHILD_TOKEN.exec(text);
+    if (adoptChild) {
+      const [, childKind, rest] = adoptChild;
+      const parent = ADOPT_CHILD_PARENT[childKind];
+      // Both parts are percent-encoded, so the one '/' is the separator; anything else is not a key the build printed.
+      const parts = rest.split('/');
+      const name = parts.length === 2 ? decode(parts[0]) : null;
+      const slot = parts.length === 2 ? decode(parts[1]) : null;
+      if (!nonEmptyString(name) || !nonEmptyString(slot)) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_INVALID' }); continue; }
+      const root = rootOf(parent, name);
+      const child = root ? slotOf(childKind, declaredEntry(parent, root), slot) : null;
+      if (!child) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
+      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
+      else rowApprovals.add(`adopt:${childKind}:${encodeURIComponent(portKeyOf(parent, root))}/${encodeURIComponent(child)}`);
       continue;
     }
     const kind = text.slice(0, text.indexOf(':'));
@@ -2649,7 +2709,7 @@ function configurationAuthorizationKeys(tokens, spec) {
     if (!TOKEN_FIELDS[kind].test(tail)) { problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_INVALID' }); continue; }
     keys.add(`${kind}:${portKeyOf(kind, root)}:${tail}`);
   }
-  return { keys, overwrite, problems, unclaimed };
+  return { keys, overwrite, rowApprovals, problems, unclaimed };
 }
 
 // The build runner's items for this feature: ONE data-model item and ONE solution-version item, whatever the
