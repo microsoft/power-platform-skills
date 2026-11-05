@@ -1314,9 +1314,11 @@ the field builds exactly as before.
   copy while that build runs. The key is read only with `configurationIdentity: "stable-v1"`.
   The build never replaces or discards the local copy on its own, also when a protected send fails or its
   answer is lost: the copy is kept with every edit in it, including one made while the build was sending,
-  and the next build stops on it until you give that key. Nothing else discards it. The unfinished send
+  and a later build that finds it stops on it until you give that key. Nothing else discards it. The unfinished send
   itself is still decided from what the build recorded before sending (below); giving the key never sends
-  it again.
+  it again. The build command keeps these items' copies in a working folder of its own and removes it
+  when the command ends, so a copy kept after a failed send lasts until then: the stop applies within
+  that command, and the next command reads the server's rows afresh.
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
@@ -1341,6 +1343,13 @@ the field builds exactly as before.
   once, then binds the rule. If the rule's conditions still need your approval, the build asks for it
   first. Rows that no answer proved this build's own are bound only after you check
   them and approve each one exactly: the stop (`create-ownership-required`) lists the tokens, such as
-  `adopt:duplicateRule:<key>` and one per child. A declaration changed since the create was prepared
+  `adopt:duplicateRule:<key>` and one per child (`adopt:<child kind>:<key>/<child>`, both parts
+  percent-encoded, for example `adopt:customApiRequestParameter:contoso_calc/request%3Aa`). Pass each as
+  printed with its own `--authorize`; a root's token never covers its children, and the tokens are read
+  only with the field and only for declared items. A declaration changed since the create was prepared
   stops with `managed-pending-intent-changed`: put the original declaration back, finish the create,
   then make the change. A row that differs from what was sent stops with `create-identity-conflict`.
+- **Retries keep the ids.** When a later step of the same build fails with a transient error and the
+  build runs again, the second attempt finds each protected row at the id the first one bound and sends
+  nothing for it. A protected create whose answer was lost stops the build (`create-outcome-unknown`)
+  and is never retried; the next build decides it as above.

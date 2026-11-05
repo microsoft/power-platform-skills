@@ -3318,8 +3318,22 @@ is the one hookup: `createProtectedConfiguration({ store, gate, ctx, apiBase })`
 whole-plan, read-only check `configuration-build.js` runs before the build's first service change, the
 solution version included) and `port` (the exact-id port `configuration-artifacts.js` uses through
 `exactPortOf` instead of the managed-artifacts manifest and the adoption policy). Without a hookup the
-opt-in stops before any request (`create-identity-unverified`); the build supplies it with the managed
-create gate and context. Edits: a duplicate rule is created with its conditions, completes its initial
+opt-in stops before any request (`create-identity-unverified`). The build command supplies it: `runBuildCommand`
+(`build-model-app.js`) makes the deferred managed create gate (`managed-create-transport.js`) only for an apply where
+protected configuration is in play (`sdk-build.js` `protectedConfigurationInPlay`: the opt-in is set, or the
+workspace's binding store holds configuration row state — a local file read that sends nothing; a store it cannot
+read counts as in play, so the preflight stops on it), and installs it on the one HTTP client (`makeSdk`,
+`composeWriteGates` with the workflow effect gate). `runSdkBuildPhases` binds it to the store and builds the hookup
+over it (`protectedConfigurationFor`, `apiBase` `<env>/api/data/v9.0`) before any service change, whatever
+`--stage`/`--phase`/`--changed-only` selects. Otherwise no gate is made and no protected module is loaded, so a
+build without protected configuration sends, prints and loads exactly what it did before. The whole-build
+retry runs the same command again over the same store, so it finds the rows at the ids the first attempt
+bound (a lost or uncertain create stops as `create-outcome-unknown`, never retried). The `adopt:` approvals a
+stop prints are read by `configurationAuthorizationKeys` (`adopt:<kind>:<port key>`,
+`adopt:<child kind>:<encoded port key>/<encoded slot>`; only under the opt-in, the root and child declared) into
+`opts.configurationApprovals`; a root's approval never covers its children. The build's configuration items
+work in a throwaway SDK workspace per command run (`makeSdk`), so a kept local copy lasts until that run ends.
+Edits: a duplicate rule is created with its conditions, completes its initial
 publication/state, and is then only verified (any later field, condition or state change, the
 `CompoundUpdateDuplicateDetectionRule` shapes and an `If-Match: *` field PATCH included, is
 `configuration-edit-unsupported`); a Custom API takes one request alone (the root, one child create or
@@ -3375,7 +3389,9 @@ the opt-in (a gated edge in `tests/creates-port.test.js`). Verify
 workspace's `managedManifestView` as an exact port: `verifyKind` reads each protected item at its bound id
 (`locateExactly`) and reports the typed code (`configuration-row-not-found`, `create-identity-unverified`;
 `managed-settlement-pending` is unverified), never a name lookup. Tests: `tests/configuration-protected.test.js`,
-`tests/configuration-create-bindings.test.js`.
+`tests/configuration-create-bindings.test.js`, and through the build command with the real bundle (derived ids,
+a lost create and its approvals, the whole-build retry, field approvals, the stops that send nothing, and a
+default build that loads no protected module) in `tests/configuration-build-real-bundle.test.js`.
 **Stable create ids** (`createIdentity: "stable-v1"`, `minimumPluginVersion: "2.21.0"`; new apps only).
 The only place the engine reads the field is one gated `require` of `lib/creates-stable-build.js` in
 `lib/sdk-build.js` (pinned by `creates-port.test.js`: a spec without it loads none of the stable modules
