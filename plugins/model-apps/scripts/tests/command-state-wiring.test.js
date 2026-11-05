@@ -129,3 +129,37 @@ test('the wrapper refuses an invalid commandStates too, and the engine refuses i
     assert.ok(outcome.thrown ? outcome.thrown.code === code : outcome.ok === false && said.includes(code), `${what} (structural): ${said}`);
   }
 });
+
+test('the build\'s inline verify reads command rows with the client makeSdk made, as standalone verify does', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { inlineVerifyReader } = require('../build-model-app.js');
+  const { createCommandStateOrg, commandRow, ORIGIN } = require('./helpers/command-state-org.js');
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+  const { commandStateSendOnce } = require('../lib/command-state-transport.js');
+  const T = 'new_ticket';
+  const MD = '44444444-4444-4444-8444-444444444444';
+  const org = createCommandStateOrg({ tables: { [T]: { metadataId: MD } }, rows: [commandRow(ROW, T, MD, { hidden: true })] });
+  const client = createAzHttpClient(ORIGIN, { getToken: () => 'offline-token', request: org.request, sleep: async () => {}, sendOnce: commandStateSendOnce });
+  const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('cs-inline-')), instanceUrl: ORIGIN, httpClient: client });
+  await provisionSdk.initWorkspace();
+  const declared = {
+    ...spec([{ entity: T, location: 'MainTab', scope: 'table', rowId: ROW, hidden: true }]),
+    app: { name: 'Support', uniqueName: 'contoso_Support' },
+    entities: [{ schemaName: T, primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+  };
+  // The shape makeSdk returns: the reader is given all of it, so nothing it carries can be left out at the call site.
+  const reader = inlineVerifyReader({ sdk: provisionSdk, provisionSdk, isolatedReader: null, commandStateClient: client }, declared, { workspaceDir: makeTempDir('cs-inline-') });
+  assert.strictEqual(typeof reader.commandStates, 'function', 'the inline reader can read command rows');
+  const only = { ...declared, entities: [], app: {}, appShell: { areas: [] } };
+  const r = await verifySpec(only, { sitemapXml: async () => '<SiteMap/>', commandStates: () => reader.commandStates(declared) });
+  const checks = r.checks.filter((c) => c.kind === 'command-state');
+  assert.strictEqual(checks.length, 1);
+  assert.strictEqual(checks[0].present, true, JSON.stringify(checks[0]));
+  // The build's verify hands the reader the whole makeSdk result, not a list of its fields, and builds no reader any other way.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  assert.match(source, /const made = await makeSdk\(/);
+  assert.match(source, /verifySpec\(s, inlineVerifyReader\(made, s, /);
+  assert.strictEqual(source.split('readerFor(').length - 1, 1, 'readerFor is called only inside inlineVerifyReader');
+});

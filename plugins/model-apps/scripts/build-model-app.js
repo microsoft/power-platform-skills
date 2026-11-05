@@ -255,6 +255,16 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   return { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient, commandStateClient };
 }
 
+// The build's own `--verify` reader, from everything makeSdk returned (`made`): the same readers standalone verify gets (verify-model-app.js),
+// so a check that needs one of them is never silently weaker inline. It takes the whole makeSdk result, not a hand-picked list, because a
+// reader this call forgets fails every entry it checks: commandStates' rows are read with `commandStateClient`, and without it every declared
+// entry failed inline verify after the build had applied it.
+function inlineVerifyReader(made, spec, { genpage, workspaceDir }) {
+  return readerFor(made.provisionSdk, appUniqueName(spec), {
+    genpage, workspaceDir, isolatedReader: made.isolatedReader,
+    ...(made.commandStateClient ? { commandStateClient: made.commandStateClient } : {}),
+  });
+}
 // Turn engine progress events into a phase-grouped, status-marked build log:
 //   ▶ <phase>
 //     [n/total] ✓ <label>        (created)
@@ -2131,7 +2141,8 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // is loaded, so such a build sends, prints and loads exactly what it did before. The engine binds it to the binding store.
   const managedCreateGate = opts.apply && protectedConfigurationInPlay(spec, { apply: true, env, workspaceDir, appDir: opts.appDir })
     ? require('./lib/managed-create-transport.js').createDeferredManagedCreateGate() : null;
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient, commandStateClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver, ...(workflowEffectGate ? { workflowEffectGate } : {}), ...(managedCreateGate ? { managedCreateGate } : {}) });
+  const made = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver, ...(workflowEffectGate ? { workflowEffectGate } : {}), ...(managedCreateGate ? { managedCreateGate } : {}) });
+  const { sdk, provisionSdk, cleanup, folderNote, previewHttpClient, commandStateClient } = made;
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -2202,7 +2213,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
         // would be left holding a copy of every page read — removed as soon as this verify ends.
         const genpage = makeGenpageSdk(env, { throttle });
         try {
-          return await verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir, isolatedReader }), verifyOpts);
+          return await verifySpec(s, inlineVerifyReader(made, s, { genpage, workspaceDir }), verifyOpts);
         } finally {
           // Awaited: a read the pass gave up on can still be running, and the workspace is removed only once the storage calls it had under way have settled. A folder it could not
           // remove holds page source, so it is a warning: the verify result is not changed by it.
@@ -2279,4 +2290,4 @@ if (require.main === module) {
     emitResult(false, err);
   });
 }
-module.exports = { buildModelApp, authorizationKeys, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion };
+module.exports = { buildModelApp, inlineVerifyReader, authorizationKeys, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion };

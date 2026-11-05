@@ -2766,34 +2766,27 @@ test('build --verify wires readers that verify-spec will NOT skip role-privilege
   // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
   // business-rule skip must not read as "not deployed"). Pinning `(s)` exactly made this test fail
   // for a change that did not touch what it is actually guarding. The lambda now makes (and disposes)
-  // the page backend around that call, so the line is found by what it calls.
-  const call = src.split(/\r?\n/).find((l) => /verifySpec\(\s*s\s*,\s*readerFor\(provisionSdk,/.test(l));
+  // the page backend around that call, so the line is found by what it calls. The reader itself is made by
+  // inlineVerifyReader from the whole makeSdk result (`made`), so a reader makeSdk hands back cannot be left
+  // out at this line.
+  const call = src.split(/\r?\n/).find((l) => /verifySpec\(\s*s\s*,\s*inlineVerifyReader\(made,/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
-  assert.match(call, /readerFor\(provisionSdk,/, 'verify must read through the provisioning SDK');
   // The second argument must actually be forwarded, or the environment-skip list is silently
   // dropped and verify keeps failing on rules the build already reported it could not create.
   assert.match(call, /verifySpec\(\s*s\s*,[\s\S]*\)\s*,\s*verifyOpts\s*\)/,
     'the caller-supplied verify options must reach verifySpec');
+  const helper = src.slice(src.indexOf('function inlineVerifyReader'), src.indexOf('\n}\n', src.indexOf('function inlineVerifyReader')));
+  assert.match(helper, /readerFor\(made\.provisionSdk,/, 'verify must read through the provisioning SDK');
 
-  // The substantive half: the option bag on that line, fed to the real `readerFor`, must yield BOTH
-  // privilege readers. A source match alone would keep passing if `entityPrivileges` were made
-  // conditional again on something the build does not supply.
-  const optsSrc = /readerFor\(provisionSdk,[^,]+,\s*(\{[^}]*\})\s*\)/.exec(call);
-  assert.ok(optsSrc, `could not extract the readerFor options from: ${call}`);
-  // Shorthand-aware: `{ genpage, workspaceDir, isolatedReader }` carries only SHORTHAND keys, and a
-  // colon-only pattern would see none of them, which would make the assertion below weaker than it
-  // looks — it would have kept passing for an option bag that had lost `workspaceDir` entirely.
-  // Match a name followed by `:`, `,` or `}`.
-  const optKeys = [...optsSrc[1].matchAll(/([A-Za-z_$][\w$]*)\s*(?::|[,}])/g)].map((m) => m[1]);
-  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpage'),
-    `expected both readerFor options to be extracted, got ${JSON.stringify(optKeys)}`);
-  const { readerFor } = require('../verify-model-app.js');
-  // A bare object is enough: every base reader is a lazy closure, so this asserts PRESENCE, which is
-  // exactly what verify-spec's method-presence gate tests.
-  const reader = readerFor({}, 'contoso_app', Object.fromEntries(optKeys.map((k) => [k, k === 'workspaceDir' ? __dirname : {}])));
+  // The substantive half: the real helper, fed what makeSdk returns, must yield BOTH privilege readers. A
+  // source match alone would keep passing if `entityPrivileges` were made conditional again on something
+  // the build does not supply. A bare object is enough: every base reader is a lazy closure, so this asserts
+  // PRESENCE, which is exactly what verify-spec's method-presence gate tests.
+  const { inlineVerifyReader } = require('../build-model-app.js');
+  const reader = inlineVerifyReader({ provisionSdk: {}, isolatedReader: {} }, { app: { uniqueName: 'contoso_app' } }, { genpage: {}, workspaceDir: __dirname });
   for (const name of ['rolePrivileges', 'entityPrivileges']) {
     assert.strictEqual(typeof reader[name], 'function',
-      `verify-spec silently skips role-privileges without '${name}'; the build's options are ${JSON.stringify(optKeys)}`);
+      `verify-spec silently skips role-privileges without '${name}'`);
   }
 });
 
@@ -2807,11 +2800,16 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
   const returned = /return \{ ([^}]*) \};/.exec(src.slice(src.indexOf('function makeSdk')));
   assert.ok(returned, 'expected makeSdk to return an object literal');
   // `await` is optional in the pattern: `makeSdk` became async when the SDK's workspace calls did,
-  // and this guard is about the KEY SETS agreeing, not about how the promise is unwrapped.
-  const destructured = /const \{ ([^}]*) \} = (?:await\s+)?makeSdk\(/.exec(src);
-  assert.ok(destructured, 'expected main to destructure makeSdk()');
+  // and this guard is about the KEY SETS agreeing, not about how the promise is unwrapped. main keeps
+  // the whole result as `made` (the inline verify reader takes all of it) and destructures the rest, so
+  // the keys it uses are the destructured ones plus those inlineVerifyReader reads off `made`.
+  assert.match(src, /const made = await makeSdk\(/, 'expected main to keep makeSdk()\u2019s result');
+  const destructured = /const \{ ([^}]*) \} = made;/.exec(src);
+  assert.ok(destructured, 'expected main to destructure makeSdk()\u2019s result');
+  const helper = src.slice(src.indexOf('function inlineVerifyReader'), src.indexOf('\n}\n', src.indexOf('function inlineVerifyReader')));
   const names = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).sort();
-  assert.deepStrictEqual(names(destructured[1]), names(returned[1]),
+  const used = [...new Set([...names(destructured[1]), ...[...helper.matchAll(/made\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1])])].sort();
+  assert.deepStrictEqual(used, names(returned[1]),
     'main destructures keys makeSdk does not return (or ignores ones it does)');
 });
 
@@ -2825,7 +2823,9 @@ test('the build verifies dashboards through makeSdk\u2019s isolated reader, shar
   assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(sendObserver \? sendObserver\.wrap\(\) : undefined\) \} : \{\}\), \.\.\.\(writeGate \? \{ workflowEffectGate: writeGate \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate, with the managed attempts\u2019 send observer inside the gate, and screens a declared workflow write (and a protected configuration create) with the build\u2019s write gate only when it has one');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
-  assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
+  assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /inlineVerifyReader\(made, /, 'verify takes the readers makeSdk returned');
+  const helper = src.slice(src.indexOf('function inlineVerifyReader'), src.indexOf('\n}\n', src.indexOf('function inlineVerifyReader')));
+  assert.match(helper, /isolatedReader: made\.isolatedReader/, 'including the isolated reader');
   assert.strictEqual((src.match(/isolatedReaderFor\(/g) || []).length, 1, 'no second reader, and so no second client, is made');
 });
 
