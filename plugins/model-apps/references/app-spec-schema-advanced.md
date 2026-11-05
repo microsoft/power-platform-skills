@@ -138,10 +138,12 @@ It only reads; a write flag is a usage error.
   name the other in `sameCaption`; an unlabelled button has `caption: null`.
 - **Excluded buttons are listed, not left out**, each with every reason it is not a candidate:
   `shape-unreadable`, `id-mismatch`, `context-not-table`, `context-mismatch`, `table-not-in-app`,
-  `location-unsupported`, `location-mismatch`, `other-app`, `scope-mismatch`, `not-standard-button`
+  `location-unsupported`, `location-mismatch`, `app-scoped` (scoped to an app — this one or another — not to its table: only
+  table-scoped buttons are candidates in this version), `not-standard-button`
   (a flyout or split container, or a group), `nested` (a menu item), `not-default-origin` (migrated
   or system), `inactive`, `managed`, `not-customizable`, `flags-unreadable`, `visibility-formula`
-  (Power Fx visibility), `formula-action` (a Power Fx on-select), `version-unavailable` (the
+  (Power Fx visibility or classic rules: `visibilitytype` other than empty or 0, or a visibility-formula field set; the
+  empty `visibilitytype` the platform stores on a button `commands[]` wrote is static), `formula-action` (a Power Fx on-select), `version-unavailable` (the
   platform keeps no row versions for commands, or the row has none).
 - A bar the App Spec has no name for (a stored location other than 0, 1, 2) is `bar: "unsupported"`.
 - **`candidate` describes the row's shape only.** It does not prove the app renders the button, or

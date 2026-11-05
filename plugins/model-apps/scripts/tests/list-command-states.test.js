@@ -85,12 +85,12 @@ test('the listing prints every button of the named table, candidates and exclude
   assert.strictEqual(r.emitted[0].ok, true);
   const out = r.payload;
   assert.deepStrictEqual({ app: out.app, entity: out.entity, optimisticConcurrency: out.optimisticConcurrency, tables: out.tables, count: out.count, candidates: out.candidates },
-    { app: { uniqueName: 'contoso_Support', appId: APP_ID }, entity: 'contoso_ticket', optimisticConcurrency: true, tables: [{ entity: 'contoso_ticket', metadataId: TICKET, inApp: true }], count: 5, candidates: 3 });
+    { app: { uniqueName: 'contoso_Support', appId: APP_ID }, entity: 'contoso_ticket', optimisticConcurrency: true, tables: [{ entity: 'contoso_ticket', metadataId: TICKET, inApp: true }], count: 5, candidates: 2 });
   assert.deepStrictEqual(out.commands.map((c) => [c.bar, c.location, c.caption, c.rowId, c.scope, c.hidden, c.disabled, c.candidate, c.reasons]), [
     ['MainTab', 0, 'Escalate', id(1), 'table', false, false, true, []],
-    ['MainTab', 0, 'Escalate', id(2), 'app', true, false, true, []],
+    ['MainTab', 0, 'Escalate', id(2), 'app', true, false, false, ['app-scoped']],
     ['HomeTab', 1, 'Approve', id(3), 'table', false, true, true, []],
-    ['ContextualTab', 2, 'Bulk', id(4), 'other-app', false, false, false, ['other-app']],
+    ['ContextualTab', 2, 'Bulk', id(4), 'other-app', false, false, false, ['app-scoped']],
     ['unsupported', 4, 'Header', id(5), 'table', false, false, false, ['location-unsupported']],
   ]);
   assert.deepStrictEqual(out.commands[0].sameCaption, [id(2)]);

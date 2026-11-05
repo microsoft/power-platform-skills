@@ -46,7 +46,8 @@ function commandRow(id, table, metadataId, extra = {}) {
     _parentappactionid_value: null,
     hidden: false,
     isdisabled: false,
-    visibilitytype: 0,
+    // What the platform stores on a button a plain commands[] build wrote: a present null, not 0.
+    visibilitytype: null,
     visibilityformulacomponentlibrary: null,
     _visibilityformulacomponentlibraryid_value: null,
     visibilityformulacomponentname: null,

@@ -40,8 +40,7 @@ const ROW_SELECT = Object.freeze([
 //   table-not-in-app    the table is not a component of the app
 //   location-unsupported  the bar is none of MainTab, HomeTab, ContextualTab
 //   location-mismatch   the bar is another one than the declared one
-//   other-app           the row is scoped to another app
-//   scope-mismatch      the row is scoped otherwise than declared (table or app)
+//   app-scoped          the row is scoped to an app (this one or another), not to its table: only table-scoped rows are edited in this version
 //   not-standard-button  a drop-down, split button or group, not a plain button (`type` 0)
 //   nested              the button sits inside another (it has a parent)
 //   not-default-origin  migrated from the classic ribbon (`origin` is not 0, Default)
@@ -49,12 +48,12 @@ const ROW_SELECT = Object.freeze([
 //   managed             the row came with a managed solution
 //   not-customizable    the row is marked not customizable
 //   flags-unreadable    `hidden` or `isdisabled` is not a true or a false
-//   visibility-formula  the button's visibility is a Power Fx formula or classic rules
+//   visibility-formula  the button's visibility is a Power Fx formula or classic rules (`visibilitytype` other than null or 0, or a formula field set)
 //   formula-action      its on-click is a Power Fx formula
 //   version-unavailable  no usable row version: optimistic concurrency is off for the table of commands, or the row came without its version
 const REASONS = Object.freeze([
   'shape-unreadable', 'id-mismatch', 'context-not-table', 'context-mismatch', 'table-not-in-app', 'location-unsupported', 'location-mismatch',
-  'other-app', 'scope-mismatch', 'not-standard-button', 'nested', 'not-default-origin', 'inactive', 'managed', 'not-customizable',
+  'app-scoped', 'not-standard-button', 'nested', 'not-default-origin', 'inactive', 'managed', 'not-customizable',
   'flags-unreadable', 'visibility-formula', 'formula-action', 'version-unavailable',
 ]);
 
@@ -67,8 +66,7 @@ const CODE_BY_REASON = Object.freeze({
   'context-mismatch': 'command-state-target-mismatch',
   'location-mismatch': 'command-state-target-mismatch',
   'location-unsupported': 'command-state-target-mismatch',
-  'other-app': 'command-state-target-mismatch',
-  'scope-mismatch': 'command-state-target-mismatch',
+  'app-scoped': 'command-state-app-scope-unverified',
   'table-not-in-app': 'command-state-context-unverified',
   'not-standard-button': 'command-state-target-unsupported',
   nested: 'command-state-target-unsupported',
@@ -80,8 +78,9 @@ const CODE_BY_REASON = Object.freeze({
   'formula-action': 'command-state-target-unsupported',
   'version-unavailable': 'command-state-version-unavailable',
 });
-// Unreadable outranks mismatch, mismatch outranks unsupported: a row that cannot be read cannot be said to be the wrong one.
-const CODE_ORDER = ['command-state-row-unreadable', 'command-state-context-unverified', 'command-state-target-mismatch', 'command-state-target-unsupported', 'command-state-version-unavailable'];
+// Unreadable outranks mismatch, mismatch outranks unsupported: a row that cannot be read cannot be said to be the wrong one. An app-scoped row is
+// refused for its scope before anything else is said about it: app scope is not supported in this version, whichever app the row belongs to.
+const CODE_ORDER = ['command-state-row-unreadable', 'command-state-context-unverified', 'command-state-app-scope-unverified', 'command-state-target-mismatch', 'command-state-target-unsupported', 'command-state-version-unavailable'];
 
 function codeForReasons(reasons) {
   const codes = new Set((reasons || []).map((reason) => CODE_BY_REASON[reason]).filter(Boolean));

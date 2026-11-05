@@ -12,7 +12,7 @@
 //     "buttonlabeltext": "Escalate", "context": 1, "contextvalue": "contoso_project", "_contextentity_value": "8f2c...", "_appmoduleid_value": null,
 //     "location": 0, "type": 0, "origin": 0, "statecode": 0, "statuscode": 1, "ismanaged": false,
 //     "iscustomizable": { "Value": true, "CanBeChanged": true, "ManagedPropertyLogicalName": "iscustomizableanddeletable" },
-//     "_parentappactionid_value": null, "hidden": false, "isdisabled": false, "visibilitytype": 0, "visibilityformulacomponentlibrary": null,
+//     "_parentappactionid_value": null, "hidden": false, "isdisabled": false, "visibilitytype": null, "visibilityformulacomponentlibrary": null,
 //     "_visibilityformulacomponentlibraryid_value": null, "visibilityformulacomponentname": null, "visibilityformulafunctionname": null,
 //     "onclickeventtype": 2 }
 // The choice values are the public ones: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appaction
@@ -153,7 +153,6 @@ async function readCommandStateRow(reader, rowId) {
  * @param {string} [expect.appId]       the app
  * @param {boolean} [expect.inApp]      false: the table is not one of the app's
  * @param {number} [expect.location]    the declared bar's number
- * @param {'app'|'table'} [expect.scope] the declared scope
  * @param {boolean} [expect.optimisticConcurrency]  false: the table of commands keeps no row versions
  * @param {boolean} [expect.requireVersion]  the answer must carry a usable row version
  */
@@ -205,6 +204,8 @@ function decodeCommandStateRow(body, expect = {}) {
   if (location !== null && bar === UNSUPPORTED_BAR) reasons.add('location-unsupported');
   if (expect.location !== undefined && location !== null && location !== expect.location) reasons.add('location-mismatch');
 
+  // Only a table-scoped row (`_appmoduleid_value` present and null) is a candidate. A row scoped to an app — this app's own included — is not:
+  // how an app-scoped row and its table-scoped siblings render together has not been measured, so it is refused, never widened to a broader edit.
   const owner = ref('_appmoduleid_value');
   let scope = 'unknown';
   if (has(body, '_appmoduleid_value')) {
@@ -212,8 +213,7 @@ function decodeCommandStateRow(body, expect = {}) {
     else if (owner && expect.appId !== undefined) scope = owner === expect.appId ? 'app' : 'other-app';
     else if (owner) scope = 'app';
   }
-  if (scope === 'other-app') reasons.add('other-app');
-  if (expect.scope !== undefined && (scope === 'app' || scope === 'table') && scope !== expect.scope) reasons.add('scope-mismatch');
+  if (scope === 'app' || scope === 'other-app') reasons.add('app-scoped');
 
   const type = int('type');
   if (type !== null && type !== 0) reasons.add('not-standard-button');
@@ -248,9 +248,16 @@ function decodeCommandStateRow(body, expect = {}) {
   const hidden = flag('hidden');
   const disabled = flag('isdisabled');
 
-  const visibilityType = int('visibilitytype');
-  if (visibilityType !== null && visibilityType !== 0) reasons.add('visibility-formula');
-  const formulaLibraryId = ref('_visibilityformulacomponentlibraryid_value');
+  // Static visibility is `visibilitytype` PRESENT and null or 0, with every formula column present and null or empty. Null is what the
+  // platform stores on the buttons a plain `commands[]` build writes (measured: every such row), so it is accepted here — but only as a
+  // present null: a missing column stays unreadable, and 1 (Power Fx), 2 (classic rules), -1 or a number spelled as text never pass.
+  // The feature never writes `visibilitytype`, not even to turn this null into 0.
+  let visibilityType = null;
+  if (has(body, 'visibilitytype') && body.visibilitytype !== null) {
+    visibilityType = int('visibilitytype');
+    if (visibilityType !== null && visibilityType !== 0) reasons.add('visibility-formula');
+  }
+  const formulaLibraryId = body._visibilityformulacomponentlibraryid_value === '' ? null : ref('_visibilityformulacomponentlibraryid_value');
   if (formulaLibraryId) reasons.add('visibility-formula');
   for (const key of ['visibilityformulacomponentlibrary', 'visibilityformulacomponentname', 'visibilityformulafunctionname']) {
     const value = text(key);

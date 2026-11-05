@@ -41,13 +41,51 @@ test('an ordinary top-level, active, unmanaged, table-scoped button is a candida
   assert.strictEqual(decoded.row.version, 'W/"1001"');
 });
 
-test('an app-scoped button is a candidate for its own app and another app\u2019s button is not', () => {
-  assert.deepStrictEqual(decodeCommandStateRow(ticketRow(1, { _appmoduleid_value: APP_ID }), { ...expectTicket, scope: 'app' }).reasons, []);
-  assert.deepStrictEqual(decodeCommandStateRow(ticketRow(1, { _appmoduleid_value: `{${APP_ID.toUpperCase()}}` }), expectTicket).row.scope, 'app');
-  const other = decodeCommandStateRow(ticketRow(1, { _appmoduleid_value: OTHER_APP_ID }), expectTicket);
-  assert.deepStrictEqual([other.row.scope, other.reasons], ['other-app', ['other-app']]);
-  assert.deepStrictEqual(decodeCommandStateRow(ticketRow(1), { ...expectTicket, scope: 'app' }).reasons, ['scope-mismatch']);
-  assert.deepStrictEqual(decodeCommandStateRow(ticketRow(1, { _appmoduleid_value: APP_ID }), { ...expectTicket, scope: 'table' }).reasons, ['scope-mismatch']);
+test('only a table-scoped button is a candidate: an app-scoped one, this app\u2019s own included, is refused for its scope', () => {
+  for (const [owner, scope] of [[APP_ID, 'app'], [`{${APP_ID.toUpperCase()}}`, 'app'], [OTHER_APP_ID, 'other-app']]) {
+    const decoded = decodeCommandStateRow(ticketRow(1, { _appmoduleid_value: owner }), expectTicket);
+    assert.deepStrictEqual([decoded.row.scope, decoded.reasons, decoded.eligible], [scope, ['app-scoped'], false], owner);
+    assert.strictEqual(codeForReasons(decoded.reasons), 'command-state-app-scope-unverified', owner);
+  }
+  assert.strictEqual(codeForReasons(['app-scoped', 'location-mismatch', 'managed']), 'command-state-app-scope-unverified', 'scope is refused before a mismatch');
+  assert.strictEqual(codeForReasons(['app-scoped', 'shape-unreadable']), 'command-state-row-unreadable', 'an unreadable row is unreadable first');
+  assert.deepStrictEqual(decodeCommandStateRow(ticketRow(1), expectTicket).row.scope, 'table');
+  assert.ok(decodeCommandStateRow(ticketRow(1, { _appmoduleid_value: 'app' }), expectTicket).reasons.includes('shape-unreadable'), 'a malformed lookup is unreadable');
+});
+
+test('static visibility is a PRESENT null or 0 with every formula column present and empty; anything else is not static', () => {
+  // The shape the platform answered for a button a plain commands[] build wrote: visibilitytype null, every formula column null.
+  const measured = {
+    '@odata.etag': 'W/"5550101"', appactionid: id(1), name: 'n', uniquename: 'u', buttonlabeltext: 'Escalate', context: 1, contextvalue: 'contoso_ticket',
+    _contextentity_value: TICKET, _appmoduleid_value: null, location: 0, type: 0, origin: 0, statecode: 0, statuscode: 1, ismanaged: false,
+    iscustomizable: { Value: true, CanBeChanged: true, ManagedPropertyLogicalName: 'iscustomizableanddeletable' }, _parentappactionid_value: null,
+    hidden: false, isdisabled: false, visibilitytype: null, visibilityformulacomponentlibrary: null, _visibilityformulacomponentlibraryid_value: null,
+    visibilityformulacomponentname: null, visibilityformulafunctionname: null, onclickeventtype: 2,
+  };
+  const decoded = decodeCommandStateRow(measured, { ...expectTicket, rowId: id(1), location: 0, requireVersion: true });
+  assert.deepStrictEqual([decoded.eligible, decoded.reasons, decoded.details, decoded.row.visibilityType], [true, [], [], null]);
+  const empty = { visibilityformulacomponentlibrary: '', _visibilityformulacomponentlibraryid_value: '', visibilityformulacomponentname: '', visibilityformulafunctionname: '' };
+  for (const visibilitytype of [null, 0]) {
+    assert.deepStrictEqual(decodeCommandStateRow({ ...measured, visibilitytype }, expectTicket).reasons, [], `${visibilitytype}`);
+    assert.deepStrictEqual(decodeCommandStateRow({ ...measured, visibilitytype, ...empty }, expectTicket).reasons, [], `${visibilitytype}, empty formula text`);
+    for (const [key, value] of [['visibilityformulacomponentlibrary', 'contoso_lib'], ['_visibilityformulacomponentlibraryid_value', id(8)],
+      ['visibilityformulacomponentname', 'Screen1'], ['visibilityformulafunctionname', 'IsVisible']]) {
+      assert.deepStrictEqual(decodeCommandStateRow({ ...measured, visibilitytype, [key]: value }, expectTicket).reasons, ['visibility-formula'], `${visibilitytype} with ${key}`);
+      const missing = { ...measured, visibilitytype };
+      delete missing[key];
+      assert.ok(decodeCommandStateRow(missing, expectTicket).reasons.includes('shape-unreadable'), `${visibilitytype} without ${key}`);
+    }
+  }
+  for (const visibilitytype of [1, 2, -1, 3]) {
+    assert.deepStrictEqual(decodeCommandStateRow({ ...measured, visibilitytype }, expectTicket).reasons, ['visibility-formula'], `${visibilitytype}`);
+  }
+  for (const visibilitytype of ['0', '', false, 0.5, {}]) {
+    assert.ok(decodeCommandStateRow({ ...measured, visibilitytype }, expectTicket).reasons.includes('shape-unreadable'), JSON.stringify(visibilitytype));
+  }
+  const missingType = { ...measured };
+  delete missingType.visibilitytype;
+  const decodedMissing = decodeCommandStateRow(missingType, expectTicket);
+  assert.ok(decodedMissing.reasons.includes('shape-unreadable') && decodedMissing.details.includes('visibilitytype is missing'), 'a missing visibilitytype is no null');
 });
 
 test('every excluded shape is named by its own reason, and the refusal it stands for', () => {
@@ -114,7 +152,8 @@ test('a missing column is not a null, a null is not a false, and a number spelle
     }
   }
   for (const key of ['context', 'location', 'type', 'origin', 'statecode', 'statuscode', 'visibilitytype', 'onclickeventtype']) {
-    for (const value of [null, '0', 0.5, true]) {
+    // A present null is the one shape visibilitytype may have that the others may not (static visibility, tested on its own).
+    for (const value of key === 'visibilitytype' ? ['0', 0.5, true] : [null, '0', 0.5, true]) {
       const decoded = decodeCommandStateRow(ticketRow(1, { [key]: value }), expectTicket);
       assert.ok(decoded.reasons.includes('shape-unreadable'), `${key}=${JSON.stringify(value)}`);
       assert.ok(decoded.details.includes(`${key} is not a whole number`), `${key}=${JSON.stringify(value)}`);
@@ -246,13 +285,13 @@ test('every page of every table is read; excluded rows are listed with their rea
   const context = await resolveCommandStateContext(reader, { appUniqueName: 'contoso_Support' });
   const listed = await listCommandStateRows(reader, context);
   assert.deepStrictEqual(listed.map((x) => [x.table, x.row.location, x.row.caption, x.row.rowId.slice(-2), x.reasons]), [
-    ['contoso_order', 2, 'Ship', '10', []],
+    ['contoso_order', 2, 'Ship', '10', ['app-scoped']],
     ['contoso_ticket', 0, 'Escalate', '01', []],
     ['contoso_ticket', 0, 'escalate ', '02', ['inactive']],
     ['contoso_ticket', 0, 'Group', '04', ['not-standard-button']],
     ['contoso_ticket', 0, 'Managed', '09', ['managed']],
     ['contoso_ticket', 0, 'Migrated', '08', ['not-default-origin']],
-    ['contoso_ticket', 0, 'Theirs', '07', ['other-app']],
+    ['contoso_ticket', 0, 'Theirs', '07', ['app-scoped']],
     ['contoso_ticket', 0, null, '03', []],
     ['contoso_ticket', 1, 'Approve', '05', []],
     ['contoso_ticket', 5, 'Header', '06', ['location-unsupported']],
