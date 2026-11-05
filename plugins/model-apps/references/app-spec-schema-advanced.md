@@ -201,11 +201,13 @@ picked by its row id. Nothing else about the button changes, and a row is never 
 - **Success needs the table's publication.** The build publishes each declared table with the tables
   it publishes before the app; until that publication is seen to succeed after the row's write, the
   build reports `command-state-publish-unconfirmed`, saying for each table what its rows are known to
-  hold ("saved, not published", or "write outcome unknown" / "not written" when that is all it knows) —
+  hold ("saved, not published"; or, when that is all it knows, "held after a write with no answer", "write
+  outcome unknown" or "not written") —
   a saved row holds the flags, but the button may still show its old state.
 - **The end of the build checks again.** After its app work the build resolves the app afresh and reads
   every declared row once more: a table no longer in the app, or a row that no longer holds its flags,
-  fails the build. Nothing is rolled back — the rows it wrote stay written.
+  fails the build. Nothing is rolled back — the rows it wrote stay written, and the message says what this
+  build did to each row (wrote it, found it already set, or sent a write that got no answer).
 - **Delayed publication is not fenced.** A table publish that was sent can still complete after a
   halt, or after you remove the entry. This release keeps no record across runs: the next publishing
   run requests the table again only because `commandStates` still names it.

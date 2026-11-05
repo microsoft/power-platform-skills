@@ -332,7 +332,7 @@ test('the final proof resolves the app afresh after the build\'s app work: a tab
   const { approvals } = await h.approve(spec);
   const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
   assert.strictEqual(error && error.code, 'command-state-context-unverified', error && error.message);
-  assert.match(error.message, /checked again at the end of the build, after its app work; the rows it wrote stay written and nothing is rolled back/);
+  assert.match(error.message, /checked again at the end of the build, after its app work; nothing is rolled back \(command state [^)]*: written by this build: the write was accepted and read back holding the declared flags\)/);
   assert.strictEqual(h.patches().length, 1, 'the row was written once and is never written again or undone');
   assert.deepStrictEqual(error.commandStates.rows.map((r) => [r.rowId, r.outcome]), [[ROW, 'acknowledged']], 'the row outcome is what was observed');
   assert.deepStrictEqual(error.commandStates.publication.map((p) => [p.entity, p.outcome]), [[T, 'confirmed']], 'and the publication that ran stands');
@@ -346,8 +346,8 @@ test('the final proof also fails a row that no longer holds the declared flags a
   const { approvals } = await h.approve(spec);
   const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
   assert.strictEqual(error && error.code, 'command-state-not-confirmed', error && error.message);
-  assert.match(error.message, /nothing is rolled back: .*it now holds hidden false/);
-  assert.match(error.message, /this build's write was accepted and read back holding the declared flags, but it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build/);
+  assert.match(error.message, /nothing is rolled back \(.*\): .*it now holds hidden false/);
+  assert.match(error.message, /it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build, after this build's step for it \(written by this build: the write was accepted and read back holding the declared flags\)/);
   assert.match(error.message, /this build did not overwrite that change/);
   assert.strictEqual(h.patches().length, 1);
   assert.strictEqual(error.commandStates.rows[0].outcome, 'acknowledged');
@@ -364,8 +364,30 @@ test('a row this build left unchanged that drifts before the final proof fails w
   assert.strictEqual(error.commandStates.rows[0].outcome, 'unchanged');
   assert.deepStrictEqual(error.commandStates.rows[0].changed, []);
   assert.strictEqual(error.commandStates.publication[0].outcome, 'confirmed');
-  assert.match(error.message, /this build did not write it \(it already held the declared flags\), but it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build/);
-  assert.doesNotMatch(error.message, /accepted/, 'no write of this build is claimed');
+  assert.match(error.message, /it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build, after this build's step for it \(not written by this build \(it already held the declared flags\)\)/);
+  assert.doesNotMatch(error.message, /accepted|saved/, 'no write of this build is claimed');
+});
+
+test('an unanswered write whose row a competing edit made match, then changed again, fails the final proof without claiming the write', async () => {
+  const rows = [commandRow(ROW, T, MD)];
+  // The PATCH is answered 503 and never stored; someone else sets the same flag (a new version) before the read that follows it.
+  const overrides = (req) => {
+    if (req.method !== 'PATCH') return undefined;
+    rows[0].hidden = true;
+    rows[0]['@odata.etag'] = 'W/"1500"';
+    return json(503, { error: { code: '0x80072321', message: 'unavailable' } });
+  };
+  const h = harness({ rows, overrides, onPublish: () => { rows[0].hidden = false; rows[0]['@odata.etag'] = 'W/"1600"'; } });
+  const spec = specFor();
+  const { approvals } = await h.approve(spec);
+  const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
+  assert.strictEqual(error && error.code, 'command-state-not-confirmed', error && error.message);
+  assert.strictEqual(h.patches().length, 1, 'sent once, never again');
+  assert.strictEqual(error.commandStates.rows[0].outcome, 'observed-matching-after-unknown-send', 'the outcome recorded at the write stays');
+  assert.strictEqual(error.commandStates.publication[0].outcome, 'confirmed');
+  assert.strictEqual(error.commandStatePublicationError, undefined);
+  assert.match(error.message, /this build's write got no answer, so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them/);
+  assert.doesNotMatch(error.message, /accepted|written by this build/, 'the unanswered write is not claimed as this build\'s');
 });
 // The build's own entry (build-model-app.js buildModelApp) with its durable journal, for what a halt leaves on disk and says on the console.
 async function buildWithJournal(h, spec, approvals) {

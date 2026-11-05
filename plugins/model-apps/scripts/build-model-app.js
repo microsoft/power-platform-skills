@@ -1336,10 +1336,12 @@ function printCommandStatePlan(plan, log) {
   }
 }
 
-// commandStates after an apply: each row's outcome and each declared table's publication, in fixed words.
+// commandStates after an apply: each row's outcome, worded by the one outcome mapping (lib/command-state-run.js ROW_MESSAGES), and each
+// declared table's publication, in fixed words.
 function printCommandStateResult(states, log) {
+  const { ROW_MESSAGES } = require('./lib/command-state-run.js');
   for (const row of states.rows || []) {
-    log(`  command state ${row.entity}/${row.location}/${row.rowId}: ${row.outcome}${row.changed && row.changed.length ? ` (${row.changed.join(', ')})` : ''}${row.code ? ` [${row.code}]` : ''}`);
+    log(`  ${ROW_MESSAGES.resultLine(row)}`);
   }
   for (const table of states.publication || []) {
     log(`  command-state table ${table.entity}: publication ${table.outcome}${table.reason ? ` (${table.reason})` : ''}`);
