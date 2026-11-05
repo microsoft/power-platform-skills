@@ -254,6 +254,11 @@ test('observe: exact reads, the private input compared in memory only, unmodelle
   assert.equal(await evState((b) => ({ ...b, value: 'someone-else' })), 'mismatch');
   const crObs = await B.observe(over(crWire.sdk.dataverse, 'connectionreferences', (b) => ({ ...b, promptingbehavior: 1 })), cr);
   assert.notEqual(crObs.rows[0].projectionSha256, cr.plan.rows[0].expectedSha256, 'a column this build never writes, filled, is a difference');
+  // The platform's own create default there is the row as made; empty is too.
+  for (const filled of [0, null]) {
+    const crDefault = await B.observe(over(crWire.sdk.dataverse, 'connectionreferences', (b) => ({ ...b, promptingbehavior: filled })), cr);
+    assert.equal(crDefault.rows[0].projectionSha256, cr.plan.rows[0].expectedSha256, `promptingbehavior ${filled} read back is the create`);
+  }
   const noMembers = { ...evWire.sdk.dataverse, get: async (p) => (p.startsWith('/solutioncomponents') ? { status: 500, body: {} } : evWire.sdk.dataverse.get(p)) };
   assert.deepEqual((await B.observe(noMembers, ev)).members, [{ id: ev.plan.rows[0].id, state: 'unknown' }]);
   const gone = await B.observe(orgReader(), planned('duplicateRule', 'email'));
@@ -311,6 +316,7 @@ test('the classifier refuses anything but the plan: ids, parents, columns, value
     ['a value under another definition', withBody(valuePost, (b) => { b['EnvironmentVariableDefinitionId@odata.bind'] = `/environmentvariabledefinitions(${OTHER})`; })],
     ['a value under no definition', withBody(valuePost, (b) => { delete b['EnvironmentVariableDefinitionId@odata.bind']; })],
     ['a column this build never writes', withBody(crPost, (b) => { b.promptingbehavior = 1; })],
+    ['a column this build never writes, sent as the platform default', withBody(crPost, (b) => { b.promptingbehavior = 0; })],
     ['a definition kept by Dataverse', withBody(defPost, (b) => { b.secretstore = 1; })],
     ['a rule without its condition', withBody(rulePost, (b) => { b.DuplicateRule_DuplicateRuleConditions = []; })],
     ['a condition on its own', { method: 'POST', url: `${rulePost.url.replace('duplicaterules', 'duplicateruleconditions')}`, headers: {}, body: JSON.stringify(JSON.parse(rulePost.body).DuplicateRule_DuplicateRuleConditions[0]) }],

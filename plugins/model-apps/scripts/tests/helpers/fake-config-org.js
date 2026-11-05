@@ -127,6 +127,10 @@ class Unmodelled extends Error {}
  *   behaviour the platform's own duplicate-rule code works around, so a caller must prove (and add) each child itself.
  * @param {number} [options.pageSize] server-driven paging: a collection read without `$top` answers at most this many rows
  *   and, when more remain, an absolute `@odata.nextLink` carrying `$skiptoken=<offset>`. Off by default (one page).
+ * @param {boolean} [options.liveRowShape] answer two rows as a live environment does: a connection reference created without
+ *   `promptingbehavior` stores the platform's create default 0 (a live read shows `"promptingbehavior": 0` on every
+ *   reference the plugin made), and a `duplicaterules` row is answered WITHOUT `@odata.etag` (a live read of a rule carries
+ *   none, while every other configuration row does). Off by default, so the tests written before keep their answers.
  */
 function createConfigOrg(options = {}) {
   const origin = options.origin || 'https://contoso.crm.dynamics.com';
@@ -215,7 +219,7 @@ function createConfigOrg(options = {}) {
     const schema = SETS[set];
     const select = query.$select ? query.$select.split(',') : null;
     if (select) checkColumns(set, select, `${set} $select`);
-    const out = { '@odata.etag': etagOf(row) };
+    const out = options.liveRowShape && set === 'duplicaterules' ? {} : { '@odata.etag': etagOf(row) };
     for (const [k, v] of Object.entries(row)) {
       if (k === 'versionnumber') continue;
       if (!select || select.includes(k) || k === schema.pk) out[k] = v;
@@ -268,6 +272,7 @@ function createConfigOrg(options = {}) {
     }
     if (parentLink) row[parentLink.fk] = parentLink.id;
     if (set === 'duplicaterules' && row.statecode === undefined) { row.statecode = 0; row.statuscode = 0; }
+    if (options.liveRowShape && set === 'connectionreferences' && row.promptingbehavior === undefined) row.promptingbehavior = 0;
     row.versionnumber = version++;
     row.ismanaged = row.ismanaged || false;
     sets.get(set).set(id, row);

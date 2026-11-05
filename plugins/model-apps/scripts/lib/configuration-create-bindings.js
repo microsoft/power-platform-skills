@@ -103,6 +103,12 @@ function optionalCode(table) {
 }
 // A column this build never writes. It may only be empty: a value there was put by someone else.
 const UNMODELLED = 'unmodelled';
+// A column this build never writes that the platform fills on create with a known default: a read may find it empty or
+// holding exactly that default; any other value, and any body that carries the column at all, is unmodelled as above.
+// Dataverse stores 0 in a connection reference's `promptingbehavior` when the create omits it (a live read shows
+// `"promptingbehavior": 0` on every reference the build made), so a closed map that expected it empty never proved one.
+const defaulted = (value) => Object.freeze({ defaulted: value });
+const isDefaulted = (spec) => isPlain(spec) && has(spec, 'defaulted');
 // A column this build never writes but a BOUND row may hold, set outside the plugin: a Custom API's implementation (its
 // plug-in type), which an App Spec cannot declare (configuration-artifacts.js refuses `pluginTypeId`) and which is
 // registered after the API exists. A read keeps its exact value (decoded.preserved); a body that carries the column at all
@@ -148,7 +154,7 @@ const KINDS = Object.freeze({
       connectionreferencelogicalname: ['logicalName', text], connectionreferencedisplayname: ['name', text, null],
       description: ['description', text, null], connectorid: ['connectorId', text], _customconnectorid_value: ['customConnectorId', guid, null],
       connectionid: PRIVATE,
-      connectionparametersconfig: UNMODELLED, connectionparametersetconfig: UNMODELLED, promptingbehavior: UNMODELLED,
+      connectionparametersconfig: UNMODELLED, connectionparametersetconfig: UNMODELLED, promptingbehavior: defaulted(0),
     },
     binds: { CustomConnectorId: ['_customconnectorid_value', 'connectors'] },
     privateColumn: 'connectionid',
@@ -276,6 +282,7 @@ function decode(kind, raw, mode) {
     const present = has(wire, col);
     const v = wire[col];
     if (spec === UNMODELLED) { if (present && v !== null) unmodelled.push(col); continue; }
+    if (isDefaulted(spec)) { if (present && v !== null && !(mode === 'read' && v === spec.defaulted)) unmodelled.push(col); continue; }
     if (spec === PRESERVED) {
       if (!present) continue;
       // Never written: even an explicit null would clear the implementation someone else registered.

@@ -1206,3 +1206,39 @@ test('protected configuration through the build command: a first create whose na
   assert.equal(org.rows('customapis').length, 0);
   assert.deepEqual(org.unexpected, []);
 });
+
+// Two answers a live environment gives that a protected build must take as they are (fake-config-org.js liveRowShape): the platform
+// stores its create default in a connection reference's `promptingbehavior` (0) although the create never sends it, and answers a
+// duplicate rule without `@odata.etag`.
+const liveOrg = () => commandOrg({ liveRowShape: true });
+const noUnexpectedError = (out, what) => assert.ok(!/UNEXPECTED_ERROR/.test(`${out.stderr} ${out.stdout || ''} ${JSON.stringify(out.payload || null)}`), `${what}: ${out.stderr.slice(-900)}`);
+
+test('protected configuration through the build command: a connection reference the platform fills with its create default is created, bound and rebuilt with no write', async () => {
+  const spec = { ...makeSpec({ configuration: false }), solution: makeSpec().solution, configurationIdentity: 'stable-v1',
+    connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] };
+  const org = liveOrg();
+  const out = await runCommand(spec, { org });
+  succeeded(out, 'the create');
+  noUnexpectedError(out, 'the create');
+  const [row] = org.rows('connectionreferences');
+  assert.equal(row.promptingbehavior, 0, 'the platform filled its create default');
+  assert.deepEqual(out.payload.created.configuration.managedBindings.map((b) => `${b.kind}:${b.key}:${b.origin}:${b.id}`),
+    [`connectionReference:contoso_sp:created:${row.connectionreferenceid}`]);
+  assert.ok(!org.requests.some((r) => r.method !== 'GET' && /promptingbehavior/i.test(JSON.stringify(r.body || {}))), 'the column is never sent');
+  const mark = org.requests.length;
+  succeeded(await runAgain(spec, out), 'the unchanged rebuild');
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual(org.unexpected, []);
+
+  // Any other value there, found as the create is read back, was put by someone else: the row is not proved the build's.
+  let other = null;
+  other = commandOrg({ liveRowShape: true, intercept: (req) => {
+    const made = other.rows('connectionreferences')[0];
+    if (made && req.method === 'GET') made.promptingbehavior = 1;
+    return undefined;
+  } });
+  const stopped = await runCommand(spec, { org: other });
+  assert.notEqual(stopped.exitCode, 0);
+  assert.match(String(stopped.thrown && stopped.thrown.message), /connectionReference contoso_sp \(create-identity-conflict\)/);
+  assert.deepEqual(other.unexpected, []);
+});
