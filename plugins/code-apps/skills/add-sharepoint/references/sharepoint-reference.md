@@ -66,24 +66,16 @@ const categoryArray = categories?.split(";") || [];
 Lookup columns in SharePoint reference items from another list. In the generated services, they appear as objects with `Id` and `Value`:
 
 ```typescript
-// Reading a lookup column
-const item = await SharePointOnlineService.GetItem({
-  dataset: siteUrl,
-  table: "Tasks",
-  id: itemId
-});
-// item.AssignedTo = { Id: 5, Value: "John Smith" }
-// item.Project = { Id: 12, Value: "Website Redesign" }
+// Reading a lookup column with the connector action GetItem(dataset, table, id):
+// dataset is the site URL, and SharePoint item IDs are integers
+const result = await SharePointService.GetItem(dataset, "Tasks", itemId);
+// result.data.AssignedTo = { Id: 5, Value: "John Smith" }
+// result.data.Project = { Id: 12, Value: "Website Redesign" }
 
 // Creating/updating with a lookup -- use the ID
-await SharePointOnlineService.PatchItem({
-  dataset: siteUrl,
-  table: "Tasks",
-  id: itemId,
-  item: {
-    AssignedToId: 5,         // Use the Id suffix
-    ProjectId: 12            // Use the Id suffix
-  }
+await SharePointService.PatchItem(dataset, "Tasks", itemId, {
+  AssignedToId: 5,         // Use the Id suffix
+  ProjectId: 12            // Use the Id suffix
 });
 ```
 
@@ -100,7 +92,7 @@ await SharePointOnlineService.PatchItem({
 | Error                                             | Cause                                        | Fix                                                                                                |
 | ------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `"Column 'X' does not exist"`                     | Using display name instead of internal name  | Check generated model for actual property name; may need `_x0020_` encoding                        |
-| `"The list 'X' does not exist"`                   | List name doesn't match exactly              | Verify list display name via `pa connector list-tables`; names are case-sensitive |
+| `"The list 'X' does not exist"`                   | List name doesn't match exactly              | Verify list display name via `pa connection list-tables`; names are case-sensitive |
 | `"Value does not fall within the expected range"` | Invalid choice value or column type mismatch | Verify the exact choice option strings; SharePoint choices are case-sensitive                      |
 | `"Item does not exist"`                           | Using wrong ID format or deleted item        | SharePoint list item IDs are sequential integers, not GUIDs                                        |
 | `"Access denied"`                                 | Insufficient SharePoint permissions          | User needs at least Edit permission on the list                                                    |
@@ -127,46 +119,32 @@ await SharePointOnlineService.PatchItem({
 
 ## Generated Service Patterns
 
-After running `pa app add data-source --connector sharepointonline`, the generated `SharePointOnlineService.ts` provides methods that work across all connected lists. The `dataset` (site URL) and `table` (list name) parameters select which list to operate on:
+What `pa app add data-source` generates depends on how SharePoint was added (CLI 1.3.0):
+
+**Lists added as tables** (`--table '<list>'`): one service per list, named after it, with typed `<List>Read` / `<List>Write` models:
 
 ```typescript
-import { SharePointOnlineService } from "../generated/services/SharePointOnlineService";
+import { ProjectMilestonesService } from "../generated/services/ProjectMilestonesService";
 
-// List all items
-const result = await SharePointOnlineService.GetItems({
-  dataset: "https://contoso.sharepoint.com/sites/mysite",
-  table: "My List"
-});
-const items = result.value || [];
-
-// Get single item by ID (SharePoint IDs are integers)
-const item = await SharePointOnlineService.GetItem({
-  dataset: siteUrl,
-  table: "My List",
-  id: 42
-});
-
-// Create item
-const newItem = await SharePointOnlineService.PostItem({
-  dataset: siteUrl,
-  table: "My List",
-  item: { Title: "New Item", Status: "Active" }
-});
-
-// Update item
-await SharePointOnlineService.PatchItem({
-  dataset: siteUrl,
-  table: "My List",
-  id: 42,
-  item: { Status: "Completed" }
-});
-
-// Delete item
-await SharePointOnlineService.DeleteItem({
-  dataset: siteUrl,
-  table: "My List",
-  id: 42
-});
+const result = await ProjectMilestonesService.getAll({ top: 50 });
+const items = result.data ?? [];
+const one = await ProjectMilestonesService.get(id);
+const created = await ProjectMilestonesService.create({ Title: "New Item" });
+await ProjectMilestonesService.update(id, { Title: "Updated" });
+await ProjectMilestonesService.delete(id);
 ```
 
-Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+**Connector actions** (`--as action`): `SharePointService`, whose methods take positional parameters. The `dataset` (site URL) and `table` (list name) arguments select the list:
+
+```typescript
+import { SharePointService } from "../generated/services/SharePointService";
+
+const dataset = "https://contoso.sharepoint.com/sites/mysite";   // the site URL
+const list = await SharePointService.GetItems(dataset, "My List");   // optional: $filter, $orderby, $top, ...
+const item = await SharePointService.GetItem(dataset, "My List", 42);  // SharePoint item IDs are integers
+const newItem = await SharePointService.PostItem(dataset, "My List", { Title: "New Item", Status: "Active" });
+await SharePointService.PatchItem(dataset, "My List", 42, { Status: "Completed" });
+await SharePointService.DeleteItem(dataset, "My List", 42);
+```
+
+These examples were verified against CLI 1.3.0. Use `Grep` on `src/generated/services/` to confirm service names and exact signatures, especially in projects created with an older CLI (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).

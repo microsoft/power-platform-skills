@@ -43,7 +43,7 @@ node --version   # Must be v22+
 - **Node.js below v22**: Report "Node.js 22+ is required. Upgrade or switch with `nvm use 22`." and STOP.
 - **All present**: Report versions and proceed.
 
-The Power Apps CLI is installed automatically via `npm install` from the app template — no separate install required.
+The Power Apps CLI is installed into each project as a dev dependency (`/create-code-app` does this; see [cli-binary.md](../shared/cli-binary.md)) — no global install required.
 
 ## Key Considerations for Power Apps Code Apps
 
@@ -66,7 +66,7 @@ The Power Apps CLI is installed automatically via `npm install` from the app tem
 
 **If none of the specific skills match**, invoke `/add-connector` — it handles any connector not covered above. Browse available connectors at https://learn.microsoft.com/en-us/connectors/connector-reference/ to find the correct API name. **If no connector exists for the required functionality, tell the user clearly and do not implement a direct API call as a workaround — it will not work in production.**
 
-**Connection IDs**: All non-Dataverse connectors require a connection ID (`-c` flag). Run `/list-connections` to find it, then run `pa app add data-source --connector <connector> -c <connection-id>`.
+**Connections**: All non-Dataverse connectors need a connection. With CLI 1.3.0+, `pa app add data-source` finds or creates it, so the connector skills omit `-c`; older CLIs need `-c <connection-id>` from `/list-connections`. See [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections).
 
 ### Generated Code Pattern
 
@@ -84,6 +84,7 @@ Always use `npx degit` to scaffold new projects — do **not** use `git clone`, 
 npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
 cd {folder}
 npm install
+npm install --save-dev "@microsoft/power-apps-cli@^1.3.0"
 ```
 
 After scaffolding, initialize:
@@ -104,9 +105,9 @@ pa app init -n '{app-name}' -e <environment-id>
 ### Connector Workarounds
 
 - **Azure DevOps**: HttpRequest method requires renaming `parameters` to `body` in 3 generated files.
-- **SharePoint/Excel**: Tabular datasources need `--dataset` and `--table` parameters when adding.
+- **SharePoint/Excel**: Tabular datasources need `--dataset` and `--table` parameters when adding. SharePoint's file and folder operations are its actions; add them with `--as action`.
 - **Excel Online**: Body is a flat key-value object -- no `{ items: ... }` wrapper.
-- **Work IQ** (`shared_a365copilotchatmcp`): stateless-tolerant MCP connector — the connection is created with `pa connection create` (browser OAuth) and it needs the `McpSession` wrapper (send **no** session id on `initialize`). See the `/add-workiq` skill for setup steps.
+- **Work IQ** (`shared_a365copilotchatmcp`): stateless-tolerant MCP connector that needs the `McpSession` wrapper (send **no** session id on `initialize`). On CLI 1.3.0+, `pa app add data-source` finds or creates its connection; older CLIs create it with `pa connection create`. See the `/add-workiq` skill for setup steps.
 
 ### Default Environment
 
@@ -114,14 +115,15 @@ Check `power.config.json` in the project root for an `environmentId` — use it 
 
 ### CLI Commands
 
-The Power Apps CLI (`@microsoft/power-apps-cli`) installs locally via `npm install`. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [cli-binary.md](../shared/cli-binary.md) before running any command**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory (works natively in bash on all platforms). Commands below are shown in the canonical grouped `pa` form:
+The Power Apps CLI (`@microsoft/power-apps-cli`) is installed into each project as a dev dependency. It has shipped two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [cli-binary.md](../shared/cli-binary.md) before running any command**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory (works natively in bash on all platforms). Commands below are shown in the canonical grouped `pa` form:
 
 ```bash
 pa app push                               # Deploy
-pa app add data-source --connector <api> -c <id>  # Add connector
+pa app add data-source --connector <api> [-c <id>]  # Add connector (-c optional on CLI 1.3.0+)
 pa connection list                   # List connections
-pa connector list-datasets --connector <api> -c <id>    # List datasets
-pa connector list-tables --connector <api> -c <id> -d <ds>  # List tables
+pa connection create --connector <api>    # Create a connection
+pa connection list-datasets --connector <api> -c <id>    # List datasets
+pa connection list-tables --connector <api> -c <id> -d <ds>  # List tables
 pa auth logout                             # Log out
 ```
 

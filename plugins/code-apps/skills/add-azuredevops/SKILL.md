@@ -22,12 +22,18 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 ### Step 2: Add Connector
 
-**First, find the connection ID** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
+Get the connection as described in [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections). The Azure DevOps connector's ID is `shared_visualstudioteamservices`.
 
-Run the `/list-connections` skill. Find the Azure DevOps connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
+**CLI 1.3.0+ (`PA_INLINE_CONNECTIONS=yes`):** tell the user that adding Azure DevOps may create a connection with their account, then run the add without `-c` and handle the result with the outcome table in connector-reference.md:
 
 ```bash
-pa app add data-source --connector azuredevops -c <connection-id>
+pa app add data-source --connector shared_visualstudioteamservices --non-interactive
+```
+
+**Older CLIs:** run `/list-connections` to find the Azure DevOps connection ID (if none exists, create one with `pa connection create` as described in connector-reference.md), then:
+
+```bash
+pa app add data-source --connector shared_visualstudioteamservices -c <connection-id>
 ```
 
 ### Step 3: Apply HttpRequest Fix (Required)

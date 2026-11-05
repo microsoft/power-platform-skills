@@ -26,6 +26,14 @@
 | DNS/network error                   | Try different environment or contact admin.                                                                      |
 | Auth error / token expired          | Run `pa auth logout`, then retry `pa app push` — CLI will prompt re-authentication via browser. On `power-apps`-only projects use `power-apps logout` then `power-apps push`.  |
 
+## Connection and Data Source Errors
+
+| Problem | Solution |
+| ------- | -------- |
+| `pa app add data-source` stops with a connection message (several connections, a connection it can't create automatically, `--use-sso` not supported, or a connection kept after a failure) | Follow the outcome table in [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections) (CLI 1.3.0+). |
+| `Missing required option --connection-id` from `pa connection list-datasets` or `list-tables` | These commands always need a connection ID. Get it with `pa connection list --search <connector>`. |
+| A connector call in the running app fails with status 442: `Request blocked due to data loss prevention (DLP) or advanced connector policies (ACP)` | A data policy in the environment blocks that connector or action. Adding the data source still succeeds; the block only appears when the app calls it. Ask a Power Platform admin to allow it, or use a different environment or connector. |
+
 ## Resources
 
 **Docs:**
