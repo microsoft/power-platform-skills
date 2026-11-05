@@ -235,9 +235,13 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // create, and its workspace scope (dashboard-recovery-workspace.js) reads a retained create copy with creates-local.js only for
 // a declared dashboard; each through one lazy accessor, so those edges are gated too. Verify (verify-model-app.js, which the
 // build requires for its inline --verify) requires configuration-protected.js only for an App Spec with configurationIdentity,
-// so that edge is gated as well. Apart
+// so that edge is gated as well. The build command requires managed-create-transport.js only to make (and compose) the managed create
+// gate of an apply where protected configuration is in play (sdk-build.js protectedConfigurationInPlay), and the engine requires the
+// configuration hookup's modules only inside protectedConfigurationFor, which it calls only once that gate exists; those edges are gated
+// too. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
-const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js'], ['verify-model-app.js', 'configuration-protected.js']];
+const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js'], ['verify-model-app.js', 'configuration-protected.js'],
+  ['build-model-app.js', 'managed-create-transport.js'], ['sdk-build.js', 'managed-create-context.js'], ['sdk-build.js', 'configuration-create-bindings.js'], ['sdk-build.js', 'configuration-protected.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -294,6 +298,19 @@ test('the default build loads none of the stable-identity modules and still wire
   const verifier = fs.readFileSync(path.join(SCRIPTS, 'verify-model-app.js'), 'utf8');
   assert.match(verifier, /spec\.configurationIdentity === 'stable-v1'\r?\n\s*\? require\('\.\/lib\/configuration-protected\.js'\)/);
   assert.equal(verifier.match(/require\('\.\/lib\/configuration-protected\.js'\)/g).length, 1);
+  // The build command makes the managed create gate only for an apply with protected configuration in play, and makeSdk composes it
+  // only when it was given one; the engine loads the hookup's modules only in protectedConfigurationFor, called only with that gate.
+  const command = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');
+  assert.match(command, /const writeGate = managedCreateGate \? require\('\.\/lib\/managed-create-transport\.js'\)\.composeWriteGates\(workflowEffectGate, managedCreateGate\) : workflowEffectGate;/);
+  assert.match(command, /const managedCreateGate = opts\.apply && protectedConfigurationInPlay\(spec, \{ apply: true, env, workspaceDir, appDir: opts\.appDir \}\)\r?\n\s*\? require\('\.\/lib\/managed-create-transport\.js'\)\.createDeferredManagedCreateGate\(\) : null;/);
+  assert.equal(command.match(/require\('\.\/lib\/managed-create-transport\.js'\)/g).length, 2);
+  const hookup = engine.slice(engine.indexOf('function protectedConfigurationFor('), engine.indexOf('// The entry every caller enters by.'));
+  for (const m of ['managed-create-context', 'configuration-create-bindings', 'configuration-protected']) {
+    assert.equal(hookup.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required in the hookup factory`);
+    assert.equal(engine.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required nowhere else in the engine`);
+  }
+  assert.match(engine, /if \(opts\.managedCreateGate && workflowStore && !opts\.protectedConfiguration\) \{/);
+  assert.equal(engine.match(/protectedConfigurationFor\(/g).length, 2, 'defined once, called once behind the gate');
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');
