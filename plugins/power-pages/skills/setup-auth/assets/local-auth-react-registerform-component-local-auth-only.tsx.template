@@ -1,0 +1,95 @@
+import { useState, useEffect } from 'react';
+import { register, getAuthProvider, getAuthError } from '../services/authService';
+import './LocalLoginForm.css';
+
+export function RegisterForm() {
+  const [credential, setCredential] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const provider = getAuthProvider();
+  const isEmailMode = provider.loginByEmail ?? true;
+
+  // Check for server-side registration errors passed via URL query params
+  useEffect(() => {
+    const serverError = getAuthError();
+    if (serverError) setError(serverError);
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Parse invitation code from URL if present
+      const params = new URLSearchParams(window.location.search);
+      const invitationCode = params.get('invitationCode') || undefined;
+
+      await register(
+        isEmailMode
+          ? { email: credential, password, confirmPassword }
+          : { username: credential, password, confirmPassword },
+        '/',
+        invitationCode
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registration failed. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="local-login-form" onSubmit={handleSubmit}>
+      <h2>Create an Account</h2>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <div className="form-field">
+        <label htmlFor="credential">{isEmailMode ? 'Email' : 'Username'}</label>
+        <input
+          id="credential"
+          type={isEmailMode ? 'email' : 'text'}
+          value={credential}
+          onChange={(e) => setCredential(e.target.value)}
+          required
+          autoComplete={isEmailMode ? 'email' : 'username'}
+        />
+      </div>
+      <div className="form-field">
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+          autoComplete="new-password"
+        />
+      </div>
+      <div className="form-field">
+        <label htmlFor="confirmPassword">Confirm Password</label>
+        <input
+          id="confirmPassword"
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          required
+          autoComplete="new-password"
+        />
+      </div>
+      <button type="submit" disabled={isSubmitting}>
+        {isSubmitting ? 'Creating account...' : 'Create Account'}
+      </button>
+      <div className="form-links">
+        <a href="/login">Already have an account? Sign in</a>
+      </div>
+    </form>
+  );
+}

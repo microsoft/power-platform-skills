@@ -1,0 +1,72 @@
+.auth-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.auth-sign-in {
+  padding: 0.5rem 1rem;
+  border: 1px solid currentColor;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: opacity 0.2s;
+}
+
+.auth-sign-in:hover {
+  opacity: 0.8;
+}
+
+.auth-signed-in {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.auth-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.auth-name {
+  font-size: 0.875rem;
+}
+
+.auth-sign-out {
+  padding: 0.25rem 0.5rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.75rem;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.auth-sign-out:hover {
+  opacity: 1;
+}
+
+.auth-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: auth-spin 0.6s linear infinite;
+}
+
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
+}

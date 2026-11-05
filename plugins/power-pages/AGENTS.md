@@ -275,8 +275,12 @@ skills/
     scripts/validate-ai-webapi.js ← Node script validating summarization code, headers, and Summarization/* settings
   setup-auth/
     SKILL.md                   ← Authentication & authorization skill definition
-    references/authentication-reference.md ← Login/logout flow, auth service, framework patterns
-    references/authorization-reference.md  ← Role-based access control, guards, directives
+    references/authentication-reference.md ← Common authentication contract
+    references/authorization-reference.md  ← Common authorization contract
+    references/provider-*.md   ← On-demand identity-provider setup
+    references/framework-*.md  ← On-demand framework bindings
+    references/*-workflow.md   ← Discovery, planning, provisioning and optional-feature workflows
+    assets/*.template          ← Service, form and profile templates
     scripts/validate-auth.js   ← Node script validating auth service and authorization code
   setup-solution/
     SKILL.md                   ← Solution creation skill definition
@@ -606,6 +610,14 @@ Checks for `docs/alm/last-pipeline.json` (Power Platform Pipelines path) — val
 Checks `docs/alm/last-deploy.json` marker for required fields (`pipelineId`, `stageRunId`, `solutionName`, `status`, `deployedAt`). Blocks if `status === "Failed"` — a failed deployment requires investigation before retrying. Gracefully exits 0 when no deploy marker is found (not a deploy-pipeline session).
 
 ## Skill Development Guide
+
+### Setup-auth portability pilot
+
+`setup-auth` uses only standard `name` and `description` metadata and capability-based instructions instead of host-specific tool names.
+Keep its entry under 500 lines and approximately 5,000 tokens, with direct conditional links to provider, framework, and optional-feature resources.
+Use `Ask the user:` for prompt introductions and preserve approval markers and catalog IDs in the owning `references/*-workflow.md`.
+Run `validate-auth.js --complete` from the site root because host hooks are not available in every agent.
+The conventions below remain the defaults for skills not yet converted.
 
 All skills in this plugin follow a consistent set of patterns. When creating a new skill, follow every convention below to maintain consistency across the plugin.
 

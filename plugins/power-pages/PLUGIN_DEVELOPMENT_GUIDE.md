@@ -1,5 +1,14 @@
 # Plugin UX & Reliability
 
+## Setup-auth portability pilot
+
+`setup-auth` expresses the phase, verification, approval and progress requirements below without binding them to a particular agent's tools or model.
+Its frontmatter contains only `name` and `description`; its entry links directly to focused resources loaded for the selected branch.
+Introduce prompts with `Ask the user:` and retain the existing gate markers, human-readable blocks and catalog IDs.
+Run its validator explicitly with `--complete` from the site root rather than relying on host-specific hooks.
+Completion mode requires finished artifacts and the report; the hook still permits instruction-loading and in-progress runs.
+Other skills retain their current conventions until converted.
+
 ## Why This Matters
 
 A plugin can have many brilliant skills and still feel broken if the user sits staring at a frozen terminal for 90 seconds, has no way to know if the schema actually deployed, or loses their main conversation context because a long deployment blocked the thread.

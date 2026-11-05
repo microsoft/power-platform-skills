@@ -1,0 +1,49 @@
+{
+  "META_DATA": {
+    "siteName": "<SITE_NAME>",
+    "reportDate": "<YYYY-MM-DD>",
+    "framework": "<React|Vue|Angular|Astro>",
+    "nextStepsHtml": "<HTML string - the same provider-specific guidance from 8.5, formatted as an <ol>>"
+  },
+  "PROVIDERS_DATA": [
+    {
+      "type": "Entra ID | Entra External ID | OIDC | SAML2 | WS-Federation | Local | Social (Microsoft|Facebook|Google)",
+      "displayName": "<friendly name shown in the login UI>",
+      "name": "<ProviderName used in site setting keys>",
+      "identifier": "<providerIdentifier / authority URL / issuer URI>",
+      "authority": "<Authority site-setting value, if applicable>",
+      "clientId": "<ClientId site-setting value, if applicable>",
+      "redirectUri": "<Computed redirect URI, if applicable>",
+      "scopes": "<Scopes site-setting value, if applicable>",
+      "registrationClaimsMapping": "<RegistrationClaimsMapping value, if applicable>",
+      "loginClaimsMapping": "<LoginClaimsMapping value, or null when sync = First sign-in only>",
+      "contactLinking": "Link to existing contact by email | Create a new contact",
+      "profileSync": "First sign-in only | Both",
+      "federatedLogout": "Enabled | Disabled",
+      "isPrimary": false
+    }
+  ],
+  "LOCAL_AUTH_DATA": {
+    "loginBy": "Email | Username",
+    "registrationMode": "Open | Invitation-only | Both | Disabled",
+    "resetPasswordEnabled": false,
+    "emailConfirmationEnabled": false
+  },
+  "OPTIONAL_FEATURES_DATA": {
+    "profilePage": false,
+    "termsAndConditions": false,
+    "termsEnforced": false,
+    "termsPrerequisiteStatus": "disabled",
+    "federatedLogout": false,
+    "sessionKeepAlive": false
+  },
+  "SITE_SETTINGS_DATA": [
+    { "name": "Authentication/Registration/ProfileRedirectEnabled", "value": "false" }
+  ],
+  "TABLE_PERMISSIONS_DATA": [
+    { "name": "My Profile - Edit Own Contact", "table": "contact", "scope": "Self (756150004)", "read": true, "write": true, "create": false, "delete": false }
+  ],
+  "FILES_DATA": [
+    { "path": "src/services/authService.ts", "action": "Created | Updated", "notes": "<short description>" }
+  ]
+}

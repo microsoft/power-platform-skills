@@ -568,6 +568,10 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ### 6.17 `setup-auth` (8 calls)
 
+The portable pilot keeps these stable IDs.
+Requirements live in `skills/setup-auth/references/planning-workflow.md`, provisioning in `skills/setup-auth/references/idp-provisioning-workflow.md`, and the other gates in `skills/setup-auth/SKILL.md`.
+Existing-provider merge mode and terms options are configuration prompts, with implementation still blocked on final plan approval.
+
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `setup-auth:1.3.deploy-first` | gate | plan | 1.3 | `.powerpages-site` missing — *"Deploy now (Required) / Later"* | nothing |
