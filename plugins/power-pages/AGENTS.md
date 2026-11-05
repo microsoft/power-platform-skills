@@ -615,7 +615,8 @@ Checks `docs/alm/last-deploy.json` marker for required fields (`pipelineId`, `st
 
 ### Portable skill rollout
 
-`setup-auth` and `create-site` use only standard `name` and `description` metadata and capability-based instructions instead of host-specific tool names.
+`setup-auth` and `create-site` use capability-based instructions instead of host-specific tool names.
+Both keep `name` and `description`; `create-site` also retains its original `argument-hint: Optional site description` for clients that display invocation hints.
 Keep their entries under 500 lines and approximately 5,000 tokens, with direct conditional links to focused branch resources.
 Use `Ask the user:` for prompt introductions and preserve approval markers and catalog IDs in the owning `references/*-workflow.md`.
 Run `validate-auth.js --complete` from the site root because host hooks are not available in every agent.

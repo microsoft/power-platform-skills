@@ -5,6 +5,7 @@ description: >-
   scaffold a static React, Vue, Angular, or Astro site. Use when starting a new
   website or portal, choosing a template, or planning its design, provisioning,
   validation, and deployment.
+argument-hint: Optional site description
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.

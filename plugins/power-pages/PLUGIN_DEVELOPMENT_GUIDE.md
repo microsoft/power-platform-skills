@@ -3,7 +3,8 @@
 ## Portable skill rollout
 
 `setup-auth` and `create-site` express the phase, verification, approval and progress requirements below without binding them to a particular agent's tools or model.
-Their frontmatter contains only `name` and `description`; their entries link directly to focused resources loaded for the selected branch.
+Both keep `name` and `description` in frontmatter; `create-site` also retains `argument-hint: Optional site description` for clients that display invocation hints.
+Their entries link directly to focused resources loaded for the selected branch.
 Introduce prompts with `Ask the user:` and retain the existing gate markers, human-readable blocks and catalog IDs.
 Run the setup-auth validator explicitly with `--complete` from the site root rather than relying on host-specific hooks.
 Completion mode requires finished artifacts and the report; the hook still permits instruction-loading and in-progress runs.

@@ -14,11 +14,12 @@ const references = fs.readdirSync(path.join(root, 'references')).map((file) => `
 const instructions = ['SKILL.md', 'workflows/non-spa-site.md', ...references];
 const links = [...entry.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/g)].map((match) => match[1]);
 
-test('create-site has minimal portable metadata and bounded activation context', () => {
+test('create-site retains its original argument hint and bounded activation context', () => {
   const [, metadata, ...rest] = entry.split(/^---\r?$/m);
-  assert.deepEqual([...metadata.matchAll(/^([a-z-]+):/gm)].map((match) => match[1]), ['name', 'description']);
+  assert.deepEqual([...metadata.matchAll(/^([a-z-]+):/gm)].map((match) => match[1]), ['name', 'description', 'argument-hint']);
   assert.match(metadata, /^name: create-site$/m);
-  const description = metadata.split('description: >-')[1].trim().replace(/\s+/g, ' ');
+  assert.match(metadata, /^argument-hint: Optional site description\r?$/m);
+  const description = metadata.split('description: >-')[1].split(/^argument-hint:/m)[0].trim().replace(/\s+/g, ' ');
   assert.ok(description.length <= 400);
   assert.ok(entry.trimEnd().split(/\r?\n/).length < 500);
   // The estimate is a reproducible character budget, not measured tokenizer usage.
