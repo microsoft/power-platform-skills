@@ -102,6 +102,12 @@ function optionalCode(table) {
 }
 // A column this build never writes. It may only be empty: a value there was put by someone else.
 const UNMODELLED = 'unmodelled';
+// A column this build never writes but a BOUND row may hold, set outside the plugin: a Custom API's implementation (its
+// plug-in type), which an App Spec cannot declare (configuration-artifacts.js refuses `pluginTypeId`) and which is
+// registered after the API exists. A read keeps its exact value (decoded.preserved); a body that carries the column at all
+// is not a write this build planned. A create expects it empty, as an unmodelled column; an update expects exactly the
+// value its fresh base read held (planOf), so an edit is proved only while the row still holds that same implementation.
+const PRESERVED = 'preserved';
 // The private input's column: compared in memory (privateStateOf), never projected.
 const PRIVATE = 'private';
 // The lookup to the row's parent: the managed row protocol's parentId (managed-create-context.js), not a field.
@@ -154,7 +160,7 @@ const KINDS = Object.freeze({
       isfunction: ['isFunction', bool, false], isprivate: ['isPrivate', bool, false],
       allowedcustomprocessingsteptype: ['allowedProcessingSteps', code(API_STEPS), 'none'], workflowsdkstepenabled: ['enabledForWorkflow', bool, false],
       executeprivilegename: ['executePrivilegeName', text, null],
-      _plugintypeid_value: UNMODELLED,
+      _plugintypeid_value: PRESERVED,
     },
     binds: {},
   },
@@ -226,7 +232,8 @@ function boundGuid(value, set) {
  *   'read'    a row a read selected every mapped column of: a missing column is unreadable;
  *   'create'  a create body: an omitted column takes its create default, an omitted required column is not the plan;
  *   'patch'   a PATCH body: only what it carries.
- * Answers { fields, unmodelled, parentId, private: { present, value }, state } or null (unreadable / not this kind's).
+ * Answers { fields, unmodelled, preserved, parentId, private: { present, value }, state } or null (unreadable / not this
+ * kind's); `preserved` maps each filled PRESERVED column to its GUID, and only a read has any.
  * A body's keys outside the map (other than the primary key, an allowed bind and the navigations the caller takes
  * out) make it null: a column this build does not model is not part of any create it planned.
  */
@@ -261,12 +268,23 @@ function decode(kind, raw, mode) {
   }
   const fields = {};
   const unmodelled = [];
+  const preserved = {};
   const state = {};
   let secret = { present: false, value: undefined };
   for (const [col, spec] of Object.entries(k.columns)) {
     const present = has(wire, col);
     const v = wire[col];
     if (spec === UNMODELLED) { if (present && v !== null) unmodelled.push(col); continue; }
+    if (spec === PRESERVED) {
+      if (!present) continue;
+      // Never written: even an explicit null would clear the implementation someone else registered.
+      if (mode !== 'read') return null;
+      if (v === null) continue;
+      const g = guid(v);
+      if (g === BAD) return null;
+      preserved[col] = g;
+      continue;
+    }
     if (spec === PRIVATE) { if (present) secret = { present: true, value: v }; continue; }
     if (spec === STATE) { if (present) state[col] = v; else if (mode === 'read') return null; continue; }
     if (spec === PARENT) {
@@ -286,7 +304,7 @@ function decode(kind, raw, mode) {
     if (d === BAD) return null;
     fields[field] = d;
   }
-  return { fields, unmodelled: unmodelled.sort(), parentId: parentId === undefined ? undefined : parentId, private: secret, state };
+  return { fields, unmodelled: unmodelled.sort(), preserved, parentId: parentId === undefined ? undefined : parentId, private: secret, state };
 }
 
 // The semantic fields a decoded row compares by. A condition takes the comparable shape the planner uses
@@ -431,13 +449,15 @@ function boundRuleState(base) {
   return ruleStateOf(base.decoded.state.statecode, base.decoded.state.statuscode) || 'published';
 }
 
-// The projection a row is judged by: the expected fields only, plus every unmodelled column a read found filled and,
-// for a root, every child row its complete graph holds that the plan does not (observe):
-//   sha256(canonicalJson({ kind, fields: { <expected field>: <value>, ... }, unmodelled?: [<column>, ...], unexpectedChildren?: ['<kind>:<id>', ...] }))
-// Both lists are left out when empty, so a row with neither hashes exactly as its expectation does.
-function projectionOf(kind, expected, semantic, unmodelled = [], unexpectedChildren = []) {
+// The projection a row is judged by: the expected fields only, plus every unmodelled column a read found filled, every
+// preserved column's exact value and, for a root, every child row its complete graph holds that the plan does not (observe):
+//   sha256(canonicalJson({ kind, fields: { <expected field>: <value>, ... }, unmodelled?: [<column>, ...],
+//                          preserved?: { <column>: <guid> }, unexpectedChildren?: ['<kind>:<id>', ...] }))
+// Each list or map is left out when empty, so a row with none hashes exactly as its expectation does. An expectation
+// carries `preserved` only for an update whose base read held one (planOf): a created row expects none.
+function projectionOf(kind, expected, semantic, unmodelled = [], unexpectedChildren = [], preserved = {}) {
   const fields = Object.fromEntries(Object.keys(expected).map((f) => [f, has(semantic, f) ? semantic[f] : null]));
-  return sha({ kind, fields, ...(unmodelled.length ? { unmodelled } : {}), ...(unexpectedChildren.length ? { unexpectedChildren } : {}) });
+  return sha({ kind, fields, ...(unmodelled.length ? { unmodelled } : {}), ...(Object.keys(preserved).length ? { preserved } : {}), ...(unexpectedChildren.length ? { unexpectedChildren } : {}) });
 }
 const sameValue = (a, b) => canonicalJson(a === undefined ? null : a) === canonicalJson(b === undefined ? null : b);
 
@@ -580,7 +600,10 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     rows.push({ kind: 'environmentVariableValue', key: JSON.stringify([portKey, slot]), id, parentId: rootId, slot, mode: 'update', kept: true, expected: {}, sensitiveInput: false });
   }
   for (const r of rows) {
-    r.expectedSha256 = projectionOf(r.kind, r.expected, r.expected);
+    // An updated row keeps what its base read held in the columns this build never writes (PRESERVED): the exact value, so
+    // a row whose implementation was replaced or removed meanwhile is not the row this edit planned.
+    r.preserved = r.mode === 'update' && !r.kept ? { ...baseOf(bases, r.kind, r.id, r.parentId).decoded.preserved } : {};
+    r.expectedSha256 = projectionOf(r.kind, r.expected, r.expected, [], [], r.preserved);
     if (r.mode === 'update' && !r.kept && PATCHABLE.has(r.kind)) r.ifMatch = baseOf(bases, r.kind, r.id, r.parentId).rowVersion;
   }
   // An update of a bound root records the versions it was prepared from (the binding store's baseObservation); they stay
@@ -961,7 +984,7 @@ async function observe(dataverse, planned) {
     }
     const out = {
       kind: r.kind, key: r.key, id: read.id, state: 'present', parentId: read.parentId,
-      projectionSha256: projectionOf(r.kind, r.expected, semanticOf(r.kind, read.decoded), read.decoded.unmodelled),
+      projectionSha256: projectionOf(r.kind, r.expected, semanticOf(r.kind, read.decoded), read.decoded.unmodelled, [], read.decoded.preserved),
     };
     if (r.sensitiveInput) out.privateState = privateStateOf(read.decoded.private, secrets.get(rowKey(r.kind, r.key)));
     rows.push(out);
@@ -971,7 +994,7 @@ async function observe(dataverse, planned) {
     const graph = await readChildGraph(dataverse, planned, exact);
     if (graph.state !== 'complete') rows[0] = { kind: root.kind, key: root.key, id: root.id, state: 'unknown' };
     else if (graph.unexpected.length) {
-      rows[0].projectionSha256 = projectionOf(root.kind, root.expected, semanticOf(root.kind, rootRead.decoded), rootRead.decoded.unmodelled, graph.unexpected);
+      rows[0].projectionSha256 = projectionOf(root.kind, root.expected, semanticOf(root.kind, rootRead.decoded), rootRead.decoded.unmodelled, graph.unexpected, rootRead.decoded.preserved);
     }
   }
   return { rows, members: await readMembers(dataverse, planned), ruleState };
@@ -1011,7 +1034,7 @@ async function editShapeOf(dataverse, planned) {
       if (now !== planned.plan.ruleState) out.ruleStateChanged = true;
     }
     const semantic = semanticOf(r.kind, read.decoded);
-    if (projectionOf(r.kind, r.expected, semantic, read.decoded.unmodelled) === r.expectedSha256) continue;
+    if (projectionOf(r.kind, r.expected, semantic, read.decoded.unmodelled, [], read.decoded.preserved) === r.expectedSha256) continue;
     if (r.parentId === null) {
       out.rootChanged = true;
       continue;
@@ -1112,7 +1135,7 @@ function privateMismatch(row) {
 /**
  * One planned row as a request carries it, or null. `raw` is the row's own object (a deep-insert child's array item);
  * `how` is 'create' (a POST, nested or not) or 'patch'. The body must decode through the kind's closed map with no
- * unmodelled column, sit under the planned parent (a nested child binds none — its parent is the root it is inside;
+ * unmodelled column and none it preserves, sit under the planned parent (a nested child binds none — its parent is the root it is inside;
  * any other child binds exactly its planned parent; a root binds none), and say exactly what the plan expects: every
  * semantic field equal and nothing more (a Custom API's labels included: the plan pins them). A private input other than the planned one
  * throws (PRIVATE_MISMATCH) rather than answer null, so the run reports it as the local failure it is. The sealed

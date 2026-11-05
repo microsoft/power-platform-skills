@@ -1018,3 +1018,135 @@ test('protected configuration in fresh processes: a create whose answer was lost
   assert.equal(new Set(p.pids).size, 4, 'four OS processes');
   assert.deepEqual(org.unexpected, []);
 });
+
+// A protected Custom API whose implementation (a plug-in type) was registered outside the plugin, as an App Spec cannot declare
+// one (configuration-artifacts.js refuses `pluginTypeId`). The build never writes the implementation; a bound row keeps the exact
+// plug-in type its fresh read found, and the edit is proved only while the row still holds that one.
+const PLUGIN_TYPE = '00000000-0000-4000-8000-0000000000aa';
+const OTHER_PLUGIN_TYPE = '00000000-0000-4000-8000-0000000000bb';
+function apiSpec(over = {}) {
+  return { ...makeSpec({ configuration: false }), solution: makeSpec().solution, configurationIdentity: 'stable-v1',
+    customApis: [structuredClone(CONFIGURATION_FIELDS.customApis[0])], ...over };
+}
+const withApi = (spec, change) => ({ ...spec, customApis: [{ ...spec.customApis[0], ...change }] });
+const withRequest = (spec, uniqueName) => withApi(spec, { requestParameters: [...spec.customApis[0].requestParameters, { uniqueName, type: 'integer' }] });
+function apiGroup(base) {
+  const store = openManagedBindings({ workspaceDir: path.join(base.appDir, '.maker-workspace'), environment: base.org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' });
+  const group = store.readGroup('customApi', 'contoso_calc');
+  return { committed: !!group.committed, pending: !!group.pending };
+}
+function succeeded(out, what) {
+  assert.equal(out.thrown && out.thrown.message, undefined, what);
+  assert.equal(out.exitCode, 0, `${what}: ${out.stderr.slice(-900)}`);
+}
+// No write since `mark` names the implementation, in any shape (a lookup column or a bind).
+const writesImplementation = (org, mark) => org.requests.slice(mark).some((r) => r.method !== 'GET' && /plugintype/i.test(JSON.stringify(r.body || {})));
+
+test('protected configuration through the build command: a Custom API with a registered implementation takes a supported root edit, keeps that implementation, and the rerun sends nothing', async () => {
+  const spec = apiSpec();
+  const out = await runCommand(spec);
+  succeeded(out, 'the create');
+  const api = out.org.rows('customapis')[0];
+  api._plugintypeid_value = PLUGIN_TYPE;
+  let mark = out.org.requests.length;
+  succeeded(await runAgain(spec, out), 'an unchanged build over the implemented API');
+  assert.deepEqual(out.org.writes(mark), []);
+
+  const edited = withApi(spec, { displayName: 'Calculator' });
+  mark = out.org.requests.length;
+  succeeded(await runAgain(edited, out), 'the root edit');
+  assert.deepEqual(out.org.writes(mark), [`PATCH /customapis(${api.customapiid})`]);
+  assert.equal(api.displayname, 'Calculator');
+  assert.equal(api._plugintypeid_value, PLUGIN_TYPE, 'the implementation is kept');
+  assert.equal(writesImplementation(out.org, mark), false, 'the implementation is never written');
+  assert.deepEqual(apiGroup(out), { committed: true, pending: false });
+
+  // A new process over the same folder: the edit is bound, so nothing is sent again.
+  mark = out.org.requests.length;
+  succeeded(await runAgain(edited, out), 'the rerun');
+  assert.deepEqual(out.org.writes(mark), []);
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+test('protected configuration through the build command: a Custom API with a registered implementation takes a new-child edit and keeps that implementation', async () => {
+  const spec = apiSpec();
+  const out = await runCommand(spec);
+  succeeded(out, 'the create');
+  const api = out.org.rows('customapis')[0];
+  api._plugintypeid_value = PLUGIN_TYPE;
+  const edited = withRequest(spec, 'B');
+  let mark = out.org.requests.length;
+  succeeded(await runAgain(edited, out), 'the new-child edit');
+  assert.deepEqual(out.org.writes(mark), ['POST /customapirequestparameters', 'POST /AddSolutionComponent']);
+  assert.deepEqual(out.org.rows('customapirequestparameters').map((r) => r.uniquename).sort(), ['A', 'B']);
+  assert.equal(api._plugintypeid_value, PLUGIN_TYPE);
+  assert.equal(writesImplementation(out.org, mark), false);
+  assert.deepEqual(apiGroup(out), { committed: true, pending: false });
+  mark = out.org.requests.length;
+  succeeded(await runAgain(edited, out), 'the rerun');
+  assert.deepEqual(out.org.writes(mark), []);
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+test('protected configuration through the build command: an implementation replaced or removed while an edit is written is refused, and the next build sends nothing for it', async () => {
+  for (const [what, during] of [['replaced', OTHER_PLUGIN_TYPE], ['removed', null]]) {
+    let hook = null;
+    const org = commandOrg({ intercept: (req) => (hook ? hook(req) : undefined) });
+    const spec = apiSpec();
+    const out = await runCommand(spec, { org });
+    succeeded(out, `${what}: the create`);
+    const api = org.rows('customapis')[0];
+    api._plugintypeid_value = PLUGIN_TYPE;
+    // Someone else changes the registration as the edit's PATCH lands: the row the edit leaves is not the one it planned.
+    hook = (req) => {
+      if (req.method === 'PATCH' && /^\/customapis\(/.test(req.path)) api._plugintypeid_value = during;
+      return undefined;
+    };
+    const edited = withApi(spec, { displayName: 'Calculator' });
+    let mark = org.requests.length;
+    const changed = await runAgain(edited, out);
+    assert.notEqual(changed.exitCode, 0, what);
+    assert.match(String(changed.thrown && changed.thrown.message), /create-identity-conflict/, what);
+    assert.deepEqual(org.writes(mark), [`PATCH /customapis(${api.customapiid})`], `${what}: sent once`);
+    assert.deepEqual(apiGroup(out), { committed: true, pending: true }, `${what}: the edit stays pending`);
+    hook = null;
+    mark = org.requests.length;
+    const again = await runAgain(edited, out);
+    assert.equal(again.thrown && again.thrown.code, 'create-identity-conflict', `${what}: ${again.thrown && again.thrown.message}`);
+    assert.deepEqual(org.writes(mark), [], `${what}: nothing is sent again`);
+    assert.equal(api._plugintypeid_value, during, `${what}: the implementation is left as it was changed`);
+    assert.deepEqual(org.unexpected, []);
+  }
+});
+
+test('protected configuration through the build command: a first create that reads back with an implementation is still not proved', async () => {
+  let org = null;
+  // The plug-in type appears on the row right after the create lands, before the build reads it back.
+  org = commandOrg({ intercept: (req) => {
+    const row = org.rows('customapis')[0];
+    if (row && req.method === 'GET') row._plugintypeid_value = PLUGIN_TYPE;
+    return undefined;
+  } });
+  const out = await runCommand(apiSpec(), { org });
+  assert.match(String(out.thrown && out.thrown.message), /create-identity-conflict/);
+  assert.deepEqual(rootCreates(org), ['POST /customapis']);
+  assert.deepEqual(apiGroup(out), { committed: false, pending: true });
+  assert.deepEqual(org.unexpected, []);
+});
+
+test('protected configuration through the build command: the same root edit of an API without an implementation, and of an implemented API without the opt-in, is applied', async () => {
+  for (const protectedMode of [true, false]) {
+    const spec = apiSpec();
+    if (!protectedMode) delete spec.configurationIdentity;
+    const out = await runCommand(spec);
+    succeeded(out, `opt-in ${protectedMode}: the create`);
+    const api = out.org.rows('customapis')[0];
+    if (!protectedMode) api._plugintypeid_value = PLUGIN_TYPE;
+    const mark = out.org.requests.length;
+    succeeded(await runAgain(withApi(spec, { displayName: 'Calculator' }), out), `opt-in ${protectedMode}: the root edit`);
+    assert.deepEqual(out.org.writes(mark), [`PATCH /customapis(${api.customapiid})`]);
+    assert.equal(api.displayname, 'Calculator');
+    assert.equal(api._plugintypeid_value ?? null, protectedMode ? null : PLUGIN_TYPE);
+    assert.deepEqual(out.org.unexpected, []);
+  }
+});

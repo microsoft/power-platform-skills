@@ -1292,7 +1292,10 @@ the field builds exactly as before.
   changeset. No service changes were sent by this build. Separate supported non-removing single-request
   edits across builds, or make the change outside the plugin. Removals require maintenance outside the
   plugin." Every write names the row's exact id and its current version (`If-Match`). A change of
-  `isPrivate` still needs `--authorize`.
+  `isPrivate` still needs `--authorize`. An implementation registered outside the plugin (the API's
+  plug-in type) is kept: no write sends it, and an edit is complete only while the row still holds the
+  implementation it was planned over. One replaced or removed while the edit is written leaves the edit
+  unfinished with `create-identity-conflict`, and the next build sends nothing for it.
 - **Environment variables and connection references** are edited at their exact ids, each as one
   checked change over the item's whole plan: a definition edit, the first value (created at the id the
   spec fixes, then bound) or a new value for its own value row. A value row under a bound definition

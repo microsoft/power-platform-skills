@@ -406,6 +406,40 @@ test('a bound Custom API edit as the real SDK sends it: the root PATCH on its ow
   assert.ok(B.createClassifier([{ token: 't', planned: both }])(parts[1]), 'the same PATCH sent on its own');
 });
 
+test('a bound Custom API\'s registered implementation is kept exactly: never written, and the edit is proved only while the row holds that one', async () => {
+  const PLUGIN = '00000000-0000-4000-8000-0000000000aa';
+  const fresh = planned('customApi', 'contoso_Calc');
+  assert.deepEqual(fresh.rows.map((r) => r.preserved), [{}, {}, {}], 'a create expects no implementation');
+  const w = await wireOf(fresh);
+  const row = w.org.rows('customapis')[0];
+  row._plugintypeid_value = PLUGIN;
+  const dv = w.sdk.dataverse;
+  // A create is still proved only with no implementation: one on the row is not the row it made.
+  assert.notEqual((await B.observe(dv, fresh)).rows[0].projectionSha256, fresh.rows[0].expectedSha256);
+
+  const root = fresh.plan.rows[0].id;
+  const p = await rebound(dv, fresh, { spec: spec({ customApis: [{ ...spec().customApis[0], isPrivate: true }] }) });
+  assert.deepEqual(p.rows[0].preserved, { _plugintypeid_value: PLUGIN }, 'the exact plug-in type of the base read');
+  assert.deepEqual(p.rows.slice(1).map((r) => r.preserved), [{}, {}]);
+  assert.equal((await B.editShapeOf(dv, p)).rootChanged, true, 'the edit itself is the only difference');
+  const edit = await pushEdit(w, 'customApi', root, [['/isPrivate', true]]);
+  assert.equal(edit.sent.length, 1);
+  const [patch] = edit.sent;
+  assert.ok(!/plugintype/i.test(patch.body), 'the SDK sends no implementation');
+  const classify = B.createClassifier([{ token: 't', planned: p }]);
+  assert.ok(classify(patch), 'the edit\'s own PATCH');
+  for (const [what, add] of [['the implementation', { _plugintypeid_value: PLUGIN }], ['a clear of it', { _plugintypeid_value: null }], ['a bind to it', { 'PluginTypeId@odata.bind': `/plugintypes(${PLUGIN})` }]]) {
+    assert.equal(classify(withBody(patch, (b) => Object.assign(b, add))), null, `a PATCH carrying ${what}`);
+  }
+  assert.equal(row._plugintypeid_value, PLUGIN);
+  const after = await B.observe(dv, p);
+  assert.equal(after.rows[0].projectionSha256, p.rows[0].expectedSha256, 'proved with the implementation it was planned over');
+  for (const changed of ['00000000-0000-4000-8000-0000000000bb', null]) {
+    row._plugintypeid_value = changed;
+    assert.notEqual((await B.observe(dv, p)).rows[0].projectionSha256, p.rows[0].expectedSha256, `an implementation ${changed ? 'replaced' : 'removed'}`);
+  }
+});
+
 test('a PATCH carries exactly the row version the plan was prepared from; an update without a fresh base read is not planned', () => {
   const s = spec({ customApis: [{ ...spec().customApis[0], isPrivate: true }] });
   const base = (over = {}) => ({ state: 'present', kind: 'customApi', id: OTHER, parentId: null, rowVersion: 'W/"3"', decoded: { fields: { name: 'n', displayName: 'd', description: 'x' } }, ...over });
