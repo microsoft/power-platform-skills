@@ -162,6 +162,8 @@ node "${PLUGIN_ROOT}/scripts/lib/discover-site-components.js" \
   --projectRoot "."
 ```
 
+When `.solution-manifest.json` has a `connectorSolution` block, also pass `--connectorSolutionId "{connectorSolution.solutionId}"` — custom connectors live only in that solution, so without it `missing.customConnectors` reports only connectors that are not solution-aware.
+
 Parse stdout and evaluate `missing`. **Before doing anything else**, capture the **pre-sync state** so a post-sync re-confirmation gate can show what changed:
 
 ```
@@ -178,7 +180,8 @@ Then:
   > - **{X}** site components (e.g. {first 3 names}, …)
   > - **{Y}** cloud flows
   > - **{Z}** environment variable definitions with your publisher prefix
-  > - **{W}** custom tables"
+  > - **{W}** custom tables
+  > - **{V}** connection references used by site connections"
 
   <!-- gate: export-solution:2.5.completeness | category=progress | cancel-leaves=nothing -->
   > 🚦 **Gate (progress · export-solution:2.5.completeness):** Source solution incomplete vs live site. Sync first, export as-is (gap recorded), or abort.
@@ -222,6 +225,23 @@ Then:
 > **Why the post-sync gate exists**: when sync mode runs mid-export, it produces a different solution version than the one the user had in mind when they invoked the skill. Re-confirming after sync gives the user an explicit chance to inspect the version bump and the list of newly-adopted components before the zip is produced and (typically) shipped onward via `import-solution`. The Phase 2.5 trigger is intentional; the post-sync re-confirmation is the safety on top of it. This mirrors the same gate in `deploy-pipeline` Phase 3.5 — same shape, same options, same audit-trail rules — so users see consistent behavior whether they take the PP Pipelines path or the Manual export/import path.
 
 > **Why Phase 2.5 exists in the first place**: historically, components created after `setup-solution` (server logic from `add-server-logic`, flows from `add-cloud-flow`, env vars from `configure-env-variables` / `setup-auth`) were silently left out of the export zip and didn't travel to target environments. The ALM-aware-by-default principle in `AGENTS.md` requires this check at every gate where a solution leaves its source environment.
+
+### Phase 2.6 — Site Connections and Custom Connectors Pre-flight
+
+Skip when the Phase 2.5 discovery output has `siteConnections: null` (the site has no site connections).
+
+Site connections point at Dataverse connection references, and a connection reference for a **custom connector** can only be exported once the connector is solution-aware — otherwise `ExportSolutionAsync` fails with `0x80040265` (*"Exporting connection reference … for a custom connector requires the custom connector to be added to a dataverse solution"*). Catch that here instead of after the async export starts.
+
+1. **Non-solution-aware custom connectors** — if any `siteConnections.customConnectors[]` entry has `isSolutionAware: false`, STOP before Phase 3 and tell the user: *"Custom connector `{connectorName}` is not solution-aware, so the export would fail with 0x80040265. Run `/power-pages:setup-solution` (sync mode) — it makes the connector solution-aware in a separate connectors solution, with your consent — then re-run the export."* Do not export as-is: the platform rejects it.
+2. **Connectors solution coverage** — when `.solution-manifest.json` has a `connectorSolution` block, confirm every custom connector is in it:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/site-connections.js" \
+     --envUrl "{envUrl}" --token "{token}" --siteId "{websiteRecordId}" \
+     --solutionIds "{solutionId},{connectorSolution.solutionId}"
+   ```
+   If `missing.customConnectors` is non-empty, STOP with the same setup-solution (sync mode) remediation. If `siteConnections.customConnectors[]` is non-empty but the manifest has **no** `connectorSolution`, STOP the same way — the connectors must ship in their own solution, imported first ([known limitations](https://learn.microsoft.com/en-us/connectors/custom-connectors/customconnectorssolutions#known-limitations)).
+3. **Id-only site connections** — for each `siteConnections.problems[]` entry with `code: LOGICAL_NAME_MISSING`, warn (do not block): *"Site connection `{name}` stores only a connection reference id. Ids change on import, so it will not resolve in the target until it stores `connectionreferencelogicalname`."*
+4. **Export the connectors solution first.** When `connectorSolution` exists, run Phases 4–6 for it **before** the site solution, with the same Managed/Unmanaged choice from Phase 3 (Step 4.0 bumps its version too — pass `--solutionId "{connectorSolution.solutionId}"`). Record it in the Phase 7 marker as `connectorSolution: { solutionUniqueName, solutionId, version, zipPath }` and tell the user it must be **imported first**.
 
 ### Phase 3 — Configure Export
 
@@ -342,9 +362,12 @@ Then write `docs/alm/last-export.json`:
   "sourceEnvironmentUrl": "<envUrl>",
   "zipPath": "<zipPath>",
   "fileSizeBytes": <fileSizeBytes>,
-  "asyncOperationId": "<asyncOperationId>"
+  "asyncOperationId": "<asyncOperationId>",
+  "connectorSolution": { "solutionUniqueName": "...", "solutionId": "...", "version": "...", "zipPath": "..." }
 }
 ```
+
+Omit `connectorSolution` when the manifest has no connectors solution (Phase 2.6 step 4).
 
 The path is registered in `scripts/lib/alm-paths.js` under the key `lastExport` — programmatic consumers should resolve via `almPath(projectRoot, 'lastExport')` rather than re-inlining the path string. (Skill prose inlines the path verbatim for readability, matching the convention used for `last-deploy.json`, `last-import.json`, and the other ALM markers.)
 
@@ -357,6 +380,7 @@ The path is registered in `scripts/lib/alm-paths.js` under the key `lastExport` 
 | File | `{zipPath}` |
 | File size | `{size} KB` |
 | Export job | `{AsyncJobId}` |
+| Connectors solution | `{connectorSolution.solutionUniqueName}` v`{version}` → `{zipPath}` — **import this first** (only when present) |
 | Marker written | `docs/alm/last-export.json` |
 
 **Suggested next steps**:
@@ -401,7 +425,7 @@ Re-renders `docs/alm-plan.html` so any step-status updates the agent made during
 | Task subject | activeForm | Description |
 |---|---|---|
 | Verify prerequisites | Verifying prerequisites | Confirm PAC CLI auth, acquire Azure CLI token, verify API access |
-| Identify solution | Identifying solution | Read .solution-manifest.json or ask user, confirm solution exists in environment |
+| Identify solution | Identifying solution | Read .solution-manifest.json or ask user, confirm solution exists in environment; Phase 2.6 stops on non-solution-aware custom connectors used by site connections and queues the connectors solution for export first |
 | Configure export | Configuring export | Ask user: managed vs unmanaged, output directory |
 | Trigger async export | Triggering async export | Bump source solution version (Step 4.0) via bump-solution-version.js so the zip carries a strictly-increasing version label; POST ExportSolutionAsync, capture AsyncJobId, poll until complete |
 | Download solution zip | Downloading solution zip | POST DownloadSolutionExportData, decode base64, write zip to disk |

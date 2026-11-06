@@ -545,3 +545,85 @@ test('returns empty siteLanguages when the powerpagesitelanguage entity-set retu
   assert.equal(result.powerpagecomponents.total, 1,
     'Other discovery paths should still complete normally');
 });
+
+// --- Site connections (ppc type 36) ----------------------------------------
+
+test('labels type 36 as Site Connection', () => {
+  assert.equal(PPC_TYPE_LABELS[36], 'Site Connection');
+});
+
+test('site connections add their connection references and custom connectors to the inventory and missing diff', async () => {
+  const SITE = '11111111-2222-4333-8444-555555555555';
+  const CUSTOM = 'shared_contosoapi-0123456789abcdef01-fedcba9876543210fe';
+  const makeRequest = fakeRequest([
+    // The type-36 query (with content) is more specific than the inventory query, so match it first.
+    ['powerpagecomponenttype eq 36', {
+      value: [{
+        powerpagecomponentid: 'sc-1', name: 'On-prem API', statecode: 0,
+        content: JSON.stringify({ connectionreferencelogicalname: 'cr1_onprem', adx_siteconnection_adx_webrole: [] }),
+      }],
+    }],
+    ['/powerpagecomponents?', { value: [{ powerpagecomponentid: 'sc-1', name: 'On-prem API', powerpagecomponenttype: 36 }] }],
+    ['/connectionreferences?', {
+      value: [{ connectionreferenceid: '0b0b0b0b-0000-4000-8000-000000000002', connectionreferencelogicalname: 'cr1_onprem', connectorid: `/providers/Microsoft.PowerApps/apis/${CUSTOM}` }],
+    }],
+    ['/connectors?', { value: [] }],
+    ['/solutioncomponentdefinitions?', { value: [{ solutioncomponenttype: 10171 }] }],
+    ['/solutioncomponents?', { value: [{ objectid: 'sc-1', componenttype: 10446 }] }],
+    ['/workflows?', { value: [] }],
+    ['/powerpagesitelanguages?', { value: [] }],
+  ]);
+
+  const result = await discoverSiteComponents({
+    envUrl: 'https://contoso.crm.dynamics.com', token: 't', siteId: SITE, solutionId: 'sol-1', makeRequest,
+  });
+  assert.equal(result.powerpagecomponents.byType['36'][0].typeLabel, 'Site Connection');
+  assert.equal(result.siteConnections.connectionReferences[0].logicalName, 'cr1_onprem');
+  assert.equal(result.siteConnections.customConnectors[0].connectorName, CUSTOM);
+  assert.deepEqual(result.missing.powerpagecomponents, []);
+  assert.deepEqual(result.missing.connectionReferences.map((r) => r.logicalName), ['cr1_onprem']);
+  assert.deepEqual(result.missing.customConnectors.map((c) => c.connectorName), [CUSTOM]);
+});
+
+test('sites without site connections make no connection-reference requests', async () => {
+  const urls = [];
+  const inner = fakeRequest([
+    ['/powerpagecomponents?', { value: [{ powerpagecomponentid: 'a1', name: 'Home', powerpagecomponenttype: 2 }] }],
+    ['/workflows?', { value: [] }],
+    ['/powerpagesitelanguages?', { value: [] }],
+  ]);
+  const makeRequest = async (req) => { urls.push(req.url); return inner(req); };
+  const result = await discoverSiteComponents({ envUrl: 'https://contoso.crm.dynamics.com', token: 't', siteId: 'site-1', makeRequest });
+  assert.equal(result.siteConnections, null);
+  assert.equal(urls.some((u) => u.includes('connectionreferences')), false);
+});
+
+test('a solution-aware custom connector in the connectors solution is not reported missing', async () => {
+  const SITE = '11111111-2222-4333-8444-555555555555';
+  const CUSTOM = 'shared_contosoapi-0123456789abcdef01-fedcba9876543210fe';
+  const CONNECTOR_SOLUTION = '0d0d0d0d-0000-4000-8000-000000000004';
+  const base = [
+    ['powerpagecomponenttype eq 36', {
+      value: [{ powerpagecomponentid: 'sc-1', name: 'API', statecode: 0, content: JSON.stringify({ connectionreferencelogicalname: 'cr1_api' }) }],
+    }],
+    ['/powerpagecomponents?', { value: [{ powerpagecomponentid: 'sc-1', name: 'API', powerpagecomponenttype: 36 }] }],
+    ['/connectionreferences?', { value: [{ connectionreferenceid: 'ref-1', connectionreferencelogicalname: 'cr1_api', connectorid: `/providers/Microsoft.PowerApps/apis/${CUSTOM}` }] }],
+    ['/connectors?', { value: [{ connectorid: 'conn-row-1', connectorinternalid: CUSTOM, name: 'cr1_contosoapi' }] }],
+    ['/solutioncomponentdefinitions?', { value: [{ solutioncomponenttype: 10171 }] }],
+    [`_solutionid_value eq ${CONNECTOR_SOLUTION}`, { value: [{ objectid: 'conn-row-1', componenttype: 372 }] }],
+    ['/solutioncomponents?', { value: [{ objectid: 'sc-1' }, { objectid: 'ref-1' }] }],
+    ['/workflows?', { value: [] }],
+    ['/powerpagesitelanguages?', { value: [] }],
+  ];
+  const withoutConnectorSolution = await discoverSiteComponents({
+    envUrl: 'https://contoso.crm.dynamics.com', token: 't', siteId: SITE, solutionId: 'sol-1', makeRequest: fakeRequest(base),
+  });
+  assert.deepEqual(withoutConnectorSolution.missing.customConnectors, [], 'never a gap just because it is not in the site solution');
+  assert.deepEqual(withoutConnectorSolution.missing.connectionReferences, []);
+
+  const withConnectorSolution = await discoverSiteComponents({
+    envUrl: 'https://contoso.crm.dynamics.com', token: 't', siteId: SITE, solutionId: 'sol-1',
+    connectorSolutionId: CONNECTOR_SOLUTION, makeRequest: fakeRequest(base),
+  });
+  assert.deepEqual(withConnectorSolution.missing.customConnectors, []);
+});

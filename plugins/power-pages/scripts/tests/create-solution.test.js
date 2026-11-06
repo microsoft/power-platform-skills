@@ -36,6 +36,53 @@ test('createSolution extracts solutionId from OData-EntityId header on 204', asy
   assert.equal(result.created, true);
 });
 
+test('createSolution extracts solutionId from the 201 body when Prefer: return=representation omits OData-EntityId', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  let sentPrefer = null;
+  helpers.makeRequest = async ({ headers }) => {
+    sentPrefer = headers.Prefer;
+    return {
+      statusCode: 201,
+      body: JSON.stringify({ solutionid: 'aabbccdd-1234-5678-abcd-000000000002', uniquename: 'MyPortal' }),
+      headers: {},
+    };
+  };
+  t.after(() => { helpers.makeRequest = orig; });
+
+  const result = await createSolution({
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'fake',
+    uniqueName: 'MyPortal',
+    friendlyName: 'My Portal',
+    version: '1.0.0.0',
+    publisherId: 'pub-id-001',
+  });
+
+  assert.equal(sentPrefer, 'return=representation');
+  assert.equal(result.solutionId, 'aabbccdd-1234-5678-abcd-000000000002');
+  assert.equal(result.created, true);
+});
+
+test('createSolution reports a clear error when a 201 carries neither header nor solutionid', async (t) => {
+  const helpers = require('../lib/validation-helpers');
+  const orig = helpers.makeRequest;
+  helpers.makeRequest = async () => ({ statusCode: 201, body: '{"uniquename":"MyPortal"}', headers: {} });
+  t.after(() => { helpers.makeRequest = orig; });
+
+  await assert.rejects(
+    () => createSolution({
+      envUrl: 'https://org.crm.dynamics.com',
+      token: 'fake',
+      uniqueName: 'MyPortal',
+      friendlyName: 'My Portal',
+      version: '1.0.0.0',
+      publisherId: 'pub-id-001',
+    }),
+    /Solution created \(HTTP 201\) but no solutionId was found/
+  );
+});
+
 test('createSolution handles 409 by returning existing solution ID', async (t) => {
   const helpers = require('../lib/validation-helpers');
   const orig = helpers.makeRequest;

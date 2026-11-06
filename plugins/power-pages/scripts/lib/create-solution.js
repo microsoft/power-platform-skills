@@ -43,6 +43,17 @@ function extractGuidFromEntityId(entityIdHeader) {
   return match ? match[1] : null;
 }
 
+function extractSolutionIdFromBody(body) {
+  if (!body) return null;
+  try {
+    const parsed = typeof body === 'string' ? JSON.parse(body) : body;
+    const id = parsed && parsed.solutionid;
+    return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 async function createSolution({ envUrl, token, uniqueName, friendlyName, version, publisherId, description }) {
   if (!envUrl || !uniqueName || !friendlyName || !version || !publisherId) {
     throw new Error('--envUrl, --uniqueName, --friendlyName, --version, --publisherId are all required');
@@ -80,12 +91,20 @@ async function createSolution({ envUrl, token, uniqueName, friendlyName, version
 
   if (res.error) throw new Error(`API request failed: ${res.error}`);
 
-  // 204: created (no body), extract ID from OData-EntityId header
+  // `Prefer: return=representation` makes Dataverse answer 201 with the created row
+  // in the body (and, in practice, no OData-EntityId header); without the preference
+  // it answers 204 with only the header. Accept either source of the id:
+  //   201 body:   { "solutionid": "aabbccdd-…", "uniquename": "MyPortal", … }
+  //   204 header: OData-EntityId: https://org.crm.dynamics.com/api/data/v9.2/solutions(aabbccdd-…)
+  // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api#create-with-data-returned
   if (res.statusCode === 204 || res.statusCode === 201) {
     const entityIdHeader = res.headers && (res.headers['odata-entityid'] || res.headers['OData-EntityId']);
-    const solutionId = extractGuidFromEntityId(entityIdHeader);
+    const solutionId = extractGuidFromEntityId(entityIdHeader) || extractSolutionIdFromBody(res.body);
     if (!solutionId) {
-      throw new Error(`Solution created but could not extract solutionId from OData-EntityId header: ${entityIdHeader}`);
+      throw new Error(
+        `Solution created (HTTP ${res.statusCode}) but no solutionId was found in the OData-EntityId header ` +
+        `(${entityIdHeader}) or the response body.`
+      );
     }
     return { solutionId, uniqueName, created: true };
   }
