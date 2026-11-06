@@ -365,7 +365,7 @@ test('a row this build left unchanged that drifts before the final proof fails w
   assert.deepStrictEqual(error.commandStates.rows[0].changed, []);
   assert.strictEqual(error.commandStates.publication[0].outcome, 'confirmed');
   assert.match(error.message, /: command state [^:]+: not written by this build \(it already held the declared flags\); then a read at the end of the build found hidden false, disabled false, not the declared flags — /);
-  assert.doesNotMatch(error.message, /accept|sav(e|ed|ing)\b|this build's write/i, 'no write of this build is claimed');
+  assert.doesNotMatch(error.message, /accept|acknowledg|sav(e|ed|ing)\b|this build's write/i, 'no write of this build is claimed');
 });
 
 test('an unanswered write whose row a competing edit made match, then changed again, fails the final proof without claiming the write', async () => {
@@ -387,7 +387,7 @@ test('an unanswered write whose row a competing edit made match, then changed ag
   assert.strictEqual(error.commandStates.publication[0].outcome, 'confirmed');
   assert.strictEqual(error.commandStatePublicationError, undefined);
   assert.match(error.message, /this build's write got no usable answer \(HTTP 503\), so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them; then a read at the end of the build found hidden false/);
-  assert.doesNotMatch(error.message.replaceAll('not proof this build saved them', ''), /accept|sav(e|ed|ing)\b|(?<!not )written by this build/i, 'the unanswered write is not claimed as this build\'s');
+  assert.doesNotMatch(error.message.replaceAll('not proof this build saved them', ''), /accept|acknowledg|sav(e|ed|ing)\b|(?<!not )written by this build/i, 'the unanswered write is not claimed as this build\'s');
 });
 // The build's own entry (build-model-app.js buildModelApp) with its durable journal, for what a halt leaves on disk and says on the console.
 async function buildWithJournal(h, spec, approvals) {
@@ -544,7 +544,7 @@ test('the halt, the recorded outcome and the printed line agree on what happened
       assert.ok(!seen.includes(true), `${c.what}: no read held the declared flags`);
     }
     for (const text of [halt.message, line]) {
-      if (c.before !== 'acknowledged') assert.doesNotMatch(text.replace('not proof this build saved them', ''), /accept|sav(e|ed|ing)\b|(?<!not )written by this build/i, `${c.what}: ${text}`);
+      if (c.before !== 'acknowledged') assert.doesNotMatch(text.replace('not proof this build saved them', ''), /accept|acknowledg|sav(e|ed|ing)\b|(?<!not )written by this build/i, `${c.what}: ${text}`);
       if (c.before === 'unchanged') assert.doesNotMatch(text, /this build's write|this build sent|the write of/i, `${c.what}: no write invented: ${text}`);
       if (c.before) assert.doesNotMatch(text, /no read (after it )?showed/, `${c.what}: the matching read is not denied: ${text}`);
     }
@@ -590,7 +590,7 @@ async function throughBuild({ hidden = false, overrides, retry = false, atRetry,
   const line = lines.find((l) => l.startsWith(`  command state ${T}/MainTab/${ROW}: `));
   return { h, halt, result, row: states.rows[0], states, line, lines, attempts, rows };
 }
-const NO_CLAIM = /accept|\bsav(e|es|ed|ing)\b|(?<!not )written by this build/i;
+const NO_CLAIM = /accept|acknowledg|\bsav(e|es|ed|ing)\b|(?<!not )written by this build/i;
 const unproven = (text) => text.replaceAll('not proof this build saved them', '');
 
 test('a read after every row\'s step that cannot be judged is said as unreadable: never as flags the row does not hold', async () => {

@@ -3634,8 +3634,12 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   later attempt has nothing to send keeps the earlier write's outcome while every read since it matched. The outcome
   (`ROW_OUTCOMES`) is a short name for the row's step: `record` passes it through `checkRowRecord`, which throws on any
   value the list does not name or the row's facts do not show. `command-state-outcomes.test.js` checks every history
-  of facts on every path, and lexes every string, template and regular-expression literal of the writer's sources
-  (`lib/source-literals.js`, case-insensitive, any inflection) so claim wording outside the vocabulary fails. Any such
+  of facts on every path, including a real final-proof halt that sent no write, and keeps a case-insensitive
+  literal-text inventory: it lexes the string, template and regular-expression literals of the writer's sources
+  (`lib/source-literals.js`) and fails on a listed claim word (accept, acknowledge, save, outcome unknown, written by
+  this build, with the inflections it lists) outside the vocabulary. The inventory reads literal text only — no
+  constant folding or call-graph analysis — so wording built at run time is left to the behavioural tests on the
+  actual messages. Any such
   halt carries non-enumerable `commandStates` and, while a table's publication is unconfirmed,
   `commandStatePublicationError` (never in the journal or a retry's reading).
   There is no store and no cross-run fence: a sent publish can complete after a halt or after an entry is removed,

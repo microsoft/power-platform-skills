@@ -112,6 +112,9 @@ const LATE_MISMATCH_REMEDY = 'this build did not overwrite that change and rolls
 const ROW_OUTCOMES = Object.freeze(['planned', 'unchanged', 'acknowledged', 'observed-matching-after-unknown-send', 'unknown', 'refused', 'drifted']);
 // What a `drifted` row was before its later read: a row that matched after its own step.
 const DRIFT_BEFORE = Object.freeze(['unchanged', 'acknowledged', 'observed-matching-after-unknown-send']);
+// The one word for a write answered 200/204: a send's `answer` in the facts, and the outcome of a row read back holding its flags after one.
+// It is named here, inside the vocabulary, so that no literal outside the vocabulary says it.
+const ACKNOWLEDGED = 'acknowledged';
 // The ONE vocabulary every claim about a row is made of (the renderer, renderRowHistory, and the publication kinds, rowKind, compose these and
 // nothing else that claims a write). The rule the words keep: only a write answered 200/204 AND then read back holding the flags is
 // "accepted" or "saved"; a write with no usable answer says its outcome is unknown and what a later read found; a row this build did not
@@ -166,7 +169,7 @@ const named = (outcome) => typeof outcome === 'string' && ROW_OUTCOMES.includes(
 // `lost` is a send whose answer does not say whether it landed (none, 5xx, 408, 429 or a status this does not expect).
 const isRead = (e) => !!e && e.kind === 'read';
 const isSend = (e) => !!e && e.kind === 'send';
-const counts = (e) => isSend(e) && (e.answer === 'acknowledged' || e.answer === 'lost');
+const counts = (e) => isSend(e) && (e.answer === ACKNOWLEDGED || e.answer === 'lost');
 const matched = (e) => e.result === 'matched';
 // The last write that may have landed, and the reads made after it (every read, when there is none).
 function sinceLastSend(facts) {
@@ -213,7 +216,7 @@ function renderRowHistory(facts) {
   sends.forEach(([send, at], n) => {
     const end = n + 1 < sends.length ? sends[n + 1][1] : facts.length;
     let runs = readRuns(facts.slice(at + 1, end).filter(isRead));
-    if (send.answer === 'acknowledged') {
+    if (send.answer === ACKNOWLEDGED) {
       if (runs.length && matched(runs[0].first) && runs[0].first.phase === 'readback' && runs[0].first.attempt === send.attempt) {
         clauses.push(`${ROW_PHRASES.writtenAndReadBack}${tag(send)}`);
         runs = runs.slice(1);
@@ -250,7 +253,7 @@ function rowKind(facts) {
     if (matched(last)) return KINDS.alreadyHeld;
     return lostAfterMatch(reads) || KINDS.notWritten;
   }
-  if (after.length && after.every(matched)) return send.answer === 'acknowledged' ? KINDS.saved : KINDS.heldAfterLost;
+  if (after.length && after.every(matched)) return send.answer === ACKNOWLEDGED ? KINDS.saved : KINDS.heldAfterLost;
   return lostAfterMatch(after) || KINDS.unknown;
 }
 
@@ -263,7 +266,7 @@ function factsShow(outcome, before, facts) {
   const lastSendOfAny = [...facts].reverse().find(isSend);
   switch (outcome) {
     case 'unchanged': return !send && !!last && matched(last);
-    case 'acknowledged': return !!send && send.answer === 'acknowledged' && allMatched;
+    case ACKNOWLEDGED: return !!send && send.answer === ACKNOWLEDGED && allMatched;
     case 'observed-matching-after-unknown-send': return !!send && send.answer === 'lost' && allMatched;
     case 'unknown': return !!send && !allMatched;
     case 'refused': return !send || (!!lastSendOfAny && lastSendOfAny.answer === 'refused');
@@ -635,7 +638,7 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
   function outcomeWithoutSend(facts) {
     const { send, reads } = sinceLastSend(facts);
     if (!send) return 'unchanged';
-    if (reads.length && reads.every(matched)) return send.answer === 'acknowledged' ? 'acknowledged' : 'observed-matching-after-unknown-send';
+    if (reads.length && reads.every(matched)) return send.answer === ACKNOWLEDGED ? ACKNOWLEDGED : 'observed-matching-after-unknown-send';
     return 'unknown';
   }
 
@@ -670,13 +673,13 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     const status = answer && answer.status;
     const what = `${label(item)} (the write of ${flagWords(fresh.delta)})`;
     if (!thrown && (status === 200 || status === 204)) {
-      note(item.rowId, { kind: 'send', answer: 'acknowledged', status, flags });
+      note(item.rowId, { kind: 'send', answer: ACKNOWLEDGED, status, flags });
       const back = await readBack(fresh, 'readback');
       if (!back.ok) {
         record(item.rowId, { outcome: 'unknown', changed, code: CODES.notConfirmed });
         throw fail(CODES.notConfirmed, `${what}: ${history(item.rowId)}`);
       }
-      record(item.rowId, { outcome: 'acknowledged', changed });
+      record(item.rowId, { outcome: ACKNOWLEDGED, changed });
       return;
     }
     const refused = (code) => {

@@ -6,8 +6,11 @@
 //     checks every message path says what those facts show and nothing more.
 //   - ROW_OUTCOMES is closed and checked against the facts at run time: `record` is the one boundary a row's outcome is set through, and
 //     checkRowRecord throws on a value the list does not name, or one the row's facts do not show.
-//   - The wording inventory reads every string, template and regular-expression literal of the writer's sources with the plugin's own lexer
-//     (lib/source-literals.js), whatever the quotes or the case, and fails on claim wording outside the one vocabulary.
+//   - The wording inventory is a case-insensitive literal-text inventory: it reads every string, template and regular-expression literal of
+//     the writer's sources with the plugin's own lexer (lib/source-literals.js), whatever the quotes, and fails where one says a listed claim
+//     word (accept, acknowledge, save, outcome unknown, written by this build, each with the inflections CLAIM_WORDS lists) outside the one
+//     vocabulary. It reads literal text only — no constant folding or call-graph analysis — so it is backed by the behavioural tests above,
+//     which check the actual messages, a real halt that sent nothing among them.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -67,8 +70,8 @@ function establish(facts) {
   };
 }
 
-// The claim words: a row was accepted or saved, or written by this build (any case, any inflection).
-const CLAIM = /accept|\bsav(?:e|es|ed|ing)\b|(?<!not )written by this build/i;
+// The claim words: a row was accepted, acknowledged or saved, or written by this build, in any case (each word's inflections listed).
+const CLAIM = /accept|acknowledg|\bsav(?:e|es|ed|ing)\b|(?<!not )written by this build/i;
 const unclaimed = (text) => text.replaceAll('which is not proof this build saved them', '').replaceAll('not proof this build saved them', '');
 const row = (facts) => ({ entity: 'new_a', location: 'MainTab', scope: 'table', rowId: 'r1', outcome: 'unknown', changed: [], facts });
 const publicationOf = (r) => {
@@ -120,7 +123,7 @@ test('every history of facts is worded by every message path from those facts, a
   for (const odd of [{ outcome: 'acknowledged' }, { outcome: 'something-new' }]) {
     const text = ROW_MESSAGES.lateNote([{ entity: 'new_a', location: 'MainTab', rowId: 'r1', ...odd }]);
     assert.match(text, /what this build did to it is not known/);
-    assert.doesNotMatch(text, /accept|sav(e|ed)\b|write|read (back|found|showed)/i);
+    assert.doesNotMatch(text, /accept|acknowledg|sav(e|ed)\b|write|read (back|found|showed)/i);
   }
 });
 
@@ -238,7 +241,7 @@ test('a writer that would record an outcome the list does not name, or its facts
 
 // Every literal (string of either quote, template, regular expression) in `source` that says claim words, outside [from, to): found by the
 // plugin's lexer, which blanks exactly the literals and comments, so neither the quote style, the case nor a comment can hide or fake one.
-const CLAIM_WORDS = /\baccept(?:s|ed|ing|ance)?\b|\bsav(?:e|es|ed|ing)\b(?! customizations)|\bunknown outcome\b|\boutcome (?:is )?unknown\b|(?<!not )\bwritten by this build\b/gi;
+const CLAIM_WORDS = /\baccept(?:s|ed|ing|ance)?\b|\backnowledg(?:e|es|ed|ing|ement|ements|ment|ments)\b|\bsav(?:e|es|ed|ing)\b(?! customizations)|\bunknown outcome\b|\boutcome (?:is )?unknown\b|(?<!not )\bwritten by this build\b/gi;
 function claimWordingOutside(source, from = 0, to = 0) {
   const blank = blankLiterals(source);
   const comments = commentRanges(source);
@@ -269,7 +272,7 @@ function writerSources() {
   ];
 }
 
-test('no literal of the writer\'s sources makes a claim about a row outside the one vocabulary, in any case or inflection', async () => {
+test('no literal of the writer\'s sources makes a claim about a row outside the one vocabulary, in any case or listed inflection', async () => {
   const [[, run, from, to]] = writerSources();
   assert.ok(from > 0 && to > from, 'the vocabulary block is where this reads it');
   assert.ok(!run.slice(from, to).includes('function '), 'the vocabulary holds words, not the renderer');
@@ -284,11 +287,17 @@ test('no literal of the writer\'s sources makes a claim about a row outside the 
   const label = 'const rowLabel = (r) => `command state ${r.entity}/${r.location}/${r.rowId}`;';
   assert.ok(run.includes(label));
   const remedy = 'const LATE_MISMATCH_REMEDY = \'';
+  // A clause appended to the remedy of the final proof, which a halt that sent nothing says.
+  const remedyEnd = 'then run the build again\';';
+  assert.ok(run.includes(remedyEnd));
+  const acknowledgement = run.replace(remedyEnd, 'then run the build again; Acknowledgement of this build\\\'s flag write is confirmed\';');
   for (const [what, mutated] of [
     ['double quotes', run.replace(label, 'const rowLabel = (r) => "accepted " + `command state ${r.entity}/${r.location}/${r.rowId}`;')],
     ['single quotes', run.replace(remedy, `${remedy}saved; `)],
     ['a capital letter', run.replace(remedy, `${remedy}Saved by this build; `)],
     ['an inflection', run.replace(remedy, `${remedy}the platform accepts it; `)],
+    ['an acknowledgement', acknowledgement],
+    ['an acknowledged write', run.replace(remedy, `${remedy}the write was acknowledged; `)],
     ['a template', run.replace('throw fail(CODES.notConfirmed, ROW_MESSAGES.postWriteMismatch(', 'throw fail(CODES.notConfirmed, `Unknown outcome ${1}` + ROW_MESSAGES.postWriteMismatch(')],
     ['a renderer clause', run.replace('`a read ${where} found the declared flags`', '`a read ${where} found the declared flags, so this build saved them`')],
   ]) {
@@ -300,7 +309,12 @@ test('no literal of the writer\'s sources makes a claim about a row outside the 
 
   // And the same capitalized mutation through a real halt that sent nothing: the writer as shipped claims no write, the mutated one does.
   const halt = async (source) => {
-    try { await throughWriter(writerFrom(source), { hidden: true, drift: true }); } catch (error) { return error; }
+    let patches = 0;
+    const counted = () => { patches += 1; return undefined; };
+    try { await throughWriter(writerFrom(source), { hidden: true, drift: true, patch: counted }); } catch (error) {
+      assert.strictEqual(patches, 0, 'the row already held its flags, so the halt follows no write');
+      return error;
+    }
     assert.fail('the final proof halts');
   };
   const shipped = await halt(run);
@@ -308,4 +322,8 @@ test('no literal of the writer\'s sources makes a claim about a row outside the 
   assert.doesNotMatch(unclaimed(shipped.message), CLAIM, shipped.message);
   const mutated = await halt(run.replace(remedy, `${remedy}Saved by this build; `));
   assert.match(mutated.message, CLAIM, 'the behavioural check sees the capitalized claim too');
+  const acknowledged = await halt(acknowledgement);
+  assert.strictEqual(acknowledged.code, 'command-state-not-confirmed');
+  assert.match(acknowledged.message, /Acknowledgement of this build's flag write is confirmed/);
+  assert.match(unclaimed(acknowledged.message), CLAIM, 'the behavioural check sees an acknowledgement in a halt that sent nothing');
 });
