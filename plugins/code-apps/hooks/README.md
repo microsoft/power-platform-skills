@@ -8,7 +8,9 @@ Host detection uses `CLAUDECODE` / `CLAUDE_CODE_ENTRYPOINT`, then `COPILOT_CLI` 
 
 ## Host contracts
 
-- Copilot CLI loads the plugin-root `hooks.json` with native `preToolUse` events.
+- Copilot CLI loads `com.github.copilot/hooks/hooks.json` for the portable package,
+  or the plugin-root `hooks.json` for the legacy package, with native `preToolUse` events.
+  Keep both configurations equal. Clients select one format rather than combining them.
   The hook reads `toolName` / `toolArgs`, chooses syntax from the actual `bash` or
   `powershell` tool name, and returns `modifiedArgs`.
 - Claude Code loads `hooks/hooks.json` with `PreToolUse` events. The hook reads

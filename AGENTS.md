@@ -60,6 +60,8 @@ power-platform-skills/
 ├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
 ├── .claude-plugin/           # Legacy manifest mirrors for existing subscriptions
 │   └── marketplace.json
+├── .agents/plugins/
+│   └── marketplace.json      # Codex catalog for the adapted Code Apps package only
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
 │       ├── .plugin/
@@ -110,6 +112,9 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Both are repo-wide and enforce metadata/marketplace rules. `validate-repository-metadata` also
 runs standalone installer regression tests on Linux and Windows.
 
+`code-apps-validation` checks the portable Code Apps package on Windows and Ubuntu.
+Its path filter covers Code Apps, its Codex catalog, and the compatibility validators.
+
 **Every test workflow is path-filtered** — to a single plugin (`power-pages` → `plugins/power-pages/**`;
 `model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles;
 `pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles), or,
@@ -141,7 +146,7 @@ Each plugin follows this structure:
 - `.claude-plugin/plugin.json` — legacy mirror of `.plugin/plugin.json` kept for existing subscriptions
 - `.mcp.json` — MCP server configuration (optional)
 - `plugin.json` and `mcp.json` — optional additive Agent Plugins 1.0.0 files at the
-  individual plugin root (currently `process-intelligence`); retain the legacy files above
+  individual plugin root (currently `process-intelligence` and `code-apps` use `plugin.json`); retain the legacy files above
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
 - `scripts/` — Shared utility scripts referenced by skills and agents

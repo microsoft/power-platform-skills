@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Add Work IQ (M365 Copilot Search)
 
@@ -24,13 +24,13 @@ Work IQ is accessed through the dedicated **Work IQ Copilot MCP** connector (`sh
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md).
 
 ### Step 2: Add Connector
 
-The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)) adds the data source and generates the typed service. Make sure the CLI is installed in the project (see cli-binary.md) and you are signed in (`pa auth status`, or `power-apps auth-status` on `power-apps`-only projects; it shares the same auth as the rest of the code-app skills).
+The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](../../shared/cli-binary.md)) adds the data source and generates the typed service. Make sure the CLI is installed in the project (see cli-binary.md) and you are signed in (`pa auth status`, or `power-apps auth-status` on `power-apps`-only projects; it shares the same auth as the rest of the code-app skills).
 
-Work IQ is a **non-tabular** connector (api id `shared_a365copilotchatmcp`, shown as **Work IQ Copilot MCP (Preview)**). Get its connection as described in [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections).
+Work IQ is a **non-tabular** connector (api id `shared_a365copilotchatmcp`, shown as **Work IQ Copilot MCP (Preview)**). Get its connection as described in [connector-reference.md](../../shared/connector-reference.md#connections).
 
 #### CLI 1.3.0+ (`PA_INLINE_CONNECTIONS=yes`)
 
@@ -59,7 +59,7 @@ pa connection create --connector shared_a365copilotchatmcp
 ```
 
 - The environment is read automatically from the app's `power.config.json` — you do **not** need to pass an environment id.
-- If the connection needs a browser sign-in, the CLI can only do that from an interactive terminal. If it says so, follow [Create a connection with the user](${PLUGIN_ROOT}/shared/connector-reference.md#create-a-connection-with-the-user): the user runs the same command in their own terminal.
+- If the connection needs a browser sign-in, the CLI can only do that from an interactive terminal. If it says so, follow [Create a connection with the user](../../shared/connector-reference.md#create-a-connection-with-the-user): the user runs the same command in their own terminal.
 - On success it prints the **Connection ID** — save it for the next step.
 
 **STOP HERE if a browser sign-in is needed:**

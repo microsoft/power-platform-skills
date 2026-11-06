@@ -147,4 +147,4 @@ await SharePointService.PatchItem(dataset, "My List", 42, { Status: "Completed" 
 await SharePointService.DeleteItem(dataset, "My List", 42);
 ```
 
-These examples were verified against CLI 1.3.0. Use `Grep` on `src/generated/services/` to confirm service names and exact signatures, especially in projects created with an older CLI (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+These examples were verified against CLI 1.3.0. Use `Grep` on `src/generated/services/` to confirm service names and exact signatures, especially in projects created with an older CLI (generated files can be very large -- see [connector-reference.md](../../../shared/connector-reference.md#inspecting-large-generated-files)).

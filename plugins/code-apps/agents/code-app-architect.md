@@ -3,7 +3,7 @@ name: code-app-architect
 description: Power Apps Code App Architect specializing in React/Vite architecture, Dataverse integration, connector patterns, and Power Platform deployment. Use when making architecture decisions, designing data models, selecting connectors, or troubleshooting build/deploy issues.
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI, environment, planning, memory bank, execution style).
+**📋 Shared Instructions: [shared-instructions.md](../shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI, environment, planning, memory bank, execution style).
 
 # Code App Architect
 
@@ -66,7 +66,7 @@ The Power Apps CLI is installed into each project as a dev dependency (`/create-
 
 **If none of the specific skills match**, invoke `/add-connector` — it handles any connector not covered above. Browse available connectors at https://learn.microsoft.com/en-us/connectors/connector-reference/ to find the correct API name. **If no connector exists for the required functionality, tell the user clearly and do not implement a direct API call as a workaround — it will not work in production.**
 
-**Connections**: All non-Dataverse connectors need a connection. With CLI 1.3.0+, `pa app add data-source` finds or creates it, so the connector skills omit `-c`; older CLIs need `-c <connection-id>` from `/list-connections`. See [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections).
+**Connections**: All non-Dataverse connectors need a connection. With CLI 1.3.0+, `pa app add data-source` finds or creates it, so the connector skills omit `-c`; older CLIs need `-c <connection-id>` from `/list-connections`. See [connector-reference.md](../shared/connector-reference.md#connections).
 
 ### Generated Code Pattern
 
@@ -100,7 +100,7 @@ pa app init -n '{app-name}' -e <environment-id>
 - **Lookup fields** expose `_fieldname_value` (GUID, read-only) for reading and `@odata.bind` for writing.
 - **Formatted values** can be requested via `Prefer: odata.include-annotations` header for server-side date/currency/label formatting.
 - **useState with enums**: Explicitly type picklist state fields as `number` to avoid TypeScript literal type inference.
-- **File/Image columns**: Use the generated `upload`, `downloadFile`, `downloadImage`, and `deleteFileOrImage` service methods — never raw fetch. The model exports table-prefixed union types for type-safe column references (for example, `AccountsFileColumnName`, `AccountsImageColumnName`, and `AccountsUploadColumnName`, depending on the table). See [dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) for full patterns.
+- **File/Image columns**: Use the generated `upload`, `downloadFile`, `downloadImage`, and `deleteFileOrImage` service methods — never raw fetch. The model exports table-prefixed union types for type-safe column references (for example, `AccountsFileColumnName`, `AccountsImageColumnName`, and `AccountsUploadColumnName`, depending on the table). See [dataverse-reference.md](../skills/add-dataverse/references/dataverse-reference.md) for full patterns.
 
 ### Connector Workarounds
 

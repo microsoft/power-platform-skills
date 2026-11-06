@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Add Connector (Generic)
 
@@ -29,7 +29,7 @@ Fallback skill for any connector not covered by a specific `/add-*` skill. For c
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md).
 
 ### Step 2: Identify Connector
 
@@ -63,7 +63,7 @@ Common connector API names:
 
 ### Step 3: Add Connector
 
-Get the connection as described in [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections). On CLI 1.3.0+ (`PA_INLINE_CONNECTIONS=yes`), tell the user a connection may be created with their account, run the add without `-c` and with `--non-interactive`, and handle the result with the outcome table there. On older CLIs, run `/list-connections` first to find the connection ID (if none exists, create one with `pa connection create` as described in connector-reference.md) and pass `-c <connection-id>`.
+Get the connection as described in [connector-reference.md](../../shared/connector-reference.md#connections). On CLI 1.3.0+ (`PA_INLINE_CONNECTIONS=yes`), tell the user a connection may be created with their account, run the add without `-c` and with `--non-interactive`, and handle the result with the outcome table there. On older CLIs, run `/list-connections` first to find the connection ID (if none exists, create one with `pa connection create` as described in connector-reference.md) and pass `-c <connection-id>`.
 
 ```bash
 # CLI 1.3.0+, connectors that only have actions (Teams, Office 365 Outlook, Azure DevOps, ...):

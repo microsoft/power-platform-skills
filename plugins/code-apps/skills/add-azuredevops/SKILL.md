@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Add Azure DevOps
 
@@ -18,11 +18,11 @@ model: sonnet
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md).
 
 ### Step 2: Add Connector
 
-Get the connection as described in [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections). The Azure DevOps connector's ID is `shared_visualstudioteamservices`.
+Get the connection as described in [connector-reference.md](../../shared/connector-reference.md#connections). The Azure DevOps connector's ID is `shared_visualstudioteamservices`.
 
 **CLI 1.3.0+ (`PA_INLINE_CONNECTIONS=yes`):** tell the user that adding Azure DevOps may create a connection with their account, then run the add without `-c` and handle the result with the outcome table in connector-reference.md:
 
@@ -100,7 +100,7 @@ await AzureDevOpsService.HttpRequest({
 
 Docs: [Azure DevOps REST API](https://learn.microsoft.com/en-us/rest/api/azure/devops/?view=azure-devops-rest-7.2)
 
-Use `Grep` to find specific methods in `src/generated/services/AzureDevOpsService.ts` (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find specific methods in `src/generated/services/AzureDevOpsService.ts` (generated files can be very large -- see [connector-reference.md](../../shared/connector-reference.md#inspecting-large-generated-files)).
 
 ### Step 5: Build
 

@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -26,7 +26,7 @@ Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md).
 
 ### Step 2: Plan
 
@@ -84,7 +84,7 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 ### Step 6: Get Connection ID
 
-Discovering sites and lists (Steps 7–8) needs a SharePoint connection ID on every CLI version: `pa connection list-datasets` and `list-tables` don't find or create connections the way `pa app add data-source` does on CLI 1.3.0+ (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections)).
+Discovering sites and lists (Steps 7–8) needs a SharePoint connection ID on every CLI version: `pa connection list-datasets` and `list-tables` don't find or create connections the way `pa app add data-source` does on CLI 1.3.0+ (see [connector-reference.md](../../shared/connector-reference.md#connections)).
 
 1. Run the `/list-connections` skill, filtered with `--search sharepointonline`.
 2. Exactly one SharePoint connection: use its connection ID. Several: ask the user which one to use.
@@ -96,7 +96,7 @@ Discovering sites and lists (Steps 7–8) needs a SharePoint connection ID on ev
      ```
 
      It creates the connection silently with the user's account and prints `Connection ID: <id>`.
-   - **Older CLIs, or if the user wants a different sign-in type:** follow [Create a connection with the user](${PLUGIN_ROOT}/shared/connector-reference.md#create-a-connection-with-the-user), then repeat step 1.
+   - **Older CLIs, or if the user wants a different sign-in type:** follow [Create a connection with the user](../../shared/connector-reference.md#create-a-connection-with-the-user), then repeat step 1.
 
 ### Step 7: Discover Sites
 
@@ -184,7 +184,7 @@ const content = await SharePointService.GetFileContent(dataset, "<file-id>");
 - Document library operations use folder/file IDs or server-relative URLs
 - Choice columns use **string values**, not integer picklist codes (unlike Dataverse)
 
-Use `Grep` to find specific methods in the generated services (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find specific methods in the generated services (generated files can be very large -- see [connector-reference.md](../../shared/connector-reference.md#inspecting-large-generated-files)).
 
 ### Step 11: Build
 
