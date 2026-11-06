@@ -53,6 +53,10 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--all-source') {
       parsed.allSource = true;
+    } else if (arg === '--diagnostic-artifacts') {
+      parsed.errors.push('BLOCKED: --diagnostic-artifacts is retired. Use published host/template packages.');
+      parsed.blocked = true;
+      if (argv[index + 1] && !argv[index + 1].startsWith('--')) index++;
     } else if (arg === '--approved-js-dependency') {
       const approvedDependency = parseApprovedJsDependency(argv[index + 1]);
       if (approvedDependency) {
@@ -134,6 +138,7 @@ function main(argv) {
   const {
     allSource,
     approvedJsDependencies,
+    blocked: invalidSelection,
     errors,
     help,
     projectRoot: projectRootArg,
@@ -145,7 +150,7 @@ function main(argv) {
   }
   if (errors.length > 0) {
     process.stderr.write(`${errors.join('\n')}\n\n${usage()}\n`);
-    return 1;
+    return invalidSelection ? 2 : 1;
   }
   if (
     !projectRootArg

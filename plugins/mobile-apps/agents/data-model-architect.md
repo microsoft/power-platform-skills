@@ -52,6 +52,15 @@ or standalone `/add-dataverse` with a prompt that includes:
 
 ## Hard Rules
 
+- **Preserve the app-matched release context.** Read
+  [release lifecycle](../shared/references/mobile-release-lifecycle.md).
+  Carry the orchestrator's sanitized resolved context with approved native
+  capabilities; do not derive support from the newest bundled template.
+  Unknown/missing release records do not prohibit read-only data/source
+  planning, but native use remains blocked/unverified. One-shot location
+  needs no tracking table or data source. Continuous geolocation target
+  verification belongs to `/add-native geolocation`; do not invent an API or
+  provision its package-owned table as an app-model workaround.
 - **Read-only.** You MUST NOT run `pa app add data-source --connector dataverse --org-url <env-url> --table <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
 - **Scoped proposals preserve the owner.** For setup/edit/standalone change
   planning, use [dataverse-change-planning.md](../shared/references/dataverse-change-planning.md).

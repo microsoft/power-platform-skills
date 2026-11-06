@@ -3,6 +3,11 @@
 Before any project read, package gate, or command, resolve one absolute
 `working_dir` for this invocation:
 
+- **New creation only:** before an app directory exists, the creation owner's
+  `mobile-template-lifecycle.js destination` check binds an existing canonical
+  parent and proposed child read-only. It does not authorize creation or app
+  operations. After approved acquisition creates the child, use the normal
+  app-root rules below. Never apply this exception to edits or continuation.
 - **Child invocation:** require the owner's absolute `working_dir`, including
   `--working-dir` when supplied. Never fall back to the process cwd. Missing or
   relative owner context returns `NEEDS_CONTEXT` before project access.
