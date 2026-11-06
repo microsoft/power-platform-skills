@@ -652,6 +652,16 @@ function identityStop(code, id) {
   return error;
 }
 
+// Under an exact port the row its binding names is read into the workspace with a fetch that OVERWRITES the local copy.
+// A copy that holds edits the service has not seen (an earlier run's unsent change, or one made by hand) is the maker's to
+// keep or drop, never this read's: it stops typed, the copy kept (the protected preflight names it first, as
+// workspace-copy-unsent-edits with the one approval that replaces it, overwrite:<kind>:<key>). Only a diff (lib/unsynced-edits.js), no request; a copy the workspace does not hold reads clean, and a diff
+// that cannot be made reads as edits, so a doubtful copy is kept too.
+async function refuseLocalDraft(sdk, kind, id) {
+  const { hasUnsyncedEdits } = require('./unsynced-edits.js');
+  if (await hasUnsyncedEdits(sdk, kind, id)) throw identityStop('create-completion-required', id);
+}
+
 // The id a typed stop is about, when it names one, so a maker can inspect the row the next run could not read. The
 // stops of a stable port's resolver carry the create they stop, e.g.
 //   { code: 'create-identity-unverified', message: '... could not be read (HTTP 503: ...)', create: { kind, key, id } }
@@ -686,9 +696,17 @@ async function adoptionOf(managed, kind, key, id, remote, origin) {
   return { id, remote, origin };
 }
 
+// An exact port (protected configuration, lib/configuration-protected.js) is the one authority on the kinds it protects:
+// its binding store, read at exact ids, decides, and no other record (the managed-artifacts manifest) or name may stand in.
+function exactPortOf(ctx, kind) {
+  const port = portOf(ctx);
+  return port && port.exact === true && typeof port.protects === 'function' && port.protects(kind) ? port : null;
+}
+
 async function locate(ctx, kind, key, identity) {
   const managed = ctx.managed;
-  if (managed && typeof managed.lookup === 'function') {
+  const exactPort = exactPortOf(ctx, kind);
+  if (!exactPort && managed && typeof managed.lookup === 'function') {
     const bound = await managed.lookup(kind, key);
     if (bound && bound.id) {
       try {
@@ -716,7 +734,13 @@ async function locate(ctx, kind, key, identity) {
       throw identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error));
     }
     if (resolved && resolved.state === 'present' && typeof resolved.id === 'string' && resolved.id) {
-      return adoptionOf(managed, kind, key, resolved.id, await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), 'resolved');
+      if (exactPort) await refuseLocalDraft(ctx.sdk, kind, resolved.id);
+      const remote = await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true });
+      // An exact port proved the row is this build's own create (its committed binding, read at the exact id): it is
+      // not adopted, so the adoption policy and the manifest's record are not asked — the binding store answers. A write
+      // the port still owes for it (an unsent pending edit) rides along: planOne never counts such an item unchanged.
+      if (exactPort) return { id: resolved.id, remote, origin: 'resolved', ...(resolved.owed ? { owed: resolved.owed } : {}) };
+      return adoptionOf(managed, kind, key, resolved.id, remote, 'resolved');
     }
     if (!resolved || resolved.state !== 'absent') throw identityStop('create-identity-unverified');
     derived = typeof resolved.id === 'string' && resolved.id ? resolved.id : null;
@@ -771,6 +795,9 @@ async function planOne(ctx, kindPlan, entry, plan) {
   // A clear the maker asked for, with its exact token, is applied: the requirement is then a readiness result of
   // the row read back (ENVIRONMENT_VARIABLE_VALUE_MISSING stops the build), not a reason to keep the old value.
   if (missing && !(kindPlan.consentedClear && kindPlan.consentedClear(entry, compared, ctx))) return refuse(missing, found.id);
+  // An exact port still owes a write for this item (an unsent pending edit) that the comparison does not see: success
+  // here would leave that attempt pending behind a clean result, so the item stops, typed, before anything is sent.
+  if (found.owed && !compared.changes.length) return refuse(found.owed.code, found.id);
   const action = compared.changes.length ? 'update' : 'unchanged';
   const op = operation(kind, key, target, action, {
     id: found.id,
@@ -779,7 +806,7 @@ async function planOne(ctx, kindPlan, entry, plan) {
     destructive: compared.destructive === true,
     ...(compared.authorize && compared.authorize.length ? { authorize: compared.authorize } : {}),
   });
-  op.detail = { entry, identity: kindPlan.identity(entry), remote: found.remote, childIds: found.childIds, changes: compared.changes, singleWrite: compared.singleWrite === true, unrecorded: found.unrecorded === true };
+  op.detail = { entry, identity: kindPlan.identity(entry), remote: found.remote, childIds: found.childIds, changes: compared.changes, singleWrite: compared.singleWrite === true, unrecorded: found.unrecorded === true, ...(found.owed ? { owed: found.owed } : {}) };
   if (kindPlan.bound) op.detail.bound = kindPlan.bound(entry, found.remote);
   plan.operations.push(op);
   return op;
@@ -1972,9 +1999,36 @@ async function applyUpdate(op, ctx, result, known) {
     return answer && answer.result;
   };
 
+  // Under an exact port that edits this kind itself (protected configuration), the whole edit — new children included —
+  // is ONE attempt of the port: the children take the ids its plan derived (never one per child through `run`), and the
+  // one push runs inside that attempt's create set, which proves and records it.
+  const exactPort = portOf(ctx);
+  const exactUpdate = exactPort && exactPort.exact === true && typeof exactPort.update === 'function' && typeof exactPort.updates === 'function' && exactPort.updates(kind) ? exactPort : null;
+  const updateExactly = async () => {
+    let entered = false;
+    try {
+      const answer = await exactUpdate.update({ kind, key: portKeyOf(kind, key), id }, async ({ childIds: plannedIds = {} }) => {
+        entered = true;
+        for (const { change, child } of created) {
+          const childId = plannedIds[child.slot];
+          if (!childId) throw tagged(child.kind, key, 'create-identity-unverified', 'nothing');
+          placeChild(change, child, childId);
+          childIds[child.slot] = childId;
+        }
+        handle.ids = { id, childIds: { ...childIds } };
+        return write();
+      });
+      return answer.result;
+    } catch (error) {
+      if (error && error[TAGGED]) throw error;
+      const routed = routeFailure(error, entered);
+      throw tagged(kind, key, routed.code, entered ? 'unknown' : 'nothing', routed);
+    }
+  };
+
   let pushed;
   try {
-    pushed = await level(0);
+    pushed = exactUpdate ? await updateExactly() : await level(0);
   } catch (error) {
     const routed = routeFailure(error, false);
     // A write (not a create) whose answer was lost: what it changed is not known.
@@ -2209,7 +2263,9 @@ async function applyConfiguration(plan, ctx) {
         if (!blocked && await typesUnreadable(['duplicateRuleCondition'], added.map((child) => child.key))) continue;
       }
     }
-    if (op.action === 'update' || (op.action === 'unchanged' && !stopped)) {
+    // An owed edit's membership is added by the port inside that edit's own attempt (configuration-protected.js update),
+    // never here outside it.
+    if ((op.action === 'update' && !(op.detail && op.detail.owed)) || (op.action === 'unchanged' && !stopped)) {
       const joined = await membership.ensure(op);
       if (joined) {
         pushFinding(result, joined.bucket, { kind, key, id: op.id, code: joined.code, unit: 'membership' });
@@ -2289,6 +2345,8 @@ async function reconcileChildRecords(plan, ctx, result) {
   const sameItem = (op) => (line) => line.kind === op.kind && line.key === op.key;
   for (const op of plan.operations || []) {
     if (!op.detail || !CHILD_KINDS[op.kind] || (op.action !== 'update' && op.action !== 'unchanged')) continue;
+    // Under an exact port every child is a row of the root's committed binding, proved at its exact id: not adopted.
+    if (exactPortOf(ctx, op.kind)) continue;
     // A root whose own management is unconfirmed is reported as such already; its children wait for it.
     if (op.detail.unrecorded) continue;
     if (![...result.saved, ...result.unchanged].some(sameItem(op))) continue;
@@ -2550,18 +2608,97 @@ const TOKEN_ROOTS = Object.freeze({
 // Sort the `--authorize` tokens the maker passed: those of this module's kinds are checked against the App Spec
 // (the root must be declared; the field must be one a plan can ask for) and normalized exactly as a plan writes them
 // (lower-cased names and child names; a rule's key and a condition's key byte for byte). Tokens of other kinds are
-// answered unclaimed, for their own grammar. `{keys: Set, problems: [{token, code}], unclaimed: [token]}`.
+// answered unclaimed, for their own grammar. `{keys: Set, overwrite: Set, rowApprovals: Set, problems: [{token, code}], unclaimed: [token]}`.
+// `overwrite:<kind>:<declared key>` (e.g. overwrite:customApi:contoso_Calc) is the one approval that replaces a protected
+// item's local workspace copy with the server's (lib/configuration-protected.js, the preflight's stop on a copy that
+// differs). It names a whole root item, matched as the other tokens are (a duplicate rule's key exactly), and is read only
+// under `configurationIdentity: "stable-v1"`: the ordinary path never stops on a configuration copy, so the token would
+// approve nothing. It lands in `overwrite` as `<kind>:<port key>` (the flag minus its verb, reconcile-common.js approvalKey).
+const OVERWRITE_TOKEN = /^overwrite:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)$/;
+// `adopt:<kind>:<declared key>` and `adopt:<child kind>:<root key>/<slot>` approve binding ONE row that an earlier,
+// unfinished protected create may have made and whose answer was lost (lib/managed-create-context.js judgeRows). The
+// preflight prints them in the context's spelling (defaultApprovalToken): a root as adopt:<kind>:<port key>, a child as
+// adopt:<child kind>:<encodeURIComponent(port key)>/<encodeURIComponent(slot)>, e.g.
+//   adopt:duplicateRule:email
+//   adopt:environmentVariableValue:contoso_apibase/value
+//   adopt:customApiRequestParameter:contoso_calc/request%3Aa
+//   adopt:duplicateRuleCondition:email/e
+// Read only under the opt-in, checked against the App Spec (the root and the child must be declared) and normalized back
+// to that spelling, so a key typed in another case still names the one row; a root's approval never covers its children.
+const ADOPT_ROOT_TOKEN = /^adopt:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)$/;
+const ADOPT_CHILD_TOKEN = /^adopt:(environmentVariableValue|customApiRequestParameter|customApiResponseProperty|duplicateRuleCondition):([\s\S]+)$/;
+const ADOPT_CHILD_PARENT = Object.freeze({
+  environmentVariableValue: 'environmentVariable', customApiRequestParameter: 'customApi', customApiResponseProperty: 'customApi', duplicateRuleCondition: 'duplicateRule',
+});
 function configurationAuthorizationKeys(tokens, spec) {
   const keys = new Set();
+  const overwrite = new Set();
+  const rowApprovals = new Set();
   const problems = [];
   const unclaimed = [];
+  const declaredRoots = (kind) => {
+    const [list, field] = TOKEN_ROOTS[kind];
+    return Array.isArray(spec && spec[list]) ? spec[list].filter(isObject).map((e) => e[field]).filter(nonEmptyString) : [];
+  };
+  const declaredEntry = (kind, root) => {
+    const [list, field] = TOKEN_ROOTS[kind];
+    return (Array.isArray(spec && spec[list]) ? spec[list] : []).find((e) => isObject(e) && e[field] === root) || null;
+  };
+  const rootOf = (kind, name) => declaredRoots(kind).find((n) => (kind === 'duplicateRule' ? n === name : lower(n) === lower(name)));
+  const decode = (text) => {
+    try { return decodeURIComponent(text); } catch { return null; }
+  };
+  // The child's slot as the protected plan keys it (configuration-create-bindings.js planOf), or null when the App Spec
+  // declares no such child: an environment variable's one value, a Custom API parameter or property by its lower-cased
+  // unique name, a duplicate rule's condition by its key exactly.
+  const slotOf = (childKind, entry, slot) => {
+    if (childKind === 'environmentVariableValue') return slot === 'value' ? 'value' : null;
+    if (childKind === 'duplicateRuleCondition') return (Array.isArray(entry.conditions) ? entry.conditions : []).some((c) => isObject(c) && c.key === slot) ? slot : null;
+    const [prefix, list] = childKind === 'customApiRequestParameter' ? ['request:', entry.requestParameters] : ['response:', entry.responseProperties];
+    const name = lower(slot).startsWith(prefix) ? lower(slot).slice(prefix.length) : null;
+    return name && (Array.isArray(list) ? list : []).some((c) => isObject(c) && lower(c.uniqueName) === name) ? `${prefix}${name}` : null;
+  };
+  const protectedSpec = isObject(spec) && spec.configurationIdentity === 'stable-v1';
   for (const token of tokens || []) {
     const text = typeof token === 'string' ? token : '';
+    const replace = OVERWRITE_TOKEN.exec(text);
+    if (replace) {
+      const [, kind, name] = replace;
+      const root = rootOf(kind, name);
+      if (!root) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
+      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_OVERWRITE_UNPROTECTED' });
+      else overwrite.add(`${kind}:${portKeyOf(kind, root)}`);
+      continue;
+    }
+    const adoptRoot = ADOPT_ROOT_TOKEN.exec(text);
+    if (adoptRoot) {
+      const [, kind, name] = adoptRoot;
+      const root = rootOf(kind, name);
+      if (!root) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
+      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
+      else rowApprovals.add(`adopt:${kind}:${portKeyOf(kind, root)}`);
+      continue;
+    }
+    const adoptChild = ADOPT_CHILD_TOKEN.exec(text);
+    if (adoptChild) {
+      const [, childKind, rest] = adoptChild;
+      const parent = ADOPT_CHILD_PARENT[childKind];
+      // Both parts are percent-encoded, so the one '/' is the separator; anything else is not a key the build printed.
+      const parts = rest.split('/');
+      const name = parts.length === 2 ? decode(parts[0]) : null;
+      const slot = parts.length === 2 ? decode(parts[1]) : null;
+      if (!nonEmptyString(name) || !nonEmptyString(slot)) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_INVALID' }); continue; }
+      const root = rootOf(parent, name);
+      const child = root ? slotOf(childKind, declaredEntry(parent, root), slot) : null;
+      if (!child) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
+      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
+      else rowApprovals.add(`adopt:${childKind}:${encodeURIComponent(portKeyOf(parent, root))}/${encodeURIComponent(child)}`);
+      continue;
+    }
     const kind = text.slice(0, text.indexOf(':'));
     if (!has(TOKEN_FIELDS, kind)) { unclaimed.push(token); continue; }
-    const [list, field] = TOKEN_ROOTS[kind];
     const rest = text.slice(kind.length + 1);
-    const roots = Array.isArray(spec && spec[list]) ? spec[list].filter(isObject).map((e) => e[field]).filter(nonEmptyString) : [];
+    const roots = declaredRoots(kind);
     const exact = kind === 'duplicateRule';
     const root = roots
       .filter((name) => (exact ? rest.startsWith(`${name}:`) : lower(rest).startsWith(`${lower(name)}:`)))
@@ -2572,7 +2709,7 @@ function configurationAuthorizationKeys(tokens, spec) {
     if (!TOKEN_FIELDS[kind].test(tail)) { problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_INVALID' }); continue; }
     keys.add(`${kind}:${portKeyOf(kind, root)}:${tail}`);
   }
-  return { keys, problems, unclaimed };
+  return { keys, overwrite, rowApprovals, problems, unclaimed };
 }
 
 // The build runner's items for this feature: ONE data-model item and ONE solution-version item, whatever the
@@ -2743,15 +2880,34 @@ async function readConfigurationForDownload(sdk, entries) {
 // Verify. Checks: {kind, key, name, ok, code?, fields?}; `name` is 'definition', 'binding', 'value',
 // 'implementation', 'publication' or 'version'. A check never carries a value.
 
+// A typed stop's code as an exact port raised it: the lower-case codes of the binding store and the create identity
+// (`configuration-row-not-found`, `managed-settlement-pending`, `create-identity-unverified`) as well as the SDK's own.
+const TYPED_CODE = /^[a-z][a-z0-9-]{2,63}$/;
+const typedCodeOf = (error) => (error && typeof error.code === 'string' && TYPED_CODE.test(error.code) ? error.code : codeOf(error));
+
+// The row an exact port's binding names, read at that id; any other answer of the port is not a row to verify.
+async function locateExactly(ctx, port, kind, key) {
+  const resolved = await port.resolve({ kind, key: portKeyOf(kind, key) });
+  if (!resolved || resolved.state !== 'present' || typeof resolved.id !== 'string' || !resolved.id) throw identityStop('create-identity-unverified');
+  await refuseLocalDraft(ctx.sdk, kind, resolved.id);
+  return { id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved' };
+}
+
 async function verifyKind(ctx, kindPlan, entries, checks, onFound) {
   for (const entry of entries) {
     const { kind } = kindPlan;
     const key = kindPlan.key(entry);
+    // Under an exact port (protected configuration) verify asks only it: the row its binding holds, read at that id, or a
+    // typed reason there is none (lib/configuration-protected.js protectedVerifyPort). Never a name, and the reason is
+    // reported as the port gave it — a gone bound row is configuration-row-not-found, not a missing name.
+    const exactPort = exactPortOf(ctx, kind);
     let found;
     try {
-      found = await locate({ ...ctx, managed: ctx.managed && { lookup: ctx.managed.lookup } }, kind, key, kindPlan.identity(entry));
+      found = exactPort
+        ? await locateExactly(ctx, exactPort, kind, key)
+        : await locate({ ...ctx, managed: ctx.managed && { lookup: ctx.managed.lookup } }, kind, key, kindPlan.identity(entry));
     } catch (error) {
-      checks.push({ kind, key, name: 'definition', ok: false, code: codeOf(error) });
+      checks.push({ kind, key, name: 'definition', ok: false, code: exactPort ? typedCodeOf(error) : codeOf(error) });
       continue;
     }
     if (!found) { checks.push({ kind, key, name: 'definition', ok: false, code: 'NOT_FOUND' }); continue; }
@@ -2835,8 +2991,9 @@ function configurationTeardownNotes(spec) {
 }
 
 // ---- An injected stable-id create port, as this module would take it ----
-// Not used by the plugin in this release: the configuration kinds use the plain create path (defaultCreates), and no
-// stable-id module is part of the plugin. These adapters run only for a caller that injects the stable-id functions
+// Not used by the plugin in this release: without the protected opt-in the configuration kinds use the plain create path
+// (defaultCreates), and under it the protected port (configuration-protected.js); no injected stable-id module is part of
+// the plugin. These adapters run only for a caller that injects the stable-id functions
 // itself (configurationContext `fence`: `intentFor`, `resolveProtectedTarget`, `createCreatesPortForSpec`), so this
 // module loads none of them; configurationStableCreates (below) composes them into the configuration kinds' own port.
 //
@@ -2924,7 +3081,8 @@ function configurationCreates(port, { resolveProtectedTarget, provision, spec, b
 // forms, charts, ...) like their call sites, and these kinds are keyed here (portKeyOf, the value slot that only the
 // deployment settings decide), so only this module can say what each create is. A build port that already protects
 // every configuration kind AND resolves (configurationAcceptsPort) is used as is; any other is set aside, never half
-// used. The build's port in this release is the plain pass-through, which never qualifies.
+// used. The build's port in this release is the plain pass-through, which never qualifies; under the protected opt-in the
+// build hands this step the protected port (configuration-protected.js), which does.
 //
 // Every configuration kind is protected as a NEW feature declaration (the injected port's `featureKinds`), with or
 // without the spec's `createIdentity` option: `shippedKinds` would leave them unprotected for a spec without the
@@ -2941,8 +3099,8 @@ const CONFIGURATION_CREATE_KINDS = Object.freeze(['environmentVariable', 'connec
 const STANDALONE_SOLUTION = 'Default';
 
 // The stable-id functions for one context: only the ones a caller injects (`ctx.fence`), never a module of the plugin.
-// The configuration kinds use the plain create path in this release, so nothing here loads a stable-id module; a
-// context without `fence` (every build and every standalone run) gets the plain pass-through (defaultCreates).
+// No injected stable-id module is part of the plugin, so nothing here loads one; a context without `fence` (every build
+// and every standalone run) gets the plain pass-through (defaultCreates) unless the build hands it the protected port.
 const fenceOf = (ctx) => ctx.fence || null;
 
 // Whether a port the build hands over can stand in for this module's own: it protects every configuration kind and
@@ -3013,6 +3171,9 @@ module.exports = {
   configurationDestructive,
   configurationHaltMessage,
   configurationAuthorizationKeys,
+  // The `--authorize` flags spelled as one shell argument each (commandArgOrPlaceholder): the protected preflight's
+  // overwrite approval names a duplicate rule's key, which may hold white space or quotes.
+  authorizeFlags,
   runConfigurationStep,
   configurationBlocking,
   configurationPlanItems,
@@ -3022,4 +3183,13 @@ module.exports = {
   readConfigurationForDownload,
   MEMBERSHIP_TABLES,
   CHILD_MEMBERSHIP_TABLES,
+  CLASSIC_MEMBERSHIP_TYPES,
+  // The pure helpers the protected configuration driver (lib/configuration-create-bindings.js) derives its row plan
+  // from, so a planned row and the artifact the SDK pushes come from one definition.
+  buildArtifact,
+  describes,
+  normalCondition,
+  portableIntent,
+  portKeyOf,
+  ruleStatus,
 };

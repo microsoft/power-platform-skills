@@ -173,7 +173,7 @@ const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approval
 const { createPassthroughCreates } = require('./creates-passthrough.js');
 const { isDeclaredView, declaredViewKey, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
 const { isDeclaredChart, declaredChartKey, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
-const { openManagedContext, isStoreEnvironment, attemptProvenUnsent } = require('./managed-bindings.js');
+const { openManagedContext, isStoreEnvironment, attemptProvenUnsent, discoverManagedStore, ROW_FAMILIES } = require('./managed-bindings.js');
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
@@ -181,7 +181,7 @@ const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 // the helper plans, applies and reads them back; the runtime closes over what only the build has (its create port, BuildHalt and
 // retry policy, the --authorize keys) so this file calls three methods and keeps no configuration state of its own.
 const { usesConfiguration, hasConfigurationDefinitions, configurationPlanItems } = require('./configuration-artifacts.js');
-const { createConfigurationRuntime } = require('./configuration-build.js');
+const { createConfigurationRuntime, sweepPendingConfiguration } = require('./configuration-build.js');
 // Declared forms (forms[].reconcile "declared", lib/form-layout-reconcile.js) are dispatched only while their enable flag is on
 // (lib/declared-features.js). With it off, no form is declared here — validation refuses `reconcile` on a form — so every form
 // takes the build's own path and every spec sends the requests it always sent.
@@ -3404,6 +3404,46 @@ function openBuildBindingGroups(spec, { apply, env, workspaceDir, appDir, barrie
   }
 }
 
+// Is protected configuration (`configurationIdentity: "stable-v1"`, lib/configuration-protected.js) in play for this apply? Yes when the
+// App Spec opts in, and also when the opt-in is gone but the workspace's binding store still holds state for a configuration family
+// (ROW_FAMILIES: a committed group, a pending attempt, or a group it cannot use): removing the opt-in keeps what the store owes, so the
+// build must still run the store's debt sweep and its opt-in-removed stop (create-identity-opt-in-required). build-model-app.js asks this
+// before it makes the SDK, to decide whether to make the deferred managed-create gate at all.
+// The store read is discoverManagedStore: the same read-only, local-only discovery openBuildBindingGroups runs, in a module the build
+// has already loaded. It sends no request, creates no file and loads no protected module, so an App Spec without the opt-in whose
+// store holds no configuration row (or that has no store) builds exactly as before. A store it cannot read answers yes (fail closed):
+// the build then stops on that store before any write anyway (openBuildBindingGroups, managed-binding-store-unreadable).
+function protectedConfigurationInPlay(spec, { apply, env, workspaceDir, appDir } = {}) {
+  if (!apply || !spec) return false;
+  if (spec.configurationIdentity === 'stable-v1') return true;
+  const sol = spec.solution;
+  if (!spec.app || !sol || !sol.uniqueName || !isStoreEnvironment(env)) return false;
+  try {
+    const found = discoverManagedStore({ workspaceDir: applyWorkspaceOf({ workspaceDir, appDir }), environment: env, appUniqueName: appUniqueName(spec), solutionUniqueName: sol.uniqueName });
+    return !found.absent && found.loaded.units().some((u) => ROW_FAMILIES.includes(u.family));
+  } catch {
+    return true;
+  }
+}
+
+// The protected configuration hookup of one invocation (lib/configuration-protected.js createProtectedConfiguration), made the first time
+// an attempt needs it and kept by its gate: every attempt of a whole-build retry (build-model-app.js) shares the one managed create
+// context, so an answer one attempt received is still known to the next. Keyed by the gate, which the CLI makes once per invocation.
+const protectedHookups = new WeakMap();
+function protectedConfigurationFor(gate, store, { env, approvals } = {}) {
+  const made = protectedHookups.get(gate);
+  if (made && made.store === store) return made;
+  const { createManagedCreateContext } = require('./managed-create-context.js');
+  const { NOT_FOUND_CODE } = require('./configuration-create-bindings.js');
+  const { createProtectedConfiguration } = require('./configuration-protected.js');
+  // The maker's `--authorize adopt:<kind>:...` row approvals (build-model-app.js authorizationKeys), exactly as the preflight printed them.
+  const ctx = createManagedCreateContext({ store, approvals: approvals ? [...approvals] : [], notFoundCode: NOT_FOUND_CODE });
+  // The API root the SDK prefixes every request with (the bundle uses v9.0): a Custom API change set is admitted only under it.
+  const hookup = createProtectedConfiguration({ store, gate, ctx, apiBase: `${new URL(String(env)).origin}/api/data/v9.0` });
+  protectedHookups.set(gate, hookup);
+  return hookup;
+}
+
 // The entry every caller enters by. An APPLY holds the app's build lease for the whole of it (lib/app-operation-lease.js): one taken here when the
 // caller holds none, or the caller's own (`opts.buildLease`, which buildModelApp hands to each attempt), borrowed and left to the caller to let go. A
 // second apply of the same app in the same workspace is refused before anything is read or written, so two builds cannot both find the app's icon,
@@ -3831,6 +3871,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
       || (workflowStore.snapshot().envelope.workflowEffects || []).length > 0)) {
     opts.workflowEffectGate.bind(workflowStore);
   }
+  // Protected configuration's deferred managed-create gate (lib/managed-create-transport.js), which build-model-app.js makes only while
+  // protected configuration is in play (protectedConfigurationInPlay) and installs on the shared HTTP client with the workflow gate.
+  // It is bound here, once, to the store every attempt shares, and the configuration hookup is made over both before the build's first
+  // service change below: its debt sweep, its whole-plan preflight and its opt-in-removed stop all run ahead of every write, whatever
+  // phases or changed-only selection this run has. Without a store (no solution, or a target no store is kept for) nothing is bound and
+  // no hookup is made: under the opt-in the configuration preflight then stops the build before any write (create-identity-unverified).
+  // A hookup the caller handed over (opts.protectedConfiguration) is used as it is.
+  let configurationOpts = opts;
+  if (opts.managedCreateGate && workflowStore && !opts.protectedConfiguration) {
+    opts.managedCreateGate.bind(workflowStore);
+    configurationOpts = { ...opts, protectedConfiguration: protectedConfigurationFor(opts.managedCreateGate, workflowStore, { env: opts.env, approvals: opts.configurationApprovals }) };
+  }
   // A declared artifact that did not settle stops the build. Its result's own findings decide — never the SDK error
   // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a
   // create that may have stored a row must be inspected first. RETRY.NEVER marks the halt `transient: false`, which
@@ -4158,7 +4210,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   };
   // The configuration kinds' runtime (lib/configuration-build.js), or null for a spec that uses none of them: then no step below runs and
   // nothing is read for them. Built before the first write so a spec that declares an item twice stops here, having written nothing.
-  const configurationRun = usesConfiguration(spec) ? createConfigurationRuntime({ spec, sdk, provision, opts, appUniqueName: appUniqueName(spec) }) : null;
+  const configurationRun = usesConfiguration(spec) ? createConfigurationRuntime({ spec, sdk, provision, opts: configurationOpts, appUniqueName: appUniqueName(spec) }) : null;
+  // Protected configuration (configurationIdentity "stable-v1") is checked whole and read-only here, before the first write below: an edit
+  // the protected path cannot make stops the build with nothing sent (lib/configuration-build.js preflight; a no-op without the opt-in).
+  // The binding store's configuration debt is read first either way: an App Spec that dropped every configuration item (no runtime)
+  // still stops on an attempt an earlier build left unfinished (sweepPendingConfiguration), whatever phases this run selects.
+  if (configurationRun) await configurationRun.preflight();
+  else sweepPendingConfiguration(spec, configurationOpts);
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
   // spec's web resources and the generated app icon are written again by id when they are in it, and the page manifest is written again by its id where
   // its published copy is not what the run wants (kept where it is: persistPageManifest). One per run of the phases, so the
@@ -10915,4 +10973,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, openBuildBindingGroups, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };
+module.exports = { runSdkBuild, openBuildBindingGroups, protectedConfigurationInPlay, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };

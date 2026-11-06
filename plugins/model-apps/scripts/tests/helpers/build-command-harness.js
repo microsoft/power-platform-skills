@@ -36,9 +36,10 @@ function appFolder(spec) {
 //   openJournal(held)       called as the journal is opened (the real one is opened after it); it may throw;
 //   engine(held, opts)      the engine (runSdkBuild) — `opts` is what buildModelApp hands it — and what it answers (else a success);
 //   verify(held)            the inline verify (else a pass);
-//   writeBaseline(held)     called as the baseline is written (the real one is written after it); it may throw.
+//   writeBaseline(held)     called as the baseline is written (the real one is written after it); it may throw;
+//   live                    the live identity a --changed-only apply reads for the app (else the real read, which asks the environment).
 // `calls` lists, in order, which doubles ran.
-function command(folder, { argv = [], auth, language, makeSdk, openJournal, engine, verify, writeBaseline } = {}) {
+function command(folder, { argv = [], auth, language, makeSdk, openJournal, engine, verify, writeBaseline, live } = {}) {
   const held = () => fs.existsSync(folder.lock);
   const authCli = loadCli(path.join(SCRIPTS, 'lib', 'dataverse-auth.js'));
   const printed = { at: null, ok: null, heldThen: null };
@@ -62,6 +63,9 @@ function command(folder, { argv = [], auth, language, makeSdk, openJournal, engi
     './lib/verify-spec.js': { ...require('../../lib/verify-spec.js'), verifySpec: async () => { note('verify'); return verify ? verify(held) : { ok: true, checks: [], missing: [] }; } },
     './lib/deployed-baseline.js': { ...realBaseline, writeBaseline: (...a) => { note('baseline'); if (writeBaseline) writeBaseline(held); return realBaseline.writeBaseline(...a); } },
   };
+  if (live) {
+    requires['./lib/changed-only-flow.js'] = { ...require('../../lib/changed-only-flow.js'), resolveLiveIdentity: async () => live };
+  }
   if (openJournal) {
     const realJournal = require('../../lib/build-journal.js');
     requires['./lib/build-journal.js'] = { ...realJournal, openJournal: (...a) => { note('journal'); openJournal(held); return realJournal.openJournal(...a); } };

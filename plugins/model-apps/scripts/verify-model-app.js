@@ -241,9 +241,15 @@ function readerFor(sdk, appUnique, opts) {
     // The configuration kinds (lib/configuration-artifacts.js verifyConfiguration), read through this reader's SDK: each declared item's
     // definition, its binding when the build was given one (--deployment-settings), a required variable's value, a Custom API's
     // implementation, a rule's publication and the solution's version. Reads only.
-    configuration: async (spec, bindings) => {
+    // Under `configurationIdentity: "stable-v1"` the workspace's binding store (`managedManifest`, readVerifyManifest) names the one
+    // row each item is checked at (lib/configuration-protected.js protectedVerifyPort): never a name lookup, never a write.
+    configuration: async (spec, bindings, managedManifest) => {
       const C = require('./lib/configuration-artifacts.js');
-      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName: spec && spec.solution && spec.solution.uniqueName }));
+      const solutionUniqueName = spec && spec.solution && spec.solution.uniqueName;
+      const creates = spec && spec.configurationIdentity === 'stable-v1'
+        ? require('./lib/configuration-protected.js').protectedVerifyPort({ spec, manifest: managedManifest, dataverse: sdk.dataverse, solution: solutionUniqueName, bindings })
+        : undefined;
+      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName, creates }));
     },
     findTable: async (logical) => {
       const l = String(logical).toLowerCase();
@@ -805,9 +811,11 @@ async function main() {
   // verification only reads that deployment. Every other finding about the entry stays an error.
   // `primaryAttributeKeys: 'warn'` is the same again for a key a table's `primaryAttribute` does not take: an earlier release accepted and
   // ignored it, and the table was built without it.
+  // `viewKeys: 'warn'` is the same for a key a `views[]` entry or one of its filters does not take: the build refuses one, because it would
+  // drop it and build the view without that part, but an earlier release accepted it — and verification only reads that deployment.
   // `declaredKeyCollisions: 'warn'` is the same for two declared views (or two declared charts) on one table with one name: a build refuses them,
   // because one --authorize adopt:/overwrite: approval would name both, but verification takes no approval and only reads what was deployed.
-  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn', declaredKeyCollisions: 'warn' });
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn', viewKeys: 'warn', declaredKeyCollisions: 'warn' });
   // A warning is printed for a person and kept for the result JSON in one step, so the two cannot differ: a caller that reads only the JSON must not
   // lose what stderr says. The spec's are found before it is judged, so a spec that is refused reports the warnings it also has.
   const warnings = [];

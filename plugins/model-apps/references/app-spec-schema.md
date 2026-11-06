@@ -844,6 +844,7 @@ list with "reach for it when…" guidance.
 | `businessRules[].reconcile` | a declared business rule (`reconcile: "declared"` on a rule: created Draft under an id the build keeps, then activated; managed and proved whole, with keyed conditions and actions, OR logic, default values, error messages and recommendations; an existing rule is adopted read-only, never edited) |
 | `businessProcessFlows[].reconcile` | a declared business process flow (`reconcile: "declared"` on a flow, with a `key` on every stage and step: created Draft with ids the build keeps, then activated; managed and proved whole, so a rename keeps a stage's or step's id; an existing flow is adopted read-only, never edited, and a removed or reordered stage or step is refused) |
 | `createIdentity` | stable create ids for declared views and charts, on a new app only (`createIdentity: "stable-v1"`) |
+| `configurationIdentity` | exact ids and a binding store for declared environment variables, connection references, Custom APIs and duplicate rules (`configurationIdentity: "stable-v1"`, `minimumPluginVersion: "2.23.0"`): a duplicate rule is created and then only verified, and a Custom API takes only single-request or create-only edits |
 | `columns[].dateTimeBehavior` | portable schema: calendar-day dates, fixed option values (`{ "value", "label" }`), table search and duplicate detection (`searchEnabled` / `changeTrackingEnabled` / `duplicateDetectionEnabled`) |
 
 ## relationships[]
@@ -965,11 +966,13 @@ why they need naming here at all.
   front, naming the view and the offending entry.
 - **A view takes only these keys:** `entity`, `name`, `description`, `columns`, `sort`, `filters`, `activeOnly`, and — on a view
   with `"reconcile": "declared"` — `key`, `viewId`, `linkEntities`. A filter item takes `attr`, `op`, `value`, `values` and
-  `relatedEntity`. Any other key is **ignored by the build**, so validation warns about it and names the key it most likely meant
-  (`filter` → `filters`, `column` → `attr`, `operator` → `op`); a view written with `filter` would otherwise be built without its
-  filter. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is still
-  accepted without a warning. These are warnings, never errors — but `lint-app-spec.js --strict` fails on them, so a view with a
-  misspelled key stops a `--strict` pipeline instead of building without its filter.
+  `relatedEntity`. Any other key is **refused** (a validation error, so the lint exits 1 without `--strict` and the build stops before it
+  writes anything): the build reads only those keys, so a view written with `filter` would otherwise be built without its filter and list
+  every active row. The message names the key it most likely meant (`filter` → `filters`, `column` → `attr`, `operator` → `op`) and
+  the allowed keys. A view has no `type` (it is always a public view of its table, so leave it out); a `type` an older doc showed is
+  still accepted without a message. Teardown and preview only read a spec that an earlier release may have built, so they accept one with
+  such a key; `verify-model-app.js` reads it too, and reports the finding as a warning. A `--changed-only` apply validates the spec before
+  it decides anything, so an unchanged spec with such a key is refused as well, not reported as nothing to apply.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).

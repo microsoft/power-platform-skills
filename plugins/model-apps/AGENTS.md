@@ -153,7 +153,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/lint-app-spec.js`** — the CLI surface for both gates, for a headless author or a CI
   job (#560). Runs `migrateAppSpec` → `validateAppSpec` (what the build runs on load) → `lintAppSpec`
   (guardrails the builder does **not** run), and exits non-zero on errors (`--strict` also fails on
-  warnings, including the one for an unknown key on a `views[]` entry or its filters). Prefer it over calling the library through `node -e`: linting the file **as written**
+  warnings). An unknown key on a `views[]` entry or its filters is an error (#827), not a warning. Prefer it over calling the library through `node -e`: linting the file **as written**
   rather than the migrated shape is what let a spec pass the lint and then fail the build (#545).
   `--profile` defaults to **`plan`**, not `deploy`, because the authoring flow runs this while pages
   are still intents — a deploy default rejects a normal work-in-progress spec. `plan` relaxes only
@@ -2068,10 +2068,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dropped and counted in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
-  builds. It validates the spec first under the `deploy` profile, with five compatibility downgrades
-  (`relationshipCollisions: 'warn'`, `columnValues: 'warn'`, `fieldOptionKeys: 'warn'`, `primaryAttributeKeys: 'warn'` and `declaredKeyCollisions: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
+  builds. It validates the spec first under the `deploy` profile, with six compatibility downgrades
+  (`relationshipCollisions: 'warn'`, `columnValues: 'warn'`, `fieldOptionKeys: 'warn'`, `primaryAttributeKeys: 'warn'`, `viewKeys: 'warn'` and `declaredKeyCollisions: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
   that share a schema name, an AutoNumber column with no format, a `required` that is not `true`, `false` or `"recommended"`, a key a form's
-  `fieldOptions` entry does not take, a key a table's `primaryAttribute` does not take, two declared views (or two declared charts) with one name on one table — is verified, with a warning that names the fix, and is never refused before anything is read (the
+  `fieldOptions` entry does not take, a key a table's `primaryAttribute` does not take, a key a `views[]` entry or one of its filters does not take, two declared views (or two declared charts) with one name on one table — is verified, with a warning that names the fix, and is never refused before anything is read (the
   build, the lint and the provisioning gate keep these as errors). **Every `WARNING:` line it prints on stderr — those findings, the spec's other warnings, and a page
   workspace it could not remove — is also in the result JSON's optional `warnings` array** (the same messages, without the prefix, in the order
   printed; left out when there is none, as `unverified` is), so a caller that reads only the JSON loses none of them. It is there on a failed
@@ -3310,6 +3310,101 @@ retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js` ("
 `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after" / "after
 retirement" / "two retirements" in `tests/sdk-build-declared-{forms,dashboards,rules,bpf}.test.js`.
 
+**Protected configuration** (`configurationIdentity: "stable-v1"`, `minimumPluginVersion: "2.23.0"`, a lint
+warning below it). Declared environment variables, connection references, Custom APIs (with their children)
+and duplicate rules (with their conditions) get exact ids (`lib/configuration-create-bindings.js` plans,
+observes and classifies them) and are bound in the managed binding store. `lib/configuration-protected.js`
+is the one hookup: `createProtectedConfiguration({ store, gate, ctx, apiBase })` answers `preflight` (the
+whole-plan, read-only check `configuration-build.js` runs before the build's first service change, the
+solution version included) and `port` (the exact-id port `configuration-artifacts.js` uses through
+`exactPortOf` instead of the managed-artifacts manifest and the adoption policy). Without a hookup the
+opt-in stops before any request (`create-identity-unverified`). The build command supplies it: `runBuildCommand`
+(`build-model-app.js`) makes the deferred managed create gate (`managed-create-transport.js`) only for an apply where
+protected configuration is in play (`sdk-build.js` `protectedConfigurationInPlay`: the opt-in is set, or the
+workspace's binding store holds configuration row state — a local file read that sends nothing; a store it cannot
+read counts as in play, so the preflight stops on it), and installs it on the one HTTP client (`makeSdk`,
+`composeWriteGates` with the workflow effect gate). `runSdkBuildPhases` binds it to the store and builds the hookup
+over it (`protectedConfigurationFor`, `apiBase` `<env>/api/data/v9.0`) before any service change, whatever
+`--stage`/`--phase` selects. While the gate exists `--changed-only` takes no shortcut: `runBuildCommand` runs the
+full build instead of `changed-only-flow.js` (which forces `full` too when handed the gate,
+`PROTECTED_CONFIGURATION_FULL`), because the apply snapshot a no-op or pages-only apply trusts does not describe the
+configuration rows (a deleted bound row, an unreadable store or a refused edit leave it as it was). Any other partial
+range on `--apply` is refused before anything is sent (`buildModelApp`), so no early exit reports success over a
+pending obligation. Otherwise no gate is made and no protected module is loaded, so a build without protected
+configuration sends, prints and loads what it did before, with one deliberate change: the configuration fields are now
+in `phase-diff.js`'s `data-model` slice, so a `--changed-only` apply whose only change is one of them runs the full
+build instead of reporting nothing to do (an unchanged spec is still the no-op). The whole-build
+retry runs the same command again over the same store, so it finds the rows at the ids the first attempt
+bound (a lost or uncertain create stops as `create-outcome-unknown`, never retried). The `adopt:` approvals a
+stop prints are read by `configurationAuthorizationKeys` (`adopt:<kind>:<port key>`,
+`adopt:<child kind>:<encoded port key>/<encoded slot>`; only under the opt-in, the root and child declared) into
+`opts.configurationApprovals`; a root's approval never covers its children. The build's configuration items
+work in a throwaway SDK workspace per command run (`makeSdk`), so a kept local copy lasts until that run ends.
+Edits: a duplicate rule is created with its conditions, completes its initial
+publication/state, and is then only verified (any later field, condition or state change, the
+`CompoundUpdateDuplicateDetectionRule` shapes and an `If-Match: *` field PATCH included, is
+`configuration-edit-unsupported`); a Custom API takes one request alone (the root, one child create or
+one child's labels), the root PATCH with new children, or two or more new children only, each with the
+row's exact `If-Match` (a multi-request edit goes through one checked `$batch` change set, classified part
+by part); one child removal is `configuration-protected-removal-unsupported`, anything else
+`configuration-edit-unsupported`. A pending create is decided from its own persisted expectation
+(`recoverPending` over `managed-create-context.js` `classify`): complete -> settled; proved unsent ->
+resumed under the same ids; otherwise `create-completion-required`, `create-ownership-required` (with each
+row's exact `adopt:` token in the message) or `managed-pending-intent-changed`. The original plan's rule
+state stays owed and an uncertain, failed or lost publish is never sent again; a bound rule is never published.
+The one exception (`unsentPublication`, `publishOnce`): a saved rule create (`acknowledgedRoot`) read
+unpublished whose `rule-state` effect is still `dispatched: false`, and which would commit (or need only
+ownership approvals, named first) if that publish had landed, sends `PublishDuplicateRule` once under a new
+epoch (`store.claimUnsentRowEffect`, through `ctx.claimEffect`), sealed dispatched before it leaves, then
+reads the rule a bounded number of times and settles. A pending EDIT is decided by
+the rows its attempt persisted (`settlePendingEdit`, answering `settled`, `retired` or `needs-write`): complete
+-> committed read-only; already at its target -> accepted read-only only when that acceptance commits (its
+verdict is judged in the preflight by `judgeReadOnly` and again by `resolve`, so an ownership approval it needs
+or a membership removed by hand stops the build, never a no-op success); proved unsent with the
+same rows and a target not there yet -> resumed under its token, ids, parents and generation (`resolve` answers
+`owed`, so `planOne` never plans it `unchanged` and its membership is added only inside its attempt); rows
+changed -> retired while prepared,
+otherwise `create-identity-conflict`. A create or edit whose push the run did not check is released by that
+same run when its record proves nothing left (`ctx.release` -> `store.retireProvenUnsentAttempt`: at the
+run's own epoch, `attemptProvenUnsent`, the group still at the attempt's base generation, no effect a read
+found made): an operation the SDK refused before its first request (`CUSTOM_API_LABELS_UNSUPPORTED` on an
+environment with more than one language) must not hold the group, or every later declaration — the earlier
+one, another edit, the same one — stops on a pending attempt prepared for another declaration. Anything that
+may have been sent keeps the attempt, and the run's own stop stands either way. Environment variable and connection reference updates (definition, first
+value, own value replacement) go through the protected port as one checked set over the item's plan; a value
+row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
+store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`
+regardless of the opt-in, the declarations or the phases): an undeclared pending or unusable protected record
+stops it with `managed-settlement-pending`. Before an overwriting fetch of a protected item (preflight, port and
+verify), a workspace copy with unsynced edits (`hasUnsyncedEdits`) stops it. The build never resets or deletes
+that copy on its own, a failed or uncertain send included: the copy is shared with the maker, the SDK diff is not
+locked and there is no conditional overwrite, so no check can prove a reset discards only the build's own change
+(a maker edit made while the build prepares its push, or just after any comparison, would be lost). After such a
+send the copy is kept as it is and the pending attempt is still recovered read-only from what it persisted. The
+next build's preflight stops on the copy before any write with `workspace-copy-unsent-edits` (the declared views'
+and charts' code, `sdk-build.js` `refuseUnsentCopy`) and prints the one approval that replaces it,
+`--authorize overwrite:<kind>:<key>` (`overwriteKey`: the configuration kind and the port key — a name in lower
+case, a rule's key exactly; read by `configurationAuthorizationKeys` into `opts.authorizedOverwrite`, only under
+the opt-in). Under that approval only, `replaceLocalCopy` reads the service row exactly: present -> overwrite
+fetch; absent (a create never taken) -> local delete; a denied or failed read or any other answer keeps the copy
+and stops. Only a collection holding the exact key approves (`approvesOverwrite`): the shared `isAuthorized`'s
+blanket `true` approves nothing here. The key names the item, not a revision: it replaces the copy as it is when
+the approved build runs, edits made after the stop was printed included (the views' and charts' contract).
+Nothing else discards it; the port's and verify's own exact reads (`refuseLocalDraft`) stop on it too
+(`create-completion-required`). A bound environment variable's value clear (a settings
+`Value` of `null`, a DELETE of its value row) is refused in the preflight with
+`configuration-protected-removal-unsupported`, authorized or not. Without the opt-in, `preflight` asks the
+hookup the build hands over (`opts.protectedConfiguration.obligations`, `optInObligations`, a local store read
+only): a declared item the store holds, committed or pending, stops with `create-identity-opt-in-required`.
+`configuration-build.js` never requires `configuration-protected.js` itself, and verify requires it only under
+the opt-in (a gated edge in `tests/creates-port.test.js`). Verify
+(`verify-model-app.js` `readerFor`, shared with the build's `--verify`) passes `protectedVerifyPort` over the
+workspace's `managedManifestView` as an exact port: `verifyKind` reads each protected item at its bound id
+(`locateExactly`) and reports the typed code (`configuration-row-not-found`, `create-identity-unverified`;
+`managed-settlement-pending` is unverified), never a name lookup. Tests: `tests/configuration-protected.test.js`,
+`tests/configuration-create-bindings.test.js`, and through the build command with the real bundle (derived ids,
+a lost create and its approvals, the whole-build retry, field approvals, the stops that send nothing, and a
+default build that loads no protected module) in `tests/configuration-build-real-bundle.test.js`.
 **Stable create ids** (`createIdentity: "stable-v1"`, `minimumPluginVersion: "2.21.0"`; new apps only).
 The only place the engine reads the field is one gated `require` of `lib/creates-stable-build.js` in
 `lib/sdk-build.js` (pinned by `creates-port.test.js`: a spec without it loads none of the stable modules

@@ -1219,3 +1219,156 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   `build-locked` while a build of the app runs in the same workspace; run it again once the build ends.
 - **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
   a file it cannot read, is reported as unverified, never as a pass.
+
+## configurationIdentity (optional — exact ids for protected configuration)
+
+Set `minimumPluginVersion: "2.23.0"` with it (a lower or missing floor is a lint warning: older plugins
+ignore the field, keep no binding store for configuration and find these items by name). The only value
+is `"stable-v1"`; any other value is a validation error (`create-identity-invalid`), and a spec without
+the field builds exactly as before.
+
+```jsonc
+{ "minimumPluginVersion": "2.23.0", "configurationIdentity": "stable-v1",
+  "environmentVariables": [ /* … */ ], "connectionReferences": [ /* … */ ],
+  "customApis": [ /* … */ ], "duplicateDetectionRules": [ /* … */ ] }
+```
+
+- **What it covers.** The declared environment variables, connection references, Custom APIs (with
+  their request parameters and response properties) and duplicate detection rules (with their
+  conditions). Each is created at an id the spec fixes and recorded in the build's binding store
+  (`managed-bindings.<hash>.json`, the same file as `createIdentity`; keep it with the build workspace).
+  A later build finds each row by that id, never by name: a bound row deleted outside the plugin stops
+  the build with `configuration-row-not-found` and is never replaced by a namesake.
+- **The binding store comes from the build.** Under the field, a build that cannot open the binding
+  store for configuration stops before any request is sent (`create-identity-unverified`).
+- **Opting in does not migrate an existing app.** Setting `configurationIdentity: "stable-v1"` does not
+  migrate an existing app. A namesake created earlier at another id stops the first protected create
+  with `create-identity-conflict`, even if it is the only match; nothing is created or bound, and no
+  approval token selects a namesake. Keep the app without the field, or move it to the reserved ids
+  outside the plugin. An app that already has protected bindings cannot go back: see "Removing the
+  field" below.
+- **An uncertain lookup is not absence.** If the namesake lookup a first create needs cannot be read
+  completely (a failed read, a page that cannot be continued), the build stops with
+  `create-identity-unverified` and creates or binds nothing for that item. Restore access or reliable
+  reads and build again.
+- **No deletion.** Under the field, clearing an environment variable's value (a deployment-settings
+  `Value` of `null`, which deletes its value row), removing a Custom API child, or an unexpected delete
+  in a protected change stops with `configuration-protected-removal-unsupported` before anything is sent, authorized or not
+  (a removed duplicate-rule condition is a rule edit: `configuration-edit-unsupported`). Make the
+  change outside the plugin, with the maker portal or the Web API. Supported changes keep their
+  `--authorize` tokens, and builds without the field are unchanged. Deleting a bound row outside the
+  plugin does not release its binding: the next build stops with `configuration-row-not-found`. Never
+  delete or reset the binding store to clear a stop.
+- **Removing the field.** Removing `configurationIdentity` from an App Spec whose binding store still
+  holds a declared protected item (bound, or a create still being settled) stops the build before any
+  request with `create-identity-opt-in-required`: those items would otherwise be found by name again,
+  where a namesake could stand in for the bound row. Put the field back.
+- **Verify reads the bound ids.** Under the field, `verify-model-app` checks each declared protected
+  item at the id its binding holds, read-only, never by name: a bound row that is gone fails with
+  `configuration-row-not-found` even when a namesake exists, an item with no binding (or no readable
+  binding store) fails with `create-identity-unverified`, and an item whose create is still being
+  settled is reported unverified. Keep the build workspace with the binding store where verify runs.
+- **Checked before anything is sent.** Every declared protected item is read and judged before the
+  build's first service change, the solution version included: a first create's reserved id and its
+  namesake lookup too, so a create that would stop with `create-identity-conflict` or
+  `create-identity-unverified` stops the whole build with nothing sent. An edit the plugin does not
+  make stops the whole build there, with nothing sent (`configuration-edit-unsupported`).
+- **Duplicate rules: create only.** A protected duplicate rule is created with its conditions, completes
+  its initial publication/state, and is then only verified; later edits are outside the plugin. A
+  later change of its fields, conditions or state stops with: "This protected duplicate rule can be
+  created with its conditions and initial state, then verified. Later field, condition or state edits
+  are not supported. No service changes were sent by this build. Make this edit outside the plugin,
+  keeping the binding store and exact ids." A rule unpublished outside the plugin is not published
+  again: the build stops.
+- **Custom APIs.**
+
+  | Change to a bound Custom API | Result |
+  |---|---|
+  | One request on its own: the root's editable fields, one new child, or one child's labels | made |
+  | The root's editable fields together with one or more new children | made, as one change set |
+  | Two or more new children, nothing else | made, as one change set |
+  | Removing one child | stops: `configuration-protected-removal-unsupported` |
+  | Anything else (two label edits, labels with any other change, a removal with any other change, a child's fixed field) | stops: `configuration-edit-unsupported` |
+
+  The refusal reads: "This protected Custom API change is not a supported single request or create-only
+  changeset. No service changes were sent by this build. Separate supported non-removing single-request
+  edits across builds, or make the change outside the plugin. Removals require maintenance outside the
+  plugin." Every write names the row's exact id and its current version (`If-Match`). A change of
+  `isPrivate` still needs `--authorize`. An implementation registered outside the plugin (the API's
+  plug-in type) is kept: no write sends it, and an edit is complete only while the row still holds the
+  implementation it was planned over. One replaced or removed while the edit is written leaves the edit
+  unfinished with `create-identity-conflict`, and the next build sends nothing for it.
+- **Environment variables and connection references** are edited at their exact ids, each as one
+  checked change over the item's whole plan: a definition edit, the first value (created at the id the
+  spec fixes, then bound) or a new value for its own value row. A value row under a bound definition
+  that the binding does not hold is never overwritten or adopted, whatever `--authorize` tokens are
+  given: the build stops with `create-identity-conflict` before anything is sent. A bound value that the
+  deployment settings do not name in this run is kept, and nothing is sent for it. A connection
+  reference's prompting behaviour is never sent: a new one is expected to hold the platform's default,
+  and one changed outside the plugin after it was bound is kept, as a Custom API's implementation is
+  (an edit is complete only while the row still holds the value it was planned over).
+- **Local copy.** Before it reads a protected item into the workspace, the build checks the workspace
+  copy. A protected item whose local copy differs from the server's (an edit an earlier run did not send,
+  or one made by hand), or cannot be compared with it, is refused before anything is written
+  (`workspace-copy-unsent-edits`), and verify stops too; the copy and its binding are kept. Put any change
+  to keep into the spec, then approve replacing the local copy with the server's: the `overwrite:` key the
+  refusal prints, `--authorize overwrite:<kind>:<key>` (for example
+  `--authorize overwrite:customApi:contoso_calc`; the kind is `customApi`, `environmentVariable`,
+  `connectionReference` or `duplicateRule`). With that key the build reads the server's row and puts it in
+  place of the local copy (a create the server never took leaves no copy); if it cannot read that row,
+  it keeps the copy and stops. The key names the item, not a version of its copy: it replaces the local
+  copy as it is when the approved build runs, including any edit made after the stop was printed, as the
+  views' and charts' `overwrite:` key does. Check the copy again before you give it, and do not edit the
+  copy while that build runs. The key is read only with `configurationIdentity: "stable-v1"`.
+  The build never replaces or discards the local copy on its own, also when a protected send fails or its
+  answer is lost: the copy is kept with every edit in it, including one made while the build was sending,
+  and a later build that finds it stops on it until you give that key. Nothing else discards it. The unfinished send
+  itself is still decided from what the build recorded before sending (below); giving the key never sends
+  it again. The build command keeps these items' copies in a working folder of its own and removes it
+  when the command ends, so a copy kept after a failed send lasts until then: the stop applies within
+  that command, and the next command reads the server's rows afresh.
+- **Unfinished work is checked first, declared or not.** Before its first service change, every build
+  reads the binding store for protected items whose create or edit has not finished. If the App Spec no
+  longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
+  This applies with or without the field and whatever phases run. Declare the item again, with the
+  field, to finish it.
+  An item that finished before it was removed from the App Spec does not stop the build.
+- **`--changed-only` runs the whole build.** While the field is set, or the binding store holds
+  configuration state, a `--changed-only` apply runs the full build and prints
+  `changed-only: FULL — protected configuration is in play`. Its record of the last apply does not cover
+  these rows, so it cannot tell that one was deleted, that an edit is refused or that the store cannot
+  be read; the full build checks them before its first service change and stops instead. With or without
+  the field, a change to an environment variable, connection reference, Custom API or duplicate-detection
+  rule also makes a `--changed-only` apply a full build.
+- **An edit that did not finish.** The next build decides a Custom API, environment variable or
+  connection reference edit from what the first one recorded before sending. A complete edit is
+  recorded and never sent again. An edit that no request can have reached is sent once, at the same ids.
+  If its target is already there, nothing is sent, and the edit is recorded only if its rows are
+  exactly what the plugin would make: one that needs an approval (a private value) or whose solution
+  membership was removed stops, and is never reported unchanged.
+  If its rows changed since then, it is dropped while nothing was sent; otherwise the build stops until
+  you restore them. Anything else keeps its stop.
+  An edit or create the SDK refuses before its first request (for example a Custom API label edit on an
+  environment with more than one language, `CUSTOM_API_LABELS_UNSUPPORTED`) stops that build and leaves
+  nothing unfinished: the next build is judged on what the App Spec then declares, the earlier
+  declaration, another edit or the same one.
+- **A create that did not finish.** The next build decides it from what the first one recorded before
+  sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
+  a create that is missing a row, its solution membership or the rule's initial state stops with
+  `create-completion-required` — complete it under the same ids, then build again. An initial
+  publication that failed or whose answer was lost is never sent again by the build: publish the rule
+  under the same id yourself. The one exception is a rule whose content was saved, but whose publish
+  request the record proves was never sent (the run stopped first). The next build sends that publish
+  once, then binds the rule. If the rule's conditions still need your approval, the build asks for it
+  first. Rows that no answer proved this build's own are bound only after you check
+  them and approve each one exactly: the stop (`create-ownership-required`) lists the tokens, such as
+  `adopt:duplicateRule:<key>` and one per child (`adopt:<child kind>:<key>/<child>`, both parts
+  percent-encoded, for example `adopt:customApiRequestParameter:contoso_calc/request%3Aa`). Pass each as
+  printed with its own `--authorize`; a root's token never covers its children, and the tokens are read
+  only with the field and only for declared items. A declaration changed since the create was prepared
+  stops with `managed-pending-intent-changed`: put the original declaration back, finish the create,
+  then make the change. A row that differs from what was sent stops with `create-identity-conflict`.
+- **Retries keep the ids.** When a later step of the same build fails with a transient error and the
+  build runs again, the second attempt finds each protected row at the id the first one bound and sends
+  nothing for it. A protected create whose answer was lost stops the build (`create-outcome-unknown`)
+  and is never retried; the next build decides it as above.

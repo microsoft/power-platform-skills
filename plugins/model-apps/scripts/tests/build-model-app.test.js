@@ -76,6 +76,50 @@ test('rejects an invalid spec before any build', async () => {
   assert.strictEqual(calls.length, 0, 'no SDK writes on a bad spec');
 });
 
+// An SDK double that counts EVERY method the build calls, not only the ones mockSdk() logs: several writes (createPublisher, pushArtifact, updateRecord,
+// addSolutionComponent, publishArtifact) are not in its `calls`, so a count of `calls` alone would miss a build that wrote before it validated.
+function countingSdk() {
+  const { sdk } = mockSdk();
+  const touched = [];
+  return { sdk: new Proxy(sdk, { get: (target, name) => (typeof target[name] === 'function' ? (...args) => { touched.push(String(name)); return target[name](...args); } : target[name]) }), touched };
+}
+
+test('a view written with `filter` is refused on load, before any SDK call, while the same view written with `filters` is built', async () => {
+  const withKey = (key) => { const s = jclone(desk); s.views.find((v) => v.name === 'Active Tickets')[key] = [{ attr: 'new_status', op: 'eq', value: 1 }]; return s; };
+  const refused = countingSdk();
+  const r = await buildModelApp(withKey('filter'), { apply: true, env: 'https://x' }, { sdk: refused.sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /^view 'Active Tickets': unknown key 'filter' — did you mean 'filters'\?/.test(e)), JSON.stringify(r.errors));
+  assert.deepStrictEqual(refused.touched, [], 'no SDK method is called on a spec whose view would be built without its filter');
+  const built = countingSdk();
+  const ok = await buildModelApp(withKey('filters'), { apply: true, env: 'https://x' }, { sdk: built.sdk });
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+  assert.ok(built.touched.length > 0, 'the control spec is built');
+});
+
+// The structural profile reads a spec to tear it down or preview it and lets an unknown view key through as a warning; a build that applied under it would
+// write the view without that part. So an apply refuses it, with no SDK call, whatever the spec holds — and the same spec under it is still accepted to read.
+test('an apply asked to validate under the structural profile is refused before any SDK call, on a spec with a typo and on one without', async () => {
+  const withKey = (key) => { const s = jclone(desk); s.views.find((v) => v.name === 'Active Tickets')[key] = [{ attr: 'new_status', op: 'eq', value: 1 }]; return s; };
+  for (const [label, spec] of [['with `filter`', withKey('filter')], ['with `filters`', withKey('filters')]]) {
+    const refused = countingSdk();
+    const r = await buildModelApp(spec, { apply: true, env: 'https://x', profile: 'structural' }, { sdk: refused.sdk });
+    assert.strictEqual(r.ok, false, label);
+    assert.ok(r.errors.some((e) => /cannot validate under the 'structural' profile/.test(e)), `${label}: ${JSON.stringify(r.errors)}`);
+    assert.deepStrictEqual(refused.touched, [], `${label}: no SDK method is called`);
+  }
+  const structural = validateAppSpec(withKey('filter'), { profile: 'structural' });
+  assert.strictEqual(structural.ok, true, 'a spec read to tear it down or preview it is still accepted');
+  assert.ok(structural.warnings.some((w) => /unknown key 'filter'/.test(w)));
+  for (const profile of ['plan', 'deploy']) {
+    const refused = countingSdk();
+    const r = await buildModelApp(withKey('filter'), { apply: true, env: 'https://x', profile }, { sdk: refused.sdk });
+    assert.strictEqual(r.ok, false, profile);
+    assert.ok(r.errors.some((e) => /unknown key 'filter'/.test(e)), `${profile}: ${JSON.stringify(r.errors)}`);
+    assert.deepStrictEqual(refused.touched, [], `${profile}: no SDK method is called`);
+  }
+});
+
 // The web-resources phase reads contentPath files after the solution and tables are written, so a
 // missing source must be caught here, with the page sources, before the first SDK call.
 test('a web resource whose contentPath file is missing halts before any SDK call', async (t) => {
@@ -1493,6 +1537,74 @@ test('--authorize: each repeated key is read, matched case-insensitively, and ke
   }
 });
 
+test('--authorize overwrite:<configuration kind>:<key> approves replacing exactly one declared protected item\'s local copy, only under the opt-in', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc' }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+    connectionReferences: [{ logicalName: 'contoso_sp', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }],
+    duplicateDetectionRules: [{ key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', 'overwrite:customApi:CONTOSO_CALC', '--authorize=overwrite:environmentVariable:contoso_apibase',
+    '--authorize', 'overwrite:connectionReference:contoso_SP', '--authorize', 'overwrite:duplicateRule:Email rule'], spec());
+  assert.strictEqual(ok.error, null);
+  // Stored as the preflight asks for it: <kind>:<port key> (a name in lower case, a rule's key byte for byte).
+  assert.deepStrictEqual([...ok.overwrite].sort(), ['connectionReference:contoso_sp', 'customApi:contoso_calc', 'duplicateRule:Email rule', 'environmentVariable:contoso_apibase']);
+  assert.strictEqual(ok.keys.size, 0, 'an overwrite consents to no destructive change');
+  assert.strictEqual(ok.adopt.size, 0);
+  for (const [key, over, why] of [
+    ['overwrite:duplicateRule:email rule', {}, /names a configuration item the spec does not declare/],
+    ['overwrite:customApi:contoso_Other', {}, /names a configuration item the spec does not declare/],
+    ['overwrite:customApi:contoso_Calc', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1"/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.overwrite.size, 0, key);
+  }
+});
+
+test('--authorize adopt:<configuration kind>:... approves binding exactly the one protected row it names, as the stop printed it, only under the opt-in', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'String' }], responseProperties: [{ uniqueName: 'Total', type: 'Integer' }] }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', value: 'x' }],
+    duplicateDetectionRules: [{ key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', 'adopt:customApi:CONTOSO_CALC', '--authorize=adopt:customApiRequestParameter:contoso_calc/request%3AA',
+    '--authorize', 'adopt:customApiResponseProperty:Contoso_Calc/response%3Atotal', '--authorize', 'adopt:environmentVariableValue:contoso_apibase/value',
+    '--authorize', 'adopt:duplicateRuleCondition:Email%20rule/e'], spec());
+  assert.strictEqual(ok.error, null);
+  // Stored in the stop's own spelling (a name and a parameter in lower case, a rule's and a condition's key byte for byte, both parts
+  // percent-encoded), one row each: the root's approval covers none of its children.
+  assert.deepStrictEqual([...ok.configurationApprovals].sort(), [
+    'adopt:customApi:contoso_calc', 'adopt:customApiRequestParameter:contoso_calc/request%3Aa', 'adopt:customApiResponseProperty:contoso_calc/response%3Atotal',
+    'adopt:duplicateRuleCondition:Email%20rule/e', 'adopt:environmentVariableValue:contoso_apibase/value',
+  ]);
+  assert.strictEqual(ok.adopt.size, 0, 'a configuration row approval adopts no view or chart');
+  assert.strictEqual(ok.overwrite.size, 0);
+  assert.strictEqual(ok.keys.size, 0);
+  for (const [key, over, why] of [
+    ['adopt:customApi:contoso_Other', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiRequestParameter:contoso_calc/request%3Ab', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiResponseProperty:contoso_calc/request%3Aa', {}, /names a configuration item the spec does not declare/],
+    ['adopt:duplicateRuleCondition:email%20rule/e', {}, /names a configuration item the spec does not declare/],
+    ['adopt:environmentVariableValue:contoso_apibase/default', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiRequestParameter:contoso_calc', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApiRequestParameter:contoso_calc/request%3Aa/x', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApiRequestParameter:contoso_calc/%E0%A4%A', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApi:contoso_Calc', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+    ['adopt:duplicateRuleCondition:Email%20rule/e', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.configurationApprovals.size, 0, key);
+  }
+});
+
 test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets, under its family', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   const spec = {
@@ -2709,7 +2821,8 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(sendObserver \? sendObserver\.wrap\(\) : undefined\) \} : \{\}\), \.\.\.\(workflowEffectGate \? \{ workflowEffectGate \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate, with the managed attempts\u2019 send observer inside the gate, and screens a declared workflow write with the build\u2019s workflow effect gate only when it has one');
+  assert.match(body, /const writeGate = managedCreateGate \? require\('\.\/lib\/managed-create-transport\.js'\)\.composeWriteGates\(workflowEffectGate, managedCreateGate\) : workflowEffectGate;/, 'the workflow effect gate alone unless protected configuration\u2019s managed create gate was made, and then both, composed into the one slot');
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(sendObserver \? sendObserver\.wrap\(\) : undefined\) \} : \{\}\), \.\.\.\(writeGate \? \{ workflowEffectGate: writeGate \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate, with the managed attempts\u2019 send observer inside the gate, and screens a declared workflow write (and a protected configuration create) with the build\u2019s write gate only when it has one');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
   assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
