@@ -336,6 +336,11 @@ Auto-triggered by the main conversation when relevant:
 
 User-invocable via `/power-pages:<skill-name>`:
 
+- `compare-site-metadata`: Read-only comparison of two PAC metadata exports, downloaded from explicit environments or supplied locally.
+  Follow `skills/compare-site-metadata/SKILL.md` for site resolution and download identity checks.
+  Keep the comparison logic and HTML renderer in `skills/compare-site-metadata/scripts/compare-site-metadata.js`, with tests in its sibling `tests/` folder.
+  Run `skills/compare-site-metadata/scripts/compare-site-metadata.js` and preserve the upstream Local/Remote status direction and HTML renderer.
+  Reports and snapshots remain outside both sites; this skill does not update their usage settings.
 - `create-site`: Routes between two eight-phase workflows. The existing SPA path retains requirements
   discovery, early React/Vue/Angular/Astro scaffolding, component and design planning, implementation
   with live Playwright preview, experience brief, narrative blueprints, batched visual critique,

@@ -42,7 +42,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 39 skills: 38 user-invocable skills and one model-only worker.
+The plugin provides 40 skills: 39 user-invocable skills and one model-only worker.
 They cover the full lifecycle of a Power Pages site - scaffolding,
 non-SPA authoring, deployment, data modeling, backend integration, authentication, localization,
 ALM and CI/CD, security review, performance analysis, testing, auditing, and platform migrations. Each user-invocable
@@ -100,6 +100,20 @@ changes without turning the site into an SPA.
 - New pages update navigation by default unless the user explicitly asks not to
 - Preserves local-only boundaries until the user explicitly runs deployment
 - Invokes the model-only `author-webpage-content` worker for localized page-body composition
+
+#### `/compare-site-metadata`
+
+> "Compare the metadata of my dev and production Power Pages sites"
+>
+> "Compare this local downloaded site with a website ID in another environment"
+
+Asks for both sites in one question: the first site's URL or downloaded folder, and the second site's website record ID and Dataverse environment or website URL.
+Downloads remote metadata into separate local folders and opens a self-contained HTML report in the default browser.
+The comparison engine and HTML renderer are bundled directly from the Power Platform VS Code extension.
+The report keeps its component tabs, expandable text diffs, and Local/Remote labels: Added Locally means first-site-only; Deleted Locally means second-site-only.
+Standard and Enhanced non-SPA sites and SPA sites are supported; for SPA sites only the `.powerpages-site` metadata is compared, not application source.
+After the report opens, the agent reads the changed files, explains which differences can change how the sites behave (access, settings, forms, templates, scripts) and asks whether you are seeing a behavior difference.
+Neither site is modified or uploaded; reports stay outside the site trees and should be kept private.
 
 #### `/deploy-site`
 

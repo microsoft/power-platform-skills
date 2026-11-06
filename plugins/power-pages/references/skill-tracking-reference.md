@@ -36,10 +36,15 @@ If the tracking script creates or updates site setting YAML files, include those
 
 ## Skill Name Mapping
 
+`compare-site-metadata` is read-only and does not update usage settings in either input site or its downloaded snapshots.
+Its invocation is still detected by the normal plugin hook.
+Changing an input to count the comparison would alter the evidence being compared.
+
 | Skill | PascalCase (`--skillName`) | Setting Name |
 |-------|---------------------------|--------------|
 | create-site | CreateSite | Site/AI/Skills/CreateSite |
 | edit-site | EditSite | Site/AI/Skills/EditSite |
+| compare-site-metadata | N/A (read-only comparison) | No site-setting writes |
 | deploy-site | DeploySite | Site/AI/Skills/DeploySite |
 | setup-datamodel | SetupDatamodel | Site/AI/Skills/SetupDatamodel |
 | add-sample-data | AddSampleData | Site/AI/Skills/AddSampleData |
