@@ -476,3 +476,78 @@ test('with the feature off the journal and the console carry nothing of command 
     assert.doesNotMatch(text, /commandState|command-state|--authorize/, `${where} is unchanged by the feature`);
   }
 });
+// One history, one story: for each way a row ends unconfirmed in the commands phase, the halt the build stops with, the outcome it records
+// and the line the CLI prints (build-model-app.js, through ROW_MESSAGES) say the same thing — whether this build wrote, what the earlier
+// read showed, and that the last read did not hold the declared flags. The row changes at an exact read of it (armed after the dry run):
+// read 1 is the preflight, 2 the commands-phase recheck, 3 the read right before its own write, then 4 the read after that write, and the
+// read after every row's step is 4 for a row with nothing to write and 5 for one written.
+test('the halt, the recorded outcome and the printed line agree on what happened to a row that ends unconfirmed', async () => {
+  const { buildModelApp } = require('../build-model-app.js');
+  const { makeTempDir } = require('./helpers/temp-dirs.js');
+  const UNCHANGED = 'not written by this build (it already held the declared flags)';
+  const ACKNOWLEDGED = 'written by this build: the write was accepted and read back holding the declared flags';
+  const OBSERVED = 'this build\'s write got no answer, so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them';
+  const DRIFT = 'then the read after every row\'s step did not show the declared flags';
+  const LOST = 'this build sent a write and no read after it showed the row holding the declared flags, so its outcome is unknown';
+  const cases = [
+    { what: 'unchanged, then changed', hidden: true, loseAt: 4, patches: 0, code: 'command-state-not-confirmed', outcome: 'drifted', before: 'unchanged', history: `${UNCHANGED}; ${DRIFT}` },
+    { what: 'written and read back, then changed', hidden: false, loseAt: 5, patches: 1, code: 'command-state-not-confirmed', outcome: 'drifted', before: 'acknowledged', history: `${ACKNOWLEDGED}; ${DRIFT}` },
+    { what: 'unanswered, matched by someone else, then changed', hidden: false, loseAt: 5, competing: true, patches: 1, code: 'command-state-not-confirmed', outcome: 'drifted', before: 'observed-matching-after-unknown-send', history: `${OBSERVED}; ${DRIFT}` },
+    { what: 'unanswered, and never seen holding the flags', hidden: false, lost: true, patches: 1, code: 'command-state-write-unknown', outcome: 'unknown', history: LOST },
+  ];
+  for (const c of cases) {
+    const rows = [commandRow(ROW, T, MD, { hidden: c.hidden })];
+    let armed = false;
+    let reads = 0;
+    const seen = [];
+    const overrides = (req) => {
+      if (!armed) return undefined;
+      if (req.method === 'PATCH' && (c.competing || c.lost)) {
+        // Answered 503 and never stored; for `competing`, someone else sets the same flag at a new version first.
+        if (c.competing) { rows[0].hidden = true; rows[0]['@odata.etag'] = 'W/"1500"'; }
+        return json(503, { error: { code: '0x80072321', message: 'unavailable' } });
+      }
+      if (req.method === 'GET' && req.path.startsWith(`/appactions(${ROW})`)) {
+        if (++reads === c.loseAt) { rows[0].hidden = false; rows[0]['@odata.etag'] = 'W/"1600"'; }
+        seen.push(rows[0].hidden);
+      }
+      return undefined;
+    };
+    const h = harness({ rows, overrides });
+    const spec = specFor();
+    const { approvals } = await h.approve(spec);
+    armed = true;
+    const lines = [];
+    let halt;
+    try {
+      const { sdk } = h.mockSdk();
+      await buildModelApp(spec, { apply: true, publish: true, env: ORIGIN, workspaceDir: makeTempDir('cs-agree-'), commandStateApprovals: approvals }, {
+        sdk, log: (m) => lines.push(String(m)), warn: (m) => lines.push(String(m)), sleep: async () => {},
+        runBuild: (s, o) => runSdkBuild(s, { ...o, commandStateTransport: h.transport }),
+      });
+    } catch (error) {
+      halt = error;
+    }
+    assert.strictEqual(halt && halt.code, c.code, `${c.what}: ${halt && halt.message}`);
+    assert.strictEqual(h.patches().length, c.patches, `${c.what}: PATCHes sent`);
+    const row = halt.commandStates.rows[0];
+    assert.deepStrictEqual([row.outcome, row.before], [c.outcome, c.before], `${c.what}: the recorded outcome keeps the history`);
+    const line = lines.find((l) => l.startsWith(`  command state ${T}/MainTab/${ROW}: `));
+    assert.ok(line, `${c.what}: the CLI printed the row`);
+    assert.ok(line.startsWith(`  command state ${T}/MainTab/${ROW}: ${c.outcome}${c.before ? ` after ${c.before}` : ''}`), `${c.what}: ${line}`);
+    assert.ok(line.endsWith(` — ${c.history}`), `${c.what}: the line says the history: ${line}`);
+    if (c.before) {
+      // The halt says the same history, then what the last read found.
+      assert.ok(halt.message.includes(`(${c.history}): it holds hidden false, disabled false`), `${c.what}: ${halt.message}`);
+      assert.ok(seen.includes(true), `${c.what}: an exact read did hold the declared flags`);
+    } else {
+      assert.match(halt.message, /got HTTP 503; the row now holds hidden false, disabled false/, `${c.what}: ${halt.message}`);
+      assert.ok(!seen.includes(true), `${c.what}: no read held the declared flags`);
+    }
+    for (const text of [halt.message, line]) {
+      if (c.before !== 'acknowledged') assert.doesNotMatch(text.replace('not proof this build saved them', ''), /accepted|saved|(?<!not )written by this build/, `${c.what}: ${text}`);
+      if (c.before === 'unchanged') assert.doesNotMatch(text, /this build's write|this build sent|the write of/, `${c.what}: no write invented: ${text}`);
+      if (c.before) assert.doesNotMatch(text, /no read (after it )?showed/, `${c.what}: the matching read is not denied: ${text}`);
+    }
+  }
+});

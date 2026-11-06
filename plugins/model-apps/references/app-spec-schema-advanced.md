@@ -202,8 +202,10 @@ picked by its row id. Nothing else about the button changes, and a row is never 
   it publishes before the app; until that publication is seen to succeed after the row's write, the
   build reports `command-state-publish-unconfirmed`, saying for each table what its rows are known to
   hold ("saved, not published"; or, when that is all it knows, "held after a write with no answer", "write
-  outcome unknown" or "not written") —
-  a saved row holds the flags, but the button may still show its old state.
+  outcome unknown", "did not hold the declared flags at the read after every row's step" or "not written") —
+  a saved row holds the flags, but the button may still show its old state. A row that held its flags
+  after its write (or already held them) and then changed before the build finished its rows is reported
+  as `drifted`, with what the build did to it first (`command-state-not-confirmed`).
 - **The end of the build checks again.** After its app work the build resolves the app afresh and reads
   every declared row once more: a table no longer in the app, or a row that no longer holds its flags,
   fails the build. Nothing is rolled back — the rows it wrote stay written, and the message says what this

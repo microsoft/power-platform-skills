@@ -3620,12 +3620,17 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   that no longer matches is worded from what this run did to it, never as an accepted write it did not make), and
   rolls nothing back. Second, every declared table must be confirmed published; only that failure halts with
   `command-state-publish-unconfirmed` (worded per table from the row outcomes: saved / already held / held after a
-  write with no answer / write outcome unknown / not written). Every message that words a row after its step (that
-  publication halt, the post-write read, the final drift and late membership checks, the CLI's result lines) builds the
-  row's text from one closed mapping, `ROW_OUTCOMES` / `ROW_WORDS` / `ROW_MESSAGES` in `lib/command-state-run.js`: only
-  `acknowledged` (answered, then read back holding the flags) is said to be accepted or saved; an unanswered send says its
-  answer is unknown and what the later read found; a row this build did not write says so. `command-state-publication.test.js`
-  checks every outcome on every path and fails if the writer records an outcome the mapping does not name. Any such
+  write with no answer / write outcome unknown / not held at the last read / not written). Every message that words a
+  row after its step (that publication halt, the post-write read, the final drift and late membership checks, the
+  CLI's result lines) builds the row's text from one closed mapping, `ROW_OUTCOMES` / `ROW_WORDS` / `ROW_MESSAGES` in
+  `lib/command-state-run.js`: only `acknowledged` (answered, then read back holding the flags) is said to be accepted
+  or saved; an unanswered send says its answer is unknown and what the later read found; a row this build did not
+  write says so. Each outcome records one history: `unknown` only for a sent write that no later read showed holding
+  the flags, and a row that matched after its step but not at the read after every row's step is `drifted` with
+  `before` (`unchanged`, `acknowledged` or `observed-matching-after-unknown-send`), worded from that history. Every
+  outcome goes through one recording boundary, `checkRowRecord`, which throws on any value the mapping does not name.
+  `command-state-outcomes.test.js` checks every history on every path, and lexes every string literal of the writer's
+  sources (`lib/source-literals.js`) so outcome wording outside the mapping fails. Any such
   halt carries non-enumerable `commandStates` and, while a table's publication is unconfirmed,
   `commandStatePublicationError` (never in the journal or a retry's reading).
   There is no store and no cross-run fence: a sent publish can complete after a halt or after an entry is removed,

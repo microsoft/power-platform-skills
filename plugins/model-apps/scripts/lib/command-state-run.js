@@ -100,9 +100,17 @@ function commandStateMode(spec, { apply = false, publish = false, phases = PHASE
 // The remedy of a row that no longer holds its flags at the final proof: no write of this build is claimed, and none is undone.
 const LATE_MISMATCH_REMEDY = 'this build did not overwrite that change and rolls nothing back. Read the row (list-command-states.js), find out what changed it, then run the build again';
 
-// Every outcome createCommandStateRun records for a row (`record`, and `planned` before anything happens to it). Closed: a test scans this
-// file's recorded outcome literals and fails on one this list (and ROW_WORDS) does not name.
-const ROW_OUTCOMES = Object.freeze(['planned', 'unchanged', 'acknowledged', 'observed-matching-after-unknown-send', 'unknown', 'refused']);
+// Every outcome createCommandStateRun records for a row: `planned` before anything happens to it, then only what `record` accepts
+// (checkRowRecord). Each names ONE history, so the words said for it can be true:
+//   unchanged     the row already held the declared flags; this build sent nothing
+//   acknowledged  this build's write was answered 200/204 and read back holding the flags
+//   observed-matching-after-unknown-send   the write got no usable answer; a later read found the flags (not proof this build saved them)
+//   unknown       this build sent a write and no read after it showed the flags (answer lost, or answered and read back otherwise)
+//   refused       not written: refused before or at the write
+//   drifted       one of the first three, then the read after every row's step did not show the flags; `before` keeps which one
+const ROW_OUTCOMES = Object.freeze(['planned', 'unchanged', 'acknowledged', 'observed-matching-after-unknown-send', 'unknown', 'refused', 'drifted']);
+// What a `drifted` row was before its later read: a row that matched after its own step.
+const DRIFT_BEFORE = Object.freeze(['unchanged', 'acknowledged', 'observed-matching-after-unknown-send']);
 // The ONE place a row outcome becomes words in a message the build says after the row's own step: the publication diagnostic (`kind`, a
 // table's tally word), and what this build did to the row (`history`) for the post-write read, the final proof (drift and membership) and
 // the result lines. The rule the wording keeps: only `acknowledged` (a write answered 200/204 AND read back holding the flags) is "saved" or
@@ -116,47 +124,71 @@ const ROW_WORDS = Object.freeze({
     kind: 'held after a write with no answer',
     history: 'this build\'s write got no answer, so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them',
   }),
-  unknown: Object.freeze({ kind: 'outcome unknown', history: 'this build\'s write has an unknown outcome: no read showed the row holding the declared flags' }),
+  unknown: Object.freeze({ kind: 'outcome unknown', history: 'this build sent a write and no read after it showed the row holding the declared flags, so its outcome is unknown' }),
   refused: Object.freeze({ kind: 'not written', history: 'not written by this build (it was refused)' }),
+  // Said after the history of the outcome it had before (`before`): what this build did to the row stays said as it was.
+  drifted: Object.freeze({ kind: 'not held at the last read', history: 'then the read after every row\'s step did not show the declared flags' }),
 });
+// Only for an outcome no list names, which checkRowRecord refuses to record: it claims neither a write nor a read.
+const UNNAMED_WORDS = Object.freeze({ kind: 'outcome unknown', history: 'what this build did to it is not known' });
 // A table's words when all its rows share one kind, and the order a mixed table counts them in.
 const KIND_WHOLE = Object.freeze({
   saved: 'saved, not published',
   'held after a write with no answer': 'held the declared flags after a write with no answer (not known to be this build\'s), not published',
   'already held': 'already held the declared flags, not published by this build',
   'outcome unknown': 'write outcome unknown, not published',
+  'not held at the last read': 'did not hold the declared flags at the read after every row\'s step, not published',
   'not written': 'not written, not published',
 });
-const KIND_ORDER = Object.freeze(['saved', 'held after a write with no answer', 'already held', 'outcome unknown', 'not written']);
-// An outcome the list does not name (a defect the inventory test exists to catch) is said as unknown: never as a write that landed.
-const rowWords = (outcome) => (Object.prototype.hasOwnProperty.call(ROW_WORDS, outcome) ? ROW_WORDS[outcome] : ROW_WORDS.unknown);
+const KIND_ORDER = Object.freeze(['saved', 'held after a write with no answer', 'already held', 'not held at the last read', 'outcome unknown', 'not written']);
+const named = (outcome) => typeof outcome === 'string' && Object.prototype.hasOwnProperty.call(ROW_WORDS, outcome);
+const rowWords = (row) => (named(row.outcome) && (row.outcome !== 'drifted' || DRIFT_BEFORE.includes(row.before)) ? ROW_WORDS[row.outcome] : UNNAMED_WORDS);
+// What this build did to the row: a drifted row's earlier history, then the read that lost the match.
+function rowHistory(row) {
+  const words = rowWords(row);
+  return words === ROW_WORDS.drifted ? `${ROW_WORDS[row.before].history}; ${words.history}` : words.history;
+}
 const rowLabel = (r) => `command state ${r.entity}/${r.location}/${r.rowId}`;
 const ROW_MESSAGES = Object.freeze({
   /** A publication-unconfirmed table, from the outcomes of its rows. */
   publicationTable(entity, rows) {
     if (!rows.length) return `${entity}: publication not confirmed`;
     const counts = new Map();
-    for (const r of rows) { const { kind } = rowWords(r.outcome); counts.set(kind, (counts.get(kind) || 0) + 1); }
+    for (const r of rows) { const { kind } = rowWords(r); counts.set(kind, (counts.get(kind) || 0) + 1); }
     if (counts.size === 1) return `${entity}: ${KIND_WHOLE[[...counts.keys()][0]]}`;
     return `${entity}: ${rows.length} rows (${KIND_ORDER.filter((k) => counts.has(k)).map((k) => `${counts.get(k)} ${k}`).join(', ')}), not published`;
   },
-  /** A row that, read again after every row's step, does not hold the declared flags. */
+  /** A row recorded `drifted` by the read after every row's step, and what that read found. */
   postWriteMismatch(row, back) {
-    return `${rowLabel(row)} (${rowWords(row.outcome).history}): read again after every row's write, it ${back.row ? `holds hidden ${back.row.hidden}, disabled ${back.row.disabled}` : 'could not be read'}`;
+    return `${rowLabel(row)} (${rowHistory(row)}): it ${back.row ? `holds hidden ${back.row.hidden}, disabled ${back.row.disabled}` : 'could not be read'}`;
   },
   /** The final proof's preface: what this build did to every declared row, none of which is rolled back. */
   lateNote(rows) {
-    return `checked again at the end of the build, after its app work; nothing is rolled back (${rows.map((r) => `${rowLabel(r)}: ${rowWords(r.outcome).history}`).join('; ')})`;
+    return `checked again at the end of the build, after its app work; nothing is rolled back (${rows.map((r) => `${rowLabel(r)}: ${rowHistory(r)}`).join('; ')})`;
   },
   /** A row that no longer holds its declared flags at the final proof. */
   finalDrift(row, now) {
-    return `${rowLabel(row)}: it now holds hidden ${now.hidden}, disabled ${now.disabled}: the flags no longer match, so the row changed during the build, after this build's step for it (${rowWords(row.outcome).history}) — ${LATE_MISMATCH_REMEDY}`;
+    return `${rowLabel(row)}: it now holds hidden ${now.hidden}, disabled ${now.disabled}: the flags no longer match, so the row changed during the build, after this build's step for it (${rowHistory(row)}) — ${LATE_MISMATCH_REMEDY}`;
   },
   /** A row's line in the result an apply (or its halt) prints. */
   resultLine(row) {
-    return `${rowLabel(row)}: ${row.outcome}${row.changed && row.changed.length ? ` (${row.changed.join(', ')})` : ''}${row.code ? ` [${row.code}]` : ''} — ${rowWords(row.outcome).history}`;
+    return `${rowLabel(row)}: ${row.outcome}${row.before ? ` after ${row.before}` : ''}${row.changed && row.changed.length ? ` (${row.changed.join(', ')})` : ''}${row.code ? ` [${row.code}]` : ''} — ${rowHistory(row)}`;
   },
 });
+
+/**
+ * The one boundary a row's outcome is recorded through (createCommandStateRun's `record`): an outcome ROW_OUTCOMES does not name, `planned`
+ * (only ever the starting value), a `drifted` without the matching history it came from, or a `before` on any other outcome is a defect in
+ * this module, thrown as one: never recorded, so no message can word a history the mapping does not know.
+ */
+function checkRowRecord(patch) {
+  const outcome = patch && patch.outcome;
+  if (!named(outcome) || outcome === 'planned') throw new TypeError(`command-state writer defect: ${JSON.stringify(outcome)} is not an outcome a row can be recorded with (ROW_OUTCOMES)`);
+  if (outcome === 'drifted' ? !DRIFT_BEFORE.includes(patch.before) : patch.before !== undefined) {
+    throw new TypeError(`command-state writer defect: ${JSON.stringify(outcome)} recorded with before ${JSON.stringify(patch.before)}`);
+  }
+  return patch;
+}
 
 function fail(code, message, detail) {
   return new CommandStateError(code, `${message} — ${REMEDY[code] || 'see the message above'}`, detail);
@@ -317,7 +349,7 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
   let current = null;
 
   const label = (s) => `command state ${s.entity}/${s.bar}/${s.rowId}`;
-  const record = (rowId, patch) => Object.assign(results.get(rowId), patch);
+  const record = (rowId, patch) => Object.assign(results.get(rowId), checkRowRecord(patch));
 
   function requireTransport({ write }) {
     const needs = ['get', 'getAbsolute', 'apiUrl', ...(write ? ['patchRow'] : [])];
@@ -554,10 +586,10 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
       for (const item of current.items) {
         const back = await readBack(item);
         if (!back.ok) {
-          // Worded from the outcome the row had before it is recorded unknown here: what this build did to it.
-          const message = ROW_MESSAGES.postWriteMismatch({ ...results.get(item.rowId) }, back);
-          record(item.rowId, { outcome: 'unknown', code: CODES.notConfirmed });
-          throw fail(CODES.notConfirmed, message);
+          // The row matched after its own step (unchanged, acknowledged or observed-matching) and has lost the match since: its own outcome,
+          // which keeps that history, so the halt, the recorded outcome and the result line all say the same thing.
+          record(item.rowId, { outcome: 'drifted', before: results.get(item.rowId).outcome, code: CODES.notConfirmed });
+          throw fail(CODES.notConfirmed, ROW_MESSAGES.postWriteMismatch({ ...results.get(item.rowId) }, back));
         }
       }
     }),
@@ -580,5 +612,5 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
 }
 
 module.exports = {
-  CODES, REMEDY, ROW_OUTCOMES, ROW_WORDS, ROW_MESSAGES, commandStateMode, commandStateHalt, commandStateSpecHalt, createCommandStateRun, createCommandStatePublicationObserver,
+  CODES, REMEDY, ROW_OUTCOMES, DRIFT_BEFORE, ROW_WORDS, ROW_MESSAGES, checkRowRecord, commandStateMode, commandStateHalt, commandStateSpecHalt, createCommandStateRun, createCommandStatePublicationObserver,
 };
