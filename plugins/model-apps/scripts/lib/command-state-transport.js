@@ -14,7 +14,7 @@
 // Only the paths below are read, so a bug elsewhere cannot turn this into a general reader of the environment, and a continuation the platform
 // gives must be under the same API root and name one of the same resources: a link anywhere else is refused before it is sent.
 
-const { CommandStateError, ROW_VERSION, guidOf } = require('./command-state-contract.js');
+const { CommandStateError, ROW_VERSION, guidOf, serviceAnswerText } = require('./command-state-contract.js');
 
 // The one write: PATCH <root>/appactions(<row id>), nothing after the parenthesis — no $select, no query.
 const ROW_PATCH = /\/appactions\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)$/;
@@ -64,15 +64,18 @@ function createCommandStateTransport({ client, apiUrl } = {}) {
   if (rootUrl.protocol !== 'https:') throw unavailable(`the API root '${root}' is not https`);
 
   const allowed = (path) => READ_PATHS.some((re) => re.test(path));
-  const refuse = (path) => new CommandStateError('command-state-transport-unavailable', `command-state transport: refusing to read '${path}', which is not one of the resources this feature reads`);
+  // Neither refusal says the path or link it refused: a continuation is the service's text (a link can carry anything), and a path is
+  // refused only when a defect built it, so naming it helps no maker. The words of a refused continuation are serviceAnswerText's.
+  const refusePath = () => new CommandStateError('command-state-transport-unavailable', 'command-state transport: refused a read of a resource this feature does not read');
+  const refuseLink = () => new CommandStateError('command-state-transport-unavailable', `command-state transport: ${serviceAnswerText({ problem: 'link-outside' })}`);
 
   const get = async (path) => {
-    if (typeof path !== 'string' || !allowed(path)) throw refuse(path);
+    if (typeof path !== 'string' || !allowed(path)) throw refusePath();
     return client.get(`${root}${path}`);
   };
   // A continuation is absolute: it must be under the same root (same origin, same API version) and name an allowed resource.
   const getAbsolute = async (url) => {
-    if (typeof url !== 'string' || !url.startsWith(`${root}/`) || !allowed(url.slice(root.length))) throw refuse(url);
+    if (typeof url !== 'string' || !url.startsWith(`${root}/`) || !allowed(url.slice(root.length))) throw refuseLink();
     return client.get(url);
   };
   const surface = { get, getAbsolute, apiUrl: (path) => `${root}${path}` };
@@ -86,8 +89,9 @@ function createCommandStateTransport({ client, apiUrl } = {}) {
     surface.patchRow = async (rowId, ifMatch, body) => {
       const id = guidOf(rowId);
       const keys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : [];
-      if (!id || id !== rowId) throw new CommandStateError('command-state-transport-unavailable', `command-state transport: '${rowId}' is not a row id`);
-      if (typeof ifMatch !== 'string' || !ROW_VERSION.test(ifMatch)) throw new CommandStateError('command-state-transport-unavailable', `command-state transport: '${ifMatch}' is not a row version`);
+      // The values refused are not said: a row version is the service's tag, and the design keeps tags out of halts and journals.
+      if (!id || id !== rowId) throw new CommandStateError('command-state-transport-unavailable', 'command-state transport: a row write names no row id');
+      if (typeof ifMatch !== 'string' || !ROW_VERSION.test(ifMatch)) throw new CommandStateError('command-state-transport-unavailable', 'command-state transport: a row write carries no row version');
       if (!keys.length || keys.some((k) => (k !== 'hidden' && k !== 'isdisabled') || typeof body[k] !== 'boolean')) {
         throw new CommandStateError('command-state-transport-unavailable', 'command-state transport: a row write carries hidden and/or isdisabled, as true or false, and nothing else');
       }

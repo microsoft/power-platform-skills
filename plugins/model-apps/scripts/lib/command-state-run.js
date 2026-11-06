@@ -16,7 +16,7 @@
 
 const {
   usesCommandStates, normalizeCommandStates, diffCommandFlags, commandStateApprovalKey, commandTablePublishApprovalKey, codeForReasons, canonicalOrigin,
-  CommandStateError, SPEC_FLAG, validateCommandStates,
+  CommandStateError, SPEC_FLAG, validateCommandStates, serviceAnswerText,
 } = require('./command-state-contract.js');
 const { resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, errorCode, NOT_FOUND, readFailureText } = require('./command-state-read.js');
 const { PHASES, STAGES } = require('./stages.js');
@@ -580,13 +580,15 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     return { context, items, tables };
   }
 
-  // What one change is, for a maker deciding whether to approve it.
-  function describe(item) {
-    const caption = item.caption === null ? '(unlabelled)' : JSON.stringify(item.caption);
+  // What one change is, for a maker deciding whether to approve it. The caption is the service's text (the row's `buttonlabeltext`), so it is
+  // said only where the design shows labels — the approval display (console only) and a dry run's plan — and never in a halt's message,
+  // which the build journal stores: there the row id names the button.
+  function describe(item, { caption: withCaption = true } = {}) {
+    const caption = !withCaption ? '' : item.caption === null ? ' (unlabelled)' : ` ${JSON.stringify(item.caption)}`;
     const changes = Object.keys(item.desired).map((key) => `${SPEC_FLAG[key]} ${item.before[key]} -> ${item.desired[key]}${item.before[key] === item.desired[key] ? ' (already)' : ''}`).join(', ');
     const disabledNote = Object.prototype.hasOwnProperty.call(item.delta, 'isdisabled') && item.delta.isdisabled
       ? '; disabled turns the modern command off for users (a ribbon equivalent can show instead) — it is not a security setting' : '';
-    return `${item.entity} ${item.bar} button ${caption} (row ${item.rowId}, table scope: every app that shows this table; stored hidden ${item.before.hidden}, disabled ${item.before.isdisabled}): ${changes}${disabledNote}`;
+    return `${item.entity} ${item.bar} button${caption} (row ${item.rowId}, table scope: every app that shows this table; stored hidden ${item.before.hidden}, disabled ${item.before.isdisabled}): ${changes}${disabledNote}`;
   }
 
   // Every approval the plan needs and does not have, in one stop.
@@ -598,7 +600,8 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
       const prefix = item.approvalKey.slice(0, item.approvalKey.lastIndexOf('/') + 1);
       const stale = [...rowApprovals].some((token) => token.startsWith(prefix));
       codes.add(stale ? CODES.approvalStale : CODES.approvalRequired);
-      lines.push([`${describe(item)}${stale ? ' — the approval given was for another version of this row or another intent' : ''}`, item.approvalKey]);
+      const why = stale ? ' — the approval given was for another version of this row or another intent' : '';
+      lines.push([`${describe(item, { caption: false })}${why}`, item.approvalKey, `${describe(item)}${why}`]);
     }
     if (publish) {
       for (const table of p.tables) {
@@ -614,10 +617,10 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     const when = earlier.length
       ? `before this attempt writes anything (an earlier attempt of this build already sent a write: ${earlier.map((s) => `${label(s)}: ${history(s.rowId)}`).join('; ')})`
       : 'before this build writes anything';
-    // The message names what needs approval; the tokens themselves go only to the approval display (withApprovalDisplay).
+    // The message names what needs approval; the tokens themselves, and the buttons' captions, go only to the approval display (withApprovalDisplay).
     throw withApprovalDisplay(
       fail(code, `commandStates: ${lines.length} approval${lines.length === 1 ? '' : 's'} needed ${when} (the exact --authorize tokens are printed with this halt, and by a dry run):\n  ${lines.map(([what]) => what).join('\n  ')}\n`),
-      approvalDisplayOf(lines),
+      approvalDisplayOf(lines.map(([what, token, shown]) => [shown || what, token])),
     );
   }
 
@@ -655,7 +658,7 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     if (!rowApprovals.has(fresh.approvalKey)) {
       const again = sentBefore(item.rowId) ? ` again (${history(item.rowId)})` : '';
       throw withApprovalDisplay(
-        fail(CODES.approvalStale, `${label(item)}: the row changed since it was approved; it was not written${again} (its new --authorize token is printed with this halt, and by a dry run):\n  ${describe(fresh)}\n`),
+        fail(CODES.approvalStale, `${label(item)}: the row changed since it was approved; it was not written${again} (its new --authorize token is printed with this halt, and by a dry run):\n  ${describe(fresh, { caption: false })}\n`),
         approvalDisplayOf([[describe(fresh), fresh.approvalKey]]),
       );
     }
@@ -698,7 +701,7 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
     // the write never started, so they are read like an unknown outcome below.
     if (!thrown && Number.isInteger(status) && status >= 400 && status < 500 && status !== 408 && status !== 429) {
       refused(CODES.updateRejected);
-      throw fail(CODES.updateRejected, `${label(item)}: the platform refused the write (HTTP ${status}${errorCode(answer.body) ? ` ${errorCode(answer.body)}` : ''})`);
+      throw fail(CODES.updateRejected, `${label(item)}: ${serviceAnswerText({ problem: 'write-refused', status, dataverseCode: errorCode(answer.body) })}`);
     }
     // No answer, a 5xx, 408, 429 or any status this does not expect (201, 202, 3xx): the write may have committed. It is never sent again; the
     // row is read once more and the outcome said as it is found.

@@ -23,7 +23,7 @@ const { collectionRows, currentAppLayer, appComponentRows, tableRefs, TABLE_NAME
 const { odataLit } = require('./odata.js');
 const { compareText } = require('./compare-text.js');
 const {
-  BAR_BY_LOCATION, UNSUPPORTED_BAR, ROW_VERSION, ROW_SELECT, REASONS, CommandStateError, guidOf, normalizeCommandStates, SPEC_FLAG,
+  BAR_BY_LOCATION, UNSUPPORTED_BAR, ROW_VERSION, ROW_SELECT, REASONS, CommandStateError, guidOf, normalizeCommandStates, SPEC_FLAG, serviceAnswerText,
 } = require('./command-state-contract.js');
 
 const CONTEXT_UNVERIFIED = 'command-state-context-unverified';
@@ -33,51 +33,61 @@ const VERSION_UNAVAILABLE = 'command-state-version-unavailable';
 // Only a 404 that carries it proves a row is gone; any other 404 (a wrong path, a proxy) proves nothing.
 const NOT_FOUND = '0x80040217';
 
-const reasonOf = (error) => String((error && error.message) || error || 'read failed');
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const has = (row, key) => Object.prototype.hasOwnProperty.call(row, key);
 
-// The `code` of a Dataverse error answer — { "error": { "code": "0x80040217" } }, spelled `Error` by some surfaces — in lower case.
+// The `code` of a Dataverse error answer — { "error": { "code": "0x80040217" } }, spelled `Error` by some surfaces — in lower case. It is
+// compared, never said: what is said of an answer is serviceAnswerText's (lib/command-state-contract.js), which checks the code's shape.
 function errorCode(body) {
   const envelope = isObject(body) ? (body.error || body.Error) : null;
   return isObject(envelope) && typeof envelope.code === 'string' ? envelope.code.toLowerCase() : '';
 }
 
-// What this feature says of a read that failed: the HTTP status and the Dataverse error code, never the service's own text. A refusal is
-// answered as, e.g.
-//   HTTP 403  { "error": { "code": "0x80040220", "message": "Principal user (Id=...) is missing prvReadAppAction privilege ..." } }
-// and the shared reader (collectionRows, lib/app-components.js) copies that `message`, with the URL it read, into the error it throws. The
-// design of row-state edits does not let ETags, digests, handlers or raw responses into its halts or journals, and the service's free text
-// can name any of them, so the feature keeps only what is stable and actionable: the status, the code (`0x` and 8 hex digits, which the
-// Dataverse error-code reference lists: https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes)
-// and, for a read with no answer at all, the system error code (ECONNRESET). The shared reader is left as it is: a build without
-// `commandStates` prints what it always printed.
-const DATAVERSE_CODE = /^0x[0-9a-f]{8}$/;
-const SYSTEM_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
-function failureText({ status, dataverseCode, code } = {}) {
-  const said = [];
-  if (Number.isInteger(status)) said.push(`HTTP ${status}`);
-  if (DATAVERSE_CODE.test(dataverseCode || '')) said.push(`Dataverse error ${dataverseCode}`);
-  if (said.length) return `${said.join(', ')}; check that the signed-in account can read it, and look the error code up`;
-  return `no usable answer${SYSTEM_CODE.test(typeof code === 'string' ? code : '') ? ` (${code})` : ''}; check the connection and run it again`;
-}
-// An error this feature did not word, said as failureText says it; one of its own (a CommandStateError) keeps its words, which hold none.
+// What this feature says of a read that was refused or got no answer: its status and Dataverse error code, or, with no answer at all, the
+// system error code (ECONNRESET) — serviceAnswerText, never the service's own text. The shared reader (collectionRows, lib/app-components.js)
+// copies the service's `message` and the URL it read into the error it throws; it is left as it is, so a build without `commandStates` prints
+// what it always printed, and this feature reads the facts from the answer instead (watched, below).
+const failureOf = (answer) => ({ status: answer && answer.status, dataverseCode: errorCode(answer && answer.body) });
+// An error this feature did not word, said by its status and system code; one of its own (a CommandStateError) keeps its words, which are
+// serviceAnswerText's or fixed text.
 function readFailureText(error) {
   if (error instanceof CommandStateError) return error.message;
-  return failureText({ status: error && error.statusCode, code: error && error.code });
+  return serviceAnswerText({ status: error && error.statusCode, systemCode: error && error.code });
 }
 
-// The reader, watched: the last read that was refused or got no answer, so a failure is said from its status and code (failureText) rather
-// than from the message the shared reader made of the service's text. Everything else is the reader's own (`apiUrl` and the rest, by prototype).
+// The shared reader's complaints about an answer it WAS given (a 2xx), e.g.
+//   "the modern commands of table 'contoso_ticket': repeated @odata.nextLink"
+//   "the component list holds 1 row it cannot place: row 1 has an objectid that is no GUID ("<up to 40 characters of the service's value>")"
+// read as the problem they name and the field they name, never copied: the second one quotes the service's value. A complaint not listed
+// here is said as `unexpected`.
+const SHARED_COMPLAINTS = [
+  [/: repeated @odata\.nextLink$/, { problem: 'repeated-link' }],
+  [/: malformed @odata\.nextLink$/, { problem: 'malformed-link', field: '@odata.nextLink' }],
+  [/no readable result set$/, { problem: 'not-a-list', field: 'value' }],
+  [/it cannot place: row \d+ is not a record/, { problem: 'not-a-record' }],
+  [/it cannot place: row \d+ has (no objectid|an objectid that is no GUID)/, { problem: 'unplaceable', field: 'objectid' }],
+  [/it cannot place: row \d+ (says no component type|has component type)/, { problem: 'unplaceable', field: 'componenttype' }],
+  [/could not be resolved to a MetadataId \+ EntitySetName$/, { problem: 'malformed-field', field: ['MetadataId', 'EntitySetName'] }],
+  [/^no single current layer among \d+ app row\(s\)$/, { problem: 'layer-ambiguous' }],
+  // The transport's own refusal of a continuation, which currentAppLayer turns into a reason like any other error.
+  [/^command-state transport: the next-page link pointed outside the expected API and was not followed$/, { problem: 'link-outside' }],
+];
+function complaintOf(text) {
+  const found = SHARED_COMPLAINTS.find(([pattern]) => pattern.test(String(text)));
+  return found ? found[1] : { problem: 'unexpected' };
+}
+
+// The reader, watched: the last read that was refused or got no answer, so a failure is said from its status and code rather than from the
+// message the shared reader made of the service's text. Everything else is the reader's own (`apiUrl` and the rest, by prototype).
 function watched(reader) {
   const watch = Object.create(reader);
   watch.failure = null;
   const seen = (answer) => {
-    if (!answer || !(answer.status >= 200 && answer.status < 300)) watch.failure = { status: answer && answer.status, dataverseCode: errorCode(answer && answer.body) };
+    if (!answer || !(answer.status >= 200 && answer.status < 300)) watch.failure = failureOf(answer);
     return answer;
   };
   const thrown = (error) => {
-    if (!(error instanceof CommandStateError)) watch.failure = { status: error && error.statusCode, code: error && error.code };
+    if (!(error instanceof CommandStateError)) watch.failure = { status: error && error.statusCode, systemCode: error && error.code };
     throw error;
   };
   for (const method of ['get', 'getAbsolute']) {
@@ -89,17 +99,17 @@ function watched(reader) {
   return watch;
 }
 
-// Runs a read whose failure must carry this feature's code; an error that already has one keeps it. `run` is given the reader, watched. A read
-// that was refused or got no answer is said as `<what>: <failureText>`; any other error is the shared reader's complaint about an answer it was
-// given (a page that repeats, a row it cannot place), which holds none of the service's text, and keeps its words.
+// Runs a read whose failure must carry this feature's code; a CommandStateError (the transport's refusal of a continuation) keeps its own.
+// `run` is given the reader, watched. Every other failure is said as `<what>: <serviceAnswerText>`: a read that was refused or got no answer
+// by its status and codes, a complaint about an answer that came by the problem it names (complaintOf).
 async function as(code, what, reader, run) {
   const watch = watched(reader);
   try {
     return await run(watch);
   } catch (error) {
     if (error instanceof CommandStateError) throw error;
-    const failure = watch.failure || (error && Number.isInteger(error.statusCode) ? { status: error.statusCode, code: error.code } : null);
-    throw new CommandStateError(code, failure ? `${what}: ${failureText(failure)}` : reasonOf(error));
+    const failure = watch.failure || (error && Number.isInteger(error.statusCode) ? { status: error.statusCode } : null);
+    throw new CommandStateError(code, `${what}: ${serviceAnswerText(failure || complaintOf(error && error.message))}`);
   }
 }
 
@@ -127,13 +137,13 @@ async function resolveCommandStateContext(reader, { appUniqueName, entities } = 
       : `app '${appUniqueName}': no published app has this unique name`);
   }
   const appId = appIds[0];
-  // currentAppLayer answers a failed read with the shared reader's message (layer.reason); the watched reader says it from its status and code.
-  // A reason with no failed read behind it ("no single current layer among 2 app row(s)") is the shared reader's own, and is kept.
+  // currentAppLayer answers a failed read with the shared reader's message (layer.reason), which can quote the service: the watched reader says
+  // a refused read from its status and code, and any other reason is read as the problem it names (complaintOf), never copied.
   const layerReader = watched(reader);
   const layer = await currentAppLayer(layerReader, appId);
   if (!layer.ok) {
-    const why = layerReader.failure ? failureText(layerReader.failure) : (Number.isInteger(layer.status) ? failureText({ status: layer.status }) : layer.reason);
-    throw new CommandStateError(CONTEXT_UNVERIFIED, `app '${appUniqueName}': its current layer could not be read: ${why}`);
+    const failure = layerReader.failure || (Number.isInteger(layer.status) ? { status: layer.status } : complaintOf(layer.reason));
+    throw new CommandStateError(CONTEXT_UNVERIFIED, `app '${appUniqueName}': its current layer could not be read: ${serviceAnswerText(failure)}`);
   }
   const components = await as(CONTEXT_UNVERIFIED, `app '${appUniqueName}': its tables`, reader, (r) => appComponentRows(r, layer.appModuleIdUnique, 1, { strict: true }));
   const memberIds = new Set(components.map((row) => guidOf(row.objectid)));
@@ -151,12 +161,16 @@ async function resolveCommandStateContext(reader, { appUniqueName, entities } = 
     }
   } else {
     for (const metadataId of [...memberIds].sort()) {
-      const answer = await as(CONTEXT_UNVERIFIED, `app '${appUniqueName}': table component ${metadataId}`, reader, (r) => r.get(`/EntityDefinitions(${metadataId})?$select=LogicalName,MetadataId`));
-      const body = answer && answer.body;
-      if (!answer || answer.status < 200 || answer.status >= 300 || !isObject(body)
-        || typeof body.LogicalName !== 'string' || !TABLE_NAME.test(body.LogicalName) || guidOf(body.MetadataId) !== metadataId) {
-        throw new CommandStateError(CONTEXT_UNVERIFIED, `app '${appUniqueName}': table component ${metadataId} could not be resolved to a table (HTTP ${answer && answer.status})`);
-      }
+      const what = `app '${appUniqueName}': table component ${metadataId}`;
+      const answer = await as(CONTEXT_UNVERIFIED, what, reader, (r) => r.get(`/EntityDefinitions(${metadataId})?$select=LogicalName,MetadataId`));
+      const answered = answer && answer.status >= 200 && answer.status < 300;
+      const body = answered ? answer.body : undefined;
+      let problem = null;
+      if (!answered) problem = failureOf(answer);
+      else if (!isObject(body)) problem = { problem: 'not-a-record' };
+      else if (typeof body.LogicalName !== 'string' || !TABLE_NAME.test(body.LogicalName)) problem = { problem: 'malformed-field', field: 'LogicalName' };
+      else if (guidOf(body.MetadataId) !== metadataId) problem = { problem: 'malformed-field', field: 'MetadataId' };
+      if (problem) throw new CommandStateError(CONTEXT_UNVERIFIED, `${what} could not be resolved to a table: ${serviceAnswerText(problem)}`);
       tables.set(body.LogicalName, { entity: body.LogicalName, metadataId, inApp: true });
     }
   }
@@ -164,9 +178,11 @@ async function resolveCommandStateContext(reader, { appUniqueName, entities } = 
   // A row version exists only where the table keeps one: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
   // Missing, not a boolean, or unreadable is no answer, never "on".
   const concurrency = await as(VERSION_UNAVAILABLE, 'whether the command table keeps row versions', reader, (r) => r.get("/EntityDefinitions(LogicalName='appaction')?$select=IsOptimisticConcurrencyEnabled"));
-  const flag = concurrency && concurrency.status >= 200 && concurrency.status < 300 && isObject(concurrency.body) ? concurrency.body.IsOptimisticConcurrencyEnabled : undefined;
+  const answered = concurrency && concurrency.status >= 200 && concurrency.status < 300;
+  const flag = answered && isObject(concurrency.body) ? concurrency.body.IsOptimisticConcurrencyEnabled : undefined;
   if (typeof flag !== 'boolean') {
-    throw new CommandStateError(VERSION_UNAVAILABLE, `whether the command table keeps row versions could not be read (HTTP ${concurrency && concurrency.status})`);
+    const problem = answered ? { problem: 'malformed-field', field: 'IsOptimisticConcurrencyEnabled' } : failureOf(concurrency);
+    throw new CommandStateError(VERSION_UNAVAILABLE, `whether the command table keeps row versions could not be read: ${serviceAnswerText(problem)}`);
   }
   return {
     appId, appUniqueName, appModuleIdUnique: layer.appModuleIdUnique, optimisticConcurrency: flag,
@@ -191,9 +207,10 @@ async function readCommandStateRow(reader, rowId) {
   }
   const status = answer && answer.status;
   if (status === 404 && errorCode(answer.body) === NOT_FOUND) return { found: false };
-  if (!(status >= 200 && status < 300) || !isObject(answer.body)) {
-    throw new CommandStateError(ROW_UNREADABLE, `command row ${id} could not be read (HTTP ${status})`);
+  if (!(status >= 200 && status < 300)) {
+    throw new CommandStateError(ROW_UNREADABLE, `command row ${id} could not be read: ${serviceAnswerText(failureOf(answer))}`);
   }
+  if (!isObject(answer.body)) throw new CommandStateError(ROW_UNREADABLE, `command row ${id} could not be read: ${serviceAnswerText({ problem: 'not-a-record' })}`);
   return { found: true, body: answer.body };
 }
 

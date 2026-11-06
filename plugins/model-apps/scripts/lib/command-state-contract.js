@@ -112,6 +112,65 @@ class CommandStateError extends Error {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------
+// The one way this feature says what was wrong with an answer of the service: a failed read, a refused write, an answer it could not use.
+// The design of row-state edits does not let ETags, digests, handlers or raw responses into a halt, a journal or a verify detail, and the
+// service's free text can carry any of them. A refusal is answered as, e.g.
+//   HTTP 403  { "error": { "code": "0x80040220", "message": "Principal user (Id=...) is missing prvReadAppAction privilege ..." } }
+// and a malformed answer can hold anything in any field (a row id that is no GUID, a next-page link to anywhere). So the text below is built
+// only from values that are checked here, each dropped when it is not of its shape, and fixed words:
+//   status         an HTTP status, an integer
+//   dataverseCode  `0x` and 8 hex digits, said in lower case: https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes
+//   systemCode     a system error code of a read with no answer at all (ECONNRESET), upper case letters, digits and `_`
+//   field          the NAME of a field the answer got wrong, one of SERVICE_FIELDS — never its value
+//   problem        one of SERVICE_PROBLEMS
+// Every CommandStateError that says something about an answer is worded here; every other one is fixed text and values the feature checked
+// itself (a row id, a table name, a bar), so a CommandStateError's message is safe to journal. tests/command-state-taint.test.js plants a
+// marker in every service string a build, a listing and a verify read, and proves it reaches none of them.
+const DATAVERSE_CODE = /^0x[0-9a-f]{8}$/i;
+const SYSTEM_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
+const SERVICE_FIELDS = new Set([
+  ...ROW_SELECT, '@odata.etag', '@odata.nextLink', 'value', 'appmoduleid', 'appmoduleidunique', 'componentstate', 'objectid', 'componenttype',
+  'MetadataId', 'EntitySetName', 'LogicalName', 'IsOptimisticConcurrencyEnabled',
+]);
+const RUN_AGAIN = 'run it again, and if it persists check the environment\'s answer for this read';
+const SERVICE_PROBLEMS = Object.freeze({
+  // A read that was answered with an error status, or not answered: said by the facts alone (see serviceAnswerText).
+  failed: null,
+  'write-refused': null,
+  'not-a-list': `the answer is not a list of rows; ${RUN_AGAIN}`,
+  'not-a-record': `the answer holds something that is not a record; ${RUN_AGAIN}`,
+  'repeated-link': `the answer repeated a next-page link; ${RUN_AGAIN}`,
+  'malformed-link': `the answer's next-page link is not a link; ${RUN_AGAIN}`,
+  'link-outside': 'the next-page link pointed outside the expected API and was not followed',
+  'malformed-field': `the answer holds an unreadable value; ${RUN_AGAIN}`,
+  unplaceable: `the answer holds a row that cannot be placed; ${RUN_AGAIN}`,
+  'layer-ambiguous': `the answer does not name exactly one current layer of the app; ${RUN_AGAIN}`,
+  unexpected: `the answer could not be read; ${RUN_AGAIN}`,
+});
+
+/**
+ * @param {{ problem?: string, status?: number, dataverseCode?: string, systemCode?: string, field?: string|string[] }} facts
+ * @returns {string} e.g. "HTTP 403, Dataverse error 0x80040220; check that the signed-in account can read it, and look the error code up"
+ *   or "no usable answer (ECONNRESET); check the connection and run it again"
+ *   or "the answer holds an unreadable value (objectid); run it again, ..."
+ */
+function serviceAnswerText({ problem = 'failed', status, dataverseCode, systemCode, field } = {}) {
+  const facts = [];
+  if (Number.isInteger(status)) facts.push(`HTTP ${status}`);
+  if (typeof dataverseCode === 'string' && DATAVERSE_CODE.test(dataverseCode)) facts.push(`Dataverse error ${dataverseCode.toLowerCase()}`);
+  const said = facts.join(', ');
+  if (problem === 'write-refused') return said ? `the platform refused the write (${said})` : 'the platform refused the write';
+  if (!Object.prototype.hasOwnProperty.call(SERVICE_PROBLEMS, problem)) problem = 'unexpected';
+  if (problem === 'failed') {
+    if (said) return `${said}; check that the signed-in account can read it, and look the error code up`;
+    return `no usable answer${typeof systemCode === 'string' && SYSTEM_CODE.test(systemCode) ? ` (${systemCode})` : ''}; check the connection and run it again`;
+  }
+  const fields = (Array.isArray(field) ? field : [field]).filter((name) => typeof name === 'string' && SERVICE_FIELDS.has(name));
+  const [what, remedy] = SERVICE_PROBLEMS[problem].split('; ');
+  return `${what}${fields.length ? ` (${fields.join(', ')})` : ''}${remedy ? `; ${remedy}` : ''}`;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
 // The App Spec's `commandStates[]`: the hidden / disabled state of an EXISTING table-scoped modern command, named by its row id.
 //   { "entity": "contoso_order", "location": "MainTab", "scope": "table", "rowId": "11111111-1111-4111-8111-111111111111", "hidden": true }
 // The first four keys are required, and at least one of `hidden` / `disabled`. A flag left out keeps what the row stores; `false` is an
@@ -346,7 +405,7 @@ function commandStateAuthorizationKeys(raw, spec) {
 
 module.exports = {
   LOCATION_BY_BAR, BAR_BY_LOCATION, UNSUPPORTED_BAR, ROW_VERSION, ROW_SELECT, REASONS, CODE_BY_REASON,
-  codeForReasons, canonicalRowId, guidOf, CommandStateError,
+  codeForReasons, canonicalRowId, guidOf, CommandStateError, serviceAnswerText, SERVICE_PROBLEMS, SERVICE_FIELDS,
   COMMAND_STATES_MIN_VERSION, WIRE_FLAG, SPEC_FLAG,
   usesCommandStates, validateCommandStates, normalizeCommandState, normalizeCommandStates, wireDesired, diffCommandFlags, canonicalOrigin,
   commandStateApprovalKey, commandTablePublishApprovalKey, commandStateAuthorizationKeys, isCommandStateToken,

@@ -3648,11 +3648,27 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
 - **Shared decoder contract** (`command-state-read.js`): a missing column is not a null and a null flag is not
   `false`; static visibility is a present `visibilitytype` of null or 0 with every visibility-formula column present
   and empty (the null `commands[]` leaves is static); `visibilitytype` is never written; only a table-scoped row is a
-  candidate. A read that fails is said by what it read, its HTTP status and its Dataverse error code (`0x` and eight
-  hex digits), or by the system code of a read with no answer (`ECONNRESET`), with a fixed next step — never the
-  service's own message, which can quote a row version (`readFailureText`; the context reads, the listing, a row
-  read, a lost write's cause and verify's details all go through it). The shared reader (`collectionRows`) still
-  copies that message for every other caller, so a build without `commandStates` prints what it always printed.
+  candidate. **Service answers are worded by one formatter**, `serviceAnswerText` (`command-state-contract.js`), from
+  checked values only: the HTTP status (an integer), the Dataverse error code (`0x` and eight hex digits, else
+  dropped), the system code of a read with no answer (`ECONNRESET`: capitals, digits and `_`, else dropped), a
+  problem from the fixed `SERVICE_PROBLEMS` list and field names from the fixed `SERVICE_FIELDS` list — never the
+  service's message, a link, a value or a row version, so `0x80040220` is said and the message beside it is not. These
+  paths word a failed or malformed answer through it, and through nothing else: the context reads (`as` in
+  `command-state-read.js` for the app, components, table and listing reads; the current layer; a table by metadata id;
+  `IsOptimisticConcurrencyEnabled`), the row read (`readCommandStateRow`), `readFailureText` (a thrown read error, used
+  by verify's details and a lost write's cause), the transport's refusal of a continuation outside the API, and a
+  refused row write (`command-state-run.js`, `write-refused`). The shared reader (`collectionRows`) still copies the
+  service's message and value into the errors it throws, so a build without `commandStates` prints what it always
+  printed; this feature never says them: a refused read is said from the answer itself (`watched`), and a complaint
+  about a 2xx answer is matched to the problem it names (`complaintOf`), the rest being `unexpected`. The transport's
+  other refusals are fixed text that names no path or row version. The one service text a maker is shown is a
+  button's caption (`buttonlabeltext`), as the inventory and approval require: the listing's `commands[].caption`,
+  the approval display and the dry-run plan (console only); a halt and the journal name the row by table, bar and
+  row id, without it. `command-state-taint.test.js` is the class gate: it plants one marker shaped like a row
+  version into each string position (error code and message, next-page links, `value`, each field) of each answer
+  the feature reads, in each phase (preflight, final proof, the row write, the listing, verify), and fails if it
+  reaches a halt, the console, a verify detail, the listing's output, `build-log.jsonl` or `build-status.json`, the
+  caption's own places aside.
 - **Verify** (`verifyCommandStates`, `verify-spec.js` kind `command-state`): each declared entry's exact row stores
   each declared flag — stored state only, not what the app renders. A reader without command-row access, or a
   failed read, fails every entry. A verify of a run that did not run the `commands` phase (exactly `--stage data`)

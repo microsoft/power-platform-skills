@@ -9,73 +9,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { inOwnFolder } = require('./helpers/own-app-folder.js');
 const runSdkBuild = inOwnFolder(require('../lib/sdk-build.js').runSdkBuild);
-const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
-const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-const { createCommandStateTransport, commandStateSendOnce } = require('../lib/command-state-transport.js');
-const { createCommandStateOrg, commandRow, json, ORIGIN, APP_ID } = require('./helpers/command-state-org.js');
-const { validateAppSpec } = require('../lib/app-spec.js');
+const { commandRow, json, ORIGIN, APP_ID } = require('./helpers/command-state-org.js');
+const { T, MD, ROW, HIDE, APPLY, specFor, harness, buildWithJournal } = require('./helpers/command-state-build-harness.js');
 
-const T = 'new_ticket';
-const MD = '44444444-4444-4444-8444-444444444444';
-const ROW = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ROW2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const API = `${ORIGIN}/api/data/v9.2`;
-const HIDE = { entity: T, location: 'MainTab', scope: 'table', rowId: ROW, hidden: true };
 // A legacy commands[] button and the script it runs.
 const LEGACY = (extra = {}) => ({ commands: [{ entity: T, label: 'Go', library: 'new_go.js', function: 'Ns.go', ...extra }], webResources: [{ name: 'new_go.js', type: 'js', content: 'var Ns = {};' }] });
-
-function specFor(states = [HIDE], extra = {}) {
-  const spec = {
-    minimumPluginVersion: '2.24.0',
-    solution: { uniqueName: 'ContosoSD', displayName: 'Contoso SD', publisherPrefix: 'new' },
-    app: { name: 'Support', uniqueName: 'contoso_Support' },
-    entities: [{ schemaName: T, displayName: 'Ticket', primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' } }],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: T, title: 'Tickets' }] }] }] },
-    ...(states ? { commandStates: states } : {}),
-    ...extra,
-  };
-  assert.deepStrictEqual(validateAppSpec(spec).errors, [], 'the fixture is a valid spec');
-  return spec;
-}
-
-// The tables a PublishXml body names: { "ParameterXml": "<importexportxml><entities><entity>new_ticket</entity></entities></importexportxml>" }
-const tablesOf = (body) => [...String((body && body.ParameterXml) || '').matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1]);
-
-function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPublish, ...orgOptions } = {}) {
-  const org = createCommandStateOrg({ writable: true, tables: { [T]: { metadataId: MD } }, rows, ...orgOptions });
-  const client = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: org.request, sleep: async () => {}, sendOnce: commandStateSendOnce });
-  const transport = createCommandStateTransport({ client, apiUrl: (p) => `${API}${p}` });
-  const published = [];
-  const mockSdk = () => {
-    const { sdk, calls } = makeSimpleMockSdk();
-    sdk.dataverse = {
-      apiUrl: (p) => `${API}${p}`,
-      post: async (url, body) => { published.push(tablesOf(body)); if (onPublish) onPublish(tablesOf(body)); return { status: publishStatus, body: null }; },
-    };
-    return { sdk, calls };
-  };
-  const build = async (spec, opts = {}) => {
-    const { sdk, calls } = mockSdk();
-    const warnings = [];
-    const run = { sdk, env: ORIGIN, commandStateTransport: transport, emit: () => {}, warn: (w) => warnings.push(String(w)), ...opts };
-    try {
-      return { res: await runSdkBuild(spec, run), calls, warnings };
-    } catch (error) {
-      return { error, calls, warnings };
-    }
-  };
-  // The approvals a dry run prints, exactly as an author would pass them back.
-  const approve = async (spec) => {
-    const { res, error } = await build(spec, { apply: false });
-    assert.ifError(error);
-    const plan = res.commandStatePlan;
-    return { plan, approvals: { rows: new Set(plan.rows.map((r) => r.approval).filter(Boolean)), tables: new Set(plan.tables.map((t) => t.token)) } };
-  };
-  const patches = () => org.requests.filter((r) => r.method === 'PATCH');
-  return { org, build, approve, published, patches, transport, mockSdk };
-}
-
-const APPLY = { apply: true, publish: true };
 
 test('a dry run reads each declared row and prints the exact approvals; it writes and publishes nothing', async () => {
   const h = harness();
@@ -394,29 +333,6 @@ test('an unanswered write whose row a competing edit made match, then changed ag
   assert.match(error.message, /this build's write got no usable answer \(HTTP 503\), so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them; then a read at the end of the build found hidden false/);
   assert.doesNotMatch(error.message.replaceAll('not proof this build saved them', ''), /accept|acknowledg|sav(e|ed|ing)\b|(?<!not )written by this build/i, 'the unanswered write is not claimed as this build\'s');
 });
-// The build's own entry (build-model-app.js buildModelApp) with its durable journal, for what a halt leaves on disk and says on the console.
-async function buildWithJournal(h, spec, approvals) {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const { buildModelApp } = require('../build-model-app.js');
-  const { openJournal } = require('../lib/build-journal.js');
-  const { makeTempDir } = require('./helpers/temp-dirs.js');
-  const engine = require('../lib/sdk-build.js').runSdkBuild;
-  const workspaceDir = makeTempDir('cs-journal-');
-  const journal = openJournal(path.join(workspaceDir, 'logs'));
-  const said = [];
-  const { sdk } = h.mockSdk();
-  let caught;
-  try {
-    await buildModelApp(spec, { apply: true, publish: true, env: ORIGIN, workspaceDir, commandStateApprovals: approvals }, {
-      sdk, journal, log: () => {}, warn: (m) => said.push(String(m)), sleep: async () => {},
-      runBuild: (s, o) => engine(s, { ...o, commandStateTransport: h.transport }),
-    });
-  } catch (error) {
-    caught = error;
-  }
-  return { caught, said: said.join('\n'), log: fs.readFileSync(journal.path, 'utf8'), status: fs.readFileSync(journal.statusPath, 'utf8') };
-}
 
 test('an approval halt keeps the exact tokens out of the build journal and says them on the console: missing and stale', async () => {
   const cases = [
