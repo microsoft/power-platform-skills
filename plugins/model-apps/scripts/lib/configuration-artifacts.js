@@ -2890,9 +2890,58 @@ async function locateExactly(ctx, port, kind, key) {
   const resolved = await port.resolve({ kind, key: portKeyOf(kind, key) });
   if (!resolved || resolved.state !== 'present' || typeof resolved.id !== 'string' || !resolved.id) throw identityStop('create-identity-unverified');
   await refuseLocalDraft(ctx.sdk, kind, resolved.id);
-  return { id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved' };
+  // A protected rule's conditions are paired at the ids its binding holds, as the build's plan pairs them (lib/configuration-protected.js
+  // locateItem): a swap of two bound rows' criteria is an edit the build refuses (configuration-edit-unsupported), so verify must not
+  // pass it. Content pairing alone would. Only a rule takes them: the other kinds are compared as before.
+  const boundChildIds = kind === 'duplicateRule' && resolved.childIds && typeof resolved.childIds === 'object' ? resolved.childIds : undefined;
+  return {
+    id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved',
+    ...(boundChildIds ? { childIds: boundChildIds } : {}),
+    ...(kind === 'duplicateRule' && resolved.buildRefusal ? { buildRefusal: resolved.buildRefusal } : {}),
+  };
 }
 
+// What a protected rule's definition check names, as the union of two judgments: the content comparison (`compared`, whose pointers
+// keep the order the unprotected check reports them in) and the build's own (`found.buildRefusal`, from the port: it refuses every
+// edit of a protected rule). Placement rules, so a consumer that reads the fields sees one stable shape:
+//   - the comparison's pointers stay where they are; a pointer only the build's judgment adds goes after them;
+//   - each `/conditions/<key>` follows `/conditions` at once, in declaration order: a declared condition the plan would create
+//     (a new or renamed key) or whose bound row no longer holds its criteria;
+//   - a removal (a bound row no longer declared, an extra row) names `/conditions` alone;
+//   - `/definition` only when the build refuses and nothing above says what: a state change the declaration does not name.
+// A content refusal does not hide a build refusal: the build still refuses, so the check is DRIFT, naming the root pointer when
+// the refusal is a root field (these refusals stop the comparison before it names anything).
+const CONTENT_REFUSAL_POINTER = { DUPLICATE_RULE_TABLE_IMMUTABLE: '/matchingEntity', DUPLICATE_RULE_NAME_CONFLICT: '/entity', CONFIGURATION_CHILD_IDENTITY_AMBIGUOUS: '/conditions' };
+
+function ruleDriftFields(entry, found, compared) {
+  const refusal = found.buildRefusal;
+  const out = compared.refusal
+    ? (CONTENT_REFUSAL_POINTER[compared.refusal] ? [CONTENT_REFUSAL_POINTER[compared.refusal]] : [])
+    : compared.changes.filter((c) => !c.binding).map((c) => c.pointer);
+  if (refusal || out.includes('/conditions')) {
+    const keyed = conditionDriftPointers(entry, found.remote, found.childIds, new Set(refusal ? refusal.created : []));
+    if (!out.includes('/conditions') && (keyed.length || (refusal && refusal.removed))) out.push('/conditions');
+    const at = out.indexOf('/conditions');
+    if (at >= 0) out.splice(at + 1, 0, ...keyed.filter((pointer) => !out.includes(pointer)));
+  }
+  return refusal && !out.length ? ['/definition'] : out;
+}
+
+// The declared conditions of a protected rule that the build's plan would create (`created`, by key), or whose bound row no
+// longer holds their criteria, as drift pointers (`/conditions/<key>`), in declaration order, so a failing check names them.
+// `bound` is the binding's slot -> id (slot = condition key). A bound row that is gone never gets here: the port reads every
+// bound row at its id (configuration-row-not-found).
+function conditionDriftPointers(entry, remote, bound, created = new Set()) {
+  const rows = Array.isArray(remote.conditions) ? remote.conditions : [];
+  const out = [];
+  for (const d of Array.isArray(entry.conditions) ? entry.conditions : []) {
+    if (created.has(d.key)) { out.push(`/conditions/${d.key}`); continue; }
+    const id = has(bound, d.key) ? bound[d.key] : null;
+    const row = id ? rows.find((r) => ref(r.id) === ref(id)) : null;
+    if (row && !describes(d, row)) out.push(`/conditions/${d.key}`);
+  }
+  return out;
+}
 async function verifyKind(ctx, kindPlan, entries, checks, onFound) {
   for (const entry of entries) {
     const { kind } = kindPlan;
@@ -2915,10 +2964,12 @@ async function verifyKind(ctx, kindPlan, entries, checks, onFound) {
     if (found.refusal) { checks.push({ kind, key, name: 'definition', ok: false, code: found.refusal }); continue; }
     if (onFound) onFound(entry, found);
     const compared = kindPlan.compare(entry, found.remote, ctx, found.childIds);
-    if (compared.refusal) { checks.push({ kind, key, name: 'definition', ok: false, code: compared.refusal }); continue; }
-    const drift = compared.changes.filter((c) => !c.binding).map((c) => c.pointer);
-    const bindingDrift = compared.changes.filter((c) => c.binding).map((c) => c.pointer);
-    checks.push(drift.length ? { kind, key, name: 'definition', ok: false, code: 'DRIFT', fields: drift } : { kind, key, name: 'definition', ok: true });
+    // A protected rule the build refuses is DRIFT whatever the comparison said (ruleDriftFields); otherwise a refusal stands.
+    const ruleRefused = kind === 'duplicateRule' && found.buildRefusal;
+    if (compared.refusal && !ruleRefused) { checks.push({ kind, key, name: 'definition', ok: false, code: compared.refusal }); continue; }
+    const fields = kind === 'duplicateRule' && found.childIds ? ruleDriftFields(entry, found, compared) : compared.changes.filter((c) => !c.binding).map((c) => c.pointer);
+    const bindingDrift = (compared.changes || []).filter((c) => c.binding).map((c) => c.pointer);
+    checks.push(fields.length ? { kind, key, name: 'definition', ok: false, code: 'DRIFT', fields } : { kind, key, name: 'definition', ok: true });
     const bindings = bindingsOf(ctx);
     const bound = kind === 'environmentVariable' ? bindings.environmentVariables.has(lower(key))
       : kind === 'connectionReference' ? bindings.connectionReferences.has(lower(key)) : false;

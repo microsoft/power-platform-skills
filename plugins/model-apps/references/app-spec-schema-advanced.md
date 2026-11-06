@@ -1362,6 +1362,17 @@ the field builds exactly as before.
   `configuration-row-not-found` even when a namesake exists, an item with no binding (or no readable
   binding store) fails with `create-identity-unverified`, and an item whose create is still being
   settled is reported unverified. Keep the build workspace with the binding store where verify runs.
+  A protected duplicate rule's conditions are checked at their bound ids too, as the build pairs them:
+  criteria swapped between two bound condition rows fails with `DRIFT`, naming the conditions
+  (`/conditions/<key>`), as the build refuses that rule (`configuration-edit-unsupported`). Verify
+  judges that rule with the build's own read-only check, so an edit the build refuses fails with
+  `DRIFT`, naming what it can: a condition added, removed or renamed in the declaration, a condition
+  row the declaration does not name, `conditions` omitted while the rule's binding holds conditions, or
+  a changed root field (for example `/matchingEntity`). `/definition` appears alone when the build
+  refuses and no declared field says why (for example the rule's publication state changed). A bound
+  row that is gone stays `configuration-row-not-found`, a binding read that could not be completed stays
+  `create-identity-unverified`, and a rule whose content could not be read whole keeps its own read
+  error (for example `DUPLICATE_RULE_READ_INCOMPLETE`): no edit can be judged from any of them.
 - **Checked before anything is sent.** Every declared protected item is read and judged before the
   build's first service change, the solution version included: a first create's reserved id and its
   namesake lookup too, so a create that would stop with `create-identity-conflict` or
