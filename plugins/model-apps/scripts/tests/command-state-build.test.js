@@ -332,7 +332,7 @@ test('the final proof resolves the app afresh after the build\'s app work: a tab
   const { approvals } = await h.approve(spec);
   const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
   assert.strictEqual(error && error.code, 'command-state-context-unverified', error && error.message);
-  assert.match(error.message, /checked again at the end of the build, after its app work; nothing is rolled back \(command state [^)]*: written by this build: the write was accepted and read back holding the declared flags\)/);
+  assert.match(error.message, /checked again at the end of the build, after its app work; nothing is rolled back \(command state [^)]*: written by this build: the write was accepted and read back holding the declared flags; then the row could not be read and judged at the end of the build \(command-state-context-unverified\)\)/);
   assert.strictEqual(h.patches().length, 1, 'the row was written once and is never written again or undone');
   assert.deepStrictEqual(error.commandStates.rows.map((r) => [r.rowId, r.outcome]), [[ROW, 'acknowledged']], 'the row outcome is what was observed');
   assert.deepStrictEqual(error.commandStates.publication.map((p) => [p.entity, p.outcome]), [[T, 'confirmed']], 'and the publication that ran stands');
@@ -346,8 +346,8 @@ test('the final proof also fails a row that no longer holds the declared flags a
   const { approvals } = await h.approve(spec);
   const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
   assert.strictEqual(error && error.code, 'command-state-not-confirmed', error && error.message);
-  assert.match(error.message, /nothing is rolled back \(.*\): .*it now holds hidden false/);
-  assert.match(error.message, /it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build, after this build's step for it \(written by this build: the write was accepted and read back holding the declared flags\)/);
+  assert.match(error.message, /nothing is rolled back \(.*\): .*then a read at the end of the build found hidden false, disabled false, not the declared flags/);
+  assert.match(error.message, /: command state [^:]+: written by this build: the write was accepted and read back holding the declared flags; then a read at the end of the build found hidden false, disabled false, not the declared flags — this build did not overwrite that change/);
   assert.match(error.message, /this build did not overwrite that change/);
   assert.strictEqual(h.patches().length, 1);
   assert.strictEqual(error.commandStates.rows[0].outcome, 'acknowledged');
@@ -364,8 +364,8 @@ test('a row this build left unchanged that drifts before the final proof fails w
   assert.strictEqual(error.commandStates.rows[0].outcome, 'unchanged');
   assert.deepStrictEqual(error.commandStates.rows[0].changed, []);
   assert.strictEqual(error.commandStates.publication[0].outcome, 'confirmed');
-  assert.match(error.message, /it now holds hidden false, disabled false: the flags no longer match, so the row changed during the build, after this build's step for it \(not written by this build \(it already held the declared flags\)\)/);
-  assert.doesNotMatch(error.message, /accepted|saved/, 'no write of this build is claimed');
+  assert.match(error.message, /: command state [^:]+: not written by this build \(it already held the declared flags\); then a read at the end of the build found hidden false, disabled false, not the declared flags — /);
+  assert.doesNotMatch(error.message, /accept|sav(e|ed|ing)\b|this build's write/i, 'no write of this build is claimed');
 });
 
 test('an unanswered write whose row a competing edit made match, then changed again, fails the final proof without claiming the write', async () => {
@@ -386,8 +386,8 @@ test('an unanswered write whose row a competing edit made match, then changed ag
   assert.strictEqual(error.commandStates.rows[0].outcome, 'observed-matching-after-unknown-send', 'the outcome recorded at the write stays');
   assert.strictEqual(error.commandStates.publication[0].outcome, 'confirmed');
   assert.strictEqual(error.commandStatePublicationError, undefined);
-  assert.match(error.message, /this build's write got no answer, so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them/);
-  assert.doesNotMatch(error.message, /accepted|written by this build/, 'the unanswered write is not claimed as this build\'s');
+  assert.match(error.message, /this build's write got no usable answer \(HTTP 503\), so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them; then a read at the end of the build found hidden false/);
+  assert.doesNotMatch(error.message.replaceAll('not proof this build saved them', ''), /accept|sav(e|ed|ing)\b|(?<!not )written by this build/i, 'the unanswered write is not claimed as this build\'s');
 });
 // The build's own entry (build-model-app.js buildModelApp) with its durable journal, for what a halt leaves on disk and says on the console.
 async function buildWithJournal(h, spec, approvals) {
@@ -478,7 +478,7 @@ test('with the feature off the journal and the console carry nothing of command 
 });
 // One history, one story: for each way a row ends unconfirmed in the commands phase, the halt the build stops with, the outcome it records
 // and the line the CLI prints (build-model-app.js, through ROW_MESSAGES) say the same thing — whether this build wrote, what the earlier
-// read showed, and that the last read did not hold the declared flags. The row changes at an exact read of it (armed after the dry run):
+// read showed, and what the last read found. The row changes at an exact read of it (armed after the dry run):
 // read 1 is the preflight, 2 the commands-phase recheck, 3 the read right before its own write, then 4 the read after that write, and the
 // read after every row's step is 4 for a row with nothing to write and 5 for one written.
 test('the halt, the recorded outcome and the printed line agree on what happened to a row that ends unconfirmed', async () => {
@@ -486,9 +486,9 @@ test('the halt, the recorded outcome and the printed line agree on what happened
   const { makeTempDir } = require('./helpers/temp-dirs.js');
   const UNCHANGED = 'not written by this build (it already held the declared flags)';
   const ACKNOWLEDGED = 'written by this build: the write was accepted and read back holding the declared flags';
-  const OBSERVED = 'this build\'s write got no answer, so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them';
-  const DRIFT = 'then the read after every row\'s step did not show the declared flags';
-  const LOST = 'this build sent a write and no read after it showed the row holding the declared flags, so its outcome is unknown';
+  const OBSERVED = 'this build\'s write got no usable answer (HTTP 503), so its outcome is unknown; a later read found the declared flags, which is not proof this build saved them';
+  const DRIFT = 'then a read after every row\'s step found hidden false, disabled false, not the declared flags';
+  const LOST = 'this build\'s write got no usable answer (HTTP 503), so its outcome is unknown; then a read after its write found hidden false, disabled false, not the declared flags';
   const cases = [
     { what: 'unchanged, then changed', hidden: true, loseAt: 4, patches: 0, code: 'command-state-not-confirmed', outcome: 'drifted', before: 'unchanged', history: `${UNCHANGED}; ${DRIFT}` },
     { what: 'written and read back, then changed', hidden: false, loseAt: 5, patches: 1, code: 'command-state-not-confirmed', outcome: 'drifted', before: 'acknowledged', history: `${ACKNOWLEDGED}; ${DRIFT}` },
@@ -536,18 +536,114 @@ test('the halt, the recorded outcome and the printed line agree on what happened
     assert.ok(line, `${c.what}: the CLI printed the row`);
     assert.ok(line.startsWith(`  command state ${T}/MainTab/${ROW}: ${c.outcome}${c.before ? ` after ${c.before}` : ''}`), `${c.what}: ${line}`);
     assert.ok(line.endsWith(` — ${c.history}`), `${c.what}: the line says the history: ${line}`);
+    // The halt says the same history, from the same facts, then its remedy.
+    assert.ok(halt.message.includes(`: ${c.history} — `) || halt.message.includes(`: ${c.history}; the row is still at the version`), `${c.what}: ${halt.message}`);
     if (c.before) {
-      // The halt says the same history, then what the last read found.
-      assert.ok(halt.message.includes(`(${c.history}): it holds hidden false, disabled false`), `${c.what}: ${halt.message}`);
       assert.ok(seen.includes(true), `${c.what}: an exact read did hold the declared flags`);
     } else {
-      assert.match(halt.message, /got HTTP 503; the row now holds hidden false, disabled false/, `${c.what}: ${halt.message}`);
       assert.ok(!seen.includes(true), `${c.what}: no read held the declared flags`);
     }
     for (const text of [halt.message, line]) {
-      if (c.before !== 'acknowledged') assert.doesNotMatch(text.replace('not proof this build saved them', ''), /accepted|saved|(?<!not )written by this build/, `${c.what}: ${text}`);
-      if (c.before === 'unchanged') assert.doesNotMatch(text, /this build's write|this build sent|the write of/, `${c.what}: no write invented: ${text}`);
+      if (c.before !== 'acknowledged') assert.doesNotMatch(text.replace('not proof this build saved them', ''), /accept|sav(e|ed|ing)\b|(?<!not )written by this build/i, `${c.what}: ${text}`);
+      if (c.before === 'unchanged') assert.doesNotMatch(text, /this build's write|this build sent|the write of/i, `${c.what}: no write invented: ${text}`);
       if (c.before) assert.doesNotMatch(text, /no read (after it )?showed/, `${c.what}: the matching read is not denied: ${text}`);
     }
+  }
+});
+// One apply through the build's own entry (buildModelApp), counting its attempts. `retry` fails the app's create once with a 503 after the
+// row step, so the build runs a second attempt; `atRetry` runs at that moment (before the second attempt reads anything).
+async function throughBuild({ hidden = false, overrides, retry = false, atRetry, onPublish } = {}) {
+  const { buildModelApp } = require('../build-model-app.js');
+  const { makeTempDir } = require('./helpers/temp-dirs.js');
+  const rows = [commandRow(ROW, T, MD, { hidden })];
+  let armed = false;
+  const h = harness({ rows, overrides: (req) => (armed && overrides ? overrides(req, rows) : undefined), onPublish: (tables) => { if (onPublish) onPublish(rows, tables); } });
+  const spec = specFor();
+  const { approvals } = await h.approve(spec);
+  armed = true;
+  const { sdk } = h.mockSdk();
+  if (retry) {
+    const create = sdk.createArtifact;
+    let failed = false;
+    sdk.createArtifact = (...args) => {
+      if (args[0] === 'app' && !failed) {
+        failed = true;
+        if (atRetry) atRetry(rows);
+        throw Object.assign(new Error('injected service failure'), { statusCode: 503 });
+      }
+      return create(...args);
+    };
+  }
+  const lines = [];
+  let attempts = 0;
+  let result;
+  let halt;
+  try {
+    result = await buildModelApp(spec, { apply: true, publish: true, env: ORIGIN, workspaceDir: makeTempDir('cs-facts-'), commandStateApprovals: approvals }, {
+      sdk, log: (m) => lines.push(String(m)), warn: (m) => lines.push(String(m)), sleep: async () => {},
+      runBuild: (s, o) => { attempts += 1; return runSdkBuild(s, { ...o, commandStateTransport: h.transport }); },
+    });
+  } catch (error) {
+    halt = error;
+  }
+  const states = (halt || result).commandStates;
+  const line = lines.find((l) => l.startsWith(`  command state ${T}/MainTab/${ROW}: `));
+  return { h, halt, result, row: states.rows[0], states, line, lines, attempts, rows };
+}
+const NO_CLAIM = /accept|\bsav(e|es|ed|ing)\b|(?<!not )written by this build/i;
+const unproven = (text) => text.replaceAll('not proof this build saved them', '');
+
+test('a read after every row\'s step that cannot be judged is said as unreadable: never as flags the row does not hold', async () => {
+  let reads = 0;
+  // Reads in the apply: preflight, recheck, own step, read back after the write, then the read after every row's step (the fifth).
+  const out = await throughBuild({
+    overrides: (req) => {
+      if (req.method === 'GET' && req.path.startsWith(`/appactions(${ROW})`) && ++reads === 5) return json(403, { error: { code: '0x80040220', message: 'denied' } });
+      return undefined;
+    },
+  });
+  assert.strictEqual(out.halt && out.halt.code, 'command-state-not-confirmed', out.halt && out.halt.message);
+  assert.strictEqual(out.h.patches().length, 1);
+  assert.match(out.halt.message, /; then the row could not be read and judged after every row's step \(command-state-[a-z-]+\)/);
+  const publication = out.halt.commandStatePublicationError;
+  assert.ok(publication, 'the table is reported unpublished');
+  assert.match(publication.message, /could not be read at its last read/);
+  for (const text of [out.halt.message, out.line, publication.message]) {
+    assert.doesNotMatch(text, /did not hold|does not hold|other flags|found hidden/, text);
+  }
+});
+
+test('a retry of the build keeps the write its earlier attempt sent: never "not written by this build", never sent again', async () => {
+  const cases = [
+    { what: 'the row still holds the flags', ok: true, outcome: 'acknowledged' },
+    {
+      what: 'the row changes before the final proof', code: 'command-state-not-confirmed', outcome: 'acknowledged',
+      // The table is published in each attempt; the change comes with the second attempt's publication, after its reads.
+      onPublish: ((n) => (rows) => { if (++n === 2) { rows[0].hidden = false; rows[0]['@odata.etag'] = 'W/"2002"'; } })(0),
+      said: /then a read at the end of the build found hidden false, disabled false, not the declared flags \(attempt 2\)/,
+    },
+    {
+      what: 'the row changes before the second attempt reads it', code: 'command-state-approval-stale',
+      atRetry: (rows) => { rows[0].hidden = false; rows[0]['@odata.etag'] = 'W/"2003"'; },
+      said: /an earlier attempt of this build already sent a write: command state new_ticket\/MainTab\/[0-9a-f-]+: written by this build: the write was accepted and read back holding the declared flags \(attempt 1\)/,
+    },
+  ];
+  for (const c of cases) {
+    const out = await throughBuild({ retry: true, atRetry: c.atRetry, onPublish: c.onPublish });
+    assert.strictEqual(out.attempts, 2, c.what);
+    assert.strictEqual(out.h.patches().length, 1, `${c.what}: one PATCH, in the first attempt`);
+    if (c.ok) assert.ifError(out.halt);
+    else assert.strictEqual(out.halt && out.halt.code, c.code, `${c.what}: ${out.halt && out.halt.message}`);
+    if (c.outcome) assert.strictEqual(out.row.outcome === 'drifted' ? out.row.before : out.row.outcome, c.outcome, c.what);
+    assert.ok(out.line, `${c.what}: the CLI printed the row`);
+    for (const text of [out.line, ...(out.halt ? [out.halt.message] : [])]) {
+      assert.doesNotMatch(text, /not written by this build/, `${c.what}: ${text}`);
+      assert.match(text, /written by this build: the write was accepted and read back holding the declared flags \(attempt 1\)/, `${c.what}: ${text}`);
+    }
+    if (c.said) assert.match(out.halt.message, c.said, c.what);
+    // A row's facts carry what was read and sent, never a version, a token or the service's text.
+    const facts = JSON.stringify(out.row.facts);
+    assert.ok(out.row.facts.length > 0, c.what);
+    assert.doesNotMatch(facts, /W\/"|etag|version|token|approval|message/i, c.what);
   }
 });

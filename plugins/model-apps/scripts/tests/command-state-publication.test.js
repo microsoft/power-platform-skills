@@ -88,23 +88,34 @@ test('an observation that cannot be made never throws and confirms nothing', () 
   assert.deepStrictEqual(o.unconfirmed(), ['new_a']);
 });
 
-test('the publication message says what each table\'s rows are known to hold, never "saved" for a write that is not known to have landed', () => {
+test('the publication message says what each table\'s rows are known to hold, from their facts, never "saved" for a write not read back', () => {
   const wording = (rows) => {
     const o = observerWith('new_a');
-    o.trackRows(() => rows.map(([outcome, entity = 'new_a'], i) => ({ entity, rowId: `r${i}`, outcome })));
+    o.trackRows(() => rows.map(([facts, entity = 'new_a'], i) => ({ entity, rowId: `r${i}`, facts })));
     const error = new Error('halted');
     o.attachFailure(error);
     assert.strictEqual(error.commandStatePublicationError.code, CODES.publishUnconfirmed);
     assert.match(error.commandStatePublicationError.message, /required table publication was not confirmed; run the build again with publishing\.$/, 'the code\'s remedy is kept');
     return error.commandStatePublicationError.message.split(' — ')[0];
   };
-  assert.strictEqual(wording([['acknowledged']]), 'new_a: saved, not published');
-  assert.strictEqual(wording([['observed-matching-after-unknown-send']]), 'new_a: held the declared flags after a write with no answer (not known to be this build\'s), not published', 'a lost answer whose row was later read holding the flags is not called saved');
-  assert.strictEqual(wording([['unknown']]), 'new_a: write outcome unknown, not published');
-  assert.strictEqual(wording([['refused']]), 'new_a: not written, not published');
-  assert.strictEqual(wording([['planned']]), 'new_a: not written, not published', 'a row the attempt never reached');
-  assert.strictEqual(wording([['unchanged']]), 'new_a: already held the declared flags, not published by this build');
-  assert.strictEqual(wording([['acknowledged'], ['unknown'], ['planned'], ['acknowledged', 'new_other']]), 'new_a: 3 rows (1 saved, 1 outcome unknown, 1 not written), not published', 'mixed rows are counted, per table');
+  const read = (result, phase = 'after-every-row') => ({ attempt: 1, kind: 'read', phase, result, ...(result === 'unreadable' ? { code: 'command-state-row-unreadable' } : { hidden: result === 'matched', disabled: false }) });
+  const send = (answer, status) => ({ attempt: 1, kind: 'send', answer, ...(status ? { status } : {}), flags: { hidden: true } });
+  const SAVED = [read('differed', 'own-step'), send('acknowledged', 204), read('matched', 'readback')];
+  const LOST_MATCHED = [read('differed', 'own-step'), send('lost', 503), read('matched', 'readback')];
+  const LOST = [read('differed', 'own-step'), send('lost'), read('differed', 'readback')];
+  const HELD = [read('matched', 'preflight'), read('matched', 'own-step')];
+  assert.strictEqual(wording([[SAVED]]), 'new_a: saved, not published');
+  assert.strictEqual(wording([[LOST_MATCHED]]), 'new_a: held the declared flags after a write with no usable answer (not known to be this build\'s), not published', 'a lost answer whose row was later read holding the flags is not called saved');
+  assert.strictEqual(wording([[LOST]]), 'new_a: write outcome unknown, not published');
+  assert.strictEqual(wording([[[read('differed', 'own-step'), send('refused', 403)]]]), 'new_a: not written, not published');
+  assert.strictEqual(wording([[[]]]), 'new_a: not written, not published', 'a row the attempt never reached');
+  assert.strictEqual(wording([[HELD]]), 'new_a: already held the declared flags, not published by this build');
+  // A read that found other flags, or could not be judged, after one that found them: said as what that last read did.
+  assert.strictEqual(wording([[[...SAVED, read('differed')]]]), 'new_a: held other flags than declared at its last read, not published');
+  assert.strictEqual(wording([[[...SAVED, read('unreadable')]]]), 'new_a: could not be read at its last read, not published', 'an unreadable read is never said to have found the flags absent');
+  assert.strictEqual(wording([[[...HELD, read('unreadable')]]]), 'new_a: could not be read at its last read, not published');
+  assert.strictEqual(wording([[SAVED], [LOST], [[]], [SAVED, 'new_other']]), 'new_a: 3 rows (1 saved, 1 outcome unknown, 1 not written), not published', 'mixed rows are counted, per table');
   assert.strictEqual(wording([]), 'new_a: publication not confirmed', 'no row results: no claim about the rows');
-  assert.strictEqual(wording([['acknowledged'], ['observed-matching-after-unknown-send'], ['unchanged']]), 'new_a: 3 rows (1 saved, 1 held after a write with no answer, 1 already held), not published');
+  assert.strictEqual(wording([[SAVED], [LOST_MATCHED], [HELD], [[...HELD, read('unreadable')]]]), 'new_a: 4 rows (1 saved, 1 held after a write with no usable answer, 1 already held, 1 could not be read at its last read), not published');
+  assert.strictEqual(wording([[undefined]]), 'new_a: write outcome unknown, not published', 'a row with no facts claims nothing');
 });

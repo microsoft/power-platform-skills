@@ -1336,7 +1336,7 @@ function printCommandStatePlan(plan, log) {
   }
 }
 
-// commandStates after an apply: each row's outcome, worded by the one outcome mapping (lib/command-state-run.js ROW_MESSAGES), and each
+// commandStates after an apply: each row's outcome and its history, worded from the row's facts (lib/command-state-run.js ROW_MESSAGES), and each
 // declared table's publication, in fixed words.
 function printCommandStateResult(states, log) {
   const { ROW_MESSAGES } = require('./lib/command-state-run.js');

@@ -201,15 +201,18 @@ picked by its row id. Nothing else about the button changes, and a row is never 
 - **Success needs the table's publication.** The build publishes each declared table with the tables
   it publishes before the app; until that publication is seen to succeed after the row's write, the
   build reports `command-state-publish-unconfirmed`, saying for each table what its rows are known to
-  hold ("saved, not published"; or, when that is all it knows, "held after a write with no answer", "write
-  outcome unknown", "did not hold the declared flags at the read after every row's step" or "not written") —
+  hold ("saved, not published"; or, when that is all it knows, "held after a write with no usable answer",
+  "held other flags than declared at its last read", "could not be read at its last read", "write outcome
+  unknown" or "not written") —
   a saved row holds the flags, but the button may still show its old state. A row that held its flags
   after its write (or already held them) and then changed before the build finished its rows is reported
   as `drifted`, with what the build did to it first (`command-state-not-confirmed`).
 - **The end of the build checks again.** After its app work the build resolves the app afresh and reads
   every declared row once more: a table no longer in the app, or a row that no longer holds its flags,
   fails the build. Nothing is rolled back — the rows it wrote stay written, and the message says what this
-  build did to each row (wrote it, found it already set, or sent a write that got no answer).
+  build did to each row (wrote it, found it already set, or sent a write that got no usable answer) and
+  what each read found. When the build retries itself, a row an earlier attempt wrote is still reported
+  as written by that attempt, and is never written again.
 - **Delayed publication is not fenced.** A table publish that was sent can still complete after a
   halt, or after you remove the entry. This release keeps no record across runs: the next publishing
   run requests the table again only because `commandStates` still names it.

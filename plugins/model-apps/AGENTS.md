@@ -3619,18 +3619,23 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   flags; a failure keeps its own code, `command-state-context-unverified` or `command-state-not-confirmed` (a row
   that no longer matches is worded from what this run did to it, never as an accepted write it did not make), and
   rolls nothing back. Second, every declared table must be confirmed published; only that failure halts with
-  `command-state-publish-unconfirmed` (worded per table from the row outcomes: saved / already held / held after a
-  write with no answer / write outcome unknown / not held at the last read / not written). Every message that words a
-  row after its step (that publication halt, the post-write read, the final drift and late membership checks, the
-  CLI's result lines) builds the row's text from one closed mapping, `ROW_OUTCOMES` / `ROW_WORDS` / `ROW_MESSAGES` in
-  `lib/command-state-run.js`: only `acknowledged` (answered, then read back holding the flags) is said to be accepted
-  or saved; an unanswered send says its answer is unknown and what the later read found; a row this build did not
-  write says so. Each outcome records one history: `unknown` only for a sent write that no later read showed holding
-  the flags, and a row that matched after its step but not at the read after every row's step is `drifted` with
-  `before` (`unchanged`, `acknowledged` or `observed-matching-after-unknown-send`), worded from that history. Every
-  outcome goes through one recording boundary, `checkRowRecord`, which throws on any value the mapping does not name.
-  `command-state-outcomes.test.js` checks every history on every path, and lexes every string literal of the writer's
-  sources (`lib/source-literals.js`) so outcome wording outside the mapping fails. Any such
+  `command-state-publish-unconfirmed` (worded per table from its rows' facts: saved / held after a write with no
+  usable answer / already held / held other flags at its last read / could not be read at its last read / write
+  outcome unknown / not written). Every message that words a row after its step (that publication halt, the
+  post-write read, the final drift and late membership checks, a retry's approval halt, the CLI's result lines) words
+  it from the row's **facts** — an ordered, append-only list of what each read found (matched, other flags, or could
+  not be read, with the phase it was made in) and how each write was answered — through one renderer,
+  `renderRowHistory`, and one publication kind, `rowKind`, composed only of the vocabulary in `lib/command-state-run.js`
+  (`ROW_PHRASES`, `READ_PHASES`, `KINDS`). Only a write answered 200/204 and then read back holding the flags is said
+  to be accepted or saved; a write with no usable answer says its outcome is unknown and what a later read found; a row
+  this build did not write says so; a read that could not be judged says only that. The facts hold no version, token
+  or service text, and outlive the build's own retries (the publication observer owns them), so a retry tags each
+  clause with its attempt and never says "not written by this build" of a row an earlier attempt wrote; a row whose
+  later attempt has nothing to send keeps the earlier write's outcome while every read since it matched. The outcome
+  (`ROW_OUTCOMES`) is a short name for the row's step: `record` passes it through `checkRowRecord`, which throws on any
+  value the list does not name or the row's facts do not show. `command-state-outcomes.test.js` checks every history
+  of facts on every path, and lexes every string, template and regular-expression literal of the writer's sources
+  (`lib/source-literals.js`, case-insensitive, any inflection) so claim wording outside the vocabulary fails. Any such
   halt carries non-enumerable `commandStates` and, while a table's publication is unconfirmed,
   `commandStatePublicationError` (never in the journal or a retry's reading).
   There is no store and no cross-run fence: a sent publish can complete after a halt or after an entry is removed,
