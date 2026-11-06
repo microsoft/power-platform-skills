@@ -1402,7 +1402,9 @@ async function verifySpec(spec, read, opts = {}) {
         try {
           checks = await read.commandStates(spec);
         } catch (error) {
-          checks = normalizeCommandStates(spec).map((s) => ({ name: label(s), present: false, detail: `could not be read: ${(error && error.message) || error}` }));
+          // Said as the feature says a failed read (lib/command-state-read.js readFailureText): a status and a code, never the service's text.
+          const { readFailureText } = require('./command-state-read.js');
+          checks = normalizeCommandStates(spec).map((s) => ({ name: label(s), present: false, detail: `could not be read: ${readFailureText(error)}` }));
         }
       }
       for (const c of checks) add('command-state', c.name, c.present, c.detail);

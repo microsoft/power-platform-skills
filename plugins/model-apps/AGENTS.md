@@ -3648,7 +3648,11 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
 - **Shared decoder contract** (`command-state-read.js`): a missing column is not a null and a null flag is not
   `false`; static visibility is a present `visibilitytype` of null or 0 with every visibility-formula column present
   and empty (the null `commands[]` leaves is static); `visibilitytype` is never written; only a table-scoped row is a
-  candidate.
+  candidate. A read that fails is said by what it read, its HTTP status and its Dataverse error code (`0x` and eight
+  hex digits), or by the system code of a read with no answer (`ECONNRESET`), with a fixed next step — never the
+  service's own message, which can quote a row version (`readFailureText`; the context reads, the listing, a row
+  read, a lost write's cause and verify's details all go through it). The shared reader (`collectionRows`) still
+  copies that message for every other caller, so a build without `commandStates` prints what it always printed.
 - **Verify** (`verifyCommandStates`, `verify-spec.js` kind `command-state`): each declared entry's exact row stores
   each declared flag — stored state only, not what the app renders. A reader without command-row access, or a
   failed read, fails every entry. A verify of a run that did not run the `commands` phase (exactly `--stage data`)

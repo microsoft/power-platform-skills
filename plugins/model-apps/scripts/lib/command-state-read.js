@@ -43,13 +43,63 @@ function errorCode(body) {
   return isObject(envelope) && typeof envelope.code === 'string' ? envelope.code.toLowerCase() : '';
 }
 
-// Runs a read whose failure must carry this feature's code; an error that already has one keeps it.
-async function as(code, run) {
+// What this feature says of a read that failed: the HTTP status and the Dataverse error code, never the service's own text. A refusal is
+// answered as, e.g.
+//   HTTP 403  { "error": { "code": "0x80040220", "message": "Principal user (Id=...) is missing prvReadAppAction privilege ..." } }
+// and the shared reader (collectionRows, lib/app-components.js) copies that `message`, with the URL it read, into the error it throws. The
+// design of row-state edits does not let ETags, digests, handlers or raw responses into its halts or journals, and the service's free text
+// can name any of them, so the feature keeps only what is stable and actionable: the status, the code (`0x` and 8 hex digits, which the
+// Dataverse error-code reference lists: https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes)
+// and, for a read with no answer at all, the system error code (ECONNRESET). The shared reader is left as it is: a build without
+// `commandStates` prints what it always printed.
+const DATAVERSE_CODE = /^0x[0-9a-f]{8}$/;
+const SYSTEM_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
+function failureText({ status, dataverseCode, code } = {}) {
+  const said = [];
+  if (Number.isInteger(status)) said.push(`HTTP ${status}`);
+  if (DATAVERSE_CODE.test(dataverseCode || '')) said.push(`Dataverse error ${dataverseCode}`);
+  if (said.length) return `${said.join(', ')}; check that the signed-in account can read it, and look the error code up`;
+  return `no usable answer${SYSTEM_CODE.test(typeof code === 'string' ? code : '') ? ` (${code})` : ''}; check the connection and run it again`;
+}
+// An error this feature did not word, said as failureText says it; one of its own (a CommandStateError) keeps its words, which hold none.
+function readFailureText(error) {
+  if (error instanceof CommandStateError) return error.message;
+  return failureText({ status: error && error.statusCode, code: error && error.code });
+}
+
+// The reader, watched: the last read that was refused or got no answer, so a failure is said from its status and code (failureText) rather
+// than from the message the shared reader made of the service's text. Everything else is the reader's own (`apiUrl` and the rest, by prototype).
+function watched(reader) {
+  const watch = Object.create(reader);
+  watch.failure = null;
+  const seen = (answer) => {
+    if (!answer || !(answer.status >= 200 && answer.status < 300)) watch.failure = { status: answer && answer.status, dataverseCode: errorCode(answer && answer.body) };
+    return answer;
+  };
+  const thrown = (error) => {
+    if (!(error instanceof CommandStateError)) watch.failure = { status: error && error.statusCode, code: error && error.code };
+    throw error;
+  };
+  for (const method of ['get', 'getAbsolute']) {
+    // The transport is frozen, so its methods are read-only on the prototype and are shadowed by definition, not assignment.
+    if (typeof reader[method] === 'function') {
+      Object.defineProperty(watch, method, { value: (...args) => Promise.resolve().then(() => reader[method](...args)).then(seen, thrown) });
+    }
+  }
+  return watch;
+}
+
+// Runs a read whose failure must carry this feature's code; an error that already has one keeps it. `run` is given the reader, watched. A read
+// that was refused or got no answer is said as `<what>: <failureText>`; any other error is the shared reader's complaint about an answer it was
+// given (a page that repeats, a row it cannot place), which holds none of the service's text, and keeps its words.
+async function as(code, what, reader, run) {
+  const watch = watched(reader);
   try {
-    return await run();
+    return await run(watch);
   } catch (error) {
     if (error instanceof CommandStateError) throw error;
-    throw new CommandStateError(code, reasonOf(error));
+    const failure = watch.failure || (error && Number.isInteger(error.statusCode) ? { status: error.statusCode, code: error.code } : null);
+    throw new CommandStateError(code, failure ? `${what}: ${failureText(failure)}` : reasonOf(error));
   }
 }
 
@@ -67,7 +117,7 @@ async function as(code, run) {
  */
 async function resolveCommandStateContext(reader, { appUniqueName, entities } = {}) {
   if (typeof appUniqueName !== 'string' || !appUniqueName.trim()) throw new CommandStateError(CONTEXT_UNVERIFIED, 'an app unique name is required');
-  const apps = await as(CONTEXT_UNVERIFIED, () => collectionRows(reader,
+  const apps = await as(CONTEXT_UNVERIFIED, `app '${appUniqueName}'`, reader, (r) => collectionRows(r,
     `/appmodules?$select=appmoduleid,uniquename&$filter=uniquename eq '${odataLit(appUniqueName)}'`, `app '${appUniqueName}'`, { code: CONTEXT_UNVERIFIED }));
   const appIds = apps.map((row) => (isObject(row) ? guidOf(row.appmoduleid) : null));
   if (appIds.some((id) => !id)) throw new CommandStateError(CONTEXT_UNVERIFIED, `app '${appUniqueName}': a row has no readable app id`);
@@ -77,9 +127,15 @@ async function resolveCommandStateContext(reader, { appUniqueName, entities } = 
       : `app '${appUniqueName}': no published app has this unique name`);
   }
   const appId = appIds[0];
-  const layer = await currentAppLayer(reader, appId);
-  if (!layer.ok) throw new CommandStateError(CONTEXT_UNVERIFIED, `app '${appUniqueName}': its current layer could not be read: ${layer.reason}`);
-  const components = await as(CONTEXT_UNVERIFIED, () => appComponentRows(reader, layer.appModuleIdUnique, 1, { strict: true }));
+  // currentAppLayer answers a failed read with the shared reader's message (layer.reason); the watched reader says it from its status and code.
+  // A reason with no failed read behind it ("no single current layer among 2 app row(s)") is the shared reader's own, and is kept.
+  const layerReader = watched(reader);
+  const layer = await currentAppLayer(layerReader, appId);
+  if (!layer.ok) {
+    const why = layerReader.failure ? failureText(layerReader.failure) : (Number.isInteger(layer.status) ? failureText({ status: layer.status }) : layer.reason);
+    throw new CommandStateError(CONTEXT_UNVERIFIED, `app '${appUniqueName}': its current layer could not be read: ${why}`);
+  }
+  const components = await as(CONTEXT_UNVERIFIED, `app '${appUniqueName}': its tables`, reader, (r) => appComponentRows(r, layer.appModuleIdUnique, 1, { strict: true }));
   const memberIds = new Set(components.map((row) => guidOf(row.objectid)));
 
   const tables = new Map();
@@ -88,14 +144,14 @@ async function resolveCommandStateContext(reader, { appUniqueName, entities } = 
     for (const name of names) {
       if (!TABLE_NAME.test(name)) throw new CommandStateError(CONTEXT_UNVERIFIED, `'${name}' is not a table's logical name`);
     }
-    const refs = await as(CONTEXT_UNVERIFIED, () => tableRefs(reader, names));
+    const refs = await as(CONTEXT_UNVERIFIED, `the tables ${names.join(', ')}`, reader, (r) => tableRefs(r, names));
     for (const name of names.sort(compareText)) {
       const { metadataId } = refs.get(name);
       tables.set(name, { entity: name, metadataId, inApp: memberIds.has(metadataId) });
     }
   } else {
     for (const metadataId of [...memberIds].sort()) {
-      const answer = await as(CONTEXT_UNVERIFIED, () => reader.get(`/EntityDefinitions(${metadataId})?$select=LogicalName,MetadataId`));
+      const answer = await as(CONTEXT_UNVERIFIED, `app '${appUniqueName}': table component ${metadataId}`, reader, (r) => r.get(`/EntityDefinitions(${metadataId})?$select=LogicalName,MetadataId`));
       const body = answer && answer.body;
       if (!answer || answer.status < 200 || answer.status >= 300 || !isObject(body)
         || typeof body.LogicalName !== 'string' || !TABLE_NAME.test(body.LogicalName) || guidOf(body.MetadataId) !== metadataId) {
@@ -107,7 +163,7 @@ async function resolveCommandStateContext(reader, { appUniqueName, entities } = 
 
   // A row version exists only where the table keeps one: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
   // Missing, not a boolean, or unreadable is no answer, never "on".
-  const concurrency = await as(VERSION_UNAVAILABLE, () => reader.get("/EntityDefinitions(LogicalName='appaction')?$select=IsOptimisticConcurrencyEnabled"));
+  const concurrency = await as(VERSION_UNAVAILABLE, 'whether the command table keeps row versions', reader, (r) => r.get("/EntityDefinitions(LogicalName='appaction')?$select=IsOptimisticConcurrencyEnabled"));
   const flag = concurrency && concurrency.status >= 200 && concurrency.status < 300 && isObject(concurrency.body) ? concurrency.body.IsOptimisticConcurrencyEnabled : undefined;
   if (typeof flag !== 'boolean') {
     throw new CommandStateError(VERSION_UNAVAILABLE, `whether the command table keeps row versions could not be read (HTTP ${concurrency && concurrency.status})`);
@@ -131,7 +187,7 @@ async function readCommandStateRow(reader, rowId) {
     answer = await reader.get(`/appactions(${id})?$select=${ROW_SELECT.join(',')}`);
   } catch (error) {
     if (error instanceof CommandStateError) throw error;
-    throw new CommandStateError(ROW_UNREADABLE, `command row ${id} could not be read: ${reasonOf(error)}`);
+    throw new CommandStateError(ROW_UNREADABLE, `command row ${id} could not be read: ${readFailureText(error)}`);
   }
   const status = answer && answer.status;
   if (status === 404 && errorCode(answer.body) === NOT_FOUND) return { found: false };
@@ -300,7 +356,7 @@ async function listCommandStateRows(reader, context, { location } = {}) {
   const out = [];
   const seen = new Set();
   for (const table of context.tables.values()) {
-    const rows = await as(ROW_UNREADABLE, () => collectionRows(reader,
+    const rows = await as(ROW_UNREADABLE, `the modern commands of table '${table.entity}'`, reader, (r) => collectionRows(r,
       `/appactions?$select=${ROW_SELECT.join(',')}&$filter=contextvalue eq '${odataLit(table.entity)}'`,
       `the modern commands of table '${table.entity}'`, { code: ROW_UNREADABLE }));
     for (const body of rows) {
@@ -364,7 +420,7 @@ async function verifyCommandStates(reader, spec) {
       appUniqueName: spec && spec.app && spec.app.uniqueName, entities: [...new Set(states.map((s) => s.entity))],
     });
   } catch (error) {
-    return states.map((s) => ({ name: nameOf(s), present: false, detail: `could not be read: ${reasonOf(error)}` }));
+    return states.map((s) => ({ name: nameOf(s), present: false, detail: `could not be read: ${readFailureText(error)}` }));
   }
   const out = [];
   for (const s of states) {
@@ -391,7 +447,7 @@ async function verifyCommandStates(reader, spec) {
         }
       }
     } catch (error) {
-      failure = `could not be read: ${reasonOf(error)}`;
+      failure = `could not be read: ${readFailureText(error)}`;
     }
     out.push({ name: nameOf(s), present: !failure, detail: failure ? `${failure} (${STORED_ONLY})` : `${flags} (${STORED_ONLY})` });
   }
@@ -400,4 +456,5 @@ async function verifyCommandStates(reader, spec) {
 
 module.exports = {
   resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, listCommandStateRows, verifyCommandStates, errorCode, NOT_FOUND,
+  readFailureText,
 };

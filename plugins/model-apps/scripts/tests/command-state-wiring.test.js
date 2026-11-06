@@ -58,8 +58,13 @@ test('verify checks each declared entry; a reader that cannot read command rows,
   const none = await verifySpec(s, base);
   assert.deepStrictEqual(kind(none), [[`new_x MainTab row ${ROW}`, false], [`new_x MainTab row ${ROW2}`, false]]);
   assert.strictEqual(none.ok, false);
-  const thrown = await verifySpec(s, { ...base, commandStates: async () => { throw new Error('offline'); } });
+  const thrown = await verifySpec(s, { ...base, commandStates: async () => { throw Object.assign(new Error('offline: review-service-message W/"498763"'), { statusCode: 503 }); } });
   assert.deepStrictEqual(kind(thrown).map((c) => c[1]), [false, false]);
+  // A read that throws is said by its status alone, never by the error's own text.
+  for (const c of thrown.checks.filter((x) => x.kind === 'command-state')) {
+    assert.match(c.detail, /^could not be read: HTTP 503; /, c.detail);
+    assert.ok(!c.detail.includes('review-service-message') && !c.detail.includes('498763'), c.detail);
+  }
   const seen = [];
   const read = await verifySpec(s, { ...base, commandStates: async (given) => { seen.push(given); return [{ name: 'one', present: true, detail: 'hidden true' }, { name: 'two', present: false, detail: 'disabled is false, declared true' }]; } });
   assert.deepStrictEqual(kind(read), [['one', true], ['two', false]]);

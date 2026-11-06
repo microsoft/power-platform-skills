@@ -257,6 +257,45 @@ test('no app, two apps, an unreadable layer or component list, an unknown table 
   await assert.rejects(resolveCommandStateContext(readerFor(org), { appUniqueName: ' ' }), { code: 'command-state-context-unverified' });
 });
 
+// The design keeps ETags, digests and raw responses out of the feature's halts and journals: every read this module makes, refused with
+// the service's own words (here carrying a row version) or cut with no answer, is said by its status, Dataverse code or system code alone.
+test('a refused or unanswered read is said by its status and code, never by the service\'s text', async () => {
+  const SERVICE = 'review-service-message W/"498763"';
+  const refuse = (prefix) => (req) => (req.path.startsWith(prefix) ? json(403, { error: { code: '0x80040220', message: SERVICE } }) : undefined);
+  const cut = (prefix) => (req) => {
+    if (req.path.startsWith(prefix)) throw Object.assign(new Error(`socket hang up: ${SERVICE}`), { code: 'ECONNRESET' });
+    return undefined;
+  };
+  const clean = (message, said, what) => {
+    assert.match(message, said, what);
+    assert.ok(!message.includes('review-service-message') && !message.includes('498763'), `${what}: ${message}`);
+  };
+  const context = (overrides) => resolveCommandStateContext(readerFor(createCommandStateOrg({ tables: TABLES, overrides })), { appUniqueName: 'contoso_Support', entities: ['contoso_ticket'] });
+  for (const [what, overrides, said] of [
+    ['the app', refuse('/appmodules?'), /^app 'contoso_Support': HTTP 403, Dataverse error 0x80040220; /],
+    ['its current layer', refuse('/appmodules/'), /its current layer could not be read: HTTP 403, Dataverse error 0x80040220; /],
+    ['its current layer, cut', cut('/appmodules/'), /its current layer could not be read: no usable answer \(ECONNRESET\); /],
+    ['its tables', refuse('/appmodulecomponents'), /its tables: HTTP 403, Dataverse error 0x80040220; /],
+    ['a named table', refuse('/EntityDefinitions(LogicalName=\'contoso_ticket\')'), /the tables contoso_ticket: HTTP 403, Dataverse error 0x80040220; /],
+  ]) {
+    await assert.rejects(context(overrides), (err) => { assert.strictEqual(err.code, 'command-state-context-unverified', what); clean(err.message, said, what); return true; }, what);
+  }
+  const org = createCommandStateOrg({ tables: TABLES });
+  const resolved = await resolveCommandStateContext(readerFor(org), { appUniqueName: 'contoso_Support', entities: ['contoso_ticket'] });
+  const listed = createCommandStateOrg({ tables: TABLES, overrides: refuse('/appactions?') });
+  await assert.rejects(listCommandStateRows(readerFor(listed), resolved), (err) => {
+    assert.strictEqual(err.code, 'command-state-row-unreadable');
+    clean(err.message, /^the modern commands of table 'contoso_ticket': HTTP 403, Dataverse error 0x80040220; /, 'the listing');
+    return true;
+  });
+  const row = createCommandStateOrg({ tables: TABLES, overrides: cut('/appactions(') });
+  await assert.rejects(readCommandStateRow(readerFor(row), id(1)), (err) => {
+    assert.strictEqual(err.code, 'command-state-row-unreadable');
+    clean(err.message, /could not be read: no usable answer \(ECONNRESET\); /, 'a row read with no answer');
+    return true;
+  });
+});
+
 test('with no table named, every table component of the app is resolved by its metadata id, and one that cannot be fails', async () => {
   const org = createCommandStateOrg({ tables: TABLES });
   const context = await resolveCommandStateContext(readerFor(org), { appUniqueName: 'contoso_Support' });

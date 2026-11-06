@@ -18,7 +18,7 @@ const {
   usesCommandStates, normalizeCommandStates, diffCommandFlags, commandStateApprovalKey, commandTablePublishApprovalKey, codeForReasons, canonicalOrigin,
   CommandStateError, SPEC_FLAG, validateCommandStates,
 } = require('./command-state-contract.js');
-const { resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, errorCode, NOT_FOUND } = require('./command-state-read.js');
+const { resolveCommandStateContext, readCommandStateRow, decodeCommandStateRow, errorCode, NOT_FOUND, readFailureText } = require('./command-state-read.js');
 const { PHASES, STAGES } = require('./stages.js');
 
 const CODES = Object.freeze({
@@ -709,8 +709,9 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
       return;
     }
     record(item.rowId, { outcome: 'unknown', changed, code: CODES.writeUnknown });
-    // The transport's own error text (e.g. "socket hang up") says why there was no answer; it is local, never a record value.
-    const cause = thrown ? ` [${String((thrown && thrown.message) || thrown).slice(0, 200)}]` : '';
+    // Why there was no answer, as readFailureText says it: the status and the system code (ECONNRESET), never the error's own text, which a
+    // transport may fill with what the service said.
+    const cause = thrown ? ` [${readFailureText(thrown)}]` : '';
     const mayLand = back.row && back.row.version === fresh.etag ? '; the row is still at the version the write was made against, so the write may still land' : '';
     throw fail(CODES.writeUnknown, `${what}: ${history(item.rowId)}${cause}${mayLand}`);
   }

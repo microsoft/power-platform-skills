@@ -177,7 +177,7 @@ test('a write whose answer is lost or throttled is sent exactly once and reporte
   for (const [what, answer] of [
     ['503', () => json(503, { error: { code: '0x80072321', message: 'unavailable' } })],
     ['429', () => json(429, { error: { code: '0x80072322', message: 'throttled' } }, { 'retry-after': '1' })],
-    ['cut', () => { throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }); }],
+    ['cut', () => { throw Object.assign(new Error('socket hang up: review-service-message W/"498763"'), { code: 'ECONNRESET' }); }],
   ]) {
     const h = harness({ overrides: (req) => (req.method === 'PATCH' ? answer() : undefined) });
     const spec = specFor();
@@ -186,6 +186,11 @@ test('a write whose answer is lost or throttled is sent exactly once and reporte
     assert.strictEqual(h.patches().length, 1, `${what}: sent once`);
     assert.strictEqual(error && error.code, 'command-state-write-unknown', what);
     assert.strictEqual(error.retry && error.retry.kind !== undefined ? error.retry.kind : error.retry, require('../lib/retry-policy.js').RETRY.NEVER, `${what}: never retried`);
+    // A write with no answer says why by its system code alone, never by the error's own text.
+    if (what === 'cut') {
+      assert.match(error.message, /\[no usable answer \(ECONNRESET\); check the connection and run it again\]/, error.message);
+      assert.ok(!error.message.includes('review-service-message') && !error.message.includes('498763'), error.message);
+    }
   }
 });
 
@@ -466,6 +471,37 @@ test('a row that changes between the commands-phase read and its write halts sta
   const digest = token.slice(token.lastIndexOf('/') + 1);
   assert.ok(!out.log.includes(digest) && !out.status.includes(digest) && !out.caught.message.includes(digest), 'the new token is not stored');
   assert.ok(out.said.includes(`--authorize ${token}`), 'and is said on the console');
+});
+// The design keeps ETags, digests, handlers and raw responses out of the feature's halts and journals. A refused read of the app is said by
+// its status and Dataverse error code; the service's own message, which here carries a row version, is in neither the halt nor the journal.
+test('a refused context read is said by its HTTP status and Dataverse code: the service\'s text and a version stay out of the halt and the journal', async () => {
+  const SERVICE = 'review-service-message W/"498763"';
+  const refusal = () => json(403, { error: { code: '0x80040220', message: SERVICE } });
+  for (const [what, arm, sent] of [
+    // At the start of the build, before anything is sent.
+    ['preflight', (h) => { h.armed = true; }, 0],
+    // At the end of the build, after the row was written, acknowledged and read back and its table published.
+    ['final', (h) => { h.armOnPublish = true; }, 1],
+  ]) {
+    const options = { rows: [commandRow(ROW, T, MD)] };
+    const h = harness({
+      ...options,
+      onPublish: () => { if (h.armOnPublish) h.armed = true; },
+      overrides: (req) => (h.armed && req.method === 'GET' && req.path.startsWith('/appmodules?') ? refusal() : undefined),
+    });
+    const spec = specFor();
+    const { approvals } = await h.approve(spec);
+    arm(h);
+    const out = await buildWithJournal(h, spec, approvals);
+    assert.strictEqual(out.caught && out.caught.code, 'command-state-context-unverified', `${what}: ${out.caught && out.caught.message}`);
+    assert.strictEqual(h.patches().length, sent, `${what}: PATCHes sent`);
+    if (sent) assert.match(out.caught.message, /written by this build: the write was accepted and read back holding the declared flags/, what);
+    assert.match(out.caught.message, /app 'contoso_Support': HTTP 403, Dataverse error 0x80040220; check that the signed-in account can read it/, what);
+    for (const [where, text] of [['the halt', out.caught.message], ['build-log.jsonl', out.log], ['build-status.json', out.status], ['the console', out.said]]) {
+      assert.ok(!text.includes('review-service-message') && !text.includes('498763'), `${what}: ${where} holds no service text or version`);
+    }
+    assert.match(out.log, /command-state-context-unverified/, `${what}: the journal keeps the code`);
+  }
 });
 test('with the feature off the journal and the console carry nothing of command states', async () => {
   const h = harness();
