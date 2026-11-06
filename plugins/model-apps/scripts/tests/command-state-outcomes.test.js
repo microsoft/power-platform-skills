@@ -174,7 +174,8 @@ test('a row outcome is recorded only through checkRowRecord, which refuses any v
   }
   // And the writer has no other way to set one: `record` passes every patch and the row's facts through it, and nothing else assigns a row
   // result's outcome.
-  const code = blankLiterals(fs.readFileSync(LIB, 'utf8'));
+  // A Windows checkout can give the source CRLF line endings (git core.autocrlf), and the shape below is matched line by line.
+  const code = blankLiterals(fs.readFileSync(LIB, 'utf8').replace(/\r\n/g, '\n'));
   assert.match(code, /const record = \(rowId, patch\) => \{\n\s+const row = results\.get\(rowId\);\n\s+checkRowRecord\(patch, row\.facts\);\n[\s\S]{0,400}?return Object\.assign\(row, patch\);\n\s+\};/);
   assert.strictEqual((code.match(/Object\.assign\(/g) || []).length, 1);
   assert.strictEqual((code.match(/checkRowRecord\(/g) || []).length, 2, 'its definition and the one call in record');
