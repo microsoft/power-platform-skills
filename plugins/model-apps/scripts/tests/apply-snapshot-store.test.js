@@ -6,6 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const store = require('../lib/apply-snapshot-store.js');
 const S = require('../lib/apply-snapshot.js');
+const { shortRenameWait } = require('./helpers/short-rename-wait.js');
+
 
 // Each test gets its own throwaway workspace so the real filesystem I/O can't cross-contaminate.
 function ws() {
@@ -37,6 +39,7 @@ test('writeSnapshotAtomic + readSnapshot round-trip and leave NO temp file behin
 // step — the write, the fsync, the rename — leaves the target exactly as it was and no temp beside it, and the text
 // lands whole however the OS splits the write (a short write fsynced and renamed into place is a partial file).
 test('writeFileAtomic leaves the target as it was, and no temp, when any step fails — and writes the whole text', (t) => {
+  shortRenameWait(t);
   const d = ws();
   try {
     const target = path.join(d, 'file.json');
@@ -67,6 +70,7 @@ test('writeFileAtomic leaves the target as it was, and no temp, when any step fa
 });
 
 test('writeSnapshotAtomic writes through writeFileAtomic: a write that fails leaves the previous snapshot', (t) => {
+  shortRenameWait(t);
   const d = ws();
   try {
     store.writeSnapshotAtomic(d, eligible('g1'));

@@ -29,12 +29,15 @@ const { processAlive } = require('./process-owner.js');
 // (lib/output-redaction.js: a text cleaned as a text, bytes masked as the bytes the file gets). The leases, claims and markers this module writes hold process ids, times and random ids, and a reason built from a file
 // system's own words.
 const { redactFileData } = require('./output-redaction.js');
-
+// The one rename that outlasts a brief Windows file lock (lib/rename-retry.js).
+const { renameWithRetry } = require('./rename-retry.js');
 const SNAPSHOT_FILE = 'apply-snapshot.json';
 const LEASE_FILE = 'apply-snapshot.lock';
 // A lease whose token is older than this is presumed abandoned by a crashed build. 5 min comfortably
 // exceeds any real snapshot read-modify-write (which is milliseconds) while still self-healing quickly.
 const LEASE_STALE_MS = 5 * 60 * 1000;
+// How long clearWorkspace waits for a refused folder rename (see there).
+const DIRECTORY_RENAME_BUDGET_MS = 10000;
 
 function snapshotPath(workspaceDir) { return path.join(workspaceDir, SNAPSHOT_FILE); }
 function leasePath(workspaceDir) { return path.join(workspaceDir, LEASE_FILE); }
@@ -75,7 +78,9 @@ function writeFileAtomic(target, text) {
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(tmp, target);
+    // Safe to repeat: `tmp` is this call's own file (pid, time and random in its name), and a refused rename moved
+    // nothing, so `target` is still the previous file or already the new one: atomicity and the CAS are unchanged.
+    renameWithRetry(fs, tmp, target);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup of the orphaned temp */ }
     throw e;
@@ -547,7 +552,9 @@ function markDistrusted(workspaceDir, { reason } = {}) {
   try {
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify({ id, reason: reason || null, pid: process.pid, at: new Date().toISOString() }));
-    fs.renameSync(tmp, target);
+    // Safe to repeat: `tmp` is this call's own file (a name unique to the id), and a refused rename moved nothing.
+    // The marker is only ever created, so a retry cannot overwrite anything either.
+    renameWithRetry(fs, tmp, target);
     return { ok: true };
   } catch (e) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* best-effort cleanup of the temp */ }
@@ -679,7 +686,10 @@ function clearWorkspace(target, deps = {}) {
     reserved = true;
     if (typeof deps.beforeRename === 'function') deps.beforeRename();
     const candidate = `${target}.cleared-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-    fs.renameSync(target, candidate);
+    // Safe to repeat: the lease is held (and the reclaim claim reserved), so nobody else moves or recreates the folder
+    // meanwhile, and a refused rename moved nothing. The wait is shorter than a file's: a folder that something holds
+    // open (a program working in it) is more often a lasting hold than a scanner's, and the lease stays taken throughout.
+    renameWithRetry(fs, target, candidate, { budgetMs: DIRECTORY_RENAME_BUDGET_MS });
     aside = candidate;
   } catch (e) {
     return { ok: false, reason: `it could not be moved aside (${(e && e.code) || (e && e.message) || e})` };

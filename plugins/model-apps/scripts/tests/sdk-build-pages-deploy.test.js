@@ -22,6 +22,7 @@ const { writeBaseline, readBaseline } = require('../lib/deployed-baseline.js');
 const { sha256 } = require('../lib/hash.js');
 const { readPageOwnership, readPendingCreations, recordPagePending, recordPageCreation } = require('../lib/page-ownership-records.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+const { shortRenameWait } = require('./helpers/short-rename-wait.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 const { withPageType, PAGE_TYPE } = require('./helpers/page-component-type.js');
 // What a guess costs a page where the TypeScript parser does not settle it (lib/typescript-views.js): these tests read the page with the lexer alone.
@@ -4418,7 +4419,8 @@ test('deploy: a local page record that cannot be read stops the build once, in a
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('deploy: a creation receipt that cannot be saved stops the build once, in a folder called "SQL Timeout Workspace" — the page exists, and running the earlier phases again would not save the receipt', async () => {
+test('deploy: a creation receipt that cannot be saved stops the build once, in a folder called "SQL Timeout Workspace" — the page exists, and running the earlier phases again would not save the receipt', async (t) => {
+  shortRenameWait(t);
   const { appDir, spec } = onePageApp('Overview');
   const workspaceDir = path.join(appDir, 'SQL Timeout Workspace');
   try {

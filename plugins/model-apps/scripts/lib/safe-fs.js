@@ -34,10 +34,11 @@ const { redactFileData } = require('./output-redaction.js');
 const UNSAFE = 'UNSAFE_OUTPUT';
 
 // Windows can refuse a rename while another process briefly holds the destination (Defender, the
-// search indexer, OneDrive) and reports EPERM/EACCES/EBUSY. A short bounded retry absorbs that;
-// a lock that outlasts it is reported as a lock. Same bound as generate-page-manifest.js.
+// search indexer, OneDrive) and reports EPERM/EACCES/EBUSY. The rename is retried by the one shared
+// helper (lib/rename-retry.js, about a minute in all); a lock that outlasts it is reported as a lock.
+// The unlink and the tree removal below keep their own short schedule.
+const { renameWithRetry, sleepSync, RENAME_LOCK_CODES } = require('./rename-retry.js');
 const RENAME_RETRY_MS = [25, 50, 100, 200, 400];
-const RENAME_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
 // `reason` is how a caller tells a link (must halt) from a resolution or create failure
 // (often best-effort). Messages stay human-readable; do not branch on their text.
@@ -46,10 +47,6 @@ function unsafe(message, reason) {
   e.code = UNSAFE;
   e.reason = reason;
   throw e;
-}
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 // `data` with the access tokens the process obtained taken out (redactFileData), and the options to write it with. A string given with a `hex`, `base64` or `base64url` encoding that held a token comes back as the
@@ -61,18 +58,6 @@ function checkedForTokens(data, opts) {
   const decoded = { ...opts };
   delete decoded.encoding;
   return { data: checked, opts: decoded };
-}
-
-function renameWithRetry(fsImpl, from, to) {
-  for (let i = 0; ; i += 1) {
-    try {
-      fsImpl.renameSync(from, to);
-      return;
-    } catch (err) {
-      if (process.platform !== 'win32' || !RENAME_LOCK_CODES.has(err.code) || i >= RENAME_RETRY_MS.length) throw err;
-      sleepSync(RENAME_RETRY_MS[i]);
-    }
-  }
 }
 
 function realpathNative(fsImpl, p) {
@@ -276,6 +261,8 @@ function writeFileSafe(filePath, data, opts) {
       fsImpl.closeSync(fd);
     }
     if (st) fsImpl.chmodSync(tmp, st.mode & 0o777);
+    // Safe to repeat: `tmp` is this call's own file (name unique to the process and call, created with `wx`),
+    // and a refused rename moved nothing, so `target` is still the old file or already the new one.
     renameWithRetry(fsImpl, tmp, target);
   } catch (err) {
     if (createdTmp) {
@@ -421,7 +408,7 @@ function noHardLinksError(target, err) {
   return e;
 }
 
-// `unlink` with the bounded retry a Windows lock needs, as renameWithRetry has.
+// `unlink` with a short bounded retry for a Windows lock.
 function unlinkWithRetry(fsImpl, file) {
   for (let i = 0; ; i += 1) {
     try {
@@ -436,7 +423,7 @@ function unlinkWithRetry(fsImpl, file) {
 }
 
 /**
- * Removes a directory tree — a folder a run made for itself — with the bounded retry a Windows lock needs, as renameWithRetry and unlinkWithRetry have: a scanner or a sync client that has just seen a file
+ * Removes a directory tree — a folder a run made for itself — with the bounded retry a Windows lock needs, as unlinkWithRetry has: a scanner or a sync client that has just seen a file
  * written holds it, and `rm` answers EBUSY, EPERM or EACCES for as long as it does. Answers `null` when the tree is gone (one that was never there counts) and, when it is not, the code that stopped it. It never
  * throws: the caller has its answer already, and says a folder that stays (its path is the one thing the maker needs to delete it) rather than fail a run that worked.
  */
