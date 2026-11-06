@@ -83,14 +83,18 @@ function createManagedTablePublisher({ store, barrier, client, halt, settle } = 
    * Publish `tables` (those of them that are routed) through the managed coverage protocol, one at a time and one
    * publish each. Answers { published: [table], withheld: [table] }; throws the halt for a refusal. Serialized: two
    * flushes never interleave, so a table is never published twice in parallel.
+   * `onHalt(partial)`, optional: told, just before a table's halt is thrown, what this flush settled before it —
+   * { published, withheld, failed } where `failed` names that table when its publish was handed to the transport (an
+   * observer must not report it as never sent). It is only told: what it does or throws never changes the halt.
    */
-  function flush(tables, { phase = 'publish', path = 'managed publication' } = {}) {
+  function flush(tables, { phase = 'publish', path = 'managed publication', onHalt } = {}) {
     const run = chain.then(async () => {
       const published = [];
       const withheld = [];
       for (const table of [...new Set((tables || []).map(lc))].filter(routed)) {
         const label = `the publish of table ${table}`;
         let out;
+        let handed = false;
         try {
           out = await publishManagedScope({
             store, barrier, client, path, settle,
@@ -101,12 +105,17 @@ function createManagedTablePublisher({ store, barrier, client, halt, settle } = 
               // A refused PublishXml is RETURNED (the client answers { status }, publishTablesXml { ok: false }), so it is
               // thrown here: returning normally would let the read-back "confirm" a carried group live before the send.
               // Never `definiteNoStart`: an answer, or the lack of one, is not proof the publish never started.
+              handed = true;
               const r = await publishTablesXml(client, [table]);
               if (!r.ok) throw Object.assign(new Error(r.reason || `the publish of table ${table} was refused`), { code: 'publish-failed' });
             },
           });
         } catch (err) {
-          throw halt(phase, label, (err && err.code) || 'managed-not-settled', { cause: err, findings: [{ key: table, code: (err && err.code) || 'managed-not-settled', message: String((err && err.message) || err) }] });
+          const stop = halt(phase, label, (err && err.code) || 'managed-not-settled', { cause: err, findings: [{ key: table, code: (err && err.code) || 'managed-not-settled', message: String((err && err.message) || err) }] });
+          if (typeof onHalt === 'function') {
+            try { onHalt({ published: [...published], withheld: [...withheld], failed: handed ? [table] : [] }); } catch { /* told only */ }
+          }
+          throw stop;
         }
         if (out.withheld) withheld.push(table);
         else { published.push(table); barrier.routePaid(table); }

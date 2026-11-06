@@ -37,16 +37,41 @@ function specFor(states = [HIDE], extra = {}) {
 // The tables a PublishXml body names: { "ParameterXml": "<importexportxml><entities><entity>new_ticket</entity></entities></importexportxml>" }
 const tablesOf = (body) => [...String((body && body.ParameterXml) || '').matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1]);
 
-function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPublish, ...orgOptions } = {}) {
-  const org = createCommandStateOrg({ writable: true, tables: { [T]: { metadataId: MD } }, rows, ...orgOptions });
+// `publishAnswer(tables)` may answer one publish otherwise (a refusal of one table, say); undefined keeps `publishStatus`.
+// `barrier`: the publication barrier the build is given (publicationBarrier). With one, every publish passes its gate (gateRequest) the
+// way the shipped transport's does, so a table the barrier routes is published by the managed publisher under its send permit.
+function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPublish, publishAnswer, barrier, tables = { [T]: { metadataId: MD } }, ...orgOptions } = {}) {
+  const org = createCommandStateOrg({ writable: true, tables, rows, ...orgOptions });
   const client = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: org.request, sleep: async () => {}, sendOnce: commandStateSendOnce });
   const transport = createCommandStateTransport({ client, apiUrl: (p) => `${API}${p}` });
   const published = [];
+  const send = async (body) => {
+    published.push(tablesOf(body));
+    if (onPublish) onPublish(tablesOf(body));
+    const answer = publishAnswer ? await publishAnswer(tablesOf(body)) : undefined;
+    return answer || { status: publishStatus, body: null };
+  };
+  // The gate reads a request in the transport's shape (lib/dataverse-auth.js makeRequest: { method, url, body } with the body as text,
+  // answered { statusCode, headers, body }); the SDK's Dataverse client answers { status, headers, body } with the body parsed.
+  const gated = barrier ? barrier.gateRequest(async (req) => {
+    const answer = await send(JSON.parse(req.body));
+    const text = answer.body == null ? '' : typeof answer.body === 'string' ? answer.body : JSON.stringify(answer.body);
+    return { statusCode: answer.status, headers: {}, body: text };
+  }) : null;
   const mockSdk = () => {
     const { sdk, calls } = makeSimpleMockSdk();
     sdk.dataverse = {
       apiUrl: (p) => `${API}${p}`,
-      post: async (url, body) => { published.push(tablesOf(body)); if (onPublish) onPublish(tablesOf(body)); return { status: publishStatus, body: null }; },
+      post: async (url, body) => {
+        if (!gated) return send(body);
+        const res = await gated({ method: 'POST', url: `${API}${url}`, headers: {}, body: JSON.stringify(body) });
+        let parsed = res.body;
+        try { parsed = res.body ? JSON.parse(res.body) : null; } catch { /* a body that is not JSON is answered as its text */ }
+        return { status: res.statusCode, headers: res.headers || {}, body: parsed };
+      },
+      // The managed publisher needs a client that can read layers (publishManagedScope). The stores these tests give it hold no managed
+      // group, so it reads none; a read is a fixture error, not a service answer.
+      ...(gated ? { get: async (url) => { throw new Error(`the harness reads no layers (${url})`); } } : {}),
     };
     return { sdk, calls };
   };
@@ -72,7 +97,7 @@ function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPubli
 }
 
 // The build's own entry (build-model-app.js buildModelApp) with its durable journal, for what a halt leaves on disk and says on the console.
-async function buildWithJournal(h, spec, approvals) {
+async function buildWithJournal(h, spec, approvals, engineOptions = {}) {
   const fs = require('node:fs');
   const path = require('node:path');
   const { buildModelApp } = require('../../build-model-app.js');
@@ -89,7 +114,7 @@ async function buildWithJournal(h, spec, approvals) {
   try {
     result = await buildModelApp(spec, { apply: true, publish: true, env: ORIGIN, workspaceDir, commandStateApprovals: approvals }, {
       sdk, journal, log: (m) => logged.push(String(m)), warn: (m) => said.push(String(m)), sleep: async () => {},
-      runBuild: (s, o) => engine(s, { ...o, commandStateTransport: h.transport }),
+      runBuild: (s, o) => engine(s, { ...o, commandStateTransport: h.transport, ...engineOptions }),
     });
   } catch (error) {
     caught = error;

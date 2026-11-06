@@ -137,6 +137,8 @@ const SERVICE_PROBLEMS = Object.freeze({
   // A read that was answered with an error status, or not answered: said by the facts alone (see serviceAnswerText).
   failed: null,
   'write-refused': null,
+  // A table publication (PublishXml) that was refused or not answered: said by the facts alone, like a refused write.
+  'publish-refused': null,
   'not-a-list': `the answer is not a list of rows; ${RUN_AGAIN}`,
   'not-a-record': `the answer holds something that is not a record; ${RUN_AGAIN}`,
   'repeated-link': `the answer repeated a next-page link; ${RUN_AGAIN}`,
@@ -153,6 +155,7 @@ const SERVICE_PROBLEMS = Object.freeze({
  * @returns {string} e.g. "HTTP 403, Dataverse error 0x80040220; check that the signed-in account can read it, and look the error code up"
  *   or "no usable answer (ECONNRESET); check the connection and run it again"
  *   or "the answer holds an unreadable value (objectid); run it again, ..."
+ *   or, for 'publish-refused', "PublishXml answered HTTP 503, Dataverse error 0x80040220" (the warning around it says the remedy)
  */
 function serviceAnswerText({ problem = 'failed', status, dataverseCode, systemCode, field } = {}) {
   const facts = [];
@@ -160,10 +163,12 @@ function serviceAnswerText({ problem = 'failed', status, dataverseCode, systemCo
   if (typeof dataverseCode === 'string' && DATAVERSE_CODE.test(dataverseCode)) facts.push(`Dataverse error ${dataverseCode.toLowerCase()}`);
   const said = facts.join(', ');
   if (problem === 'write-refused') return said ? `the platform refused the write (${said})` : 'the platform refused the write';
+  const system = typeof systemCode === 'string' && SYSTEM_CODE.test(systemCode) ? ` (${systemCode})` : '';
+  if (problem === 'publish-refused') return said ? `PublishXml answered ${said}` : `PublishXml got no usable answer${system}`;
   if (!Object.prototype.hasOwnProperty.call(SERVICE_PROBLEMS, problem)) problem = 'unexpected';
   if (problem === 'failed') {
     if (said) return `${said}; check that the signed-in account can read it, and look the error code up`;
-    return `no usable answer${typeof systemCode === 'string' && SYSTEM_CODE.test(systemCode) ? ` (${systemCode})` : ''}; check the connection and run it again`;
+    return `no usable answer${system}; check the connection and run it again`;
   }
   const fields = (Array.isArray(field) ? field : [field]).filter((name) => typeof name === 'string' && SERVICE_FIELDS.has(name));
   const [what, remedy] = SERVICE_PROBLEMS[problem].split('; ');

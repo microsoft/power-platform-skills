@@ -3613,7 +3613,11 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
 - **Publication** adds no SDK push and no second publish request. `publishTablesBeforeApp` unions the declared tables
   into its existing before-app set; the one publication observer per invocation records whether that plain
   request, or the managed publisher's flush for a managed table (the supported overlap: the existing publisher
-  publishes it, the observer reads its `published` list), named each table after its latest row write. An apply
+  publishes it, the observer reads its `published` list), named each table after its latest row write. The managed
+  publisher publishes one routed table at a time and throws on the first it cannot; before it throws, its flush tells
+  an optional `onHalt` what it settled (`published`, `withheld`, and `failed`: the table whose publish was sent and
+  failed), so a table published before the halt is reported confirmed and the failing one `failed`, never as unsent.
+  `onHalt` is only told: the halt thrown is the publisher's own, whatever it does. An apply
   succeeds only when both final checks pass. First, after the build's app work, every declared row is judged against
   a freshly resolved app context (the commands phase's context is not membership proof) and must still hold its
   flags; a failure keeps its own code, `command-state-context-unverified` or `command-state-not-confirmed` (a row
@@ -3656,17 +3660,21 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   paths word a failed or malformed answer through it, and through nothing else: the context reads (`as` in
   `command-state-read.js` for the app, components, table and listing reads; the current layer; a table by metadata id;
   `IsOptimisticConcurrencyEnabled`), the row read (`readCommandStateRow`), `readFailureText` (a thrown read error, used
-  by verify's details and a lost write's cause), the transport's refusal of a continuation outside the API, and a
-  refused row write (`command-state-run.js`, `write-refused`). The shared reader (`collectionRows`) still copies the
-  service's message and value into the errors it throws, so a build without `commandStates` prints what it always
-  printed; this feature never says them: a refused read is said from the answer itself (`watched`), and a complaint
+  by verify's details and a lost write's cause), the transport's refusal of a continuation outside the API, a
+  refused row write (`command-state-run.js`, `write-refused`), and the before-app table publish's refusal warning
+  (`publish-refused`: `publishTablesXml` with `facts: true` returns the status, Dataverse code or system code beside
+  its reason). The shared reader (`collectionRows`) still copies the
+  service's message and value into the errors it throws, and the publish warning of a build without `commandStates`
+  still quotes the reason, so such a build prints what it always printed; this feature never says them: a refused
+  read is said from the answer itself (`watched`), and a complaint
   about a 2xx answer is matched to the problem it names (`complaintOf`), the rest being `unexpected`. The transport's
   other refusals are fixed text that names no path or row version. The one service text a maker is shown is a
   button's caption (`buttonlabeltext`), as the inventory and approval require: the listing's `commands[].caption`,
   the approval display and the dry-run plan (console only); a halt and the journal name the row by table, bar and
   row id, without it. `command-state-taint.test.js` is the class gate: it plants one marker shaped like a row
   version into each string position (error code and message, next-page links, `value`, each field) of each answer
-  the feature reads, in each phase (preflight, final proof, the row write, the listing, verify), and fails if it
+  the feature reads, in each phase (preflight, final proof, the row write, the listing, verify), and into each position
+  of the table publish's answer on the plain and the managed route, and fails if it
   reaches a halt, the console, a verify detail, the listing's output, `build-log.jsonl` or `build-status.json`, the
   caption's own places aside.
 - **Verify** (`verifyCommandStates`, `verify-spec.js` kind `command-state`): each declared entry's exact row stores

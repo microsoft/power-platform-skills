@@ -443,13 +443,18 @@ function createCommandStatePublicationObserver() {
         }
       } catch { /* an observation that cannot be made confirms nothing */ }
     },
-    /** The managed publisher's flush: only the names in `published` confirm; `withheld` says why a table did not. */
+    /**
+     * The managed publisher's flush: only the names in `published` confirm; `withheld` says why a table did not, and `failed` names the table
+     * whose publish was handed to the transport and halted (managed-scope-publisher.js flush `onHalt`), so it is never called unsent.
+     */
     observeManaged(flushed) {
       try {
         const published = flushed && Array.isArray(flushed.published) ? flushed.published : [];
         const withheld = flushed && Array.isArray(flushed.withheld) ? flushed.withheld : [];
+        const failed = flushed && Array.isArray(flushed.failed) ? flushed.failed : [];
         for (const name of published) { const entry = tables.get(lc(name)); if (entry) confirm(entry, 'managed-before-app'); }
         for (const name of withheld) { const entry = tables.get(lc(name)); if (entry && entry.outcome !== 'confirmed') entry.reason = 'withheld'; }
+        for (const name of failed) { const entry = tables.get(lc(name)); if (entry && entry.outcome !== 'confirmed') entry.reason = 'failed'; }
       } catch { /* as above */ }
     },
     unconfirmed: () => unconfirmedEntries().map((t) => t.entity).sort(),

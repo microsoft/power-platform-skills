@@ -177,6 +177,7 @@ const { openManagedContext, isStoreEnvironment, attemptProvenUnsent, discoverMan
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
 const { commandStateMode, commandStateSpecHalt, createCommandStateRun, createCommandStatePublicationObserver, CODES: COMMAND_STATE_CODES, REMEDY: COMMAND_STATE_REMEDY } = require('./command-state-run.js');
 const { createCommandStateTransport } = require('./command-state-transport.js');
+const { serviceAnswerText } = require('./command-state-contract.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 // The configuration kinds (environment variables, connection references, Custom APIs, duplicate rules) and the solution's version:
@@ -4532,13 +4533,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       // commandStates (lib/command-state-run.js): the observer only records what this path answers; it sends nothing and never throws.
       const commandStateObserver = owed.commandStateObserver;
+      // The managed publisher's share of this envelope. It publishes one routed table at a time and throws on the first it cannot, so
+      // the tables it published before that halt reach the observer through `onHalt` (managed-scope-publisher.js flush): a table it
+      // confirmed is reported confirmed and the failing one `failed`, never `halted-before-send`. The halt itself is thrown as it was.
+      const flushManaged = async () => {
+        const flushed = await managedTables.flush(owed.barrier.routedWanted(), {
+          phase: 'app-shell', path: 'tables published before the app', ...(commandStateObserver ? { onHalt: (partial) => commandStateObserver.observeManaged(partial) } : {}),
+        });
+        if (commandStateObserver) commandStateObserver.observeManaged(flushed);
+      };
       if (!publish || !client || typeof client.post !== 'function') {
         for (const logical of added || []) appAdded.add(logical);
         await publishReconciledTables();
-        if (managedTables) {
-          const flushed = await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
-          if (commandStateObserver) commandStateObserver.observeManaged(flushed);
-        }
+        if (managedTables) await flushManaged();
         return undefined;
       }
       await readHoldings();
@@ -4548,12 +4555,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const askedBeforeApp = commandStateObserver ? [...new Set([...preApp, ...commandStateObserver.declaredTables()])].sort() : preApp;
       const wanted = owed.barrier.allowTables(askedBeforeApp, 'tables published before the app');
       // A routed table is left out of the request above and remembered as wanted: the managed publisher sends it first.
-      if (managedTables) {
-        const flushed = await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
-        if (commandStateObserver) commandStateObserver.observeManaged(flushed);
-      }
+      if (managedTables) await flushManaged();
       const tables = wanted.filter((logical) => !namedBeforeApp.has(logical));
-      const outcome = await publishTablesXml(client, tables);
+      // With commandStates the failure is asked for its checked facts too: its warning below must not quote the platform's text.
+      const outcome = await publishTablesXml(client, tables, commandStateObserver ? { facts: true } : undefined);
       // Only a non-empty list answered ok confirms, and only the names it carried (an empty list answers ok without a request).
       if (commandStateObserver) commandStateObserver.observePlain(tables, outcome);
       for (const logical of tables) namedBeforeApp.add(logical);
@@ -4564,7 +4569,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       await publishReconciledTables();
       const unprotected = tables.filter((logical) => !reconciled.has(logical));
       if (unprotected.length && typeof opts.warn === 'function') {
-        opts.warn(describePreAppRefusal({ reason: outcome.reason, tables: unprotected, saved: savedOnTable, described: describedCharts, forms: appHolds.forms, added }));
+        // A build with commandStates says the refusal by its checked facts only (lib/command-state-contract.js serviceAnswerText): the
+        // platform's text can carry a row version or anything else, and this feature lets none of it into what the build prints.
+        // Without commandStates the warning quotes the reason as it always did.
+        const reason = commandStateObserver ? serviceAnswerText({ problem: 'publish-refused', ...(outcome.facts || {}) }) : outcome.reason;
+        opts.warn(describePreAppRefusal({ reason, tables: unprotected, saved: savedOnTable, described: describedCharts, forms: appHolds.forms, added }));
       }
       return undefined;
     });

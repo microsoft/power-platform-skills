@@ -129,17 +129,22 @@ const tablesPublishXml = (names) => `<importexportxml><entities>${names.map((t) 
 // client answers `{ status, body }` and does not throw on an HTTP error (lib/sdk-http-client.js); a transport failure does throw. The client
 // sends a publish once, so a refusal — the customization lock's 429 included — is reported as it came; a deadlock victim is sent again by
 // postPublishXml (lib/publish-xml.js). A refusal's platform text, when it gives one, is kept: `{ "error": { "code": "0x80040217", "message": "..." } }`.
-async function publishTablesXml(client, tables, { sleep } = {}) {
+// `facts: true` adds `facts` to a failure: the answer's status, its `error.code` and a thrown failure's `code`, as they came and UNCHECKED. A caller
+// that must not print the platform's text (a build with commandStates) words the failure from them alone, through a formatter that checks each
+// (lib/command-state-contract.js serviceAnswerText). Without it the answer is exactly what it always was.
+async function publishTablesXml(client, tables, { sleep, facts = false } = {}) {
   const names = Array.isArray(tables) ? tables : [];
   if (!names.length) return { ok: true };
-  if (!client || typeof client.post !== 'function') return { ok: false, reason: 'no client to publish with' };
+  const failed = (reason, answer) => (facts ? { ok: false, reason, facts: answer } : { ok: false, reason });
+  if (!client || typeof client.post !== 'function') return failed('no client to publish with', {});
   try {
     const response = await postPublishXml(client, tablesPublishXml(names), { sleep });
     if (response && response.status >= 200 && response.status < 300) return { ok: true };
-    const said = response && response.body && response.body.error && response.body.error.message;
-    return { ok: false, reason: `PublishXml answered HTTP ${response && response.status}${typeof said === 'string' && said ? `: ${said}` : ''}` };
+    const error = response && response.body && typeof response.body === 'object' ? response.body.error : undefined;
+    const said = error && error.message;
+    return failed(`PublishXml answered HTTP ${response && response.status}${typeof said === 'string' && said ? `: ${said}` : ''}`, { status: response && response.status, dataverseCode: error && error.code });
   } catch (e) {
-    return { ok: false, reason: (e && e.message) || String(e) };
+    return failed((e && e.message) || String(e), { systemCode: e && e.code });
   }
 }
 

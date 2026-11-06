@@ -13,6 +13,8 @@
 //   write      the row PATCH's answer
 //   listing    list-command-states.js, its output as the command line emits it
 //   verify     verifyCommandStates, each declared row's detail
+//   publish    the table publication's PublishXml answer, which reaches the build's own Dataverse client and not the org: the before-app
+//              envelope's plain publish, and the managed publisher's publish of a table a managed group routes (lib/managed-scope-publisher.js)
 //
 // The one carve-out is the button's caption (`buttonlabeltext`), which the design shows to a maker: in the listing's `commands[].caption`
 // and in the approval display (console only, never journaled). A planted caption may appear there, as exactly what was read, and nowhere else.
@@ -27,6 +29,9 @@ const { createCommandStateOrg, commandRow, json, ORIGIN, SELECT_ALL } = require(
 const { T, MD, ROW, specFor, harness, buildWithJournal } = require('./helpers/command-state-build-harness.js');
 const { createCommandStateTransport } = require('../lib/command-state-transport.js');
 const { verifyCommandStates } = require('../lib/command-state-read.js');
+const { createPublicationBarrier } = require('../lib/publication-barrier.js');
+const { openManagedContext } = require('../lib/managed-bindings.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 const MARKER = 'review-service-message W/"498763"';
 const TAINT = /review-service-message|498763/;
@@ -133,19 +138,50 @@ async function inBuild(phase, name, plant, position) {
   // The approval display is the console's, and the one place a planted caption belongs.
   const display = (out.caught && out.caught.approvalDisplay) || '';
   const unshown = (text) => (isLabel(name, position) && display ? text.split(display).join('') : text);
+  return { hits: state.hits, primary: out.caught ? out.caught.message : '', where: whereOf(out, unshown) };
+}
+
+// What a build says and leaves, by where.
+function whereOf(out, unshown = (text) => text) {
   const states = out.caught && out.caught.commandStates;
-  return {
-    hits: state.hits,
-    primary: out.caught ? out.caught.message : '',
-    where: [
-      ['the halt', out.caught ? `${out.caught.code} ${out.caught.message}` : ''],
-      ['the warnings', unshown(out.said)],
-      ['the console', unshown(out.logged)],
-      ['the result', JSON.stringify(states === undefined ? out.result : states) || ''],
-      ['build-log.jsonl', out.log],
-      ['build-status.json', out.status],
-    ],
-  };
+  return [
+    ['the halt', out.caught ? `${out.caught.code} ${out.caught.message}` : ''],
+    ['the warnings', unshown(out.said)],
+    ['the console', unshown(out.logged)],
+    ['the result', JSON.stringify(states === undefined ? out.result : states) || ''],
+    ['build-log.jsonl', out.log],
+    ['build-status.json', out.status],
+  ];
+}
+
+// The publication's answer, planted in each of its positions: the error's code or message at a refusal status, a body that is not JSON, and
+// no answer at all (the client throws, as the SDK's does for a failure of the transport).
+function publishPositions() {
+  const out = {};
+  for (const status of [400, 403, 404, 429, 500, 503]) {
+    out[`HTTP ${status} error.code`] = () => ({ status, body: { error: { code: MARKER, message: 'denied' } } });
+    out[`HTTP ${status} error.message`] = () => ({ status, body: { error: { code: '0x80040220', message: MARKER } } });
+  }
+  out['HTTP 502 non-JSON body'] = () => ({ status: 502, body: `<html><body>${MARKER}</body></html>` });
+  out['no answer'] = () => { throw Object.assign(new Error(MARKER), { code: MARKER }); };
+  return out;
+}
+
+async function inPublish(route, plant) {
+  let hits = 0;
+  const barrier = route === 'managed' ? createPublicationBarrier() : undefined;
+  const h = harness({ barrier, publishAnswer: async () => { hits += 1; return plant(); } });
+  const spec = specFor();
+  const { approvals } = await h.approve(spec);
+  const engine = {};
+  if (barrier) {
+    // A committed managed group of the table routes it (managed-scope-publisher.js routeStored); this store holds none, so the route is set here.
+    const { store } = openManagedContext({ workspaceDir: makeTempDir('cs-taint-store-'), environment: ORIGIN, appUniqueName: spec.app.uniqueName, solutionUniqueName: spec.solution.uniqueName, barrier });
+    barrier.route(T, 'a managed group of the table');
+    Object.assign(engine, { publicationBarrier: barrier, bindingGroups: { store } });
+  }
+  const out = await buildWithJournal(h, spec, approvals, engine);
+  return { hits, primary: [out.caught ? out.caught.message : '', out.said].join('\n'), where: whereOf(out) };
 }
 
 async function inListing(name, plant, position) {
@@ -205,17 +241,23 @@ for (const [phase, names] of Object.entries(PHASES)) {
     for (const [position, plant] of Object.entries(positionsOf(name))) cases.push({ phase, name, position, plant });
   }
 }
+for (const route of ['plain', 'managed']) {
+  for (const [position, plant] of Object.entries(publishPositions())) cases.push({ phase: 'publish', name: route, position, plant });
+}
 const nameOf = (c) => `${c.phase} | ${c.name} | ${c.position}`;
 
 // The thirteen cases an independent review found leaking, each one of the matrix: an app component's objectid and component type and the
 // app read's next-page link, at the preflight and in the final proof; the objectid and the link in the listing and in verify; and a refused
-// row read, table-row-version read and table read by metadata id, whose message is the service's but whose Dataverse code must be said.
+// row read, table-row-version read and table read by metadata id, whose message is the service's but whose Dataverse code must be said. Two
+// more came from a later review: the before-app publish refused with the service's message.
 const REVIEWED = [
   'preflight | components | objectid', 'final | components | objectid', 'preflight | components | componenttype', 'final | components | componenttype',
   'preflight | app | @odata.nextLink (another origin)', 'final | app | @odata.nextLink (another origin)',
   'listing | components | objectid', 'listing | app | @odata.nextLink (another origin)',
   'verify | components | objectid', 'verify | app | @odata.nextLink (another origin)',
   'verify | row | error.message', 'verify | concurrency | error.message', 'listing | tableById | error.message',
+  // The pull request's review: a refused before-app publish whose message the warning quoted.
+  'publish | plain | HTTP 403 error.message', 'publish | plain | HTTP 503 error.message',
 ];
 test('the matrix holds every reviewed case', () => {
   const names = new Set(cases.map(nameOf));
@@ -226,7 +268,8 @@ for (const c of cases) {
   test(`no service text: ${nameOf(c)}`, async () => {
     const seen = c.phase === 'listing' ? await inListing(c.name, c.plant, c.position)
       : c.phase === 'verify' ? await inVerify(c.name, c.plant)
-        : await inBuild(c.phase, c.name, c.plant, c.position);
+        : c.phase === 'publish' ? await inPublish(c.name, c.plant)
+          : await inBuild(c.phase, c.name, c.plant, c.position);
     assert.ok(seen.hits > 0, 'the planted answer was read');
     if (c.phase === 'preflight' && c.position.startsWith('buttonlabeltext, at')) assert.match(seen.primary, /^command-state-approval-stale\b/, 'the stale-approval halt is reached');
     for (const [where, text] of seen.where) {
@@ -235,6 +278,9 @@ for (const c of cases) {
     // A refusal whose code is the platform's is still said by its status and that code: the message stays useful without the service's text.
     if (c.position === 'error.message' || (c.name === 'write' && /^HTTP 40[34] error\.message$/.test(c.position))) {
       assert.match(seen.primary, /HTTP 40[34], Dataverse error 0x80040220/, 'the status and the Dataverse code are said');
+    }
+    if (c.phase === 'publish' && c.name === 'plain' && /^HTTP \d+ error\.message$/.test(c.position)) {
+      assert.match(seen.primary, /PublishXml answered HTTP \d+, Dataverse error 0x80040220/, 'the refused publish is said by its status and code');
     }
   });
 }
