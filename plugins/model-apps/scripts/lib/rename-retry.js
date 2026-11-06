@@ -1,8 +1,8 @@
 'use strict';
 // One rename that survives a brief Windows file lock.
 //
-// Every workspace store (the managed binding store, the changed-only snapshot, its markers and the other
-// records written temp-then-rename) becomes durable with `rename(temp, target)`. On Windows a rename fails
+// The plugin's state files (the managed binding store, the changed-only snapshot, its markers and the other
+// records written temp-then-rename) become durable with `rename(temp, target)`. On Windows a rename fails
 // with EPERM, EACCES or EBUSY while another process holds the source or the target open: antivirus or the
 // search indexer scanning the file that was just written, a backup or sync client, a second build reading
 // the store. The hold ends in milliseconds to seconds, and a build that gives up at the first refusal fails
@@ -15,26 +15,40 @@
 // The contract:
 //   * Windows only, and only for a refusal that is one of those three codes. Any other platform, and any other
 //     code (ENOENT, EXDEV, ENOSPC...), is exactly one attempt, as before.
-//   * The wait is bounded (RENAME_RETRY_BUDGET_MS in total, growing from a short first pause to a cap). A hold
-//     that outlasts it is a real lock, and the caller gets the ORIGINAL error from the LAST attempt, untouched
-//     (same code, syscall, path, message), so every caller's own message and exit code stay what they were.
+//   * The wait is bounded twice (see the two numbers below). A hold that outlasts the bound is a real lock, and
+//     the caller gets the ORIGINAL error from the LAST attempt, untouched (same code, syscall, path, message), so
+//     every caller's own message and exit code stay what they were.
 //   * A retry only ever repeats the same rename, so it stays atomic: a refused rename moved nothing.
-// A caller must be able to say why repeating its rename is safe (its temp file is its own and unique to the
-// attempt; the target is either still the old content or already the new one); see each call site.
+// A caller must be able to say why repeating its rename is safe: its temp file is its own and unique to the
+// attempt, and the target is a file the plugin owns, written under a lease or compare-and-set; see each call
+// site. A path that an actor outside the plugin can replace while the wait goes on (a maker's file, a folder
+// that is about to be deleted) must NOT use this: the wait would let a decision made before it go stale.
 
 const RENAME_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
-// About a minute: long enough for a scanner or an indexer working through a large workspace on a loaded
-// machine (a loaded Windows machine was seen refusing the same rename for several seconds), short enough that
-// a lock that is really held (a program that has the file open without sharing) still ends the run with its
-// own message rather than a hang.
-const RENAME_RETRY_BUDGET_MS = 60000;
+// The wait is synchronous (Atomics.wait): nothing else in the process runs meanwhile, not the heartbeat of a
+// teardown (a beat every 60 s; a teardown with no beat for 5 min is taken for dead), not an HTTP callback (the
+// transport times out a read after 60 s and a write after 300 s). So the wait is capped twice:
+//   * RENAME_RETRY_BUDGET_MS, 5 s: the most one rename waits. Enough for a scanner or an indexer to let go of a
+//     file just written (a loaded Windows machine was seen refusing the same rename for a few seconds).
+//   * PROCESS_WAIT_TOTAL_MS, 30 s: the most this process waits out locks in all, across every rename. Once the
+//     time spent reaches it, every later refused rename is ONE attempt, exactly as it was before this module, so
+//     a lock that really is held cannot add up to minutes of blocking over many writes (a teardown that records
+//     several receipts, a build that writes a record per step). 30 s is half of the 60 s beat, a tenth of the
+//     5 min staleness and well inside the transport's timeouts.
+// No production path can raise either number; only a test can change them (setDefaultBudgetMs and
+// setProcessWaitedMs, through tests/helpers/short-rename-wait.js, which restores them).
+const RENAME_RETRY_BUDGET_MS = 5000;
+const PROCESS_WAIT_TOTAL_MS = 30000;
 const FIRST_PAUSE_MS = 25;
 // Doubling from 25 ms would reach tens of seconds in a few steps; a cap keeps polling often enough to land
 // soon after the hold ends.
 const MAX_PAUSE_MS = 1000;
 
 let defaultBudgetMs = RENAME_RETRY_BUDGET_MS;
+// The time this process has spent waiting out locks (the pauses asked for), against PROCESS_WAIT_TOTAL_MS. A new
+// process starts at zero.
+let processWaitedMs = 0;
 
 // Tests that make every rename fail for good on Windows use this to keep the wait to a moment. Returns the
 // previous value so a test can restore it.
@@ -44,13 +58,21 @@ function setDefaultBudgetMs(ms) {
   return previous;
 }
 
+// Sets (and returns the previous) time this process has already spent waiting: a test starts from 0 and puts the
+// old value back, so no test leaves a spent budget to the next one.
+function setProcessWaitedMs(ms) {
+  const previous = processWaitedMs;
+  processWaitedMs = ms;
+  return previous;
+}
+
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 // A directory where the file is to go is refused for good, never for a moment: on Windows `rename(file, directory)`
-// answers EPERM, and no scanner letting go changes that. Waiting a minute for it (a receipt path that a folder
-// holds, say) would only delay the same error. Any doubt (a stat that fails, an fs without `lstatSync`) is "not
+// answers EPERM, and no scanner letting go changes that. Waiting for it (a receipt path that a folder holds,
+// say) would only delay the same error. Any doubt (a stat that fails, an fs without `lstatSync`) is "not
 // that case", so the lock is waited out.
 function targetIsADirectory(fsImpl, from, to) {
   try {
@@ -60,9 +82,9 @@ function targetIsADirectory(fsImpl, from, to) {
   }
 }
 
-// `fsImpl` is the fs the caller already writes through (a test seam). `opts`: `budgetMs` (a lower total wait
-// for a caller that wants less than the default), `pause(ms)` (how to wait), `platform` (default
-// process.platform): the last two are seams for tests, never for callers.
+// `fsImpl` is the fs the caller already writes through (a test seam). `opts`: `budgetMs` (a lower wait for this
+// call than the default), `pause(ms)` (how to wait), `platform` (default process.platform): the last two are
+// seams for tests, never for callers.
 function renameWithRetry(fsImpl, from, to, opts) {
   const o = opts || {};
   const budget = typeof o.budgetMs === 'number' ? Math.min(o.budgetMs, defaultBudgetMs) : defaultBudgetMs;
@@ -75,13 +97,14 @@ function renameWithRetry(fsImpl, from, to, opts) {
       fsImpl.renameSync(from, to);
       return;
     } catch (err) {
-      if (platform !== 'win32' || !err || !RENAME_LOCK_CODES.has(err.code) || waited >= budget || targetIsADirectory(fsImpl, from, to)) throw err;
-      const wait = Math.min(next, budget - waited);
+      if (platform !== 'win32' || !err || !RENAME_LOCK_CODES.has(err.code) || waited >= budget || processWaitedMs >= PROCESS_WAIT_TOTAL_MS || targetIsADirectory(fsImpl, from, to)) throw err;
+      const wait = Math.min(next, budget - waited, PROCESS_WAIT_TOTAL_MS - processWaitedMs);
       pause(wait);
       waited += wait;
+      processWaitedMs += wait;
       next = Math.min(next * 2, MAX_PAUSE_MS);
     }
   }
 }
 
-module.exports = { renameWithRetry, setDefaultBudgetMs, sleepSync, RENAME_LOCK_CODES, RENAME_RETRY_BUDGET_MS };
+module.exports = { renameWithRetry, setDefaultBudgetMs, setProcessWaitedMs, sleepSync, RENAME_LOCK_CODES, RENAME_RETRY_BUDGET_MS, PROCESS_WAIT_TOTAL_MS };

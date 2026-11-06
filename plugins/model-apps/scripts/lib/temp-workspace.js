@@ -352,7 +352,7 @@ function writeWhole(file, text, deps) {
   const temp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     fsx.writeFileSync(temp, text, { flag: 'wx', mode: 0o600 });
-    // The same short waits as every other refusal in this module (WAITS_MS, through `deps.pause`, and only where there are no owners: windowsRefusesForAMoment), not the minute of lib/rename-retry.js: this write is
+    // The same short waits as every other refusal in this module (WAITS_MS, through `deps.pause`, and only where there are no owners: windowsRefusesForAMoment), not the longer, process-bounded retry of lib/rename-retry.js: this write is
     // a courtesy that never fails a run, and a sweep or a make must not stall on it. A rename repeated here is safe: the temporary copy is this call's own (`wx`, a name with the pid and a random part) and `file` is
     // whole before and after.
     // On Windows a scanner that has just seen the new file can hold it for a moment, and the rename is refused (EPERM, EACCES or EBUSY): the same short waits as for the folder.
@@ -482,7 +482,7 @@ function removeWorkspace(dir, deps) {
   const file = path.join(dir, OWNER_FILE);
   const aside = path.join(path.dirname(dir), `${path.basename(dir)}${REMOVING_SUFFIX}`);
   // Not retried (lib/rename-retry.js): this moves the owner record aside as the first step of removing a folder, from a sweep that is bounded in time (see "A SWEEP IS BOUNDED, AND FAIR") — a refusal means this
-  // folder is not removed now, which the sweep already treats as "try again on a later sweep", and waiting a minute on each held folder would spend the sweep's whole budget on one.
+  // folder is not removed now, which the sweep already treats as "try again on a later sweep", and waiting on each held folder would spend the sweep's whole budget on one.
   try {
     fsx.renameSync(file, aside);
   } catch (e) {
