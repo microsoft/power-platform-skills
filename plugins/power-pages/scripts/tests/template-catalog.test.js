@@ -32,6 +32,7 @@ const {
   assertValidSha,
   resolveRefToSha,
   normalizeCatalogFamilies,
+  applySolutionSettings,
 } = require('../lib/template-catalog');
 const { parseArgs: parseCatalogArgs } = require('../fetch-template-catalog');
 const { parseArgs: parseVariantArgs } = require('../fetch-template-variant');
@@ -369,6 +370,74 @@ test('validateCatalogShape rejects duplicate framework variants in a family', ()
     validateCatalogShape({ templates: [family] }),
     /duplicate framework variant/i
   );
+  assert.match(
+    validateCatalogShape({
+      templates: [{
+        ...VALID_TEMPLATE_FAMILY,
+        variants: {
+          react: {
+            solutions: [{ uniqueName: 'SupplierPortal', publishChanges: true }],
+          },
+        },
+      }],
+    }),
+    /family level/
+  );
+});
+
+test('validateCatalogShape accepts strict solution-level publish settings', () => {
+  assert.equal(validateCatalogShape({
+    templates: [{
+      ...VALID_TEMPLATE_FAMILY,
+      solutions: [
+        { uniqueName: 'SupplierBase', publishChanges: false },
+        { uniqueName: 'SupplierPortal', publishChanges: true },
+      ],
+    }],
+  }), null);
+
+  for (const solutions of [
+    {},
+    [{ uniqueName: 'SupplierPortal' }],
+    [{ uniqueName: 'SupplierPortal', publishChanges: 'true' }],
+    [{ uniqueName: 'SupplierPortal', publishChanges: true, extra: true }],
+    [
+      { uniqueName: 'SupplierPortal', publishChanges: true },
+      { uniqueName: 'supplierportal', publishChanges: false },
+    ],
+  ]) {
+    assert.notEqual(validateCatalogShape({
+      templates: [{ ...VALID_TEMPLATE_FAMILY, solutions }],
+    }), null);
+  }
+});
+
+test('normalization preserves family solution settings for every variant', () => {
+  const solutions = [{ uniqueName: 'SupplierPortal', publishChanges: true }];
+  const [family] = normalizeCatalogFamilies({
+    templates: [{ ...VALID_TEMPLATE_FAMILY, solutions }],
+  });
+  assert.deepEqual(family.solutions, solutions);
+  assert.ok(family.variants.every(variant => variant.solutions === solutions));
+});
+
+test('solution settings default to false and reject unknown manifest entries', () => {
+  const discovered = [
+    { uniqueName: 'SupplierBase', version: '1.0.0.0', solutionPath: '/base' },
+    { uniqueName: 'SupplierPortal', version: '2.0.0.0', solutionPath: '/portal' },
+  ];
+  assert.deepEqual(applySolutionSettings(discovered, [
+    { uniqueName: 'SupplierPortal', publishChanges: true },
+  ]), [
+    { ...discovered[0], publishChanges: false },
+    { ...discovered[1], publishChanges: true },
+  ]);
+  assert.throws(() => applySolutionSettings(discovered, [
+    { uniqueName: 'MissingSolution', publishChanges: true },
+  ]), /unknown solution/);
+  assert.throws(() => applySolutionSettings(discovered, [
+    { uniqueName: 'supplierportal', publishChanges: true },
+  ]), /unknown solution/);
 });
 
 test('fetchCatalog materializes nested preview and seed artifact paths', async (t) => {
@@ -865,6 +934,7 @@ test('downloadTemplateVariant combines variant website code with family solution
     templateId: 'company',
     variant: 'react',
     cacheRoot: dir,
+    solutionSettings: [{ uniqueName: 'CompanyPortal', publishChanges: true }],
   }, {
     execFileSync(command, args) {
       calls.push([command, args]);
@@ -892,6 +962,7 @@ test('downloadTemplateVariant combines variant website code with family solution
     templateId: 'company',
     variant: 'react',
     cacheRoot: dir,
+    solutionSettings: [{ uniqueName: 'CompanyPortal', publishChanges: true }],
   }, {
     execFileSync() {
       throw new Error('cached variant must not run git');
@@ -915,11 +986,13 @@ test('downloadTemplateVariant combines variant website code with family solution
       uniqueName: 'CompanyBase',
       version: '1.0.0.0',
       solutionPath: path.join(localSolutionsPath, 'CompanyBase'),
+      publishChanges: false,
     },
     {
       uniqueName: 'CompanyPortal',
       version: '2.0.0.0',
       solutionPath: path.join(localSolutionsPath, 'CompanyPortal'),
+      publishChanges: true,
     },
   ]);
   assert.deepEqual(cached, { ...result, cached: true });
@@ -1344,6 +1417,7 @@ test('fetch-template-variant CLI parser accepts derivable variant identity', () 
     '--kind', 'spa',
     '--templateId', 'company',
     '--variant', 'react',
+    '--solutionSettingsJson', '[{"uniqueName":"CompanyPortal","publishChanges":true}]',
     '--catalogPath', 'templates/manifest.json',
     '--cacheRoot', '/tmp/cache',
   ]), {
@@ -1353,6 +1427,7 @@ test('fetch-template-variant CLI parser accepts derivable variant identity', () 
     kind: 'spa',
     templateId: 'company',
     variant: 'react',
+    solutionSettings: [{ uniqueName: 'CompanyPortal', publishChanges: true }],
     catalogPath: 'templates/manifest.json',
     cacheRoot: '/tmp/cache',
   });

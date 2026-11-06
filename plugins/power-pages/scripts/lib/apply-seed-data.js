@@ -6,6 +6,7 @@ const {
   getAuthToken,
   makeRequest,
   validateDataverseEnvironmentUrl,
+  odataGet,
 } = require('./validation-helpers');
 const generateUuid = require('../generate-uuid');
 
@@ -23,6 +24,11 @@ const DATAVERSE_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 
 function emptySummary() {
   return { ok: true, inserted: 0, failed: 0, skipped: 0, errors: [] };
+}
+
+function emptyPlan() {
+  return { ok: true, writes: 0, counts: { tables: 0, records: 0, files: 0 },
+    financialEntitySets: [], currencies: [], requiresCurrencySelection: false, errors: [] };
 }
 
 function listSeedFiles(seedDir, deps = {}, seedFile = null) {
@@ -93,7 +99,29 @@ function readSeedFile(filePath, deps = {}) {
 
 function splitReservedFiles(record) {
   const { __files: files = null, ...recordBody } = record;
+  // File uploads populate the file GUID and its read-only <column>_name companion.
+  // Strip only declared uploads; ordinary business name columns remain writable.
+  // https://learn.microsoft.com/power-apps/developer/data-platform/file-column-data
+  if (files && typeof files === 'object' && !Array.isArray(files)) {
+    for (const column of Object.keys(files)) {
+      delete recordBody[column];
+      delete recordBody[`${column}_name`];
+    }
+  }
   return { recordBody, files };
+}
+
+function uploadFileName(record, columnName, filePath) {
+  const companion = `${columnName}_name`;
+  const name = Object.prototype.hasOwnProperty.call(record, companion)
+    ? record[companion] : path.basename(filePath);
+  if (typeof name !== 'string' || !name.trim() || name !== name.trim() ||
+      name === '.' || name === '..' || /[\\/:<>"|?*\x00-\x1f\x7f]/.test(name) ||
+      /%(?:2f|5c|00)/i.test(name) ||
+      /[. ]$/.test(name) || name.length > 255) {
+    throw new Error(`Invalid upload filename for ${columnName}; expected a non-empty filename without path segments`);
+  }
+  return name;
 }
 
 function splitCreateAndStateUpdate(seed, record) {
@@ -142,7 +170,21 @@ function validateSeedLookupContract(seedEntries) {
 
   const errors = [];
   for (const { file, seed } of seedEntries) {
+    if (!ODATA_IDENTIFIER_RE.test(String(seed.entitySetName || ''))) {
+      errors.push({ file, entitySetName: seed.entitySetName,
+        message: `Invalid Dataverse OData operation name: ${seed.entitySetName}` });
+      continue;
+    }
+    if ((seed.logicalName !== undefined && !ODATA_IDENTIFIER_RE.test(String(seed.logicalName))) ||
+        (seed.primaryKey !== undefined && !ODATA_IDENTIFIER_RE.test(String(seed.primaryKey)))) {
+      errors.push({ file, entitySetName: seed.entitySetName, message: 'Invalid seed logicalName or primaryKey identifier' });
+      continue;
+    }
     for (const record of seed.records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) {
+        errors.push({ file, entitySetName: seed.entitySetName, message: 'Seed record must be an object' });
+        continue;
+      }
       for (const [key, value] of Object.entries(record || {})) {
         if (isCamelCaseLookupKey(key) && typeof value === 'string') {
           errors.push({
@@ -152,28 +194,42 @@ function validateSeedLookupContract(seedEntries) {
           });
           continue;
         }
-        if (!key.endsWith('@odata.bind') || typeof value !== 'string') continue;
+        if (!key.endsWith('@odata.bind')) continue;
         // Seed lookups use the OData bind shape:
         //   "spa311_CategoryId@odata.bind":
         //     "/spa311_categories(11111111-1111-1111-1111-111111111111)"
         // Validate references to records in this seed set before any writes. The
         // navigation-property key itself remains authoritative solution metadata.
-        const match = value.match(/^\/([^/()]+)\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/i);
-        if (!match) {
-          errors.push({
-            file,
-            entitySetName: seed.entitySetName,
-            message: `Lookup ${key} must use /<entitySetName>(<guid>)`,
-          });
-          continue;
-        }
-        const target = idToTarget.get(match[2].toLowerCase());
-        if (target && target.entitySetName !== match[1]) {
-          errors.push({
-            file,
-            entitySetName: seed.entitySetName,
-            message: `Lookup ${key} targets ${match[1]}, but the referenced seed record belongs to ${target.entitySetName}`,
-          });
+        // Collection-valued binds associate N:N rows on create, e.g.
+        // "cr123_Contacts@odata.bind": ["/contacts(<guid>)", "/contacts(<guid>)"].
+        // Validate each member without converting it to intersect-table upserts.
+        // https://learn.microsoft.com/power-apps/developer/data-platform/webapi/associate-disassociate-entities-using-web-api
+        const references = Array.isArray(value) ? value : [value];
+        let collectionEntitySet = null;
+        for (const reference of references) {
+          const match = typeof reference === 'string' &&
+            reference.match(/^\/([A-Za-z_][A-Za-z0-9_]*)\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/i);
+          if (!match) {
+            errors.push({
+              file,
+              entitySetName: seed.entitySetName,
+              message: `Lookup ${key} must use /<entitySetName>(<guid>)`,
+            });
+            continue;
+          }
+          if (collectionEntitySet && collectionEntitySet !== match[1]) {
+            errors.push({ file, entitySetName: seed.entitySetName,
+              message: `Lookup ${key} collection must reference one entity set` });
+          }
+          collectionEntitySet = match[1];
+          const target = idToTarget.get(match[2].toLowerCase());
+          if (target && target.entitySetName !== match[1]) {
+            errors.push({
+              file,
+              entitySetName: seed.entitySetName,
+              message: `Lookup ${key} targets ${match[1]}, but the referenced seed record belongs to ${target.entitySetName}`,
+            });
+          }
         }
       }
     }
@@ -186,21 +242,39 @@ function normalizeDataverseExportSeed(seed) {
     return null;
   }
   const idToEntitySet = new Map();
+  const idCounts = new Map();
   for (const table of Object.values(seed.tables)) {
     if (!table || typeof table !== 'object' || !Array.isArray(table.records) || typeof table.idColumn !== 'string' || typeof table.entitySet !== 'string') {
-      continue;
+      throw new Error('Expected export tables to declare entitySet, idColumn and records');
     }
     for (const record of table.records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) {
+        throw new Error('Export seed record must be an object');
+      }
       const id = record && record[table.idColumn];
-      if (typeof id === 'string') idToEntitySet.set(id.toLowerCase(), table.entitySet);
+      if (typeof id === 'string') {
+        idToEntitySet.set(id.toLowerCase(), table.entitySet);
+        idCounts.set(id.toLowerCase(), (idCounts.get(id.toLowerCase()) || 0) + 1);
+      }
     }
   }
   const filesByRecordId = new Map();
-  for (const fileExport of Array.isArray(seed.fileExports) ? seed.fileExports : []) {
-    if (!fileExport || typeof fileExport !== 'object') continue;
+  if (seed.fileExports !== undefined && !Array.isArray(seed.fileExports)) {
+    throw new Error('fileExports must be an array of declared uploads');
+  }
+  for (const fileExport of seed.fileExports || []) {
+    if (!fileExport || typeof fileExport !== 'object') throw new Error('Invalid fileExports upload declaration');
     const { attachmentId, fileColumn, path: filePath } = fileExport;
-    if (typeof attachmentId !== 'string' || typeof fileColumn !== 'string' || typeof filePath !== 'string') continue;
+    if (typeof attachmentId !== 'string' || !DATAVERSE_GUID_RE.test(attachmentId) ||
+        typeof fileColumn !== 'string' || !ODATA_IDENTIFIER_RE.test(fileColumn) ||
+        typeof filePath !== 'string' || !filePath.trim()) {
+      throw new Error('fileExports upload requires GUID attachmentId, fileColumn and path');
+    }
+    if (idCounts.get(attachmentId.toLowerCase()) !== 1) {
+      throw new Error('fileExports attachmentId must identify exactly one source record');
+    }
     const current = filesByRecordId.get(attachmentId.toLowerCase()) || {};
+    if (Object.prototype.hasOwnProperty.call(current, fileColumn)) throw new Error('Duplicate fileExports upload column for attachmentId');
     current[fileColumn] = filePath;
     filesByRecordId.set(attachmentId.toLowerCase(), current);
   }
@@ -209,6 +283,7 @@ function normalizeDataverseExportSeed(seed) {
     .map((table) => ({
       entitySetName: table.entitySet,
       primaryKey: table.idColumn,
+      ...(table.logicalName !== undefined ? { logicalName: table.logicalName } : {}),
       records: table.records.map((record) => normalizeExportRecord(record, table.idColumn, idToEntitySet, filesByRecordId)),
     }));
 }
@@ -260,6 +335,7 @@ function validateFilesContract({ seedDir, seed, record }, deps = {}) {
     return '__files must be an object mapping file column logical names to seed-data-relative paths';
   }
   if (!seed.primaryKey) return 'Seed file with __files must declare primaryKey';
+  if (!ODATA_IDENTIFIER_RE.test(seed.primaryKey)) return 'Invalid file primaryKey identifier';
   const recordId = record[seed.primaryKey];
   if (typeof recordId !== 'string' || !DATAVERSE_GUID_RE.test(recordId)) {
     return `Record with __files must include GUID primary key ${seed.primaryKey}`;
@@ -274,6 +350,11 @@ function validateFilesContract({ seedDir, seed, record }, deps = {}) {
     if (!absolutePath.startsWith(seedRoot + path.sep)) return `Attachment path must stay under seed-data root: ${relativePath}`;
     const containmentError = validateContainedPath(seedRoot, absolutePath, fsImpl);
     if (containmentError) return containmentError;
+    try {
+      uploadFileName(record, columnName, absolutePath);
+    } catch (err) {
+      return err.message;
+    }
   }
   return null;
 }
@@ -340,6 +421,7 @@ function validateAttachmentFile(filePath, deps = {}) {
   if (!fsImpl.existsSync(filePath)) return `Attachment file not found: ${filePath}`;
   const stat = fsImpl.lstatSync(filePath);
   if (!stat.isFile()) return `Attachment path is not a file: ${filePath}`;
+  if (stat.size === 0) return `Attachment file is empty: ${filePath}`;
   // Git LFS pointer files start with:
   //   version https://git-lfs.github.com/spec/v1
   // Spec: https://github.com/git-lfs/git-lfs/blob/main/docs/spec.md
@@ -407,9 +489,16 @@ function entityLogicalNameFromPrimaryKey(primaryKey) {
   return primaryKey.replace(/id$/i, '');
 }
 
-async function uploadFileColumn({ envUrl, tokenProvider, primaryKey, recordId, columnName, filePath }, deps = {}) {
-  const fileName = path.basename(filePath);
+async function uploadFileColumn({ envUrl, tokenProvider, primaryKey, recordId, columnName, filePath, fileName = path.basename(filePath) }, deps = {}) {
+  if (!ODATA_IDENTIFIER_RE.test(String(primaryKey || '')) ||
+      !ODATA_IDENTIFIER_RE.test(String(columnName || '')) || !DATAVERSE_GUID_RE.test(String(recordId || ''))) {
+    throw new Error('File upload requires valid primaryKey, recordId and columnName identifiers');
+  }
+  uploadFileName({ [`${columnName}_name`]: fileName }, columnName, filePath);
+  const fileError = validateAttachmentFile(filePath, deps);
+  if (fileError) throw new Error(fileError);
   const entityLogicalName = entityLogicalNameFromPrimaryKey(primaryKey);
+  if (!ODATA_IDENTIFIER_RE.test(entityLogicalName)) throw new Error('Invalid file target logical name');
   // Dataverse file columns use actions rather than setting bytes in the record:
   //   InitializeFileBlocksUpload -> UploadBlock* -> CommitFileBlocksUpload
   // See: https://learn.microsoft.com/power-apps/developer/data-platform/file-column-data
@@ -421,9 +510,7 @@ async function uploadFileColumn({ envUrl, tokenProvider, primaryKey, recordId, c
       FileName: fileName,
       FileAttributeName: columnName,
     } }, deps);
-  if (init.error || init.statusCode < 200 || init.statusCode >= 300) {
-    throw new Error(init.error || init.body || `InitializeFileBlocksUpload failed (${init.statusCode})`);
-  }
+  requireSuccess(init, 'InitializeFileBlocksUpload');
   // InitializeFileBlocksUpload returns a JSON payload shaped as:
   //   { "FileContinuationToken": "<opaque token>" }
   // Older/proxy-failed responses can be empty or non-JSON even with an HTTP
@@ -431,25 +518,33 @@ async function uploadFileColumn({ envUrl, tokenProvider, primaryKey, recordId, c
   let tokenPayload;
   try {
     tokenPayload = JSON.parse(init.body || '{}');
-  } catch (err) {
-    throw new Error(`InitializeFileBlocksUpload returned invalid JSON: ${err.message}`);
+  } catch {
+    // JSON parser messages can quote response bytes containing the opaque upload token.
+    throw new Error('InitializeFileBlocksUpload returned invalid JSON');
   }
-  const continuation = tokenPayload.FileContinuationToken;
-  if (!continuation) throw new Error('InitializeFileBlocksUpload did not return FileContinuationToken');
+  const continuation = tokenPayload && tokenPayload.FileContinuationToken;
+  if (typeof continuation !== 'string' || !continuation.trim()) throw new Error('InitializeFileBlocksUpload did not return a valid FileContinuationToken');
 
   const blockIds = [];
   const randomBlockId = deps.randomBlockId || defaultBlockId;
   const fsImpl = deps.fs || fs;
-  const fileSize = fsImpl.statSync(filePath).size || 0;
+  const fileSize = fsImpl.statSync(filePath).size;
+  if (!Number.isSafeInteger(fileSize) || fileSize <= 0) throw new Error('Attachment file must have a non-zero valid size');
   const fileHandle = typeof fsImpl.openSync === 'function' ? fsImpl.openSync(filePath, 'r') : null;
   try {
     let offset = 0;
     while (offset < fileSize) {
       const block = Buffer.alloc(Math.min(FILE_BLOCK_SIZE_BYTES, fileSize - offset));
       if (fileHandle !== null && typeof fsImpl.readSync === 'function') {
-        fsImpl.readSync(fileHandle, block, 0, block.length, offset);
+        let bytesRead = 0;
+        while (bytesRead < block.length) {
+          const count = fsImpl.readSync(fileHandle, block, bytesRead, block.length - bytesRead, offset + bytesRead);
+          if (!Number.isInteger(count) || count <= 0) throw new Error('Attachment read ended before the expected file size');
+          bytesRead += count;
+        }
       } else {
-        fsImpl.readFileSync(filePath).copy(block, 0, offset, offset + block.length);
+        const bytesRead = fsImpl.readFileSync(filePath).copy(block, 0, offset, offset + block.length);
+        if (bytesRead !== block.length) throw new Error('Attachment read ended before the expected file size');
       }
       offset += block.length;
       const blockId = randomBlockId();
@@ -459,9 +554,7 @@ async function uploadFileColumn({ envUrl, tokenProvider, primaryKey, recordId, c
           BlockData: block.toString('base64'),
           FileContinuationToken: continuation,
         } }, deps);
-      if (res.error || res.statusCode < 200 || res.statusCode >= 300) {
-        throw new Error(res.error || res.body || `UploadBlock failed (${res.statusCode})`);
-      }
+      requireSuccess(res, 'UploadBlock');
     }
   } finally {
     if (fileHandle !== null && typeof fsImpl.closeSync === 'function') fsImpl.closeSync(fileHandle);
@@ -472,8 +565,14 @@ async function uploadFileColumn({ envUrl, tokenProvider, primaryKey, recordId, c
       FileName: fileName,
       MimeType: contentTypeForFile(filePath),
     } }, deps);
-  if (commit.error || commit.statusCode < 200 || commit.statusCode >= 300) {
-    throw new Error(commit.error || commit.body || `CommitFileBlocksUpload failed (${commit.statusCode})`);
+  requireSuccess(commit, 'CommitFileBlocksUpload');
+}
+
+function requireSuccess(response, operation) {
+  if (!response || !Number.isInteger(response.statusCode) ||
+      response.error || response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(response && (response.error || response.body) ||
+      `${operation} failed (HTTP ${response && response.statusCode || 'invalid response'})`);
   }
 }
 
@@ -492,7 +591,7 @@ function postDataverseJson({ envUrl, tokenProvider, apiPath, body, includeHeader
   }, deps);
 }
 
-function requestDataverseJson({
+async function requestDataverseJson({
   envUrl,
   tokenProvider,
   apiPath,
@@ -501,7 +600,7 @@ function requestDataverseJson({
   body,
   includeHeaders = false,
 }, deps = {}) {
-  const request = deps.makeRequest || makeRequest;
+  const request = safeSeedRequest(envUrl, deps);
   const trustedEnvUrl = validateDataverseEnvironmentUrl(envUrl);
   if (!ODATA_IDENTIFIER_RE.test(String(apiPath || ''))) {
     throw new Error(`Invalid Dataverse OData operation name: ${apiPath}`);
@@ -513,7 +612,7 @@ function requestDataverseJson({
     throw new Error(`Invalid Dataverse record id: ${recordId}`);
   }
   const headers = {
-    Authorization: `Bearer ${tokenProvider()}`,
+    Authorization: `Bearer ${requireToken(tokenProvider())}`,
     Accept: 'application/json',
     'Content-Type': 'application/json',
   };
@@ -540,26 +639,297 @@ function createTokenProvider({ envUrl, initialToken, resolveToken, refreshEvery 
       token = resolveToken(envUrl);
       calls = 0;
     }
+    if (typeof token !== 'string' || !token.trim()) throw new Error('Azure CLI token unavailable');
     calls += 1;
     return token;
   };
 }
 
-async function applySeedData({ seedDir, seedFile, envUrl }, deps = {}) {
+function loadSeedEntries({ seedDir, seedFile }, deps, summary) {
+  const seedEntries = [];
+  for (const filePath of listSeedFiles(seedDir, deps, seedFile)) {
+    try {
+      const seed = readSeedFile(filePath, deps);
+      for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {
+        seedEntries.push({ file: path.basename(filePath), seed: seedEntry });
+      }
+    } catch (err) {
+      summary.errors.push({ file: path.basename(filePath), message: err.message });
+    }
+  }
+  return seedEntries;
+}
+
+function normalizeCurrencyCode(currencyCode) {
+  if (typeof currencyCode !== 'string' || !/^[A-Za-z]{3}$/.test(currencyCode)) {
+    throw new Error('currencyCode must contain exactly three ASCII letters (ISO currency code)');
+  }
+  return currencyCode.toUpperCase();
+}
+
+function runTokenProvider(envUrl, deps) {
+  const resolveToken = deps.getAuthToken || getAuthToken;
+  const token = deps.token || resolveToken(envUrl);
+  if (typeof token !== 'string' || !token.trim()) {
+    const error = new Error(`Azure CLI token unavailable for ${envUrl}`);
+    error.code = 'SEED_AUTH_UNAVAILABLE';
+    throw error;
+  }
+  return deps.tokenProvider || createTokenProvider({
+    envUrl, initialToken: token, resolveToken,
+    refreshEvery: deps.tokenRefreshEvery || TOKEN_REFRESH_EVERY_REQUESTS,
+  });
+}
+
+function requireToken(token) {
+  if (typeof token !== 'string' || !token.trim()) throw new Error('Azure CLI token unavailable');
+  return token;
+}
+
+function redactDiagnostic(message, secrets = []) {
+  let text = String(message);
+  for (const secret of secrets) {
+    if (typeof secret === 'string' && secret) text = text.split(secret).join('<REDACTED>');
+  }
+  return text.replace(/("FileContinuationToken"\s*:\s*")[^"]*"/gi, '$1<REDACTED>"')
+    .replace(/Bearer\s+\S+/gi, 'Bearer <REDACTED>');
+}
+
+function safeSeedRequest(envUrl, deps) {
+  const origin = new URL(validateDataverseEnvironmentUrl(envUrl)).origin;
+  const request = deps.makeRequest || makeRequest;
+  return async (options) => {
+    const url = new URL(options.url, origin);
+    if (url.origin !== origin || url.username || url.password || url.hash ||
+        !url.pathname.startsWith('/api/data/v9.2/')) {
+      throw new Error('Seed request must remain on the current Dataverse origin and Web API path');
+    }
+    const authorization = options.headers && options.headers.Authorization;
+    const secrets = [typeof authorization === 'string' ? authorization.replace(/^Bearer /, '') : null];
+    if (options.body) {
+      const body = JSON.parse(options.body);
+      secrets.push(body.FileContinuationToken);
+    }
+    try {
+      const response = await request({ ...options, url: url.href });
+      if (!response || typeof response !== 'object') throw new Error('Invalid Dataverse response');
+      return {
+        ...response,
+        ...(response.error ? { error: redactDiagnostic(response.error, secrets) } : {}),
+        // Success bodies include continuation tokens needed by the next upload action.
+        // Redact only error bodies, so diagnostics cannot echo bearer or file tokens.
+        ...((response.error || !Number.isInteger(response.statusCode) || response.statusCode < 200 || response.statusCode >= 300)
+          ? { body: redactDiagnostic(response.body || '', secrets) } : {}),
+      };
+    } catch (err) {
+      throw new Error(redactDiagnostic(err.message, secrets));
+    }
+  };
+}
+
+async function seedGetAll(envUrl, apiPath, tokenProvider, deps) {
+  const request = safeSeedRequest(envUrl, deps);
+  const guardedRequest = async (options) => {
+    const response = await request(options);
+    requireSuccess(response, 'Metadata/currency query');
+    return response;
+  };
+  const rows = [];
+  let next = `${envUrl}/api/data/v9.2/${apiPath}`;
+  const visited = new Set();
+  while (next) {
+    if (visited.has(next) || visited.size >= 100) throw new Error('Metadata/currency pagination did not terminate');
+    visited.add(next);
+    const token = requireToken(tokenProvider());
+    let page;
+    try {
+      page = await odataGet(next, token, guardedRequest);
+    } catch (err) {
+      if (err instanceof SyntaxError) throw new Error('Metadata/currency query returned invalid JSON');
+      throw new Error(redactDiagnostic(err.message, [token]));
+    }
+    if (!page || !Array.isArray(page.value)) throw new Error('Metadata/currency query must return a JSON value array');
+    rows.push(...page.value);
+    next = page['@odata.nextLink'];
+    if (next !== undefined && (typeof next !== 'string' || !next.trim())) {
+      throw new Error('Invalid metadata/currency @odata.nextLink');
+    }
+  }
+  return rows;
+}
+
+async function discoverFinancialEntities(seedEntries, envUrl, tokenProvider, deps) {
+  const byEntitySet = new Map();
+  for (const { seed } of seedEntries) {
+    if (seed.entitySetName === 'transactioncurrencies') {
+      throw new Error('Currency selection cannot create currencies from seed data; choose an existing target currency');
+    }
+    const group = byEntitySet.get(seed.entitySetName) || { seeds: [], records: [] };
+    group.seeds.push(seed);
+    group.records.push(...seed.records);
+    byEntitySet.set(seed.entitySetName, group);
+  }
+  const financial = [];
+  for (const [entitySetName, group] of byEntitySet) {
+    if (!ODATA_IDENTIFIER_RE.test(entitySetName)) throw new Error(`Invalid Dataverse OData operation name: ${entitySetName}`);
+    if (group.records.length === 0) continue;
+    const entities = await seedGetAll(envUrl,
+      `EntityDefinitions?$select=LogicalName,EntitySetName,PrimaryIdAttribute&$filter=EntitySetName eq '${entitySetName}'`,
+      tokenProvider, deps);
+    if (entities.length !== 1 || !entities[0] || entities[0].EntitySetName !== entitySetName ||
+        !ODATA_IDENTIFIER_RE.test(String(entities[0].LogicalName || '')) ||
+        !ODATA_IDENTIFIER_RE.test(String(entities[0].PrimaryIdAttribute || ''))) {
+      throw new Error(`Unsupported or ambiguous entity metadata for ${entitySetName}`);
+    }
+    const logicalName = entities[0].LogicalName;
+    if (group.seeds.some((seed) => seed.logicalName && seed.logicalName !== logicalName)) {
+      throw new Error(`Seed logicalName disagrees with target metadata for ${entitySetName}`);
+    }
+    // Money detection uses the typed metadata endpoint, never amount/price/name heuristics.
+    // https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-metadata-web-api
+    const attributes = await seedGetAll(envUrl,
+      `EntityDefinitions(LogicalName='${logicalName}')/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsValidForCreate`,
+      tokenProvider, deps);
+    if (attributes.some((attr) => !attr || !ODATA_IDENTIFIER_RE.test(String(attr.LogicalName || '')) ||
+        typeof attr.IsValidForCreate !== 'boolean') ||
+        new Set(attributes.map((attr) => attr.LogicalName)).size !== attributes.length) {
+      throw new Error(`Unsupported Money metadata for ${entitySetName}`);
+    }
+    const usedAttributes = attributes.filter((attr) =>
+      group.records.some((record) => Object.prototype.hasOwnProperty.call(record, attr.LogicalName)));
+    if (usedAttributes.length === 0) continue;
+    if (usedAttributes.some((attr) => !attr.IsValidForCreate)) {
+      throw new Error(`Unsupported non-creatable Money attribute in ${entitySetName}`);
+    }
+    const moneyAttributes = usedAttributes.map((attr) => attr.LogicalName).sort();
+    const records = group.records.filter((record) =>
+      moneyAttributes.some((attr) => Object.prototype.hasOwnProperty.call(record, attr)));
+    const relationships = await seedGetAll(envUrl,
+      `EntityDefinitions(LogicalName='${logicalName}')/ManyToOneRelationships?$select=ReferencedEntity,ReferencingEntity,ReferencingAttribute,ReferencingEntityNavigationPropertyName&$filter=ReferencedEntity eq 'transactioncurrency'`,
+      tokenProvider, deps);
+    const currencyRelationships = relationships.filter((r) => r && r.ReferencedEntity === 'transactioncurrency' &&
+      r.ReferencingEntity === logicalName && r.ReferencingAttribute === 'transactioncurrencyid');
+    if (currencyRelationships.length !== 1 ||
+        !ODATA_IDENTIFIER_RE.test(String(currencyRelationships[0].ReferencingEntityNavigationPropertyName || ''))) {
+      throw new Error(`Unsupported or ambiguous currency navigation metadata for ${entitySetName}`);
+    }
+    // Lookup writes require the exact metadata navigation property, including case.
+    // https://learn.microsoft.com/power-apps/developer/data-platform/webapi/web-api-navigation-properties
+    financial.push({ entitySetName, logicalName, moneyAttributes, records,
+      navigationProperty: currencyRelationships[0].ReferencingEntityNavigationPropertyName });
+  }
+  return financial;
+}
+
+async function queryTargetCurrencies(envUrl, tokenProvider, deps, currencyCode) {
+  const rows = await seedGetAll(envUrl,
+    'transactioncurrencies?$select=transactioncurrencyid,isocurrencycode,currencyname,statecode&$filter=statecode eq 0' +
+      (currencyCode ? ` and isocurrencycode eq '${currencyCode}'` : ''), tokenProvider, deps);
+  const currencies = rows.map((row) => {
+    if (!row || row.statecode !== 0 || !DATAVERSE_GUID_RE.test(String(row.transactioncurrencyid || '')) ||
+        typeof row.currencyname !== 'string' || !row.currencyname.trim()) {
+      throw new Error('Target currency query returned invalid or inactive currency metadata');
+    }
+    const code = normalizeCurrencyCode(row.isocurrencycode);
+    if (currencyCode && code !== currencyCode) throw new Error('Target currency query returned a mismatched code');
+    return { code, name: row.currencyname, id: row.transactioncurrencyid };
+  });
+  if (currencyCode && currencies.length !== 1) {
+    throw new Error(`Expected one existing active ${currencyCode} target currency; found ${currencies.length}`);
+  }
+  if (!currencies.length) throw new Error('No existing active target currencies are available');
+  if (new Set(currencies.map((currency) => currency.code)).size !== currencies.length) {
+    throw new Error('Target active currency codes are ambiguous (duplicate codes)');
+  }
+  return currencies;
+}
+
+function bindTargetCurrency(financial, currency) {
+  const bind = `/transactioncurrencies(${currency.id})`;
+  // Check every row first. A conflict must stop the run before even unrelated tables write.
+  for (const entity of financial) {
+    for (const record of entity.records) {
+      for (const [key, value] of Object.entries(record)) {
+        if (!key.endsWith('@odata.bind')) continue;
+        const references = Array.isArray(value) ? value : [value];
+        if (key === `${entity.navigationProperty}@odata.bind` ||
+            references.some((reference) => typeof reference === 'string' && /^\/transactioncurrencies\(/i.test(reference))) {
+          if (key !== `${entity.navigationProperty}@odata.bind` || typeof value !== 'string' ||
+              value.toLowerCase() !== bind.toLowerCase()) {
+            throw new Error(`Explicit currency binding disagrees with selected ${currency.code} for ${entity.entitySetName}`);
+          }
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(record, 'transactioncurrencyid')) {
+        throw new Error(`Currency lookup must use exact metadata navigation for ${entity.entitySetName}`);
+      }
+    }
+  }
+  for (const entity of financial) {
+    for (const record of entity.records) {
+      // Source lookup GUIDs and exchange rates are environment-specific.
+      // Select only the reviewed target currency; Dataverse owns its exchange rate.
+      // https://learn.microsoft.com/power-apps/developer/data-platform/transaction-currency-currency-entity
+      delete record._transactioncurrencyid_value;
+      delete record.exchangerate;
+      record[`${entity.navigationProperty}@odata.bind`] = bind;
+    }
+  }
+}
+
+async function planSeedData({ seedDir, seedFile, envUrl, currencyCode }, deps = {}) {
+  const plan = emptyPlan();
+  try {
+    envUrl = validateDataverseEnvironmentUrl(envUrl);
+    if (currencyCode !== undefined) currencyCode = normalizeCurrencyCode(currencyCode);
+    const entries = loadSeedEntries({ seedDir, seedFile }, deps, plan);
+    if (!entries.length && !plan.errors.length) throw new Error('No seed JSON source was found');
+    plan.errors.push(...validateSeedLookupContract(entries));
+    plan.counts.tables = new Set(entries.map(({ seed }) => seed.entitySetName)).size;
+    for (const { file, seed } of entries) {
+      plan.counts.records += seed.records.length;
+      for (const record of seed.records) {
+        try {
+          const error = validateFilesContract({ seedDir, seed, record }, deps);
+          if (error) throw new Error(error);
+          const { recordBody, files } = splitReservedFiles(record);
+          splitCreateAndStateUpdate(seed, recordBody);
+          for (const relativePath of Object.values(files || {})) {
+            plan.counts.files += 1;
+            const fileError = validateAttachmentFile(path.join(seedDir, relativePath), { ...deps, seedDir });
+            if (fileError) throw new Error(fileError);
+          }
+        } catch (err) {
+          plan.errors.push({ file, entitySetName: seed.entitySetName, message: err.message });
+        }
+      }
+    }
+    if (plan.errors.length) {
+      plan.ok = false;
+      return plan;
+    }
+    const tokenProvider = runTokenProvider(envUrl, deps);
+    const financial = await discoverFinancialEntities(entries, envUrl, tokenProvider, deps);
+    plan.financialEntitySets = financial.map(({ entitySetName, logicalName, records, moneyAttributes }) =>
+      ({ entitySetName, logicalName, recordCount: records.length, moneyAttributes }));
+    if (financial.length || currencyCode) {
+      plan.currencies = await queryTargetCurrencies(envUrl, tokenProvider, deps, currencyCode);
+      if (currencyCode) bindTargetCurrency(financial, plan.currencies[0]);
+    }
+    plan.requiresCurrencySelection = financial.length > 0 && !currencyCode;
+  } catch (err) {
+    plan.ok = false;
+    plan.errors.push({ scope: 'plan', message: err.message });
+  }
+  return plan;
+}
+
+async function applySeedData({ seedDir, seedFile, envUrl, currencyCode }, deps = {}) {
   const summary = emptySummary();
   try {
     envUrl = validateDataverseEnvironmentUrl(envUrl);
-    const seedEntries = [];
-    for (const filePath of listSeedFiles(seedDir, deps, seedFile)) {
-      try {
-        const seed = readSeedFile(filePath, deps);
-        for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {
-          seedEntries.push({ file: path.basename(filePath), seed: seedEntry });
-        }
-      } catch (err) {
-        summary.errors.push({ file: path.basename(filePath), message: err.message });
-      }
-    }
+    if (currencyCode !== undefined) currencyCode = normalizeCurrencyCode(currencyCode);
+    const seedEntries = loadSeedEntries({ seedDir, seedFile }, deps, summary);
     summary.errors.push(...validateSeedLookupContract(seedEntries));
     if (summary.errors.length > 0) {
       summary.ok = false;
@@ -567,12 +937,13 @@ async function applySeedData({ seedDir, seedFile, envUrl }, deps = {}) {
       return summary;
     }
 
-    const resolveToken = deps.getAuthToken || getAuthToken;
-    const token = deps.token || resolveToken(envUrl);
-    if (!token) {
-      return { ...summary, ok: false, failed: 1, errors: [{ scope: 'auth', message: `Azure CLI token unavailable for ${envUrl}` }] };
+    const tokenProvider = runTokenProvider(envUrl, deps);
+    if (!seedEntries.length) throw new Error('No seed JSON source was found');
+    if (currencyCode) {
+      const financial = await discoverFinancialEntities(seedEntries, envUrl, tokenProvider, deps);
+      const [currency] = await queryTargetCurrencies(envUrl, tokenProvider, deps, currencyCode);
+      bindTargetCurrency(financial, currency);
     }
-    const tokenProvider = deps.tokenProvider || createTokenProvider({ envUrl, initialToken: token, resolveToken, refreshEvery: deps.tokenRefreshEvery || TOKEN_REFRESH_EVERY_REQUESTS });
     for (const { file, seed: seedEntry } of seedEntries) {
       for (const record of seedEntry.records) {
         const context = { file, entitySetName: seedEntry.entitySetName };
@@ -592,12 +963,14 @@ async function applySeedData({ seedDir, seedFile, envUrl }, deps = {}) {
             summary.errors.push({ ...context, message: res.error });
           } else if (isDuplicateConflict(res)) {
             outcome = 'skipped';
-          } else if (res.statusCode >= 200 && res.statusCode < 300) {
+          } else if (Number.isInteger(res.statusCode) && res.statusCode >= 200 && res.statusCode < 300) {
             outcome = 'inserted';
           } else {
             summary.failed += 1;
             summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
           }
+          if (outcome === 'inserted') summary.inserted += 1;
+          if (outcome === 'skipped') summary.skipped += 1;
           if (outcome && stateUpdate) {
             const stateRes = await patchRecordState({
               envUrl,
@@ -606,12 +979,8 @@ async function applySeedData({ seedDir, seedFile, envUrl }, deps = {}) {
               recordId,
               stateUpdate,
             }, deps);
-            if (stateRes.error || stateRes.statusCode < 200 || stateRes.statusCode >= 300) {
-              throw new Error(stateRes.error || stateRes.body || `State update failed (${stateRes.statusCode})`);
-            }
+            requireSuccess(stateRes, 'State update');
           }
-          if (outcome === 'inserted') summary.inserted += 1;
-          if (outcome === 'skipped') summary.skipped += 1;
           if (outcome && files) {
             await uploadRecordFiles({ seedDir, seed: seedEntry, record, files, envUrl, tokenProvider, summary, context }, deps);
           }
@@ -624,8 +993,9 @@ async function applySeedData({ seedDir, seedFile, envUrl }, deps = {}) {
   } catch (err) {
     summary.ok = false;
     summary.failed += 1;
-    summary.errors.push({ scope: 'seedDir', message: err.message });
+    summary.errors.push({ scope: err.code === 'SEED_AUTH_UNAVAILABLE' ? 'auth' : 'seedDir', message: err.message });
   }
+  summary.ok = summary.failed === 0 && summary.errors.length === 0;
   return summary;
 }
 
@@ -642,6 +1012,7 @@ async function uploadRecordFiles({ seedDir, seed, record, files, envUrl, tokenPr
         recordId: record[seed.primaryKey],
         columnName,
         filePath,
+        fileName: uploadFileName(record, columnName, filePath),
       }, deps);
     } catch (err) {
       summary.failed += 1;
@@ -652,7 +1023,9 @@ async function uploadRecordFiles({ seedDir, seed, record, files, envUrl, tokenPr
 
 module.exports = {
   applySeedData,
+  planSeedData,
   emptySummary,
+  emptyPlan,
   listSeedFiles,
   readSeedFile,
   normalizeDataverseExportSeed,

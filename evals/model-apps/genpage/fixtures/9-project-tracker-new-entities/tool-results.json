@@ -39,14 +39,29 @@
       }
     }
   },
-  { "id": "list-languages", "by": "genpage-planner", "command": "pac model list-languages", "exitCode": 0, "result": "LCID  Code   Name               RTL\n1033  en-US  English            No" },
-  { "id": "list-tables-search", "by": "genpage-planner", "command": "pac model list-tables --search 'cr_project,cr_milestone'", "exitCode": 0, "result": "No tables found matching the specified criteria." },
+  { "id": "list-languages", "by": "genpage-planner", "command": "node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'", "exitCode": 0, "result": { "ok": true, "baseLanguage": { "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }, "languages": [{ "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }], "unmapped": [], "summary": ["1033 en-US \u2014 RTL: No"] } },
+  { "id": "list-tables-search", "by": "genpage-planner", "command": "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'cr_project,cr_milestone' --exact", "exitCode": 0, "result": { "ok": true, "search": ["cr_project", "cr_milestone"], "exact": true, "count": 0, "tables": [], "missing": ["cr_project", "cr_milestone"] } },
   {
     "id": "list-tables-prefix-scan",
     "by": "genpage-planner",
-    "command": "pac model list-tables",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --type custom",
     "exitCode": 0,
-    "result": "1712 tables. Type=Custom rows: cr_contractor, cr_costcenter, cr_expense, cr_invoice, cr_resource, cr_timesheet, cr_vendor, new_feedback, new_survey"
+    "result": {
+      "ok": true,
+      "type": "custom",
+      "count": 9,
+      "tables": [
+        { "logicalName": "cr_contractor", "displayName": "Contractor", "schemaName": "cr_Contractor", "isCustom": true },
+        { "logicalName": "cr_costcenter", "displayName": "Cost Center", "schemaName": "cr_CostCenter", "isCustom": true },
+        { "logicalName": "cr_expense", "displayName": "Expense", "schemaName": "cr_Expense", "isCustom": true },
+        { "logicalName": "cr_invoice", "displayName": "Invoice", "schemaName": "cr_Invoice", "isCustom": true },
+        { "logicalName": "cr_resource", "displayName": "Resource", "schemaName": "cr_Resource", "isCustom": true },
+        { "logicalName": "cr_timesheet", "displayName": "Timesheet", "schemaName": "cr_Timesheet", "isCustom": true },
+        { "logicalName": "cr_vendor", "displayName": "Vendor", "schemaName": "cr_Vendor", "isCustom": true },
+        { "logicalName": "new_feedback", "displayName": "Feedback", "schemaName": "new_Feedback", "isCustom": true },
+        { "logicalName": "new_survey", "displayName": "Survey", "schemaName": "new_Survey", "isCustom": true }
+      ]
+    }
   },
   {
     "id": "list-solutions",
@@ -58,7 +73,10 @@
       { "uniquename": "FieldSurveys", "friendlyname": "Field Surveys", "publisherid": { "customizationprefix": "new" } }
     ] } }
   },
-  { "id": "list-apps", "by": "genpage-planner", "command": "pac model list", "exitCode": 0, "result": "App ID                                Display Name            Unique Name\n11111111-2222-3333-4444-555555555555  Contoso Operations Hub  ContosoOperationsHub\n44444444-5555-6666-7777-888888888888  Field Service Desk      FieldServiceDesk" },
+  { "id": "list-apps", "by": "genpage-planner", "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'", "exitCode": 0, "result": { "ok": true, "count": 2, "apps": [
+    { "id": "11111111-2222-3333-4444-555555555555", "name": "Contoso Operations Hub", "uniqueName": "ContosoOperationsHub", "description": "", "published": true, "unpublishedChanges": false },
+    { "id": "44444444-5555-6666-7777-888888888888", "name": "Field Service Desk", "uniqueName": "FieldServiceDesk", "description": "", "published": true, "unpublishedChanges": false }
+  ] } },
   {
     "id": "planner-proposal",
     "command": "Task genpage-planner (answers: create, cr_project + cr_milestone (new), project tracker with milestones and sample data, app Contoso Operations Hub, solution ContosoProjects)",
@@ -233,10 +251,10 @@
   },
   {
     "id": "generate-types",
-    "command": "pac model genpage generate-types --data-sources 'cr_project,cr_milestone' --output-file 'D:/work/project-tracker/RuntimeTypes.ts'",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'cr_project,cr_milestone' --output-file 'D:/work/project-tracker/RuntimeTypes.ts'",
     "artifact": "RuntimeTypes.ts",
     "exitCode": 0,
-    "result": "Types written to D:/work/project-tracker/RuntimeTypes.ts"
+    "result": { "ok": true, "outputFile": "D:/work/project-tracker/RuntimeTypes.ts", "dataSources": ["cr_project", "cr_milestone"], "detail": "none", "bytes": 14870 }
   },
   { "id": "gate-custom-api", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api", "exitCode": 1, "result": "disabled" },
   { "id": "gate-telemetry", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-telemetry", "exitCode": 1, "result": "disabled" },
@@ -271,8 +289,7 @@
     "id": "create",
     "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555' --code-file 'project-tracker.tsx' --name-file 'page-name.txt' --data-sources 'cr_project,cr_milestone' --prompt-file 'prompt.txt' --model 'claude-sonnet-4-6' --agent-message-file 'agent-message.txt' --add-to-sitemap",
     "exitCode": 0,
-    "pacExecutable": "pac.exe",
-    "pacWrites": 1,
+    "writes": 1,
     "result": { "ok": true, "pageId": "66666666-7777-4888-9999-aaaaaaaaaaaa", "appId": "11111111-2222-3333-4444-555555555555", "updated": false }
   }
 ]

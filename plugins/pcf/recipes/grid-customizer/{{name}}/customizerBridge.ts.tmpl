@@ -1,0 +1,31 @@
+// pcf-extension-pattern: grid-customizer
+// Power Apps grid customizers are a documented Microsoft extension pattern rather than a general
+// public PCF API. Keep the official template's factory.fireEvent call isolated here so the code gate
+// can reject accidental use elsewhere. Learn: https://learn.microsoft.com/power-apps/developer/component-framework/customize-editable-grid-control
+// Official template: https://github.com/microsoft/PowerApps-Samples/tree/master/component-framework/resources/GridCustomizerControlTemplate
+import { PAOneGridCustomizer } from "./types";
+
+interface GridCustomizerFactory {
+    fireEvent?: (eventName: string, customizer: PAOneGridCustomizer) => void;
+}
+
+interface GridCustomizerContextWithFactory {
+    factory?: GridCustomizerFactory;
+}
+
+export function fireGridCustomizerEvent<TInputs>(
+    context: ComponentFramework.Context<TInputs>,
+    eventName: string,
+    customizer: PAOneGridCustomizer,
+): void {
+    const factory = (context as unknown as GridCustomizerContextWithFactory).factory;
+    if (typeof factory?.fireEvent !== "function") return;
+
+    // The official GridCustomizerControlTemplate registers customizers through this factory event.
+    // The adapter's header marks the only accepted location for the code-gate exception.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (context as any).factory.fireEvent(eventName, customizer);
+}
+
+
+

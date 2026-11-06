@@ -5,7 +5,8 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage, primaryNameLengthProblem, autoNumberFormatProblem, requiredValueProblem, primaryAttributeKeyProblems } = require('./app-spec.js');
+const { validateSchemaFeatures } = require('./schema-feature-contract.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -88,9 +89,9 @@ function validateProvisionInput(input) {
     // rule alone. This input is documented as "App Spec format", so entities copied out of an
     // app-spec.json must keep validating.
     //
-    // That means the 5 keys this narrower path does not consume — vectorIcon, iconDescription, icon,
-    // existing, enrichDefaultViews — are ACCEPTED and ignored here (it provisions the data model
-    // only; it writes no icons and enriches no views). That is a known subset boundary, not the
+    // That means the 6 keys this narrower path does not consume — vectorIcon, iconDescription, icon,
+    // existing, enrichDefaultViews, quickFind — are ACCEPTED and ignored here (it provisions the data
+    // model only; it writes no icons, enriches no views and sets no Quick Find view). That is a known subset boundary, not the
     // unknown-key hole #537 is about, and rejecting them would break the copy-paste compatibility
     // the format promises.
     // Enumeration is guarded for the same reason as validateAppSpec's: the object comes from the
@@ -132,6 +133,20 @@ function validateProvisionInput(input) {
     } else if (!e.primaryAttribute.schemaName || typeof e.primaryAttribute.schemaName !== 'string') {
       errors.push(`entity '${e.schemaName}': primaryAttribute.schemaName is required and must be a string`);
     }
+    // A key the build does not read from the name column is refused here as validateAppSpec refuses it, by the one rule: this gate is
+    // the only one /genpage passes through, and without it a `maxlength` or `requiredLevel` created the table without what it asked.
+    errors.push(...primaryAttributeKeyProblems(e.primaryAttribute, `entity '${e.schemaName}'`));
+    // The length of the name column goes into BOTH table creates as the request's MaxLength, so a value the platform would
+    // refuse — or a string, which it would be sent as — has to stop here, before the solution is written. It is the rule
+    // validateAppSpec applies (one function), because this gate is the only one /genpage and /app-builder pass through.
+    if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
+      const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
+      if (lengthProblem) errors.push(`entity '${e.schemaName}': ${lengthProblem}`);
+      // A `required` that is not true, false or "recommended" is read by the build as "not required" — and written over an existing column's level —
+      // so it is refused at the gate, by the one rule validateAppSpec applies.
+      const requiredProblem = requiredValueProblem(e.primaryAttribute.required);
+      if (requiredProblem) errors.push(`entity '${e.schemaName}': primaryAttribute.required ${requiredProblem}`);
+    }
 
     // Validate columns
     if (Array.isArray(e.columns)) {
@@ -145,7 +160,8 @@ function validateProvisionInput(input) {
           errors.push(`entity '${e.schemaName}': column.schemaName is required and must be a string`);
         }
 
-        if (c.type && !TYPE_MAP[c.type]) {
+        // An own key of TYPE_MAP, as in validateAppSpec: a member of Object.prototype (`constructor`, `toString`, …) is no column type.
+        if (c.type && !Object.hasOwn(TYPE_MAP, c.type)) {
           errors.push(`entity '${e.schemaName}': column '${c.schemaName || ''}' has unknown type '${c.type}'`);
         }
 
@@ -155,6 +171,13 @@ function validateProvisionInput(input) {
         }
         validateLabel(c.displayName, `entity '${e.schemaName}': column '${c.schemaName || ''}' displayName`, errors, { baseLanguageCode: input.languageCode });
         validateChoiceOptionLabels(c.options, `entity '${e.schemaName}': column '${c.schemaName || ''}'`, errors, { baseLanguageCode: input.languageCode });
+        // The two column rules a build depends on, which validateAppSpec applies from the same functions: an AutoNumber column needs a format (the SDK
+        // refuses to create one without — after the solution and the tables are written, where this gate stops it before the first write), and `required`
+        // is true, false or "recommended".
+        const formatProblem = autoNumberFormatProblem(c);
+        if (formatProblem) errors.push(`entity '${e.schemaName}': column '${c.schemaName || ''}' ${formatProblem}`);
+        const requiredProblem = requiredValueProblem(c.required);
+        if (requiredProblem) errors.push(`entity '${e.schemaName}': column '${c.schemaName || ''}' required ${requiredProblem}`);
       }
     }
 
@@ -287,6 +310,15 @@ function validateProvisionInput(input) {
         }
       }
     }
+  }
+
+  // The 2.21.0 schema fields this path provisions — explicit `{ value, label }` options, dateTimeBehavior, isSecured and the
+  // table flags — are checked by the SAME validator validateAppSpec uses, for the reason the labels and ENTITY_KEYS are shared:
+  // without it a malformed `{ value, label }` option, a non-boolean flag, or `searchEnabled: true` with no confirmed (one-way)
+  // change tracking returned ok:true here and reached the SDK, while the App Spec path refused it. `fieldSecurityProfiles` is not
+  // passed: this path does not provision profiles. The minimumPluginVersion advisory is App Spec only (this input has no floor).
+  if (Array.isArray(input.entities)) {
+    errors.push(...validateSchemaFeatures({ entities: input.entities, globalChoices: input.globalChoices }).errors);
   }
 
   return { ok: errors.length === 0, errors };

@@ -87,7 +87,10 @@ async function main() {
   }
 
   reporter.end();
-  process.exit(reporter.exitCode);
+  // Set the exit code instead of calling process.exit(): on macOS and Linux a piped stdout is
+  // written asynchronously, so exiting at once can cut off the end of this (over 100 KB) TAP output
+  // when the reader is slower than the writer; Node exits on its own once the writes drain.
+  process.exitCode = reporter.exitCode;
 }
 
 if (require.main === module) main();

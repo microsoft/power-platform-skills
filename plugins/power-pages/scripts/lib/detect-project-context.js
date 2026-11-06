@@ -1,29 +1,26 @@
 #!/usr/bin/env node
 
 // Reads Power Pages project context files from the project root.
-// Locates powerpages.config.json (code/SPA sites) OR a .powerpages-site/ config tree
-// (declarative sites — Power Pages design-studio sites), plus
+// Locates powerpages.config.json (SPA sites) OR a nested/direct PAC config tree
+// (non-SPA sites — Power Pages design-studio sites), plus
 // .solution-manifest.json and .datamodel-manifest.json.
 //
-// NOTE on terminology: the discriminator here is the BUILD axis — code/SPA site vs
-// declarative (design-studio) site — NOT the Dataverse data-model axis. A declarative
-// site can be on the standard OR the enhanced data model ("EDM"); both download to a
-// .powerpages-site/ tree via `pac pages download`. siteType "declarative" names that
-// bucket. (It was historically labeled "data-model"; that value is now the legacy
-// alias. Nothing branches on the literal — it is a diagnostic label the agent reads
-// and the estimator echoes — so the rename is safe, and any plan-data written before
-// the rename that still carries "data-model" remains equivalent.)
+// The discriminator is the build axis, not the Dataverse data-model axis. A non-SPA
+// site can use either the Standard or Enhanced data model; both download to a
+// `.powerpages-site/` tree. New output uses `spa` and `non-spa`. Consumers that read
+// older persisted values normalize `code`, `declarative`, and `data-model`.
 //
 // Site identity resolution order (first match wins):
-//   1. powerpages.config.json  -> siteType "code"  (code/SPA sites; has siteName,
+//   1. powerpages.config.json  -> siteType "spa"  (has siteName,
 //                                  websiteRecordId, environmentUrl)
-//   2. .powerpages-site/ (.portalconfig/ + website.yml) -> siteType "declarative"
-//                                  (declarative design-studio sites; standard or
+//   2. .powerpages-site/ or direct root (.portalconfig/ + website.yml)
+//                                  -> siteType "non-spa"
+//                                  (Design Studio sites; Standard or
 //                                  enhanced data model. website.yml carries `id` and
 //                                  `name` but no environment URL — callers re-confirm
 //                                  via `pac env who`. `.portalconfig/` is the positive
-//                                  declarative marker; BOTH site types carry website.yml,
-//                                  so it isn't a reliable "declarative" signal alone.)
+//                                  non-SPA marker; BOTH site types carry website.yml,
+//                                  so it is not a reliable site-type signal alone.)
 //
 // Usage: node detect-project-context.js [--projectRoot <path>]
 //
@@ -33,7 +30,8 @@
 // Output (JSON to stdout):
 //   {
 //     "projectRoot": "...",
-//     "siteType": "code" | "declarative",   // "declarative" was formerly "data-model"
+//     "siteType": "spa" | "non-spa",
+//     "siteRoot": "...",                    // directory containing PAC components
 //     "siteName": "...",
 //     "websiteRecordId": "...",
 //     "environmentUrl": "..." | null,
@@ -41,14 +39,17 @@
 //     "datamodelManifest": { ... } | null
 //   }
 //
-// Exit 0 on success, exit 1 if neither powerpages.config.json nor
-// .powerpages-site/website.yml is found (not a Power Pages project).
+// Exit 0 on success, exit 1 if neither powerpages.config.json nor a nested/direct
+// non-SPA component root is found (not a Power Pages project).
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const { findProjectRoot } = require('./validation-helpers');
+const {
+  findProjectRoot,
+  resolvePowerPagesSiteRoot,
+} = require('./validation-helpers');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -122,15 +123,15 @@ function detectProjectContext(options = {}) {
   if (!projectRoot) {
     throw new Error(
       'No Power Pages project found. Run this command from a site project directory ' +
-      '(one containing powerpages.config.json for a code site, or .powerpages-site/ ' +
-      'for a data-model site).'
+      '(one containing powerpages.config.json for a SPA site, or .powerpages-site/ ' +
+      'for a non-SPA site).'
     );
   }
 
   const solutionManifest = readJsonFile(path.join(projectRoot, '.solution-manifest.json'));
   const datamodelManifest = readJsonFile(path.join(projectRoot, '.datamodel-manifest.json'));
 
-  // 1. Code/SPA site — powerpages.config.json is the source of truth.
+  // 1. SPA site — powerpages.config.json is the source of truth.
   const configPath = path.join(projectRoot, 'powerpages.config.json');
   if (fs.existsSync(configPath)) {
     const config = readJsonFile(configPath);
@@ -139,7 +140,8 @@ function detectProjectContext(options = {}) {
     }
     return {
       projectRoot,
-      siteType: 'code',
+      siteRoot: resolvePowerPagesSiteRoot(projectRoot),
+      siteType: 'spa',
       siteName: config.siteName || null,
       websiteRecordId: config.websiteRecordId || null,
       environmentUrl: config.environmentUrl || null,
@@ -148,18 +150,18 @@ function detectProjectContext(options = {}) {
     };
   }
 
-  // 2. Declarative site (siteType "declarative", formerly "data-model") — a Power Pages design-studio site
-  //    (`pac pages download`; standard or enhanced data model), as opposed to a
-  //    code/SPA site. The authoritative positive marker is the
-  //    `.powerpages-site/.portalconfig/` directory (only declarative sites have it).
+  // 2. Non-SPA site — a Power Pages Design Studio site downloaded by PAC using
+  //    either the Standard or Enhanced data model. The authoritative marker is the
+  //    `.powerpages-site/.portalconfig/` directory (only non-SPA sites have it).
   //    Identity (`id` -> websiteRecordId, `name` -> siteName) is read from website.yml —
-  //    but BOTH site types carry website.yml, so it's an identity source, not proof of
-  //    "declarative" on its own (a `.portalconfig/` site with no website.yml is still
-  //    declarative; its identity resolves at runtime). No environment URL in the local
+  //    but BOTH site types carry website.yml, so it is an identity source, not proof of
+  //    the site type. A `.portalconfig/` site with no website.yml is still non-SPA;
+  //    its identity resolves at runtime. No environment URL is stored in the local
   //    files — callers re-confirm via `pac env who`.
-  const portalConfigDir = path.join(projectRoot, '.powerpages-site', '.portalconfig');
-  const websiteYmlPath = path.join(projectRoot, '.powerpages-site', 'website.yml');
-  if (isDirectory(portalConfigDir) || fs.existsSync(websiteYmlPath)) {
+  const siteRoot = resolvePowerPagesSiteRoot(projectRoot);
+  const portalConfigDir = siteRoot && path.join(siteRoot, '.portalconfig');
+  const websiteYmlPath = siteRoot && path.join(siteRoot, 'website.yml');
+  if (siteRoot && (isDirectory(portalConfigDir) || fs.existsSync(websiteYmlPath))) {
     let site = null;
     if (fs.existsSync(websiteYmlPath)) {
       site = readWebsiteYml(websiteYmlPath);
@@ -169,7 +171,8 @@ function detectProjectContext(options = {}) {
     }
     return {
       projectRoot,
-      siteType: 'declarative',
+      siteRoot,
+      siteType: 'non-spa',
       siteName: site ? (site.name || null) : null,
       websiteRecordId: site ? (site.id || null) : null,
       environmentUrl: null,
@@ -179,8 +182,8 @@ function detectProjectContext(options = {}) {
   }
 
   throw new Error(
-    `No site identity found at ${projectRoot}: neither powerpages.config.json nor ` +
-    '.powerpages-site/website.yml is present.'
+    `No site identity found at ${projectRoot}: neither powerpages.config.json nor a ` +
+    'nested/direct non-SPA site root is present.'
   );
 }
 

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoItemCatalog", "publisherPrefix": "contoso" },
+  "app": {
+    "name": "Item Catalog",
+    "description": "Items open on the Summary form only",
+    "mainForms": { "contoso_item": ["Summary"] },
+    "mainFormsOnUpdate": "exact"
+  },
+  "entities": [
+    { "schemaName": "contoso_item", "displayName": "Item", "pluralName": "Items",
+      "primaryAttribute": { "schemaName": "contoso_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "contoso_category", "displayName": "Category", "type": "Text" },
+        { "schemaName": "contoso_price", "displayName": "Price", "type": "Money" }
+      ] }
+  ],
+  "forms": [
+    { "entity": "contoso_item", "name": "Summary", "layout": "auto" },
+    { "entity": "contoso_item", "name": "Details", "layout": "auto" }
+  ],
+  "views": [{ "entity": "contoso_item", "name": "All Items", "columns": ["contoso_name", "contoso_category", "contoso_price"] }],
+  "appShell": { "areas": [{ "label": "Catalog", "groups": [{ "label": "Items", "subAreas": [{ "entity": "contoso_item", "title": "Items" }] }] }] }
+}

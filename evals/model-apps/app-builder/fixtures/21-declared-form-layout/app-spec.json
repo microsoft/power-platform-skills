@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoSiteInspections", "displayName": "Contoso Site Inspections", "publisherPrefix": "cnt" },
+  "app": { "name": "Site Inspections", "description": "Sites with their inspections and open issues on one hand-laid-out form" },
+  "entities": [
+    { "schemaName": "cnt_site", "displayName": "Site", "pluralName": "Sites",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Site Name" },
+      "columns": [
+        { "schemaName": "cnt_address", "displayName": "Address", "type": "Memo" },
+        { "schemaName": "cnt_region", "displayName": "Region", "type": "Choice", "options": ["North", "South", "East", "West"] },
+        { "schemaName": "cnt_sitecode", "displayName": "Site Code", "type": "Text" },
+        { "schemaName": "cnt_riskscore", "displayName": "Risk Score", "type": "Integer" }
+      ] },
+    { "schemaName": "cnt_inspection", "displayName": "Inspection", "pluralName": "Inspections",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Inspection" },
+      "columns": [ { "schemaName": "cnt_inspectedon", "displayName": "Inspected On", "type": "DateTime", "dateTimeBehavior": "DateOnly" } ] },
+    { "schemaName": "cnt_issue", "displayName": "Issue", "pluralName": "Issues",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Issue" },
+      "columns": [ { "schemaName": "cnt_severity", "displayName": "Severity", "type": "Choice", "options": ["Low", "Medium", "High"] } ] }
+  ],
+  "relationships": [
+    { "type": "OneToMany", "referenced": "cnt_site", "referencing": "cnt_inspection",
+      "lookup": { "schemaName": "cnt_SiteId", "displayName": "Site" } },
+    { "type": "OneToMany", "referenced": "cnt_site", "referencing": "cnt_issue",
+      "lookup": { "schemaName": "cnt_IssueSiteId", "displayName": "Site" } }
+  ],
+  "webResources": [
+    { "name": "cnt_site.js", "type": "js", "content": "var Site = Site || {}; Site.onLoad = function (context) { };" }
+  ],
+  "forms": [
+    { "entity": "cnt_site", "formType": "Main", "name": "Site Layout", "reconcile": "declared",
+      "tabs": [
+        { "name": "tab_site", "label": "Site", "expanded": true,
+          "sections": [
+            { "name": "section_identity", "label": "Identity", "columns": 2, "showLabel": true,
+              "fields": [
+                { "name": "cnt_name", "colspan": 2 },
+                { "name": "cnt_sitecode", "readOnly": true },
+                { "name": "cnt_region", "hidden": false },
+                "cnt_riskscore",
+                { "name": "cnt_address", "rowspan": 2 }
+              ] }
+          ] }
+      ],
+      "subgrids": [
+        { "childEntity": "cnt_inspection", "label": "Inspections" },
+        { "childEntity": "cnt_issue", "label": "Issues" }
+      ],
+      "events": [
+        { "event": "onload", "library": "cnt_site.js", "function": "Site.onLoad" }
+      ] },
+    { "entity": "cnt_inspection", "name": "Information", "layout": "auto" },
+    { "entity": "cnt_issue", "name": "Information", "layout": "auto" }
+  ],
+  "views": [
+    { "entity": "cnt_site", "name": "Sites by Region", "columns": ["cnt_name", "cnt_region", "cnt_riskscore"], "activeOnly": true }
+  ],
+  "appShell": { "areas": [{ "label": "Inspections", "groups": [{ "label": "Field", "subAreas": [
+    { "entity": "cnt_site", "title": "Sites" },
+    { "entity": "cnt_inspection", "title": "Inspections" },
+    { "entity": "cnt_issue", "title": "Issues" }
+  ] }] }] }
+}

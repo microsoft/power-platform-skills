@@ -46,7 +46,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
 - **HARD RULE — Route Intent Matrix + tap idempotency.** Navigation APIs are NOT interchangeable. Apply this matrix exactly: (1) **singleton destinations** (`/(app)/workout/form`, `/(app)/recovery/form`, `/login`, and any route the plan marks singleton) use `router.navigate(...)`, never `router.push(...)`; (2) **entity detail drill-down** routes use `router.push(...)`; (3) **auth/guard redirects** use `router.replace(...)`. Any primary navigation CTA (`Start`, `Continue`, `Open`, `Next`) must be double-tap safe: lock with `isNavigating`, early-return when true, set lock before calling router, and unlock in `finally` (or after transition callback). On iOS this prevents duplicate transitions and accidental double stack entries.
 
-- **HARD RULE — Profile owns sign-out, but is not sign-out-only.** Every generated app has a Profile screen at `/(app)/profile`. If your assigned screen is Profile, render the planned app-specific profile sections first, then a visible text button labeled `Sign out` exactly where the spec places it. Use `signOut` from `useAuth()`; do not call `npx power-apps logout`, clear storage manually, or invent a custom auth service. Confirm before signing out, then call `signOut()` and `router.replace('/login')`. Non-Profile screens must not add sign-out actions.
+- **HARD RULE — Profile owns sign-out, but is not sign-out-only.** Every generated app has a Profile screen at `/(app)/profile`. If your assigned screen is Profile, render the planned app-specific profile sections first, then a visible text button labeled `Sign out` exactly where the spec places it. Use `signOut` from `useAuth()`; do not call `pa auth logout`, clear storage manually, or invent a custom auth service. Confirm before signing out, then call `signOut()` and `router.replace('/login')`. Non-Profile screens must not add sign-out actions.
 
 - **HARD RULE — `useLocalSearchParams<{}>` type for THIS screen MUST be the EXACT union from the Navigation Contracts row, not a synthesized "what this screen needs" type.** The planner enforces param-union: every param ANY sender pushes to your route is listed in the contracts table for your route. Your `useLocalSearchParams<{}>` declaration MUST include every one of those params (path params required, query params optional with `?`). Even if your screen's content only uses some of them, the OTHERS are still received from senders and must be declared so they're typed correctly — undeclared params are silently dropped at runtime, breaking the senders.
 
@@ -915,14 +915,15 @@ export default function <ScreenName>Screen() {
 
 - **Detail routes** like `/(app)/inspections/[id]` use `useLocalSearchParams<{ id: string }>()` from `expo-router`
 - **Form screens** use `react-hook-form` if installed; otherwise inline `useState` per field for v0
+- **Tamagui text controls** — use `onChangeText={(text) => ...}` for `<Input>` and `<TextArea>`. Do not read `target.value` or `nativeEvent.text` from their `onChange` event: Tamagui types that callback as a web `Event`, while `onChangeText` is consistently string-valued on web and native.
 - **Choice / picklist fields in forms** — use Tamagui `<Select>` with the generated const. The const lives in `src/generated/models/<Entity>Model.ts` and maps int values (as string keys) to label strings (e.g. `Cr123_Projectstatus = { '100000000': 'Active', ... }`). Use `Object.entries(Const)` to build `<Select.Item>` elements. Convert to/from string at the `Select` boundary (`String(field.value)` in, `Number(v)` out). Never hardcode option values. For read-only display (list rows, detail fields), use the `formattedValue(record, '<columnLogicalName>')` helper from `@/utils`, or fall back to the generated const lookup (`Cr123_Projectstatus[String(record.cr123_status)]`). NEVER invent/read a separate `*name` shadow property and NEVER inline the raw annotation key. See the "Choice / picklist select" recipe in `shared/references/tamagui-component-recipes.md`.
   - **Fallback — const missing or model file absent:** emit a plain `<Input>` storing the raw int as a string, with a TODO comment:
     ```tsx
     {/* TODO(choice-missing): No option const found for cr123_status in Cr123_ProjectModel.ts.
-      Re-run `npx power-apps add-data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
+      Re-run `$PA app add data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
     <Input
       value={String(field.value ?? '')}
-      onChange={event => field.onChange(Number(event.target?.value ?? event.nativeEvent?.text ?? ''))}
+      onChangeText={value => field.onChange(Number(value) || 0)}
       inputMode="numeric"
     />
     ```
@@ -1153,7 +1154,7 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 Before returning a status, run the mobile changed-file dispatcher against exactly `target_file`:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<target_file>"
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root '<working_dir>' --file '<target_file>'
 ```
 
 If it exits `2`, repair every reported violation and rerun it. Do not return `DONE` until it exits `0`. This explicit mobile-owned gate replaces the former plugin-wide write hooks, which also ran during unrelated Canvas Apps workflows.

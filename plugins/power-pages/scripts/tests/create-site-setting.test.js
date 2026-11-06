@@ -4,7 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const { createTempProject } = require('./test-utils');
+const {
+  createTempProject,
+  createTempNonSpaSite,
+  writeProjectFile,
+} = require('./test-utils');
 
 function runCreateSiteSetting(args) {
   const cliPath = path.join(__dirname, '..', 'create-site-setting.js');
@@ -52,6 +56,92 @@ test('create-site-setting creates an environment-variable-backed site setting', 
   assert.match(yaml, /^source: 1$/m);
   assert.doesNotMatch(yaml, /^value:/m);
   assert.doesNotMatch(yaml, /^description:/m);
+});
+
+test('create-site-setting appends aggregate PAC settings and retains source convention', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  const aggregatePath = writeProjectFile(
+    siteRoot,
+    'sitesetting.yml',
+    [
+      '- adx_name: Existing/Setting',
+      '  adx_sitesettingid: 11111111-1111-4111-8111-111111111111',
+      '  adx_source: 0',
+      '  adx_value: existing',
+      '',
+    ].join('\n')
+  );
+  const before = fs.readFileSync(aggregatePath, 'utf8');
+
+  const result = runCreateSiteSetting([
+    '--projectRoot', siteRoot,
+    '--name', 'Webapi/contact/enabled',
+    '--value', 'true',
+    '--description', 'Enable contact Web API',
+    '--type', 'boolean',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.filePath, aggregatePath);
+  assert.equal(output.storage, 'aggregate');
+  const after = fs.readFileSync(aggregatePath, 'utf8');
+  assert.ok(after.startsWith(before));
+  assert.match(after, /- adx_description: Enable contact Web API/);
+  assert.match(after, /  adx_name: Webapi\/contact\/enabled/);
+  assert.match(after, /  adx_source: 0/);
+  assert.match(after, /  adx_value: true/);
+});
+
+test('create-site-setting does not invent adx_source when aggregate metadata omits it', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  const aggregatePath = writeProjectFile(
+    siteRoot,
+    'sitesetting.yml',
+    [
+      '- adx_name: Existing/Setting',
+      '  adx_sitesettingid: 11111111-1111-4111-8111-111111111111',
+      '  adx_value: existing',
+      '',
+    ].join('\n')
+  );
+
+  const result = runCreateSiteSetting([
+    '--projectRoot', siteRoot,
+    '--name', 'Webapi/contact/fields',
+    '--value', 'fullname',
+    '--description', 'Contact fields',
+  ]);
+
+  assert.equal(result.status, 0, result.stderr);
+  const after = fs.readFileSync(aggregatePath, 'utf8');
+  const createdRecord = after.slice(after.indexOf('- adx_description: Contact fields'));
+  assert.doesNotMatch(createdRecord, /adx_source:/);
+});
+
+test('create-site-setting rejects mixed aggregate and per-record storage', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  writeProjectFile(
+    siteRoot,
+    'sitesetting.yml',
+    '- adx_name: Existing\n  adx_sitesettingid: 11111111-1111-4111-8111-111111111111\n'
+  );
+  writeProjectFile(
+    siteRoot,
+    'site-settings/existing.sitesetting.yml',
+    'id: 22222222-2222-4222-8222-222222222222\nname: Existing Per Record\nvalue: true\n'
+  );
+
+  const result = runCreateSiteSetting([
+    '--projectRoot', siteRoot,
+    '--name', 'Webapi/contact/enabled',
+    '--value', 'true',
+    '--description', 'Enable contact Web API',
+    '--type', 'boolean',
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Mixed site-setting serialization/);
 });
 
 test('create-site-setting rejects mixing environment-variable and value inputs', (t) => {

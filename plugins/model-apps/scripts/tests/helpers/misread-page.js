@@ -55,15 +55,16 @@ const MISREAD_PAGES = {
       '}',
     ),
   },
-  // `of` is a name here and the table takes it for the keyword before a regex. The false regex ends at the real one's `/`, the `/*` inside
-  // it opens a comment that ends at the `*/` INSIDE a string, and the rest of that string is read as code.
+  // `of` is a name here — in the value a `for … of` head iterates — and the table takes it for the keyword before a regex: after what a head binds
+  // an `of` is the keyword, and a second one may be either (`for (let of of …)` binds a name `of`). The false regex ends at the real one's `/`,
+  // the `/*` inside it opens a comment that ends at the `*/` INSIDE a string, and the rest of that string is read as code.
   keyword: {
     kind: 'keyword',
     frontier: (code) => code.indexOf('of/2') + 2,
     code: page(
       'export default function Page() {',
       '  const of = 12;',
-      '  const count = of/2; const re = /\\/*$/;',
+      '  for (const x of of/2 + "") {} const re = /\\/*$/;',
       `  ${IN_A_STRING}`,
       `  ${CALL}`,
       '  return null;',
@@ -187,6 +188,37 @@ const MISREAD_PAGES = {
       'export default function Page() {',
       `  ${CALL}`,
       '  function* probe() { const element = <yield extends SomeType>text</yield>; const re = /navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/; return element; }',
+      `  ${CALL}`,
+      '  return null;',
+      '}',
+    ),
+  },
+  // A line comment ends in the last word of its text, which is trivia: after `1 + // fallback` the last token is the `+`, so the `/` on the next line begins a regex, whose `)` is not the one that
+  // ends the parameter list. A lexer that took that `/` for a division — the last word is a name — ended the list at the `)`, read the string after it, which holds a closing tag and the text of a
+  // call, as code, and rewrote the token in it. The guess is reported at the `<` (`generic`), so the text in the string, and the call after it, are refused.
+  'generic, a regex after a line comment': {
+    kind: 'generic',
+    frontier: (code) => code.indexOf('<T>'),
+    code: page(
+      'export default function Page() {',
+      `  ${CALL}`,
+      '  interface Callable { <T>(a = 1 + // fallback',
+      `  /[)]/); m: '</T>;${CALL}//' }`,
+      `  ${CALL}`,
+      '  return null;',
+      '}',
+    ),
+  },
+  // The same after a call signature with no return type, whose text is read up to a closing tag: a later member's default holds, after a line comment, a regex that holds the closing tag and the
+  // text of a call. Read as a division, the `/` hid the closing tag no more, and the text after it was read as code.
+  'generic, a regex that holds a closing tag after a line comment': {
+    kind: 'generic',
+    frontier: (code) => code.indexOf('<T>'),
+    code: page(
+      'export default function Page() {',
+      `  ${CALL}`,
+      '  interface Callable { <T>(x); m(a = 1 + // fallback',
+      `  /[</T>;${CALL}//]/): void }`,
       `  ${CALL}`,
       '  return null;',
       '}',
@@ -394,7 +426,7 @@ const HIDDEN_CALL_PAGE = {
   code: page(
     'export default function Page() {',
     '  const of = 12;',
-    '  const count = of/2; const re = /\\/*$/;',
+    '  for (const x of of/2 + "") {} const re = /\\/*$/;',
     `  ${CALL}`,
     '  /* regular comment */',
     '  return null;',

@@ -1,0 +1,9 @@
+export function openRecord(
+    dataSet: ComponentFramework.PropertyTypes.DataSet | null,
+    record: ComponentFramework.PropertyHelper.DataSetApi.EntityRecord,
+): void {
+    // Use the documented dataset navigation hook so model-driven apps can execute the same command
+    // pipeline as a native grid row instead of this control manufacturing an app URL.
+    // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/dataset/opendatasetitem
+    dataSet?.openDatasetItem(record.getNamedReference());
+}

@@ -74,7 +74,7 @@ test('missing orgId/envUrl/appUniqueName on EITHER side is a mismatch (never a v
   assert.strictEqual(S.identityMatches(bare, LIVE).ok, false, 'a snapshot with no orgId cannot match a live org');
 });
 
-test('a snapshot that recorded an appId requires a NON-NULL matching live appId (deleted-app hole, C1)', () => {
+test('a snapshot that recorded an appId requires a NON-NULL matching live appId (deleted-app hole)', () => {
   const env = eligibleEnvelope(); // records appId app-1...
   // App deleted (or discovery failed) -> live.appId is null. A snapshot that recorded an appId must NOT
   // vacuously match — else an eligible snapshot survives its app being deleted into a false noop.

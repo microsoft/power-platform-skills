@@ -24,9 +24,10 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 - **Five functions only**: A server logic file can only export these top-level functions: `get`, `post`, `put`, `patch`, `del`. The name `delete` is a reserved word in JavaScript and cannot be used.
 - **Always return a string**: Every function must return a string. Use `JSON.stringify()` when returning objects or arrays.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Preserve frontend integrity**: If Phase 9 adds or changes SPA UI, first read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; synchronize visible states across configured locale resources and keep the UI bidirectional and expansion-safe. Backend-only runs do not need localization changes.
 
 > **Prerequisites:**
-> - An existing Power Pages code site created
+> - An existing Power Pages SPA site created
 > - The site **must** be deployed at least once (`.powerpages-site` folder must exist) — server logic files live inside `.powerpages-site/server-logic/`, so deployment is required before any server logic can be created
 
 **Initial request:** $ARGUMENTS
@@ -77,7 +78,7 @@ Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to anal
 
 **Prompt for the Explore agent:**
 
-> "Analyze this Power Pages code site for server logic context. Check:
+> "Analyze this Power Pages SPA site for server logic context. Check:
 > 1. Does `.powerpages-site/server-logic/` exist? If yes, list all subdirectories and their .js files. Summarize what each server logic does (which functions it implements, what SDK features it uses). Also read the corresponding .serverlogic.yml files to check web role assignments.
 > 2. Search the frontend source code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for any existing calls to `/_api/serverlogics/` — these indicate server logic endpoints already being consumed.
 > 3. Look for CSRF token handling patterns (`__RequestVerificationToken`, `_layout/tokenhtml`) — these show how the site currently makes authenticated API calls.
@@ -827,7 +828,7 @@ When any approved server logic item uses `Server.Connector.Dataverse`, invoke th
 
 **Prompt:**
 
-> "Analyze this Power Pages code site and propose table permissions for Dataverse tables accessed by the approved server logic plan. The following tables need permissions:
+> "Analyze this Power Pages SPA site and propose table permissions for Dataverse tables accessed by the approved server logic plan. The following tables need permissions:
 >
 > [list each table with required CRUD privileges from step 6.1, grouped by server logic item]
 >
@@ -1167,6 +1168,19 @@ Re-read each `.serverlogic.yml` file and verify:
 - [ ] `display_name` and `description` are populated
 - [ ] Fields are alphabetically sorted
 - [ ] File names match: folder name, `.js` name, `.serverlogic.yml` name, and `name` field all use the same value
+
+### 10.1b Final site-integrity gate
+
+After server logic and any optional client-side integration are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Backend-only runs still execute this
+gate; it is a no-op for visible-source integrity when no SPA source changed. Rerun it after any
+later source change.
 
 ### 10.2 Provide API URL
 

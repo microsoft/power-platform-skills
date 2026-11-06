@@ -18,10 +18,19 @@
 //       ...
 //   1..N
 //
+// A skip grades nothing, so a fixture passes only when at least one assertion was graded and none failed. A fixture with no graded
+// assertion — every one skipped, or none at all — is UNSCORED: its line takes TAP's skip directive,
+//   ok 3 - fixture-3-kept-page # SKIP no expectation graded
+// and it is counted apart from the passed fixtures, so the summary never credits ungraded work as a pass. An unscored fixture does not fail
+// the run (the exit code is non-zero only for a failed fixture).
+//
 // Failure diagnostics currently include only `reason:`. Additional fields
 // (e.g., `file:`) can be added by extending `assertion()` if needed.
 //
-// Aggregate result emitted at the end as `# tests N`, `# pass X`, etc.
+// Aggregate result emitted at the end as `# tests N`, `# pass X`, etc. Release and test tooling parse the
+// `# fixtures N (pass P, fail F)` line, so it keeps that exact form and stays the only line that starts with
+// `# fixtures`; unscored fixtures get one line of their own, `# unscored fixtures U`, written only when U > 0 — a
+// run without one prints exactly what it always printed.
 
 class TapReporter {
   constructor(stream = process.stdout) {
@@ -32,6 +41,7 @@ class TapReporter {
     this.totalSkip = 0;
     this.fixturePass = 0;
     this.fixtureFail = 0;
+    this.fixtureUnscored = 0;
     this.fixtureIndex = 0;
     this.totalFixtures = 0;
   }
@@ -77,9 +87,12 @@ class TapReporter {
     if (this._currentFail) {
       this.fixtureFail += 1;
       this.write(`not ok ${this.fixtureIndex} - ${this._currentName}`);
-    } else {
+    } else if (this._currentAssertions.some(({ result }) => result.status === 'pass')) {
       this.fixturePass += 1;
       this.write(`ok ${this.fixtureIndex} - ${this._currentName}`);
+    } else {
+      this.fixtureUnscored += 1;
+      this.write(`ok ${this.fixtureIndex} - ${this._currentName} # SKIP no expectation graded`);
     }
     this._currentName = null;
     this._currentAssertions = [];
@@ -92,6 +105,7 @@ class TapReporter {
     this.write(`# fail  ${this.totalFail}`);
     this.write(`# skip  ${this.totalSkip}`);
     this.write(`# fixtures ${this.totalFixtures} (pass ${this.fixturePass}, fail ${this.fixtureFail})`);
+    if (this.fixtureUnscored > 0) this.write(`# unscored fixtures ${this.fixtureUnscored}`);
   }
 
   get exitCode() {

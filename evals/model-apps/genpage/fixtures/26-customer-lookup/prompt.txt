@@ -1,0 +1,4 @@
+Build a Customer Opportunities page for our existing opportunities. Show every opportunity that has a customer, whether an account or a contact, and let me search customer names by substring. From each opportunity I want to open the customer's record, change the opportunity's customer, and see the opportunities for this account.
+
+- Data source: Dataverse entity opportunity (already exists)
+- Specific requirements: open the customer's record, change the customer, and show the opportunities for this account

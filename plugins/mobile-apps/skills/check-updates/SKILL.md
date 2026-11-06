@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, AskUserQuestion
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
+**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - read first, then skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
 
 # Check Updates (`/check-updates`)
 
@@ -26,11 +26,15 @@ https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/m
 
 Compare semantic versions. If the public version is newer, make no project changes, return `BLOCKED: mobile-app plugin update requires restart`, and show the matching update path:
 
+- First determine whether `${PLUGIN_ROOT}` is under a local source checkout by walking its ancestors for a `.git` directory or gitfile. This includes plugins loaded from a **local marketplace directory** as well as `--plugin-dir`. For this live-source mode, do not recommend marketplace/plugin update commands, a VS Code Update button, or Git commands. Explain that Copilot cannot update a plugin loaded live from a local source; ask the person who configured the local marketplace or plugin directory to update its mobile-app files, then restart/reload the host and rerun this skill. Do not modify that source automatically.
 - GitHub Copilot CLI: `copilot plugin marketplace update power-platform-skills`, then `copilot plugin update mobile-app@power-platform-skills`, `/restart`, and rerun this skill.
 - Claude Code: `claude plugin marketplace update power-platform-skills`, then `claude plugin update mobile-app@power-platform-skills`, restart, and rerun this skill.
-- VS Code Copilot Chat: update **mobile-app** in the Agent Plugins/Extensions view, reload VS Code, and rerun this skill.
-
-For a checkout loaded with `--plugin-dir`, tell the user to update that checkout and restart the host instead.
+- VS Code Copilot Chat, when the plugin is a copied marketplace install rather than a live local source:
+  1. Open the integrated terminal.
+  2. Run `copilot plugin marketplace update power-platform-skills`.
+  3. Run `copilot plugin update mobile-app@power-platform-skills`.
+  4. Run **Developer: Reload Window** from the Command Palette.
+  5. Rerun this skill.
 
 After the plugin is current, run this once from `<working_dir>`:
 
@@ -65,7 +69,7 @@ For each approved package update:
 
 1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
 2. Install with `--ignore-scripts`; use `--package-lock=false` when the project had no npm lockfile.
-3. Run `npm install --ignore-scripts`, `npx expo install --check`, the project's `type-check` script (or `npx tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file. Never run `npx expo install --fix`.
+3. Run `npm install --ignore-scripts`, `npx --no-install expo install --check`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file. Never run `npx expo install --fix`.
 4. If any command fails, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Otherwise delete the snapshot and continue.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.

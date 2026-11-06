@@ -6,13 +6,18 @@ const path = require('path');
 const {
   TRACKED_SKILLS,
   ALM_PLAN_SKILLS,
+  VISIBLE_SOURCE_SKILLS,
   detectTrackedSkill,
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  getBlockingSpawnStatus,
   isAlmPlanSkill,
+  modifiesVisibleSource,
 } = require('../lib/powerpages-hook-utils');
 
 const SKILLS_DIR = path.join(__dirname, '..', '..', 'skills');
+const FINAL_INTEGRITY_COMMAND =
+  'node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"';
 
 test('detectTrackedSkill recognizes tracked skill references', () => {
   assert.equal(detectTrackedSkill('create-site'), 'create-site');
@@ -60,6 +65,32 @@ test('getValidatorScript returns null for tracked skills without validators', ()
   assert.equal(getValidatorScript('deploy-site'), null);
   assert.equal(getValidatorScript('diagnose-deployment'), null);
   assert.equal(getValidatorScript('missing-skill'), null);
+});
+
+test('styling references are not tracked skills but all local scripts remain installed', () => {
+  assert.equal(TRACKED_SKILLS['style-site'], undefined);
+  for (const alias of ['style-site', '/style-site', 'power-pages:style-site', '/power-pages:style-site']) {
+    assert.equal(detectTrackedSkill(alias), null, alias);
+    assert.equal(getTrackedSkillFromToolInput({ skill: alias }), null, alias);
+    assert.equal(getValidatorScript(alias), null, alias);
+  }
+  for (const alias of ['edit-site', '/edit-site', 'power-pages:edit-site', '/power-pages:edit-site']) {
+    assert.equal(detectTrackedSkill(alias), 'edit-site', alias);
+    assert.equal(getTrackedSkillFromToolInput({ skill: alias }), 'edit-site', alias);
+  }
+  assert.equal(getValidatorScript('edit-site'), null);
+  for (const script of [
+    'inspect-style-context.js',
+    'inspect-runtime-dom.js',
+    'inspect-studio-capabilities.js',
+    'check-style-contrast.js',
+    'prepare-style-plan.js',
+    'style-site-workflow.js',
+    'apply-style-plan.js',
+    'validate-style-site.js',
+  ]) {
+    assert.ok(fs.statSync(path.join(__dirname, '..', 'style-site', script)).isFile(), script);
+  }
 });
 
 test('getValidatorScript covers every ALM skill that previously declared a Stop hook', () => {
@@ -173,4 +204,54 @@ test('ALM_PLAN_SKILLS members are all real tracked skills', () => {
   for (const name of ALM_PLAN_SKILLS) {
     assert.ok(TRACKED_SKILLS[name], `ALM_PLAN_SKILLS member "${name}" must be a tracked skill (have a SKILL.md)`);
   }
+});
+
+test('modifiesVisibleSource identifies workflows that can change SPA UI', () => {
+  for (const skillName of [
+    'create-site',
+    'add-localization',
+    'setup-auth',
+    'integrate-webapi',
+    'add-ai-webapi',
+    'add-cloud-flow',
+    'add-server-logic',
+    'add-seo',
+    'migrate-webapi-selectall',
+  ]) {
+    assert.equal(modifiesVisibleSource(`/power-pages:${skillName}`), true);
+  }
+  assert.equal(modifiesVisibleSource('setup-datamodel'), false);
+  assert.equal(modifiesVisibleSource('deploy-site'), false);
+  assert.equal(modifiesVisibleSource('missing-skill'), false);
+});
+
+test('VISIBLE_SOURCE_SKILLS members are all real tracked skills', () => {
+  for (const name of VISIBLE_SOURCE_SKILLS) {
+    assert.ok(TRACKED_SKILLS[name], `VISIBLE_SOURCE_SKILLS member "${name}" must be tracked`);
+  }
+});
+
+test('every visible-source skill has an explicit final site-integrity gate', () => {
+  for (const name of VISIBLE_SOURCE_SKILLS) {
+    const skillPath = path.join(SKILLS_DIR, name, 'SKILL.md');
+    const source = fs.readFileSync(skillPath, 'utf8');
+    assert.match(
+      source,
+      /Final site-integrity gate/i,
+      `${name} must identify the post-implementation integrity phase`
+    );
+    assert.ok(
+      source.includes(FINAL_INTEGRITY_COMMAND),
+      `${name} must run the shared integrity validator after implementation`
+    );
+  }
+});
+
+test('getBlockingSpawnStatus fails closed for incomplete child processes', () => {
+  assert.equal(getBlockingSpawnStatus({ status: 0, error: undefined, signal: null }), 0);
+  assert.equal(getBlockingSpawnStatus({ status: 2, error: undefined, signal: null }), 2);
+  assert.equal(getBlockingSpawnStatus({ status: 1, error: undefined, signal: null }), 2);
+  assert.equal(getBlockingSpawnStatus({ status: null, error: new Error('ENOBUFS'), signal: 'SIGTERM' }), 2);
+  assert.equal(getBlockingSpawnStatus({ status: null, error: undefined, signal: 'SIGTERM' }), 2);
+  assert.equal(getBlockingSpawnStatus(null), 2);
 });

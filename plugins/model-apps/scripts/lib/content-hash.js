@@ -71,6 +71,16 @@ function annotateContentHashes(spec, readFile) {
   return clone;
 }
 
+// The hash annotateContentHashes recorded for the page `key` in `spec` — the annotated spec an earlier apply (or a download) wrote to last-applied.json, read back by
+// deployed-baseline.js readBaseline, which returns it only for the app and environment being built — or null when there is none to compare with: no baseline, no page of that key,
+// an intent page (nothing on disk to hash), or a source that could not be read then (recorded as null, which no hash equals). A page is "the one that was last sent" when its
+// bytes hash to this (sha256 of the raw file, as annotateContentHashes hashes them), and nothing else about the page decides it.
+function recordedContentSha(spec, key) {
+  const pages = spec && Array.isArray(spec.pages) ? spec.pages : [];
+  const page = pages.find((p) => p && typeof p === 'object' && (p.key || p.name) === key);
+  return page && typeof page.__contentSha === 'string' && page.__contentSha ? page.__contentSha : null;
+}
+
 // Validate the on-disk half of every implemented page declaration. Schema validation proves a
 // `source.kind: "tsx"` page NAMES a confined codeFile; this proves the named file exists and is a
 // regular file before lint/preview/dry-run can call the page "implemented". `isFile` is injectable
@@ -122,4 +132,4 @@ function appSourceFileErrors(spec, appDir, deps = {}) {
   return [...pageSourceFileErrors(spec, appDir, deps), ...webResourceSourceFileErrors(spec, appDir, deps)];
 }
 
-module.exports = { annotateContentHashes, pageContentPath, pageSourceFileErrors, webResourceSourceFileErrors, appSourceFileErrors };
+module.exports = { annotateContentHashes, recordedContentSha, pageContentPath, pageSourceFileErrors, webResourceSourceFileErrors, appSourceFileErrors };

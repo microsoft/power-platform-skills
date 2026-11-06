@@ -3,12 +3,12 @@
 
 // Writes two files into a working dir to make it editor-friendly:
 //   package.json   — installable manifest with the deps from
-//                    scripts/lib/supported-dependencies.js (Ask 2)
+//                    scripts/lib/supported-dependencies.js
 //   genpage.d.ts   — ambient global declarations only: `window.Xrm` and
 //                    the bare `Xrm` identifier with the navigation/utility
 //                    surface used by generative pages, plus the
 //                    `__genpage_*` window cache-key index signature
-//                    (Ask 3). `GeneratedComponentProps` is exported by
+//                    `GeneratedComponentProps` is exported by
 //                    RuntimeTypes.ts and is intentionally not re-declared
 //                    here.
 //
@@ -46,6 +46,7 @@ const {
   buildDevDependencyMap,
   FEATURE_RUNTIME_KEYS,
 } = require('./lib/supported-dependencies.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const VALID_FEATURES = new Set(Object.keys(FEATURE_RUNTIME_KEYS));
 
@@ -99,7 +100,7 @@ function buildPackageJson(slug, features) {
     dependencies: buildDependencyMap(features),
     devDependencies: buildDevDependencyMap(features),
     // No scripts — the runtime owns build and deploy.
-    // `pac model genpage upload` reads <page>.tsx directly.
+    // The page is deployed from <page>.tsx itself: genpage-upload.js sends its text.
   };
 }
 
@@ -440,6 +441,7 @@ function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(`error: ${err.message}`);
     process.exit(1);
   }
@@ -457,24 +459,29 @@ function main() {
   let approvedRoot;
   try {
     if (!fs.existsSync(workingDir)) {
+      makeWritesBlocking(process.stdout, process.stderr);
       console.error(`error: working directory does not exist: ${workingDir}`);
       process.exit(2);
     }
     if (fs.lstatSync(workingDir).isSymbolicLink()) {
+      makeWritesBlocking(process.stdout, process.stderr);
       console.error(`error: refusing to use ${workingDir} as the working directory: it is a symbolic link or junction. Pass the directory it points to if that is intended.`);
       process.exit(2);
     }
     if (!fs.statSync(workingDir).isDirectory()) {
+      makeWritesBlocking(process.stdout, process.stderr);
       console.error(`error: not a directory: ${workingDir}`);
       process.exit(2);
     }
     approvedRoot = fs.realpathSync(workingDir);
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(`error: failed to stat working directory: ${err.message}`);
     process.exit(2);
   }
 
   if (!/^[a-z][a-z0-9-]*$/.test(slug)) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(`error: page-slug must be kebab-case (got: ${slug})`);
     process.exit(1);
   }
@@ -491,6 +498,7 @@ function main() {
     const dtsPath = path.join(workingDir, 'genpage.d.ts');
     dtsResult = writeIfAllowed(dtsPath, buildAmbientDeclarations(), args.force, approvedRoot);
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(`error: ${err.message}`);
     process.exit(2);
   }

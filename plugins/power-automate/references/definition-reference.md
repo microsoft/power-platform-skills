@@ -49,6 +49,12 @@
 }
 ```
 
+**Nested parameters use slash-path keys.** Fields inside an operation's body (or
+other object parameters) are written as flat keys joined with `/`, e.g.
+`"parameters": { "body/recipient": "user@contoso.com", "body/messageBody": "Hi" }`.
+Do not nest them as `"body": { "recipient": ... }`; `validate_flow` warns
+(`nested-body-parameter`). `get_operation_details` returns the exact key names.
+
 ## Other Action Types
 
 - `Compose`: `{ "type": "Compose", "inputs": "<expression>" }`

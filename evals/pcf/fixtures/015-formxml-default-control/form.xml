@@ -1,0 +1,5 @@
+<form>
+  <tabs><tab><columns><column><sections><section><rows><row>
+    <cell><control id="new_rating" classid="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" datafieldname="new_rating" /></cell>
+  </row></rows></section></sections></column></columns></tab></tabs>
+</form>

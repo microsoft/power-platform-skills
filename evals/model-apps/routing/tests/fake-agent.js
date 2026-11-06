@@ -12,6 +12,11 @@
 //   copilot-answer   Copilot-format successful text answer (exitCode 0), no skill call
 // FAKE_AGENT_EXIT sets the process exit code for the *-failed modes (default 1), so a test can
 // prove the failed RESULT alone is caught even when the process exits 0.
+// FAKE_AGENT_READY_FILE names a file `hang` writes once it has read the prompt and gone silent, so a
+// test can wait until the agent is really running before it ends the run, instead of guessing how
+// long a loaded machine takes to start Node.
+// FAKE_AGENT_START_DELAY_MS makes the agent sit idle that long before it reads the prompt — a machine
+// so loaded that Node needs seconds to get going, which a fixed test timeout must not be raced against.
 const mode = process.env.FAKE_AGENT_MODE;
 const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
 const skills = ['model-apps:app-builder', 'model-apps:genpage', 'model-apps:report-issue', 'model-apps:telemetry'];
@@ -36,13 +41,19 @@ if (argv.includes('skill') && argv.includes('list')) {
 }
 
 let prompt = '';
+const startDelay = Number(process.env.FAKE_AGENT_START_DELAY_MS || 0);
+if (startDelay > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, startDelay);
 process.stdin.on('data', (c) => { prompt += c; });
 process.stdin.on('end', () => {
   if (mode === 'crash') {
     process.stderr.write('Error: not signed in\n');
     process.exit(3);
   }
-  if (mode === 'hang') { setInterval(() => {}, 1000); return; }
+  if (mode === 'hang') {
+    if (process.env.FAKE_AGENT_READY_FILE) require('node:fs').writeFileSync(process.env.FAKE_AGENT_READY_FILE, String(process.pid));
+    setInterval(() => {}, 1000);
+    return;
+  }
   const failExit = Number(process.env.FAKE_AGENT_EXIT || 1);
   if (mode === 'copilot-failed') {
     out({ type: 'user.message', data: { content: prompt.trim() } });

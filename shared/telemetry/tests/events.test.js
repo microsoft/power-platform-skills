@@ -4,6 +4,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   buildSkillStarted,
+  buildSkillEvent,
+  buildSkillConfigured,
   buildSkillCompleted,
 } = require("../lib/events");
 
@@ -30,6 +32,37 @@ test("buildSkillStarted returns top-level fields with envelope name", () => {
   assert.equal(ev.data.osName, "Windows");
   assert.equal(ev.data.osVersion, "10.0.26200");
   assert.equal(ev.data.nodeVersion, "v22");
+});
+
+test("buildSkillConfigured carries approved configuration in eventInfo", () => {
+  const eventInfo = {
+    configurationType: "create-site",
+    framework: "react",
+    siteContentLocale: "fr-FR",
+  };
+  const ev = buildSkillConfigured(ENVELOPE, {
+    ...common,
+    skillName: "create-site",
+    eventInfo,
+  });
+  assert.equal(ev.data.eventName, "skill_configured");
+  assert.equal(ev.data.severity, "Info");
+  assert.deepEqual(ev.data.eventInfo, eventInfo);
+});
+
+test("buildSkillEvent applies a caller-owned event name and severity", () => {
+  const eventInfo = {
+    validationStatus: "unsupported",
+    failureCodes: ["mode-unsupported"],
+  };
+  const event = buildSkillEvent(ENVELOPE, "skill_validation", {
+    ...common,
+    skillName: "add-localization",
+    eventInfo,
+  }, "Error");
+  assert.equal(event.data.eventName, "skill_validation");
+  assert.equal(event.data.severity, "Error");
+  assert.deepEqual(event.data.eventInfo, eventInfo);
 });
 
 test("buildSkillCompleted with success outcome → severity Info", () => {

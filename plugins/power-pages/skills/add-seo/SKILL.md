@@ -1,7 +1,7 @@
 ---
 name: add-seo
 description: >-
-  Adds SEO essentials to a Power Pages code site, including robots.txt, sitemap.xml,
+  Adds SEO essentials to a Power Pages SPA site, including robots.txt, sitemap.xml,
   meta tags, Open Graph tags, and favicon configuration. Use when the user wants to
   improve search engine optimization or make their site more searchable.
 user-invocable: true
@@ -13,15 +13,16 @@ model: sonnet
 
 # Add SEO
 
-Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`, and meta tags.
+Add essential SEO assets to a Power Pages SPA site: `robots.txt`, `sitemap.xml`, and meta tags.
 
-> **Prerequisite:** This skill expects an existing Power Pages code site created via `/create-site`. Run that skill first if the site does not exist yet.
+> **Prerequisite:** This skill expects an existing Power Pages SPA site created via `/create-site`. Run that skill first if the site does not exist yet.
 
 ## Core Principles
 
 - **Crawlability first:** Every public page must be discoverable by search engines via a valid `robots.txt` and `sitemap.xml` before any other SEO work matters.
 - **Accurate metadata:** Meta tags (title, description, Open Graph) must truthfully represent page content — misleading metadata harms rankings.
 - **Framework-aware placement:** SEO assets must be placed in the correct location for the detected framework (public directory, layout component, etc.).
+- **Preserve localized metadata:** Read `${PLUGIN_ROOT}/references/site-modification-integrity.md`. When localization exists, keep language-specific titles, descriptions, social metadata, alternate links, and static locale routes synchronized without advertising unavailable locales.
 
 **Initial request:** $ARGUMENTS
 
@@ -39,7 +40,7 @@ Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`
 
 ## Phase 1: Verify Site Exists
 
-**Goal:** Confirm a Power Pages code site exists and understand its structure.
+**Goal:** Confirm a Power Pages SPA site exists and understand its structure.
 
 ### Actions
 
@@ -305,6 +306,18 @@ If a dev server is running (or start one):
 1. Navigate to the site root and use `browser_snapshot` to verify meta tags are present in the page source
 2. Navigate to `/robots.txt` and verify it loads
 3. Navigate to `/sitemap.xml` and verify it loads
+
+#### 7.2b Final site-integrity gate
+
+After all SEO source and metadata changes and browser verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before recording completion or creating the final commit. Inspect and
+report review findings in both directions and with expanded content. Rerun this gate after any
+later source change.
 
 #### 7.3 Record Skill Usage
 

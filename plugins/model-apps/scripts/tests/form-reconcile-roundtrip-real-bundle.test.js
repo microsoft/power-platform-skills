@@ -8,7 +8,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const ai = require('../lib/artifact-intent.js');
-const { runSdkBuild } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { verifySpec } = require('../lib/verify-spec.js');
 const { readerFor } = require('../verify-model-app.js');
 
@@ -74,7 +77,9 @@ function existingTabs(spec) {
       section.id = guid(next++);
       for (const row of section.rows) for (const c of row.cells) {
         c.id = guid(next++);
-        if (c.control) c.control.id = guid(next++);
+        // The timeline keeps the fixed id the platform renders it under: this form is one the engine already
+        // built correctly, which is what "untouched" below is a claim about. (A generated id would be repaired.)
+        if (c.control && c.control.id !== 'notescontrol') c.control.id = guid(next++);
       }
     }
   }

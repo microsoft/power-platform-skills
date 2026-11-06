@@ -20,7 +20,16 @@ test('getAuthToken calls az account get-access-token without --allow-no-subscrip
   assert.equal(captured.file, 'az');
   assert.deepEqual(
     captured.args,
-    ['account', 'get-access-token', '--resource', 'https://example.crm.dynamics.com', '--query', 'accessToken', '-o', 'tsv'],
+    [
+      'account',
+      'get-access-token',
+      '--resource',
+      'https://example.crm.dynamics.com',
+      '--query',
+      'accessToken',
+      '-o',
+      'tsv',
+    ],
   );
   assert.equal(captured.options.shell, false);
   assert.ok(
@@ -163,14 +172,14 @@ test('URL validation rejects malicious hosts, credentials, ports, fragments, and
   );
 });
 
-// --- findProjectRoot: EDM / data-model site awareness ------------------------
+// --- findProjectRoot: declarative data-model site awareness ------------------
 
-test('findProjectRoot: recognizes a .powerpages-site/ directory as a project root (data-model/EDM sites)', (t) => {
+test('findProjectRoot recognizes a declarative .powerpages-site directory as a project root', (t) => {
   const fs = require('fs');
   const os = require('os');
   const { findProjectRoot } = require(helpersPath);
 
-  // EDM/data-model site: .powerpages-site/ present, NO powerpages.config.json.
+  // Declarative data-model site: .powerpages-site/ present, NO powerpages.config.json.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-edm-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.powerpages-site'), { recursive: true });
@@ -179,7 +188,56 @@ test('findProjectRoot: recognizes a .powerpages-site/ directory as a project roo
   assert.equal(findProjectRoot(root), path.resolve(root));
 });
 
-test('findProjectRoot: still recognizes powerpages.config.json (code sites)', (t) => {
+test('findProjectRoot walks past a managed .powerpages-site directory to the enclosing project', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot } = require(helpersPath);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-wrapped-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const siteRoot = path.join(root, '.powerpages-site');
+  const nestedStart = path.join(siteRoot, 'web-pages', 'home');
+  fs.mkdirSync(path.join(siteRoot, '.portalconfig'), { recursive: true });
+  fs.mkdirSync(nestedStart, { recursive: true });
+  fs.writeFileSync(path.join(siteRoot, 'website.yml'), 'id: x\nname: Wrapped Site\n');
+  fs.writeFileSync(path.join(root, '.solution-manifest.json'), '{}');
+
+  assert.equal(findProjectRoot(nestedStart), path.resolve(root));
+});
+
+test('findProjectRoot does not misclassify nested SPA metadata as a direct non-SPA project', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot } = require(helpersPath);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-spa-nested-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const siteRoot = path.join(root, '.powerpages-site');
+  const nestedStart = path.join(siteRoot, 'site-settings');
+  fs.mkdirSync(path.join(siteRoot, '.portalconfig'), { recursive: true });
+  fs.mkdirSync(nestedStart, { recursive: true });
+  fs.writeFileSync(path.join(siteRoot, 'website.yml'), 'id: x\nname: SPA Metadata\n');
+  fs.writeFileSync(path.join(root, 'powerpages.config.json'), '{}');
+
+  assert.equal(findProjectRoot(nestedStart), path.resolve(root));
+});
+
+test('findProjectRoot recognizes a direct PAC declarative-site root', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot, resolvePowerPagesSiteRoot } = require(helpersPath);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-direct-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.portalconfig'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'web-pages'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'website.yml'), 'id: x\nname: Direct Site\n');
+
+  assert.equal(findProjectRoot(path.join(root, 'web-pages')), path.resolve(root));
+  assert.equal(resolvePowerPagesSiteRoot(root), path.resolve(root));
+});
+
+test('findProjectRoot: still recognizes powerpages.config.json (SPA sites)', (t) => {
   const fs = require('fs');
   const os = require('os');
   const { findProjectRoot } = require(helpersPath);

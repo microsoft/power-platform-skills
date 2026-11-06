@@ -1,7 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { runSdkBuild } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { fitsGrid } = require('../lib/form-occupancy.js');
 

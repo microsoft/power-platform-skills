@@ -13,8 +13,8 @@ a folder name, a previous session, or the active default.
 |---|---|---|
 | Environment | `pac auth who`, `pac env who` | download, upload |
 | Website name and `WebSiteId` | `pac pages list`, `website.yml` | download, upload |
-| Site type: traditional or SPA | `powerpages.config.json` presence | download, upload |
-| Data model: Standard or Enhanced | user | traditional only |
+| Site type: non-SPA or SPA | `powerpages.config.json` presence | download, upload |
+| Data model: Standard or Enhanced | user | non-SPA only |
 | Deployment profile | user, and profile files in the project | upload |
 | Target path | user | download |
 
@@ -25,7 +25,7 @@ changes. One approval covers one target.
 
 | Site type | Download | Upload |
 |---|---|---|
-| Traditional | `pac pages download` | `pac pages upload` |
+| Non-SPA | `pac pages download` | `pac pages upload` |
 | SPA | `pac pages download-code-site` | `pac pages upload-code-site` |
 
 ```bash
@@ -40,7 +40,7 @@ pac pages download-code-site --path "<PATH>" --webSiteId "<WEBSITE_ID>" --enviro
 pac pages upload-code-site --rootPath "<PROJECT_ROOT>" --siteName "<SITE_NAME>"
 ```
 
-Pass `--modelVersion` explicitly on every traditional download and upload;
+Pass `--modelVersion` explicitly on every non-SPA download and upload;
 `Standard` and `Enhanced` may also be written as `1` and `2`.
 
 ## Failure modes
@@ -48,7 +48,7 @@ Pass `--modelVersion` explicitly on every traditional download and upload;
 Each of these corrupts configuration and cannot be reverted.
 
 - **Wrong upload command.** `pac pages upload` corrupts an SPA site's
-  metadata, and `pac pages upload-code-site` corrupts a traditional site. A
+  metadata, and `pac pages upload-code-site` corrupts a non-SPA site. A
   project holding `powerpages.config.json` is an SPA site even when it also
   contains `.powerpages-site/` artifacts.
 - **Wrong data model.** `pac pages download` uses `Standard` when

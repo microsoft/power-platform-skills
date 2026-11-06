@@ -155,6 +155,104 @@ test('an unavailable optional served-form reader is a named skip, never a verifi
   assert.strictEqual(check({ facts: broken }).status, 'fail');
 });
 
+test('the all-present reader renders the Notes timeline and placed sub-grids, so verify proves them offline', async () => {
+  // Verify checks the timeline and a placed grid on any layout, and the reader has to answer with the form a matching
+  // environment holds — the timeline as the compiler writes it, each grid where the spec places it — or a spec that
+  // uses either fails offline on a gap in this fixture rather than on a finding about the spec.
+  const named = (schemaName, displayName, columns = []) => ({ schemaName, displayName, pluralName: `${displayName}s`, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns });
+  const placedSpec = () => ({
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'T', description: '' },
+    entities: [
+      named('new_order', 'Order', [{ schemaName: 'new_status', displayName: 'Status', type: 'Text' }, { schemaName: 'new_remark', displayName: 'Remark', type: 'Memo' }]),
+      named('new_line', 'Line'),
+      named('new_part', 'Part'),
+      named('new_bin', 'Bin'),
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'new_order', referencing: 'new_line', lookup: { schemaName: 'new_orderid', displayName: 'Order' } },
+      { type: 'OneToMany', referenced: 'new_part', referencing: 'new_bin', lookup: { schemaName: 'new_partid', displayName: 'Part' } },
+    ],
+    forms: [
+      { entity: 'new_order', name: 'Order', notes: true, subgrids: [{ childEntity: 'new_line', after: 'sec_head' }],
+        tabs: [{ name: 'tab_main', label: 'Main', sections: [
+          { name: 'sec_head', label: 'Head', columns: 1, fields: ['new_name', 'new_status'] },
+          { name: 'sec_tail', label: 'Tail', columns: 1, fields: ['new_remark'] },
+        ] }] },
+      { entity: 'new_part', name: 'Part', notes: true, subgrids: [{ childEntity: 'new_bin', before: 'section_general' }] },
+    ],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ entity: 'new_order', title: 'Orders' }, { entity: 'new_part', title: 'Parts' }] }] }] },
+  });
+  const kindsOf = (facts, kind) => facts.verify.checks.filter((c) => c.kind === kind);
+
+  const placed = placedSpec();
+  const facts = await stageFacts(placed);
+  assert.strictEqual(facts.author.validate.ok, true, JSON.stringify(facts.author.validate.errors));
+  assert.strictEqual(facts.verify.ok, true, JSON.stringify(facts.verify.missing));
+  // An explicit layout and an auto layout both: the timeline and the grid are proven on each.
+  assert.strictEqual(kindsOf(facts, 'form-timeline').length, 2);
+  assert.strictEqual(kindsOf(facts, 'form-subgrid').length, 2);
+  assert.strictEqual(facts.verify.requiredChecks['form-timeline'], 2, 'the timeline check cannot silently stop running');
+  assert.strictEqual(facts.verify.requiredChecks['form-subgrid'], 2, 'the placement check cannot silently stop running');
+  const required = ASSERTIONS.get('verify: every required check kind actually ran');
+  assert.strictEqual(required({ facts }).status, 'pass');
+  const dropped = structuredClone(facts);
+  dropped.verify.checks = dropped.verify.checks.filter((c) => c.kind !== 'form-subgrid');
+  assert.strictEqual(required({ facts: dropped }).status, 'fail');
+
+  // The reader renders what the compiler writes, not a form that passes by construction: a form still carrying the
+  // timeline an older build wrote, or a grid left where it was appended, fails the same verify.
+  const stale = makeAllPresentReader(placed);
+  const render = stale.formTopology;
+  stale.formTopology = async (entity, id) => String(await render(entity, id))
+    .replace(/id="notescontrol"/g, 'id="0f0f0f0f-0000-4000-8000-000000000001"').replace(/rowspan="23"/g, 'rowspan="1"');
+  const oldTimeline = await stageFacts(placed, { verifyReader: stale });
+  assert.strictEqual(oldTimeline.verify.ok, false);
+  assert.strictEqual(kindsOf(oldTimeline, 'form-timeline').filter((c) => !c.present).length, 2);
+
+  const elsewhere = placedSpec();
+  elsewhere.forms[0].subgrids = [{ childEntity: 'new_line', after: 'sec_tail' }];
+  elsewhere.forms[1].subgrids = [{ childEntity: 'new_bin', after: 'section_general' }];
+  const moved = await stageFacts(placed, { verifyReader: makeAllPresentReader(elsewhere) });
+  assert.strictEqual(moved.verify.ok, false);
+  assert.strictEqual(kindsOf(moved, 'form-subgrid').filter((c) => !c.present).length, 2, JSON.stringify(kindsOf(moved, 'form-subgrid')));
+});
+
+test('the all-present reader keeps the Notes section the form asks for beside a layout section of the same name', async () => {
+  // A layout may declare a section named `section_notes` (a natural name for note fields) and the compiler's own Notes
+  // section carries that name too. The two are told apart by place in the column — a lookup by name would find the
+  // layout's for both and drop the compiler's whenever a grid is placed in that column, so verify would fail
+  // form-timeline offline on a gap in this fixture rather than on a finding about the spec.
+  const named = (schemaName, displayName, columns = []) => ({ schemaName, displayName, pluralName: `${displayName}s`, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns });
+  const orderSpec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'T', description: '' },
+    entities: [named('new_order', 'Order', [{ schemaName: 'new_remark', displayName: 'Remark', type: 'Memo' }]), named('new_line', 'Line')],
+    relationships: [{ type: 'OneToMany', referenced: 'new_order', referencing: 'new_line', lookup: { schemaName: 'new_orderid', displayName: 'Order' } }],
+    forms: [{ entity: 'new_order', name: 'Order', notes: true, subgrids: [{ childEntity: 'new_line', after: 'sec_head' }],
+      tabs: [{ name: 'tab_main', label: 'Main', sections: [
+        { name: 'sec_head', label: 'Head', columns: 1, fields: ['new_name'] },
+        { name: 'section_notes', label: 'Remarks', columns: 1, fields: ['new_remark'] },
+      ] }] }],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ entity: 'new_order', title: 'Orders' }] }] }] },
+  };
+  const facts = await stageFacts(orderSpec);
+  assert.strictEqual(facts.author.validate.ok, true, JSON.stringify(facts.author.validate.errors));
+  const timeline = facts.verify.checks.filter((c) => c.kind === 'form-timeline');
+  assert.deepStrictEqual(timeline.map((c) => c.present), [true], JSON.stringify(timeline));
+  assert.deepStrictEqual(facts.verify.checks.filter((c) => c.kind === 'form-subgrid').map((c) => c.present), [true]);
+  assert.strictEqual(facts.verify.ok, true, JSON.stringify(facts.verify.missing));
+
+  // The reader's form holds BOTH sections: the layout's, with its field, and the compiler's, with the timeline.
+  const xml = String(await makeAllPresentReader(orderSpec).formTopology('new_order', 'Order'));
+  const sections = xml.match(/<section\b[\s\S]*?<\/section>/g).filter((s) => /name="section_notes"/.test(s));
+  assert.strictEqual(sections.length, 2);
+  assert.ok(sections[0].includes('datafieldname="new_remark"') && !sections[0].includes('notescontrol'), 'the layout\u2019s section first');
+  assert.ok(sections[1].includes('id="notescontrol"') && !sections[1].includes('datafieldname'), 'then the Notes section the compiler adds');
+});
+
 test('stageFacts.teardown plans a reverse-of-build delete ending at the solution, web resources after tables', async () => {
   const f = await stageFacts(spec);
   const kinds = f.teardown.kinds;
@@ -201,8 +299,8 @@ test('stageFacts round-trips a classic DashBoard subarea and plans its teardown'
 });
 
 // A lookup-heavy child (8 scalars + a 1:N parent lookup) with a no-label sub-grid — exercises the
-// 2026-07-15 fixes at the fact level: #2 (default view keeps the lookup), #7 (no createdon), #5
-// (sub-grid own 1-column section titled by the child pluralName).
+// hardening fixes at the fact level: the default view keeps the lookup, there is no createdon, and
+// the sub-grid gets its own 1-column section titled by the child pluralName.
 const hardeningSpec = {
   schemaVersion: 2,
   solution: { uniqueName: 'H', publisherPrefix: 'new' },
@@ -728,4 +826,462 @@ test('the app-builder fixture roster and required assertion texts match the regi
   const typo = structuredClone(evalsManifest);
   typo.evals.find((e) => e.id === 7).expectations.push('verify: an unregistered required assertion');
   assert.throws(() => check(fixtures, typo), /unregistered assertion/);
+});
+
+test('2.21.0 authoring expectations pass on their fixtures and fail when the spec drifts from the prompt', () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const grade = (id, mutate) => {
+    const ev = evalsManifest.evals.find((e) => e.id === id);
+    const spec = structuredClone(fixtures.find((f) => f.id === id).spec);
+    if (mutate) mutate(spec);
+    return ASSERTIONS.get(ev.expectations[0])({ spec, eval: ev, facts: {} }).status;
+  };
+  for (const id of [11, 12, 13]) assert.strictEqual(grade(id), 'pass', `eval ${id}`);
+  const col = (spec, name) => spec.entities[0].columns.find((c) => c.schemaName === name);
+  assert.strictEqual(grade(11, (s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+  assert.strictEqual(grade(11, (s) => { s.globalChoices[0].options[2] = 'Export'; }), 'fail');
+  assert.strictEqual(grade(11, (s) => { col(s, 'cnt_stage').options[1] = 'Held'; }), 'fail');
+  assert.strictEqual(grade(12, (s) => { col(s, 'cnt_renewaldate').dateTimeBehavior = 'UserLocal'; }), 'fail');
+  assert.strictEqual(grade(12, (s) => { col(s, 'cnt_kickoff').dateTimeBehavior = 'DateOnly'; }), 'fail');
+  assert.strictEqual(grade(12, (s) => { delete col(s, 'cnt_lastcontact').dateTimeBehavior; }), 'pass');
+  assert.strictEqual(grade(13, (s) => { delete col(s, 'cnt_medicalnotes').isSecured; }), 'fail');
+  assert.strictEqual(grade(13, (s) => { s.fieldSecurityProfiles[1].assignTo = { teams: ['22222222-2222-4222-8222-222222222222'] }; }), 'fail');
+  assert.strictEqual(grade(13, (s) => { s.fieldSecurityProfiles[0].permissions.pop(); }), 'fail');
+});
+
+// Fixture 11's prompt asks for a High Priority view filtered on Priority 5. The view builder reads `filters[]` entries of
+// `{ attr, op, value }` (plugins/model-apps/scripts/lib/sdk-build.js, the saved-query builder) and ignores any other spelling:
+// the fixture once wrote `filter[].column/operator`, and its view then showed every active shipment. So the fixture must carry
+// exactly the read shape, and the check must tell it from the old spelling, a wrong value and a missing filter.
+test('fixture 11 filters its High Priority view on Priority 5 in the shape the view builder reads', () => {
+  const spec = loadFixtures(path.join(__dirname, '..', 'fixtures')).find((f) => f.id === 11).spec;
+  const filtersPriorityFive = (s) => {
+    const view = (s.views || []).find((v) => v.name === 'High Priority');
+    return !!view && Array.isArray(view.filters)
+      && view.filters.some((f) => f && f.attr === 'cnt_priority' && f.op === 'eq' && f.value === 5);
+  };
+  const mutated = (mutate) => {
+    const s = structuredClone(spec);
+    mutate(s.views.find((v) => v.name === 'High Priority'));
+    return filtersPriorityFive(s);
+  };
+  assert.strictEqual(filtersPriorityFive(spec), true, 'the fixture filters Priority to 5');
+  assert.strictEqual(mutated((v) => { v.filter = [{ column: 'cnt_priority', operator: 'eq', value: 5 }]; delete v.filters; }), false, 'the old filter[].column/operator spelling');
+  assert.strictEqual(mutated((v) => { v.filters[0].value = 1; }), false, 'a wrong value');
+  assert.strictEqual(mutated((v) => { delete v.filters; }), false, 'no filter');
+});
+
+// The runner grades the same thing on a generated spec: fixture 11's expectation names the filter the prompt asks for, and the check reads
+// the conditions the view builder compiled, so a spelling it ignores grades as a missing filter.
+const FILTER_ASSERTION = 'ui: a view filter the prompt names is built from filters[] attr/op/value';
+async function gradeViewFilter(mutate, mutateEval) {
+  const fixture = fixtureFor(11);
+  const spec = structuredClone(fixture.spec);
+  if (mutate) mutate(spec.views.find((v) => v.name === 'High Priority'), spec);
+  const ev = structuredClone(evalsManifest.evals.find((e) => e.id === 11));
+  if (mutateEval) mutateEval(ev);
+  const facts = await stageFacts(spec, { fixture });
+  return ASSERTIONS.get(FILTER_ASSERTION)({ facts, spec, eval: ev });
+}
+
+test('the view-filter expectation of fixture 11 is written from the prompt and graded in its own assertion', () => {
+  const ev = evalsManifest.evals.find((e) => e.id === 11);
+  assert.deepStrictEqual(ev.expect.viewFilters, [{ entity: 'cnt_shipment', view: 'High Priority', attr: 'cnt_priority', op: 'eq', value: 5 }]);
+  assert.ok(ev.expectations.includes(FILTER_ASSERTION), 'the assertion is listed in the eval expectations');
+  assert.ok(/Priority 5/.test(ev.prompt), 'the prompt names the filter the expectation checks');
+});
+
+test('view-filter grading: the right filter passes; a missing filter, the old spelling, a wrong value, op or column fail', async () => {
+  assert.strictEqual((await gradeViewFilter()).status, 'pass');
+  const missing = await gradeViewFilter((v) => { delete v.filters; });
+  assert.strictEqual(missing.status, 'fail', 'no filter');
+  assert.match(missing.reason, /no condition cnt_priority eq 5/);
+  assert.strictEqual((await gradeViewFilter((v) => { v.filter = [{ column: 'cnt_priority', operator: 'eq', value: 5 }]; delete v.filters; })).status, 'fail', 'old filter[].column/operator spelling');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters = [{ column: 'cnt_priority', operator: 'eq', value: 5 }]; })).status, 'fail', 'old column/operator inside filters[]');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters[0].value = 1; })).status, 'fail', 'wrong value');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters[0].op = 'ne'; })).status, 'fail', 'wrong operator');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters[0].attr = 'cnt_stage'; })).status, 'fail', 'wrong column');
+  assert.strictEqual((await gradeViewFilter((v) => { v.name = 'Urgent'; })).status, 'fail', 'the filter on a view with another name');
+});
+
+test('view-filter grading: the active-records condition is neither the filter nor in the way of it', async () => {
+  assert.strictEqual((await gradeViewFilter((v) => { v.activeOnly = false; })).status, 'pass', 'activeOnly false leaves the filter');
+  assert.strictEqual((await gradeViewFilter((v) => { v.filters = []; v.activeOnly = true; })).status, 'fail', 'statecode alone is not a Priority filter');
+  assert.strictEqual((await gradeViewFilter(null, (ev) => { ev.expect.viewFilters = [{ entity: 'cnt_shipment', view: 'High Priority', attr: 'statecode', op: 'eq', value: 0 }]; })).status, 'fail', 'the auto condition is not matchable as a filter');
+  assert.strictEqual((await gradeViewFilter(null, (ev) => { delete ev.expect.viewFilters; })).status, 'fail', 'no independent expectation grades nothing');
+});
+
+test('view-filter grading: a declared view is graded as the declared compiler builds it, so a filter on a joined table is not one on the view\'s own table', async () => {
+  const join = (v) => { v.reconcile = 'declared'; v.linkEntities = [{ name: 'contact', from: 'contactid', to: 'ownerid', alias: 'c' }]; };
+  assert.strictEqual((await gradeViewFilter((v) => { v.reconcile = 'declared'; })).status, 'pass', 'declared, no join');
+  assert.strictEqual((await gradeViewFilter((v) => { v.reconcile = 'declared'; v.filters[0].value = 'High'; })).status, 'pass', 'a choice label resolves to its value as the build resolves it');
+  assert.strictEqual((await gradeViewFilter(join)).status, 'pass', 'a join the filter does not use leaves the filter on the view\'s own table');
+  const scoped = await gradeViewFilter((v) => { join(v); v.filters[0].relatedEntity = 'c'; });
+  assert.strictEqual(scoped.status, 'fail', 'the same condition scoped to the joined table constrains another table');
+  assert.match(scoped.reason, /no condition cnt_priority eq 5/);
+  assert.strictEqual((await gradeViewFilter((v) => { join(v); v.filters.push({ ...v.filters[0] }); v.filters[0].relatedEntity = 'c'; })).status, 'pass', 'an unscoped condition beside a scoped one still counts');
+  assert.strictEqual((await gradeViewFilter((v) => { join(v); v.filters[0].relatedEntity = 'nope'; })).status, 'fail', 'a declared view that does not compile builds no filter');
+});
+
+test('a declared view with a malformed join collection is graded invalid by the validator, with every other grade kept, and never throws in the facts', async () => {
+  const { gradeFixture } = require('../run-app-builder.js');
+  const base = fixtureFor(11);
+  const cases = [
+    ['linkEntities is an object', (v) => { v.reconcile = 'declared'; v.linkEntities = {}; }, /views\[0\]\.linkEntities must be an array/],
+    ['a join\'s filters is an object', (v) => { v.reconcile = 'declared'; v.linkEntities = [{ name: 'contact', from: 'contactid', to: 'ownerid', alias: 'c', filters: {} }]; }, /views\[0\]\.linkEntities\[0\]\.filters must be an array/],
+  ];
+  for (const [name, mutate, diagnostic] of cases) {
+    const spec = structuredClone(base.spec);
+    mutate(spec.views.find((v) => v.name === 'High Priority'));
+    const { results } = await gradeFixture({ ...base, spec }, evalsManifest.evals.find((e) => e.id === 11), evalsManifest);
+    assert.ok(!results.some((r) => r.text === 'stage facts computed without error'), `${name}: the facts are computed`);
+    assert.ok(results.length > 20, `${name}: the other assertions still run (${results.length})`);
+    const gate = results.find((r) => r.text === 'author: validateAppSpec(plan profile) passes with no errors');
+    assert.strictEqual(gate.result.status, 'fail', name);
+    assert.match(gate.result.reason, diagnostic, `${name}: the validator's own diagnostic is the reason`);
+    assert.strictEqual(results.find((r) => r.text === 'data: schema-facts provision exactly the expected tables').result.status, 'pass', `${name}: an unrelated grade is unchanged`);
+  }
+});
+
+test('view grading by name and the other stage assertions are unchanged by the view-filter facts', async () => {
+  const fixture = fixtureFor(11);
+  const facts = await stageFacts(fixture.spec, { fixture });
+  const ev = evalsManifest.evals.find((e) => e.id === 11);
+  const named = 'ui: wire-facts build exactly the expected views and charts';
+  assert.strictEqual(score(named, facts, fixture).status, 'pass');
+  const other = structuredClone(fixture.spec);
+  other.views[0].name = 'Urgent';
+  assert.strictEqual(ASSERTIONS.get(named)({ facts: await stageFacts(other, { fixture }), spec: other, eval: ev }).status, 'fail', 'a renamed view still fails the name check');
+  assert.deepStrictEqual(Object.keys(facts.ui.views[0]).sort(), ['columns', 'conditions', 'entity', 'name']);
+});
+
+const grade2210 = (id, mutate) => {
+  const ev = evalsManifest.evals.find((e) => e.id === id);
+  const spec = structuredClone(loadFixtures(path.join(__dirname, '..', 'fixtures')).find((f) => f.id === id).spec);
+  if (mutate) mutate(spec);
+  return ASSERTIONS.get(ev.expectations[0])({ spec, eval: ev, facts: {} }).status;
+};
+
+test('option-value grading ties each number to its label, not only to its presence', () => {
+  const priority = (s) => s.entities[0].columns.find((c) => c.schemaName === 'cnt_priority');
+  assert.strictEqual(grade2210(11), 'pass');
+  assert.strictEqual(grade2210(11, (s) => { const o = s.globalChoices[0].options; [o[0].label, o[1].label] = [o[1].label, o[0].label]; }), 'fail', 'North and South swapped keep 1 and 2');
+  assert.strictEqual(grade2210(11, (s) => { const o = priority(s).options; [o[0].label, o[1].label] = [o[1].label, o[0].label]; }), 'fail', 'Low and High swapped keep 1 and 5');
+  assert.strictEqual(grade2210(11, (s) => { priority(s).options[0].label['1036'] = 'Faible'; }), 'pass', 'a translation the prompt does not state is not graded');
+});
+
+test('field-security grading checks each profile\'s grants and named principals', () => {
+  const hr = (s) => s.fieldSecurityProfiles.find((p) => p.key === 'hr');
+  const payroll = (s) => s.fieldSecurityProfiles.find((p) => p.key === 'payroll');
+  assert.strictEqual(grade2210(13), 'pass');
+  assert.strictEqual(grade2210(13, (s) => { for (const x of hr(s).permissions) { x.read = false; x.create = false; x.update = false; } }), 'fail', 'HR granted nothing');
+  assert.strictEqual(grade2210(13, (s) => { hr(s).assignTo = { users: ['22222222-2222-4222-8222-222222222222'] }; }), 'fail', 'HR team replaced by an unrelated user');
+  assert.strictEqual(grade2210(13, (s) => { hr(s).assignTo = { teams: ['22222222-2222-4222-8222-222222222222'] }; }), 'fail', 'HR assigned to a different team');
+  assert.strictEqual(grade2210(13, (s) => { payroll(s).permissions[0].update = true; }), 'fail', 'Payroll given update');
+  assert.strictEqual(grade2210(13, (s) => { hr(s).assignTo.teams = hr(s).assignTo.teams.map((t) => t.toUpperCase()); }), 'pass', 'a GUID compares case-insensitively');
+  assert.strictEqual(grade2210(13, (s) => { payroll(s).permissions[0].update = false; }), 'pass', 'an explicit false is no grant');
+});
+
+test('app membership expectations pass on their fixtures and fail when the spec drifts from the prompt', async () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const grade = (id, mutate, evMutate) => {
+    const ev = structuredClone(evalsManifest.evals.find((e) => e.id === id));
+    const spec = structuredClone(fixtures.find((f) => f.id === id).spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(ev.expectations[0])({ spec, eval: ev, facts: {} }).status;
+  };
+  for (const id of [14, 15]) assert.strictEqual(grade(id), 'pass', `eval ${id}`);
+  assert.strictEqual(grade(14, (s) => { delete s.app.mainFormsOnUpdate; }), 'fail');
+  assert.strictEqual(grade(14, (s) => { s.app.mainForms.contoso_item.push('Details'); }), 'fail');
+  assert.strictEqual(grade(14, (s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+  // The negative: "add the Summary form" expects no "exact", so the exact fixture fails it and the plain list passes.
+  const addOnly = (ev) => { ev.prompt = 'Add the Summary form to Items.'; delete ev.expect.appMembership.mainFormsOnUpdate; };
+  assert.strictEqual(grade(14, null, addOnly), 'fail');
+  assert.strictEqual(grade(14, (s) => { delete s.app.mainFormsOnUpdate; }, addOnly), 'pass');
+  assert.strictEqual(grade(15, (s) => { delete s.app.pinDeclaredArtifacts; }), 'fail');
+  assert.strictEqual(grade(15, (s) => { s.appShell.areas[0].groups[0].subAreas.push({ entity: 'cnt_expense', title: 'Expenses' }); }), 'fail');
+  assert.strictEqual(grade(15, (s) => { s.charts = []; }), 'fail');
+
+  // The all-present reader answers an exact Main-form list only when it is read strictly.
+  const spec = fixtures.find((f) => f.id === 14).spec;
+  const reader = makeAllPresentReader(spec);
+  assert.strictEqual((await reader.appMainForms('x', spec.app.mainForms)).kind, 'inconclusive');
+  assert.deepStrictEqual((await reader.appMainForms('x', spec.app.mainForms, { strict: true })).tables, [{ table: 'contoso_item', extras: [], missing: [] }]);
+});
+
+test('the branding expectations pass on their fixture, and an ordinary app ask must not get a theme', async () => {
+  const fixture = fixtureFor(19);
+  const ev19 = evalsManifest.evals.find((e) => e.id === 19);
+  const [authorText, verifyText] = ev19.expectations;
+  const grade = (mutate, evMutate) => {
+    const ev = structuredClone(ev19);
+    const spec = structuredClone(fixture.spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(authorText)({ spec, eval: ev, facts: {} }).status;
+  };
+  assert.strictEqual(grade(), 'pass');
+  assert.strictEqual(grade((s) => { delete s.app.theme; }), 'fail', 'a branding ask with no theme');
+  assert.strictEqual(grade((s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+  assert.strictEqual(grade((s) => { s.app.theme.basePaletteColor = '#C50F1F'; }), 'fail', 'a colour the prompt did not ask for');
+  assert.strictEqual(grade((s) => { s.app.theme.basePaletteColor = '#0f6cbd'; }), 'pass', 'a colour compares case-insensitively');
+  assert.strictEqual(grade((s) => { delete s.app.theme.appHeader.foreground; }), 'fail');
+  assert.strictEqual(grade((s) => { s.app.theme.font = 'Segoe UI'; }), 'fail', 'a font the prompt does not name');
+  assert.strictEqual(grade((s) => { s.app.theme.logo.webResourceName = 'https://contoso.example/logo.svg'; }), 'fail', 'a URL logo');
+  assert.strictEqual(grade((s) => { s.webResources = []; }), 'fail', 'a logo that is not declared');
+  assert.strictEqual(grade((s) => { s.webResources[0].type = 'js'; }), 'fail', 'a logo that is not an image');
+  // The negative: an ordinary app prompt states no branding, so any theme on it is invented.
+  const ordinary = (ev) => { ev.prompt = 'A new Field Visits app for site visits.'; delete ev.expect.appTheme; };
+  assert.strictEqual(grade(null, ordinary), 'fail');
+  assert.strictEqual(grade((s) => { delete s.app.theme; }, ordinary), 'pass');
+
+  // verify reads the theme as API state and passes only a live one; any other state, or no reader, fails.
+  const verifyWith = async (states) => {
+    const reader = makeAllPresentReader(fixture.spec);
+    if (states === null) delete reader.appTheme;
+    else if (states) reader.appTheme = async () => states;
+    const facts = await stageFacts(fixture.spec, { fixture, verifyReader: reader });
+    return ASSERTIONS.get(verifyText)({ facts, spec: fixture.spec, eval: ev19 }).status;
+  };
+  assert.strictEqual(await verifyWith(), 'pass');
+  assert.strictEqual(await verifyWith([{ key: 'app.theme', ok: false, state: 'pendingPublish', reasons: [] }]), 'fail');
+  assert.strictEqual(await verifyWith([{ key: 'app.theme', ok: false, state: 'mismatch' }]), 'fail');
+  assert.strictEqual(await verifyWith(null), 'fail', 'no theme reader is unverified, not proven');
+});
+
+test('declared reconciliation expectations pass on their fixture and fail when the spec drifts from the prompt', () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const ev16 = evalsManifest.evals.find((e) => e.id === 16);
+  const grade = (text, mutate, evMutate) => {
+    const ev = structuredClone(ev16);
+    const spec = structuredClone(fixtures.find((f) => f.id === 16).spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(text)({ spec, eval: ev, facts: {} }).status;
+  };
+  const [declared, search, joins] = ev16.expectations;
+  for (const text of ev16.expectations) assert.strictEqual(grade(text), 'pass', text);
+  const view = (s, name) => s.views.find((v) => v.name === name);
+  const ticket = (s) => s.entities.find((e) => e.schemaName === 'cnt_ticket');
+
+  assert.strictEqual(grade(declared, (s) => { delete view(s, 'Customer Directory').reconcile; }), 'fail', 'a view left undeclared');
+  assert.strictEqual(grade(declared, (s) => { delete s.charts[0].reconcile; }), 'fail', 'a chart left undeclared');
+  assert.strictEqual(grade(declared, (s) => { s.forms[0].reconcile = 'declared'; }), 'fail', 'reconcile on a form');
+  assert.strictEqual(grade(declared, (s) => { s.charts[0].title = 'Tickets'; }), 'fail', 'a title on a new chart');
+  assert.strictEqual(grade(declared, (s) => { view(s, 'Customer Directory').name = 'Active Customers'; }), 'fail', 'the stock default view name');
+  assert.strictEqual(grade(declared, (s) => { s.commandBars = [{ entity: 'cnt_ticket', commands: [{ key: 'close', label: 'Close' }] }]; }), 'fail', 'a command key');
+  assert.strictEqual(grade(declared, (s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+
+  assert.strictEqual(grade(search, (s) => { delete ticket(s).quickFind; }), 'fail', 'a new table without search columns');
+  assert.strictEqual(grade(search, (s) => { ticket(s).quickFind.findColumns = ['cnt_name']; }), 'fail', 'the ticket number the prompt names');
+  assert.strictEqual(grade(search, (s) => { ticket(s).quickFind.findColumns = ['cnt_ticketnumber']; }), 'fail', 'the primary name');
+  assert.strictEqual(grade(search, (s) => { ticket(s).changeTrackingEnabled = true; }), 'fail', 'change tracking unasked');
+  assert.strictEqual(grade(search, (s) => { ticket(s).changeTrackingEnabled = true; }, (ev) => { ev.expect.changeTracking = true; }), 'pass', 'change tracking asked for');
+  assert.strictEqual(grade(search, null, (ev) => { delete ev.expect.quickFind; }), 'fail', 'no independent expectation');
+
+  assert.strictEqual(grade(joins, (s) => { delete view(s, 'Open Tickets').linkEntities; }), 'fail', 'the join removed');
+  assert.strictEqual(grade(joins, (s) => { view(s, 'Open Tickets').columns = view(s, 'Open Tickets').columns.filter((c) => typeof c === 'string'); }), 'fail', 'no joined column shown');
+  assert.strictEqual(grade(joins, (s) => { view(s, 'Open Tickets').columns[2].relatedEntity = 'acct'; }), 'fail', 'a column naming no join');
+  assert.strictEqual(grade(joins, (s) => { delete view(s, 'Open Tickets').reconcile; }), 'fail', 'a join on an undeclared view');
+  assert.strictEqual(grade(joins, (s) => { view(s, 'Customer Directory').linkEntities = structuredClone(view(s, 'Open Tickets').linkEntities); }), 'fail', 'a join the prompt did not ask for');
+});
+
+test('configuration expectations pass on their fixture, fail when the spec drifts, and the fixture settings bind every declared item', () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const ev18 = evalsManifest.evals.find((e) => e.id === 18);
+  const fixtureSpec = fixtures.find((f) => f.id === 18).spec;
+  const grade = (mutate, evMutate) => {
+    const ev = structuredClone(ev18);
+    const spec = structuredClone(fixtureSpec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(ev18.expectations[0])({ spec, eval: ev, facts: {} }).status;
+  };
+  const secret = (s) => s.environmentVariables.find((v) => v.type === 'secret');
+  assert.strictEqual(grade(), 'pass');
+  assert.strictEqual(grade((s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail', 'below the release that reads configuration');
+  assert.strictEqual(grade((s) => { secret(s).defaultValue = 'k'; }), 'fail', 'a secret value in the spec');
+  assert.strictEqual(grade((s) => { secret(s).type = 'string'; }), 'fail', 'the API key not declared secret');
+  assert.strictEqual(grade((s) => { s.environmentVariables[0].currentValue = 'https://x'; }), 'fail', 'a current value in the spec');
+  assert.strictEqual(grade((s) => { s.connectionReferences[0].connectionId = '0'; }), 'fail', 'a connection id in the spec');
+  assert.strictEqual(grade((s) => { delete s.customApis; }), 'fail', 'the Escalate action missing');
+  assert.strictEqual(grade((s) => { s.duplicateDetectionRules = []; }), 'fail', 'the duplicate rule missing');
+  assert.strictEqual(grade((s) => { s.connectionReferences.push({ logicalName: 'contoso_extra', connectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' }); }), 'fail', 'a reference the prompt did not ask for');
+  assert.strictEqual(grade((s) => { delete s.solution.version; }), 'fail', 'the version the prompt names');
+  assert.strictEqual(grade((s) => { s.solution.version = '1.0.0.0'; }), 'fail', 'a different version');
+  assert.strictEqual(grade(null, (ev) => { delete ev.expect.configuration; }), 'fail', 'no independent expectation');
+
+  // The runner grades the spec alone, so the per-environment half of the fixture is checked here: its
+  // deployment-settings file binds every declared reference and gives every secret its value, with no error.
+  const { readDeploymentBindings } = require('../../../../plugins/model-apps/scripts/lib/configuration-artifacts.js');
+  const settings = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'fixtures', '18-configuration-items', 'deployment-settings.json'), 'utf8'));
+  const bindings = readDeploymentBindings(settings, fixtureSpec);
+  assert.deepStrictEqual(bindings.errors, []);
+  for (const r of fixtureSpec.connectionReferences) assert.ok(bindings.connectionReferences.has(r.logicalName.toLowerCase()), r.logicalName);
+  for (const v of fixtureSpec.environmentVariables.filter((e) => e.type === 'secret')) assert.ok(bindings.environmentVariables.has(v.schemaName.toLowerCase()), v.schemaName);
+});
+
+test('stable-identity expectations pass on their fixture, a download prompt must not gain the field, and the skill teaches the stop', () => {
+  const fixture = fixtureFor(20);
+  const ev20 = evalsManifest.evals.find((e) => e.id === 20);
+  const [optIn, explained] = ev20.expectations;
+  const grade = (mutate, evMutate) => {
+    const ev = structuredClone(ev20);
+    const spec = structuredClone(fixture.spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(optIn)({ spec, eval: ev, facts: {} }).status;
+  };
+  assert.strictEqual(grade(), 'pass');
+  assert.strictEqual(grade((s) => { delete s.createIdentity; }), 'fail', 'a new app without stable ids');
+  assert.strictEqual(grade((s) => { s.createIdentity = 'stable-v2'; }), 'fail', 'a value the plugin does not know');
+  assert.strictEqual(grade((s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail', 'below the release that reads the field');
+  assert.strictEqual(grade((s) => { for (const x of [...s.views, ...s.charts]) delete x.reconcile; }), 'fail', 'no declared view or chart to use it');
+  // The negative: a download prompt is not a new app, so the field on its spec is invented, and the plain spec passes.
+  const download = (ev) => { ev.prompt = 'Download the Equipment Loans app into a spec.'; delete ev.expect.createIdentity; };
+  assert.strictEqual(grade(null, download), 'fail');
+  assert.strictEqual(grade((s) => { delete s.createIdentity; }, download), 'pass');
+
+  // The fixture spec also passes the plugin's own validation and lint with no createIdentity finding.
+  const { validateAppSpec } = require('../../../../plugins/model-apps/scripts/lib/app-spec.js');
+  const { lintAppSpec } = require('../../../../plugins/model-apps/scripts/lib/spec-lint.js');
+  assert.deepStrictEqual(validateAppSpec(fixture.spec).errors || [], []);
+  const lint = lintAppSpec(fixture.spec);
+  const findings = [...(lint.errors || []), ...(lint.warnings || [])].map((w) => (typeof w === 'string' ? w : JSON.stringify(w)));
+  assert.deepStrictEqual(findings.filter((w) => /createIdentity|create-identity/.test(w)), []);
+
+  // The explanation is graded on the real skill, and fails when the bullet stops saying what the maker must hear.
+  const real = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'skills', 'app-builder', 'SKILL.md'), 'utf8');
+  const teach = (skill) => ASSERTIONS.get(explained)({ spec: fixture.spec, eval: ev20, facts: skill === undefined ? {} : { appBuilderSkill: skill } }).status;
+  assert.strictEqual(teach(), 'pass');
+  assert.strictEqual(teach(real.replace('does not merge', 'merges')), 'fail', 'the stop described as a merge');
+  assert.strictEqual(teach(real.replace(/create-completion-required/g, 'a refusal')), 'fail', 'the stop not named');
+  assert.strictEqual(teach(real.replace(/createIdentity/g, 'stableIds')), 'fail', 'no createIdentity guidance');
+});
+
+// Optional capabilities: the spec-level opt-in, in both directions, on every fixture. What the evals grade for the offer flow
+// (#804) is this: a capability is in the spec only when the prompt asks for it, and one it asks for is authored. Whether the
+// flow makes the offer needs a transcript of a conversation, which no offline fixture records (EVAL_GUIDE.md).
+const OPTIONAL = 'author: an optional capability is in the spec only when the prompt asks for it, and each one it asks for is authored as expected';
+const NO_LOGIC = 'author: a maker who declines business rules and process flows gets no rule and no flow of any kind';
+function gradeOptional(id, mutate, mutateEval, text = OPTIONAL) {
+  const fixture = fixtureFor(id);
+  const ev = structuredClone(evalsManifest.evals.find((e) => e.id === id));
+  const spec = structuredClone(fixture.spec);
+  if (mutate) mutate(spec);
+  if (mutateEval) mutateEval(ev);
+  return ASSERTIONS.get(text)({ spec, eval: ev, facts: {} });
+}
+const reasonOf = (result) => result.reason || '';
+
+test('the opt-in check is a common assertion, so every fixture is graded by it, and every shipped fixture passes', () => {
+  assert.ok(evalsManifest.common_stage_assertions.includes(OPTIONAL));
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  assert.ok(fixtures.length >= 25);
+  for (const f of fixtures) assert.deepStrictEqual(gradeOptional(f.id), { status: 'pass' }, `fixture ${f.id}`);
+});
+
+test('an optional capability nobody asked for fails on any fixture, an older one included', () => {
+  const unasked = {
+    'an app theme': (s) => { s.app = { ...s.app, theme: { basePaletteColor: '#123456' } }; s.minimumPluginVersion = '2.21.0'; },
+    'an environment variable': (s) => { s.environmentVariables = [{ schemaName: 'new_Base', displayName: 'Base', type: 'string' }]; },
+    'a connection reference': (s) => { s.connectionReferences = [{ logicalName: 'new_sp', connectorId: 'shared_sharepointonline' }]; },
+    'a Custom API': (s) => { s.customApis = [{ uniqueName: 'new_Api' }]; },
+    'a duplicate-detection rule': (s) => { s.duplicateDetectionRules = [{ entity: 'new_customer' }]; },
+    'a solution version': (s) => { s.solution = { ...s.solution, version: '1.0.0.0' }; },
+    'a declared form': (s) => { s.forms = [...(s.forms || []), { entity: 'new_customer', formType: 'Main', name: 'Layout', reconcile: 'declared' }]; },
+    'a declared dashboard': (s) => { s.dashboards = [...(s.dashboards || []), { name: 'Board', key: 'board', reconcile: 'declared', tiles: [] }]; },
+    'a declared business rule': (s) => { s.businessRules = [...(s.businessRules || []), { entity: 'new_customer', name: 'Rule', key: 'rule', reconcile: 'declared', scope: 'Entity' }]; },
+    'a declared process flow': (s) => { s.businessProcessFlows = [...(s.businessProcessFlows || []), { entity: 'new_customer', name: 'Flow', reconcile: 'declared', stages: [] }]; },
+  };
+  const ordinary = [1, 2, 3, 4, 5, 6, 10, 11, 20];
+  for (const id of ordinary) {
+    for (const [name, mutate] of Object.entries(unasked)) {
+      assert.strictEqual(gradeOptional(id, mutate).status, 'fail', `fixture ${id}: ${name}`);
+    }
+  }
+  assert.match(reasonOf(gradeOptional(1, unasked['an app theme'])), /app\.theme is declared, but the prompt asks for no branding/);
+  assert.match(reasonOf(gradeOptional(1, unasked['a declared business rule'])), /businessRules declared on \[new_customer\], but the prompt asks to keep no businessRules declared/);
+});
+
+test('a capability the prompt asks for must be authored: deleting it, or dropping its reconcile, fails on each positive fixture', () => {
+  // Theme (19) and configuration (18).
+  assert.strictEqual(gradeOptional(19, (s) => { delete s.app.theme; }).status, 'fail', 'a branding ask with no theme');
+  for (const field of ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules']) {
+    assert.strictEqual(gradeOptional(18, (s) => { delete s[field]; }).status, 'fail', `18: ${field} deleted`);
+  }
+  assert.strictEqual(gradeOptional(18, (s) => { delete s.solution.version; }).status, 'fail', '18: the solution version deleted');
+  // Declared forms (21), dashboards (22), rules (23), flows (24): graded by kind and table, nothing finer.
+  const positives = [
+    [21, 'forms', (x) => x.name === 'Site Layout'],
+    [22, 'dashboards', (x) => x.name === 'Field Operations'],
+    [23, 'businessRules', (x) => x.name === 'Close out a request'],
+    [24, 'businessProcessFlows', (x) => x.name === 'Claim handling'],
+  ];
+  for (const [id, kind, isIt] of positives) {
+    assert.strictEqual(gradeOptional(id, (s) => { s[kind] = s[kind].filter((x) => !isIt(x)); }).status, 'fail', `${id}: ${kind} entry deleted`);
+    assert.strictEqual(gradeOptional(id, (s) => { delete s[kind].find(isIt).reconcile; }).status, 'fail', `${id}: reconcile removed`);
+    assert.strictEqual(gradeOptional(id, (s) => { s[kind].find(isIt).reconcile = 'adopt'; }).status, 'fail', `${id}: reconcile is not "declared"`);
+    assert.match(reasonOf(gradeOptional(id, (s) => { delete s[kind].find(isIt).reconcile; })), /missing \(deleted, or without reconcile "declared"\)|missing: \[/);
+    // A name is the maker's to choose, whether or not the prompt gives one.
+    assert.strictEqual(gradeOptional(id, (s) => { s[kind].find(isIt).name = 'Another name'; }).status, 'pass', `${id}: ${kind} renamed`);
+  }
+  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.pop(); }).status, 'fail', 'one of the two rules the prompt asks for is missing');
+  // The table is graded: the artifact on another table is a different capability.
+  assert.strictEqual(gradeOptional(21, (s) => { s.forms.find((x) => x.name === 'Site Layout').entity = 'cnt_issue'; }).status, 'fail', 'a form on another table');
+  assert.strictEqual(gradeOptional(23, (s) => { s.businessRules.forEach((r) => { r.entity = 'cnt_other'; }); }).status, 'fail', 'rules on another table');
+  assert.strictEqual(gradeOptional(24, (s) => { s.businessProcessFlows[0].entity = 'cnt_other'; }).status, 'fail', 'a flow on another table');
+  // A kind the prompt did not ask for fails even on a positive fixture.
+  assert.strictEqual(gradeOptional(23, (s) => { s.businessProcessFlows = [{ entity: 'cnt_request', name: 'Extra', reconcile: 'declared', stages: [] }]; }).status, 'fail', 'a flow nobody asked for beside the rules');
+  assert.strictEqual(gradeOptional(21, (s) => { s.dashboards = [{ name: 'Board', key: 'board', reconcile: 'declared', tiles: [] }]; }).status, 'fail', 'a dashboard nobody asked for beside the form');
+  // Shape and wording are not this check's business, and fixtures 22-24 have no shape assertion of their own yet: another stage
+  // word, a reversed tile order, a rule scope swapped between two rules, or a changed tile kind still pass here.
+  assert.strictEqual(gradeOptional(24, (s) => { const st = s.businessProcessFlows[0].stages; st[1].name = 'Appraisal'; st[2].name = 'Outcome'; }).status, 'pass', 'other stage labels');
+  assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles.reverse(); }).status, 'pass', 'tiles in another order');
+  assert.strictEqual(gradeOptional(23, (s) => { const [r1, r2] = s.businessRules; [r1.scope, r2.scope] = [r2.scope, r1.scope]; }).status, 'pass', 'swapped scopes');
+  // The version floor still applies to a declared artifact.
+  assert.strictEqual(gradeOptional(24, (s) => { s.minimumPluginVersion = '2.20.6'; }).status, 'fail');  assert.strictEqual(gradeOptional(24, (s) => { s.minimumPluginVersion = '2.20.6'; }).status, 'fail');
+});
+
+test('the expectation side is checked too: a declared kind it does not know fails, and an ask it does not state is not allowed', () => {
+  assert.strictEqual(gradeOptional(21, null, (ev) => { ev.expect.declared.dashboard = []; }).status, 'fail', 'an unknown kind');
+  assert.strictEqual(gradeOptional(21, null, (ev) => { delete ev.expect.declared; }).status, 'fail', 'a declared form the prompt never asked for');
+  assert.strictEqual(gradeOptional(19, null, (ev) => { delete ev.expect.appTheme; }).status, 'fail', 'a theme with no branding ask');
+  assert.strictEqual(gradeOptional(18, null, (ev) => { ev.expect.configuration.customApis = []; }).status, 'fail', 'a Custom API with no ask');
+});
+
+test('what must NOT change: plain forms, dashboards, rules and flows are not optional capabilities, and a capability needs no offer record', () => {
+  // Not declared, so not the capability: ordinary authoring keeps passing.
+  assert.strictEqual(gradeOptional(1, (s) => { s.businessRules = [...(s.businessRules || []), { entity: 'new_customer', name: 'Plain rule' }]; }).status, 'pass');
+  assert.strictEqual(gradeOptional(1, (s) => { s.dashboards = [...(s.dashboards || []), { name: 'Plain board', tiles: [] }]; }).status, 'pass');
+  assert.strictEqual(gradeOptional(1, (s) => { s.environmentVariables = []; s.customApis = []; }).status, 'pass', 'an empty list is no capability');
+  // No fixture carries offer evidence and no assertion grades an offer: the evals grade the spec only.
+  for (const f of loadFixtures(path.join(__dirname, '..', 'fixtures'))) assert.strictEqual(f.evidence.offers, undefined, `fixture ${f.id}`);
+  assert.ok(![...ASSERTIONS.keys()].some((t) => /^offers:/.test(t)));
+});
+
+test('a maker who declines business rules and process flows gets none of ANY kind, graded independently of the declared-capability check', async () => {
+  const { gradeFixture } = require('../run-app-builder.js');
+  assert.ok(evalsManifest.evals.find((e) => e.id === 25).expectations.includes(NO_LOGIC));
+  assert.deepStrictEqual(gradeOptional(25, null, null, NO_LOGIC), { status: 'pass' });
+  const plainRule = (s) => { s.businessRules = [{ entity: 'cnt_part', name: 'Stock rule', conditions: [{ field: 'cnt_stock', operator: 'Equals', value: '0' }], actions: [{ type: 'SetBusinessRequired', field: 'cnt_price' }] }]; };
+  const plainFlow = (s) => { s.businessProcessFlows = [{ entity: 'cnt_part', name: 'Stock flow', stages: [{ name: 'One', steps: [{ name: 'Price', field: 'cnt_price' }] }] }]; };
+  for (const [name, mutate] of [['a plain business rule', plainRule], ['a plain process flow', plainFlow]]) {
+    assert.strictEqual(gradeOptional(25, mutate, null, NO_LOGIC).status, 'fail', name);
+    // The declared-capability check cannot see it (no reconcile), so this is not a duplicate of it.
+    assert.strictEqual(gradeOptional(25, mutate).status, 'pass', `${name}: invisible to the declared check`);
+    const base = fixtureFor(25);
+    const spec = structuredClone(base.spec);
+    mutate(spec);
+    const { results } = await gradeFixture({ ...base, spec }, evalsManifest.evals.find((e) => e.id === 25), evalsManifest);
+    assert.strictEqual(results.find((r) => r.text === NO_LOGIC).result.status, 'fail', `${name}: the runner reports it`);
+  }
+  // A declared one is caught by both.
+  assert.strictEqual(gradeOptional(25, (s) => { plainRule(s); s.businessRules[0].reconcile = 'declared'; }).status, 'fail');
+  // The check needs its expectation from the prompt: an eval that does not state it cannot use it.
+  assert.strictEqual(gradeOptional(25, null, (ev) => { delete ev.expect.noBusinessLogic; }, NO_LOGIC).status, 'fail');
+  // The same fixture still declines the theme and the configuration items through their own assertions.
+  assert.deepStrictEqual(evalsManifest.evals.find((e) => e.id === 25).expect.configuration, {});
+  assert.strictEqual(gradeOptional(25, (s) => { s.app.theme = { basePaletteColor: '#123456' }; s.minimumPluginVersion = '2.21.0'; }).status, 'fail');
 });

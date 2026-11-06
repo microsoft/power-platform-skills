@@ -15,7 +15,7 @@ model: opus
 
 # Add Cloud Flow
 
-Connect one or more Power Automate cloud flows to a Power Pages code site, or wire already-registered flows into additional pages/components. For new flows this skill:
+Connect one or more Power Automate cloud flows to a Power Pages SPA site, or wire already-registered flows into additional pages/components. For new flows this skill:
 - Creates the `adx_cloudflowconsumer` metadata YAML in `.powerpages-site/cloud-flow-consumer/`
 - Assigns web roles based on the flow's scenario and target audience
 - Generates client-side TypeScript/JavaScript service code to trigger the flow with CSRF authentication
@@ -29,9 +29,10 @@ For already-registered flows, the skill skips metadata and role creation and goe
 - **Web roles drive access**: Every flow must have at least one web role. Anonymous Users role is valid but must be confirmed.
 - **Scenario determines roles**: Understand what each flow does and who triggers it before picking roles.
 - **Use TaskCreate/TaskUpdate**: Track all phases upfront before starting any work.
+- **Preserve site integrity**: Before wiring a flow into a page or component, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; localize every new visible state when configured and keep the UI bidirectional and expansion-safe.
 
 > **Prerequisites:**
-> - An existing Power Pages code site with `.powerpages-site` deployed
+> - An existing Power Pages SPA site with `.powerpages-site` deployed
 > - PAC CLI authenticated (`pac auth who` must succeed)
 > - Azure CLI authenticated (`az login --allow-no-subscriptions` works whether or not your account has an Azure subscription — Dataverse and Power Platform tokens are AAD-scoped)
 
@@ -424,7 +425,7 @@ node "${PLUGIN_ROOT}/skills/add-cloud-flow/scripts/create-cloud-flow-metadata.js
 `--fileSlug`: lowercase display name, special characters replaced with hyphens, max 50 chars.
 `--flowName`: display name written as-is into the `name` YAML field.
 
-The generated YAML (PAC CLI code-site git format):
+The generated YAML (PAC CLI SPA git format):
 - `adx_*` scalar prefix stripped: `adx_flowapiurl` → `flowapiurl`, `adx_processid` → `processid`
 - `adx_cloudflowconsumerid` → `id`; `adx_websiteid` omitted
 - M2M key `adx_CloudFlowConsumer_adx_webrole` kept as-is
@@ -586,6 +587,18 @@ Read the service file created in Phase 7 and verify:
 - [ ] At least one UI component or page imports and calls the trigger function(s)
 
 If any check fails, fix the issue in the service file or UI before continuing.
+
+### 8.1c Final site-integrity gate
+
+After all cloud-flow UI integration and skill-specific verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
 
 ### 8.2 Record Skill Usage
 

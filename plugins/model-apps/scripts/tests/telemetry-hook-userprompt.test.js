@@ -3,7 +3,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
@@ -14,6 +13,7 @@ const {
   writePacExecutable,
   isolatePath,
 } = require("./fixtures/stub-pac/install.js");
+const { makeTempDir } = require("./helpers/temp-dirs.js");
 
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-user-prompt-telemetry.js");
@@ -25,7 +25,7 @@ let stubDir;
 let trapDir;
 let stubBuilt = false;
 test.before(() => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "modelapps-uptel-pac-"));
+  const root = makeTempDir("modelapps-uptel-pac-");
   stubDir = path.join(root, "stub");
   trapDir = path.join(root, "trap");
   stubBuilt = writePacExecutable(stubDir, STUB_BANNER);
@@ -37,7 +37,7 @@ test.before(() => {
 });
 
 function mkTemp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "modelapps-uptel-"));
+  return makeTempDir("modelapps-uptel-");
 }
 
 function runHook({ input, configDir, ikeyPath, fakeProbe }) {
@@ -67,6 +67,23 @@ function waitForFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(filePath) && Date.now() < deadline) sleep(25);
   return fs.existsSync(filePath);
+}
+
+// The dispatcher writes the probe with a plain writeFileSync (scripts/lib/telemetry/lib/emit-dispatcher.js,
+// writeProbe), so a read that lands while it is still writing finds an empty or partial file and fails with
+// "Unexpected end of JSON input". Wait until the probe reads as one whole JSON document with the event's body.
+function waitForProbe(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const probe = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (probe && typeof probe.body === "string") return probe;
+    } catch {
+      // Not there yet, or only partly written: read it again.
+    }
+    if (Date.now() >= deadline) return null;
+    sleep(25);
+  }
 }
 
 function writeProvisionedConfig(configDir) {
@@ -117,8 +134,8 @@ test("provisioned config → /model-apps:genpage prompt emits skill_started, WIT
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5000), "dispatcher should have written the probe");
-  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  const probe = waitForProbe(probePath, 5000);
+  assert.ok(probe, "dispatcher should have written the probe");
   const body = JSON.parse(probe.body);
   assert.equal(body.name, "ModelAppsTestStream");
   assert.equal(body.data.eventName, "skill_started");
@@ -139,8 +156,9 @@ test("bare /genpage prompt is also recognized (host may drop the plugin prefix)"
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5000), "bare /genpage should emit");
-  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  const probe = waitForProbe(probePath, 5000);
+  assert.ok(probe, "bare /genpage should emit");
+  const body = JSON.parse(probe.body);
   assert.equal(body.data.skillName, "genpage");
 });
 
@@ -190,7 +208,7 @@ test("provisioned hooks never use ambient PAC or credentials", (t) => {
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5000), "dispatcher should have written the probe");
+  assert.ok(waitForProbe(probePath, 5000), "dispatcher should have written the probe");
   const probeText = fs.readFileSync(probePath, "utf8");
   const body = JSON.parse(JSON.parse(probeText).body);
   assert.equal(body.data.orgId, STUB_BANNER.orgId);

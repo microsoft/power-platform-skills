@@ -11,10 +11,13 @@
 //     function returns (the forms a given user may open, first to last);
 //   - moving `systemform.isdefault` to another form did not reorder it;
 //   - forms with an EQUAL `Order` are put in an order the platform chooses, which `isdefault` does not
-//     decide: three new forms, all at the `Order="0"` a new form carries, were served with the
-//     `isdefault` form LAST — so a table whose Main forms the build had just created did NOT open with
+//     decide: three new forms, all at the `Order="0"` the SDK then gave every new form, were served with
+//     the `isdefault` form LAST — so a table whose Main forms the build had just created did NOT open with
 //     the form the build marked as the default;
 //   - a form with no <DisplayConditions> at all is served after every form that has one.
+// A form the SDK creates carries `<DisplayConditions FallbackForm="true"><Everyone />` with NO `Order`,
+// so it takes no slot in the order Maker lists; the build therefore writes the place of every form it
+// orders, the first of a table included, and puts a new form it does not order after the table's others.
 // So the order is plain formxml, written through the same supported call that sets a form's security
 // roles (the SDK's setFormSecurityRoles) — the private messages behind Maker's "Form order" dialog are
 // not needed. What a user actually opens also depends on two things this module does not control: the
@@ -25,7 +28,21 @@
 //      https://learn.microsoft.com/power-apps/developer/model-driven-apps/form-xml-schema (FormDisplayConditionsType)
 //      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievefilteredforms
 
+const { declaredFeatureOn } = require('./declared-features.js');
+
 const lower = (s) => String(s === undefined || s === null ? '' : s).toLowerCase();
+
+// A form the build manages whole (forms[].reconcile "declared", lib/form-layout-reconcile.js), while its feature flag is on
+// (lib/declared-features.js). With the flag off validation refuses `reconcile` on a form, so every form is plain.
+const isDeclaredFormOn = (f) => declaredFeatureOn('forms') && !!f && f.reconcile === 'declared';
+// The forms the default-form promotion and the Main Form Set order apply to, for the build that writes them and for verify that
+// expects them. A declared form is left out: both would write onto the form's own row (isdefault, formxml DisplayConditions) after
+// its layout was proved, which the next build would read as a drift of the saved layer, so the build never sets either on it and
+// verify must never expect it. Validation refuses the fields that would ask for either on a declared form (app-spec.js
+// validateDeclaredForms), so leaving it out drops nothing the spec asked for. One rule here, so the build and verify cannot disagree.
+const formOrderForms = (spec) => ((spec && spec.forms) || []).filter((f) => !isDeclaredFormOn(f));
+// The spec to give the default-form and form-order functions below: without its declared forms (the same object when it has none).
+const formOrderSpecOf = (spec) => (((spec && spec.forms) || []).some(isDeclaredFormOn) ? { ...spec, forms: formOrderForms(spec) } : spec);
 
 /** A `forms[]` entry that is a Main form (`formType` omitted means Main). */
 const isMainForm = (f) => !!f && typeof f === 'object' && (f.formType === undefined || f.formType === 'Main');
@@ -98,7 +115,8 @@ function ordersByHand(spec, entityLogical) {
 /**
  * The spec's Main forms of a table in the order the build gives them, first to last, or null when the
  * build orders none of them. `current` maps a form entry to its stored `Order` (a number, or undefined
- * when the form has no <DisplayConditions>).
+ * when the form has none: no <DisplayConditions> at all, or one without the attribute, as on a form the
+ * SDK has just created).
  *
  * The forms `mainFormOrder` lists come first, in that order; without a list, the default form alone
  * comes first. The spec's other Main forms follow in their CURRENT relative order (ties, and forms with
@@ -129,6 +147,8 @@ function plannedMainFormSequence(spec, entityLogical, current = new Map()) {
  *   <DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions>
  *   <DisplayConditions FallbackForm="true" Order="3"><Everyone /></DisplayConditions>
  *   <DisplayConditions Order="2" FallbackForm="false"><Role Id="{GUID}" /></DisplayConditions>
+ *   <DisplayConditions FallbackForm="true"><Everyone /></DisplayConditions>
+ * The last is what the SDK gives a form it creates: present, with no `Order`.
  * Attribute order varies, so `Order` is read by name from the start tag (which may also be
  * self-closing). `order` is undefined when the attribute is absent or is not an integer.
  */
@@ -170,6 +190,9 @@ function compareServedOrder(planned, served) {
 }
 
 module.exports = {
+  isDeclaredFormOn,
+  formOrderForms,
+  formOrderSpecOf,
   isMainForm,
   isOwnCustomTable,
   declaredMainForms,

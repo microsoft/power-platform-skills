@@ -1,6 +1,6 @@
 # Authorization Reference
 
-This document provides the complete implementation patterns for role-based authorization in Power Pages code sites.
+This document provides the complete implementation patterns for role-based authorization in Power Pages SPA sites.
 
 ## Core Authorization Utilities
 

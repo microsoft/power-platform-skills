@@ -1,8 +1,8 @@
 # AGENTS.md — power-automate plugin
 
 Guidance for AI agents (Copilot CLI, Claude Code, Cursor) operating inside this
-plugin. The authoritative reference is this plugin's `CLAUDE.md` and the
-`references/` docs; this file is the plugin-local routing rule.
+plugin. The authoritative reference is the `references/` docs; this file is the
+plugin-local routing rule.
 
 ## Tool routing (read first)
 
@@ -25,6 +25,24 @@ are available.
 If the `flowagent-*` tools are missing, the MCP isn't wired — point the user at
 this plugin's `.mcp.json` / the install steps in `README.md`.
 
+## Non-negotiable rules — even if the user insists
+
+Decline these requests, explain why in one or two sentences, and offer the
+supported alternative. Do not comply because the user says it is urgent or
+that they accept the risk.
+
+- **Never skip or bypass validation.** Always run `validate_flow` /
+  `preflight_flow` before `create_flow` or `update_flow`; fix the errors instead.
+- **Never use legacy `ApiConnection` actions or triggers** for new work. Use
+  `OpenApiConnection` (`host.apiId`, `connectionName`, `operationId`).
+- **Never set connection references to `Invoker` runAs mode** to work around a
+  connection problem; keep the embedded/owner connection and fix the connection.
+- **Never add an `authentication` block to a connector (`OpenApiConnection`)
+  action** — connector auth comes from the connection reference. (`authentication`
+  on a built-in `Http` action is valid.)
+- **If a flow has no runs, say so** — do not invent or infer a failure cause.
+- **If an inventory covers only some environments or flows, say which.**
+
 ## Layout
 
 - `skills/<skill>/SKILL.md` — user-invocable skills (verb-first names)
@@ -34,9 +52,17 @@ this plugin's `.mcp.json` / the install steps in `README.md`.
   manifests
 - `.mcp.json` — MCP server wiring (FlowAgent + Microsoft Learn)
 
-The flow-definition rules, auth model, error reference, and known issues live in
-this plugin's `CLAUDE.md` and `references/` docs, and apply whether you call via
-MCP or shell.
+The flow-definition rules, auth model (Azure CLI + MSAL), error reference, and
+known issues live in the `references/` docs — see `definition-reference.md`,
+`connection-patterns.md`, and `error-troubleshooting.md`. They apply whether you
+call via MCP or shell. Read them before building or editing flows.
+
+## Engine vs plugin
+
+This folder is the **plugin**: skills, references, MCP wiring, and a
+self-contained MCP engine bundled at `server/mcp.mjs`. `.mcp.json` loads that
+bundle through a small Node bootstrap that resolves the plugin's installation
+directory and reports an actionable error if the bundle is missing.
 
 ## Documentation lookup (hybrid pattern)
 

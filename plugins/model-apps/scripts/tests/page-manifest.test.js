@@ -66,9 +66,9 @@ test('parseManifest is fail-closed on structure: bad JSON / wrong schemaVersion 
   assert.strictEqual(parseManifest(JSON.stringify({ pages: [] })), null);
 });
 
-// ---------- parseManifest: page schema (plan + addendum I5) ----------
+// ---------- parseManifest: page schema ----------
 
-test('parseManifest is fail-closed on page schema: missing key/name, duplicate key, malformed optional (I5)', () => {
+test('parseManifest is fail-closed on page schema: missing key/name, duplicate key, malformed optional', () => {
   assert.strictEqual(parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ name: 'NoKey' }] })), null);
   assert.strictEqual(parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a' }] })), null); // no name
   assert.strictEqual(parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a', name: 'A' }, { key: 'a', name: 'A2' }] })), null); // duplicate key
@@ -78,9 +78,9 @@ test('parseManifest is fail-closed on page schema: missing key/name, duplicate k
   assert.strictEqual(parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a', name: 'A', pageId: '' }] })), null); // empty pageId
 });
 
-// ---- addendum I5: per-element dataSources validation ----
+// ---- per-element dataSources validation ----
 
-test('parseManifest REJECTS a non-string dataSources element (addendum I5)', () => {
+test('parseManifest REJECTS a non-string dataSources element', () => {
   assert.strictEqual(
     parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a', name: 'A', dataSources: [123] }] })),
     null, 'number element',
@@ -95,9 +95,9 @@ test('parseManifest REJECTS a non-string dataSources element (addendum I5)', () 
   );
 });
 
-// ---- addendum I5: per-entry navigatesTo validation ----
+// ---- per-entry navigatesTo validation ----
 
-test('parseManifest REJECTS a malformed navigatesTo entry (addendum I5)', () => {
+test('parseManifest REJECTS a malformed navigatesTo entry', () => {
   // missing targetKey
   assert.strictEqual(
     parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a', name: 'A', navigatesTo: [{}] }] })),
@@ -120,9 +120,9 @@ test('parseManifest REJECTS a malformed navigatesTo entry (addendum I5)', () => 
   );
 });
 
-// ---- addendum I5: key grammar ----
+// ---- key grammar ----
 
-test('parseManifest REJECTS a bad key grammar (addendum I5)', () => {
+test('parseManifest REJECTS a bad key grammar', () => {
   // uppercase — grammar is lowercase alphanumeric + hyphens only
   assert.strictEqual(
     parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'Overview', name: 'A' }] })), null, 'uppercase',
@@ -145,9 +145,9 @@ test('parseManifest REJECTS a bad key grammar (addendum I5)', () => {
   );
 });
 
-// ---- addendum I5: purpose type ----
+// ---- purpose type ----
 
-test('parseManifest REJECTS a non-string purpose field (addendum I5)', () => {
+test('parseManifest REJECTS a non-string purpose field', () => {
   assert.strictEqual(
     parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a', name: 'A', purpose: 123 }] })),
     null, 'number purpose',
@@ -158,9 +158,9 @@ test('parseManifest REJECTS a non-string purpose field (addendum I5)', () => {
   );
 });
 
-// ---- addendum I5: source discriminated validation ----
+// ---- source discriminated validation ----
 
-test('parseManifest REJECTS a malformed source field (addendum I5)', () => {
+test('parseManifest REJECTS a malformed source field', () => {
   // source is not an object
   assert.strictEqual(
     parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a', name: 'A', source: 'tsx' }] })),
@@ -178,7 +178,7 @@ test('parseManifest REJECTS a malformed source field (addendum I5)', () => {
   );
 });
 
-test('parseManifest ACCEPTS valid source shapes (addendum I5)', () => {
+test('parseManifest ACCEPTS valid source shapes', () => {
   assert.notStrictEqual(
     parseManifest(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'a', name: 'A', source: { kind: 'intent' } }] })),
     null, 'intent shape',
@@ -189,9 +189,9 @@ test('parseManifest ACCEPTS valid source shapes (addendum I5)', () => {
   );
 });
 
-// ---- addendum I5: top-level design ----
+// ---- top-level design ----
 
-test('parseManifest REJECTS an invalid top-level design field (addendum I5)', () => {
+test('parseManifest REJECTS an invalid top-level design field', () => {
   assert.strictEqual(
     parseManifest(JSON.stringify({ schemaVersion: 1, pages: [], design: 'string' })),
     null, 'design string',
@@ -216,7 +216,7 @@ test('parseManifestBase64 decodes then parses (fail-closed on garbage)', () => {
 });
 
 // ---------- reconcilePageIds (4-arg: pages, manifest, existenceIds, sitemapIds) ----------
-// Three-authority + provenance model (C3, Task 4): spec pageId (provenance-gated), manifest id
+// Three-authority + provenance model: spec pageId (provenance-gated), manifest id
 // (existence-confirmed, crash-safe), absent (create). No name-based lookup.
 // Returns { keyToId, absentKeys, conflicts }.
 
@@ -232,8 +232,8 @@ const MAN_2 = {
 const STORED_NAMES = new Map([[GP_O, 'Overview'], [GP_D, 'Order Detail']]);
 const CREATED_IDS = new Map([['overview', new Set([GP_O])], ['order-detail', new Set([GP_D])]]);
 
-// (f) manifest id ∈ existenceIds → reuse (C1) — case-insensitive match
-test('reconcilePageIds: manifest id ∈ existence → reuse (C1)', () => {
+// (f) manifest id ∈ existenceIds → reuse — case-insensitive match
+test('reconcilePageIds: manifest id ∈ existence → reuse', () => {
   const pages = [{ key: 'overview', name: 'Overview' }, { key: 'order-detail', name: 'Order Detail' }];
   const { keyToId, absentKeys, conflicts } = reconcilePageIds(pages, MAN_2, [GP_O.toUpperCase(), GP_D], [], STORED_NAMES, CREATED_IDS);
   assert.strictEqual(keyToId.get('overview'), GP_O);
@@ -242,8 +242,8 @@ test('reconcilePageIds: manifest id ∈ existence → reuse (C1)', () => {
   assert.deepStrictEqual(conflicts, []);
 });
 
-// Crash-safety (C1): manifest id ∈ existence but NOT yet in sitemap (finalizer died) → reuse, not re-create
-test('reconcilePageIds: crash-safety — manifest id in existence but not in sitemap → reused (C1)', () => {
+// Crash-safety: manifest id ∈ existence but NOT yet in sitemap (finalizer died) → reuse, not re-create
+test('reconcilePageIds: crash-safety — manifest id in existence but not in sitemap → reused', () => {
   const { keyToId, absentKeys } = reconcilePageIds(
     [{ key: 'overview', name: 'Overview' }], MAN_2, [GP_O], [], STORED_NAMES, CREATED_IDS,
   );
@@ -267,7 +267,7 @@ test('reconcilePageIds: no manifest, no spec pageId → absent', () => {
 });
 
 // (a) spec pageId ∈ sitemapIds → binds (edit-snapshot adoption, ownership proven by membership)
-test('reconcilePageIds: spec pageId ∈ sitemapIds → binds (edit-snapshot adoption, C3)', () => {
+test('reconcilePageIds: spec pageId ∈ sitemapIds → binds (edit-snapshot adoption)', () => {
   const STRAY = 'aabbccdd-1234-4567-89ab-ccddeeff0011';
   const { keyToId, conflicts } = reconcilePageIds(
     [{ key: 'overview', name: 'Overview', pageId: STRAY }],
@@ -278,7 +278,7 @@ test('reconcilePageIds: spec pageId ∈ sitemapIds → binds (edit-snapshot adop
 });
 
 // (b) spec pageId === manifest id → binds (manifest agreement — consistent edit-snapshot)
-test('reconcilePageIds: spec pageId === manifest id → binds (manifest agreement, C3)', () => {
+test('reconcilePageIds: spec pageId === manifest id → binds (manifest agreement)', () => {
   const { keyToId, conflicts } = reconcilePageIds(
     [{ key: 'overview', name: 'Overview', pageId: GP_O }],
     MAN_2, [GP_O], [], STORED_NAMES, CREATED_IDS,
@@ -312,8 +312,8 @@ test('reconcilePageIds: stale spec pageId (not in existence) falls through to ma
   assert.strictEqual(keyToId.get('overview'), GP_O, 'manifest id wins when spec id is stale');
 });
 
-// (d) spec pageId != manifest id, BOTH live → spec-manifest-disagree conflict (C3)
-test('reconcilePageIds: spec pageId != manifest id, both live → spec-manifest-disagree conflict (C3)', () => {
+// (d) spec pageId != manifest id, BOTH live → spec-manifest-disagree conflict
+test('reconcilePageIds: spec pageId != manifest id, both live → spec-manifest-disagree conflict', () => {
   // spec says GP_D for key 'overview'; MAN_2 says GP_O for key 'overview'; BOTH are in existence
   const { keyToId, conflicts } = reconcilePageIds(
     [{ key: 'overview', name: 'Overview', pageId: GP_D }],
@@ -353,8 +353,8 @@ test('reconcilePageIds: two keys → one live id → 1:1 identity conflict', () 
   assert.deepStrictEqual(conflicts[0].keys.sort(), ['a', 'b']);
 });
 
-// (i) parseManifest rejects duplicate pageIds (Imp11 — 1:1 key↔id identity, case-insensitive)
-test('parseManifest REJECTS two keys mapping to the same pageId (case-insensitive, Imp11)', () => {
+// (i) parseManifest rejects duplicate pageIds (1:1 key↔id identity, case-insensitive)
+test('parseManifest REJECTS two keys mapping to the same pageId (case-insensitive)', () => {
   const dup = JSON.stringify({
     schemaVersion: 1,
     pages: [

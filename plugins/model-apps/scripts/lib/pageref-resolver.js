@@ -1,9 +1,10 @@
 'use strict';
-const { blankNonCodePreservingTemplateExpressions, isTrivia } = require('./source-literals.js');
+const { isTrivia, isLineTerminator } = require('./source-literals.js');
+const { guessedPageViews } = require('./typescript-views.js');
 
 // Pure STRUCTURAL resolver for generative-page cross-page navigation. Authors emit a link as a stable
 // symbolic token — pageId: "PAGEREF_<key>" — because the real GenPageId is minted by the server at
-// deploy time and differs per environment (SDK opaque-identity rule T5: never bake a resolved GUID into
+// deploy time and differs per environment (SDK opaque-identity rule: never bake a resolved GUID into
 // canonical source, or a cross-env recreate ships a dead link). See references/rules.md "Generative Page
 // Navigation" and docs/app-builder-design.md §9. The ENGINE reads/writes files; this module
 // only shapes/parses strings (pure, offline).
@@ -88,7 +89,7 @@ const AMBIGUITY_TEXT = {
   'jsx-type-arguments': 'a JSX element with type arguments that hold a string, template, object or function type is read by the rules of a JSX tag, not by TypeScript\'s',
   'jsx-attribute': 'a JSX attribute value written after white space or a comment that follows its "=" is read by TypeScript as a string with escapes, and by other compilers without them, so they may disagree on where it ends when it holds a backslash; write the value right after the "="',
   'jsx-open': 'a "<" where an element may start, but that this check does not read as one (a space after it, a name beyond ASCII), may be a comparison or an element, and a closing tag that holds anything but a name and comments before its ">" (a second name, a string, a brace) is not read, so where it ends cannot be told',
-  generic: 'a "<Name>" followed by a parameter list and a ":" may be the type parameters of a call signature or an element whose text starts with a parenthesis, and so may one followed by a parameter list and no return type when a string, a template, a comment or a regex after it could hold its closing tag "</Name>" or the text after it cannot be read to the end of an element; one followed by a parameter list and "=>" is a function type unless a nested tag, an attribute string or an expression container in the list holds the arrow, and this check cannot rule that out for every "<" or "{" there; "<await" and "<yield" may be type parameters or an element, by whether the function around them is async or a generator; and a parameter list too long to scan cannot be told at all',
+  generic: 'a "<Name>" followed by a parameter list and a ":" may be the type parameters of a call signature or an element whose text starts with a parenthesis, and so may one followed by a parameter list and no return type when a string, a template, a comment or a regex after it could hold its closing tag "</Name>" or the text after it cannot be read to the end of an element; one followed by a parameter list and "=>" is a function type unless a nested tag, an attribute string or an expression container in the list holds the arrow, and this check cannot rule that out for every "<" or "{" there; "<await" and "<yield" may be type parameters or an element, by whether the function around them is async or a generator; and a parameter list too long to scan, or one that cannot be read to its end (a regex after a call in a default, a template with a template or a comment in it), cannot be told at all',
   fallback: 'a quote with no closing quote on its line is read as an ordinary character, not as the start of a string, and a "/" after a character that begins nothing in code ("#", "@") has no grammar to ask',
 };
 const AMBIGUITY_REMEDY = 'this check cannot tell for certain how the code after it is read, so it does not trust a navigation call that reaches it, '
@@ -191,7 +192,8 @@ function matchBrackets(mask) {
 //   tag`x`(navigateTo)({ … })                        a back-tick ends an operand: a tagged template
 //   function () { return f; }(navigateTo)({ … })     `}` ends an operand: a function expression — which the `}` of a block cannot be told from
 // So the last token before the `(` must be the start of the source; `;` `{` `(` `[` `,` or `:`; a `?` that is a ternary (`?.` ends in
-// a `.`); an operator that ends in `=` (`=` `==` `===` `!=` `!==` `+=` `<=` `>=` …); `=>`; or `&&`, `||` or `??`. Anything else is
+// a `.`); an operator that ends in `=` (`=` `==` `===` `!=` `!==` `+=` `<=` `>=` …); `=>`; `&&`, `||` or `??`; or the keyword `return` on the
+// line of the `(` (followsReturnKeyword). Anything else is
 // refused — a name or keyword, `)`, `]`, `.`, `?.`, `}`, `!`, any other `>`, a quote or a back-tick, `++`, `--`, the other operators —
 // and the token in the call is reported as stray: the plain `navigateTo({ … })` is the one to write. Comments are blank in the
 // mask, so they are not tokens.
@@ -204,8 +206,35 @@ function parenBeginsExpression(mask, at) {
       return true;
     case '>': return mask[i - 1] === '=';
     case '&': case '|': return mask[i - 1] === mask[i];
-    default: return false;
+    default: return followsReturnKeyword(mask, i, at);
   }
+}
+
+// Whether the token that ends at `last`, before the `(` at `open`, is the keyword `return` that starts a return statement, so that the expression after it begins at the `(`:
+//   return (navigateTo)({ … });
+// TypeScript's `parseReturnStatement` reads an expression after `return` when one starts on the same line (https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts), and a
+// `(` starts one, so `(navigateTo)` is the callee of a call and the object is its argument. That holds in every program that parses, because `return` is a reserved word: a name only after a `.`
+// (`a.return(navigateTo)({ … })` hands the object to what `a.return(navigateTo)` returns) or as a member's own name, where a `(` that follows is the parameter list of a method that has no body here.
+// Three things are checked, each of which would read another program:
+//   - a line terminator between `return` and the `(` — a block comment that holds one included, which the mask keeps — is automatic semicolon insertion at a restricted production
+//     (https://tc39.es/ecma262/#sec-automatic-semicolon-insertion): the statement is `return;` and the `(navigateTo)({ … })` after it is a statement of its own that never runs. Both are calls of
+//     navigateTo, but the page does not navigate, so the call is no proof of an edge: refused;
+//   - the word is the whole of `return`: what stands right before it is white space or one of `;` `{` `)` `:` (or the start of the source), so it is no tail of a longer name (`xreturn`, `$return`,
+//     `1return`, `a.#return`) and no escape's end (`\u0061return` ends in a hex digit, and `}` is not allowed before it because `\u{61}return` ends in one);
+//   - the token before it, past white space and comments, is no `.` (a `?.` ends in one): a member named `return`.
+// `await` and `yield` are not listed, for the reason the lexer has a guess for `<await` (opensTypeParameters): they are keywords only inside an async function or a generator (`await` also at the top
+// level of a module) and identifiers anywhere else. TypeScript parses `function f() { await (navigateTo)({ … }) }` with no diagnostic, as a call of `await(navigateTo)` whose result is called with the
+// object, which does not navigate; and the lexer does not track the function around a token, so both stay refused.
+const RETURN_PREDECESSORS = ';{):';
+function followsReturnKeyword(mask, last, open) {
+  const start = last - 5;
+  if (start < 0 || mask.slice(start, last + 1) !== 'return') return false;
+  for (let k = last + 1; k < open; k += 1) if (isLineTerminator(mask[k])) return false;
+  const before = mask[start - 1];
+  if (before !== undefined && !isTrivia(before) && !RETURN_PREDECESSORS.includes(before)) return false;
+  let k = start - 1;
+  while (k >= 0 && isTrivia(mask[k])) k -= 1;
+  return mask[k] !== '.';
 }
 
 // Whether the mask between `from` and `to` is a member chain and nothing more — `navigateTo`, `Xrm.Navigation.navigateTo`,
@@ -655,12 +684,16 @@ function tokenRange(tokens, from, to) {
 // the lexer takes the regex reading, and where that is wrong it blanks code up to the next `/` and reads on in the wrong state. The same
 // holds for every guess the lexer makes, and nothing short of a parser can tell which was wrong, so nothing at or after the earliest is
 // trusted: pageRefTokens marks every token there, strayPageRefs reports each, and no consumer rewrites a call that reaches it.
+// So where the lexer guessed, the parser is asked (typescript-views.js): the TypeScript compiler the pages are compiled with, which settles every guess. Where it
+// parses the page with no diagnostic, the mask is the one built from its parse — the lexer's own format, character for character (a test holds the two equal on
+// every page the lexer reads with no guess) — and nothing in the page is a guess any more: there is no frontier. Where it reports a diagnostic, the lexer's mask and
+// frontier stand; and so they do where another reader reads the page differently or refuses it (a JSX attribute string after trivia, which TypeScript reads with
+// escapes and other compilers without, so they end it at different quotes; grammar only TypeScript's parser takes), told from the parse itself by
+// guessedPageViews, which the structure gate (page-structure.js) asks too.
 function lexNavigation(src) {
-  let frontier = null;
-  const mask = blankNonCodePreservingTemplateExpressions(src, {
-    onAmbiguity: (at, kind) => { if (!frontier || at < frontier.at) frontier = { at, kind }; },
-  });
-  return { mask, tokens: pageRefTokens(src, frontier), frontier };
+  const { keep, frontier, views } = guessedPageViews(src);
+  if (views !== null) return { mask: views.keep, tokens: pageRefTokens(src, null), frontier: null };
+  return { mask: keep, tokens: pageRefTokens(src, frontier), frontier };
 }
 
 // Everything the oracle reads from one source, computed once: the classified targets (in source order), the tokens and the frontier. A

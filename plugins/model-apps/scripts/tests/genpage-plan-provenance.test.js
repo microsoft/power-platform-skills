@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { preparePlanProvenance, verifyPlanProvenance, planTargets } = require('../genpage-plan-provenance.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 // What the planner hands back for approval (agents/genpage-planner.md Step 5) — a PREVIEW, with full
 // prefixed names — and what it then writes (Step 6): a different document, suffixes only. The gate
@@ -52,7 +53,7 @@ const EDIT_WRITTEN = `# Genpage Edit Plan\n\n## File Being Edited\n- **Absolute 
 // kind its name says.
 const EDIT = 'genpage-edit-plan.md';
 function tmpPlan(content, name = 'genpage-plan.md') {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-plan-prov-'));
+  const dir = makeTempDir('genpage-plan-prov-');
   const planPath = path.join(dir, name);
   if (content !== undefined) fs.writeFileSync(planPath, content, 'utf8');
   return planPath;
@@ -174,7 +175,7 @@ test('verifyPlanProvenance halts when the planner wrote nothing, or the approval
 });
 
 // An overlong id was truncated to its first 36 characters and certified. Both GUID patterns are bounded
-// like the upload parser's (lib/genpage-cli.js parsePageId), and a Page ID label whose value is malformed
+// like the id parsers elsewhere in the plugin (a page id is exactly 36 characters), and a Page ID label whose value is malformed
 // makes the plan name nothing — never a GUID found elsewhere, since the edit worker reads that label.
 test('an overlong or malformed page id is refused, never truncated to a valid-looking one', () => {
   const overlong = EDIT_WRITTEN.replace(`**Page ID:** ${PAGE_ID}`, `**Page ID:** ${PAGE_ID}deadbeef`);
@@ -535,4 +536,225 @@ test('prepare and verify refuse a hard-linked plan', (t) => {
   const verified = verifyPlanProvenance({ planPath, approvedPlan: EDIT_PREVIEW });
   assert.equal(verified.ok, false);
   assert.match(verified.error, /is not a plain file \(a link, junction, hard link or folder\)/);
+});
+
+// --- The plan's semantic records (references/plan-schema.md): what was assumed, each page's decisions and lookups --------------
+// The approval preview carries them at its own levels (### Assumptions first; ### Data Semantics and ### Lookup Metadata after the
+// Pages table, by page file) and the written plan at the plan's (## Assumptions; #### Data semantics / #### Lookup metadata in each
+// page's specification). Same page files are not enough: a changed decision needs new approval.
+const SEM_A1 = (decision) => [
+  '- Decision: ' + decision,
+  '- Alternatives considered: An empty form with no initial read; uncached loading.',
+  '- Evidence: default: this page loads on mount, so Critical Rule 15 applies.',
+  '- Resolution: planner-default',
+].join('\n');
+const SEM_LOOKUPS = (state = 'observed') => [
+  '| Table | Column | Read property | Targets | Used by | Metadata state |',
+  '|-------|--------|---------------|---------|---------|----------------|',
+  `| contoso_project | contoso_ownerid | _contoso_ownerid_value | systemuser, team | F1; owner navigation | ${state} |`,
+  '',
+  '- Evidence: lookup-metadata.json; successful source/target metadata discovery.',
+  '- Read target strategy: normalize the logical-name annotation and qualified prefix.',
+].join('\n');
+const SEM_FILTER = '##### F1\n- Kind: filter\n- Definition: Projects owned by the selected owner, matched by the bare id.\n- Source: User Requirements\n- Requirement quote: Projects overview';
+function semPreview({ decision = 'De-duplicate and cache the initial list read.', assumptions = true, lookups = SEM_LOOKUPS(), semantics = SEM_FILTER } = {}) {
+  return [
+    '## Genpage Plan',
+    '',
+    ...(assumptions ? ['### Assumptions', '', '#### A1 — Initial-load caching', SEM_A1(decision), ''] : []),
+    '### Pages (2 total)',
+    '| Page | File | Purpose | Entities |',
+    '|------|------|---------|----------|',
+    '| Overview | overview.tsx | Summary cards | contoso_project |',
+    '| Details | details.tsx | One record | contoso_project |',
+    '',
+    ...(semantics === null ? [] : ['### Data Semantics', '', '#### overview.tsx', '', semantics, '', '#### details.tsx', '', 'None.', '']),
+    ...(lookups === null ? [] : ['### Lookup Metadata', '', '#### overview.tsx', '', lookups, '', '#### details.tsx', '', 'None.', '']),
+    '### Data Strategy',
+    '- Entities to create: contoso_project (contoso_name, contoso_stage)',
+  ].join('\n');
+}
+function semWritten({ decision = 'De-duplicate and cache the initial list read.', assumptions = true, lookups = SEM_LOOKUPS(), semantics = SEM_FILTER } = {}) {
+  return [
+    '# Genpage Plan',
+    '## User Requirements',
+    'Projects overview and details.',
+    ...(assumptions ? ['## Assumptions', '### A1 — Initial-load caching', SEM_A1(decision)] : []),
+    '## Pages',
+    '| Page | File | Purpose | Entities |',
+    '|------|------|---------|----------|',
+    '| Details | details.tsx | One record | project |',
+    '| Overview | overview.tsx | Summary cards | project |',
+    '## Per-Page Specifications',
+    '### Overview',
+    '- **File:** overview.tsx',
+    ...(semantics === null ? [] : ['#### Data semantics', semantics]),
+    ...(lookups === null ? [] : ['#### Lookup metadata', lookups]),
+    '### Details',
+    '- **File:** details.tsx',
+    ...(semantics === null ? [] : ['#### Data semantics', 'None.']),
+    ...(lookups === null ? [] : ['#### Lookup metadata', 'None.']),
+  ].join('\r\n');
+}
+const LOOKUP_EVIDENCE = {
+  ok: true,
+  tables: [{ logicalName: 'contoso_project', primaryIdAttribute: 'contoso_projectid', primaryNameAttribute: 'contoso_name', lookups: [{
+    column: 'contoso_ownerid', readProperty: '_contoso_ownerid_value', targets: ['systemuser', 'team'], paths: [],
+    sharedPaths: [{ navigationProperty: 'contoso_ownerid', referencedEntity: 'owner', targets: ['systemuser', 'team'] }],
+  }] }],
+};
+function evidenceFile(dir, content) {
+  const file = path.join(dir, 'lookup-metadata.json');
+  fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
+  return file;
+}
+
+test('verifyPlanProvenance compares the approved and written semantic records, not only the page files', () => {
+  const same = verifyPlanProvenance({ planPath: tmpPlan(semWritten()), approvedPlan: semPreview() });
+  assert.equal(same.ok, true, `neighbour: ${same.error}`);
+  assert.match(same.semanticsHash, /^[a-f0-9]{64}$/, 'the verified records are hashed for the log');
+  const changed = verifyPlanProvenance({ planPath: tmpPlan(semWritten({ decision: 'Load the list without a cache.' })), approvedPlan: semPreview() });
+  assert.equal(changed.ok, false, 'a written plan whose A1 decision differs from the approved preview must need re-approval');
+  assert.match(changed.error, /A1 changed its Decision/);
+  assert.deepEqual(changed.writtenTargets, ['details.tsx', 'overview.tsx'], 'the page files are the same');
+  for (const [label, written] of [
+    ['a changed filter', semWritten({ semantics: SEM_FILTER.replace('matched by the bare id', 'matched by the owner name') })],
+    ['a narrowed target set', semWritten({ lookups: SEM_LOOKUPS().replace('systemuser, team', 'systemuser') })],
+    ['an added assumption', semWritten().replace('## Pages', '### A2 — Sort\r\n' + SEM_A1('Sort by name.').replace(/\n/g, '\r\n') + '\r\n## Pages')],
+  ]) {
+    assert.equal(verifyPlanProvenance({ planPath: tmpPlan(written), approvedPlan: semPreview() }).ok, false, label);
+  }
+  // Preview formatting is not compared: wrapped values and blank lines differ, the records do not.
+  const reflowed = semPreview().replace('- Decision: De-duplicate and cache the initial list read.', '- Decision: De-duplicate and cache\n  the initial list read.').replace(/\n\n/g, '\n\n\n');
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(semWritten()), approvedPlan: reflowed }).ok, true);
+});
+
+test('a one-sided semantic contract is never a legacy downgrade, and a malformed present section fails without any option', () => {
+  for (const [label, written, approved] of [
+    ['the preview has Assumptions, the written plan none', semWritten({ assumptions: false }), semPreview()],
+    ['the written plan has Assumptions, the preview none', semWritten(), semPreview({ assumptions: false })],
+    ['the written plan dropped its lookups', semWritten({ lookups: null }), semPreview()],
+    ['the preview has no records at all', semWritten(), semPreview({ assumptions: false, lookups: null, semantics: null })],
+  ]) {
+    assert.equal(verifyPlanProvenance({ planPath: tmpPlan(written), approvedPlan: approved }).ok, false, label);
+  }
+  const malformed = semWritten().replace('- Resolution: planner-default', '- Resolution: assumed');
+  const result = verifyPlanProvenance({ planPath: tmpPlan(malformed), approvedPlan: semPreview().replace('- Resolution: planner-default', '- Resolution: assumed') });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Resolution must be/);
+  // An older pair, with neither document carrying the contract, is verified exactly as before.
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(WRITTEN), approvedPlan: PREVIEW }).ok, true);
+});
+
+test('--require-assumptions: a newly authored plan cannot evade the comparison by leaving the contract out of both documents', () => {
+  const legacy = verifyPlanProvenance({ planPath: tmpPlan(WRITTEN), approvedPlan: PREVIEW, requireAssumptions: true });
+  assert.equal(legacy.ok, false);
+  assert.match(legacy.error, /no Assumptions section/);
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(semWritten()), approvedPlan: semPreview(), requireAssumptions: true }).ok, true);
+  const empty = { assumptions: false, semantics: 'None.', lookups: 'None.' };
+  const sentinels = (doc) => doc.replace(/^(#{2,3}) Pages/m, (all, hashes) => `${hashes} Assumptions\n\nNo assumptions.\n\n${all}`);
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(sentinels(semWritten(empty))), approvedPlan: sentinels(semPreview(empty)), requireAssumptions: true }).ok, true, 'the empty sentinels satisfy it');
+  const partial = verifyPlanProvenance({ planPath: tmpPlan(semWritten({ lookups: null })), approvedPlan: semPreview({ lookups: null }), requireAssumptions: true });
+  assert.equal(partial.ok, false, 'every page needs its Lookup metadata');
+  // The options belong to a create plan; an edit plan keeps its own comparison and refuses them.
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN, EDIT), approvedPlan: EDIT_PREVIEW }).ok, true, 'neighbour: an edit without the options');
+  assert.equal(verifyPlanProvenance({ planPath: tmpPlan(EDIT_WRITTEN, EDIT), approvedPlan: EDIT_PREVIEW, requireAssumptions: true }).ok, false);
+});
+
+test('a planned lookup becomes observed only with successful lookup metadata evidence that matches it', () => {
+  const planned = semPreview({ lookups: SEM_LOOKUPS('planned') });
+  const dir = makeTempDir('genpage-plan-evidence-');
+  const ok = (options) => verifyPlanProvenance({ planPath: tmpPlan(semWritten()), approvedPlan: planned, ...options });
+  assert.equal(ok({}).ok, false, 'no evidence: the promotion is a change');
+  assert.equal(ok({ lookupMetadataPath: evidenceFile(dir, LOOKUP_EVIDENCE) }).ok, true, 'with matching evidence');
+  assert.equal(ok({ lookupMetadataPath: evidenceFile(dir, LOOKUP_EVIDENCE), requireObservedLookups: true }).ok, true);
+  const narrowed = structuredClone(LOOKUP_EVIDENCE);
+  narrowed.tables[0].lookups[0].targets = ['systemuser'];
+  assert.equal(ok({ lookupMetadataPath: evidenceFile(dir, narrowed) }).ok, false, 'a target set the evidence does not hold');
+  assert.equal(ok({ lookupMetadataPath: evidenceFile(dir, { ok: false, code: 'X', error: 'failed' }) }).ok, false, 'a failed read is no evidence');
+  assert.equal(ok({ lookupMetadataPath: evidenceFile(dir, '{ not json') }).ok, false, 'an unreadable file is no evidence');
+  assert.equal(ok({ lookupMetadataPath: path.join(dir, 'missing.json') }).ok, false, 'an absent file is no evidence');
+  assert.equal(ok({ requireObservedLookups: true }).ok, false, '--require-observed-lookups needs the evidence file');
+  const stillPlanned = verifyPlanProvenance({ planPath: tmpPlan(semWritten({ lookups: SEM_LOOKUPS('planned') })), approvedPlan: planned,
+    lookupMetadataPath: evidenceFile(dir, LOOKUP_EVIDENCE), requireObservedLookups: true });
+  assert.equal(stillPlanned.ok, false, 'a lookup still planned before generation');
+  assert.match(stillPlanned.error, /planned/);
+});
+
+test('evidence that is read is validated whatever its value: JSON null is not "no evidence", and never passes an observed plan', () => {
+  const dir = makeTempDir('genpage-plan-null-evidence-');
+  // Already observed in both documents: nothing to promote, so only the evidence check can refuse it.
+  const observed = (content, options = {}) => verifyPlanProvenance({ planPath: tmpPlan(semWritten()), approvedPlan: semPreview(),
+    lookupMetadataPath: evidenceFile(dir, content), ...options });
+  assert.equal(observed(LOOKUP_EVIDENCE, { requireObservedLookups: true, requireAssumptions: true }).ok, true, 'neighbour: matching evidence');
+  for (const content of ['null', 'false', '0', '[]', '"ok"', '{}']) {
+    const result = observed(content, { requireObservedLookups: true, requireAssumptions: true });
+    assert.equal(result.ok, false, `${content}: refused`);
+    assert.match(result.error, /not a successful get-lookup-metadata\.js answer/, content);
+    assert.equal(observed(content).ok, false, `${content}: refused without the other flags too`);
+  }
+  // Nor does it authorize a promotion.
+  const promoted = verifyPlanProvenance({ planPath: tmpPlan(semWritten()), approvedPlan: semPreview({ lookups: SEM_LOOKUPS('planned') }),
+    lookupMetadataPath: evidenceFile(dir, 'null') });
+  assert.equal(promoted.ok, false);
+  // Fixture 26's own approved preview and written plan, both already observed, with a file holding only `null`.
+  const fixture = path.join(__dirname, '..', '..', '..', '..', 'evals', 'model-apps', 'genpage', 'fixtures', '26-customer-lookup');
+  const fixturePlan = tmpPlan(fs.readFileSync(path.join(fixture, 'genpage-plan.md'), 'utf8'));
+  const approved = fs.readFileSync(path.join(fixture, 'approved-plan.md'), 'utf8');
+  const withEvidence = verifyPlanProvenance({ planPath: fixturePlan, approvedPlan: approved, requireAssumptions: true,
+    requireObservedLookups: true, lookupMetadataPath: path.join(fixture, 'lookup-metadata.json') });
+  assert.equal(withEvidence.ok, true, `neighbour: fixture 26 with its own evidence: ${withEvidence.error}`);
+  const fixtureResult = verifyPlanProvenance({ planPath: fixturePlan, approvedPlan: approved, requireAssumptions: true,
+    requireObservedLookups: true, lookupMetadataPath: evidenceFile(dir, 'null') });
+  assert.equal(fixtureResult.ok, false, 'fixture 26 with null evidence');
+  assert.match(fixtureResult.error, /not a successful get-lookup-metadata\.js answer/);
+});
+
+test('a second specification of a page is refused, whichever block carries the records: the approved page is the one written', () => {
+  const fixture = path.join(__dirname, '..', '..', '..', '..', 'evals', 'model-apps', 'genpage', 'fixtures', '26-customer-lookup');
+  const plan = fs.readFileSync(path.join(fixture, 'genpage-plan.md'), 'utf8').replace(/\r\n/g, '\n');
+  const approved = fs.readFileSync(path.join(fixture, 'approved-plan.md'), 'utf8');
+  const evidence = path.join(fixture, 'lookup-metadata.json');
+  const verify = (text) => verifyPlanProvenance({ planPath: tmpPlan(text), approvedPlan: approved, requireAssumptions: true,
+    requireObservedLookups: true, lookupMetadataPath: evidence });
+  assert.equal(verify(plan).ok, true, 'neighbour: the fixture plan');
+  const start = plan.indexOf('\n### Customer Opportunities\n');
+  assert.ok(start > 0, 'the fixture has the page specification');
+  const fileLine = /\n- \*\*File:\*\* [^\n]+/.exec(plan.slice(start))[0];
+  const duplicate = `\n### Customer Opportunities${fileLine}\n- **Purpose:** Browse opportunities by customer\n- **Data Binding:** customerid_contact/contactid\n`;
+  for (const [label, text] of [
+    ['a later duplicate without records', `${plan.trimEnd()}\n${duplicate}`],
+    ['an earlier duplicate without records', plan.slice(0, start) + duplicate + plan.slice(start)],
+  ]) {
+    const result = verify(text);
+    assert.equal(result.ok, false, label);
+    assert.match(result.error, /another page specification/, label);
+  }
+});
+
+test('the CLI takes the semantic options as declared flags and refuses an unknown or misspelled one', () => {
+  const { spawnSync } = require('node:child_process');
+  const script = path.join(__dirname, '..', 'genpage-plan-provenance.js');
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+  const dir = makeTempDir('genpage-plan-prov-flags-');
+  const planPath = path.join(dir, 'genpage-plan.md');
+  const approved = path.join(dir, '.approved-genpage-plan.md');
+  fs.writeFileSync(planPath, semWritten());
+  fs.writeFileSync(approved, semPreview({ lookups: SEM_LOOKUPS('planned') }));
+  const evidence = evidenceFile(dir, LOOKUP_EVIDENCE);
+  const ok = run('verify', '--plan', planPath, '--approved', `@${approved}`, '--require-assumptions', '--require-observed-lookups', '--lookup-metadata', evidence);
+  assert.equal(ok.status, 0, ok.stdout);
+  assert.equal(JSON.parse(ok.stdout).ok, true);
+  assert.equal(run('verify', '--plan', planPath, '--approved', `@${approved}`, '--require-assumptions').status, 3, 'the promotion has no evidence');
+  for (const args of [
+    ['--require-assumption'],
+    ['--require-assumptions', 'yes'],
+    ['--lookup-metadata'],
+    ['stray'],
+  ]) {
+    const result = run('verify', '--plan', planPath, '--approved', `@${approved}`, ...args);
+    assert.equal(result.status, 1, args.join(' '));
+    assert.equal(JSON.parse(result.stdout).ok, false);
+  }
+  assert.equal(run('prepare', '--plan', planPath, '--require-assumptions').status, 1, 'prepare takes no semantic option');
 });

@@ -6,7 +6,7 @@
 //
 // Wraps `dataverse-request.js` so it inherits auth, retry, and 401/429 handling.
 //
-// Usage: node list-table-columns.js <envUrl> <table1> [<table2> ...]
+// Usage: node list-table-columns.js <envUrl> <table1> [<table2> ...] [--tenant-id <id>]
 //
 // Output (JSON to stdout):
 //   {
@@ -23,6 +23,7 @@
 
 const { execFileSync } = require('child_process');
 const path = require('path');
+const { parseArgs: parseCliArgs } = require('node:util');
 
 const SYSTEM_COLUMN_PATTERNS = [
   /^createdon/,
@@ -50,27 +51,33 @@ function isSystemColumn(name) {
 }
 
 function parseArgs() {
-  const args = process.argv.slice(2);
-  if (args.length < 2) {
-    process.stderr.write(
-      'Usage: node list-table-columns.js <envUrl> <table1> [<table2> ...]\n'
+  const { positionals, values } = parseCliArgs({
+    options: { 'tenant-id': { type: 'string' } },
+    allowPositionals: true,
+  });
+  const tenantId = values['tenant-id'];
+  if (positionals.length < 2 || (tenantId !== undefined && !tenantId.trim())) {
+    throw new Error(
+      'Usage: node list-table-columns.js <envUrl> <table1> [<table2> ...] [--tenant-id <id>]'
     );
-    process.exit(1);
   }
   return {
-    envUrl: args[0].replace(/\/+$/, ''),
-    tables: args.slice(1),
+    envUrl: positionals[0].replace(/\/+$/, ''),
+    tables: positionals.slice(1),
+    tenantId,
   };
 }
 
-function fetchColumns(envUrl, table) {
+function fetchColumns(envUrl, table, tenantId) {
   const apiPath =
     `EntityDefinitions(LogicalName='${table}')/Attributes` +
     `?$select=LogicalName,AttributeType,RequiredLevel`;
   const requestScript = path.join(__dirname, 'dataverse-request.js');
+  const args = [requestScript, envUrl, 'GET', apiPath];
+  if (tenantId) args.push('--tenant-id', tenantId);
   const stdout = execFileSync(
     process.execPath,
-    [requestScript, envUrl, 'GET', apiPath],
+    args,
     { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
   );
   const parsed = JSON.parse(stdout);
@@ -88,11 +95,11 @@ function fetchColumns(envUrl, table) {
     }));
 }
 
-const { envUrl, tables } = parseArgs();
 const out = {};
 try {
+  const { envUrl, tables, tenantId } = parseArgs();
   for (const table of tables) {
-    out[table] = fetchColumns(envUrl, table);
+    out[table] = fetchColumns(envUrl, table, tenantId);
   }
   process.stdout.write(JSON.stringify(out, null, 2) + '\n');
 } catch (e) {

@@ -1,0 +1,9 @@
+{
+  "id": "field-virtual",
+  "kind": "field",
+  "controlType": "virtual",
+  "dependencySet": "virtual",
+  "hosts": ["model"],
+  "title": "Virtual field control",
+  "description": "A React virtual PCF field control for model-driven apps."
+}

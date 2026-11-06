@@ -2,9 +2,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { buildTemplateOutcomeEvent, emitTemplateOutcome, normalizeBool, sanitizeTemplateOutcomeInfo } = require('../lib/create-site-template-telemetry');
 const { parseArgs, toCliResult } = require('../emit-create-site-template-outcome');
+const { version: PLUGIN_VERSION } = require('../../.plugin/plugin.json');
 
 test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the existing skill event shape', () => {
   const event = buildTemplateOutcomeEvent({
@@ -21,14 +26,13 @@ test('buildTemplateOutcomeEvent emits non-PII template eventInfo through the exi
   }, {
     readPacAuth: () => ({ orgId: 'org', tenantId: 'tenant' }),
     readAgentInfo: () => ({ aiAgentName: 'Copilot CLI', aiAgentVersion: '1.0.76-0', pacCliVersion: '2.10.1' }),
-    pluginVersion: '2.7.0',
     randomUUID: () => 'ignored',
   });
 
   assert.equal(event.name, 'PagesAIPluginEvent');
   assert.equal(event.data.eventName, 'template_used');
   assert.equal(event.data.skillName, 'create-site');
-  assert.equal(event.data.pluginVersion, '2.7.0');
+  assert.equal(event.data.pluginVersion, PLUGIN_VERSION);
   assert.equal(event.data.sessionId, 'session');
   assert.equal(event.data.aiAgentName, 'Copilot CLI');
   assert.equal(event.data.aiAgentVersion, '1.0.76-0');
@@ -72,7 +76,7 @@ test('buildTemplateOutcomeEvent emits import result details separately from temp
     framework: 'react',
     audience: 'internal',
     outcome: 'failure',
-    errorClass: 'ImportSolutionAsync',
+    errorClass: 'PacSolutionImport',
     errorDescription: 'https://example.crm.dynamics.com/private/path',
     correlationId: 'corr',
   }, {
@@ -82,7 +86,7 @@ test('buildTemplateOutcomeEvent emits import result details separately from temp
   });
   assert.equal(failure.data.eventName, 'template_import_failure');
   assert.equal(failure.data.outcome, 'failure');
-  assert.equal(failure.data.errorClass, 'ImportSolutionAsync');
+  assert.equal(failure.data.errorClass, 'PacSolutionImport');
   assert.equal('errorDescription' in failure.data, false);
   assert.equal(failure.data.severity, 'Error');
 });
@@ -158,7 +162,6 @@ test('buildTemplateOutcomeEvent emits scratch branch adoption signal', () => {
     readAgentInfo: () => ({}),
     randomUUID: () => 'corr',
     env: { COPILOT_AGENT_SESSION_ID: 'copilot-session' },
-    pluginVersion: '2.7.0',
   });
 
   assert.equal(event.data.eventName, 'create_site_from_scratch');
@@ -204,6 +207,42 @@ test('telemetry CLI output excludes the emitted event and organization identifie
   }), { ok: true });
   assert.deepEqual(toCliResult({ ok: false, error: 'private failure details' }), { ok: false });
   assert.deepEqual(toCliResult(null), { ok: false });
+});
+
+test('template telemetry CLI exits 0 when its optional module cannot load', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppskills-template-load-'));
+  const preload = path.join(tempDir, 'block-template-telemetry-load.js');
+  fs.writeFileSync(
+    preload,
+    [
+      "'use strict';",
+      "const Module = require('node:module');",
+      'const originalLoad = Module._load;',
+      'Module._load = function (request, parent, isMain) {',
+      "  if (String(request).includes('create-site-template-telemetry')) {",
+      "    throw new Error('simulated template telemetry load failure');",
+      '  }',
+      '  return originalLoad.call(this, request, parent, isMain);',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--require',
+      preload,
+      path.resolve(__dirname, '../emit-create-site-template-outcome.js'),
+      '--eventName',
+      'create_site_from_scratch',
+    ],
+    { encoding: 'utf8', timeout: 30_000 }
+  );
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stderr, /simulated template telemetry load failure/);
 });
 
 test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () => {

@@ -1,0 +1,640 @@
+{
+  "goals": [
+    {
+      "id": "website",
+      "title": "Build a website",
+      "summary": "Public or partner-facing sites, with data and sign-in."
+    },
+    {
+      "id": "app",
+      "title": "Build an app",
+      "summary": "Business apps for your team, from data model to screens."
+    },
+    {
+      "id": "mobile",
+      "title": "Build for phones",
+      "summary": "Apps and native features for iPhone and Android."
+    },
+    {
+      "id": "automate",
+      "title": "Automate work",
+      "summary": "Flows that run tasks for you and tell you when something fails."
+    },
+    {
+      "id": "data",
+      "title": "Work with your data",
+      "summary": "Ask questions about records and manage tables in Dataverse."
+    },
+    {
+      "id": "analyze",
+      "title": "Find where work slows down",
+      "summary": "Look for delays and rework in your business processes."
+    },
+    {
+      "id": "extend",
+      "title": "Extend apps with code",
+      "summary": "Custom controls and tools for developers."
+    }
+  ],
+  "plugins": [
+    {
+      "name": "power-pages",
+      "title": "Power Pages",
+      "product": "power-pages",
+      "goal": "website",
+      "audience": "both",
+      "status": null,
+      "summary": "Create, customize, and publish Power Pages websites, including the data behind them and sign-in for visitors.",
+      "prompts": [
+        "Create a Power Pages site with React for a job board",
+        "Create a site from a Power Pages template",
+        "Deploy my site to Power Pages"
+      ],
+      "requirements": [
+        "Node.js (LTS version)",
+        "Power Platform CLI (PAC CLI)",
+        "Azure CLI, for site data, sample data, and activating the site",
+        "A Power Platform environment where you can create Power Pages sites"
+      ],
+      "skills": [
+        {
+          "name": "create-site",
+          "description": "Start a new site from a template or from scratch."
+        },
+        {
+          "name": "edit-site",
+          "description": "Change the pages, content, navigation, and styling of a downloaded site."
+        },
+        {
+          "name": "setup-datamodel",
+          "description": "Create the Dataverse tables your site needs."
+        },
+        {
+          "name": "setup-auth",
+          "description": "Add sign-in, sign-out, and role-based access."
+        },
+        {
+          "name": "deploy-site",
+          "description": "Build your site and upload it to Power Pages."
+        }
+      ],
+      "notes": [
+        "Works with single-page sites built with React, Angular, Vue, or Astro, and with Liquid-based sites you download with PAC CLI.",
+        "Server-rendered frameworks such as Next.js are not supported."
+      ],
+      "learn": [
+        {
+          "title": "What is Power Pages?",
+          "url": "https://learn.microsoft.com/power-pages/introduction"
+        },
+        {
+          "title": "Create code sites",
+          "url": "https://learn.microsoft.com/power-pages/configure/create-code-sites"
+        }
+      ]
+    },
+    {
+      "name": "model-apps",
+      "title": "Model-driven apps",
+      "product": "power-apps",
+      "goal": "app",
+      "audience": "both",
+      "status": null,
+      "summary": "Build a complete model-driven Power App from a description, with its tables, forms, views, and security roles, or add generative pages to an app you already have.",
+      "prompts": [
+        "Build an app for tracking service requests",
+        "Create a model-driven app to manage suppliers and contracts",
+        "Build a data grid page for my model-driven app"
+      ],
+      "requirements": [
+        "Node.js (LTS version)",
+        "Power Platform CLI (PAC CLI) newer than 2.10.0",
+        "Azure CLI, signed in with the same account as PAC CLI",
+        "A Dataverse environment where you can create apps and tables"
+      ],
+      "skills": [
+        {
+          "name": "app-builder",
+          "description": "Build or change a whole app from a plain-language description."
+        },
+        {
+          "name": "genpage",
+          "description": "Create and publish a generative page in an existing app."
+        }
+      ],
+      "notes": [
+        "You review a plan and previews before anything is created in your environment.",
+        "Use a general-purpose or advanced reasoning model. Lightweight coding models are not recommended."
+      ],
+      "learn": [
+        {
+          "title": "Build model-driven apps with external tools",
+          "url": "https://learn.microsoft.com/power-apps/maker/model-driven-apps/model-driven-app-external-tools"
+        },
+        {
+          "title": "Generative pages with external tools",
+          "url": "https://learn.microsoft.com/power-apps/maker/model-driven-apps/generative-page-external-tools"
+        }
+      ]
+    },
+    {
+      "name": "canvas-apps",
+      "title": "Canvas apps",
+      "product": "power-apps",
+      "goal": "app",
+      "audience": "both",
+      "status": null,
+      "summary": "Build or change a canvas app's screens, controls, and formulas while the app is open in Power Apps Studio.",
+      "prompts": [
+        "Create a Canvas App for managing inventory",
+        "Edit my Canvas App to add a new screen for reports",
+        "List the available Canvas App controls."
+      ],
+      "requirements": [
+        ".NET 10 SDK or later",
+        "A canvas app saved in your environment, with coauthoring turned on in Settings > Updates > Coauthoring",
+        "Power Apps Studio open in your browser while you work",
+        "A work account that can edit the app"
+      ],
+      "skills": [
+        {
+          "name": "configure-canvas-mcp",
+          "description": "Connect your assistant to the app that is open in Power Apps Studio."
+        },
+        {
+          "name": "canvas-app",
+          "description": "Build a new connected app or change an existing one."
+        }
+      ],
+      "notes": [
+        "Create the app and turn on coauthoring in Power Apps Studio first. The plugin can't do those two steps for you.",
+        "Your organization's data policies can limit which connectors you can use, and an admin may need to allow local MCP servers."
+      ],
+      "learn": [
+        {
+          "title": "Get started with canvas apps",
+          "url": "https://learn.microsoft.com/power-apps/maker/canvas-apps/getting-started"
+        }
+      ]
+    },
+    {
+      "name": "code-apps-preview",
+      "title": "Code apps",
+      "product": "power-apps",
+      "goal": "app",
+      "audience": "developers",
+      "status": "preview",
+      "summary": "Create and publish Power Apps code apps: React web apps that connect to Dataverse, SharePoint, Excel, Teams, Outlook, and other Power Platform connectors.",
+      "prompts": [
+        "Create a code app for tracking customer requests",
+        "Add Dataverse tables for customers and requests",
+        "Connect my app to a SharePoint list"
+      ],
+      "requirements": [
+        "Node.js 22 or later",
+        "A Power Platform environment where you can publish apps"
+      ],
+      "skills": [
+        {
+          "name": "create-code-app",
+          "description": "Set up, build, and publish a new code app."
+        },
+        {
+          "name": "add-datasource",
+          "description": "Pick the right data source or connector for your app."
+        },
+        {
+          "name": "add-dataverse",
+          "description": "Add Dataverse tables to your app."
+        },
+        {
+          "name": "add-connector",
+          "description": "Add any other Power Platform connector."
+        },
+        {
+          "name": "deploy",
+          "description": "Build and publish your app."
+        }
+      ],
+      "notes": [
+        "This plugin is in preview and may change before general availability."
+      ],
+      "learn": [
+        {
+          "title": "Power Apps code apps overview",
+          "url": "https://learn.microsoft.com/power-apps/developer/code-apps/overview"
+        }
+      ]
+    },
+    {
+      "name": "mobile-app",
+      "title": "Mobile apps",
+      "product": "power-apps",
+      "goal": "mobile",
+      "audience": "both",
+      "status": "private-preview",
+      "summary": "Create iPhone and Android apps that use your Power Platform data, and preview them on your own phone as you build.",
+      "prompts": [
+        "Build me a small notes app",
+        "I want a field inspection app where technicians log site visits with photos, GPS location, and notes",
+        "I need an Asset table with name, serial number, and a lookup to an existing Account"
+      ],
+      "requirements": [
+        "Node.js 24 LTS",
+        "The Power Apps Mobile Preview app on your phone, from the Apple App Store or Google Play",
+        "Azure CLI, signed in",
+        "A Power Apps app registration. The plugin helps you find or configure one."
+      ],
+      "skills": [
+        {
+          "name": "create-mobile-app",
+          "description": "Create a new mobile app from a description."
+        },
+        {
+          "name": "edit-app",
+          "description": "Improve an app you already generated."
+        },
+        {
+          "name": "add-dataverse",
+          "description": "Add Dataverse tables and fields."
+        },
+        {
+          "name": "add-native",
+          "description": "Add phone features such as the camera or barcode scanning."
+        },
+        {
+          "name": "deploy",
+          "description": "Build and publish the app to your organization."
+        }
+      ],
+      "notes": [
+        "Private preview. Don't use it for production apps."
+      ],
+      "learn": []
+    },
+    {
+      "name": "power-apps-mobile-extension",
+      "title": "Power Apps Mobile extensions",
+      "product": "power-apps",
+      "goal": "mobile",
+      "audience": "developers",
+      "status": "preview",
+      "summary": "Add your own native phone features, written for Android and iOS, to a wrapped canvas app.",
+      "prompts": [
+        "Design a native barcode scanning feature for my wrapped canvas app",
+        "Generate the Android and iOS code and the companion control",
+        "Build the ppmplugin bundle and check it"
+      ],
+      "requirements": [
+        "Node.js 20 or 22",
+        "JDK 17 or later and the Android SDK with platform 35, for Android",
+        "Xcode 16 or later on a Mac, for iOS",
+        "PAC CLI 1.40 or later and .NET SDK 10 or later, to publish the companion control",
+        "Power Apps component framework for canvas apps, turned on by an admin"
+      ],
+      "skills": [
+        {
+          "name": "design-native-extension-feature",
+          "description": "Plan the feature and its technical design."
+        },
+        {
+          "name": "generate-native-extension",
+          "description": "Generate the Android and iOS code."
+        },
+        {
+          "name": "generate-pcf-companion",
+          "description": "Generate the control that connects the feature to your canvas app."
+        },
+        {
+          "name": "generate-ppmplugin",
+          "description": "Build and check the bundle you upload when you wrap the app."
+        },
+        {
+          "name": "publish-pcf-companion",
+          "description": "Publish the companion control to your environment."
+        }
+      ],
+      "notes": [
+        "Native code doesn't run in the browser preview. Test it in the wrapped app on a real phone.",
+        "Uploading a ppmplugin bundle during wrap is a preview feature."
+      ],
+      "learn": [
+        {
+          "title": "Power Apps component framework overview",
+          "url": "https://learn.microsoft.com/power-apps/developer/component-framework/overview"
+        },
+        {
+          "title": "Wrap a canvas app as a mobile app",
+          "url": "https://learn.microsoft.com/power-apps/maker/common/wrap/overview"
+        }
+      ]
+    },
+    {
+      "name": "power-automate",
+      "title": "Power Automate",
+      "product": "power-automate",
+      "goal": "automate",
+      "audience": "makers",
+      "status": null,
+      "summary": "Create, change, run, and troubleshoot Power Automate cloud flows by describing what you want, and run your desktop flows.",
+      "prompts": [
+        "Create a flow that emails me when a new item is added to my SharePoint list",
+        "Why did the last run of my approval flow fail?",
+        "Show me the flows in my environment"
+      ],
+      "requirements": [
+        "Node.js 18 or later",
+        "Azure CLI, signed in with az login",
+        "Access to the environments and flows you want to work with"
+      ],
+      "skills": [
+        {
+          "name": "setup",
+          "description": "Check and set up what the plugin needs the first time."
+        },
+        {
+          "name": "create-flow",
+          "description": "Create a new flow step by step."
+        },
+        {
+          "name": "build-flow",
+          "description": "Generate a complete flow from a description."
+        },
+        {
+          "name": "debug-flow",
+          "description": "Find out why a flow run failed."
+        },
+        {
+          "name": "manage-flows",
+          "description": "Publish, test, and list your flows."
+        }
+      ],
+      "notes": [
+        "The plugin can publish, turn off, copy, and delete flows. Check the environment and flow name before you approve a change."
+      ],
+      "learn": [
+        {
+          "title": "Get started with Power Automate",
+          "url": "https://learn.microsoft.com/power-automate/getting-started"
+        }
+      ]
+    },
+    {
+      "name": "process-intelligence",
+      "title": "Process Intelligence",
+      "product": "power-automate",
+      "goal": "analyze",
+      "audience": "makers",
+      "status": null,
+      "summary": "Ask questions about your Power Automate Process Mining data to find slow steps, rework, and differences between groups of cases.",
+      "prompts": [
+        "Why are invoice approvals taking longer this quarter?",
+        "Which steps cause the most waiting in this process?",
+        "Compare this month's cases with last month's"
+      ],
+      "requirements": [
+        "Node.js 22 or later, ideally a maintained LTS release",
+        "Azure CLI 2.54 or later",
+        "A Power Automate Process Mining account and environment you can use"
+      ],
+      "skills": [
+        {
+          "name": "setup",
+          "description": "Connect to your Process Mining environment and sign in."
+        },
+        {
+          "name": "investigate-process",
+          "description": "Test an idea about why a process behaves the way it does."
+        },
+        {
+          "name": "analytics",
+          "description": "Pick a process and get an overview."
+        },
+        {
+          "name": "analyze-performance",
+          "description": "Find slow steps and handoffs."
+        },
+        {
+          "name": "compare-cohorts",
+          "description": "Compare groups of cases or time periods."
+        }
+      ],
+      "notes": [
+        "Run the setup skill first. You review a privacy notice and confirm before any process data reaches your assistant.",
+        "Results can include business or personal data from your processes.",
+        "GCC, GCC High, DoD and Mooncake are not supported yet."
+      ],
+      "learn": [
+        {
+          "title": "Overview of process mining",
+          "url": "https://learn.microsoft.com/power-automate/process-mining-overview"
+        }
+      ]
+    },
+    {
+      "name": "dataverse",
+      "title": "Dataverse",
+      "product": "dataverse",
+      "goal": "data",
+      "audience": "both",
+      "status": null,
+      "external": "https://github.com/microsoft/Dataverse-skills",
+      "summary": "Connect to Dataverse and work with your business data: ask questions about records, import data, and manage tables, solutions, and security.",
+      "prompts": [
+        "Show me my open deals over $100K closing this quarter",
+        "Import this CSV into the contacts table",
+        "Create a customer feedback table with name, rating, and comment columns"
+      ],
+      "requirements": [
+        "A Dataverse environment. The free Power Apps Developer Plan works.",
+        "The dv-connect skill checks for the other tools it needs and helps you install them."
+      ],
+      "skills": [
+        {
+          "name": "dv-connect",
+          "description": "Set up tools, sign in, and connect to an environment."
+        },
+        {
+          "name": "dv-query",
+          "description": "Ask questions about your records."
+        },
+        {
+          "name": "dv-data",
+          "description": "Create, update, and import records."
+        },
+        {
+          "name": "dv-metadata",
+          "description": "Create and change tables, columns, forms, and views."
+        },
+        {
+          "name": "dv-solution",
+          "description": "Create, export, and import solutions."
+        }
+      ],
+      "notes": [
+        "Maintained in the microsoft/Dataverse-skills repository. Report issues there.",
+        "The install-everything command skips this plugin. To include it, use the Include Dataverse commands on the home page.",
+        "If you already installed it from the dataverse-skills marketplace, keep only one copy so its skills don't load twice."
+      ],
+      "learn": [
+        {
+          "title": "What is Dataverse?",
+          "url": "https://learn.microsoft.com/power-apps/maker/data-platform/data-platform-intro"
+        },
+        {
+          "title": "Power Apps Developer Plan",
+          "url": "https://learn.microsoft.com/power-platform/developer/plan"
+        }
+      ]
+    },
+    {
+      "name": "pcf",
+      "title": "PCF code components",
+      "product": "power-apps",
+      "goal": "extend",
+      "audience": "developers",
+      "status": "preview",
+      "summary": "Build, test, and deploy custom controls for Power Apps forms and views, with guided setup for Power Pages and canvas apps.",
+      "prompts": [
+        "Create a PCF star rating control for a model-driven form",
+        "Diagnose why this PCF project will not build",
+        "Deploy this PCF control and verify the binding"
+      ],
+      "requirements": [
+        "Node.js 20 or later",
+        "PAC CLI and .NET SDK 8, to deploy",
+        "Azure CLI, to check what you deployed"
+      ],
+      "skills": [
+        {
+          "name": "pcf",
+          "description": "Plan, build, test, deploy, and check a control."
+        }
+      ],
+      "notes": [
+        "For canvas apps, an admin must turn on Power Apps component framework for canvas apps in each environment.",
+        "Deployment and binding pause for your approval."
+      ],
+      "learn": [
+        {
+          "title": "Power Apps component framework overview",
+          "url": "https://learn.microsoft.com/power-apps/developer/component-framework/overview"
+        }
+      ]
+    },
+    {
+      "name": "mcp-apps",
+      "title": "MCP Apps",
+      "product": "dataverse",
+      "goal": "extend",
+      "audience": "developers",
+      "status": null,
+      "summary": "Generate tools that AI assistants can call to work with your Dataverse data, plus small interactive widgets that show the results.",
+      "prompts": [
+        "Create a tool named account-summary",
+        "Show account revenue as a bar chart",
+        "Create a tool that searches accounts and a widget that shows the results"
+      ],
+      "requirements": [
+        "PAC CLI, when a tool reads Dataverse tables"
+      ],
+      "skills": [
+        {
+          "name": "generate-codeful-mcp-tool",
+          "description": "Generate a tool and its description, inputs, and outputs."
+        },
+        {
+          "name": "generate-mcp-app-ui",
+          "description": "Generate a widget that shows a tool's results."
+        }
+      ],
+      "notes": [],
+      "learn": []
+    }
+  ],
+  "faq": [
+    {
+      "question": "Do I need to know how to code?",
+      "answer": "No. You describe what you want in your own words. You run a few commands to install things, and some plugins are aimed at developers. Each plugin page says who it's for."
+    },
+    {
+      "question": "What does it cost?",
+      "answer": "The plugins are free and open source under the MIT license. You need your own AI assistant, such as GitHub Copilot or Claude, and a Power Platform environment, which can need Power Platform licenses."
+    },
+    {
+      "question": "How do I update or remove a plugin?",
+      "answer": "The install-everything command turns on automatic updates. Otherwise, run claude plugin update or copilot plugin update with the plugin name. To remove a plugin, use uninstall instead of update."
+    },
+    {
+      "question": "Where do I get help?",
+      "answer": "Most plugins include a report-issue skill that drafts a bug report for you. You can also open an issue on GitHub."
+    }
+  ],
+  "video": {
+    "transcript": [
+      {
+        "spoken": "Your AI assistant knows a lot about code. A plugin teaches it how to build on Power Platform.",
+        "shown": "An AI assistant window opens, titled \"Your AI assistant\". Its Plugins list is empty and reads \"No plugins yet\", and the message box says \"Describe what you need\". A Power Pages plugin card flies in and settles into the list."
+      },
+      {
+        "spoken": "You install a plugin once, and it adds a set of skills.",
+        "shown": "Under \"Skills in this plugin\", five skills unfold from the plugin, each with what it does: /create-site, Start a new site. /edit-site, Change pages. /setup-datamodel, Add tables. /setup-auth, Add sign-in. /deploy-site, Upload the site."
+      },
+      {
+        "spoken": "Each skill is one job, written down step by step. Creating a Power Pages site is one skill. Deploying it is another.",
+        "shown": "/create-site opens into a card titled \"Create a Power Pages site\" with four steps: Ask what the site is for. Show you a plan to approve. Build the site. Ask before deploying it. A badge reads \"One skill, one job\". A second card, /deploy-site, titled \"Deploy the site\", slides in front with three steps: Check your sign-in and environment. Build the site. Upload it to Power Pages."
+      },
+      {
+        "spoken": "When you describe what you need, your assistant picks the right skill and follows its steps. It asks before it runs commands or changes files.",
+        "shown": "The cards fold back into the list of skills, which moves into the window's sidebar. Someone types \"Create a Power Pages site for a job board\" and sends it. A line links the request to /create-site, and the reply reads \"Using /create-site\" as three steps get checked off: Asked what the site is for. Showed you a plan to approve. Built the site. Then the assistant stops and asks \"Allow this command?\" for npm run build, with Deny and Allow buttons and a \"Your turn\" badge. Allow is pressed and changes to \"Allowed\"."
+      },
+      {
+        "spoken": "So, plugins are what you install, and skills are the jobs inside them. You just ask.",
+        "shown": "The window fades. The plugin card sits on the left above \"Plugin: What you install\", and the five skills line up on the right above \"Skills: The jobs inside it\". The film ends on \"You just ask.\" over a message box that says \"Describe what you need\", with \"Power Platform Skills\" and microsoft.github.io/power-platform-skills."
+      }
+    ]
+  },
+  "showcase": [
+    {
+      "plugin": "power-pages",
+      "prompt": "Create a Power Pages site with React for a job board",
+      "steps": [
+        "Asks what the site is for, who uses it, and how it should look",
+        "Shows you a plan of pages and design to approve",
+        "Builds the site in React with a live preview you can open"
+      ],
+      "waiting": "Asks before it deploys the site to your environment"
+    },
+    {
+      "plugin": "model-apps",
+      "prompt": "Build an app for tracking service requests",
+      "steps": [
+        "Confirms which environment to build in",
+        "Checks for tables you already have",
+        "Drafts the tables, forms, views, and security roles"
+      ],
+      "waiting": "Waits for you to approve the plan before it builds anything"
+    },
+    {
+      "plugin": "power-automate",
+      "prompt": "Create a flow that emails me when a new item is added to my SharePoint list",
+      "steps": [
+        "Picks the environment to build in",
+        "Finds the SharePoint and email actions and checks your connections",
+        "Drafts the trigger and the email step"
+      ],
+      "waiting": "Asks you to confirm the design before it creates the flow"
+    },
+    {
+      "plugin": "process-intelligence",
+      "prompt": "Why are invoice approvals taking longer this quarter?",
+      "steps": [
+        "Confirms the process, the question, and the time periods",
+        "States what it expects to find and what would prove it wrong",
+        "Compares this quarter's cases with the last",
+        "Reports each finding as supported, contradicted, or inconclusive"
+      ],
+      "waiting": null
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "planned-only",
+  "title": "Planned only",
+  "summary": "Planned fixture.",
+  "template": "field-standard",
+  "hosts": [
+    "model"
+  ],
+  "whyWanted": "Exercises planned recipe handling.",
+  "status": "planned",
+  "certified": {
+    "model": {},
+    "pages": {}
+  }
+}

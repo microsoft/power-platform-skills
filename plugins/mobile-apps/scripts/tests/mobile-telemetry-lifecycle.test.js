@@ -747,6 +747,32 @@ test('run lock serializes parent completion and retry creation across processes'
   const configDir = path.join(projectRoot, 'config');
   const ikeyPath = path.join(configDir, 'ikey.json');
   const cli = path.join(PLUGIN_ROOT, 'scripts', 'emit-telemetry-checkpoint.js');
+  const traceFs = path.join(projectRoot, 'trace-lifecycle-fs.cjs');
+  // The CLI sanitizes failures, so trace fixture I/O errors inside test children.
+  fs.writeFileSync(traceFs, `
+const fs = require('node:fs');
+const path = require('node:path');
+const failures = [];
+for (const operation of ['linkSync', 'rmSync', 'statSync', 'readFileSync']) {
+  const original = fs[operation];
+  fs[operation] = function (...args) {
+    try {
+      return original.apply(this, args);
+    } catch (error) {
+      if (typeof args[0] === 'string') {
+        failures.push({
+          operation, code: error.code, file: path.basename(args[0]),
+          target: typeof args[1] === 'string' && operation === 'linkSync' ? path.basename(args[1]) : undefined,
+        });
+      }
+      throw error;
+    }
+  };
+}
+process.on('exit', () => {
+  for (const failure of failures) process.stderr.write(JSON.stringify(failure) + '\\n');
+});
+`);
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(ikeyPath, JSON.stringify(provisioned));
   const env = {
@@ -756,7 +782,7 @@ test('run lock serializes parent completion and retry creation across processes'
     POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
   };
   const runCli = (args) => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, ...args], {
+    const child = spawn(process.execPath, ['--require', traceFs, cli, ...args], {
       cwd: projectRoot,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -806,7 +832,8 @@ test('run lock serializes parent completion and retry creation across processes'
     );
   }
 
-  for (const spanType of ['skill', 'checkpoint']) {
+  for (let retryTrial = 0; retryTrial < 32; retryTrial += 1) {
+    const spanType = retryTrial % 2 === 0 ? 'skill' : 'checkpoint';
     const root = lifecycle.beginSpan({
       projectRoot, configDir, skillName: 'create-mobile-app',
     });
@@ -831,8 +858,9 @@ test('run lock serializes parent completion and retry creation across processes'
       assert.equal(result.code, 0, result.stderr);
       return JSON.parse(result.stdout);
     });
-    assert.equal(attempts.filter((attempt) => attempt.state === 'started').length, 1);
-    assert.equal(attempts.filter((attempt) => attempt.reason === 'invalid_retry').length, 1);
+    const retryResults = `${spanType} retry trial ${retryTrial}: ${JSON.stringify(attempts)}\n${results.map(result => result.stderr).join('\n')}`;
+    assert.equal(attempts.filter((attempt) => attempt.state === 'started').length, 1, retryResults);
+    assert.equal(attempts.filter((attempt) => attempt.reason === 'invalid_retry').length, 1, retryResults);
     const retry = attempts.find((attempt) => attempt.state === 'started');
     lifecycle.finishSpan({ ...options, spanId: retry.spanId, state: 'completed' });
     const repeated = await runCli(args);
@@ -907,6 +935,91 @@ test('lock publication treats transient EEXIST as contention after release', (co
   assert.equal(fs.existsSync(lockPath), false);
   assert.ok(pendingPaths.every((filename) => !fs.existsSync(filename)));
 });
+
+test('run lock recovery retries transient EPERM after the owner releases', (context) => {
+  const projectRoot = tempProject(context);
+  const configDir = path.join(projectRoot, 'config');
+  const root = lifecycle.beginSpan({
+    projectRoot, configDir, skillName: 'create-mobile-app',
+  });
+  const runDirectory = lifecycle.runDirectory(configDir, root.runId);
+  const lockPath = path.join(runDirectory, '.lifecycle.lock');
+  const recoveryPath = path.join(runDirectory, '.lifecycle.lock.recovery');
+  fs.writeFileSync(lockPath, JSON.stringify({
+    pid: process.pid,
+    token: '11111111-1111-4111-8111-111111111111',
+    acquiredAtMs: Date.now(),
+  }));
+  const originalLink = fs.linkSync;
+  let recoveryAttempts = 0;
+  context.mock.method(fs, 'linkSync', (source, target) => {
+    if (target === recoveryPath) {
+      recoveryAttempts += 1;
+      // Windows can report EPERM as the other owner unlinks the source.
+      fs.rmSync(lockPath, { force: true });
+      throw Object.assign(new Error('lock release in progress'), { code: 'EPERM' });
+    }
+    return originalLink(source, target);
+  });
+
+  const child = lifecycle.beginSpan({
+    projectRoot,
+    configDir,
+    runId: root.runId,
+    parentSpanId: root.spanId,
+    skillName: 'create-mobile-app',
+    checkpointName: 'gather_app_requirements',
+  });
+  assert.equal(recoveryAttempts, 1);
+  assert.equal(child.parentSpanId, root.spanId);
+  assert.equal(fs.existsSync(lockPath), false);
+  assert.equal(fs.existsSync(recoveryPath), false);
+});
+
+for (const [code, expectedError] of [
+  ['EPERM', /lock_timeout/],
+  ['EIO', { code: 'EIO' }],
+]) {
+  test(`run lock recovery preserves the owner after persistent ${code}`, (context) => {
+    const projectRoot = tempProject(context);
+    const configDir = path.join(projectRoot, 'config');
+    const root = lifecycle.beginSpan({
+      projectRoot, configDir, skillName: 'create-mobile-app',
+    });
+    const runDirectory = lifecycle.runDirectory(configDir, root.runId);
+    const lockPath = path.join(runDirectory, '.lifecycle.lock');
+    const recoveryPath = path.join(runDirectory, '.lifecycle.lock.recovery');
+    const owner = JSON.stringify({
+      pid: process.pid,
+      token: '11111111-1111-4111-8111-111111111111',
+      acquiredAtMs: Date.now(),
+    });
+    fs.writeFileSync(lockPath, owner);
+    const filesBefore = fs.readdirSync(runDirectory).sort();
+    const originalLink = fs.linkSync;
+    let recoveryAttempts = 0;
+    context.mock.method(fs, 'linkSync', (source, target) => {
+      if (target === recoveryPath) {
+        recoveryAttempts += 1;
+        throw Object.assign(new Error('recovery link unavailable'), { code });
+      }
+      return originalLink(source, target);
+    });
+
+    assert.throws(() => lifecycle.beginSpan({
+      projectRoot,
+      configDir,
+      runId: root.runId,
+      parentSpanId: root.spanId,
+      skillName: 'create-mobile-app',
+      checkpointName: 'gather_app_requirements',
+      lockTimeoutMs: 0,
+    }), expectedError);
+    assert.equal(recoveryAttempts, 1);
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), owner);
+    assert.deepEqual(fs.readdirSync(runDirectory).sort(), filesBefore);
+  });
+}
 
 test('run lock recovers when its recorded owner process is dead', (context) => {
   const projectRoot = tempProject(context);

@@ -19,9 +19,12 @@
     "exitCode": 0,
     "result": "Index Active Kind      Name Friendly Name User                           Cloud  Type Environment Environment Url\n[1]   *      UNIVERSAL           Contoso       maker@contoso.onmicrosoft.com Public User Contoso     https://contoso.crm.dynamics.com/"
   },
-  { "id": "list-languages", "by": "genpage-planner", "command": "pac model list-languages", "exitCode": 0, "result": "LCID  Code   Name               RTL\n1033  en-US  English            No" },
-  { "id": "list-tables", "by": "genpage-planner", "command": "pac model list-tables --search 'account'", "exitCode": 0, "result": "Logical Name          Display Name\naccount               Account\naccountleads          AccountLeads\nmsdyn_accountkpiitem  Account KPI Item" },
-  { "id": "list-apps", "by": "genpage-planner", "command": "pac model list", "exitCode": 0, "result": "App ID                                Display Name          Unique Name\n11111111-2222-3333-4444-555555555555  Sales Hub             SalesHub\n44444444-5555-6666-7777-888888888888  Customer Service Hub  CustomerServiceHub" },
+  { "id": "list-languages", "by": "genpage-planner", "command": "node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'", "exitCode": 0, "result": { "ok": true, "baseLanguage": { "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }, "languages": [{ "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }], "unmapped": [], "summary": ["1033 en-US \u2014 RTL: No"] } },
+  { "id": "list-tables", "by": "genpage-planner", "command": "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'account' --exact", "exitCode": 0, "result": { "ok": true, "search": ["account"], "exact": true, "count": 1, "tables": [{ "logicalName": "account", "displayName": "Account", "schemaName": "Account", "isCustom": false }], "missing": [] } },
+  { "id": "list-apps", "by": "genpage-planner", "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'", "exitCode": 0, "result": { "ok": true, "count": 2, "apps": [
+    { "id": "11111111-2222-3333-4444-555555555555", "name": "Sales Hub", "uniqueName": "SalesHub", "description": "", "published": true, "unpublishedChanges": false },
+    { "id": "44444444-5555-6666-7777-888888888888", "name": "Customer Service Hub", "uniqueName": "CustomerServiceHub", "description": "", "published": true, "unpublishedChanges": false }
+  ] } },
   {
     "id": "planner-discovery",
     "command": "Task genpage-planner (discovery: create, No connector bindings., No custom API bindings.)",
@@ -51,9 +54,9 @@
   },
   {
     "id": "generate-types",
-    "command": "pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'",
     "exitCode": 0,
-    "result": "Types written to D:/work/account-records/RuntimeTypes.ts"
+    "result": { "ok": true, "outputFile": "D:/work/account-records/RuntimeTypes.ts", "dataSources": ["account"], "detail": "none", "bytes": 18432 }
   },
   { "id": "gate-custom-api", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api", "exitCode": 1, "result": "disabled" },
   { "id": "gate-telemetry", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-telemetry", "exitCode": 1, "result": "disabled" },

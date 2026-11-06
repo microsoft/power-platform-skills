@@ -31,6 +31,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const FIXTURES_DIR = path.join(
@@ -253,17 +254,20 @@ function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(`error: ${err.message}`);
     process.exit(1);
   }
 
   const workingDir = path.resolve(args.workingDir);
   if (!fs.existsSync(workingDir) || !fs.statSync(workingDir).isDirectory()) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(`error: working directory does not exist or is not a directory: ${workingDir}`);
     process.exit(2);
   }
 
   if (!evalExists(args.eval)) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(`error: no eval with id ${args.eval} in evals.json`);
     process.exit(1);
   }
@@ -273,6 +277,7 @@ function main() {
 
   if (fs.existsSync(fixtureDir)) {
     if (!args.force) {
+      makeWritesBlocking(process.stdout, process.stderr);
       console.error(
         `error: fixture already exists: ${fixtureDir}\n` +
           `       pass --force to overwrite, or pick a different --slug`,
@@ -285,6 +290,7 @@ function main() {
   const { copied, skipped } = copyAllowedFiles(workingDir, fixtureDir);
 
   if (copied.length === 0) {
+    makeWritesBlocking(process.stdout, process.stderr);
     console.error(
       `error: no allowlisted files found in ${workingDir}\n` +
         `       expected at least one of: *.tsx, *.md, RuntimeTypes.ts`,

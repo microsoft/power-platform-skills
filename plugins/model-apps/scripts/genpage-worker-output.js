@@ -10,7 +10,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 // The structural gate is shared with promote-intent-pages.js (see lib/page-structure.js).
-const { pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
+const { pageStructure, pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
+const { typescriptProviderOptions } = require('./lib/typescript-provider.js');
 
 // A worker that returns without writing leaves whatever was at its path before, and a complete page an
 // earlier attempt left there passes every content check: the stale page was deployed instead of taking
@@ -23,6 +24,7 @@ const { pageStructureProblems: structuralProblems } = require('./lib/page-struct
 const STAMP_SUFFIX = '.dispatch-stamp.json';
 const stampPathFor = (abs) => path.join(path.dirname(abs), `.${path.basename(abs)}${STAMP_SUFFIX}`);
 const { sha256 } = require('./lib/hash.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function stampPageTarget({ filePath }) {
   if (!filePath) return { ok: false, action: 'stamp', problems: ['--file is required'] };
@@ -92,7 +94,7 @@ function consumeStamp(abs) {
 // uncaught CLI failure instead of that recovery. lstat, not existsSync, so a link there (dangling ones
 // included) is reported as what it is: not a page written in place — the dispatch gate
 // (check-page-files.js) refuses a link at a page path before any worker runs.
-function validatePageOutput({ filePath }) {
+function validatePageOutput({ filePath, typescript }) {
   if (!filePath) return { ok: false, filePath, problems: ['--file is required'] };
   const abs = path.resolve(filePath);
   const fail = (problem) => ({ ok: false, filePath: abs, problems: [problem] });
@@ -115,7 +117,10 @@ function validatePageOutput({ filePath }) {
   }
   // Written since the stamp (or no stamp at all): the stamp has done its job.
   if (stamp) consumeStamp(abs);
-  const problems = structuralProblems(bytes.toString('utf8'));
+  // `typescript`: a caller's provider (lib/typescript-provider.js) — the parser is handed the resolved namespace, never the provider as given.
+  const { problems, code } = pageStructure(bytes.toString('utf8'), typescriptProviderOptions(typescript).parse);
+  // A valid page nested too deeply for the parser is refused with the compile's own code and the page's file, not as the cut-off page the lexer's guess made of it.
+  if (code) return { ok: false, filePath: abs, code, problems: problems.map((p) => `page file "${path.basename(abs)}": ${p}`) };
   return { ok: problems.length === 0, filePath: abs, problems };
 }
 
@@ -135,6 +140,9 @@ function parseArgv(argv) {
 function main() {
   const args = parseArgv(process.argv.slice(2));
   const result = args.stamp ? stampPageTarget(args) : validatePageOutput(args);
+  // The result quotes the path it was given and the page's problems, and the process exits right after it:
+  // the write is made blocking first, or a pipe on Linux and macOS takes only what fits at once (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exit(result.ok ? 0 : 3);
 }

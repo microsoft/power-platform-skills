@@ -1,0 +1,22 @@
+{
+  "id": "grid-customizer",
+  "title": "Grid customizer",
+  "summary": "Supplies custom cell renderers and editors to the Power Apps grid control.",
+  "template": "field-virtual",
+  "hosts": ["model"],
+  "status": "available",
+  "certified": { "model": {}, "pages": {} },
+  "whyWanted": "Makers want a supported starting point for Power Apps grid customizers because the wiring is difficult to discover and diagnose.",
+  "properties": [
+    {
+      "name": "EventName",
+      "displayNameKey": "EventName_Display_Key",
+      "descriptionKey": "EventName_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "bound",
+      "required": true
+    }
+  ],
+  "features": [],
+  "configuration": "Add the component to the Power Apps grid Customizer control property, using the full logical name <publisher prefix>_<namespace>.<control name>."
+}

@@ -1,0 +1,702 @@
+[
+  {
+    "id": "manifest",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/generate-page-manifest.js' 'D:/work/job-candidates' 'job-candidates'",
+    "exitCode": 0,
+    "result": {
+      "workingDir": "D:\\work\\job-candidates",
+      "slug": "job-candidates",
+      "features": [],
+      "files": {
+        "package.json": {
+          "wrote": true
+        },
+        "genpage.d.ts": {
+          "wrote": true
+        }
+      }
+    }
+  },
+  {
+    "id": "interaction-mode",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/resolve-interaction-mode.js'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "interactive": true,
+      "reason": "default (attended)"
+    }
+  },
+  {
+    "id": "node-version",
+    "command": "node --version",
+    "exitCode": 0,
+    "result": "v20.20.2"
+  },
+  {
+    "id": "pac-help",
+    "command": "pac help",
+    "exitCode": 0,
+    "result": "Microsoft PowerPlatform CLI Version: 2.11.0"
+  },
+  {
+    "id": "auth-list",
+    "command": "pac auth list",
+    "exitCode": 0,
+    "result": "Index Active Kind      Name Friendly Name User                           Cloud  Type Environment Environment Url\n[1]   *      UNIVERSAL           Contoso       maker@contoso.onmicrosoft.com Public User Contoso     https://contoso.crm.dynamics.com/"
+  },
+  {
+    "id": "planner-discovery",
+    "command": "Task genpage-planner (discovery: create, No connector bindings., No custom API bindings.)",
+    "result": {
+      "action": "needs_input",
+      "why": "Two new tables must be created, so an app and a target solution are required before the plan can be proposed",
+      "questions": [
+        {
+          "id": "app",
+          "question": "Which app should the page be added to?",
+          "options": [
+            "Contoso Talent Hub (11111111-2222-3333-4444-555555555555)",
+            "Field Service Desk (44444444-5555-6666-7777-888888888888)",
+            "Create a new app"
+          ]
+        },
+        {
+          "id": "solution",
+          "question": "Your env has 6 existing custom tables using prefix cr. Which solution should the new tables (cr_candidate, cr_jobrequisition) go in?",
+          "options": [
+            "Continue in 'ContosoRecruiting' (prefix: cr) — matches your existing custom tables [RECOMMENDED]",
+            "Create new 'genpage-contoso-talent-hub' solution under cr publisher",
+            "Use existing 'FieldSurveys' (prefix: new)",
+            "Create a new solution under Default Publisher (prefix: new)",
+            "Use Default Solution (prefix: new) ⚠ different prefix from existing work"
+          ]
+        }
+      ],
+      "discovered": {
+        "languages": [
+          "English (1033)"
+        ],
+        "existingEntities": [],
+        "entitiesToCreate": [
+          "cr_candidate",
+          "cr_jobrequisition"
+        ],
+        "detectedPrefix": "cr",
+        "detectedTableCount": 6,
+        "solutions": [
+          {
+            "uniquename": "ContosoRecruiting",
+            "prefix": "cr"
+          },
+          {
+            "uniquename": "FieldSurveys",
+            "prefix": "new"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "list-languages",
+    "by": "genpage-planner",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "baseLanguage": {
+        "lcid": 1033,
+        "code": "en-US",
+        "name": "English (United States)",
+        "rtl": false
+      },
+      "languages": [
+        {
+          "lcid": 1033,
+          "code": "en-US",
+          "name": "English (United States)",
+          "rtl": false
+        }
+      ],
+      "unmapped": [],
+      "summary": [
+        "1033 en-US — RTL: No"
+      ]
+    }
+  },
+  {
+    "id": "list-tables-search",
+    "by": "genpage-planner",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'cr_candidate,cr_jobrequisition' --exact",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "search": [
+        "cr_candidate",
+        "cr_jobrequisition"
+      ],
+      "exact": true,
+      "count": 0,
+      "tables": [],
+      "missing": [
+        "cr_candidate",
+        "cr_jobrequisition"
+      ]
+    }
+  },
+  {
+    "id": "list-tables-prefix-scan",
+    "by": "genpage-planner",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --type custom",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "type": "custom",
+      "count": 8,
+      "tables": [
+        {
+          "logicalName": "cr_hiringstage",
+          "displayName": "Hiring Stage",
+          "schemaName": "cr_HiringStage",
+          "isCustom": true
+        },
+        {
+          "logicalName": "cr_interview",
+          "displayName": "Interview",
+          "schemaName": "cr_Interview",
+          "isCustom": true
+        },
+        {
+          "logicalName": "cr_offerletter",
+          "displayName": "Offer Letter",
+          "schemaName": "cr_OfferLetter",
+          "isCustom": true
+        },
+        {
+          "logicalName": "cr_onboardingtask",
+          "displayName": "Onboarding Task",
+          "schemaName": "cr_OnboardingTask",
+          "isCustom": true
+        },
+        {
+          "logicalName": "cr_referral",
+          "displayName": "Referral",
+          "schemaName": "cr_Referral",
+          "isCustom": true
+        },
+        {
+          "logicalName": "cr_talentpool",
+          "displayName": "Talent Pool",
+          "schemaName": "cr_TalentPool",
+          "isCustom": true
+        },
+        {
+          "logicalName": "new_feedback",
+          "displayName": "Feedback",
+          "schemaName": "new_Feedback",
+          "isCustom": true
+        },
+        {
+          "logicalName": "new_survey",
+          "displayName": "Survey",
+          "schemaName": "new_Survey",
+          "isCustom": true
+        }
+      ]
+    }
+  },
+  {
+    "id": "list-solutions",
+    "by": "genpage-planner",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/dataverse-request.js' 'https://contoso.crm.dynamics.com' GET 'solutions?$select=uniquename,friendlyname&$expand=publisherid($select=customizationprefix)&$filter=ismanaged eq false and uniquename ne ''Default'' and uniquename ne ''Active'' and isvisible eq true&$top=10'",
+    "exitCode": 0,
+    "result": {
+      "status": 200,
+      "data": {
+        "value": [
+          {
+            "uniquename": "ContosoRecruiting",
+            "friendlyname": "Contoso Recruiting",
+            "publisherid": {
+              "customizationprefix": "cr"
+            }
+          },
+          {
+            "uniquename": "FieldSurveys",
+            "friendlyname": "Field Surveys",
+            "publisherid": {
+              "customizationprefix": "new"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "list-apps",
+    "by": "genpage-planner",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "count": 2,
+      "apps": [
+        {
+          "id": "11111111-2222-3333-4444-555555555555",
+          "name": "Contoso Talent Hub",
+          "uniqueName": "ContosoTalentHub",
+          "description": "",
+          "published": true,
+          "unpublishedChanges": false
+        },
+        {
+          "id": "44444444-5555-6666-7777-888888888888",
+          "name": "Field Service Desk",
+          "uniqueName": "FieldServiceDesk",
+          "description": "",
+          "published": true,
+          "unpublishedChanges": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "planner-proposal",
+    "command": "Task genpage-planner (answers: create, cr_candidate + cr_jobrequisition (new), candidate list with status, interview scores and recruiter, app Contoso Talent Hub, solution ContosoRecruiting)",
+    "result": {
+      "action": "plan",
+      "pages": [
+        {
+          "page": "Job Candidates",
+          "file": "job-candidates.tsx",
+          "entities": [
+            "cr_candidate",
+            "cr_jobrequisition"
+          ]
+        }
+      ],
+      "entityCreationRequired": true,
+      "entities": [
+        {
+          "suffix": "jobrequisition",
+          "resolved": "cr_jobrequisition",
+          "columns": [
+            "department",
+            "openings"
+          ],
+          "choices": []
+        },
+        {
+          "suffix": "candidate",
+          "resolved": "cr_candidate",
+          "columns": [
+            "interviewscore",
+            "recruiter"
+          ],
+          "choices": [
+            "applicationstatus"
+          ],
+          "relationships": [
+            {
+              "type": "1:N lookup",
+              "relatedTable": "jobrequisition",
+              "lookupSuffix": "jobrequisition"
+            }
+          ]
+        }
+      ],
+      "app": {
+        "name": "Contoso Talent Hub",
+        "appId": "11111111-2222-3333-4444-555555555555"
+      },
+      "solution": {
+        "uniqueName": "ContosoRecruiting",
+        "publisherPrefix": "cr"
+      }
+    }
+  },
+  {
+    "id": "plan-prepare",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-plan-provenance.js' prepare --plan 'D:/work/job-candidates/genpage-plan.md'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "action": "prepare",
+      "planPath": "D:\\work\\job-candidates\\genpage-plan.md",
+      "quarantinedPath": null
+    }
+  },
+  {
+    "id": "planner-write",
+    "command": "Task genpage-planner (approved: write genpage-plan.md)",
+    "result": {
+      "action": "written",
+      "plan": "D:/work/job-candidates/genpage-plan.md"
+    }
+  },
+  {
+    "id": "plan-verify",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-plan-provenance.js' verify --plan 'D:/work/job-candidates/genpage-plan.md' --approved '@D:/work/job-candidates/.approved-genpage-plan.md'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "action": "verify",
+      "planPath": "D:\\work\\job-candidates\\genpage-plan.md",
+      "kind": "create",
+      "targets": [
+        "job-candidates.tsx"
+      ],
+      "writtenHash": "69e164741206e6a3f8e0037b55ba757318cb404bdaf1981abce94f07af40e391"
+    }
+  },
+  {
+    "id": "auth-preflight",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/check-auth.js' --env 'https://contoso.crm.dynamics.com' --require-pac",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "blocker": null,
+      "message": "Ready (az + pac both signed in as maker@contoso.onmicrosoft.com, env https://contoso.crm.dynamics.com).",
+      "warnings": [],
+      "azUser": "maker@contoso.onmicrosoft.com",
+      "pacUser": "maker@contoso.onmicrosoft.com",
+      "envUrl": "https://contoso.crm.dynamics.com",
+      "identitiesMatch": true,
+      "whoAmI": {
+        "ok": true,
+        "userId": "22222222-3333-4444-5555-666666666666",
+        "organizationId": "33333333-4444-5555-6666-777777777777"
+      }
+    }
+  },
+  {
+    "id": "entity-builder-1",
+    "command": "Task genpage-entity-builder (plan D:/work/job-candidates/genpage-plan.md, working dir D:/work/job-candidates, plugin root D:/repo/plugins/model-apps, env from Phase 2a)",
+    "result": {
+      "action": "needs_input",
+      "why": "Sample data is optional; the user must confirm it before rows are written",
+      "questions": [
+        {
+          "id": "sample-data",
+          "question": "Entities created successfully: cr_jobrequisition (3 columns, parent of cr_candidate), cr_candidate (5 columns, lookup cr_jobrequisition). Would you like me to add sample data for testing?",
+          "options": [
+            {
+              "label": "Yes, add sample data",
+              "description": "Seed realistic requisitions and candidates linked through the cr_jobrequisition lookup"
+            },
+            {
+              "label": "No, skip",
+              "description": "Leave both tables empty"
+            }
+          ],
+          "multiSelect": false
+        }
+      ],
+      "discovered": {
+        "provisioned": [
+          "cr_jobrequisition",
+          "cr_candidate"
+        ],
+        "relationship": "cr_jobrequisition_cr_candidate",
+        "log": "D:/work/job-candidates/genpage-entity-creation-log.md",
+        "input": "D:/work/job-candidates/provision-input.json"
+      }
+    }
+  },
+  {
+    "id": "builder-auth-1",
+    "by": "genpage-entity-builder",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/check-auth.js' --env 'https://contoso.crm.dynamics.com' --require-pac",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "blocker": null,
+      "message": "Ready (az + pac both signed in as maker@contoso.onmicrosoft.com, env https://contoso.crm.dynamics.com).",
+      "warnings": [],
+      "azUser": "maker@contoso.onmicrosoft.com",
+      "pacUser": "maker@contoso.onmicrosoft.com",
+      "envUrl": "https://contoso.crm.dynamics.com",
+      "identitiesMatch": true,
+      "whoAmI": {
+        "ok": true,
+        "userId": "22222222-3333-4444-5555-666666666666",
+        "organizationId": "33333333-4444-5555-6666-777777777777"
+      }
+    }
+  },
+  {
+    "id": "provision-data-model",
+    "by": "genpage-entity-builder",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/provision-entities.js' --env 'https://contoso.crm.dynamics.com' --input '@D:/work/job-candidates/provision-input.json' --apply",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "solution": "ContosoRecruiting",
+      "entities": [
+        {
+          "schemaName": "cr_JobRequisition",
+          "logicalName": "cr_jobrequisition",
+          "entitySetName": "cr_jobrequisitions"
+        },
+        {
+          "schemaName": "cr_Candidate",
+          "logicalName": "cr_candidate",
+          "entitySetName": "cr_candidates"
+        }
+      ],
+      "columns": [
+        {
+          "table": "cr_jobrequisition",
+          "schemaName": "cr_Department",
+          "logicalName": "cr_department"
+        },
+        {
+          "table": "cr_jobrequisition",
+          "schemaName": "cr_Openings",
+          "logicalName": "cr_openings"
+        },
+        {
+          "table": "cr_candidate",
+          "schemaName": "cr_InterviewScore",
+          "logicalName": "cr_interviewscore"
+        },
+        {
+          "table": "cr_candidate",
+          "schemaName": "cr_Recruiter",
+          "logicalName": "cr_recruiter"
+        },
+        {
+          "table": "cr_candidate",
+          "schemaName": "cr_ApplicationStatus",
+          "logicalName": "cr_applicationstatus"
+        }
+      ],
+      "relationships": [
+        {
+          "kind": "1n",
+          "schemaName": "cr_jobrequisition_cr_candidate",
+          "lookupLogicalName": "cr_jobrequisition"
+        }
+      ],
+      "records": {}
+    }
+  },
+  {
+    "id": "entity-builder-2",
+    "command": "Task genpage-entity-builder (sample-data decision answered: Yes, add sample data; carries the pass-1 provisioning result)",
+    "result": {
+      "action": "complete",
+      "summary": [
+        {
+          "table": "Job Requisition",
+          "logicalName": "cr_jobrequisition",
+          "columns": 3,
+          "relationships": "parent of cr_candidate",
+          "sampleRecords": 3
+        },
+        {
+          "table": "Candidate",
+          "logicalName": "cr_candidate",
+          "columns": 5,
+          "relationships": "lookup cr_jobrequisition → cr_jobrequisition",
+          "sampleRecords": 8
+        }
+      ],
+      "log": "D:/work/job-candidates/genpage-entity-creation-log.md"
+    }
+  },
+  {
+    "id": "builder-auth-2",
+    "by": "genpage-entity-builder",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/check-auth.js' --env 'https://contoso.crm.dynamics.com' --require-pac",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "blocker": null,
+      "message": "Ready (az + pac both signed in as maker@contoso.onmicrosoft.com, env https://contoso.crm.dynamics.com).",
+      "warnings": [],
+      "azUser": "maker@contoso.onmicrosoft.com",
+      "pacUser": "maker@contoso.onmicrosoft.com",
+      "envUrl": "https://contoso.crm.dynamics.com",
+      "identitiesMatch": true,
+      "whoAmI": {
+        "ok": true,
+        "userId": "22222222-3333-4444-5555-666666666666",
+        "organizationId": "33333333-4444-5555-6666-777777777777"
+      }
+    }
+  },
+  {
+    "id": "provision-sample-data",
+    "by": "genpage-entity-builder",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/provision-entities.js' --env 'https://contoso.crm.dynamics.com' --input '@D:/work/job-candidates/provision-input.json' --apply --sample-data",
+    "artifact": "provision-input.json",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "solution": "ContosoRecruiting",
+      "entities": [
+        {
+          "schemaName": "cr_JobRequisition",
+          "logicalName": "cr_jobrequisition",
+          "entitySetName": "cr_jobrequisitions"
+        },
+        {
+          "schemaName": "cr_Candidate",
+          "logicalName": "cr_candidate",
+          "entitySetName": "cr_candidates"
+        }
+      ],
+      "columns": [
+        {
+          "table": "cr_jobrequisition",
+          "schemaName": "cr_Department",
+          "logicalName": "cr_department"
+        },
+        {
+          "table": "cr_jobrequisition",
+          "schemaName": "cr_Openings",
+          "logicalName": "cr_openings"
+        },
+        {
+          "table": "cr_candidate",
+          "schemaName": "cr_InterviewScore",
+          "logicalName": "cr_interviewscore"
+        },
+        {
+          "table": "cr_candidate",
+          "schemaName": "cr_Recruiter",
+          "logicalName": "cr_recruiter"
+        },
+        {
+          "table": "cr_candidate",
+          "schemaName": "cr_ApplicationStatus",
+          "logicalName": "cr_applicationstatus"
+        }
+      ],
+      "relationships": [
+        {
+          "kind": "1n",
+          "schemaName": "cr_jobrequisition_cr_candidate",
+          "lookupLogicalName": "cr_jobrequisition"
+        }
+      ],
+      "records": {
+        "cr_JobRequisition": [
+          "44444444-0000-4000-8000-000000000101",
+          "44444444-0000-4000-8000-000000000102",
+          "44444444-0000-4000-8000-000000000103"
+        ],
+        "cr_Candidate": [
+          "55555555-0000-4000-8000-000000000101",
+          "55555555-0000-4000-8000-000000000102",
+          "55555555-0000-4000-8000-000000000103",
+          "55555555-0000-4000-8000-000000000104",
+          "55555555-0000-4000-8000-000000000105",
+          "55555555-0000-4000-8000-000000000106",
+          "55555555-0000-4000-8000-000000000107",
+          "55555555-0000-4000-8000-000000000108"
+        ]
+      }
+    }
+  },
+  {
+    "id": "generate-types",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'cr_candidate,cr_jobrequisition' --output-file 'D:/work/job-candidates/RuntimeTypes.ts'",
+    "artifact": "RuntimeTypes.ts",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "outputFile": "D:/work/job-candidates/RuntimeTypes.ts",
+      "dataSources": [
+        "cr_candidate",
+        "cr_jobrequisition"
+      ],
+      "detail": "none",
+      "bytes": 2769
+    }
+  },
+  {
+    "id": "gate-custom-api",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api",
+    "exitCode": 1,
+    "result": "disabled"
+  },
+  {
+    "id": "gate-telemetry",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-telemetry",
+    "exitCode": 1,
+    "result": "disabled"
+  },
+  {
+    "id": "page-files",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/check-page-files.js' --plan 'D:/work/job-candidates/genpage-plan.md'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "workingDir": "D:\\work\\job-candidates",
+      "files": [
+        "job-candidates.tsx"
+      ],
+      "problems": []
+    }
+  },
+  {
+    "id": "stamp",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-worker-output.js' --stamp --file 'D:/work/job-candidates/job-candidates.tsx'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "action": "stamp",
+      "filePath": "D:\\work\\job-candidates\\job-candidates.tsx",
+      "existed": false
+    }
+  },
+  {
+    "id": "write-page",
+    "command": "Write job-candidates.tsx",
+    "artifact": "job-candidates.tsx"
+  },
+  {
+    "id": "icon-grep",
+    "command": "Grep from \"@fluentui/react-icons\" job-candidates.tsx; Grep ^PeopleTeamRegular$ references/verified-icons.txt",
+    "result": "PeopleTeamRegular: verified"
+  },
+  {
+    "id": "border-grep",
+    "command": "Grep ['\"]?borderWidth['\"]?\\s*: job-candidates.tsx",
+    "result": "no matches"
+  },
+  {
+    "id": "gate",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-worker-output.js' --file 'D:/work/job-candidates/job-candidates.tsx'",
+    "artifact": "job-candidates.tsx",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "filePath": "D:\\work\\job-candidates\\job-candidates.tsx",
+      "problems": []
+    }
+  },
+  {
+    "id": "write-upload-text",
+    "command": "Write prompt.txt, agent-message.txt, page-name.txt",
+    "artifacts": [
+      "prompt.txt",
+      "agent-message.txt",
+      "page-name.txt"
+    ]
+  },
+  {
+    "id": "create",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555' --code-file 'job-candidates.tsx' --name-file 'page-name.txt' --data-sources 'cr_candidate,cr_jobrequisition' --prompt-file 'prompt.txt' --model 'claude-sonnet-4-6' --agent-message-file 'agent-message.txt' --add-to-sitemap",
+    "exitCode": 0,
+    "writes": 1,
+    "result": {
+      "ok": true,
+      "pageId": "66666666-7777-4888-9999-bbbbbbbbbbbb",
+      "appId": "11111111-2222-3333-4444-555555555555",
+      "updated": false
+    }
+  }
+]

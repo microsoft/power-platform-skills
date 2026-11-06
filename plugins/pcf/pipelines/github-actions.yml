@@ -1,0 +1,75 @@
+# Example only: adapt this workflow into your own repository.
+# Microsoft Learn documents GitHub Actions for Microsoft Power Platform and requires
+# actions-install before other Power Platform actions:
+# https://learn.microsoft.com/power-platform/alm/devops-github-available-actions
+name: pcf-control-ci
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "pcf/**"
+
+jobs:
+  build-test-pack-import:
+    runs-on: ubuntu-latest
+    env:
+      SOLUTION_NAME: ContosoPcfControls
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Power Platform Tool Installer
+        uses: microsoft/powerplatform-actions/actions-install@v1
+        with:
+          add-tools-to-path: true
+
+      - name: Build PCF control
+        run: |
+          npm ci
+          node node_modules/pcf-scripts/bin/pcf-scripts.js build --buildMode production
+
+      - name: Test PCF control
+        run: node node_modules/jest/bin/jest.js --ci --config jest.config.cjs --runInBand
+
+      - name: Pack managed solution
+        shell: bash
+        run: |
+          SOLUTION_PROJECT="build/$SOLUTION_NAME"
+          SOLUTION_ZIP="$SOLUTION_PROJECT/bin/Release/${SOLUTION_NAME}_managed.zip"
+          echo "SOLUTION_PROJECT=$SOLUTION_PROJECT" >> "$GITHUB_ENV"
+          echo "SOLUTION_ZIP=$SOLUTION_ZIP" >> "$GITHUB_ENV"
+          mkdir -p "$(dirname "$SOLUTION_PROJECT")"
+          pac solution init --publisher-name Contoso --publisher-prefix contoso --outputDirectory "$SOLUTION_PROJECT"
+          cd "$SOLUTION_PROJECT"
+          pac solution add-reference --path "$GITHUB_WORKSPACE"
+          dotnet build -c Release -p:SolutionPackageType=Managed
+
+      - name: Publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcf-managed-solution
+          path: ${{ env.SOLUTION_ZIP }}
+
+      - name: Import managed solution
+        if: github.event_name == 'workflow_dispatch'
+        uses: microsoft/powerplatform-actions/import-solution@v1
+        with:
+          environment-url: ${{ vars.POWER_PLATFORM_ENVIRONMENT_URL }}
+          app-id: ${{ secrets.POWER_PLATFORM_APP_ID }}
+          client-secret: ${{ secrets.POWER_PLATFORM_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.POWER_PLATFORM_TENANT_ID }}
+          solution-file: ${{ env.SOLUTION_ZIP }}
+          force-overwrite: true
+          publish-changes: true

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoFieldVisits", "publisherPrefix": "cnt" },
+  "app": {
+    "name": "Field Visits",
+    "description": "Site visits, in Contoso brand colours with the Contoso logo in the header",
+    "theme": {
+      "basePaletteColor": "#0F6CBD",
+      "appHeader": { "background": "#0F3D6E", "foreground": "#FFFFFF" },
+      "logo": { "webResourceName": "cnt_/images/contosologo.svg", "tooltip": "Contoso Field Visits" }
+    }
+  },
+  "webResources": [
+    { "name": "cnt_/images/contosologo.svg", "displayName": "Contoso logo", "type": "svg",
+      "content": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><rect width=\"32\" height=\"32\" rx=\"6\" fill=\"#0F6CBD\"/><path d=\"M22 10a8 8 0 1 0 0 12\" fill=\"none\" stroke=\"#FFFFFF\" stroke-width=\"3\"/></svg>" }
+  ],
+  "entities": [
+    { "schemaName": "cnt_visit", "displayName": "Visit", "pluralName": "Visits",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "cnt_visitdate", "displayName": "Visit Date", "type": "DateTime" },
+        { "schemaName": "cnt_site", "displayName": "Site", "type": "Text" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_visit", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "cnt_visit", "name": "Upcoming Visits", "columns": ["cnt_name", "cnt_visitdate", "cnt_site"] }],
+  "appShell": { "areas": [{ "label": "Visits", "groups": [{ "label": "Field", "subAreas": [{ "entity": "cnt_visit", "title": "Visits" }] }] }] }
+}

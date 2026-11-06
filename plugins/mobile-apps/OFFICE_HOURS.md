@@ -5,7 +5,7 @@ Join our native mobile apps Office Hours for developers and admins to share feed
 **Schedule (rest of 2026):**
 
 * Wednesday, September 23 — 08:00–8:30 AM EST
-* Wednesday, October 21 — 08:00–8:30 AM EST
+* Wednesday, October 14 — 08:00–8:30 AM EST
 * Wednesday, November 18 — 08:00–8:30 AM EST
 * Wednesday, December 9 — 08:00–8:30 AM EST
 

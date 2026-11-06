@@ -1004,7 +1004,7 @@ test('deleteSnapshot removes the file; deleting a missing file is success', () =
 });
 
 test('invalidate BUMPS the generation (fencing) and returns it; eligible stays false', () => {
-  // Fencing (Sol #6): invalidate rotates the generation so a concurrent reader holding the pre-invalidate
+  // Fencing: invalidate rotates the generation so a concurrent reader holding the pre-invalidate
   // token can no longer win the re-bless CAS. The returned generation is what the caller passes as the CAS
   // `expected` on its re-bless.
   const d = ws();

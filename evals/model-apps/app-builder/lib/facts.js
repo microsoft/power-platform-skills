@@ -10,14 +10,17 @@ function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..',
 // helpers and performs no I/O at require time, so it is safe to load from the offline harness.
 function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', name)); }
 
-const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE, formLayoutNames, subgridRelationshipName } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
+const { isDeclaredView, compileViewIntent } = pluginLib('view-reconcile.js');
 const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
 const { subgridSectionIntent, isNonFieldControl } = pluginLib('artifact-intent.js');
+const { SUBGRID_CLASS_ID, splitSubgrids, columnItems } = pluginLib('form-subgrid-placement.js');
+const { TIMELINE_CLASS_ID, wantsTimeline } = pluginLib('form-timeline.js');
 const { decodeXmlEntities } = pluginLib('sitemap-pages.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
-const { isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
+const { formOrderSpecOf, isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
 // Round-trip (edit/download) + teardown oracles: both plugin primitives are PURE — planTeardown does
 // no I/O, and hydrateSpec takes an injected `read`, so we can grade the compared hydration subset
 // and the reverse-of-build teardown plan offline. This does not execute a rebuild. See EVAL_GUIDE.md.
@@ -27,7 +30,7 @@ const { hydrateSpec } = pluginLib('hydrate-spec.js');
 // `columns[]`. Grading it here (rather than only in the plugin's unit tests) puts the download
 // side of the round-trip under the same fixture corpus as the build side.
 const { entityFromMetadata, parseDownloadedPages, assignPageKeys } = pluginLib2('download-model-app.js');
-const { unescapePacName } = pluginLib('genpage-cli.js');
+const { unescapePacName } = pluginLib('genpage-sdk.js');
 const { classifyChanges } = pluginLib('classify-changes.js');
 const { annotateContentHashes, pageSourceFileErrors } = pluginLib('content-hash.js');
 const { makeEnvelope, markEligible, parseEnvelope, serializeEnvelope, isFastPathEligible } = pluginLib('apply-snapshot.js');
@@ -110,11 +113,46 @@ function planFacts(spec) {
   return { byPhase, phases: Object.keys(byPhase), labels: items.map((i) => `${i.phase}\t${i.label}`) };
 }
 
+// compileViewIntent reads filters, linkEntities (and each join's filters), columns and sort as arrays and throws a TypeError on any other
+// shape (`linkEntities: {}` -> "(v.linkEntities || []).forEach is not a function"). The author gate (validateAppSpec) already reports each
+// of those precisely (`views[0].linkEntities must be an array`), and the build refuses such a spec, so a view the compiler cannot read has
+// no conditions. Letting the TypeError escape would replace that diagnostic and every other grade of the fixture with one generic failure.
+// Only a TypeError is treated this way; any other failure of the compiler is a real fault and still surfaces.
+function compileDeclaredView(v, resolveValue) {
+  try { return compileViewIntent(v, { resolveValue }); }
+  catch (e) {
+    if (e instanceof TypeError) return { intent: null };
+    throw e;
+  }
+}
+
+// The conditions the build gives a view from its filters[], each `{ attribute, operator, value }` plus `scope` (the join alias) on one that
+// constrains a joined table. The build compiles a view one of two ways and the facts must follow it: a declared view (`reconcile:
+// "declared"`) goes through compileViewIntent, which scopes a condition to its join (`relatedEntity`); every other view goes through viewDef,
+// which reads no scope at all. Reading a declared view through viewDef would grade a filter on a joined table as one on the view's own table.
+function viewConditions(spec, v, d) {
+  // The leading active-records condition (statecode eq 0, when activeOnly is not false) is the build's own, not the author's filter.
+  const authored = (list) => (v.activeOnly !== false ? list.slice(1) : list);
+  if (!isDeclaredView(v)) return authored(d.filters.conditions).map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value }));
+  // The build resolves a choice label to its value with resolveFilterValue, which sdk-build does not export; a one-condition view built by
+  // viewDef on the condition's own table runs exactly that rule.
+  const resolveValue = (table, attr, value) => viewDef(spec, { entity: table, name: 'x', activeOnly: false, filters: [{ attr, op: 'eq', value }] }).filters.conditions[0].value;
+  const { intent } = compileDeclaredView(v, resolveValue);
+  // A declared view that does not compile is refused by the build: no view, so no filter.
+  if (!intent) return [];
+  return authored(intent.filters.conditions).map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value, ...(c.entityname ? { scope: c.entityname } : {}) }));
+}
+
 // ui: normalized view/chart/form facts from the pure def builders — the pre-serialization equivalents
 // of wire-facts.js (viewFacts/chartFacts/formFacts), deterministic with no live env or bundle round-trip.
 function wireFacts(spec) {
   return {
-    views: (spec.views || []).map((v) => { const d = viewDef(spec, v); return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name) }; }),
+    views: (spec.views || []).map((v) => {
+      const d = viewDef(spec, v);
+      // What viewConditions returns is what the author's filters[] compiled to, so a filter the build ignored (a misspelled key) leaves
+      // nothing here.
+      return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name), conditions: viewConditions(spec, v, d) };
+    }),
     charts: (spec.charts || []).map((c) => { const d = chartDef(spec, c); return { entity: d.entityLogicalName, name: d.name, measure: d.series[0].aggregate, groupBy: d.categories[0].attribute }; }),
     forms: (spec.forms || []).map((f) => {
       const authoredShape = authoredFormShape(f);
@@ -435,24 +473,44 @@ function appFacts(spec) {
 // and read-only / hidden state. A second derivation here drifted from it — an undeclared width rendered
 // as 100% in every form-column, and no display flag at all. `columns` is emitted as the width RATIO
 // string FormXML actually uses ("11" = two equal columns), not as a count.
+//
+// Two things the compiler does NOT emit are rendered here too, because verify asks the deployed form about them:
+// the Notes timeline in the shape the compiler writes (its fixed control id, the tall cell and the spacer rows
+// under it), and each sub-grid that says where it goes (`tab` / `column` / `after` / `before`), as the section the
+// build gives it, set where the spec places it. Without them a spec using either would fail verify offline on a
+// gap in this fixture, not on a finding about the spec.
 function formXmlForAuthoredLayout(spec, form) {
   const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const labels = (text) => `<labels><label description="${esc(text)}" languagecode="1033"/></labels>`;
   const cellXml = (cell) => {
     const control = cell.control || {};
     const classId = control.classId && control.classId !== 'undefined' ? String(control.classId).replace(/[{}]/g, '') : '';
-    return `<cell colspan="${cell.colspan || 1}" rowspan="${cell.rowspan || 1}"${cell.visible === false ? ' visible="false"' : ''}>`
-      + `<control${control.fieldName ? ` datafieldname="${esc(control.fieldName)}"` : ''}${classId ? ` classid="{${esc(classId)}}"` : ''}`
-      + `${control.isReadOnly ? ' disabled="true"' : ''} /></cell>`;
+    const auto = (((cell.bag && cell.bag.a) || []).find((pair) => pair[0] === 'auto') || [])[1];
+    const parameters = Object.entries(control.parameters || {});
+    return `<cell colspan="${cell.colspan || 1}" rowspan="${cell.rowspan || 1}"${cell.visible === false ? ' visible="false"' : ''}${auto === undefined ? '' : ` auto="${esc(auto)}"`}>`
+      + `<control${control.id ? ` id="${esc(control.id)}"` : ''}${control.fieldName ? ` datafieldname="${esc(control.fieldName)}"` : ''}${classId ? ` classid="{${esc(classId)}}"` : ''}`
+      + `${control.isReadOnly ? ' disabled="true"' : ''}`
+      + `${parameters.length ? `><parameters>${parameters.map(([key, value]) => `<${key}>${esc(value)}</${key}>`).join('')}</parameters></control>` : ' />'}</cell>`;
   };
-  const tabsXml = (compileFormIntent(spec, form).tabs || []).map((t) => {
-    const colsXml = (t.columns || []).map((col) => {
-      const secsXml = (col.sections || []).map((sec) => {
-        const width = Math.max(1, Math.min(4, Number(sec.columns) || 1));
-        const rowsXml = (sec.rows || []).map((r) => `<row>${(r.cells || []).map(cellXml).join('')}</row>`).join('');
-        return `<section name="${esc(sec.name)}" columns="${'1'.repeat(width)}" visible="${sec.visible !== false}" showlabel="${sec.showLabel !== false}">`
-          + `${labels(sec.label)}<rows>${rowsXml}</rows></section>`;
-      }).join('');
+  const sectionXml = (sec) => {
+    const width = Math.max(1, Math.min(4, Number(sec.columns) || 1));
+    const rowsXml = (sec.rows || []).map((r) => `<row>${(r.cells || []).map(cellXml).join('')}</row>`).join('');
+    return `<section name="${esc(sec.name)}" columns="${'1'.repeat(width)}" visible="${sec.visible !== false}" showlabel="${sec.showLabel !== false}">`
+      + `${labels(sec.label)}<rows>${rowsXml}</rows></section>`;
+  };
+  const layout = formLayoutNames(form);
+  const { placed } = splitSubgrids(layout, form.subgrids);
+  // A grid whose two tables have no relationship is one the build skips, so the deployed form has no section for it.
+  const gridSectionXml = (sg) => {
+    const relationshipName = subgridRelationshipName(spec, form.entity, sg.childEntity);
+    return relationshipName
+      ? sectionXml(subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: lc(sg.childEntity), relationshipName, viewId: 'v', label: subgridLabel(spec, sg) }))
+      : '';
+  };
+  const tabsXml = (compileFormIntent(spec, form, { notesClassId: TIMELINE_CLASS_ID }).tabs || []).map((t, ti) => {
+    const colsXml = (t.columns || []).map((col, ci) => {
+      const secsXml = columnItems(layout, ti, ci, col.sections, placed)
+        .map((item) => (item.subgrid ? gridSectionXml(item.subgrid) : sectionXml(item.section))).join('');
       return `<column width="${esc(col.width)}"><sections>${secsXml}</sections></column>`;
     }).join('');
     return `<tab name="${esc(t.name)}" expanded="${t.expanded !== false}" visible="${t.visible !== false}">${labels(t.label)}<columns>${colsXml}</columns></tab>`;
@@ -584,18 +642,34 @@ function makeAllPresentReader(spec, formEvidence = null) {
         ? (spec.forms || []).find((f) => isMainForm(f) && lc(f.entity) === lc(entityLogical) && mainFormName(f) === named[1])
         : (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical) && Array.isArray(f.tabs) && f.tabs.length);
       if (!form) return null;
-      const layout = Array.isArray(form.tabs) && form.tabs.length ? formXmlForAuthoredLayout(spec, form) : '<form><tabs></tabs></form>';
+      // An auto layout declares no tabs, so it has nothing to render — unless the form asks for the Notes timeline
+      // or places a sub-grid, which verify checks on any layout.
+      const rendered = (Array.isArray(form.tabs) && form.tabs.length) || wantsTimeline(spec, form) || splitSubgrids(formLayoutNames(form), form.subgrids).placed.length > 0;
+      const layout = rendered ? formXmlForAuthoredLayout(spec, form) : '<form><tabs></tabs></form>';
       return isMainForm(form) ? withOrder(layout, lc(entityLogical), form) : layout;
     },
     servedMainForms: async (entityLogical) => formEvidence
       ? ((formEvidence.servedMainForms || {})[lc(entityLogical)] || [])
       : (plannedMainFormSequence(spec, entityLogical) || []).map((f) => ({ id: `form:${mainFormName(f)}`, name: mainFormName(f) })),
+    // The app holds exactly the listed Main forms. An "exact" list (app.mainFormsOnUpdate) has to be asked for
+    // strictly: a lenient read can drop a row it cannot place, so it would prove "only these forms" from part of the list.
+    appMainForms: async (_appUnique, mainForms, opts) => (spec.app && spec.app.mainFormsOnUpdate === 'exact' && !(opts && opts.strict)
+      ? { kind: 'inconclusive', reason: 'an exact Main-form list was read without strict' }
+      : { kind: 'read', tables: Object.keys(mainForms || {}).map((table) => ({ table: lc(table), extras: [], missing: [] })), formNames: {} }),
+    // app.theme (Preview): verify asks for the theme only when the spec declares one, and the real reader answers with
+    // lib/app-theme.js verifyAppTheme's shape, [{ key, ok, state: 'live'|'pendingPublish'|'mismatch'|'unknown' }]. The
+    // environment matches the spec by this reader's premise, so the declared theme is live. Without it a themed spec failed
+    // verify offline on a gap in this fixture ("the app theme reader is unavailable"), not on a finding about the spec.
+    appTheme: async () => [{ key: 'app.theme', ok: true, state: 'live' }],
   };
 }
 
 function requiredVerifyChecks(spec, reader) {
-  const mains = [...new Set((spec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
-  const ordered = mains.filter((entity) => plannedMainFormSequence(spec, entity));
+  // Verify expects a form order only of the Main forms the build orders, which leaves out a declared form (the shared rule,
+  // formOrderSpecOf in lib/form-order.js), so a table whose only Main form is declared owes no form-order check.
+  const orderSpec = formOrderSpecOf(spec);
+  const mains = [...new Set((orderSpec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
+  const ordered = mains.filter((entity) => plannedMainFormSequence(orderSpec, entity));
   const pages = (spec.pages || []).filter((p) => {
     const source = normalizePageSource(p);
     return source && source.kind === 'tsx' && source.codeFile;
@@ -610,7 +684,11 @@ function requiredVerifyChecks(spec, reader) {
     dashboard: (spec.dashboards || []).length,
     'form-order': ordered.length,
     'form-topology': (spec.forms || []).filter((f) => Array.isArray(f.tabs) && f.tabs.length).length,
+    'form-timeline': (spec.forms || []).filter((f) => wantsTimeline(spec, f)).length,
+    'form-subgrid': (spec.forms || []).reduce((n, f) => n + splitSubgrids(formLayoutNames(f), f.subgrids).placed
+      .filter((p) => subgridRelationshipName(spec, f.entity, p.sg.childEntity)).length, 0),
     'form-order-served': typeof reader.servedMainForms === 'function' ? ordered.length : 0,
+    'app-main-forms': Object.keys((spec.app && spec.app.mainForms) || {}).length,
     'business-rule': (spec.businessRules || []).length,
     'business-process-flow': (spec.businessProcessFlows || []).length,
     role: (spec.personas || []).length,
@@ -748,8 +826,8 @@ async function changedOnlyFacts(spec, fixture) {
   }
 }
 
-// page: PAGEREF_ resolution facts (Plan 3). Returns null when pageref-resolver isn't loaded →
-// the assertion layer emits SKIP (loose Plan-3 coupling). When present, each declared nav edge
+// page: PAGEREF_ resolution facts. Returns null when pageref-resolver isn't loaded →
+// the assertion layer emits SKIP (loose coupling). When present, each declared nav edge
 // is represented as a canonical navigateTo call site so resolvePageRefs can parse and resolve it.
 // A missing keyToId entry → unresolved entry (tests prove the assertion can FAIL).
 function pageFacts(spec) {

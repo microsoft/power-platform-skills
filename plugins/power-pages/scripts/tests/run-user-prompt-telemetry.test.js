@@ -109,7 +109,7 @@ function writeProvisionedConfig(configDir) {
   return ikeyPath;
 }
 
-// Materializes a Power Pages code site (config marker + package.json) so the
+// Materializes a Power Pages SPA site (config marker + package.json) so the
 // framework detector has something to find from the hook's reported cwd.
 function mkSite(deps) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-site-"));
@@ -190,7 +190,7 @@ test("hook reports the site framework in eventInfo from the payload cwd", () => 
   assert.equal(eventInfo.framework, "vue");
 });
 
-test("hook omits framework when cwd is not a Power Pages code site", () => {
+test("hook omits framework when cwd is not a Power Pages SPA site", () => {
   const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   const ikeyPath = writeProvisionedConfig(configDir);
@@ -209,7 +209,7 @@ test("hook omits framework when cwd is not a Power Pages code site", () => {
     typeof body.data.eventInfo === "string" ? JSON.parse(body.data.eventInfo) : {};
   assert.ok(
     !("framework" in eventInfo),
-    "no framework key should be emitted outside a Power Pages code site"
+    "no framework key should be emitted outside a Power Pages SPA site"
   );
 });
 

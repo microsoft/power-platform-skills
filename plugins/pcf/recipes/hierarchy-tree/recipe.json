@@ -1,0 +1,32 @@
+{
+  "id": "hierarchy-tree",
+  "title": "Hierarchy Tree",
+  "summary": "Renders a dataset as an accessible tree using a self-referencing parent lookup.",
+  "template": "dataset-standard",
+  "hosts": ["model"],
+  "whyWanted": "Makers need a supported replacement for the deprecated hierarchy control.",
+  "status": "available",
+  "certified": { "model": {}, "pages": {} },
+  "configuration": "Bind the dataset to the target table, map primaryName to the row label column, and map parentRecord to the table's self-referencing parent lookup column.",
+  "propertySets": [
+    {
+      "dataSet": "sampleDataSet",
+      "name": "primaryName",
+      "displayNameKey": "Primary_Name_Display_Key",
+      "descriptionKey": "Primary_Name_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "bound",
+      "required": true
+    },
+    {
+      "dataSet": "sampleDataSet",
+      "name": "parentRecord",
+      "displayNameKey": "Parent_Record_Display_Key",
+      "descriptionKey": "Parent_Record_Desc_Key",
+      "ofType": "Lookup.Simple",
+      "usage": "bound",
+      "required": false
+    }
+  ],
+  "features": []
+}

@@ -4,20 +4,48 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { commandDef, chartDef, runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { commandDef, chartDef, runSdkBuild: runSdkBuildWithRealWaits, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { withPageType } = require('./helpers/page-component-type.js');
+// The AI phase's proof after a publish waits 500 ms between reads of an override row that is not there yet, as --verify
+// does. No test below is about that wait (it is pinned through `proofBudget`), and every one that leaves a row absent
+// would otherwise sleep a second for it.
+//
+// The page backend a test hands the build (`genpageCli`) is written as a double of the CLI wrapper the pages phase used before pages
+// went through the SDK: `{ enumerateEnv, upload(o) }`, `upload` answering a create (no `pageId`) or an update (the page it is sent
+// to) with `{ pageId }`. The build takes a backend of lib/genpage-sdk.js's shape (`genpage`: enumerateEnv, create, update), so the
+// double is adapted here: each write reaches `upload` as `{ name, pageId?, model, dataSources, prompt, agentMessage, source }` and is
+// answered as a page that was written and published.
+function pageBackend(double) {
+  const written = async (answer, o) => ({ name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [], ...(await answer) });
+  return {
+    enumerateEnv: (...args) => double.enumerateEnv(...args),
+    create: (o) => written(double.upload({ ...o, pageId: undefined }), o),
+    update: (id, o) => written(double.upload({ ...o, pageId: id }), o),
+  };
+}
+// A build that runs the pages phase opens its workspace in `<appDir>/.maker-workspace` — unless it is given a `workspaceDir` — and an `appDir` it is not given is the folder the tests run in, which is the
+// plugin's own: every such build took its pages lock there and left `plugins/model-apps/.maker-workspace` behind, empty (scripts/run-tests.js fails a run that makes it). A call that names neither is given an
+// app folder of this file's own, one for all of those calls — as the plugin's folder was — removed after the file's last test. It is only a place for the lock: none of these tests reads a file from it.
+let defaultAppDir;
+const appFolderOf = (opts) => (opts.appDir === undefined && opts.workspaceDir === undefined ? { appDir: defaultAppDir || (defaultAppDir = makeTempDir('sdkb-app-')) } : {});
+const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofDelayMs: 0, ...opts, ...appFolderOf(opts), ...(opts.genpageCli ? { genpage: pageBackend(opts.genpageCli) } : {}) });
 
-// Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
+// Real GUIDs for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
 // through the GenPageId/GUID extractors in a test MUST be real 36-char GUIDs.
 const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
 const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
+// A never-published app (mockSdk opts.draftApps) has a layer key and a sitemap id of its own, both real GUIDs: the layer key goes into a Dataverse filter, so the scan refuses one that is not.
+const draftLayerKey = (j) => `c0ffee00-0000-4000-8000-0000000000d${j}`;
+const draftSitemapId = (j) => `5111e0f2-0000-4000-8000-0000000000d${j}`;
 // A valid, page-less sitemap (passes sitemap-pages.isMalformed) — the default membership for a build that
 // does not seed opts.liveSitemapXml.
 const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
 
-// Stage a fresh temp appDir with a minimal valid .tsx for each IMPLEMENTED page. Task 8's pages-phase
+// Stage a fresh temp appDir with a minimal valid .tsx for each IMPLEMENTED page. The pages-phase
 // scan READS canonical source from disk, so any pages-phase test must have real files (not a bare
 // 'o.tsx' string). Optional `bodyByCodeFile` overrides a page's source (e.g. to inject navigation).
 function stagePages(pages, bodyByCodeFile = {}) {
@@ -34,7 +62,7 @@ function stagePages(pages, bodyByCodeFile = {}) {
 
 test('appUniqueName prefers spec.app.uniqueName (real immutable identity) over the display-name derivation', () => {
   // A DOWNLOADED spec carries the real uniquename → used verbatim so a rebuild resolves the EXISTING app
-  // even after a display-name rename (deriving from the mutable name would miss it and duplicate — Sol F1).
+  // even after a display-name rename (deriving from the mutable name would miss it and duplicate).
   assert.strictEqual(
     appUniqueName({ solution: { publisherPrefix: 'crba3' }, app: { name: 'Zava App 2', uniqueName: 'crba3_zavaapp' } }),
     'crba3_zavaapp', 'the real uniquename is used, NOT the derived crba3_zavaapp2');
@@ -86,17 +114,31 @@ function seedForm(id, fields) {
     bag: { a: [], c: [] } };
 }
 
-// `existingTables`: { logical: { entitySetName, columns:[logical...], relationships:[schema...] } }
+// `existingTables`: { logical: { entitySetName, columns:[logical...], relationships:[row...] } }, a relationship row being what the SDK's
+// metadata projection lists for the table: { schemaName, type, relatedEntity, relatedAttribute } (a name alone does not identify one).
+const MEMBER_SOLUTION_ID = '5011c0de-0000-4000-8000-000000000001'; // a GUID: the membership read interpolates it unquoted
 function mockSdk(opts = {}) {
   const calls = [];
   let idc = 0;
   const ex = opts.existingTables || {};
   const store = {}; // `${type}:${id}` -> in-memory artifact (form/view/app), mutated by the generic surface
+  // What the existing app's header holds on the server. A real fetched app always carries both texts (the adapter reads `description` as ''
+  // when the row has none), and the defaults are makeSpec's own, so a rebuild of an existing app starts with a header that already matches
+  // it; a test that needs a different deployed one sets existingAppName / existingAppDescription (a LOCALIZED value is an LCID map).
+  const deployedHeader = {
+    name: opts.existingAppName !== undefined ? opts.existingAppName : 'Support Desk',
+    description: opts.existingAppDescription !== undefined ? opts.existingAppDescription : 'Tickets',
+    aiDescription: opts.existingAppAiDescription,
+  };
   const sdk = {
     queryRecords: async (e, o) => {
       calls.push({ name: 'queryRecords', args: [e, o] });
       const filter = (o && o.filter) || '';
-      if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
+      if (e === 'solution') return opts.solutionMembers ? [{ solutionid: MEMBER_SOLUTION_ID }] : opts.solutionExists ? [{ solutionid: 's' }] : [];
+      // The components the solution is proven to hold, `[componenttype, objectid]` pairs — the one
+      // read the build makes (solution-membership.js) before it re-adds anything it reuses.
+      // A row may carry a third element, the table's `rootcomponentbehavior` (0 Include Subcomponents).
+      if (e === 'solutioncomponent' && opts.solutionMembers) return opts.solutionMembers.map(([componenttype, objectid, rootcomponentbehavior]) => ({ componenttype, objectid, ...(rootcomponentbehavior === undefined ? {} : { rootcomponentbehavior }) }));
       // Which dashboards the app's solution holds (componenttype 60 = systemform) — the ownership
       // evidence the build uses to pick among several same-named dashboards.
       if (e === 'solutioncomponent' && /componenttype eq 60/.test(filter)) {
@@ -113,7 +155,7 @@ function mockSdk(opts = {}) {
         return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
       }
       if (e === 'uxagentproject') return (opts.pageRows || []).filter((r) => filter.includes(r.uxagentprojectid.toLowerCase()));
-      // appmodule / appmodulecomponent / sitemap answer the fetchSitemap + fetchAppsForPages reads (Imp9).
+      // appmodule / appmodulecomponent / sitemap answer the fetchSitemap + fetchAppsForPages reads.
       // FILTERED appmodule (fetchSitemap for one app) echoes a resolvable row for ANY uniquename — self
       // resolves to SELF_SITEMAP_ID (→ opts.liveSitemapXml); a named otherApp resolves to its own sitemap.
       // UNFILTERED appmodule (fetchAppsForPages) lists self + otherApps; self is skipped by excludeAppUnique
@@ -122,18 +164,25 @@ function mockSdk(opts = {}) {
         const m = filter.match(/uniquename eq '([^']+)'/);
         if (m) {
           const oi = (opts.otherApps || []).findIndex((a) => a.uniquename === m[1]);
-          if (oi >= 0) return [{ appmoduleid: `app-${oi + 2}`, appmoduleidunique: `uv-${oi + 2}`, uniquename: m[1] }];
-          return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1] }];
+          if (oi >= 0) return [{ appmoduleid: opts.otherApps[oi].appmoduleid || `app-${oi + 2}`, appmoduleidunique: `uv-${oi + 2}`, uniquename: m[1] }];
+          return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: m[1], ...(opts.existingAppIconId ? { webresourceid: opts.existingAppIconId } : {}) }];
         }
         if (opts.failAppList) throw new Error('appmodule list failed'); // shared-check fail-closed
         const rows = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique }];
-        (opts.otherApps || []).forEach((a, i) => rows.push({ appmoduleid: `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename }));
+        (opts.otherApps || []).forEach((a, i) => rows.push({ appmoduleid: a.appmoduleid || `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename }));
         return rows;
       }
       if (e === 'appmodulecomponent') {
         if (opts.failSitemap) return []; // membership read failure → sitemap-component-not-found
         const uv = (filter.match(/_appmoduleidunique_value eq (\S+)/) || [])[1];
         if (uv === SELF_UNIQUE_VALUE) return [{ objectid: SELF_SITEMAP_ID, componenttype: 62 }];
+        // A never-published app's sitemap component hangs off the layer key its draft row carries.
+        const dj = (opts.draftApps || []).findIndex((_, j) => draftLayerKey(j) === uv);
+        if (dj >= 0) {
+          // `componentReadFails`: the read itself fails (a 5xx, a timeout), which proves nothing about the app — unlike an answer with no rows.
+          if (opts.draftApps[dj].componentReadFails) throw new Error('component read failed');
+          return opts.draftApps[dj].noSitemapComponent ? [] : [{ objectid: draftSitemapId(dj), componenttype: 62 }];
+        }
         const idx = (opts.otherApps || []).findIndex((_, i) => `uv-${i + 2}` === uv);
         return [{ objectid: `sm-${idx + 2}`, componenttype: 62 }];
       }
@@ -174,7 +223,7 @@ function mockSdk(opts = {}) {
     // the existing app's copy dirty with `dirtyApp`.
     listArtifacts: async (kind) => {
       calls.push({ name: 'listArtifacts', args: [kind] });
-      return kind === 'app' && opts.artifactsExist ? [{ type: 'app', id: 'app-existing', isDirty: !!opts.dirtyApp }] : [];
+      return kind === 'app' && opts.artifactsExist ? [{ type: 'app', id: opts.appId || 'app-existing', isDirty: !!opts.dirtyApp }] : [];
     },
     findArtifact: async (kind, identity) => {
       calls.push({ name: 'findArtifact', args: [kind, identity] });
@@ -182,7 +231,7 @@ function mockSdk(opts = {}) {
       if (kind === 'view') return 'view-existing';
       if (kind === 'chart') return 'chart-existing';
       if (kind === 'form') return 'form-existing';
-      if (kind === 'app') return 'app-existing';
+      if (kind === 'app') return opts.appId || 'app-existing';
       return null;
     },
     // Discovery seam mirrored from the vendored bundle. The teardown engine — and now the additive
@@ -230,7 +279,11 @@ function mockSdk(opts = {}) {
         // when its pointer resolves to undefined, whereas this mock's jpSet would happily create the
         // key. Omitting it would let a test pass against an artifact the SDK would have rejected.
         else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), description: opts.existingViewDescription !== undefined ? opts.existingViewDescription : '' };
-        else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] }, ...(opts.existingAppAiDescription ? { aiDescription: opts.existingAppAiDescription } : {}) };
+        else if (t === 'app') store[`${t}:${id}`] = { id,
+          // What a fetched app carries: its header text (see deployedHeader above).
+          name: deployedHeader.name,
+          description: deployedHeader.description,
+          siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] }, ...(opts.existingAppAiDescription ? { aiDescription: opts.existingAppAiDescription } : {}) };
         // The chart description reconcile reads through fetchArtifact/getArtifact rather than
         // queryRecords, because a plain query returns the PUBLISHED row while the PATCH writes the
         // unpublished one (measured live). Seed `description` for the same reason as the view.
@@ -243,7 +296,7 @@ function mockSdk(opts = {}) {
     createSolution: async (o) => { calls.push({ name: 'createSolution', args: [o] }); return { id: 'sol-1' }; },
     findTables: async (q, o) => { calls.push({ name: 'findTables', args: [q, o] }); const t = ex[String(q).toLowerCase()]; return t ? [{ logicalName: String(q).toLowerCase(), schemaName: q, displayName: q, entitySetName: t.entitySetName, isCustom: true }] : []; },
     findColumns: async (logical) => { calls.push({ name: 'findColumns', args: [logical] }); const t = ex[logical]; return ((t && t.columns) || []).map((c) => ({ logicalName: c, schemaName: c, displayName: c, attributeType: 'String', isCustom: true })); },
-    fetchEntityMetadata: async (logical) => { calls.push({ name: 'fetchEntityMetadata', args: [logical] }); const t = ex[logical]; return { logicalName: logical, displayName: logical, entitySetName: (t && t.entitySetName) || `${logical}s`, attributes: ((t && t.columns) || []).map((c) => ({ logicalName: c })), relationships: ((t && t.relationships) || []).map((s) => ({ schemaName: s, type: 'OneToMany' })) }; },
+    fetchEntityMetadata: async (logical) => { calls.push({ name: 'fetchEntityMetadata', args: [logical] }); const t = ex[logical]; return { logicalName: logical, displayName: logical, entitySetName: (t && t.entitySetName) || `${logical}s`, attributes: ((t && t.columns) || []).map((c) => ({ logicalName: c })), relationships: (t && t.relationships) || [] }; },
     createTable: async (o) => { calls.push({ name: 'createTable', args: [o] }); if (opts.failTable === o.schemaName) throw new Error('boom'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: `tbl-${o.schemaName}` }; },
     updateTable: async (l, o) => { calls.push({ name: 'updateTable', args: [l, o] }); return {}; },
     createColumn: async (e, o) => { calls.push({ name: 'createColumn', args: [e, o] }); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
@@ -364,9 +417,20 @@ function mockSdk(opts = {}) {
     // `appPushResult` lets a test answer an APP push the way the real SDK answers a 412: it RESOLVES with
     // `saved:false` and a VERSION_CONFLICT error rather than throwing. `appPushThrows` is the other shape:
     // refusals the SDK THROWS (a never-published app's header, a sitemap target that no longer exists).
+    // `draftHeader` models the one refusal that depends on the push's content: the app was NEVER published, so Dataverse refuses a write to its
+    // header (name, description, routing description) — and the SDK, which writes the header only when the artifact holds one that differs
+    // from the row's, throws APP_DRAFT_HEADER_NOT_WRITABLE before it writes anything ("Nothing was modified by this call"). A push whose
+    // header matches the row's goes through, as the real one does (the sitemap alone needs no header write).
     pushArtifact: async (t, id) => {
       calls.push({ name: 'pushArtifact', args: [t, id] });
       if (t === 'app' && opts.appPushThrows) throw Object.assign(new Error(`push refused: ${opts.appPushThrows}`), { code: opts.appPushThrows });
+      if (t === 'app' && opts.draftHeader) {
+        const held = store[`${t}:${id}`] || {};
+        const differs = (key) => held[key] !== undefined && JSON.stringify(held[key]) !== JSON.stringify(deployedHeader[key]);
+        if (differs('name') || differs('description') || differs('aiDescription')) {
+          throw Object.assign(new Error(`Refusing to update app '${id}': its appmodule row is UNPUBLISHED, and Dataverse cannot resolve version numbers for a draft appmodule (HTTP 400). Publish the app first, then push the header edit. Nothing was modified by this call.`), { code: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
+        }
+      }
       if (t === 'app' && opts.appPushResult) return { type: t, id, ...opts.appPushResult };
       return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } };
     },
@@ -404,6 +468,46 @@ function mockSdk(opts = {}) {
     associateRecords: async (e, id, o) => { calls.push({ name: 'associateRecords', args: [e, id, o] }); if (opts.associateDuplicate) { const err = new Error('HTTP 400 from /appmodules(x)/appmoduleroles_association/$ref: A record with matching key values already exists.'); err.statusCode = 400; err.cause = { error: { code: '0x80060891', message: 'duplicate' } }; throw err; } if (opts.associateFail) { const err = new Error('HTTP 400 from ...: bad request'); err.statusCode = 400; err.cause = { error: { code: '0x80040203', message: 'invalid argument' } }; throw err; } },
     disassociateRecords: async (e, id, rel, targetId) => { calls.push({ name: 'disassociateRecords', args: [e, id, rel, targetId] }); if (opts.dissociateGone) { const err = new Error('HTTP 404 from ...: does not exist'); err.statusCode = 404; throw err; } },
     deleteSecurityRole: async (id) => { calls.push({ name: 'deleteSecurityRole', args: [id] }); },
+  };
+  // The other apps' navigation, read through the SDK's Dataverse client (fetchAppsForPages). Attached for a build that has an app identity to scan from (`selfAppUnique`) or other
+  // apps to find: the scan lists the apps that were never published (one RetrieveUnpublishedMultiple read on the `appmodule` collection) even when there is no other app, as the real
+  // SDK always has a client to read it with. A build without one keeps no client, so the table-reuse and relationship probes — which also look for it — read as they always did.
+  //   apps list      self and every other app have their published row (componentstate 0); `draftApps` ([{ uniquename, savedSitemapXml }]) were NEVER published, so they have
+  //                  no published row and one draft row (componentstate 1) with a layer key of its own. opts.draftAppsError makes this read fail.
+  //   saved sitemaps every sitemap's current layer, in one read; every row carries its sitemap's `sitemapnameunique`, which is its app's unique name (the SDK names an app's sitemap after the
+  //                  app). An app with no `savedSitemapXml` has nothing pending: the one row is its published sitemap; with one, the platform
+  //                  answers with both layers. opts.savedNavigationError makes the read fail as a whole; an app's `savedRows` replaces its rows (e.g. to leave them out). A draft app's
+  //                  one row is its saved sitemap; it may set `noSitemapComponent` (its layer has no sitemap component to find), `componentReadFails` (the read of its components fails) or
+  //                  `sitemapName` (the unique name its sitemap carries, when it is not the app's own).
+  //   page type      the page table's solution component type, which the pages phase reads to add the pages to the spec's solution (helpers/page-component-type.js);
+  //                  answered in front of the rest, and not recorded among the calls.
+  if (opts.selfAppUnique !== undefined || (opts.otherApps || []).length || (opts.draftApps || []).length) sdk.dataverse = {
+    get: withPageType(async (url) => {
+      calls.push({ name: 'dataverse.get', args: [url] });
+      if (/^\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(url)) {
+        if (opts.draftAppsError) return { status: 503, body: null };
+        const value = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique, componentstate: 0 }];
+        (opts.otherApps || []).forEach((a, i) => value.push({ appmoduleid: a.appmoduleid || `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename, componentstate: 0 }));
+        (opts.draftApps || []).forEach((d, j) => value.push({ appmoduleid: d.appmoduleid || `draft-${j}`, appmoduleidunique: draftLayerKey(j), uniquename: d.uniquename, componentstate: 1 }));
+        return { status: 200, body: { value } };
+      }
+      if (!/^\/sitemaps\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(url)) return { status: 404, body: null };
+      if (opts.savedNavigationError) return { status: 503, body: null };
+      const value = [];
+      (opts.otherApps || []).forEach((a, i) => {
+        const sitemapid = `sm-${i + 2}`;
+        const sitemapnameunique = a.uniquename;
+        if (a.savedRows) value.push(...a.savedRows.map((r) => ({ sitemapid, sitemapnameunique, ...r })));
+        else if (a.savedSitemapXml !== undefined) value.push({ sitemapid, sitemapnameunique, sitemapxml: a.sitemapxml, componentstate: 0 }, { sitemapid, sitemapnameunique, sitemapxml: a.savedSitemapXml, componentstate: 1 });
+        else value.push({ sitemapid, sitemapnameunique, sitemapxml: a.sitemapxml, componentstate: 0 });
+      });
+      (opts.draftApps || []).forEach((d, j) => {
+        const sitemapnameunique = d.sitemapName === undefined ? d.uniquename : d.sitemapName;
+        if (d.savedRows) value.push(...d.savedRows.map((r) => ({ sitemapid: draftSitemapId(j), sitemapnameunique, ...r })));
+        else value.push({ sitemapid: draftSitemapId(j), sitemapnameunique, sitemapxml: d.savedSitemapXml, componentstate: 1 });
+      });
+      return { status: 200, body: { value } };
+    }),
   };
   return { sdk, calls };
 }
@@ -571,9 +675,195 @@ test('idempotent: an existing table is reused — no createTable, and only missi
 });
 
 test('idempotent: an existing relationship is skipped', async () => {
-  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: [], relationships: ['new_customer_new_ticket'] } } });
+  // The table already has the spec's columns: a table that took a new column would first have its Date and Time behaviours read, which this double cannot answer.
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'], relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }] } } });
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   assert.strictEqual(find(calls, 'createRelationship').length, 0, 'existing relationship not re-created');
+});
+
+// A run that seeds without the data-model phase never secured the spec's columns, so it reads, before the first row, whether each column
+// the spec declares isSecured: true on a seeded table is secured now — and writes no row when one is not, or when the read cannot say.
+function seedOnlySecured(answer) {
+  const base = makeSpec();
+  const spec = makeSpec({
+    entities: [{ ...base.entities[0], columns: [...base.entities[0].columns, { schemaName: 'new_secret', displayName: 'Secret', type: 'Text', isSecured: true }] }, base.entities[1]],
+    sampleData: { ...base.sampleData, new_customer: [{ new_name: 'Acme', new_tier: 'Pro', new_secret: 'x' }] },
+  });
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier', 'new_secret'], relationships: [] } } });
+  const reads = [];
+  sdk.dataverse = { get: async (url) => { reads.push(url); return answer(url); } };
+  return { spec, sdk, calls, reads };
+}
+const IS_SECURED = /\/EntityDefinitions\(LogicalName='new_customer'\)\/Attributes\?\$select=LogicalName,IsSecured$/;
+
+test('seed only: a declared secured column that is not secured stops the run before any sample record is written', async () => {
+  const run = seedOnlySecured(() => ({ status: 200, body: { value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_secret', IsSecured: false }] } }));
+  await assert.rejects(runSdkBuild(run.spec, { sdk: run.sdk, apply: true, sampleData: true, phases: ['sample-data'] }),
+    (e) => e.code === 'COLUMN_NOT_SECURED' && /new_customer\.new_secret/.test(e.message) && e.phase === 'sample-data');
+  assert.strictEqual(find(run.calls, 'seedRecordGraph').length, 0, 'no record written');
+  assert.strictEqual(run.reads.filter((u) => IS_SECURED.test(u)).length, 1, 'one read of the seeded table');
+});
+
+test('seed only: an unreadable security state stops the run before any sample record is written', async () => {
+  const run = seedOnlySecured(() => ({ status: 503, body: {} }));
+  await assert.rejects(runSdkBuild(run.spec, { sdk: run.sdk, apply: true, sampleData: true, phases: ['sample-data'] }), (e) => e.code === 'COLUMN_SECURITY_UNREAD');
+  assert.strictEqual(find(run.calls, 'seedRecordGraph').length, 0);
+});
+
+test('seed only: a secured column seeds as before; a spec that secures no column reads nothing new', async () => {
+  const secured = seedOnlySecured(() => ({ status: 200, body: { value: [{ LogicalName: 'new_secret', IsSecured: true }] } }));
+  await runSdkBuild(secured.spec, { sdk: secured.sdk, apply: true, sampleData: true, phases: ['sample-data'] });
+  assert.ok(find(secured.calls, 'seedRecordGraph').length > 0, 'records seeded');
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'], relationships: [] } } });
+  const reads = [];
+  sdk.dataverse = { get: async (url) => { reads.push(url); return { status: 404, body: {} }; } };
+  await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true, phases: ['sample-data'] });
+  assert.ok(find(calls, 'seedRecordGraph').length > 0);
+  assert.deepStrictEqual(reads.filter((u) => /IsSecured/.test(u)), []);
+});
+
+// Field security profiles through the build: created through the create port in the data-model phase, after the columns are secured and
+// before any sample row; given to the users and teams the spec names in the security phase, only once the profile is proven as declared.
+const FSP_ID = '11111111-1111-4111-8111-111111111111';
+const FSP_USER = '33333333-3333-4333-8333-333333333333';
+const FSP_TEAM = '44444444-4444-4444-8444-444444444444';
+function fieldSecuritySpec(assignTo = { users: [FSP_USER], teams: [FSP_TEAM] }) {
+  const base = makeSpec();
+  return makeSpec({
+    entities: [{ ...base.entities[0], columns: [...base.entities[0].columns, { schemaName: 'new_secret', displayName: 'Secret', type: 'Text', isSecured: true }] }, base.entities[1]],
+    sampleData: { ...base.sampleData, new_customer: [{ new_name: 'Acme', new_tier: 'Pro', new_secret: 'x' }] },
+    fieldSecurityProfiles: [{ key: 'hr', name: 'HR', permissions: [{ table: 'new_customer', column: 'new_secret', read: true }], ...(assignTo ? { assignTo } : {}) }],
+  });
+}
+// `found`: the profile exists (the name finds FSP_ID); `held` lists the permissions the server holds for it (default: as declared);
+// `pushed`: the SDK push's answer; `head`: the status of the profile read.
+function fieldSecurityRun({ found = false, held, pushed = { saved: true }, head = 200, port = true } = {}) {
+  const { sdk, calls } = mockSdk();
+  const find = sdk.findArtifact;
+  const create = sdk.createArtifact;
+  const push = sdk.pushArtifact;
+  sdk.findArtifact = async (kind, q) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'findProfile', args: [q] }), found ? FSP_ID : null) : find(kind, q));
+  sdk.createArtifact = (kind, a) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'createProfile', args: [a] }), a) : create(kind, a));
+  sdk.pushArtifact = async (kind, id, ...rest) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'pushProfile', args: [id] }), pushed) : push(kind, id, ...rest));
+  const rows = held || [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_customer', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 0, canreadunmasked: 0 }];
+  sdk.dataverse = {
+    get: async (url) => {
+      calls.push({ name: 'dataverse.get', args: [url] });
+      if (url.startsWith(`/fieldsecurityprofiles(${FSP_ID})?`)) return { status: head, body: head === 200 ? { name: 'HR', description: null } : {} };
+      if (url.startsWith('/fieldpermissions?')) return { status: 200, body: { value: rows } };
+      if (/\/(systemuserprofiles_association|teamprofiles_association)\?/.test(url)) return { status: 200, body: { value: [] } };
+      return { status: 404, body: {} };
+    },
+  };
+  const creates = {
+    runs: [],
+    run: async (desc, fn) => {
+      creates.runs.push(desc);
+      const childIds = Object.fromEntries(desc.childKeys.map((k, i) => [k, `2222222${i}-2222-4222-8222-222222222222`]));
+      await fn({ id: FSP_ID, childIds });
+      return { outcome: 'created', id: FSP_ID, childIds };
+    },
+  };
+  const events = [];
+  const go = (spec, opts) => runSdkBuild(spec, { sdk, apply: true, ...(port ? { creates } : {}), emit: (e) => events.push(e), ...opts });
+  return { sdk, calls, creates, events, go };
+}
+const DATA_STAGE = ['solution', 'data-model', 'sample-data'];
+
+test('field security: the plan names who each profile is given to, says when no one is named, and adds nothing for a spec without one', () => {
+  const labels = planFor(fieldSecuritySpec(), {}).map((i) => `${i.phase}: ${i.label}`);
+  assert.ok(labels.includes(`data-model: field security profile "HR" (1 permission; to be given to user ${FSP_USER}, team ${FSP_TEAM})`), labels.join('\n'));
+  assert.ok(labels.includes(`security: give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM}`));
+  const seeded = planFor(fieldSecuritySpec(), { sampleData: true }).map((i) => `${i.phase}: ${i.label}`);
+  const firstSeed = seeded.findIndex((l) => /^sample-data:/.test(l));
+  assert.ok(firstSeed > 0 && seeded.indexOf(`data-model: field security profile "HR" (1 permission; to be given to user ${FSP_USER}, team ${FSP_TEAM})`) < firstSeed, seeded.join('\n'));
+  const none = planFor(fieldSecuritySpec(null), {}).map((i) => i.label);
+  assert.ok(none.includes('field security profile "HR" (1 permission; no assignment requested)'));
+  assert.ok(!none.some((l) => /^give field security profile/.test(l)));
+  // A data-only run plans the assignment as deferred work, not as security it will do.
+  const data = planFor(fieldSecuritySpec(), { phases: DATA_STAGE, sampleData: true }).map((i) => `${i.phase}: ${i.label}`);
+  assert.ok(data.includes(`data-model: give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM} (deferred: this run does not include the security phase)`), data.join('\n'));
+  assert.ok(!data.some((l) => /^security:/.test(l)));
+  // A table that declares a flag has exactly one step, run or skipped.
+  const flagged = makeSpec();
+  flagged.entities[1] = { ...flagged.entities[1], duplicateDetectionEnabled: true };
+  assert.deepStrictEqual(planFor(flagged, {}).filter((i) => /^table flags /.test(i.label)).map((i) => i.label), ['table flags new_ticket']);
+  // An existing spec plans exactly what it did.
+  assert.deepStrictEqual(planFor(makeSpec(), {}).filter((i) => /field security|table flags/.test(i.label)), []);
+});
+
+test('field security: a full build creates the profile through the create port before any sample row, adds it to the solution, then gives it to the named users and teams', async () => {
+  const run = fieldSecurityRun();
+  const r = await run.go(fieldSecuritySpec(), { sampleData: true });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(run.creates.runs, [{ kind: 'fieldSecurityProfile', key: 'hr', identity: { name: 'HR' }, childKeys: ['new_customer.new_secret'] }]);
+  const names = run.calls.map((c) => c.name);
+  assert.ok(names.indexOf('createProfile') >= 0 && names.indexOf('createProfile') < names.indexOf('seedRecordGraph'), 'the profile exists before the first sample row');
+  assert.deepStrictEqual(find(run.calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === 70).map((c) => c.args[0]), [{ componentId: FSP_ID, componentType: 70, solutionUniqueName: 'ContosoSD' }]);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords').map((c) => [c.args[0], c.args[1], c.args[2].targetEntity, c.args[2].targetId]), [
+    ['fieldsecurityprofile', FSP_ID, 'systemuser', FSP_USER], ['fieldsecurityprofile', FSP_ID, 'team', FSP_TEAM],
+  ]);
+  assert.deepStrictEqual(r.created.fieldSecurityProfiles, { hr: { id: FSP_ID, origin: 'created' } });
+  assert.ok(run.events.some((e) => e.status === 'ok' && e.label === `give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM}`));
+  const total = run.events[0].total;
+  assert.ok(run.events.every((e) => e.n <= total), 'the field security steps are in the plan the progress counts');
+});
+
+test('field security: a data-only run creates the profile and reports its assignment deferred, not done', async () => {
+  const run = fieldSecurityRun();
+  const r = await run.go(fieldSecuritySpec(), { phases: DATA_STAGE });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(run.creates.runs.length, 1);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords'), []);
+  assert.deepStrictEqual(r.skipped.fieldSecurityAssignments, [{ profile: 'hr', principals: [`user ${FSP_USER}`, `team ${FSP_TEAM}`], deferredTo: 'security' }]);
+  assert.ok(run.events.some((e) => e.status === 'skip' && /\(deferred: this run does not include the security phase\)$/.test(e.label)));
+});
+
+test('field security: a security-only run gives a profile the environment holds as declared, and refuses one it does not', async () => {
+  const held = fieldSecurityRun({ found: true });
+  const r = await held.go(fieldSecuritySpec(), { phases: ['security'] });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(held.creates.runs, [], 'nothing is created in the security phase');
+  assert.strictEqual(find(held.calls, 'associateRecords').length, 2);
+  const missing = fieldSecurityRun({ found: false });
+  await assert.rejects(missing.go(fieldSecuritySpec(), { phases: ['security'] }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNRESOLVED' && e.phase === 'security' && /run the data-model phase first/.test(e.message));
+  assert.deepStrictEqual(find(missing.calls, 'associateRecords'), []);
+  const differs = fieldSecurityRun({ found: true, held: [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_customer', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 4, canreadunmasked: 0 }] });
+  await assert.rejects(differs.go(fieldSecuritySpec(), { phases: ['security'] }), (e) => e.code === 'FIELD_SECURITY_PROFILE_DIFFERS');
+  assert.deepStrictEqual(find(differs.calls, 'associateRecords'), []);
+});
+
+test('field security: a created profile whose content is not proven stops the build before any sample row and is given to no one', async () => {
+  const run = fieldSecurityRun({ pushed: { saved: true, warnings: ['the answer did not echo every permission'] }, head: 503 });
+  await assert.rejects(run.go(fieldSecuritySpec(), { sampleData: true }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNREAD' && e.phase === 'data-model');
+  assert.deepStrictEqual(find(run.calls, 'seedRecordGraph'), []);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords'), []);
+  // A build with no create port creates nothing.
+  const noPort = fieldSecurityRun({ port: false });
+  await assert.rejects(noPort.go(fieldSecuritySpec(), { phases: DATA_STAGE }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNKNOWN');
+  assert.deepStrictEqual(find(noPort.calls, 'createProfile'), []);
+});
+
+test('field security: through the pass-through create port the profile carries the ids the port minted, and a lost create answer halts the build', async () => {
+  const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  const MINTED = '55555555-5555-4555-8555-555555555555';
+  const ids = [MINTED, '66666666-6666-4666-8666-666666666666'];
+  const run = fieldSecurityRun({ port: false });
+  const r = await run.go(fieldSecuritySpec(), { sampleData: true, creates: createPassthroughCreates({ newId: () => ids.shift() }) });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  const [created] = find(run.calls, 'createProfile').map((c) => c.args[0]);
+  assert.deepStrictEqual([created.id, created.permissions.map((p) => p.id)], [MINTED, ['66666666-6666-4666-8666-666666666666']]);
+  assert.deepStrictEqual(r.created.fieldSecurityProfiles, { hr: { id: MINTED, origin: 'created' } });
+  assert.deepStrictEqual(find(run.calls, 'associateRecords').map((c) => c.args[1]), [MINTED, MINTED]);
+  // The port neither swallows nor re-sends: a create whose answer was lost reaches the build's halt once, before any sample row.
+  const lost = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+  const failing = fieldSecurityRun({ port: false });
+  const push = failing.sdk.pushArtifact;
+  failing.sdk.pushArtifact = async (kind, ...rest) => (kind === 'fieldSecurityProfile' ? (failing.calls.push({ name: 'pushProfile', args: rest }), Promise.reject(lost)) : push(kind, ...rest));
+  await assert.rejects(failing.go(fieldSecuritySpec(), { sampleData: true, creates: createPassthroughCreates() }), (e) => e.phase === 'data-model');
+  assert.strictEqual(find(failing.calls, 'createProfile').length, 1);
+  assert.deepStrictEqual(find(failing.calls, 'seedRecordGraph'), []);
+  assert.deepStrictEqual(find(failing.calls, 'associateRecords'), []);
 });
 
 test('existing-table entity-set name comes from findTables (sample-data binding works)', async () => {
@@ -615,6 +905,14 @@ test('app icon: an explicit spec.app.icon (declared web resource) is used instea
   assert.ok(!find(calls, 'createWebResource').some((c) => /_icon$/.test(c.args[0].name)), 'no generated icon when app.icon is set');
   const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
   assert.ok(appCreate.args[1].iconWebResourceId, 'app def carries the explicit icon id');
+});
+
+test('app create: the def leaves `published` unset, so the SDK publishes the new app (a draft is invisible to the build\'s own probes)', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'web-resources', 'app-shell'] });
+  const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
+  assert.ok(appCreate, 'the app is created');
+  assert.ok(!('published' in appCreate.args[1]), `published must stay unset; def keys: ${Object.keys(appCreate.args[1]).join(', ')}`);
 });
 
 test('sitemap: the app sitemap is added to the solution (componenttype 62)', async () => {
@@ -735,11 +1033,464 @@ test('#583 an existing app whose routing description already matches is left alo
 test('#583 a spec with no routing description never reads or writes one', async () => {
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: 'Written by the platform.' });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases });
-  // One read, for the live sitemap the rewrite re-attaches to (AB#6726727) — the routing description
-  // is never looked at: applyAppAiDescription returns before reading when the spec sets none.
-  assert.strictEqual(appCalls(calls, 'getArtifact').length, 1, 'read once, for the sitemap');
+  // Two reads, both of the fetched copy: the live sitemap the rewrite re-attaches to (AB#6726727) and the header text the run
+  // compares with the spec's (name, description). The routing description is never looked at: applyAppAiDescription returns before
+  // reading when the spec sets none.
+  assert.strictEqual(appCalls(calls, 'getArtifact').length, 2, 'read for the sitemap and for the header text');
   assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
+});
+
+// The app's NAME and DESCRIPTION were set when the app was created and never touched again: a rebuild with an edited
+// description reported the app step as done and left the old text (the same in 2.13.0). The SDK's header push carries `name`,
+// `description` and the routing description — whichever of them the artifact holds differently from the row (pinned against the
+// real bundle in app-header-text-real-bundle.test.js) — so the build edits the FETCHED artifact, as it does for the routing
+// description, and the change rides the push that already writes the app. Like a view's or a chart's description, only a
+// non-blank text is written and only when it differs: a spec that leaves the description out, or carries the "" a download writes,
+// never blanks one a maker typed.
+const DESCRIBED = 'Track tickets, orders and escalations in one place.';
+const describedSpec = (app = {}) => makeSpec({ app: { name: 'Support Desk', description: DESCRIBED, ...app } });
+const headerEdits = (calls) => appCalls(calls, 'updateElement', (c) => c.args[2] === '/name' || c.args[2] === '/description').map((c) => [c.args[2], c.args[3]]);
+
+test('app header: a rebuild applies an edited description to the existing app, on the push that already writes its sitemap', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true }); // deployed: 'Tickets'
+  await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]], 'the description is edited, and nothing else of the header');
+  const pushes = appCalls(calls, 'pushArtifact');
+  assert.strictEqual(pushes.length, 1, 'one push carries the sitemap and the description (a second from the same fetch would race the first on its If-Match)');
+  const edit = appCalls(calls, 'updateElement', (c) => c.args[2] === '/description')[0];
+  assert.ok(calls.indexOf(appCalls(calls, 'fetchArtifact')[0]) < calls.indexOf(edit) && calls.indexOf(edit) < calls.indexOf(pushes[0]), 'edited on the fetched copy, before the push');
+  assert.strictEqual(appCalls(calls, 'publishArtifact').length, 1, 'and published, as the sitemap write is');
+});
+
+test('app header: with the pages phase the description rides the finalizer\u2019s push — app-shell pushes nothing', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(describedSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages });
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one app push in the whole run');
+  const fetches = appCalls(calls, 'fetchArtifact');
+  const pushes = appCalls(calls, 'pushArtifact');
+  const edit = appCalls(calls, 'updateElement', (c) => c.args[2] === '/description')[0];
+  assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/description').length, 1);
+  assert.ok(calls.indexOf(fetches[1]) < calls.indexOf(edit) && calls.indexOf(edit) < calls.indexOf(pushes[0]), 'applied after the finalizer\u2019s fetch, before its push');
+});
+
+test('app header: a renamed app (its unique name pinned) gets its new display name — the unique name is its identity and never changes', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  const spec = makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: 'Tickets' } });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk']]);
+  assert.deepStrictEqual(find(calls, 'findArtifact').filter((c) => c.args[0] === 'app').map((c) => c.args[1]), [{ uniqueName: 'new_supportdesk' }], 'found by its unique name, not by the display name');
+  assert.ok(!appCalls(calls, 'updateElement').some((c) => /uniqueName/i.test(String(c.args[2]))), 'no write ever touches the unique name');
+  assert.ok(!appCalls(calls, 'createArtifact').length, 'renamed, not recreated');
+});
+
+test('app header: the name and the description are edited together, and with the routing description on one push', async () => {
+  const spec = makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED, aiDescription: ROUTING } });
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk'], ['/description', DESCRIBED]]);
+  assert.deepStrictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').map((c) => c.args[3]), [{ aiDescription: ROUTING }]);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one push for the whole header');
+});
+
+test('app header: when only the routing description keeps the sitemap write off the app, the description rides that push', async () => {
+  // A page subarea defers the existing app's sitemap write to the pages finalizer, which an app-shell-only build does not run: the
+  // routing description gets a push of its own, and a changed description is written with it, not by a second one.
+  const spec = describedSpec({ aiDescription: ROUTING });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]]);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+});
+
+test('app header: nothing is written for a header that already matches, and a blank or absent description never blanks one', async () => {
+  // Pins: the neighbours of the fix stay as they were.
+  const same = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk: same.sdk, apply: true, phases: appShellPhases });
+  assert.deepStrictEqual(headerEdits(same.calls), [], 'equal text is not rewritten');
+  for (const [what, app] of [['an empty description (what a download writes)', { name: 'Support Desk', description: '' }], ['a blank one', { name: 'Support Desk', description: '   ' }], ['none', { name: 'Support Desk' }]]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppDescription: 'Typed in the maker.' });
+    await runSdkBuild(makeSpec({ app }), { sdk, apply: true, phases: appShellPhases });
+    assert.deepStrictEqual(headerEdits(calls), [], `${what} leaves the deployed description alone`);
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, `${what}: the sitemap push is as before`);
+  }
+});
+
+test('app header: a NEW app is created with its name and description as before, and edits nothing', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases });
+  const def = appCalls(calls, 'createArtifact')[0].args[1];
+  assert.strictEqual(def.name, 'Support Desk');
+  assert.strictEqual(def.description, DESCRIBED);
+  assert.deepStrictEqual(headerEdits(calls), []);
+});
+
+// A never-published app takes no write to its header — name, description or routing description — until it is published, and the SDK
+// THROWS APP_DRAFT_HEADER_NOT_WRITABLE before it writes anything (its message: "Nothing was modified by this call"); it writes the header
+// only when the artifact holds one that differs from the row's, so a push whose header matches goes through. The routing description is
+// an explicit request the build cannot honour, so it halts, as it always did. The app's name and description are different: a rebuild
+// applies them because it can, and a refusal of THEM alone must not stop the navigation and everything after it. The build says they
+// were not applied, puts the fetched header back so the push no longer carries a header write, and goes on.
+const NEVER_PUBLISHED = /the app was never published; publish it in Power Apps and re-run/;
+const notAppliedWarnings = (warnings) => warnings.filter((w) => NEVER_PUBLISHED.test(w));
+
+test('app header: a text edit on a never-published app is NOT applied — the build warns, puts the fetched header back, and carries on with the navigation', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true }); // deployed: 'Tickets'
+  const warnings = [];
+  const events = [];
+  const result = await runSdkBuild(describedSpec(), { sdk, apply: true, publish: true, phases: [...appShellPhases, 'publish'], warn: (m) => warnings.push(m), emit: (e) => events.push(e) });
+  assert.strictEqual(result.ok, true, 'the build succeeds');
+  assert.strictEqual(notAppliedWarnings(warnings).length, 1, JSON.stringify(warnings));
+  assert.match(notAppliedWarnings(warnings)[0], /^app "Support Desk": its description was not applied: the app was never published; publish it in Power Apps and re-run\./);
+  // The edit was made, refused, and put back — the second push carries no header write.
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED], ['/description', 'Tickets']]);
+  const pushes = appCalls(calls, 'pushArtifact');
+  assert.strictEqual(pushes.length, 2, 'the refused push, then the push that writes the navigation');
+  const siteMapEdits = appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap');
+  assert.strictEqual(siteMapEdits.length, 1, 'the sitemap rewrite is made once and rides the second push');
+  assert.ok(calls.indexOf(siteMapEdits[0]) < calls.indexOf(pushes[0]), 'made before the first push');
+  const held = await sdk.getArtifact('app', pushes[0].args[1]);
+  assert.strictEqual(held.description, 'Tickets', 'the artifact holds the deployed header again');
+  assert.ok(appCalls(calls, 'publishArtifact').length >= 1, 'the app is published');
+  assert.ok(calls.indexOf(appCalls(calls, 'publishArtifact')[0]) > calls.indexOf(pushes[1]), 'after the push that saved');
+  assert.ok(!events.some((e) => e.status === 'error'), JSON.stringify(events.filter((e) => e.status === 'error')));
+  assert.ok(events.some((e) => e.phase === 'app-shell' && e.status === 'ok'), 'the app step is reported as done');
+  assert.ok(events.some((e) => e.phase === 'publish'), 'and the phases after it still run');
+});
+
+test('app header: with the pages phase the same refusal is not applied and the finalizer goes on, then so does the pages phase', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const warnings = [];
+  const events = [];
+  const result = await runSdkBuild(describedSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages, warn: (m) => warnings.push(m), emit: (e) => events.push(e) });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(notAppliedWarnings(warnings).length, 1, JSON.stringify(warnings));
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 2, 'the finalizer\u2019s refused push and its second');
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED], ['/description', 'Tickets']]);
+  assert.ok(events.some((e) => e.phase === 'pages' && e.status === 'ok' && /finalize sitemap/.test(e.label)), 'the finalizer step is reported as done');
+  assert.ok(!events.some((e) => e.status === 'error'), JSON.stringify(events.filter((e) => e.status === 'error')));
+  assert.strictEqual(appCalls(calls, 'publishArtifact').length, 1, 'and the app is published once');
+});
+
+test('app header: a rename and a description edit that are both refused are both put back, and the warning names both', async () => {
+  const spec = makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED } });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk'], ['/description', DESCRIBED], ['/name', 'Support Desk'], ['/description', 'Tickets']]);
+  assert.strictEqual(notAppliedWarnings(warnings).length, 1);
+  assert.match(notAppliedWarnings(warnings)[0], /^app "Help Desk": its name and description were not applied: the app was never published; publish it in Power Apps and re-run\./);
+  const held = await sdk.getArtifact('app', appCalls(calls, 'pushArtifact')[0].args[1]);
+  assert.deepStrictEqual([held.name, held.description], ['Support Desk', 'Tickets']);
+});
+
+test('app header: a never-published app that takes a rebuild with no text edit builds exactly as before — one push, no warning', async () => {
+  // Pins the neighbour: the refusal is met only by an EDIT of the header.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const warnings = [];
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), []);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+  assert.deepStrictEqual(warnings.filter((w) => /^app "/.test(w)), [], 'nothing is said about the app');
+});
+
+test('app header: the routing description on a never-published app still halts with the precise refusal — whether or not the text changed too', async () => {
+  // An explicit request the build cannot honour is never skipped, and a push carrying it is not retried without it.
+  for (const [what, spec] of [['the routing description alone', routingSpec()], ['with a text edit beside it', makeSpec({ app: { name: 'Support Desk', description: DESCRIBED, aiDescription: ROUTING } })]]) {
+    for (const phases of [appShellPhases, fullPhases]) {
+      const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+      const warnings = [];
+      await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases, genpageCli: noPages, warn: (m) => warnings.push(m) }), (e) => {
+        assert.strictEqual(e.code, 'app-header-unpublished', `${what}, ${phases.join(',')}: ${e.message}`);
+        assert.match(e.message, /name, description or routing description/);
+        return true;
+      });
+      assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, `${what}: the refused push is the only one`);
+      assert.deepStrictEqual(headerEdits(calls).filter(([, value]) => value === 'Tickets'), [], `${what}: no header is put back`);
+      assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, `${what}: the copy is reset`);
+      assert.deepStrictEqual(notAppliedWarnings(warnings), [], `${what}: no \u201cnot applied\u201d is claimed over a halt`);
+    }
+  }
+});
+
+test('app header: when the never-published app refuses even the push with the header put back, the build halts with the precise refusal', async () => {
+  // The recovery is one retry, on the SDK's own promise that the refused call wrote nothing; a second refusal is not looped on.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE' });
+  await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
+    assert.match(e.message, /name, description or routing description/);
+    return true;
+  });
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 2, 'the refused push and one retry, never more');
+  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'the copy is reset before the halt');
+});
+
+test('app header: the refusal is recovered from whether the SDK throws it or returns it', async () => {
+  // The vendored SDK throws; the older shape resolved `saved:false` (or `success:false`) with the same code. Both mean "nothing was written".
+  for (const result of [{ saved: false }, { success: false }]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true });
+    const push = sdk.pushArtifact;
+    let refused = false;
+    sdk.pushArtifact = async (t, id) => {
+      if (t !== 'app' || refused) return push(t, id);
+      refused = true;
+      calls.push({ name: 'pushArtifact', args: [t, id] });
+      return { type: t, id, ...result, error: Object.assign(new Error('The retrieval of version numbers failed.'), { code: 'APP_DRAFT_HEADER_NOT_WRITABLE' }) };
+    };
+    const warnings = [];
+    const built = await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+    assert.strictEqual(built.ok, true, JSON.stringify(result));
+    assert.strictEqual(notAppliedWarnings(warnings).length, 1, JSON.stringify(result));
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 2, JSON.stringify(result));
+  }
+});
+
+test('app header: a 412 on a push that carried a text edit is a concurrent edit — never skipped, never retried, and the copy is kept', async () => {
+  for (const phases of [appShellPhases, fullPhases]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+    const warnings = [];
+    await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases, genpageCli: noPages, warn: (m) => warnings.push(m) }), (e) => {
+      assert.strictEqual(e.code, 'version-conflict', `${phases.join(',')}: ${e.message}`);
+      return true;
+    });
+    assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one attempt');
+    assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]], 'the edit is not put back');
+    assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, 'the copy is kept as the fence');
+    assert.deepStrictEqual(notAppliedWarnings(warnings), []);
+  }
+});
+
+test('app header: a push that fails for any other reason propagates unchanged and is not retried, a text edit or not', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushThrows: 'SITEMAP_TARGET_NOT_FOUND' });
+  await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'SITEMAP_TARGET_NOT_FOUND');
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]]);
+});
+
+test('app header: if the fetched header cannot be put back the build halts rather than push an edit it could not take out', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, draftHeader: true });
+  const update = sdk.updateElement;
+  sdk.updateElement = async (t, id, ptr, patch) => {
+    if (t === 'app' && ptr === '/description' && patch === 'Tickets') { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); throw new Error('workspace write failed'); }
+    return update(t, id, ptr, patch);
+  };
+  await assert.rejects(runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => e.code === 'app-header-unpublished');
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'no second push of a copy still holding the edit');
+});
+
+// Both columns are localizable (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule), and whether
+// a plain write of the base-language text keeps the translations beside it has not been measured against an environment. Until it has, a
+// header text that is not plain — a localized one, held as one text per language — is never replaced by a
+// scalar: its own edit is left unapplied, with a warning, and nothing else about the push changes. The text is taken off the copy right before
+// the push (`removeElement`), so the SDK — which writes every text the copy holds when its own comparison read of the header fails — has none of it to write.
+const localized = (english, french) => ({ '1033': english, '1036': french });
+const headerRemovals = (calls) => appCalls(calls, 'removeElement', (c) => c.args[2] === '/name' || c.args[2] === '/description').map((c) => c.args[2]);
+const beforeTheFirstPush = (calls, call) => calls.indexOf(call) < calls.indexOf(appCalls(calls, 'pushArtifact')[0]);
+
+test('app header: a localized name and description are never replaced by a scalar — they are taken off the copy before the push, and the build says the edit was not applied', async () => {
+  const name = localized('Support Desk', 'Bureau d\u2019assistance');
+  const description = localized('Tickets', 'Billets');
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: name, existingAppDescription: description });
+  const warnings = [];
+  const result = await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(headerEdits(calls), [], 'no write to the header text at all');
+  assert.deepStrictEqual(headerRemovals(calls), ['/name', '/description'], 'both texts are taken off the copy');
+  assert.ok(appCalls(calls, 'removeElement').every((c) => beforeTheFirstPush(calls, c)), 'before the push that would otherwise offer them to the SDK');
+  const held = await sdk.getArtifact('app', appCalls(calls, 'pushArtifact')[0].args[1]);
+  assert.deepStrictEqual([held.name, held.description], [undefined, undefined], 'neither is on the copy any more, and neither was ever replaced by a scalar');
+  const notApplied = warnings.filter((w) => /was not applied/.test(w));
+  assert.strictEqual(notApplied.length, 1, JSON.stringify(warnings));
+  assert.match(notApplied[0], /^app "Support Desk": its description was not applied: it is localized \(2 languages: 1033, 1036\)/);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'the sitemap push is as it always is');
+});
+
+test('app header: a localized name and a localized description the spec changes are each left as they are, and the build says so for each', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: localized('Support Desk', 'Bureau d\u2019assistance'), existingAppDescription: localized('Tickets', 'Billets') });
+  const warnings = [];
+  await runSdkBuild(makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED } }), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), []);
+  assert.strictEqual(warnings.filter((w) => /was not applied/.test(w)).length, 2, JSON.stringify(warnings));
+  assert.ok(warnings.some((w) => /^app "Help Desk": its name was not applied: it is localized/.test(w)));
+  assert.ok(warnings.some((w) => /^app "Help Desk": its description was not applied: it is localized/.test(w)));
+  assert.deepStrictEqual(headerRemovals(calls), ['/name', '/description']);
+});
+
+// The SDK's header push writes only the texts that changed, and neither compares nor writes a text removed from the copy (pinned against the real bundle in
+// app-header-text-real-bundle.test.js, which also shows what goes over the wire). So a text that is not plain is taken off the copy and holds back its OWN edit
+// only: the plain text beside it, and a routing description, are applied as usual and written alone.
+const NOT_APPLIED = /was not applied/;
+const notAppliedOf = (warnings) => warnings.filter((w) => NOT_APPLIED.test(w));
+
+test('app header: a plain-text name beside a localized description IS applied, on its own — only the localized description\u2019s edit is left, and it is taken off the copy', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppDescription: localized('Tickets', 'Billets') });
+  const warnings = [];
+  const result = await runSdkBuild(makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED } }), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk']], 'the plain name is written; the localized description is not');
+  const notApplied = notAppliedOf(warnings);
+  assert.strictEqual(notApplied.length, 1, JSON.stringify(warnings));
+  assert.match(notApplied[0], /^app "Help Desk": its description was not applied: it is localized \(2 languages: 1033, 1036\)/);
+  assert.deepStrictEqual(headerRemovals(calls), ['/description']);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one push carries the name and the navigation');
+  const held = await sdk.getArtifact('app', appCalls(calls, 'pushArtifact')[0].args[1]);
+  assert.deepStrictEqual([held.name, held.description], ['Help Desk', undefined], 'the copy that push carries holds the new name and none of the localized description');
+});
+
+test('app header: a localized name the spec leaves as it is, beside a description it changes — the description is applied, and the name is not mentioned', async () => {
+  const name = localized('Support Desk', 'Bureau d\u2019assistance');
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: name });
+  const warnings = [];
+  await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), [['/description', DESCRIBED]]);
+  assert.deepStrictEqual(notAppliedOf(warnings), []);
+  assert.deepStrictEqual(headerRemovals(calls), ['/name']);
+  const held = await sdk.getArtifact('app', appCalls(calls, 'pushArtifact')[0].args[1]);
+  assert.deepStrictEqual([held.name, held.description], [undefined, DESCRIBED]);
+});
+
+test('app header: a header text of ANY shape that is not plain holds back its own edit only — the other text is applied', async () => {
+  const unreadable = [['an array', ['Support Desk']], ['a number', 42], ['null', null], ['a localized text', localized('Support Desk', 'Bureau d\u2019assistance')]];
+  for (const [what, shape] of unreadable) {
+    // …in the name, beside a changed plain description: the description is written. The name's own edit is the spec's name, which an array, a number or a null does not hold — said once;
+    // the localized text holds it (it is one of its entries), so it needs no word.
+    const inName = mockSdk({ artifactsExist: true, existingAppName: shape });
+    const nameWarnings = [];
+    await runSdkBuild(describedSpec(), { sdk: inName.sdk, apply: true, phases: appShellPhases, warn: (m) => nameWarnings.push(m) });
+    assert.deepStrictEqual(headerEdits(inName.calls), [['/description', DESCRIBED]], `${what} in the name`);
+    assert.deepStrictEqual(headerRemovals(inName.calls), ['/name'], `${what} in the name`);
+    const ownName = notAppliedOf(nameWarnings);
+    assert.strictEqual(ownName.length, what === 'a localized text' ? 0 : 1, `${what} in the name: ${JSON.stringify(nameWarnings)}`);
+    for (const w of ownName) assert.match(w, /^app "Support Desk": its name was not applied: the app's name could not be read as plain text \(it came back as /);
+    // …and in the description, beside a changed plain name: the name is written, and the description's own edit is said once.
+    const inDescription = mockSdk({ artifactsExist: true, existingAppDescription: shape });
+    const descriptionWarnings = [];
+    await runSdkBuild(makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: 'Tickets' } }), { sdk: inDescription.sdk, apply: true, phases: appShellPhases, warn: (m) => descriptionWarnings.push(m) });
+    assert.deepStrictEqual(headerEdits(inDescription.calls), [['/name', 'Help Desk']], `${what} in the description`);
+    assert.deepStrictEqual(headerRemovals(inDescription.calls), ['/description'], `${what} in the description`);
+    assert.strictEqual(notAppliedOf(descriptionWarnings).filter((w) => /^app "Help Desk": its description was not applied: (it is localized|the app's description could not be read as plain text)/.test(w)).length, 1, `${what} in the description: ${JSON.stringify(descriptionWarnings)}`);
+    assert.strictEqual(appCalls(inDescription.calls, 'pushArtifact').length, 1, `${what}: the navigation is still pushed`);
+  }
+});
+
+test('app header: a routing description is applied beside a text that is not plain — written alone, nothing warned, and the text taken off the copy', async () => {
+  // The SDK writes the routing description by itself when only it changed, so the localized name is neither in the request nor a reason to hold the routing description back.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: localized('Support Desk', 'Bureau d\u2019assistance') });
+  const warnings = [];
+  const result = await runSdkBuild(makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').map((c) => c.args[3]), [{ aiDescription: ROUTING }], 'added at the artifact root, as for a plain header');
+  assert.deepStrictEqual(headerEdits(calls), []);
+  assert.deepStrictEqual(headerRemovals(calls), ['/name']);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1, 'one push carries the routing description and the navigation');
+  assert.deepStrictEqual(notAppliedOf(warnings), []);
+  // …and a routing description the app already has, or none in the spec, writes nothing, as for a plain header.
+  const quiet = [];
+  for (const [app, over] of [[{ name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING }, { existingAppAiDescription: ROUTING }], [{ name: 'Support Desk', description: 'Tickets' }, {}]]) {
+    const m = mockSdk({ artifactsExist: true, existingAppName: localized('Support Desk', 'Bureau d\u2019assistance'), ...over });
+    await runSdkBuild(makeSpec({ app }), { sdk: m.sdk, apply: true, phases: appShellPhases, warn: (w) => quiet.push(w) });
+    assert.strictEqual(appCalls(m.calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length + appCalls(m.calls, 'addElement', (c) => c.args[2] === '').length, 0);
+  }
+  assert.deepStrictEqual(notAppliedOf(quiet), []);
+});
+
+test('app header: with the pages phase the finalizer applies the header the same way, and an app-shell-only run pushes a routing description beside a text that is not plain', async () => {
+  const held = { existingAppDescription: localized('Tickets', 'Billets') };
+  // The finalizer is the sole existing-app writer when the pages phase runs.
+  const withPages = mockSdk({ artifactsExist: true, ...held });
+  const warnings = [];
+  await runSdkBuild(describedSpec({ aiDescription: ROUTING }), { sdk: withPages.sdk, apply: true, phases: fullPhases, genpageCli: noPages, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(withPages.calls), [], 'the localized description is not replaced');
+  assert.deepStrictEqual(appCalls(withPages.calls, 'addElement', (c) => c.args[2] === '').map((c) => c.args[3]), [{ aiDescription: ROUTING }], 'but the routing description is applied');
+  assert.deepStrictEqual(headerRemovals(withPages.calls), ['/description']);
+  assert.strictEqual(appCalls(withPages.calls, 'pushArtifact').length, 1, 'the finalizer\u2019s sitemap push, as ever');
+  assert.strictEqual(notAppliedOf(warnings).length, 1, JSON.stringify(warnings));
+  assert.match(notAppliedOf(warnings)[0], /^app "Support Desk": its description was not applied: it is localized/);
+  // Without the pages phase, a page subarea defers the sitemap write, so the routing description is the ONLY reason to push the app — and it is one, with the text taken off the copy.
+  const spec = describedSpec({ aiDescription: ROUTING });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const alone = mockSdk({ artifactsExist: true, ...held });
+  const aloneWarnings = [];
+  await runSdkBuild(spec, { sdk: alone.sdk, apply: true, phases: appShellPhases, warn: (m) => aloneWarnings.push(m) });
+  assert.strictEqual(appCalls(alone.calls, 'pushArtifact').length, 1, 'the routing description rides a push of its own, as it does for a plain header');
+  assert.deepStrictEqual(headerEdits(alone.calls), []);
+  assert.deepStrictEqual(headerRemovals(alone.calls), ['/description']);
+  assert.strictEqual(notAppliedOf(aloneWarnings).length, 1, JSON.stringify(aloneWarnings));
+});
+
+test('app header: a text that is not plain is taken off the copy only when a push follows — a run that pushes nothing leaves the copy as the fetch read it', async () => {
+  // The same shape, with a routing description the app already has: nothing is edited, so no push is made, and an edit left on the copy would be refused by the next run (refuseUnpushedAppCopy).
+  const spec = describedSpec({ aiDescription: ROUTING });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppDescription: localized('Tickets', 'Billets'), existingAppAiDescription: ROUTING });
+  await runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases, warn: () => {} });
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 0, 'nothing to push');
+  assert.deepStrictEqual(headerRemovals(calls), [], 'so nothing is taken off the copy');
+  assert.deepStrictEqual(headerEdits(calls), []);
+});
+
+test('app header: a plain header is still edited whole — the guard changes nothing when no text is held', async () => {
+  // The neighbour of the guard, pinned: a plain name and description take their edits together with the routing description, on one push.
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  const warnings = [];
+  await runSdkBuild(makeSpec({ app: { name: 'Help Desk', uniqueName: 'new_supportdesk', description: DESCRIBED, aiDescription: ROUTING } }), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), [['/name', 'Help Desk'], ['/description', DESCRIBED]]);
+  assert.deepStrictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').map((c) => c.args[3]), [{ aiDescription: ROUTING }]);
+  assert.strictEqual(appCalls(calls, 'pushArtifact').length, 1);
+  assert.deepStrictEqual(notAppliedOf(warnings), []);
+});
+
+test('app header: a header of an unknown shape is left as it is and reported, the same as a localized one', async () => {
+  for (const [what, value] of [['an array', ['Tickets']], ['a number', 42], ['null', null]]) {
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppDescription: value });
+    const warnings = [];
+    await runSdkBuild(describedSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+    assert.deepStrictEqual(headerEdits(calls), [], what);
+    assert.strictEqual(warnings.filter((w) => /^app "Support Desk": its description was not applied: .* could not be read as plain text/.test(w)).length, 1, `${what}: ${JSON.stringify(warnings)}`);
+  }
+});
+
+test('app header: a localized header the spec says nothing new about is left alone without a word', async () => {
+  // The spec's name and description are the app's English texts, and a spec with no description says nothing: nothing to apply, nothing to warn.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppName: localized('Support Desk', 'Bureau d\u2019assistance'), existingAppDescription: localized('Tickets', 'Billets') });
+  const warnings = [];
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  const quiet = mockSdk({ artifactsExist: true, existingAppDescription: localized('Tickets', 'Billets') });
+  await runSdkBuild(makeSpec({ app: { name: 'Support Desk' } }), { sdk: quiet.sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(headerEdits(calls), []);
+  assert.deepStrictEqual(headerEdits(quiet.calls), []);
+  assert.deepStrictEqual(warnings.filter((w) => /^app "/.test(w)), []);
+});
+
+test('app header: the icon is set at create only — a spec icon the app does not have is reported as NOT applied, never silently dropped', async () => {
+  // `webresourceid` is effectively write-once and the SDK's header push does not carry it, so a rebuild cannot change an app's
+  // icon. When the spec NAMES an icon that is not the app's, the build says so instead of reporting the app step as done over it.
+  const iconSpec = makeSpec({ app: { name: 'Support Desk', description: 'Tickets', icon: 'new_appicon' }, webResources: [{ name: 'new_appicon', type: 'png', contentBase64: 'AAAA' }] });
+  const phases = ['solution', 'data-model', 'web-resources', 'app-shell'];
+  const different = mockSdk({ artifactsExist: true, existingWebResource: true, existingAppIconId: 'wr-maker-chose-this' });
+  const warnings = [];
+  await runSdkBuild(iconSpec, { sdk: different.sdk, apply: true, phases, warn: (m) => warnings.push(m) });
+  assert.ok(warnings.some((w) => /app "Support Desk": its icon was NOT changed — the spec's app\.icon \('new_appicon'\) is not the icon the app has\. An app's icon is set when the app is created and a rebuild does not replace it: change it in the app designer, or point app\.icon at the web resource the app already uses\./.test(w)), JSON.stringify(warnings));
+  assert.deepStrictEqual(headerEdits(different.calls), [], 'and nothing is written for it');
+  // The same icon: nothing to say.
+  const same = mockSdk({ artifactsExist: true, existingWebResource: true, existingAppIconId: 'wr-existing' });
+  const quiet = [];
+  await runSdkBuild(iconSpec, { sdk: same.sdk, apply: true, phases, warn: (m) => quiet.push(m) });
+  assert.ok(!quiet.some((w) => /icon/.test(w)), JSON.stringify(quiet));
+  // A spec with no icon of its own gets the generated default at create and leaves a maker's choice alone afterwards: no read, no word.
+  const generated = mockSdk({ artifactsExist: true, existingAppIconId: 'wr-maker-chose-this' });
+  const silent = [];
+  await runSdkBuild(makeSpec(), { sdk: generated.sdk, apply: true, phases: appShellPhases, warn: (m) => silent.push(m) });
+  assert.ok(!silent.some((w) => /icon/.test(w)), JSON.stringify(silent));
+  assert.ok(!find(generated.calls, 'queryRecords').some((c) => c.args[0] === 'appmodule' && (c.args[1].select || []).includes('webresourceid')), 'the deployed icon is not read when the spec names none');
+  // A read that fails proves nothing: no warning, and the build goes on.
+  const unreadable = mockSdk({ artifactsExist: true, existingWebResource: true });
+  const failing = unreadable.sdk.queryRecords;
+  unreadable.sdk.queryRecords = async (e, o) => { if (e === 'appmodule' && (o.select || []).includes('webresourceid')) throw new Error('read failed'); return failing(e, o); };
+  const none = [];
+  await runSdkBuild(iconSpec, { sdk: unreadable.sdk, apply: true, phases, warn: (m) => none.push(m) });
+  assert.ok(!none.some((w) => /icon/.test(w)), JSON.stringify(none));
 });
 
 test('#583 when the sitemap write is deferred, the routing description is pushed on its own', async () => {
@@ -766,7 +1517,7 @@ test('#583 the deferred routing-description push refuses a copy holding an earli
   await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
     assert.match(e.message, /holds edits an earlier run did not push/);
-    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run\./, 'the baseline and the approval record are kept');
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\), dashboard-creation\.\*\.json \(the ids of the dashboards an interrupted build created before they joined the solution\) and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run\./, 'the baseline, the approval record and the page and resource records are kept');
     return true;
   });
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
@@ -832,7 +1583,7 @@ test('#583 when the workspace copy cannot be reset, the halt names the workspace
   const { sdk } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE', failOverwriteFetch: true });
   await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
-    assert.match(e.message, /then re-run the build\. First reset the workspace, which still holds this run's unpushed copy of the app \(a re-run would refuse to overwrite it\): stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json\./);
+    assert.match(e.message, /then re-run the build\. First reset the workspace, which still holds this run's unpushed copy of the app \(a re-run would refuse to overwrite it\): stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\), dashboard-creation\.\*\.json \(the ids of the dashboards an interrupted build created before they joined the solution\) and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\)\./);
     return true;
   });
 });
@@ -1002,7 +1753,7 @@ test('a push refused for an earlier version\u2019s workspace copy halts with the
   };
   await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'ARTIFACT_PROJECTION_STALE', e.message);
-    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run/);
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\), dashboard-creation\.\*\.json \(the ids of the dashboards an interrupted build created before they joined the solution\) and the page-ownership\.\*\.json records \(the receipts and pending records of the pages the app created: nothing else can find them\), and re-run/);
     return true;
   });
 });
@@ -1206,7 +1957,7 @@ test('apply progress total includes existing-column reconciliation steps', async
       new_customer: {
         entitySetName: 'new_customers',
         columns: ['new_name', 'new_tier', 'new_score'],
-        relationships: ['new_customer_new_ticket'],
+        relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }],
       },
       new_ticket: {
         entitySetName: 'new_tickets',
@@ -1254,6 +2005,506 @@ test('apply progress total covers the existing-app sitemap finalize on a page-le
   assert.equal(terminal.at(-1).n, terminal.at(-1).total, 'the final step index must equal the advertised total');
 });
 
+// Live-measured: once a table's EXISTING form is saved, a PublishXml that names only the app, sent before the table's
+// own publish, leaves the form's label changes unpublished for good (publishReconciledTables in sdk-build.js). With
+// --publish a reconcile defers its table's publish to phase 8, so every table it deferred must be published before the
+// first write that can publish the app: an existing app's sitemap finalize or app-shell publish, and a new app's create
+// push. Order is what these pin; the label loss itself is a platform behaviour no mock reproduces.
+const RECONCILE_PHASES = ['views', 'charts', 'forms', 'app-shell', 'pages', 'publish'];
+function firstAppWrite(calls) {
+  return calls.findIndex((c) => (c.name === 'createArtifact' || c.name === 'pushArtifact' || c.name === 'publishArtifact') && c.args[0] === 'app');
+}
+// The publishes in a slice of the call log, one `type id` per artifact: a per-target publish, or each target of an envelope.
+const publishesIn = (slice) => slice.flatMap((c) => (c.name === 'publishArtifact' ? [`${c.args[0]} ${c.args[1]}`]
+  : c.name === 'publishArtifacts' ? c.args[0].map((t) => `${t.type} ${t.id}`) : []));
+function assertReconciledPublishedBeforeApp(calls) {
+  const boundary = firstAppWrite(calls);
+  assert.ok(boundary > 0, 'the build writes the app');
+  const before = publishesIn(calls.slice(0, boundary));
+  assert.ok(before.includes('form form-existing'), `the reconciled Customer form's table is published before the app: ${before.join(', ') || 'nothing'}`);
+  assert.ok(before.includes('view view-existing'), `the reconciled Active Tickets view's table is published before the app: ${before.join(', ') || 'nothing'}`);
+  const after = publishesIn(calls.slice(boundary));
+  assert.ok(after.includes('form form-existing'), `phase 8 still publishes the table with everything else: ${after.join(', ')}`);
+}
+
+test('with --publish, the tables a rebuild reconciled are published before the sitemap finalize publishes the app', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+test('with --publish and no pages phase, the tables a rebuild reconciled are published before the app-shell publishes the app', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES.filter((p) => p !== 'pages') });
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+test('with --publish, the tables a first build reconciled are published before the new app is created, whose push publishes it', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  // The forms and views exist (a spec over tables another build left), the app does not.
+  const find = sdk.findArtifact;
+  sdk.findArtifact = async (kind, identity) => (kind === 'app' ? (calls.push({ name: 'findArtifact', args: [kind, identity] }), null) : find(kind, identity));
+  const list = sdk.listArtifacts;
+  sdk.listArtifacts = async (kind) => (kind === 'app' ? [] : list(kind));
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assert.ok(calls.some((c) => c.name === 'createArtifact' && c.args[0] === 'app'), 'the app is created');
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+test('without --publish the reconciles publish their own tables as before, and the app step publishes nothing extra', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: false, phases: RECONCILE_PHASES, genpageCli: noPages });
+  const boundary = firstAppWrite(calls);
+  const before = calls.slice(0, boundary).filter((c) => c.name === 'publishArtifact').map((c) => `${c.args[0]} ${c.args[1]}`);
+  assert.deepEqual(before.filter((p) => p === 'form form-existing').length, 1, `the form reconcile's own publish, once: ${before.join(', ')}`);
+  assert.deepEqual(before.filter((p) => p === 'view view-existing').length, 1, `the view reconcile's own publish, once: ${before.join(', ')}`);
+});
+
+// The SDK the build uses, with an envelope publish (`publishArtifacts`) when `envelope` is set: `outcome(type, id)` answers
+// both the envelope's targets and a per-target publish; it defaults to a verified publish.
+function publishingSdk({ envelope = false, outcome, appId } = {}) {
+  const mock = mockSdk({ artifactsExist: true, ...(appId ? { appId } : {}) });
+  const { sdk, calls } = mock;
+  const single = sdk.publishArtifact;
+  const answer = (type, id) => (outcome && outcome(type, id)) || { type, id, shipped: true, publish: { kind: 'verified' } };
+  sdk.publishArtifact = async (type, id) => {
+    const own = outcome && outcome(type, id);
+    if (!own) return single(type, id);
+    calls.push({ name: 'publishArtifact', args: [type, id] });
+    return own;
+  };
+  if (envelope) sdk.publishArtifacts = async (targets) => { calls.push({ name: 'publishArtifacts', args: [targets] }); return targets.map(({ type, id }) => answer(type, id)); };
+  return mock;
+}
+const refusedPublish = (type, id) => ({ type, id, shipped: false, publish: { kind: 'failed', error: new Error('PublishXml refused (test)') } });
+
+for (const envelope of [false, true]) {
+  const how = envelope ? 'in one envelope' : 'one table at a time';
+  test(`with --publish, the app step waits until the tables a rebuild reconciled are published (${how})`, async () => {
+    const { sdk, calls } = publishingSdk({ envelope });
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let held = 0;
+    for (const name of ['publishArtifact', 'publishArtifacts']) {
+      const inner = sdk[name];
+      if (typeof inner !== 'function') continue;
+      sdk[name] = async (...args) => {
+        if (release && !(name === 'publishArtifact' && args[0] === 'app')) { held += 1; await gate; }
+        return inner(...args);
+      };
+    }
+    const run = runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+    for (let i = 0; i < 2000 && held === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(held > 0, 'the reconciled tables are being published');
+    for (let i = 0; i < 200; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(firstAppWrite(calls), -1, 'nothing creates, pushes or publishes the app while that publish is outstanding');
+    const open = release;
+    release = null;
+    open();
+    await run;
+    assertReconciledPublishedBeforeApp(calls);
+  });
+}
+
+test('with --publish, a reconciled table whose early publish is refused stops the build before anything writes the app', async () => {
+  const { sdk, calls } = publishingSdk({ outcome: (type, id) => (type === 'form' ? refusedPublish(type, id) : null) });
+  const warnings = [];
+  const halt = await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) }).then(() => null, (e) => e);
+  assert.ok(halt, 'the build halts');
+  assert.equal(halt.code, 'reconciled-publish-failed', halt.message);
+  assert.equal(halt.phase, 'app-shell');
+  assert.match(halt.message, /publish form Customer FAILED before the app was written: PublishXml refused \(test\)/);
+  assert.equal(firstAppWrite(calls), -1, 'the app is neither created, pushed nor published');
+  assert.ok(warnings.some((w) => /publish form Customer FAILED/.test(w)), warnings.join(' | '));
+  assert.ok(Array.isArray(halt.owedPublishes) && halt.owedPublishes.some(([type, id]) => type === 'form' && id === 'form-existing'),
+    'the halt carries the table it owes, for the CLI to publish without the app once no retry follows');
+});
+
+test('with --publish, a reconciled table the envelope and then its own publish both refuse stops the build before the app', async () => {
+  const { sdk, calls } = publishingSdk({ envelope: true, outcome: (type, id) => (type === 'form' ? refusedPublish(type, id) : null) });
+  const halt = await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: () => {} }).then(() => null, (e) => e);
+  assert.ok(halt, 'the build halts');
+  assert.equal(halt.code, 'reconciled-publish-failed', halt.message);
+  assert.equal(firstAppWrite(calls), -1);
+  assert.deepEqual(publishesIn(calls).filter((p) => p === 'form form-existing').length, 2, 'the envelope, then the form on its own');
+});
+
+test('with --publish, a reconciled table the envelope refuses but its own publish then takes does not stop the build', async () => {
+  let envelopeSeen = false;
+  const { sdk, calls } = publishingSdk({ envelope: true });
+  const envelope = sdk.publishArtifacts;
+  sdk.publishArtifacts = async (targets) => {
+    const results = await envelope(targets);
+    if (envelopeSeen) return results;
+    envelopeSeen = true;
+    return results.map((r) => (r.type === 'form' ? refusedPublish(r.type, r.id) : r));
+  };
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: () => {} });
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+// The runner wraps the halt once more, and the CLI's retry check reads a status only on the halt it is given and on that
+// halt's cause: the refusal's status must reach it, or a throttled publish is never re-run.
+test('with --publish, an early publish refused with a 429 or a 503 halts as transient; a 400, or a refusal marked never-retry, does not', async () => {
+  const { isTransientHalt } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const haltFor = async (statusCode, extra = {}) => {
+    const error = Object.assign(new Error(`HTTP ${statusCode} from PublishXml (test)`), { statusCode }, extra);
+    const { sdk } = publishingSdk({ outcome: (type, id) => (type === 'form' ? { type, id, shipped: false, publish: { kind: 'failed', error } } : null) });
+    return runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: () => {} }).then(() => null, (e) => e);
+  };
+  for (const status of [429, 503]) {
+    const halt = await haltFor(status);
+    assert.equal(halt && halt.code, 'reconciled-publish-failed');
+    assert.equal(isTransientHalt(halt), true, `${status}: the build is run again at once`);
+  }
+  assert.equal(isTransientHalt(await haltFor(400)), false, 'a refusal a re-run cannot change is final');
+  assert.equal(isTransientHalt(await haltFor(429, { transient: false })), false, 'an explicit never-retry still wins');
+});
+
+// --- The tables the build changed, and the ones the app is proven to hold, are published before the app -----------------------------
+//
+// The reason publishReconciledTables exists (measured live): a PublishXml that names only the app, sent after a form's label change was
+// saved and before its table's own publish, leaves that label unpublished for good. It protected the tables whose views and forms the
+// build reconciled. A label a maker saved on a table the build does not change was still exposed if the app holds a form of that table:
+// the app's publish ships the forms it holds, and an existing app gets that publish on every rebuild, a new app when it is created. So with
+// --publish the build publishes, before anything writes or publishes the app, in ONE PublishXml, the tables it reconciled (the same ones
+// the SDK's publish covered), the tables of the charts it wrote, and the tables whose forms or charts the app's component list on the
+// server proves it holds. A rebuild sends the publishes it always did, and a first build one more. A table the app is not proven to hold a
+// form or chart of — declared only, a lookup column's target, only read by a page, only in the navigation — is not named: a table's
+// publish ships everything saved on it, whoever saved it. These tests record what reaches the platform in ONE ordered log.
+
+// The build's own PublishXml requests — the ones it sends through the raw client rather than the SDK's artifact publish — recorded in the
+// same log as the SDK's calls, so their order against the app's writes can be asserted. `answer(body)` makes the platform refuse one.
+// `holds` is what the app already holds on the server, as the build reads it: `forms` and `charts` are the tables of the form and chart
+// components its component list names. Without it the app's components cannot be read (every read answers 404).
+const HELD_APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000aa';
+const HELD_LAYER_ID = 'a1b2c3d4-0000-4000-8000-0000000000bb';
+function withRawPublish(mock, { answer, holds } = {}) {
+  const component = (type, n) => `f${type}00000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const held = holds && { 60: (holds.forms || []).map((table, i) => [component(60, i + 1), table]), 59: (holds.charts || []).map((table, i) => [component(59, i + 1), table]) };
+  // The table of each form and chart component is looked up in the SAVED layer (RetrieveUnpublishedMultiple, which answers a record that was never published):
+  //   GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq <id> or …
+  const asset = { systemforms: [60, 'formid', 'objecttypecode'], savedqueryvisualizations: [59, 'savedqueryvisualizationid', 'primaryentitytypecode'] };
+  mock.sdk.dataverse = {
+    get: async (url) => {
+      mock.calls.push({ name: 'dataverse.get', args: [url] });
+      if (holds && url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+        return { status: 200, body: { value: [{ appmoduleid: HELD_APP_ID, appmoduleidunique: HELD_LAYER_ID, componentstate: 1 }] } };
+      }
+      const saved = holds && /^\/(systemforms|savedqueryvisualizations)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?\$select=[^&]+&\$filter=(.*)$/.exec(url);
+      if (saved) {
+        const [type, idField, tableField] = asset[saved[1]];
+        mock.calls.push({ name: 'readComponentTables', args: [saved[1]] });
+        return { status: 200, body: { value: held[type].filter(([id]) => saved[2].includes(id)).map(([id, table]) => ({ [idField]: id, [tableField]: table })) } };
+      }
+      return { status: 404, body: null };
+    },
+    post: async (url, body) => {
+      mock.calls.push({ name: 'dataverse.post', args: [url, body] });
+      return answer ? answer(body) : { status: 204, body: null };
+    },
+  };
+  if (holds) {
+    const query = mock.sdk.queryRecords;
+    mock.sdk.queryRecords = async (set, options) => {
+      const filter = (options && options.filter) || '';
+      if (set === 'appmodulecomponent' && filter.includes(HELD_LAYER_ID)) {
+        const type = Number(/componenttype eq (\d+)/.exec(filter)[1]);
+        mock.calls.push({ name: 'readComponents', args: [type] });
+        return (held[type] || []).map(([objectid]) => ({ objectid, componenttype: type }));
+      }
+      return query(set, options);
+    };
+  }
+  return mock;
+}
+// A rebuild of an existing app whose id is a GUID, as a real one's is, and whose components the build can read.
+const rebuildOf = (holds, { answer, outcome } = {}) => withRawPublish(publishingSdk({ envelope: true, appId: HELD_APP_ID, outcome }), { answer, holds });
+// `<entity>x</entity>` names of a PublishXml body, in the order sent: { ParameterXml: '<importexportxml><entities><entity>new_a</entity>…' }.
+const entitiesIn = (body) => [...String((body && body.ParameterXml) || '').matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1]);
+// Every publish request, in the order it reaches the platform: an envelope of artifacts, a one-artifact publish, or a table PublishXml.
+function publishRequests(calls) {
+  return calls.flatMap((c) => {
+    if (c.name === 'publishArtifacts') return [`envelope ${c.args[0].map((t) => `${t.type} ${t.id}`).join(', ')}`];
+    if (c.name === 'publishArtifact') return [`one ${c.args[0]} ${c.args[1]}`];
+    if (c.name === 'dataverse.post' && c.args[0] === '/PublishXml') return [`tables ${entitiesIn(c.args[1]).join(', ')}`];
+    return [];
+  });
+}
+const tablePublishes = (calls) => calls.filter((c) => c.name === 'dataverse.post' && c.args[0] === '/PublishXml').map((c) => entitiesIn(c.args[1]));
+const beforeApp = (calls) => publishRequests(calls.slice(0, firstAppWrite(calls)));
+// A write of a chart's description (the charts phase does it with a PATCH of the saved row), which the double records.
+const writesChartDescriptions = (mock) => {
+  mock.sdk.updateRecord = async (entity, id, data) => { mock.calls.push({ name: 'updateRecord', args: [entity, id, data] }); };
+  return mock;
+};
+const readsOfAppComponents = (calls) => calls.filter((c) => c.name === 'readComponents'
+  || (c.name === 'dataverse.get' && c.args[0].startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()'))).length;
+
+// Customer (a form, in the navigation) and Ticket (a view and a chart) are tables whose existing artifacts the reconcile publishes. Note only
+// has a chart, whose description the build writes. Hub is only in the navigation: the SDK's write of the app adds its active Main forms, so it is
+// published before the app is written, though the build saves nothing there and the app holds nothing of it yet. Region is only declared (the target
+// of a lookup, say): the build saves nothing on it, the app holds no form or chart of it, and nothing adds one.
+function publishSpec() {
+  const base = makeSpec();
+  const table = (schemaName, displayName, extra) => ({ schemaName, displayName, primaryAttribute: { schemaName: 'new_title', displayName: 'Title' }, columns: [], ...extra });
+  return makeSpec({
+    entities: [
+      ...base.entities,
+      table('new_note', 'Note', { columns: [{ schemaName: 'new_kind', displayName: 'Kind', type: 'Choice', options: ['Call', 'Mail'] }] }),
+      table('new_hub', 'Hub', { existing: true }),
+      table('new_region', 'Region', { existing: true }),
+    ],
+    charts: [...base.charts, { entity: 'new_note', name: 'Notes By Kind', chartType: 'Pie', groupBy: 'new_kind', measure: 'count', description: 'Notes per kind.' }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'new_customer', title: 'Customers' }, { entity: 'new_hub', title: 'Hub' }] }] }] },
+  });
+}
+// What the build itself changed on a rebuild of publishSpec: Customer and Ticket (reconciled) and Note (a chart description). A first build changes
+// only what it creates a chart on: Ticket and Note.
+const CHANGED = ['new_customer', 'new_note', 'new_ticket'];
+// What the build's write of the app adds the Main forms of: the navigation's tables.
+const ADDED = ['new_customer', 'new_hub'];
+// Everything the request names when the build writes the app and the app holds nothing else: what it changed, and what its write adds.
+const NAMED = ['new_customer', 'new_hub', 'new_note', 'new_ticket'];
+
+test('a first build publishes, in one request before the new app is created, the tables of the charts it wrote and the navigation\u2019s tables, whose Main forms the creation adds: the app does not exist, so nothing on the server is proven', async () => {
+  // The forms, views and charts do not exist yet, and neither does the app: the new app is created holding what the spec authors.
+  const mock = withRawPublish(mockSdk());
+  mock.sdk.publishArtifacts = async (targets) => { mock.calls.push({ name: 'publishArtifacts', args: [targets] }); return targets.map(({ type, id }) => ({ type, id, shipped: true, publish: { kind: 'verified' } })); };
+  await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  const { calls } = mock;
+  const boundary = calls.findIndex((c) => c.name === 'createArtifact' && c.args[0] === 'app');
+  assert.ok(boundary > 0, 'the app is created');
+  assert.deepStrictEqual(publishRequests(calls.slice(0, boundary)), [`tables ${NAMED.join(', ')}`], 'one request, in name order: the charts\u2019 tables and the navigation\u2019s, and not the declared Region');
+  assert.deepStrictEqual(tablePublishes(calls), [NAMED], 'and no other request names a table');
+  assert.strictEqual(readsOfAppComponents(calls.slice(0, boundary)), 0, 'there is no app to read the components of');
+});
+
+test('the tables of a page\u2019s data sources are not published: a table only a page reads is not proven to be held, declared or not', async () => {
+  const mock = withRawPublish(mockSdk());
+  mock.sdk.publishArtifacts = async (targets) => targets.map(({ type, id }) => ({ type, id, shipped: true, publish: { kind: 'verified' } }));
+  const spec = publishSpec();
+  spec.pages = [{ key: 'insights', name: 'Insights', dataSources: ['new_page_ds', 'new_region'], source: { kind: 'tsx', codeFile: 'Insights.tsx' } }];
+  await runSdkBuild(spec, { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES.filter((p) => p !== 'pages'), genpageCli: noPages });
+  assert.deepStrictEqual(tablePublishes(mock.calls), [NAMED], 'neither the undeclared source nor the declared one: no form or chart of either is in the app');
+});
+
+test('with --publish, one PublishXml names the tables a rebuild reconciled, the charts it wrote, the navigation\u2019s tables its write of the app adds forms of, and the tables whose forms or charts the app holds \u2014 whatever the spec names \u2014 before the app is written', async () => {
+  // The app holds a form of Customer (reconciled) and of Elsewhere (a table the spec never names), and a chart of Ticket and of Note. It holds nothing
+  // of Hub yet, which the navigation lists and whose Main forms the build's write adds, or of Region, which only a lookup column names.
+  const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer', 'new_elsewhere'], charts: ['new_ticket', 'new_note'] }));
+  const warnings = [];
+  await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
+  const { calls } = mock;
+  const named = ['new_customer', 'new_elsewhere', 'new_hub', 'new_note', 'new_ticket'];
+  assert.ok(firstAppWrite(calls) > 0, 'the build writes the app');
+  assert.deepStrictEqual(beforeApp(calls), [`tables ${named.join(', ')}`], 'one request before the first write that can publish the app, in name order');
+  assert.deepStrictEqual(tablePublishes(calls), [named], 'the app is never named in it, and neither is Region (only a lookup\u2019s target)');
+  assert.deepStrictEqual(readsOfAppComponents(calls), 3, 'the app\u2019s layer, its form components and its chart components: nothing else is read of it');
+  assert.deepStrictEqual(warnings.filter((w) => /could not (publish|tell|read)/.test(w)), []);
+});
+
+// The forms the write adds are only those of a build that WRITES the app through the SDK. A build that publishes an existing app and leaves its
+// sitemap alone (a changed-only re-upload of pages) adds none, so the navigation's tables are named only for what the app holds.
+test('a build that does not write the existing app\u2019s sitemap adds no form to it, so the navigation\u2019s tables are named only when the app is proven to hold a form or chart of them', async () => {
+  const quiet = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }));
+  await runSdkBuild(publishSpec(), { sdk: quiet.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, changedOnly: { skipSitemapFinalize: true } });
+  assert.deepStrictEqual(tablePublishes(quiet.calls), [CHANGED], 'Hub is not named: the app holds nothing of it and this build adds nothing');
+  const writing = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }));
+  await runSdkBuild(publishSpec(), { sdk: writing.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assert.deepStrictEqual(tablePublishes(writing.calls), [NAMED], 'the same app and spec, with the sitemap written: Hub is named');
+});
+
+// The chart's description is a PATCH of the saved layer (the build never pushes an existing chart), and it was published only with the
+// other changes at the end, after the app's own publish. Its table is published before the app now, whether or not the app holds it.
+test('a chart description a rebuild writes is published with its table before the app, even when nothing else on that table changed and the app holds nothing of it', async () => {
+  const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }));
+  await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  const { calls } = mock;
+  const written = calls.findIndex((c) => c.name === 'updateRecord' && c.args[0] === 'savedqueryvisualization' && c.args[2].description === 'Notes per kind.');
+  const published = calls.findIndex((c) => c.name === 'dataverse.post' && entitiesIn(c.args[1]).includes('new_note'));
+  assert.ok(written >= 0, 'the description is written');
+  assert.ok(published > written, 'and published afterwards');
+  assert.ok(published < firstAppWrite(calls), 'before anything writes or publishes the app');
+});
+
+test('a chart description written on a table the reconcile also publishes goes out in that one request, and the table is not published twice', async () => {
+  const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }));
+  const spec = publishSpec();
+  spec.charts[0].description = 'Tickets by priority.'; // Ticket's view is reconciled, so its table is one the reconcile publishes
+  await runSdkBuild(spec, { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assert.ok(mock.calls.some((c) => c.name === 'updateRecord' && c.args[2].description === 'Tickets by priority.'), 'the description is written');
+  assert.deepStrictEqual(beforeApp(mock.calls), [`tables ${NAMED.join(', ')}`]);
+  assert.deepStrictEqual(tablePublishes(mock.calls), [NAMED]);
+});
+
+test('a build that does not write the existing app\u2019s sitemap and cannot read what the app holds says it published only what it changed, and claims nothing of the navigation', async () => {
+  const mock = writesChartDescriptions(withRawPublish(publishingSdk({ envelope: true, appId: HELD_APP_ID })));
+  const warnings = [];
+  await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, changedOnly: { skipSitemapFinalize: true }, warn: (w) => warnings.push(String(w)) });
+  assert.deepStrictEqual(tablePublishes(mock.calls), [CHANGED], 'what it changed, and no navigation table: nothing adds a form');
+  const unread = warnings.filter((w) => /could not tell which tables/.test(w));
+  assert.strictEqual(unread.length, 1, warnings.join('\n'));
+  assert.match(unread[0], /so before the app's own publish it published only the tables this build changed\. Any other table/);
+  assert.ok(!/navigation/.test(unread[0]));
+});
+
+// The count and the order are part of the contract: the 3 publishes of an unchanged rebuild are the tables, the app's finalize, and
+// phase 8's envelope. Naming the tables the app holds must not add one when a rebuild already publishes the reconciled ones.
+test('an unchanged rebuild sends the same three publishes as before, in the same order, the first now one request for the tables', async () => {
+  const mock = rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] });
+  const warnings = [];
+  await runSdkBuild(makeSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
+  assert.deepStrictEqual(publishRequests(mock.calls), [
+    'tables new_customer, new_ticket',
+    `one app ${HELD_APP_ID}`,
+    `envelope form form-existing, view view-existing, app ${HELD_APP_ID}`,
+  ]);
+  assert.deepStrictEqual(warnings.filter((w) => /could not (publish|tell|read)/.test(w)), [], 'the app\u2019s components were read: there is nothing to say');
+});
+
+test('a rebuild with tables the reconcile does not publish sends the same number of publishes: the one before the app names them too', async () => {
+  const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer', 'new_elsewhere'], charts: ['new_ticket'] }));
+  await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  const requests = publishRequests(mock.calls);
+  assert.strictEqual(requests.length, 3, requests.join(' | '));
+  assert.strictEqual(requests[0], 'tables new_customer, new_elsewhere, new_hub, new_note, new_ticket');
+  assert.match(requests[1], /^one app /, 'the app\u2019s own publish follows');
+  assert.match(requests[2], new RegExp(`^envelope .* app ${HELD_APP_ID}$`), 'and phase 8 publishes the app last');
+});
+
+// What the app holds is a proof, not a guess: when it cannot be read, or not all of it can be identified, the request names what the build changed
+// and what its write of the app adds — which no read is needed to know — and the build says which proof failed.
+for (const [what, holds, said] of [
+  ['cannot be read at all', undefined, /current layer of app '[0-9a-f-]+': HTTP 404/],
+  ['cannot be fully identified', { forms: ['new_elsewhere'], charts: ['new_ticket'], hide: true }, /could not be fully identified \(no systemform record answered for/],
+  ['cannot be told apart (one form answered with two tables)', { forms: ['new_elsewhere'], charts: ['new_ticket'], conflict: true }, /could not be fully identified \(the systemform answer for f6000000-0000-4000-8000-000000000001 names more than one table\)/],
+]) {
+  test(`a rebuild whose app's forms and charts ${what} publishes what it changed and what its write adds, once, and says which proof failed`, async () => {
+    const mock = writesChartDescriptions(withRawPublish(publishingSdk({ envelope: true, appId: HELD_APP_ID }), { holds: holds && { forms: holds.forms, charts: holds.charts } }));
+    if (holds && (holds.hide || holds.conflict)) {
+      const get = mock.sdk.dataverse.get;
+      mock.sdk.dataverse.get = async (url) => {
+        const answered = await get(url);
+        if (!url.startsWith('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) return answered;
+        return { ...answered, body: { value: holds.hide ? [] : [...answered.body.value, { formid: answered.body.value[0].formid, objecttypecode: 'new_other' }] } };
+      };
+    }
+    const warnings = [];
+    await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
+    assert.deepStrictEqual(tablePublishes(mock.calls), [NAMED], 'the reconciled tables, the chart\u2019s and the navigation\u2019s, and no table the build cannot prove the app holds');
+    assert.strictEqual(publishRequests(mock.calls).length, 3, 'the count does not change');
+    const unread = warnings.filter((w) => /could not tell which tables/.test(w));
+    assert.strictEqual(unread.length, 1, warnings.join('\n'));
+    assert.match(unread[0], said);
+    assert.match(unread[0], /so before the app's own publish it published only the tables this build changed and the navigation's tables, whose Main forms its own write of the app adds/);
+    assert.ok(!/new_elsewhere|new_hub|new_region/.test(unread[0]), 'no table is named, so none can be taken for a recommendation');
+    assert.ok(!/Publish (that|those|the)[^.]* in Power Apps/i.test(unread[0]));
+  });
+}
+
+test('without --publish no table is published ahead of the app: the reconciles publish their own artifacts, as before, and the app\u2019s components are not read', async () => {
+  const mock = rebuildOf({ forms: ['new_customer', 'new_elsewhere'], charts: ['new_ticket'] });
+  await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: false, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assert.deepStrictEqual(tablePublishes(mock.calls), []);
+  assert.strictEqual(mock.calls.filter((c) => c.name === 'publishArtifacts').length, 0, 'nothing is batched');
+  assert.strictEqual(readsOfAppComponents(mock.calls), 0);
+});
+
+test('the app step waits until the tables are published: nothing writes or publishes the app while that request is outstanding', async () => {
+  const mock = rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] });
+  const post = mock.sdk.dataverse.post;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let held = 0;
+  mock.sdk.dataverse.post = async (...args) => { held += 1; await gate; return post(...args); };
+  const run = runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  for (let i = 0; i < 2000 && held === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(held > 0, 'the tables are being published');
+  for (let i = 0; i < 200; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(firstAppWrite(mock.calls), -1, 'nothing creates, pushes or publishes the app while that publish is outstanding');
+  release();
+  await run;
+  assert.ok(firstAppWrite(mock.calls) > 0);
+});
+
+// What the build saved on the reconciled tables is owed to phase 8 until a publish phase pays it, whichever way the tables went out:
+// a build that halts after them still hands those tables to its caller, which publishes them again once no retry follows.
+test('a build that halts after the tables were published by name still owes the reconciled tables', async () => {
+  const mock = withRawPublish(publishingSdk({ envelope: true }));
+  const find = mock.sdk.findArtifact;
+  mock.sdk.findArtifact = async (kind, identity) => (kind === 'app' ? null : find(kind, identity));
+  mock.sdk.listArtifacts = async () => [];
+  const create = mock.sdk.createArtifact;
+  mock.sdk.createArtifact = (type, def) => { if (type === 'app') throw new Error('app create refused'); return create(type, def); };
+  const halt = await runSdkBuild(makeSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages }).then(() => null, (e) => e);
+  assert.ok(halt && halt.phase === 'app-shell', String(halt));
+  assert.deepStrictEqual(tablePublishes(mock.calls), [['new_customer', 'new_ticket']], 'they were published before the app was attempted');
+  assert.deepStrictEqual(halt.owedPublishes.map(([type, id]) => `${type} ${id}`).sort(), ['form form-existing', 'view view-existing']);
+});
+
+// If that request is refused nothing is assumed published. The reconciled tables go through the SDK as before, so a refusal of THEIRS
+// still stops the build before the app. The others carry no such guarantee, so the build says plainly that its protection did not apply
+// and what that leaves open — what THIS build saved on them, and the risk to a form the app holds there, each when it applies — and goes
+// on: it must never fail a build that passed before.
+for (const [how, answer, said] of [
+  ['refused with a 500', () => ({ status: 500, body: { error: { message: 'internal error' } } }), 'PublishXml answered HTTP 500: internal error'],
+  ['refused with a 400', () => ({ status: 400, body: null }), 'PublishXml answered HTTP 400'],
+  ['lost to the network', () => { throw new Error('socket hang up'); }, 'socket hang up'],
+]) {
+  test(`a PublishXml of the tables ${how}: the reconciled tables are published through the SDK, the others are warned about, and the build goes on`, async () => {
+    const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer', 'new_hub'], charts: ['new_ticket', 'new_note'] }, { answer }));
+    const warnings = [];
+    const result = await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(beforeApp(mock.calls), ['tables new_customer, new_hub, new_note, new_ticket', 'envelope view view-existing, form form-existing'], 'the SDK publishes what the build reconciled');
+    const line = warnings.find((w) => /could not publish tables new_hub, new_note before the app/.test(w));
+    assert.ok(line, warnings.join('\n'));
+    assert.ok(line.includes(`(${said})`), line);
+    assert.match(line, /the protection the build gives what is saved on them did not apply/, 'it says plainly that the protection failed');
+    // What this build wrote is named, and is not presented as a form someone else saved.
+    assert.match(line, /This build saved the description of chart Notes By Kind on new_note; it goes out with the build's final publish, after the app's\./);
+    assert.match(line, /Whether the app's publish holds back a chart's description saved before it has not been measured\./);
+    // The table whose form the app holds carries the label risk, with the measured part and a hedge for the rest.
+    assert.match(line, /The app holds forms of new_hub: a label someone saved on a form there and did not publish may stay unpublished once the app is published/);
+    assert.match(line, /a later publish of the table does not release it/);
+    assert.match(line, /may have to be saved again and then published with its table before the app\./);
+    assert.ok(!/forms of [^:]*new_note/.test(line), 'a table the app holds a chart of and no form is not described as holding a form');
+    assert.ok(!/run the build again\.$/.test(line), 'no promise that a later run repairs what the app\u2019s publish left out');
+    assert.match(line, /or run the build again once the cause is cleared: it sends this request first again\.$/);
+  });
+}
+
+test('a PublishXml of the tables that is refused names the navigation\u2019s tables its write of the app adds forms of, in the label risk, even when the app holds none of them yet', async () => {
+  // Hub is only in the navigation and the app holds nothing of it: the build's write of the app is about to add its Main forms, and the request that
+  // would have published them first was refused, so a label saved on one is exposed exactly as it is on a form the app already holds.
+  const mock = writesChartDescriptions(rebuildOf({ forms: ['new_customer'], charts: ['new_ticket', 'new_note'] }, { answer: () => ({ status: 500, body: { error: { message: 'internal error' } } }) }));
+  const warnings = [];
+  const result = await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
+  assert.strictEqual(result.ok, true);
+  const line = warnings.find((w) => /could not publish tables new_hub, new_note before the app/.test(w));
+  assert.ok(line, warnings.join('\n'));
+  assert.match(line, /The app holds, or this build's write of it adds, forms of new_hub: a label someone saved on a form there and did not publish may stay unpublished once the app is published/);
+  assert.ok(!/forms of [^:]*new_note/.test(line), 'a table the app holds a chart of and the build adds no form to is not described as holding one');
+});
+
+test('a PublishXml of the tables that is refused, and a refusal by the SDK of the reconciled tables too, stop the build before the app', async () => {
+  const mock = rebuildOf({ forms: ['new_customer'], charts: ['new_ticket'] }, { answer: () => ({ status: 500, body: null }), outcome: (type, id) => (type === 'form' ? refusedPublish(type, id) : null) });
+  const warnings = [];
+  const halt = await runSdkBuild(publishSpec(), { sdk: mock.sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) }).then(() => null, (e) => e);
+  assert.strictEqual(halt && halt.code, 'reconciled-publish-failed');
+  assert.strictEqual(firstAppWrite(mock.calls), -1, 'the app is neither created, pushed nor published');
+  assert.deepStrictEqual(warnings.filter((w) => /could not publish tables/.test(w)), [], 'the halt is what is reported');
+});
+
+test('an SDK with no raw client publishes the reconciled tables as it always did, sends no table publish, reads nothing of the app, and says nothing about it', async () => {
+  const { sdk, calls } = publishingSdk({ envelope: true });
+  const warnings = [];
+  await runSdkBuild(publishSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) });
+  assert.deepStrictEqual(publishRequests(calls.slice(0, firstAppWrite(calls))), ['envelope view view-existing, form form-existing']);
+  assert.deepStrictEqual(warnings.filter((w) => /could not (publish|tell|read)/.test(w)), []);
+});
+
 // --- Tier 2.x: SDK fix uptake (AutoNumber primary, N:N sub-grids) + folded build steps ----
 test('AutoNumber primary column flows to createTable.primaryColumnAutoNumberFormat', async () => {
   const spec = makeSpec();
@@ -1276,6 +2527,25 @@ test('formDef forces single-column sections for a field-heavy QuickCreate form',
   // New topology: tab → columns[0] → sections[0]
   assert.strictEqual(main.tabs[0].columns[0].sections[0].columns, 2, 'Main form is 2-column when field-heavy (>6 fields)');
   assert.strictEqual(qc.tabs[0].columns[0].sections[0].columns, 1, 'QuickCreate form is forced to a single column');
+});
+
+// Dataverse refuses a multi-column section on a Quick View form exactly as it does on a Quick Create one —
+// live: "HTTP 400 … systemforms: Columns in a section must be set to '1'. Found '11'." for a Quick View whose
+// auto layout went to two columns past six fields, which failed the build mid-run.
+test('formDef forces single-column sections for a field-heavy QuickView form, auto and explicit', () => {
+  const { sectionGridWidth } = require('../lib/artifact-intent.js');
+  const spec = makeSpec();
+  const cust = spec.entities.find((e) => e.schemaName === 'new_customer');
+  cust.columns = Array.from({ length: 8 }, (_, i) => ({ schemaName: `new_c${i}`, displayName: `C${i}`, type: 'Text' }));
+  const auto = compileFormIntent(spec, { entity: 'new_customer', name: 'Card', formType: 'QuickView', layout: 'auto' });
+  const autoSection = auto.tabs[0].columns[0].sections[0];
+  assert.strictEqual(autoSection.columns, 1, 'a field-heavy QuickView auto layout stays single-column');
+  assert.ok(autoSection.rows.every((r) => r.cells.length === 1), 'one cell per row in a single-column section');
+  const explicit = compileFormIntent(spec, { entity: 'new_customer', name: 'Card', formType: 'QuickView',
+    tabs: [{ label: 'G', sections: [{ label: 'S', columns: 2, fields: ['new_name', 'new_c0', 'new_c1'] }] }] });
+  assert.strictEqual(explicit.tabs[0].columns[0].sections[0].columns, 1, 'an authored two-column QuickView section is clamped to 1');
+  assert.strictEqual(sectionGridWidth({ columns: 2 }, 'QuickView'), 1, 'verify judges a QuickView section by the same width');
+  assert.strictEqual(sectionGridWidth({ columns: 2 }, 'Main'), 2, 'a Main form keeps its authored width');
 });
 
 test('formDef clamps an explicitly authored multi-column section to 1 for QuickCreate', () => {
@@ -1482,7 +2752,7 @@ test('a junction sample row binds multiple parents via $parents', async () => {
       { type: 'OneToMany', referenced: 'new_wo', referencing: 'new_assign', lookup: { schemaName: 'new_woid', displayName: 'WO' } },
       { type: 'OneToMany', referenced: 'new_tech', referencing: 'new_assign', lookup: { schemaName: 'new_techid', displayName: 'Tech' } },
     ],
-    views: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [], charts: [], forms: [], appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'new_wo', title: 'Work orders' }] }] }] },
     sampleData: {
       new_wo: [{ new_name: 'WO1' }], new_tech: [{ new_name: 'T1' }],
       new_assign: [{ new_name: 'A1', $parents: [{ entity: 'new_wo', match: { new_name: 'WO1' } }, { entity: 'new_tech', match: { new_name: 'T1' } }] }],
@@ -1653,6 +2923,28 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
 });
 
+// A tile's height is its rowspan, and the app draws a one-row tile as its title bar alone, so a tile the spec does not
+// size is built 12 rows tall whatever its kind, and a size the spec states reaches the payload as written. The cells the
+// real bundle writes are read in dashboard-roundtrip.test.js; this drives the dashboards phase itself.
+test('dashboards: a tile the spec does not size is built 12 rows by 1 column, and an authored size is kept', async () => {
+  const spec = makeSpec();
+  spec.dashboards = [
+    { name: 'Ops', tiles: [
+      { type: 'chart', chart: 'By Priority', view: 'Active Tickets' },
+      { type: 'list', view: 'Active Tickets', name: 'Recent' },
+      { type: 'iframe', url: 'https://contoso.com/map', name: 'Map' },
+      { type: 'list', view: 'Active Tickets', name: 'Wide', colspan: 2, rowspan: 6 },
+      { type: 'list', view: 'Active Tickets', name: 'Strip', rowspan: 1 },
+    ] },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const sizes = find(calls, 'addElement')
+    .filter((c) => c.args[0] === 'dashboard' && c.args[2] === '/components')
+    .map((c) => [c.args[3].name, c.args[3].rowspan, c.args[3].colspan]);
+  assert.deepStrictEqual(sizes, [['By Priority', 12, 1], ['Recent', 12, 1], ['Map', 12, 1], ['Wide', 6, 2], ['Strip', 1, 1]]);
+});
+
 test('app-shell: a live sitemap target absent from the gate approval halts before the app push', async () => {
   const spec = makeSpec();
   const existingSitemap = { areas: [{ groups: [{ subAreas: [
@@ -1758,6 +3050,24 @@ test('dashboards: a pin that names a form, not a dashboard, halts instead of wir
   answerPinned(sdk, { [PINNED_DASH]: { formid: PINNED_DASH, name: 'Account', type: 2 } });
   await assert.rejects(runSdkBuild(pinnedSpec(), { sdk, apply: true }), /dashboardId 280948ec-7bbb-5279-b106-2bdd09451a3a is a type-2 form, not a dashboard/);
   assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'));
+});
+
+// The build never applies tile edits to a dashboard that exists — it reuses the dashboard as it is — so a dashboard an
+// earlier version built keeps its one-row tiles when the default tile height changes. A rebuild adds no tile and pushes
+// nothing, whether it finds the dashboard by name or by the id a download recorded.
+test('dashboards: a rebuild does not resize the tiles of a dashboard that already exists', async () => {
+  const touched = (calls) => ['addElement', 'updateElement', 'removeElement', 'pushArtifact']
+    .flatMap((name) => find(calls, name))
+    .filter((c) => c.args[0] === 'dashboard');
+  const byName = makeSpec();
+  byName.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const named = mockSdk({ existingDashboards: ['Ops'] });
+  await runSdkBuild(byName, { sdk: named.sdk, apply: true });
+  assert.deepStrictEqual(touched(named.calls), [], 'a dashboard found by name is reused as it is');
+  const pinned = mockSdk();
+  answerPinned(pinned.sdk, { [PINNED_DASH]: { formid: PINNED_DASH, name: 'Command Center - Event operations', type: 0 } });
+  await runSdkBuild(pinnedSpec(), { sdk: pinned.sdk, apply: true });
+  assert.deepStrictEqual(touched(pinned.calls), [], 'a dashboard found by its pinned id is reused as it is');
 });
 
 // Names are neither unique nor compared exactly, so the lookup can return several dashboards. Reusing
@@ -1995,6 +3305,31 @@ test('quick-view placement halts clearly when the referenced form was not built'
   await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), /quick-view references form 'Nope' on 'new_customer' which wasn't built/);
 });
 
+// Quick views went into the first section of the first form-column — which is a sub-grid's section once the grid is
+// placed in front of the form's own. It is the first FIELD section they belong in, as a field with no section of
+// its own is put.
+test('quick-view placement: the quick view goes into the first field section, not a sub-grid section placed ahead of it', async () => {
+  const spec = makeSpec();
+  spec.forms = [
+    { entity: 'new_customer', name: 'Customer', formType: 'Main', layout: 'auto',
+      subgrids: [{ childEntity: 'new_ticket', before: 'section_general' }],
+      quickViews: [{ lookup: 'new_primaryticket', targetEntity: 'new_ticket', form: 'Ticket QV', label: 'Ticket' }] },
+    { entity: 'new_ticket', name: 'Ticket QV', formType: 'QuickView', layout: 'auto' },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const QUICKVIEW_CLS = '5C5600E0-1D6E-4205-A272-BE80DA87FD42';
+  const qvCall = find(calls, 'addElement').find((c) => c.args[0] === 'form' && (c.args[3] && c.args[3].cells || [])
+    .some((cell) => cell.control && String(cell.control.classId).replace(/[{}]/g, '').toUpperCase() === QUICKVIEW_CLS));
+  assert.ok(qvCall, 'one quick-view control placed');
+  const host = await sdk.getArtifact('form', qvCall.args[1]);
+  const sections = host.tabs[0].columns[0].sections;
+  assert.deepStrictEqual(sections.map((s) => s.name), ['section_grid_new_customer_new_ticket', 'section_general'], 'the premise: the grid section comes first');
+  assert.strictEqual(qvCall.args[2], '/tabs/0/columns/0/sections/1/rows', 'the quick view is added to the field section');
+  assert.strictEqual(sections[0].rows.length, 1, 'the grid section still holds only its grid');
+  assert.ok(sections[1].rows.some((r) => r.cells.some((c) => c.control && c.control.fieldName === 'new_primaryticket')), 'the quick view sits in section_general');
+});
+
 test('commands: loose buttons + a flyout with children build to the right shape (one loose group)', async () => {
   const spec = makeSpec();
   spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];
@@ -2077,13 +3412,28 @@ test('app-shell: a page subarea resolves to a GenPage subarea with the built gen
   assert.strictEqual(sub.genPageId, 'gp-1');
 });
 
+// A page placed on its own (lib/genpage-sdk.js placeInApp, and apps.js around a first page) is a sub-area of the same shape the build writes for a page of an App Spec: both come from
+// genPageSubArea (lib/genpage-subarea.js), so a navigation holds one shape of GenPage entry whoever put the page there.
+test('app-shell: the GenPage subarea the build writes is the one genPageSubArea builds — a page placed on its own has the same shape', () => {
+  const { genPageSubArea, genPageSubAreaId } = require('../lib/genpage-subarea.js');
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+  const sub = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: { Overview: 'gp-1' } }).siteMap.areas[0].groups[0].subAreas.find((s) => s.type === 'GenPage');
+  assert.deepStrictEqual(sub, genPageSubArea({ id: sub.id, title: 'Overview' }, 'gp-1'));
+  assert.deepStrictEqual(Object.keys(sub).sort(), ['genPageId', 'id', 'title', 'type']);
+  // The shape, spelled out: nothing but the target is added to what every sub-area has — the SDK writes the designer defaults itself.
+  assert.deepStrictEqual(genPageSubArea({ id: genPageSubAreaId('11111111-0000-4000-8000-000000000001'), title: 'T', icon: 'i.png' }, '11111111-0000-4000-8000-000000000001'),
+    { id: 'genpage_11111111000040008000000000000001', title: 'T', icon: 'i.png', type: 'GenPage', genPageId: '11111111-0000-4000-8000-000000000001' });
+});
+
 test('app-shell: a page subarea for an unbuilt page throws a clear error', () => {
   const spec = makeSpec();
   spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Missing', title: 'X' });
   assert.throws(() => appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {} }), /references page 'Missing' which wasn't built/);
 });
 
-test('pages phase uploads each page (no --add-to-sitemap) then finalizes the sitemap with GenPage subareas', async () => {
+test('pages phase writes each page (it is placed by the sitemap finalize, not by the write) then finalizes the sitemap with GenPage subareas', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx', prompt: 'kpis', dataSources: ['new_customer'] }];
   spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
@@ -2135,8 +3485,8 @@ test('pages phase reuses an existing page by MANIFEST+EXISTENCE (not by name) �
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// pac stores whatever `--model` an upload sends, so an upload without one stored the page's model empty. The build sends
-// the spec's `pages[].model` on every upload — the create, and the in-place update of an existing page — and nothing
+// The page's model is stored as sent, and a write that omits one leaves the page's own (the SDK writes only what differs). The build sends
+// the spec's `pages[].model` on every write — the create, and the in-place update of an existing page — and nothing
 // for a page without one.
 test('pages phase sends each page\'s model on create and on update, and none for a page without one', async () => {
   const spec = makeSpec();
@@ -2286,6 +3636,24 @@ test('resolveExistingFormId treats a "not found in the MetadataCache" 400 (brand
   // preflight must NOT halt on this) — mirroring the SDK findArtifact this replaced.
   const provision = { queryRecords: async () => { const e = new Error("The entity with a name = 'ftx_widget' was not found in the MetadataCache"); e.statusCode = 400; throw e; } };
   assert.strictEqual(await resolveExistingFormId(provision, { entityLogicalName: 'ftx_widget', name: 'Information', formType: 'Main' }), null);
+});
+
+test('resolveExistingFormId (#796): the same answer is also the lag of a table created moments ago, so a caller that would create on a miss gets the failure back', async () => {
+  // Live, a table that exists answered the form lookup with
+  //   HTTP 400 {"error":{"code":"0x80041102","message":"The entity with a name = 'contoso_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075"}}
+  // and the build read that as "no form" and created a second form of the same name.
+  const lag = () => Object.assign(new Error("The entity with a name = 'contoso_ticket' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache"), { statusCode: 400, code: '0x80041102' });
+  const def = { entityLogicalName: 'contoso_ticket', name: 'Information', formType: 'Main' };
+  const lagging = { queryRecords: async () => { throw lag(); } };
+  await assert.rejects(() => resolveExistingFormId(lagging, def, { tableNotInCache: 'fail' }), /not found in the MetadataCache/);
+  const proofs = [];
+  await assert.rejects(() => resolveExistingFormId(lagging, def, { tableNotInCache: async (err) => { proofs.push(err.code); return false; } }), /not found in the MetadataCache/, 'the table is not proved absent');
+  assert.strictEqual(await resolveExistingFormId(lagging, def, { tableNotInCache: async (err) => { proofs.push(err.code); return true; } }), null, 'the table is proved absent');
+  assert.deepStrictEqual(proofs, ['0x80041102', '0x80041102']);
+  assert.strictEqual(await resolveExistingFormId(lagging, def), null, 'a read-only caller keeps "not found"');
+  // A successful read with no row is "not found" for every caller, and any other failure stays a failure.
+  assert.strictEqual(await resolveExistingFormId({ queryRecords: async () => [] }, def, { tableNotInCache: 'fail' }), null);
+  await assert.rejects(() => resolveExistingFormId({ queryRecords: async () => { throw Object.assign(new Error('503 Service Unavailable'), { statusCode: 503 }); } }, def, { tableNotInCache: async () => true }), /503/);
 });
 
 test('resolveExistingFormId RE-THROWS a non-metadata error (a transient failure must still fail closed)', async () => {
@@ -2856,6 +4224,219 @@ test('form reconcile: a partial control patch PRESERVES fieldName (updateElement
   const control = form.tabs[0].columns[0].sections[0].rows[1].cells[0].control;
   assert.strictEqual(control.fieldName, 'new_tier', 'the control lost its binding');
   assert.strictEqual(control.isReadOnly, true);
+});
+
+// A deployed form can hold a field more than once — a maker places it in a second section — and a spec, which
+// places each field once, still declares the state of THE FIELD: a read-only or hidden field is read-only or hidden
+// wherever the form shows it. The assertion used to visit the first cell only, so the second stayed editable or
+// visible, exactly as the lookup-label repair once left a second cell's label (lookup-cell-labels.js, which visits all).
+// `section_more` is a maker's own section: it is neither in the auto layout nor pruned (auto layouts are additive).
+function formHoldingTierTwice() {
+  const cell = (fn) => ({ cells: [{ control: { fieldName: fn } }] });
+  return { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+      columns: [{ width: '100%', sections: [
+        { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: false, columns: 1, rows: [cell('new_name'), cell('new_tier')] },
+        { id: 's1', name: 'section_more', label: 'More', visible: true, showLabel: true, columns: 1, rows: [cell('new_notes'), cell('new_tier')] },
+      ] }] },
+  ], bag: { a: [], c: [] } };
+}
+const FIRST_TIER = '/tabs/0/columns/0/sections/0/rows/1/cells/0';
+const SECOND_TIER = '/tabs/0/columns/0/sections/1/rows/1/cells/0';
+const controlPatches = (calls) => find(calls, 'updateElement').filter((c) => c.args[0] === 'form' && /\/control$/.test(String(c.args[2])));
+const cellPatches = (calls) => find(calls, 'updateElement').filter((c) => c.args[0] === 'form' && /\/cells\/\d+$/.test(String(c.args[2])));
+
+test('form reconcile: readOnly is applied to EVERY cell a deployed form holds the field in', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => [c.args[2], c.args[3]]), [
+    [`${FIRST_TIER}/control`, { isReadOnly: true }],
+    [`${SECOND_TIER}/control`, { isReadOnly: true }],
+  ], 'both placements of the field are locked, each patched at its own pointer');
+  // Read the mutated artifact back: each cell keeps its binding (updateElement merges) and carries the flag.
+  const form = await sdk.getArtifact('form', 'form-existing');
+  for (const where of [form.tabs[0].columns[0].sections[0].rows[1], form.tabs[0].columns[0].sections[1].rows[1]]) {
+    assert.strictEqual(where.cells[0].control.fieldName, 'new_tier');
+    assert.strictEqual(where.cells[0].control.isReadOnly, true);
+  }
+  assert.ok(!('isReadOnly' in form.tabs[0].columns[0].sections[0].rows[0].cells[0].control), 'a field the spec did not flag stays as it was');
+});
+
+test('form reconcile: hidden is applied to EVERY cell a deployed form holds the field in', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { hidden: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(cellPatches(calls).map((c) => [c.args[2], c.args[3]]), [
+    [FIRST_TIER, { visible: false }],
+    [SECOND_TIER, { visible: false }],
+  ], 'both placements of the field are hidden');
+});
+
+test('form reconcile: a field that is both readOnly and hidden gets both flags on each of its cells', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true, hidden: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'updateElement').filter((c) => /\/(control|cells\/\d+)$/.test(String(c.args[2]))).map((c) => [c.args[2], c.args[3]]), [
+    [`${FIRST_TIER}/control`, { isReadOnly: true }],
+    [FIRST_TIER, { visible: false }],
+    [`${SECOND_TIER}/control`, { isReadOnly: true }],
+    [SECOND_TIER, { visible: false }],
+  ]);
+});
+
+test('form reconcile: a flag set on an EXPLICIT layout\'s inline field entry reaches every cell of that field too', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit', prune: false, tabs: [{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', { name: 'new_tier', readOnly: true }] },
+  ] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => c.args[2]), [`${FIRST_TIER}/control`, `${SECOND_TIER}/control`]);
+});
+
+test('form reconcile: a field held ONCE is patched ONCE, and nothing else is touched (the single-placement path is unchanged)', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => [c.args[2], c.args[3]]), [['/tabs/0/columns/0/sections/0/rows/1/cells/0/control', { isReadOnly: true }]]);
+  assert.deepStrictEqual(cellPatches(calls), [], 'no visibility write when the spec asks for none');
+});
+
+test('form reconcile: a second cell of a field the spec does NOT flag is left exactly as it is', async () => {
+  // The flag is asserted for the field the spec names, never for a neighbour that merely shares a section — and a field the
+  // spec says nothing about keeps both cells as they were (a maker's lock or hide survives, as with one cell).
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual(controlPatches(calls).map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/0/cells/0/control'], 'only the one cell of new_name');
+  const none = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(makeSpec(), { sdk: none.sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.deepStrictEqual([...controlPatches(none.calls), ...cellPatches(none.calls)], [], 'a spec that flags nothing writes no per-control attribute, however many cells a field has');
+});
+
+test('form reconcile: the flags are written after each cell is re-read, so a cell the write moved is not patched at a stale pointer', async () => {
+  // Each updateElement rewrites the artifact, so every cell is located again just before its own write (as the label repair
+  // does). A double that re-sorts the tree on every write would otherwise send the second write to a stale index.
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formHoldingTierTwice() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const order = calls.filter((c) => (c.name === 'getArtifact' && c.args[0] === 'form') || (c.name === 'updateElement' && /\/control$/.test(String(c.args[2]))))
+    .map((c) => (c.name === 'getArtifact' ? 'read' : 'write'));
+  const firstWrite = order.indexOf('write');
+  assert.strictEqual(order[firstWrite + 1], 'read', 'a read separates the first control write from the second');
+  assert.strictEqual(order.filter((x) => x === 'write').length, 2);
+});
+
+// A Main form's HEADER and FOOTER hold cells too, and a maker can put a field there as well as in a section. The SDK does not model them: it
+// keeps their XML in the form's bag — raw nodes `{ n, a: [[name, value], …], c: [children] }` — and writes it back as it read it. A field the
+// spec makes read-only or hidden is so wherever the form shows it, so those cells get the flags too, by an edit of the one attribute (the
+// control's `disabled`, the cell's `visible`) that leaves every other attribute and child of the node as it is.
+const rawNode = (n, attrs = {}, c = []) => ({ n, a: Object.entries(attrs), c });
+const TEXT_CLASS = '{4273EDBD-AC1D-40D3-9FB2-095C621B552D}';
+const outerCellNode = (part, field, { cell = {}, control = {}, classid = TEXT_CLASS } = {}) => rawNode('cell', { id: `${part}-cell-${field}`, ...cell },
+  [rawNode('labels', {}, [rawNode('label', { description: field, languagecode: '1033' })]), rawNode('control', { id: `${part}_${field}`, classid, datafieldname: field, ...control }), rawNode('extra', { keep: '1' })]);
+const outerPart = (part, cells) => ({ node: rawNode(part, { id: `${part}-id`, columns: '1' }, [rawNode('rows', {}, [rawNode('row', {}, cells)])]) });
+const withBag = (form, parts) => Object.assign(form, { bag: { a: [], c: parts.map((p, i) => ({ i: i + 1, ...p })) } });
+const HEADER_CELL = '/bag/c/0/node/c/0/c/0/c/0';
+const FOOTER_CELL = '/bag/c/1/node/c/0/c/0/c/0';
+const attrPatches = (calls) => calls.filter((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form' && /^\/bag\//.test(String(c.args[2])))
+  .map((c) => [c.name === 'updateElement' ? 'update' : 'add', c.args[2], c.args[3]]);
+// header: the control carries `disabled` and the cell `visible`; footer: neither (an absent attribute is added).
+const tierInHeaderAndFooter = () => withBag(seedForm('f1', ['new_name', 'new_tier']), [
+  outerPart('header', [outerCellNode('header', 'new_tier', { cell: { visible: 'true' }, control: { disabled: 'false' } })]),
+  outerPart('footer', [outerCellNode('footer', 'new_tier')]),
+]);
+const flagSpec = (options) => { const spec = makeSpec(); spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: options } }]; return spec; };
+const buildForms = async (spec, form) => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: form });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  return { sdk, calls, after: await sdk.getArtifact('form', 'form-existing') };
+};
+
+test('form reconcile: readOnly reaches the field\u2019s cell in the form HEADER and in the FOOTER, by an edit of the control\u2019s one attribute', async () => {
+  const { calls, after } = await buildForms(flagSpec({ readOnly: true }), tierInHeaderAndFooter());
+  const before = tierInHeaderAndFooter();
+  assert.deepStrictEqual(attrPatches(calls), [
+    ['update', `${HEADER_CELL}/c/1/a/3`, ['disabled', 'true']],
+    ['add', `${FOOTER_CELL}/c/1/a`, ['disabled', 'true']],
+  ], 'the header\u2019s attribute is replaced where it stands, the footer\u2019s absent one is appended');
+  // …and nothing else of either part changed: every other attribute and child (the label, the unmodeled `extra` node, the
+  // cell\u2019s own attributes) is exactly what the form held.
+  const expected = JSON.parse(JSON.stringify(before.bag));
+  expected.c[0].node.c[0].c[0].c[0].c[1].a[3] = ['disabled', 'true'];
+  expected.c[1].node.c[0].c[0].c[0].c[1].a.push(['disabled', 'true']);
+  assert.deepStrictEqual(after.bag, expected);
+  assert.strictEqual(controlPatches(calls).length, 1, 'the body cell is still patched, once');
+});
+
+test('form reconcile: hidden reaches the field\u2019s cell in the header and the footer, by an edit of the cell\u2019s `visible` attribute', async () => {
+  const { calls, after } = await buildForms(flagSpec({ hidden: true }), tierInHeaderAndFooter());
+  assert.deepStrictEqual(attrPatches(calls), [
+    ['update', `${HEADER_CELL}/a/1`, ['visible', 'false']],
+    ['add', `${FOOTER_CELL}/a`, ['visible', 'false']],
+  ]);
+  assert.deepStrictEqual(after.bag.c[0].node.c[0].c[0].c[0].a, [['id', 'header-cell-new_tier'], ['visible', 'false']]);
+  assert.deepStrictEqual(after.bag.c[1].node.c[0].c[0].c[0].a, [['id', 'footer-cell-new_tier'], ['visible', 'false']]);
+  assert.strictEqual(cellPatches(calls).length, 1, 'the body cell is still hidden, once');
+});
+
+test('form reconcile: a field that is both readOnly and hidden gets both flags on every body, header and footer cell', async () => {
+  const { calls } = await buildForms(flagSpec({ readOnly: true, hidden: true }), tierInHeaderAndFooter());
+  assert.strictEqual(controlPatches(calls).length + cellPatches(calls).length, 2);
+  assert.deepStrictEqual(attrPatches(calls).map(([, pointer]) => pointer), [`${HEADER_CELL}/c/1/a/3`, `${HEADER_CELL}/a/1`, `${FOOTER_CELL}/c/1/a`, `${FOOTER_CELL}/a`]);
+});
+
+test('form reconcile: a header or footer cell already carrying the flag is not written again, and one of another field is never touched', async () => {
+  const flagged = withBag(seedForm('f1', ['new_name', 'new_tier']), [
+    outerPart('header', [outerCellNode('header', 'new_tier', { cell: { visible: '0' }, control: { disabled: 'TRUE' } }), outerCellNode('header', 'new_owner')]),
+    outerPart('footer', [outerCellNode('footer', 'new_tier', { cell: { visible: 'false' }, control: { disabled: '1' } })]),
+  ]);
+  const { calls, after } = await buildForms(flagSpec({ readOnly: true, hidden: true }), flagged);
+  assert.deepStrictEqual(attrPatches(calls), [], 'xs:boolean spellings of the wanted state are the wanted state: nothing to write');
+  assert.deepStrictEqual(after.bag, flagged.bag);
+  // A field the spec does not flag keeps its header cell as it is, even when it shares the part with one that is flagged.
+  const owner = withBag(seedForm('f1', ['new_name', 'new_tier']), [outerPart('header', [outerCellNode('header', 'new_owner', { control: { disabled: 'false' } })])]);
+  assert.deepStrictEqual(attrPatches((await buildForms(flagSpec({ readOnly: true }), owner)).calls), []);
+});
+
+test('form reconcile: a header or footer control that is not the field itself (a quick view bound to the lookup) is skipped', async () => {
+  const QUICK_VIEW = '{5C5600E0-1D6E-4205-A272-BE80DA87FD42}';
+  const form = withBag(seedForm('f1', ['new_name', 'new_tier']), [outerPart('header', [outerCellNode('header', 'new_tier', { classid: QUICK_VIEW, control: { disabled: 'false' } })])]);
+  assert.deepStrictEqual(attrPatches((await buildForms(flagSpec({ readOnly: true }), form)).calls), []);
+});
+
+test('form reconcile: a field held twice in the header and once in the footer is flagged in all three, each located again after the last write', async () => {
+  const form = withBag(seedForm('f1', ['new_name', 'new_tier']), [
+    outerPart('header', [outerCellNode('header', 'new_tier', { control: { disabled: 'false' } }), outerCellNode('header', 'new_tier', { control: { disabled: 'false' } })]),
+    outerPart('footer', [outerCellNode('footer', 'new_tier', { control: { disabled: 'false' } })]),
+  ]);
+  const { calls, after } = await buildForms(flagSpec({ readOnly: true }), form);
+  assert.strictEqual(attrPatches(calls).length, 3);
+  for (const cell of [after.bag.c[0].node.c[0].c[0].c[0], after.bag.c[0].node.c[0].c[0].c[1], after.bag.c[1].node.c[0].c[0].c[0]]) {
+    assert.deepStrictEqual(cell.c[1].a.find(([name]) => name === 'disabled'), ['disabled', 'true']);
+  }
+  const reads = calls.filter((c) => (c.name === 'getArtifact' && c.args[0] === 'form') || (c.name === 'updateElement' && /^\/bag\//.test(String(c.args[2]))) || (c.name === 'addElement' && /^\/bag\//.test(String(c.args[2]))))
+    .map((c) => (c.name === 'getArtifact' ? 'read' : 'write')).join(',');
+  assert.match(reads, /write,read,write,read,write/, 'a read separates each outer write from the next');
+});
+
+test('form reconcile: a form with no header or footer is flagged as before, with no extra write and no read it did not make', async () => {
+  const withoutOuter = await buildForms(flagSpec({ readOnly: true, hidden: true }), seedForm('f1', ['new_name', 'new_tier']));
+  assert.deepStrictEqual(attrPatches(withoutOuter.calls), []);
+  assert.strictEqual(controlPatches(withoutOuter.calls).length, 1);
+  assert.strictEqual(cellPatches(withoutOuter.calls).length, 1);
+});
+
+test('form reconcile: no header or footer cell is written when the spec asserts neither flag', async () => {
+  const { calls } = await buildForms(makeSpec(), tierInHeaderAndFooter());
+  assert.deepStrictEqual(attrPatches(calls), []);
 });
 
 test('form reconcile: no control/cell patch is issued when the spec asserts neither flag', async () => {
@@ -3938,7 +5519,7 @@ test('publish (opt-in) publishes one artifact per entity + the app', async () =>
   assert.ok(pubs.includes('form') || pubs.includes('view'), 'entity customizations published');
 });
 
-// --- Security personas / roles (Group N P1) ------------------------------------------------
+// --- Security personas / roles ------------------------------------------------
 const personaSpec = () => makeSpec({
   personas: [
     { persona: 'Ticket Agent', jobs: [
@@ -3997,6 +5578,115 @@ test('security phase: a REUSED role is STILL added to the solution (idempotent r
   // AddSolutionComponent is idempotent server-side, so membership is re-ensured on every run (a role that
   // missed the add on a prior run — created, add failed, then reused — is repaired here).
   assert.strictEqual(find(calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === 20).length, 2, 'both reused roles re-ensured in the solution');
+});
+
+// --- rebuild writes: what a rebuild REUSES joins the solution only when the solution is not proven to hold it ------
+//
+// A reused component is re-added on every run so one that missed its add (or came from a build of a different
+// solution) is repaired. One read of the solution's members (solution-membership.js) lets the build skip the adds
+// that are provably unnecessary; anything the read does not prove present is added exactly as before. The wire-level
+// behaviour is pinned against the real bundle in rebuild-writes-real-bundle.test.js — these pin each reuse site.
+
+const addsOf = (calls, type) => find(calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === type).map((c) => c.args[0].componentId);
+
+test('rebuild writes: a reused role the solution already holds is not added again — one it lacks still is', async () => {
+  const { sdk, calls } = mockSdk({ rolesExist: true, solutionMembers: [[20, 'role-Ticket Agent']] });
+  await runSdkBuild(personaSpec(), { sdk, apply: true });
+  assert.deepStrictEqual(addsOf(calls, 20), ['role-Dispatcher']);
+});
+
+test('rebuild writes: a role the SDK just created is always added — it cannot be a member yet', async () => {
+  const { sdk, calls } = mockSdk({ solutionMembers: [[20, 'role-Ticket Agent'], [20, 'role-Dispatcher']] });
+  await runSdkBuild(personaSpec(), { sdk, apply: true });
+  assert.deepStrictEqual(addsOf(calls, 20).sort(), ['role-Dispatcher', 'role-Ticket Agent']);
+  assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 0, 'nothing reused, so nothing read');
+});
+
+test('rebuild writes: a reused view, chart and form the solution already holds are not added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent'), []);
+  assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 1, 'one membership read for all of them');
+});
+
+test('rebuild writes: a reused view, chart or form the solution lacks is added again, and only that one', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[26, 'view-existing']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`).sort(), ['59:chart-existing', '60:form-existing']);
+});
+
+// A table the solution holds with ALL its subcomponents (`rootcomponentbehavior` 0) carries its views, charts and forms,
+// which then have no row of their own. The table row's `objectid` is the table's MetadataId, so the build resolves each
+// table through the raw client (the same read the app's table pins use) before it can match one.
+const TICKET_TABLE = '7a1b1c1d-0000-4000-8000-0000000000a1';
+const CUSTOMER_TABLE = '7a1b1c1d-0000-4000-8000-0000000000a2';
+function withTableMetadata(sdk, { fails = false } = {}) {
+  const urls = [];
+  sdk.dataverse = {
+    get: async (url) => {
+      urls.push(url);
+      if (fails) throw new Error('metadata service unavailable');
+      const logical = /LogicalName='([^']+)'/.exec(url)[1];
+      return { status: 200, body: { LogicalName: logical, MetadataId: logical === 'new_ticket' ? TICKET_TABLE : CUSTOMER_TABLE, EntitySetName: `${logical}s` } };
+    },
+  };
+  return urls;
+}
+
+test('rebuild writes: a reused view, chart and form whose tables the solution holds with all their subcomponents are not added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 0], [1, CUSTOMER_TABLE, 0]] });
+  const urls = withTableMetadata(sdk);
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent'), []);
+  assert.deepStrictEqual(urls.filter((u) => /MetadataId/.test(u)).sort(), [
+    "/EntityDefinitions(LogicalName='new_customer')?$select=MetadataId,EntitySetName",
+    "/EntityDefinitions(LogicalName='new_ticket')?$select=MetadataId,EntitySetName",
+  ], 'each table is resolved once, not once per component');
+  assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 1, 'still one membership read');
+});
+
+test('rebuild writes: a table held in part, another table\'s row, or a table that cannot be resolved vouches for nothing', async () => {
+  // The ticket table is held at 2 (shell only) and the customer table at 0: the view and chart (ticket) are added, the form (customer) is not.
+  const mixed = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 2], [1, CUSTOMER_TABLE, 0]] });
+  withTableMetadata(mixed.sdk);
+  await runSdkBuild(makeSpec(), { sdk: mixed.sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(mixed.calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`).sort(), ['26:view-existing', '59:chart-existing']);
+
+  // Both tables whole, but their metadata cannot be read: nothing is proven, everything is added, the build still succeeds.
+  const unreadable = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 0], [1, CUSTOMER_TABLE, 0]] });
+  withTableMetadata(unreadable.sdk, { fails: true });
+  const res = await runSdkBuild(makeSpec(), { sdk: unreadable.sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(find(unreadable.calls, 'addSolutionComponent').length, 3, 'view, chart and form are added as before');
+
+  // No raw client at all (a double without one): the same.
+  const bare = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 0], [1, CUSTOMER_TABLE, 0]] });
+  await runSdkBuild(makeSpec(), { sdk: bare.sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.strictEqual(find(bare.calls, 'addSolutionComponent').length, 3);
+});
+
+test('rebuild writes: an existing app and its sitemap the solution already holds are not added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingWebResource: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing'], [80, 'app-existing'], [62, 'sm-1']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent'), []);
+});
+
+test('rebuild writes: an existing app, or its sitemap, the solution lacks is added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingWebResource: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing'], [62, 'sm-1']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`), ['80:app-existing']);
+  const missingSitemap = mockSdk({ artifactsExist: true, existingWebResource: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing'], [80, 'app-existing']] });
+  await runSdkBuild(makeSpec(), { sdk: missingSitemap.sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  assert.deepStrictEqual(find(missingSitemap.calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`), ['62:sm-1']);
+});
+
+test('rebuild writes: a membership read that fails leaves every re-assert in place, and the build still succeeds', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing']] });
+  const read = sdk.queryRecords;
+  sdk.queryRecords = async (e, o) => { if (e === 'solutioncomponent') throw new Error('membership unreadable'); return read(e, o); };
+  const res = await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(find(calls, 'addSolutionComponent').length, 3, 'view, chart and form are added as before');
 });
 
 test('security phase: a duplicate app<->role association (realistic 400 + 0x80060891) is swallowed', async () => {
@@ -4372,9 +6062,11 @@ const aiRetrySpec = () => makeSpec({ ai: { appFeatures: { nlSearch: true }, summ
 const withAiResults = (results) => {
   const { sdk, calls } = mockSdk();
   let n = 0;
+  // A fresh copy per call, like the SDK's own: the build moves features between a result's buckets, and a result
+  // handed out twice would carry the first call's moves into the second.
   sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
     calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
-    return results[Math.min(n++, results.length - 1)];
+    return clone(results[Math.min(n++, results.length - 1)]);
   };
   return { sdk, calls };
 };
@@ -4698,6 +6390,368 @@ test('ai-features phase: an override holding the WRONG value is not treated as p
   assert.ok(events.some((e) => e.phase === 'ai-features' && e.status === 'skip'), 'a wrong-valued override must still warn');
 });
 
+// ── `pendingPublish`: an override the SDK now PROVES while it is still unpublished ──────────────────
+// An app-scope setting write lands in the app's unpublished layer, which the published `appsettings`
+// projection the SDK used to prove against cannot show: on a freshly created app the first write read
+// back `notPersisted`, and the build's post-publish re-issue (fetch, publish, write again) is what
+// put the rows in force. The SDK now proves the row where it is, and reports it `applied` with
+// `pendingPublish: true` — saved, taking effect when the app is published. That is NOT "applied" for the
+// build's purposes unless a publish follows: without `--publish` nothing else publishes the app after
+// this write, and `--verify` reads the published layer.
+const pendingOutcome = (feature) => ({ feature, setting: `S_${feature}`, requestedValue: '2', status: 'applied', appOverrideExists: true, pendingPublish: true });
+const pendingResult = (features) => ({ applied: [...features], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: features.map(pendingOutcome) });
+const inForceResult = (features) => ({ applied: [...features], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: features.map((feature) => ({ feature, status: 'applied', appOverrideExists: true })) });
+const withOverrideRow = (sdk, rows) => {
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') return rows;
+    return [];
+  };
+};
+
+// What the app's publish answers, in order (the last answer repeats). The SDK reports a publish that did not succeed
+// BY VALUE — `failed` and `unverifiable` RESOLVE, they do not throw — so that is what these hand back. Only the
+// app's publish is scripted: every other target publishes cleanly.
+const failedPublish = () => ({ kind: 'failed', error: new Error('PublishXml was refused') });
+const unverifiablePublish = () => ({ kind: 'unverifiable', reason: 'the published copy could not be read back' });
+const verifiedPublish = () => ({ kind: 'verified' });
+const withAppPublishes = (sdk, calls, answers) => {
+  let n = 0;
+  sdk.publishArtifact = async (type, id) => {
+    calls.push({ name: 'publishArtifact', args: [type, id] });
+    const publish = type === 'app' ? answers[Math.min(n++, answers.length - 1)]() : verifiedPublish();
+    return { type, id, shipped: publish.kind === 'verified', publish };
+  };
+};
+const notPersistedResult = (features) => ({ applied: [], skipped: [], notPersisted: [...features], unverified: [], failed: [], outcomes: features.map((feature) => ({ feature, status: 'notPersisted', appOverrideExists: false, reason: 'no override observed' })) });
+const aiWarnings = (events) => events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+const appPublishCalls = (calls) => find(calls, 'publishArtifact').filter((c) => c.args[0] === 'app');
+const aiOutcome = (r, feature) => r.created.ai.appFeatures.outcomes.find((o) => o.feature === feature);
+
+test('ai-features phase: a feature saved but not yet published is published once and PROVED — not written again', async () => {
+  // Its row is already in the app's unpublished layer, so a second write would only save it again: the publish is what
+  // puts it in force, and the proof reads the row where the runtime does.
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, [{ value: '2' }]); // in force once the app is published
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'no second write');
+  const firstWrite = calls.findIndex((c) => c.name === 'setAppAiFeatures');
+  const fetchIdx = calls.findIndex((c, i) => i > firstWrite && c.name === 'fetchArtifact' && c.args[0] === 'app');
+  const pubIdx = calls.findIndex((c, i) => i > firstWrite && c.name === 'publishArtifact' && c.args[0] === 'app');
+  assert.ok(fetchIdx > firstWrite && pubIdx > fetchIdx, 'without --publish nothing else publishes the app, so it is fetched and published after the write');
+  assert.strictEqual(appPublishCalls(calls).length, 1);
+
+  const af = r.created.ai.appFeatures;
+  assert.deepStrictEqual(af.applied, ['formFill'], 'reported once, not twice');
+  assert.ok(!(af.pendingPublish || []).length, 'the bucket is emptied once the feature is in force');
+  const outcome = aiOutcome(r, 'formFill');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.strictEqual(outcome.pendingPublish, undefined, 'no longer pending');
+  assert.match(outcome.reason, /override-row proof/, 'what was claimed is what was proved, not a write that never happened');
+  assert.strictEqual(aiWarnings(events).length, 0, 'a recovered feature is not reported as a problem');
+});
+
+test('ai-features phase: when the publish that should put a saved override in force FAILS, it is NOT YET PUBLISHED — never applied', async () => {
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, []); // the published layer holds nothing: the publish did not happen
+  withAppPublishes(sdk, calls, [failedPublish]);
+  const events = [];
+  const warnings = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e), warn: (w) => warnings.push(w) });
+
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(warnings.some((w) => /publish app .*FAILED: PublishXml was refused/.test(w)), `the failed publish is reported too: ${JSON.stringify(warnings)}`);
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'a second write could not put it in force either');
+  const af = r.created.ai.appFeatures;
+  assert.ok(!af.applied.includes('formFill'), 'nothing is in force, so nothing is claimed');
+  assert.deepStrictEqual(af.pendingPublish, ['formFill'], 'and a --json consumer sees it as what it is');
+  assert.strictEqual(aiOutcome(r, 'formFill').status, 'pendingPublish');
+});
+
+for (const [label, answer] of [['UNVERIFIABLE', unverifiablePublish], ['verified', verifiedPublish]]) {
+  test(`ai-features phase: after a ${label} publish, what is claimed is what the override-row proof reads`, async () => {
+    // `unverifiable` means PublishXml answered 2xx and only the SDK's own read-back was not possible, so the proof —
+    // the same read --verify makes — decides, in both directions.
+    for (const [rows, applied] of [[[{ value: '2' }], true], [[], false]]) {
+      const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+      withOverrideRow(sdk, rows);
+      withAppPublishes(sdk, calls, [answer]);
+      const events = [];
+      const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+      assert.strictEqual(r.created.ai.appFeatures.applied.includes('formFill'), applied, `${label}, ${rows.length ? 'row present' : 'row absent'}`);
+      assert.strictEqual(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), !applied);
+      assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1);
+    }
+  });
+}
+
+for (const [label, answer] of [['FAILED', failedPublish], ['UNVERIFIABLE', unverifiablePublish]]) {
+  test(`ai-features phase: a re-issue that only reaches the unpublished layer after a ${label} publish is NOT YET PUBLISHED, never applied`, async () => {
+    // The first write saved nothing, so it IS written again after the publish. When that publish did not put the app in
+    // force the SDK proves the row where the write put it — the unpublished layer — and answers `applied` with
+    // `pendingPublish`. Counting that `applied` reported a feature nothing serves.
+    const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), pendingResult(['formFill'])]);
+    withOverrideRow(sdk, []);
+    withAppPublishes(sdk, calls, [answer]);
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'it was not saved at first, so it is written again after the publish');
+    assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+    assert.ok(!aiWarnings(events).some((l) => /NOT PERSISTED/.test(l)), 'the first write\u2019s verdict is superseded: the row IS saved');
+    const af = r.created.ai.appFeatures;
+    assert.deepStrictEqual(af.applied, [], 'nothing is in force');
+    assert.deepStrictEqual([af.pendingPublish, af.notPersisted], [['formFill'], []], 'the --json result agrees with the report');
+    assert.strictEqual(aiOutcome(r, 'formFill').status, 'pendingPublish');
+  });
+}
+
+test('ai-features phase: a re-issue the SDK proves in force is applied, whatever the publish before it answered', async () => {
+  const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), inForceResult(['formFill'])]);
+  withAppPublishes(sdk, calls, [unverifiablePublish]);
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
+  assert.strictEqual(aiWarnings(events).length, 0);
+});
+
+for (const [label, answer] of [['FAILED', failedPublish], ['UNVERIFIABLE', unverifiablePublish]]) {
+  test(`ai-features phase: with --publish, a re-issue that only reaches the unpublished layer after a ${label} post-publish publish is NOT YET PUBLISHED`, async () => {
+    // The publish phase published the app (its answer is the first), but the feature was not saved by the first write, so
+    // the post-publish pass publishes once more (its answer is the second) and writes it again.
+    const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), pendingResult(['formFill'])]);
+    withOverrideRow(sdk, []);
+    withAppPublishes(sdk, calls, [verifiedPublish, answer]);
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+    assert.strictEqual(appPublishCalls(calls).length, 2);
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2);
+    assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+    assert.deepStrictEqual([r.created.ai.appFeatures.applied, r.created.ai.appFeatures.pendingPublish], [[], ['formFill']]);
+  });
+}
+
+test('ai-features phase: when the build\u2019s own publish follows, a saved-but-unpublished feature is only CONFIRMED — no second publish, no second write', async () => {
+  // The publish phase publishes the app in its one envelope, which carries the saved override. Re-issuing the
+  // write after it (a fetch, another PublishXml and a second write with its own proof) would pay again for
+  // what is already in force.
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, [{ value: '2' }]); // in force once published, holding ENABLED for this family
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'no re-issue: the publish phase already put the row in force');
+  const appPublishes = find(calls, 'publishArtifact').filter((c) => c.args[0] === 'app');
+  assert.strictEqual(appPublishes.length, 1, 'the app is published once, by the publish phase');
+  const firstWrite = calls.findIndex((c) => c.name === 'setAppAiFeatures');
+  assert.ok(!calls.some((c, i) => i > firstWrite && c.name === 'fetchArtifact' && c.args[0] === 'app'), 'and not re-fetched for a retry');
+
+  const af = r.created.ai.appFeatures;
+  assert.deepStrictEqual(af.applied, ['formFill']);
+  const outcome = af.outcomes.find((o) => o.feature === 'formFill');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.strictEqual(outcome.pendingPublish, undefined);
+  assert.match(outcome.reason, /override-row proof/, 'the claim is the proof it is: the row was read where the runtime reads it');
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0);
+});
+
+test('ai-features phase: after the publish the override is read back, and one still not visible is reported, not claimed', async () => {
+  const { sdk } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, []); // the publish did not carry it
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+  assert.ok(warnings.some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(warnings));
+  const af = r.created.ai.appFeatures;
+  assert.ok(!af.applied.includes('formFill'), 'not claimed as in force');
+  assert.deepStrictEqual(af.pendingPublish, ['formFill'], 'and visible to a --json consumer as what it is');
+});
+
+// ── the proof after a publish: the budget --verify has, and a read that failed said plainly ─────────────────────────
+// A publish can answer before the published `appsettings` row is readable. `--verify` reads the row three times, 500 ms
+// apart, to ride that out; the build's proof after its publish read once, so a row that appeared a moment late was reported
+// NOT YET PUBLISHED (and left out of `applied`) by a run whose own --verify passed.
+
+// An override row that becomes readable on the `visibleOn`th read of it (never, when omitted); `reads.count` is how often it was read.
+const withLateOverrideRow = (sdk, reads, visibleOn = Infinity) => {
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') { reads.count += 1; return reads.count >= visibleOn ? [{ value: '2' }] : []; }
+    return [];
+  };
+};
+
+for (const withPublishPhase of [false, true]) {
+  test(`ai-features phase: a published row that appears a moment after the publish is found by the proof, not reported NOT YET PUBLISHED (${withPublishPhase ? 'with' : 'without'} --publish)`, async () => {
+    const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+    const reads = { count: 0 };
+    withLateOverrideRow(sdk, reads, 3); // readable on the third read
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), {
+      sdk, apply: true, publish: withPublishPhase,
+      phases: ['app-shell', 'ai-features', ...(withPublishPhase ? ['publish'] : [])],
+      emit: (e) => events.push(e),
+    });
+    assert.strictEqual(reads.count, 3, 'it read until the row was there, and no longer');
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'no second write: the row was saved all along');
+    assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
+    assert.strictEqual(aiWarnings(events).length, 0, JSON.stringify(aiWarnings(events)));
+    assert.match(aiOutcome(r, 'formFill').reason, /override-row proof/);
+  });
+}
+
+test('ai-features phase: a row still absent after the same three reads --verify makes is reported NOT YET PUBLISHED, not claimed', async () => {
+  const { sdk } = withAiResults([pendingResult(['formFill'])]);
+  const reads = { count: 0 };
+  withLateOverrideRow(sdk, reads); // never readable
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(reads.count, 3, 'three reads: the budget --verify has');
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(!aiWarnings(events).some((l) => /could not run/.test(l)), 'the check ran and found nothing: it is not reported as unable to run');
+  assert.deepStrictEqual(r.created.ai.appFeatures.pendingPublish, ['formFill']);
+  assert.ok(!r.created.ai.appFeatures.applied.includes('formFill'));
+});
+
+test('the override proof budget is one value for the build and --verify, with the one pair of test seams both take', () => {
+  const { AI_PROOF_BUDGET, proofBudget } = require('../lib/ai-app-settings.js');
+  assert.deepStrictEqual({ ...AI_PROOF_BUDGET }, { attempts: 3, delayMs: 500 });
+  assert.ok(Object.isFrozen(AI_PROOF_BUDGET), 'neither caller can change what the other waits for');
+  assert.deepStrictEqual(proofBudget(), { attempts: 3, delayMs: 500 });
+  assert.deepStrictEqual(proofBudget({}), { attempts: 3, delayMs: 500 });
+  assert.deepStrictEqual(proofBudget({ proofAttempts: 1, proofDelayMs: 0 }), { attempts: 1, delayMs: 0 });
+  assert.deepStrictEqual(proofBudget({ proofAttempts: 5 }), { attempts: 5, delayMs: 500 });
+});
+
+// A check that could not run leaves the verdict from before it standing. The warning has to say it did not look: a reader who sees
+// only that verdict takes the check for having found nothing.
+const READ_FAILURES = [
+  ['the override row cannot be read', (set) => { if (set === 'appsetting') throw new Error('429 Too Many Requests'); }, 'the app-scope override row could not be read: 429 Too Many Requests'],
+  ['the app module cannot be read', (set) => { if (set === 'appmodule') throw new Error('503 Service Unavailable'); }, 'the app module could not be read: 503 Service Unavailable'],
+  ['the setting definition cannot be read', (set) => { if (set === 'settingdefinition') throw new Error('403 Forbidden'); }, 'the setting definition could not be read: 403 Forbidden'],
+];
+for (const [what, fail, readError] of READ_FAILURES) {
+  test(`ai-features phase: when ${what}, the warning says the check could not run — ahead of what the SDK said`, async () => {
+    const sdkSaid = 'no override observed for FormFillBarUXEnabled';
+    const { sdk } = withAiResults([{ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: sdkSaid }] }]);
+    sdk.queryRecords = async (set) => {
+      fail(set);
+      if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+      if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+      return [];
+    };
+    const events = [];
+    await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+    const [warning] = aiWarnings(events);
+    assert.match(warning, /^NOT PERSISTED: formFill \u2014 /, 'the verdict that stands is the first write\u2019s');
+    const couldNotRun = warning.indexOf(`the check after the publish could not run: ${readError}`);
+    assert.ok(couldNotRun > 0, warning);
+    assert.ok(warning.indexOf(sdkSaid) > couldNotRun, `what the SDK said comes after it, and is not lost: ${warning}`);
+  });
+}
+
+test('ai-features phase: the same holds for a feature the re-issue saved but could not put in force', async () => {
+  // The reason that rides along is the one the build files a saved-but-unpublished override under.
+  const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), pendingResult(['formFill'])]);
+  withAppPublishes(sdk, calls, [failedPublish]);
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') throw new Error('429 Too Many Requests'); // the override row cannot be read
+    return [];
+  };
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const [warning] = aiWarnings(events);
+  assert.match(warning, /^NOT YET PUBLISHED: formFill \u2014 the check after the publish could not run: the app-scope override row could not be read: 429 Too Many Requests \u2014 saved in the app's unpublished layer/, warning);
+});
+
+test('ai-features phase: a publish phase whose app publish FAILED does not count — the app is published again and the override proved, with no second write', async () => {
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, [{ value: '2' }]);
+  withAppPublishes(sdk, calls, [failedPublish, verifiedPublish]);
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+  assert.strictEqual(appPublishCalls(calls).length, 2, 'an unpublished app has not put the override in force, so it is published once more');
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'the override was saved by the first write; publishing is all it needed');
+  assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
+  assert.strictEqual(aiWarnings(events).length, 0);
+});
+
+test('ai-features phase: with --publish, an app publish that FAILS twice leaves the saved override NOT YET PUBLISHED', async () => {
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, []);
+  withAppPublishes(sdk, calls, [failedPublish]); // the publish phase's and the post-publish pass's, alike
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+  assert.strictEqual(appPublishCalls(calls).length, 2);
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(!r.created.ai.appFeatures.applied.includes('formFill'));
+  assert.deepStrictEqual(r.created.ai.appFeatures.pendingPublish, ['formFill']);
+});
+
+test('ai-features phase: with --publish, an UNVERIFIABLE app publish counts as published: the override is only proved, in either direction', async () => {
+  // PublishXml answered 2xx; only the SDK's read-back was not possible. A second publish would add nothing, and the
+  // proof — which reads the row where the runtime does — settles the verdict.
+  for (const [rows, applied] of [[[{ value: '2' }], true], [[], false]]) {
+    const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+    withOverrideRow(sdk, rows);
+    withAppPublishes(sdk, calls, [unverifiablePublish]);
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+    assert.strictEqual(appPublishCalls(calls).length, 1, 'published once, by the publish phase');
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1);
+    assert.strictEqual(r.created.ai.appFeatures.applied.includes('formFill'), applied, rows.length ? 'row present' : 'row absent');
+    assert.strictEqual(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), !applied);
+  }
+});
+
+test('ai-features phase: features that need a write and features that need only the publish share one fetch and one publish', async () => {
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true, nlSearch: true }, summaries: { default: 'off' } } });
+  const first = {
+    applied: ['formFill'], skipped: [], notPersisted: ['nlSearch'], unverified: [], failed: [],
+    outcomes: [pendingOutcome('formFill'), { feature: 'nlSearch', status: 'notPersisted', reason: 'no override observed' }],
+  };
+  const { sdk, calls } = withAiResults([first, inForceResult(['nlSearch'])]);
+  withOverrideRow(sdk, [{ value: '2' }]); // formFill's saved row, in force once published
+  const events = [];
+  const r = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const writes = find(calls, 'setAppAiFeatures');
+  assert.strictEqual(writes.length, 2);
+  assert.deepStrictEqual(Object.keys(writes[1].args[1]), ['nlSearch'], 'only the feature that was not saved is written again');
+  const firstWrite = calls.findIndex((c) => c.name === 'setAppAiFeatures');
+  assert.strictEqual(calls.filter((c, i) => i > firstWrite && c.name === 'fetchArtifact' && c.args[0] === 'app').length, 1);
+  assert.strictEqual(appPublishCalls(calls).length, 1, 'one publish serves both');
+  assert.deepStrictEqual([...r.created.ai.appFeatures.applied].sort(), ['formFill', 'nlSearch']);
+  assert.strictEqual(aiWarnings(events).length, 0);
+});
+
+test('ai-features phase: a feature already in force is applied at once, and only the pending one waits for the publish', async () => {
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true, nlSearch: true }, summaries: { default: 'off' } } });
+  const mixed = { applied: ['formFill', 'nlSearch'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [
+    { feature: 'formFill', status: 'applied', appOverrideExists: true },
+    pendingOutcome('nlSearch'),
+  ] };
+  const { sdk, calls } = withAiResults([mixed]);
+  withOverrideRow(sdk, [{ value: '2' }]);
+  const r = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'nothing is written twice');
+  assert.strictEqual(appPublishCalls(calls).length, 1);
+  assert.deepStrictEqual([...r.created.ai.appFeatures.applied].sort(), ['formFill', 'nlSearch']);
+});
+
+test('ai-features phase: an SDK result with no pending outcome is handled exactly as before', async () => {
+  const { sdk, calls } = withAiResults([inForceResult(['formFill'])]);
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'an override already in force needs no second write');
+  assert.strictEqual(find(calls, 'publishArtifact').length, 0, 'and no publish');
+  assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
+});
+
 test('ai-features planFor: spec.ai adds enable + per-table summary plan entries', () => {
   const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'auto' } } });
   const items = planFor(spec, { phases: ['ai-features'] });
@@ -4797,12 +6851,12 @@ test('pages phase persists the manifest on a SINGLE-page first build (one create
     const created = find(calls, 'createWebResource').map((c) => c.args[0]).find((o) => /_pagemanifest$/.test(o.name));
     assert.strictEqual(created.type, 'js');
     assert.deepStrictEqual(JSON.parse(created.content).pages[0], { key: 'Overview', name: 'Overview', pageId: 'gp-1' });
-    assert.strictEqual(find(calls, 'updateWebResource').length, 0, 'one create writes the final content; the final persist is deduped → ZERO updates (I6)');
+    assert.strictEqual(find(calls, 'updateWebResource').length, 0, 'one create writes the final content; the final persist is deduped → ZERO updates');
     assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 61), 'manifest added to the solution');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages phase persists the manifest per-create on a MULTI-page first build (one create + one update, I6)', async () => {
+test('pages phase persists the manifest per-create on a MULTI-page first build (one create + one update)', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
   const appDir = stagePages(spec.pages);
@@ -4835,6 +6889,40 @@ test('pages phase updates the manifest IN PLACE on a rebuild whose page ids chan
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+test('rebuild writes: a rebuild whose manifest the solution already holds updates it in place and does not add it again', async () => {
+  const spec = makeSpec();
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }, { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } }];
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const OV = 'a11c9d20-0000-4000-8000-0000000000a1';
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OV }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${OV}"/></Group></Area></SiteMap>`;
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm, existingWebResource: true, solutionMembers: [[61, 'wr-manifest']] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [OV], pages: [{ pageId: OV, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || 'a22c9d20-0000-4000-8000-0000000000d2' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.ok(find(calls, 'updateWebResource').some((c) => c.args[0] === 'wr-manifest'), 'the manifest content is still written');
+    assert.deepStrictEqual(addsOf(calls, 61), [], 'it is already a member');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('rebuild writes: a multi-page first build adds the manifest to the solution once, not once per page', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk({ existingWebResource: true, solutionMembers: [] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async (o) => ({ pageId: o.name === 'Detail' ? 'gp-d' : 'gp-o' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(find(calls, 'updateWebResource').length, 1, 'the manifest is still persisted after every create');
+    assert.strictEqual(addsOf(calls, 61).length, 1, 'but the add the first persist made is not repeated');
+    // The manifest is the one component a first build asks about — it is persisted through the membership check even
+    // when it was just created — so a build that deploys pages makes the read, once, and still adds what is missing.
+    assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 1, 'one membership read, shared by every persist');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('pages phase HALTS fail-closed when EXISTENCE enumeration fails — never treats it as empty, uploads nothing', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
@@ -4842,7 +6930,7 @@ test('pages phase HALTS fail-closed when EXISTENCE enumeration fails — never t
   try {
     const { sdk } = mockSdk();
     let uploaded = 0;
-    // enumerateEnv is env-wide EXISTENCE (Task 2). A failed listing must HALT — never collapse to "no pages".
+    // enumerateEnv is env-wide EXISTENCE. A failed listing must HALT — never collapse to "no pages".
     const genpageCli = { enumerateEnv: async () => ({ ok: false, ids: [], error: 'auth expired' }), upload: async () => { uploaded += 1; return { pageId: 'gp-1' }; } };
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
@@ -4852,7 +6940,7 @@ test('pages phase HALTS fail-closed when EXISTENCE enumeration fails — never t
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages phase HALTS when the app id is absent (I1 recovery guard — do NOT resume from --from pages)', async () => {
+test('pages phase HALTS when the app id is absent (recovery guard — do NOT resume from --from pages)', async () => {
   const spec = makeSpec();
   spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }];
   const appDir = stagePages(spec.pages);
@@ -4878,7 +6966,7 @@ test('planFor emits one step per page + a manifest step (alignment)', () => {
 const PRIOR_SITEMAP = { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [{ type: 'GenPage', genPageId: 'gp-prev', title: 'Overview' }] }] }] };
 const hasGenPage = (sm, id) => (sm.areas || []).some((a) => (a.groups || []).some((g) => (g.subAreas || []).some((s) => s.type === 'GenPage' && s.genPageId === id)));
 
-test('C2: an EXISTING page-backed app does NOT push its sitemap in app-shell — an enumeration failure PRESERVES the prior sitemap', async () => {
+test('an EXISTING page-backed app does NOT push its sitemap in app-shell — an enumeration failure PRESERVES the prior sitemap', async () => {
   const spec = makeSpec();
   spec.schemaVersion = 2;
   spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
@@ -4897,7 +6985,7 @@ test('C2: an EXISTING page-backed app does NOT push its sitemap in app-shell —
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('C2: an EXISTING page-backed app writes its sitemap ONCE, in the finalizer, with GenPage subareas resolved', async () => {
+test('an EXISTING page-backed app writes its sitemap ONCE, in the finalizer, with GenPage subareas resolved', async () => {
   const spec = makeSpec();
   spec.schemaVersion = 2;
   spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }];
@@ -4913,15 +7001,19 @@ test('C2: an EXISTING page-backed app writes its sitemap ONCE, in the finalizer,
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('C2: an EXISTING app with NO page subareas still pushes its sitemap in app-shell (unchanged behavior)', async () => {
+test('an EXISTING app with NO page subareas still pushes its sitemap in app-shell (unchanged behavior)', async () => {
   const spec = makeSpec(); // entity subarea only, no pages
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: PRIOR_SITEMAP });
-  await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir: process.cwd(), phases: ['solution', 'data-model', 'app-shell'] });
-  assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'a no-page existing app keeps pushing its sitemap in app-shell');
+  // The build opens its workspace in `<appDir>/.maker-workspace` when it is given none, so the app folder is one of the test's own, removed after it: never `process.cwd()`, which is the plugin's own folder.
+  const appDir = stagePages([]);
+  try {
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, phases: ['solution', 'data-model', 'app-shell'] });
+    assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'a no-page existing app keeps pushing its sitemap in app-shell');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// ── Plan 5 three-authority safety gates: existence-driven crash-safety (C1), discriminated reads,
-//    destructive-removal (Imp6) and cross-app shared-page (Imp5) HALTs. Real GUIDs (Imp9). ─────────────
+// ── Three-authority safety gates: existence-driven crash-safety, discriminated reads,
+//    destructive-removal and cross-app shared-page HALTs. Real GUIDs. ─────────────
 const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_D = '5c0a4889-45fd-46ea-91a8-ff876914d644';
 const overviewSpec = () => {
@@ -4932,7 +7024,7 @@ const overviewSpec = () => {
   return spec;
 };
 
-test('pages: crash-after-create convergence — a manifest id in EXISTENCE but NOT in the sitemap is UPDATED, never re-created (C1)', async () => {
+test('pages: crash-after-create convergence — a manifest id in EXISTENCE but NOT in the sitemap is UPDATED, never re-created', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
@@ -5062,7 +7154,7 @@ test('pages: spec.pages=[] with --allow-destructive DETACHES all live pages (pag
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live genpages via a page-less sitemap (whole-branch review)', async () => {
+test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live genpages via a page-less sitemap', async () => {
   const spec = makeSpec(); spec.schemaVersion = 2; // page-less spec, no page subareas
   const appUnique = appUniqueName(spec);
   const appDir = stagePages([]);
@@ -5082,7 +7174,7 @@ test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live g
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-apps (Imp5) — --allow-destructive does NOT bypass', async () => {
+test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-apps — --allow-destructive does NOT bypass', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
@@ -5101,6 +7193,380 @@ test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-app
       runSdkBuild(spec, { sdk: mk().sdk, apply: true, allowDestructive: true, env: 'https://x', appDir, genpageCli: cli(), phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
       (e) => e && e.code === 'pages-shared-across-apps'
     );
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The halt says what to run: `genpage.js remove-from-app` takes the page out of the OTHER app's navigation and publishes that app, so the page is no longer shared. The scan already holds each app's id (the rows it lists the
+// apps from), so the command is ready to run — against the environment the build runs in; an app whose id is not one the command takes is named by its unique name in the id's place. Changing another app is not the
+// build's to do, so the text says to ask first.
+const OTHER_APP_ID = 'a1111111-1111-4111-8111-111111111111';
+const detachCommand = (env, appId, pageId) => `node scripts/genpage.js remove-from-app --env ${env} --app-id ${appId} --page-id ${pageId}`;
+test('pages: the shared-across-apps halt prints the command that takes the page out of EACH other app that holds it — the id from the scan, the environment from the build — and still offers to give this app its own page', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const empty = '<SiteMap><Area><Group/></Area></SiteMap>';
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [
+      { uniquename: 'contoso_secondapp', appmoduleid: OTHER_APP_ID, sitemapxml: sitemapWithO },
+      // Holds the page in its SAVED navigation only, and its id in this fixture is not a GUID (`app-3`): the command names the app instead of printing an id it would refuse.
+      { uniquename: 'contoso_thirdapp', sitemapxml: empty, savedSitemapXml: sitemapWithO },
+    ] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://contoso.crm.dynamics.com', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => {
+        assert.strictEqual(e.code, 'pages-shared-across-apps');
+        assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_secondapp, contoso_thirdapp \\[saved, not published\\]\\)`), 'what was said before is still said');
+        assert.match(e.message, /Detach it from the other app — ask the user first, since this changes another app: /);
+        assert.ok(e.message.includes(detachCommand('https://contoso.crm.dynamics.com', OTHER_APP_ID, GP_O)), e.message);
+        assert.ok(e.message.includes(detachCommand('https://contoso.crm.dynamics.com', '<id of app contoso_thirdapp>', GP_O)), e.message);
+        assert.ok(e.message.endsWith(" (each takes the page out of that app's navigation and publishes that app, which publishes everything that app has saved; the page itself stays) — or detach it in Maker, or give this app its own page."), e.message);
+        return true;
+      });
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The shared-page scan is a snapshot: another maker can take a page into another app's navigation while the build runs. So the build scans
+// again right before the first page is written in place, and once more after the last. A page that became shared while a navigation target
+// was being created halts the build there, before any page is updated in place.
+const overviewToDetailSpec = () => {
+  const spec = overviewSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  return spec;
+};
+const NAV_TO_DETAIL = 'export function go(){ Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" }); }\nexport default function P(){ return null; }';
+
+test('pages: a page another app takes in while a navigation target is created HALTS before any page it began with is updated in place', async () => {
+  const spec = overviewToDetailSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL });
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area><Group/></Area></SiteMap>' };
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => {
+        uploads.push([o.name, o.pageId]);
+        // While Detail is created, another maker saves Overview into contoso_secondapp's navigation.
+        if (!o.pageId) other.savedSitemapXml = sitemapWithO;
+        return { pageId: o.pageId || GP_D };
+      } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => {
+        assert.strictEqual(e.phase, 'pages');
+        assert.strictEqual(e.code, 'pages-shared-across-apps');
+        assert.match(e.message, /^generative page\(s\) became shared across apps while this build ran: /, 'raised ahead of the page step, so the runner does not wrap it');
+        assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_secondapp \\[saved, not published\\]\\)`));
+        assert.match(e.message, /no page this build began with has been updated in place/);
+        assert.ok(e.message.includes(`${detachCommand('https://x', '<id of app contoso_secondapp>', GP_O)} (each takes the page out`), 'the command that detaches it is printed here too');
+        assert.match(e.message, /— or detach it in Maker, or give this app its own page\.$/);
+        assert.strictEqual(require('../build-model-app.js').isTransientHalt(e), false, 'another app still holds the page, so a re-run of the halt would only halt again');
+        // Marked outright, not left to the text: the message quotes other apps' names, and no transient pattern may ever make the build re-run it.
+        assert.strictEqual(e.transient, false, 'the halt carries transient: false itself');
+        return true;
+      });
+    assert.deepStrictEqual(uploads, [['Detail', undefined]], 'Detail was created; Overview was never written in place');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// What lands while the pages upload cannot be refused: the page is written by then, and no write can be made conditional on another app's
+// navigation. So the scan after the last upload REPORTS it, naming the page and the app that now shows the new content.
+test('pages: a page another app takes in while the pages upload is REPORTED after the uploads, naming the page and the app', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }] }), 'utf8').toString('base64');
+    const both = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/><SubArea GenPageId="${GP_D}" Title="Detail"/></Group></Area></SiteMap>`;
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area><Group/></Area></SiteMap>' };
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: both, otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => {
+        uploads.push([o.name, o.pageId]);
+        // While Overview uploads, another maker saves Detail into contoso_secondapp's navigation: Detail is next, past the last check before a write.
+        if (o.pageId === GP_O) other.savedSitemapXml = `<SiteMap><Area><Group><SubArea GenPageId="${GP_D}" Title="Detail"/></Group></Area></SiteMap>`;
+        return { pageId: o.pageId };
+      } };
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    assert.deepStrictEqual(uploads, [['Overview', GP_O], ['Detail', GP_D]], 'both pages were written in place');
+    const reported = warnings.filter((w) => /was taken into another app's navigation while this build was updating it/.test(w));
+    assert.strictEqual(reported.length, 1, `one report: ${JSON.stringify(warnings)}`);
+    assert.match(reported[0], new RegExp(`^generative page "Detail" ${GP_D} \\(also in contoso_secondapp \\[saved, not published\\]\\) was taken into another app's navigation`));
+    assert.match(reported[0], /so its new content will show there once that app is published\./, 'an app that only SAVED the page shows it once published');
+    assert.ok(reported[0].includes(`Detach it from the other app — ask the user first, since this changes another app: ${detachCommand('https://x', '<id of app contoso_secondapp>', GP_D)} (each takes the page out`), reported[0]);
+    assert.ok(reported[0].endsWith('or detach it in Maker, or give this app its own page.'), reported[0]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The pages are written by the time of the last scan, so a scan that fails there is reported rather than halting the build.
+test('pages: a failed scan after the uploads is REPORTED, and the build completes', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const options = { pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap/>' }] };
+    const { sdk } = mockSdk(options);
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { options.failAppList = true; return { pageId: o.pageId }; } };
+    const warnings = [];
+    const result = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    assert.ok(result, 'the build completes');
+    const said = warnings.filter((w) => /^could not check again, once they were written, that the 1 page\(s\) this build updated in place are not shared with another app: /.test(w));
+    assert.strictEqual(said.length, 1, JSON.stringify(warnings));
+    assert.doesNotMatch(said[0], /refusing to UPDATE|Re-run to retry|then rebuild/, 'the pages are written: no halt advice in the report');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+const pagesSitemap = (...ids) => `<SiteMap><Area><Group>${ids.map((id) => `<SubArea GenPageId="${id}" Title="x"/>`).join('')}</Group></Area></SiteMap>`;
+const pagesManifest = (pages) => Buffer.from(JSON.stringify({ schemaVersion: 1, pages }), 'utf8').toString('base64');
+const NO_PAGES_SITEMAP = '<SiteMap><Area><Group/></Area></SiteMap>';
+const NAV_TO_OVERVIEW = 'export function back(){ Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_overview" }); }\nexport default function P(){ return null; }';
+const backLinkSpec = () => {
+  const spec = overviewToDetailSpec();
+  spec.pages[1].navigatesTo = [{ targetKey: 'overview' }];
+  return spec;
+};
+
+// The check right before the first in-place write is taken there, inside the loop: a page the loop CREATES before it (a new page first in the
+// spec) leaves the window open until then, and a page another app takes in during that create halts the build before it is written.
+test('pages: a page another app takes in while the loop creates an earlier page HALTS before it is written in place', async () => {
+  const spec = overviewSpec();
+  spec.pages.unshift({ key: 'intro', name: 'Intro', source: { kind: 'tsx', codeFile: 'i.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'intro', title: 'Intro' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); if (!o.pageId) other.savedSitemapXml = pagesSitemap(GP_O); return { pageId: o.pageId || GP_D }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e.code === 'pages-shared-across-apps' && /became shared across apps while this build ran/.test(e.message) && /no page this build began with has been updated in place/.test(e.message));
+    assert.deepStrictEqual(uploads, [['Intro', null]], 'Intro was created; Overview was never written in place');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The check covers EVERY page the loop will write in place, not only the one it is about to write: one taken in after the first scan halts the
+// build before the first of them is written.
+test('pages: the check before the first in-place write covers every page the loop will write in place', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const realGet = sdk.dataverse.get;
+    let savedReads = 0;
+    sdk.dataverse.get = async (url) => {
+      const r = await realGet(url);
+      // Once the first scan has read the saved layer, another maker saves Detail — the SECOND page written — into contoso_secondapp's navigation.
+      if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && (savedReads += 1) === 1) other.savedSitemapXml = pagesSitemap(GP_D);
+      return r;
+    };
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId]); return { pageId: o.pageId }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e.code === 'pages-shared-across-apps' && e.message.includes(GP_D) && /while this build ran/.test(e.message));
+    assert.deepStrictEqual(uploads, [], 'nothing was written in place, Overview included');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The check is taken once, before the first in-place write — not before every page: a build that updates three pages in place scans three
+// times in all (the first scan, that check, and the last).
+test('pages: a build that updates three pages in place takes the shared-page scan three times, not once per page', async () => {
+  const GP_X = '2d7b3e4f-5a6c-4d8e-8f9a-0b1c2d3e4f5a';
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } }, { key: 'extra', name: 'Extra', source: { kind: 'tsx', codeFile: 'x.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' }, { page: 'extra', title: 'Extra' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }, { key: 'extra', name: 'Extra', pageId: GP_X }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D, GP_X), otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP }] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D, GP_X], pages: [] }), upload: async (o) => { uploads.push(o.pageId); return { pageId: o.pageId }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.deepStrictEqual(uploads, [GP_O, GP_D, GP_X]);
+    assert.strictEqual(scanReads(calls).filter((u) => u === APPS_LIST_URL).length, 3, 'the first scan, the check before the first in-place write, and the last scan');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The check is taken ahead of the page's step, so a scan that fails there halts as the first scan's does — recoverable, in its own words —
+// rather than wrapped as a failed step.
+test('pages: a scan that fails at the check before the first in-place write halts as the first scan does: recoverable, unwrapped', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const options = { pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP }] };
+    const { sdk } = mockSdk(options);
+    const realGet = sdk.dataverse.get;
+    let savedReads = 0;
+    // The app list fails from the second scan on: the first scan passes, the check before the first in-place write cannot read.
+    sdk.dataverse.get = async (url) => { const r = await realGet(url); if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && (savedReads += 1) === 1) options.failAppList = true; return r; };
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [] }), upload: async (o) => { uploads.push(o.pageId); return { pageId: o.pageId }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => {
+        assert.strictEqual(e.code, 'pages-shared-check-failed');
+        assert.strictEqual(e.recoverable, true);
+        assert.match(e.message, /^could not scan the environment for pages shared across apps/);
+        return true;
+      });
+    assert.deepStrictEqual(uploads, [], 'nothing was written');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A page this run created, first in the spec, is written again (its link resolved) before the loop reaches the first page the build began
+// with — where the check halts. So the halt says no page the build BEGAN WITH was updated in place, which stays true.
+test('pages: a halt after the loop wrote again a page this run created says no page the build began with was updated in place', async () => {
+  const spec = backLinkSpec();
+  spec.pages.reverse(); // Detail (created this run, links back to Overview) first
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL, 'd.tsx': NAV_TO_OVERVIEW });
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); if (!o.pageId) other.savedSitemapXml = pagesSitemap(GP_O); return { pageId: o.pageId || GP_D }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e.code === 'pages-shared-across-apps' && /no page this build began with has been updated in place/.test(e.message));
+    assert.deepStrictEqual(uploads, [['Detail', null], ['Detail', GP_D]], 'Detail, which this run created, was written again; Overview was not written');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A page this run created was not there to share when the build began, so neither later scan covers it: a fresh app whose pages link both
+// ways (each a navigation target the build creates first, then writes again with the other's id) makes no scan at all, and an unrelated
+// app whose navigation cannot be read does not stop it.
+test('pages: a fresh app whose pages link both ways makes no shared-page scan, even beside an app whose navigation cannot be read', async () => {
+  const spec = backLinkSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL, 'd.tsx': NAV_TO_OVERVIEW });
+  try {
+    const { sdk, calls } = mockSdk({ selfAppUnique: appUnique, otherApps: [{ uniquename: 'contoso_fine', sitemapxml: NO_PAGES_SITEMAP }, { uniquename: 'contoso_broken', sitemapxml: '<SiteMap><Area' }] });
+    const uploads = [];
+    const fresh = [GP_O, GP_D];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); return { pageId: o.pageId || fresh.shift() }; } };
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    assert.ok(uploads.some(([, id]) => id !== null), `a page this run created is written again with its link resolved: ${JSON.stringify(uploads)}`);
+    assert.deepStrictEqual(scanReads(calls), [], 'no shared-page scan');
+    assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'the sitemap is written');
+    assert.deepStrictEqual(warnings.filter((w) => /another app/.test(w)), []);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A non-navigation page created in step 2 is never written again in place, so another app taking it in at once halts nothing.
+test('pages: a navigation target created in step 2 and taken in by another app at once does not halt the build', async () => {
+  const spec = overviewToDetailSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL });
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); if (!o.pageId) other.savedSitemapXml = pagesSitemap(GP_D); return { pageId: o.pageId || GP_D }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.deepStrictEqual(uploads, [['Detail', null], ['Overview', GP_O]]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A changed-only run writes only its selected pages, so the checks cover only those: an unselected page another app takes in after the
+// first scan halts nothing.
+test('pages: in a changed-only run, a page it does not write that another app takes in does not halt it', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const realGet = sdk.dataverse.get;
+    let savedReads = 0;
+    sdk.dataverse.get = async (url) => {
+      const r = await realGet(url);
+      // Once the first scan has read the saved layer, another maker saves Detail into contoso_secondapp's navigation.
+      if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && (savedReads += 1) === 1) other.savedSitemapXml = pagesSitemap(GP_D);
+      return r;
+    };
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId]); return { pageId: o.pageId }; } };
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], changedOnly: { selectedKeys: ['overview'], skipSitemapFinalize: true }, warn: (m) => warnings.push(String(m)) });
+    assert.deepStrictEqual(uploads, [['Overview', GP_O]], 'only the selected page is written');
+    assert.deepStrictEqual(warnings.filter((w) => /another app/.test(w)), [], 'Detail was not written, so there is nothing to report');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// What the loop wrote before it stopped is written, so the last scan runs when a later page's upload fails too — and the failure still
+// reaches the caller as it was.
+test('pages: a page another app takes in is REPORTED when a later upload then fails, and the failure stands', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => {
+        if (o.pageId === GP_O) { other.savedSitemapXml = pagesSitemap(GP_O); return { pageId: GP_O }; } // Overview is taken in while it uploads…
+        throw new Error('pac genpage upload failed: the request timed out'); // …and Detail's upload then fails.
+      } };
+    const warnings = [];
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) }),
+      (e) => /the request timed out/.test(e.message), 'the upload failure is what the build reports');
+    const reported = warnings.filter((w) => /was taken into another app's navigation while this build was updating it/.test(w));
+    assert.strictEqual(reported.length, 1, JSON.stringify(warnings));
+    assert.match(reported[0], new RegExp(`^generative page "Overview" ${GP_O} `));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// An app that has PUBLISHED the page shows the new content at once, and the report says so.
+test('pages: a page another app takes into its PUBLISHED navigation while the pages upload is reported as showing there', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => { if (o.pageId === GP_O) other.sitemapxml = pagesSitemap(GP_D); return { pageId: o.pageId }; } }; // published, with Detail in it
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    const reported = warnings.filter((w) => /was taken into another app's navigation while this build was updating it/.test(w));
+    assert.strictEqual(reported.length, 1, JSON.stringify(warnings));
+    assert.match(reported[0], new RegExp(`^generative page "Detail" ${GP_D} \\(also in contoso_secondapp\\) was taken into another app's navigation while this build was updating it, so its new content shows there too\\.`));
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -5136,6 +7602,96 @@ test('pages: an env app-list failure HALTS pages-shared-check-failed (fail-close
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// The build reads other things through the client too; the shared-page scan's own read is the sitemap collection's.
+const SAVED_URL = '/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapxml,componentstate,sitemapnameunique';
+const savedLayerReads = (calls) => find(calls, 'dataverse.get').filter((c) => c.args[0].startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()'));
+
+test('pages: a page shared with another app\'s SAVED (unpublished) navigation HALTS pages-shared-across-apps and names where it is saved', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    // contoso_secondapp's PUBLISHED navigation does not have the page; its maker has saved the page into the draft, and not published it.
+    // The published scan alone read this as "not shared" and the build rewrote the page.
+    const mk = () => mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area><Group/></Area></SiteMap>', savedSitemapXml: sitemapWithO }] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    for (const allowDestructive of [false, true]) {
+      const { sdk, calls } = mk();
+      await assert.rejects(
+        runSdkBuild(spec, { sdk, apply: true, allowDestructive, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+        (e) => {
+          assert.strictEqual(e.phase, 'pages');
+          assert.strictEqual(e.code, 'pages-shared-across-apps');
+          assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_secondapp \\[saved, not published\\]\\)`));
+          return true;
+        },
+        `allowDestructive=${allowDestructive}: cross-app mutation has no escape`
+      );
+      assert.strictEqual(savedLayerReads(calls).length, 1, 'the saved layer of every other app is one read');
+    }
+    assert.deepStrictEqual(uploads, [], 'the shared page was never uploaded');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: another app\'s saved navigation that cannot be read HALTS pages-shared-check-failed (fail-closed — cannot prove non-sharing)', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const empty = '<SiteMap><Area><Group/></Area></SiteMap>';
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    const cases = {
+      // The whole read fails: no app's draft is known.
+      'the saved read fails': [{ savedNavigationError: true, otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: empty }] }, /could not scan the environment[\s\S]*saved \(unpublished\) navigation/],
+      // The read works, but the app's own saved row did not come back: that app's draft cannot be ruled out.
+      'one app\'s saved row is missing': [{ otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: empty, savedRows: [] }] }, /1 app\(s\) had an unreadable sitemap \(contoso_secondapp\)/],
+      'one app\'s saved XML is cut short': [{ otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: empty, savedRows: [{ sitemapxml: '<SiteMap><Area', componentstate: 1 }] }] }, /1 app\(s\) had an unreadable sitemap \(contoso_secondapp\)/],
+    };
+    for (const [what, [extra, message]] of Object.entries(cases)) {
+      const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, ...extra });
+      await assert.rejects(
+        runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+        (e) => {
+          assert.strictEqual(e.phase, 'pages', what);
+          assert.strictEqual(e.code, 'pages-shared-check-failed', what);
+          assert.match(e.message, message, what);
+          return true;
+        },
+        what
+      );
+    }
+    assert.deepStrictEqual(uploads, [], 'nothing was uploaded while sharing could not be ruled out');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: other apps that do not hold the page — in either layer — pass the check, with one saved-layer read per scan', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const other = '<SiteMap><Area><Group><SubArea GenPageId="00000000-0000-4000-8000-0000000000aa" Title="Other"/></Group></Area></SiteMap>';
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [
+      { uniquename: 'contoso_secondapp', sitemapxml: other },
+      { uniquename: 'contoso_thirdapp', sitemapxml: other, savedSitemapXml: other },
+      { uniquename: 'contoso_fourthapp', sitemapxml: other },
+    ] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(uploads.length, 1);
+    assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE): nobody else holds the page');
+    assert.strictEqual(savedLayerReads(calls).length, 3, 'three other apps, one saved-layer read per scan — and three scans, as the build writes a page in place');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('pages: a single-app env passes the shared-page check (reads no other sitemaps) and reuses the page', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
@@ -5143,13 +7699,148 @@ test('pages: a single-app env passes the shared-page check (reads no other sitem
   try {
     const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
     const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`;
-    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm }); // no otherApps
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm }); // no otherApps
     const uploads = [];
     const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     assert.strictEqual(uploads.length, 1);
     assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE); a single-app env has no other app to share with');
+    // The cost of knowing there is no draft app: ONE small read of the list of apps that were never published, and no sitemap — saved or published — of any other app.
+    // The scan is taken three times when the build writes a page in place (before any write, right before the first one, and after the last: the
+    // others are the build's own guard against another maker taking a page in while it runs), so that is three such reads in all.
+    assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL, APPS_LIST_URL, APPS_LIST_URL], 'one request per scan, three scans');
+    assert.strictEqual(savedLayerReads(calls).length, 0);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// An app saved in the maker and never published has no row in the published app list, so the scan read nothing of it: a page it holds was updated without a halt, and the draft
+// then showed a rewritten page when its maker published it. The scan lists such apps (one request) and reads their saved sitemap from the saved-layer read.
+// The shared-page scan's own reads through the client (the build makes others — entity definitions, say): the list of never-published apps, and the sitemaps' saved layer.
+const scanReads = (calls) => find(calls, 'dataverse.get').map((c) => c.args[0]).filter((url) => url.startsWith('/appmodules/') || url.startsWith('/sitemaps/'));
+const APPS_LIST_URL = '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,uniquename,componentstate';
+const stageUpdate = () => {
+  const spec = overviewSpec();
+  const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+  const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+  const uploads = [];
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+  return { spec, appUnique: appUniqueName(spec), appDir: stagePages(spec.pages), sitemapWithO, existing, uploads, genpageCli };
+};
+const runPagesUpdate = (s, sdk, extra = {}) => runSdkBuild(s.spec, { sdk, apply: true, env: 'https://x', appDir: s.appDir, genpageCli: s.genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], ...extra });
+
+test('pages: a page shared with a NEVER-PUBLISHED app\'s saved navigation HALTS pages-shared-across-apps and names where it is saved', async () => {
+  const s = stageUpdate();
+  try {
+    // The only other app has never been published: the published list has no row for it. The published scan alone read this environment as having no other app.
+    for (const allowDestructive of [false, true]) {
+      const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ uniquename: 'contoso_draftapp', appmoduleid: OTHER_APP_ID, savedSitemapXml: s.sitemapWithO }] });
+      await assert.rejects(
+        runPagesUpdate(s, sdk, { allowDestructive }),
+        (e) => {
+          assert.strictEqual(e.phase, 'pages');
+          assert.strictEqual(e.code, 'pages-shared-across-apps');
+          assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_draftapp \\[saved, not published\\]\\)`));
+          assert.ok(e.message.includes(detachCommand('https://x', OTHER_APP_ID, GP_O)), 'the id of a never-published app comes from the list of such apps');
+          return true;
+        },
+        `allowDestructive=${allowDestructive}: cross-app mutation has no escape`
+      );
+      assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL, SAVED_URL], 'the list of apps, then the one saved-layer read');
+    }
+    assert.deepStrictEqual(s.uploads, [], 'the shared page was never uploaded');
+    // Control: the same environment whose draft app holds some other page passes, and the page is updated.
+    const other = '<SiteMap><Area><Group><SubArea GenPageId="00000000-0000-4000-8000-0000000000aa" Title="Other"/></Group></Area></SiteMap>';
+    const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ uniquename: 'contoso_draftapp', savedSitemapXml: other }] });
+    await runPagesUpdate(s, sdk);
+    assert.strictEqual(s.uploads.length, 1);
+    assert.strictEqual(s.uploads[0].pageId, GP_O);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: the list of never-published apps that cannot be read HALTS pages-shared-check-failed, in a single-app environment too', async () => {
+  const s = stageUpdate();
+  try {
+    const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftAppsError: true });
+    await assert.rejects(
+      runPagesUpdate(s, sdk),
+      (e) => {
+        assert.strictEqual(e.phase, 'pages');
+        assert.strictEqual(e.code, 'pages-shared-check-failed');
+        assert.match(e.message, /could not scan the environment[\s\S]*could not list the apps that have never been published/);
+        return true;
+      }
+    );
+    assert.deepStrictEqual(s.uploads, [], 'nothing was uploaded while it could not be told whether a draft app holds the page');
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// An app saved in the maker with nothing but a name has no sitemap component, and no sitemap of its name: it has no navigation and holds no page. A read that SUCCEEDS and finds no component,
+// with no sitemap of the app's name in the saved layer, shows that, and one such app must not stop every page update in the environment; a read that FAILS proves nothing and still halts
+// (the next test, and the unit tests of fetchAppsForPages).
+test('pages: a never-published app with no sitemap component and no sitemap of its name holds no page, so the update goes ahead — for the list of apps and one saved-layer read per scan', async () => {
+  const s = stageUpdate();
+  try {
+    // Another app's sitemap that names the page is nothing to do with it: no row carries this app's name.
+    const bare = { uniquename: 'contoso_bareapp', savedRows: [], noSitemapComponent: true };
+    const alone = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [bare] });
+    await runPagesUpdate(s, alone.sdk);
+    assert.strictEqual(s.uploads.length, 1);
+    assert.strictEqual(s.uploads[0].pageId, GP_O, 'the page is updated in place');
+    assert.deepStrictEqual(scanReads(alone.calls), [APPS_LIST_URL, SAVED_URL, APPS_LIST_URL, SAVED_URL, APPS_LIST_URL, SAVED_URL],
+      'the saved layer is read once per scan, which is how the app is shown to have no sitemap (three scans: the build writes a page in place)');
+    // Beside a draft app that does hold the page the build still halts, and names only that app.
+    s.uploads.length = 0;
+    const mixed = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [bare, { uniquename: 'contoso_draftapp', savedSitemapXml: s.sitemapWithO }] });
+    await assert.rejects(
+      runPagesUpdate(s, mixed.sdk),
+      (e) => e.code === 'pages-shared-across-apps' && new RegExp(`${GP_O} \\(also in contoso_draftapp \\[saved, not published\\]\\)`).test(e.message) && !/contoso_bareapp/.test(e.message)
+    );
+    assert.deepStrictEqual(s.uploads, []);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// The SDK links an app to its sitemap by the sitemap's unique name, whatever its component rows say, so an app whose layer has no sitemap component can still hold a sitemap — and
+// the page in it. The scan finds it through the saved-layer read it makes anyway, and the update halts like any other shared page.
+test('pages: a never-published app with no sitemap component whose sitemap is linked to it by name HALTS the update, naming the app — a sitemap of another name does not', async () => {
+  const s = stageUpdate();
+  try {
+    const linked = { uniquename: 'contoso_linkedapp', savedSitemapXml: s.sitemapWithO, noSitemapComponent: true };
+    const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [linked] });
+    await assert.rejects(
+      runPagesUpdate(s, sdk),
+      (e) => e.phase === 'pages' && e.code === 'pages-shared-across-apps' && new RegExp(`${GP_O} \\(also in contoso_linkedapp \\[saved, not published\\]\\)`).test(e.message)
+    );
+    assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL, SAVED_URL], 'no request beyond the ones a draft app costs anyway');
+    assert.deepStrictEqual(s.uploads, [], 'the shared page was never uploaded');
+    // Control: the same sitemap under another app's name is not this app's, so the update goes ahead.
+    const { sdk: other } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ ...linked, sitemapName: 'contoso_someoneelse' }] });
+    await runPagesUpdate(s, other);
+    assert.strictEqual(s.uploads.length, 1);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a never-published app whose navigation cannot be read HALTS pages-shared-check-failed and names it', async () => {
+  const s = stageUpdate();
+  try {
+    const cases = {
+      'its sitemap component read fails': { uniquename: 'contoso_draftapp', savedSitemapXml: s.sitemapWithO, componentReadFails: true },
+      'its saved row did not come back': { uniquename: 'contoso_draftapp', savedRows: [] },
+      'its saved XML is cut short': { uniquename: 'contoso_draftapp', savedRows: [{ sitemapxml: '<SiteMap><Area', componentstate: 1 }] },
+    };
+    for (const [what, draft] of Object.entries(cases)) {
+      const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [draft] });
+      await assert.rejects(
+        runPagesUpdate(s, sdk),
+        (e) => {
+          assert.strictEqual(e.code, 'pages-shared-check-failed', what);
+          assert.match(e.message, /1 app\(s\) had an unreadable sitemap \(contoso_draftapp\)/, what);
+          return true;
+        },
+        what
+      );
+    }
+    assert.deepStrictEqual(s.uploads, []);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
 });
 
 test('a by-value publish failure reaches the warn channel through the whole build', async () => {
@@ -5784,7 +8475,7 @@ test('form topology: a span already at the authored value is not rewritten', asy
     'an absent colspan already MEANS 1, so declaring 1 must not produce a write');
 });
 
-// --- #N2: widening a field on a DEPLOYED form must re-pack its row -------------------------------
+// --- widening a field on a DEPLOYED form must re-pack its row -------------------------------
 // LIVE-REPRODUCED: widening an existing field left three columns of content in a two-column row.
 // The span was patched in place, but the packing that the create path applies (`rowsFromCells`)
 // never re-ran, so the row kept both its original cells and the newly widened one.
@@ -6012,7 +8703,7 @@ test('form topology: after a narrowing move, a second apply of the same spec cha
   assert.deepStrictEqual(warnings.filter((w) => /spanned/.test(w)), []);
 });
 
-// --- F2: a span CLAMPED to 1 is still an explicit claim -----------------------------------------
+// --- a span CLAMPED to 1 is still an explicit claim -----------------------------------------
 // The clamp branch dropped the attribute when it reduced a span to 1, on the reasoning that "1 is
 // the default". That recreates exactly the omission/value ambiguity the explicit-1 fix removed one
 // layer up: reconcile reads the missing value as "no opinion" and LEAVES AN EXISTING WIDE CELL
@@ -6040,7 +8731,7 @@ test('form topology: a clamped span is an EXPLICIT 1 and shrinks an existing wid
     'a colspan of 4 in a 1-column section clamps to 1, and that 1 must REACH the deployed cell');
 });
 
-// --- F3: shrinking the GRID must repack the rows it now overflows -------------------------------
+// --- shrinking the GRID must repack the rows it now overflows -------------------------------
 // The repack fires when a CELL span changes. A section whose width shrinks overflows without any
 // cell changing: three unit-width cells sit legally in a 4-column row and illegally in a 1-column
 // one. Live-reproduced: occupancy 3 in width 1, on both applies.
@@ -7285,4 +9976,149 @@ test('form topology: an authored section named like a sub-grid host never takes 
   await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
   assert.deepStrictEqual(sectionMoves(calls), [], 'the host stays where it is');
   assert.deepStrictEqual(sectionAdds(calls).map((c) => c.args[3].name), ['section_grid_new_ticket'], 'the authored section is created');
+});
+
+// --- --preview-push (build-model-app.js): the dry run hands lib/push-preview.js the artifacts its live probe found ---
+const PUSH_PREVIEW_PATH = require.resolve('../lib/push-preview.js');
+// Stands a fake runPushPreview in for the real one for the length of `fn`; the dry run requires the module lazily, so
+// it gets these exports. The real previewItemsFromPlan stays: the items the build makes are the ones it would send.
+async function withPushPreviewStub(runPushPreview, fn) {
+  require('../lib/push-preview.js');
+  const mod = require.cache[PUSH_PREVIEW_PATH];
+  const real = mod.exports;
+  mod.exports = { ...real, runPushPreview };
+  try { return await fn(); } finally { mod.exports = real; }
+}
+const PREVIEW_FORM_ID = '7a1c0de0-0000-4000-8000-0000000000f1';
+const PREVIEW_VIEW_ID = '7a1c0de0-0000-4000-8000-0000000000f2';
+// A live environment where both tables, the main form "Customer" and the view "Active Tickets" exist; the form read
+// answers `formid`, the view lookup its id.
+function previewEnvironment(formid = PREVIEW_FORM_ID.toUpperCase(), savedqueryid = PREVIEW_VIEW_ID.toUpperCase()) {
+  const { sdk } = mockSdk({ existingTables: {
+    new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'] },
+    new_ticket: { entitySetName: 'new_tickets', columns: ['new_subject', 'new_priority', 'new_customerid'] },
+  } });
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (e, o) => (e === 'systemform' ? [{ formid, objecttypecode: 'new_customer', type: 2, name: 'Customer' }] : query(e, o));
+  // A view's probe is the build's own lookup (findArtifact), which answers the view's id.
+  const find = sdk.findArtifact;
+  sdk.findArtifact = async (type, q) => (type === 'view' && q && q.name === 'Active Tickets' ? savedqueryid : (find ? find(type, q) : null));
+  return sdk;
+}
+const PREVIEW_OPTS = { apply: false, emit: () => {}, previewPush: true, env: 'https://contoso.crm.dynamics.com', httpClient: { get: async () => ({}) } };
+
+test('--preview-push: a dry run previews a reused view by the id its live probe read WITH the build\'s reconcile, and lists a reused form as not evaluated', async () => {
+  const sdk = previewEnvironment();
+  const seen = [];
+  const answer = { ok: true, previews: [], notPrepared: [], requiresSchema: [], notEvaluated: [], allEvaluated: true, summary: {}, writeAttempts: 0, disclaimer: 'x' };
+  const r = await withPushPreviewStub(async (o) => { seen.push(o); return answer; }, () => runSdkBuild(makeSpec(), { sdk, ...PREVIEW_OPTS }));
+  assert.strictEqual(seen.length, 1, 'the preview ran once');
+  const view = seen[0].items.find((i) => i.type === 'view');
+  assert.ok(view, JSON.stringify(seen[0].items));
+  assert.strictEqual(view.id, PREVIEW_VIEW_ID, 'the id the probe read, in lower case');
+  assert.strictEqual(view.key, 'view:new_ticket:Active Tickets');
+  assert.deepStrictEqual(view.liveEdits({ columns: [{ name: 'new_subject', width: 150, order: 0 }] }),
+    [{ op: 'update', pointer: '/columns', value: [{ name: 'new_subject', width: 150, order: 0 }, { name: 'new_priority', width: 100, order: 1 }] }],
+    'the column the build would add, over the fetched copy');
+  // An existing form is reconciled only while the build runs, so it has no typed change: never its unedited live copy.
+  const form = seen[0].items.find((i) => /^form:/.test(i.key));
+  assert.deepStrictEqual(form, { key: form.key, notEvaluated: 'noTypedTarget' });
+  assert.ok(!seen[0].items.some((i) => i.type === 'form' || i.type === 'app'), JSON.stringify(seen[0].items));
+  assert.strictEqual(seen[0].env, PREVIEW_OPTS.env);
+  assert.strictEqual(seen[0].httpClient, PREVIEW_OPTS.httpClient, 'the client the CLI hands over (wrapped read-only there and again in the helper)');
+  assert.strictEqual(seen[0].solutionUniqueName, 'ContosoSD');
+  // Nothing is made up: what has no typed target is listed by its reason, never as an item to preview.
+  assert.ok(seen[0].items.every((i) => i.type || i.notEvaluated || i.requiresSchema), JSON.stringify(seen[0].items));
+  assert.ok(seen[0].items.some((i) => i.notEvaluated === 'noTypedTarget'), 'a plan step with no typed target is reported, not dropped');
+  assert.strictEqual(new Set(seen[0].items.map((i) => i.key)).size, seen[0].items.length, 'every key is unique');
+  assert.strictEqual(r.dryRun, true);
+  assert.strictEqual(r.pushPreview, answer, 'the result carries the preview');
+  assert.ok(r.planItems.every((p) => !('liveId' in p)), 'the plan items keep the fields they had');
+});
+
+test('--preview-push: a probe answer that is not a GUID names nothing — the reused view is not evaluated', async () => {
+  const seen = [];
+  await withPushPreviewStub(async (o) => { seen.push(o); return { ok: true }; }, () => runSdkBuild(makeSpec(), { sdk: previewEnvironment(undefined, 'view-existing'), ...PREVIEW_OPTS }));
+  const view = seen[0].items.find((i) => /^view:/.test(i.key));
+  assert.deepStrictEqual(view, { key: view.key, notEvaluated: 'noTypedTarget' });
+});
+
+test('--preview-push: a preview that fails is reported by its code and HTTP status, and the dry run stands', async () => {
+  const SENTINEL = 'SENTINEL-record-value-7f3a';
+  const r = await withPushPreviewStub(async () => {
+    throw Object.assign(new Error(`HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.2/systemforms: ${SENTINEL}`), { statusCode: 403 });
+  }, () => runSdkBuild(makeSpec(), { sdk: previewEnvironment(), ...PREVIEW_OPTS }));
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.dryRun, true);
+  assert.strictEqual(r.pushPreview.ok, false);
+  assert.strictEqual(r.pushPreview.allEvaluated, false);
+  assert.strictEqual(r.pushPreview.error.statusCode, 403);
+  assert.ok(r.pushPreview.error.code, JSON.stringify(r.pushPreview.error));
+  assert.ok(!JSON.stringify(r).includes(SENTINEL), 'the service\'s words are not carried');
+});
+
+test('--preview-push: without the flag, or on a plan with no live probe, the preview is never loaded and the result has no preview', async () => {
+  for (const opts of [{ apply: false, emit: () => {} }, { ...PREVIEW_OPTS, livePlan: false }]) {
+    delete require.cache[PUSH_PREVIEW_PATH];
+    const r = await runSdkBuild(makeSpec(), { sdk: previewEnvironment(), ...opts });
+    assert.strictEqual(r.dryRun, true);
+    assert.ok(!('pushPreview' in r), JSON.stringify(Object.keys(r)));
+    assert.ok(!(PUSH_PREVIEW_PATH in require.cache), 'lib/push-preview.js was not required');
+  }
+});
+
+test('--preview-push: the target of each plan item — a reused view with the build\'s reconcile edits, a created chart by its definition, nothing else', () => {
+  const { previewTargetOf } = require('../lib/sdk-build.js');
+  const spec = makeSpec();
+  const id = PREVIEW_FORM_ID;
+  const viewKey = { kind: 'view', entity: 'new_ticket', name: 'Active Tickets' };
+  const view = previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, spec);
+  assert.deepStrictEqual(Object.keys(view).sort(), ['id', 'liveEdits', 'type']);
+  assert.strictEqual(view.type, 'view');
+  assert.strictEqual(view.id, id);
+  // The same edits the apply makes (reconcileView): the fetched columns verbatim plus the spec's missing ones; the
+  // description only when the spec sets one and it differs from the live text.
+  const live = { columns: [{ name: 'new_subject', width: 120, order: 0 }, { name: 'new_priority', width: 80, order: 1 }], description: 'Theirs' };
+  assert.deepStrictEqual(view.liveEdits(live), [{ op: 'update', pointer: '/columns', value: live.columns }], 'nothing to add: the copy stays equal to its snapshot');
+  const described = makeSpec();
+  described.views[0].description = 'Open work';
+  described.views[0].columns.push('New_CustomerId');
+  assert.deepStrictEqual(previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, described).liveEdits(live), [
+    { op: 'update', pointer: '/columns', value: [...live.columns, { name: 'new_customerid', width: 100, order: 2 }] },
+    { op: 'update', pointer: '/description', value: 'Open work' },
+  ]);
+  assert.deepStrictEqual(previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, described).liveEdits({ ...live, description: 'Open work' }).map((e) => e.pointer), ['/columns']);
+  // An existing form, chart, app or command bar: the build makes its change only while it runs (or, for a chart, never
+  // pushes it), so there is no typed target — never its live copy alone, which would preview as an unedited noChange.
+  for (const kind of ['form', 'chart', 'app', 'command', 'dashboard', 'businessRule', 'bpf', 'fieldSecurityProfile']) {
+    assert.strictEqual(previewTargetOf({ key: { kind, entity: 'new_ticket', name: 'By Priority' }, state: 'reuse', liveId: id }, spec), null, kind);
+  }
+  assert.strictEqual(previewTargetOf({ key: viewKey, state: 'reuse' }, spec), null, 'view: no live id, no target');
+  assert.strictEqual(previewTargetOf({ key: { ...viewKey, name: 'Not in the spec' }, state: 'reuse', liveId: id }, spec), null, 'no spec view, no edits to state');
+  assert.deepStrictEqual(previewTargetOf({ key: { kind: 'chart', entity: 'new_ticket', name: 'By Priority' }, state: 'create' }, spec),
+    { type: 'chart', create: chartDef(spec, spec.charts[0]) });
+  for (const item of [
+    { key: viewKey, state: 'create' },
+    { key: { kind: 'form', entity: 'new_customer', name: 'Customer' }, state: 'create' },
+    { key: viewKey, state: 'unknown', liveId: id },
+    { key: { kind: 'environmentVariable', name: 'x' }, state: 'reuse', liveId: id },
+    { key: { kind: 'table', entity: 'new_ticket' }, state: 'reuse', liveId: id },
+  ]) assert.strictEqual(previewTargetOf(item, spec), null, JSON.stringify(item));
+});
+
+test('--preview-push: repeated plan keys are made unique without taking a key another plan step carries, in either order', () => {
+  const { previewItemsForPlan } = require('../lib/sdk-build.js');
+  const { previewItemsFromPlan, validatePreviewItems } = require('../lib/push-preview.js');
+  const spec = makeSpec();
+  const form = (name) => ({ key: { kind: 'form', entity: 'new_customer', name }, state: 'reuse', liveId: PREVIEW_FORM_ID });
+  for (const [names, keys] of [
+    [['Customer', 'Customer'], ['Customer', 'Customer#2']],
+    [['Customer', 'Customer', 'Customer#2'], ['Customer', 'Customer#3', 'Customer#2']],
+    [['Customer#2', 'Customer', 'Customer'], ['Customer#2', 'Customer', 'Customer#3']],
+    [['Customer', 'Customer#2', 'Customer', 'Customer'], ['Customer', 'Customer#2', 'Customer#3', 'Customer#4']],
+  ]) {
+    const items = previewItemsForPlan(names.map(form), spec, previewItemsFromPlan);
+    assert.deepStrictEqual(items.map((i) => i.key), keys.map((k) => `form:new_customer:${k}`), names.join(', '));
+    assert.deepStrictEqual(validatePreviewItems(items).errors, [], 'the preview accepts the input');
+  }
 });

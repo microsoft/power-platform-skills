@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { spawnSync } = require('child_process');
 const path = require('path');
 
@@ -13,6 +14,17 @@ const VALIDATOR_PATH = path.join(
   'audit-permissions',
   'scripts',
   'validate-audit.js'
+);
+const ENABLED_TEST_TELEMETRY = {
+  disabled: false,
+  event_stream_name: 'PagesAIPluginEvent',
+  instrumentationKey: 'test-key',
+  collector_url: 'https://example.invalid/OneCollector/1.0/',
+};
+const TELEMETRY_SCRIPT_PATH = path.join(
+  __dirname,
+  '..',
+  'emit-audit-permissions-telemetry.js'
 );
 
 function validFindings() {
@@ -195,4 +207,156 @@ test('hook mode never blocks, even with an invalid earlier report', (t) => {
   const outcome = runHook(projectRoot);
   assert.equal(outcome.status, 0, outcome.stderr);
   assert.equal(outcome.stderr, '');
+});
+
+test('validated report and source data record successful lifecycle completion together', (t) => {
+  const projectRoot = createTempProject(t);
+  const configDir = path.join(projectRoot, '.telemetry-test');
+  const ikeyPath = writeProjectFile(
+    projectRoot,
+    '.telemetry-test/ikey.json',
+    JSON.stringify(ENABLED_TEST_TELEMETRY)
+  );
+  const env = {
+    ...process.env,
+    PATH: '',
+    POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+    POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+    // Enabled config so run state is created, but opted out so nothing is POSTed.
+    POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: '1',
+  };
+  const started = spawnSync(process.execPath, [TELEMETRY_SCRIPT_PATH, '--action', 'start'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(started.status, 0, started.stderr);
+  const auditRunId = JSON.parse(started.stdout).auditRunId;
+
+  const findings = validFindings();
+  const scorecard = validScorecard();
+  const reportPath = writeReport(projectRoot, { findings, scorecard });
+  const dataPath = writeProjectFile(
+    projectRoot,
+    'audit-data.json',
+    JSON.stringify({
+      FINDINGS_DATA: findings,
+      SCORECARD_DATA: scorecard,
+    })
+  );
+  const outcome = spawnSync(process.execPath, [
+    VALIDATOR_PATH,
+    '--report', reportPath,
+    '--data', dataPath,
+    '--auditRunId', auditRunId,
+  ], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(outcome.status, 0, outcome.stderr);
+  const result = JSON.parse(outcome.stdout);
+  assert.equal(result.valid, true);
+  assert.equal(result.telemetryStatus, 'recorded_success');
+  assert.ok(fs.existsSync(path.join(
+    configDir,
+    'telemetry',
+    'power-pages',
+    'audit-runs',
+    `${auditRunId}.completed`
+  )));
+});
+
+test('valid report with unreconcilable source data is recorded as a failed run', (t) => {
+  const projectRoot = createTempProject(t);
+  const configDir = path.join(projectRoot, '.telemetry-test');
+  const ikeyPath = writeProjectFile(
+    projectRoot,
+    '.telemetry-test/ikey.json',
+    JSON.stringify(ENABLED_TEST_TELEMETRY)
+  );
+  const env = {
+    ...process.env,
+    PATH: '',
+    POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+    POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+    // Enabled config so run state is created, but opted out so nothing is POSTed.
+    POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: '1',
+  };
+  const started = spawnSync(process.execPath, [TELEMETRY_SCRIPT_PATH, '--action', 'start'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(started.status, 0, started.stderr);
+  const auditRunId = JSON.parse(started.stdout).auditRunId;
+
+  const reportPath = writeReport(projectRoot);
+  // The data file no longer matches the rendered report (one finding dropped).
+  const dataPath = writeProjectFile(
+    projectRoot,
+    'audit-data.json',
+    JSON.stringify({ FINDINGS_DATA: validFindings().slice(0, 1), SCORECARD_DATA: null })
+  );
+  const outcome = spawnSync(process.execPath, [
+    VALIDATOR_PATH,
+    '--report', reportPath,
+    '--data', dataPath,
+    '--auditRunId', auditRunId,
+  ], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(outcome.status, 0, outcome.stderr);
+  const result = JSON.parse(outcome.stdout);
+  assert.equal(result.valid, true, 'the report itself remains valid');
+  assert.equal(result.telemetryStatus, 'recorded_failure');
+});
+
+test('a telemetry module that cannot load never breaks report validation or the hook', (t) => {
+  const projectRoot = createTempProject(t);
+  // Preload that makes loading the telemetry emitter throw, standing in for any
+  // load failure (missing file, syntax error, partial install).
+  const preload = writeProjectFile(
+    projectRoot,
+    'break-telemetry.js',
+    "const Module = require('module');\n" +
+      'const load = Module._load;\n' +
+      'Module._load = function (request, ...rest) {\n' +
+      "  if (/emit-audit-permissions-telemetry/.test(request)) throw new Error('simulated load failure');\n" +
+      '  return load.call(this, request, ...rest);\n' +
+      '};\n'
+  );
+  const run = (args, input) => spawnSync(process.execPath, ['--require', preload, VALIDATOR_PATH, ...args], {
+    input,
+    encoding: 'utf8',
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: '1' },
+  });
+
+  const findings = validFindings();
+  const scorecard = validScorecard();
+  const reportPath = writeReport(projectRoot, { findings, scorecard });
+
+  // Report-only validation must not even load telemetry.
+  let outcome = run(['--report', reportPath]);
+  assert.equal(outcome.status, 0, outcome.stderr);
+  assert.equal(JSON.parse(outcome.stdout).telemetryStatus, 'not_requested');
+
+  // The PostToolUse(Skill) hook must still approve.
+  outcome = run([], JSON.stringify({ cwd: projectRoot }));
+  assert.equal(outcome.status, 0, outcome.stderr);
+  assert.equal(outcome.stderr, '');
+
+  // When telemetry is requested, the load failure is contained and reported.
+  const dataPath = writeProjectFile(
+    projectRoot,
+    'audit-data.json',
+    JSON.stringify({ FINDINGS_DATA: findings, SCORECARD_DATA: scorecard })
+  );
+  outcome = run([
+    '--report', reportPath,
+    '--data', dataPath,
+    '--auditRunId', '11111111-1111-4111-8111-111111111111',
+  ]);
+  assert.equal(outcome.status, 0, outcome.stderr);
+  const result = JSON.parse(outcome.stdout);
+  assert.equal(result.valid, true, 'the report stays valid when telemetry cannot load');
+  assert.equal(result.telemetryStatus, 'failed');
 });

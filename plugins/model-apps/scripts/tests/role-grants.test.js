@@ -13,7 +13,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { validateAppSpec } = require('../lib/app-spec.js');
-const { planFor, runSdkBuild, roleGrantLabel, resolveRoleGrantTarget } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { planFor, runSdkBuild: runSdkBuildInPlace, roleGrantLabel, resolveRoleGrantTarget } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 
 function base() {
   return {
@@ -75,6 +78,31 @@ test('roleGrants: role and roleId together are rejected — they can disagree', 
 test('roleGrants: roleId must be a GUID', () => {
   const errs = errorsFor((s) => { s.roleGrants = [{ roleId: 'Project Manager', privileges: [{ entity: 'contoso_order', access: ['read'] }] }]; });
   assert.ok(errs.some((e) => /roleId must be a GUID/.test(e)), JSON.stringify(errs));
+});
+
+// Which role an entry names is decided by one function, which the design document asks too (lib/app-access.js roleGrantRefusals): the gate
+// reports exactly its words for each way an entry can fail to name one role, and nothing else about the entry's identity.
+test('roleGrants: the identity check is one shared function, and the gate reports exactly its words', () => {
+  const { roleGrantIdentityErrors, roleGrantEntryLabel } = require('../lib/app-spec.js');
+  const privileges = [{ entity: 'contoso_order', access: ['read'] }];
+  const cases = [
+    [{ role: 'Contoso PM - Project Manager', roleId: '11111111-1111-1111-1111-111111111111', privileges }, 1],
+    [{ privileges }, 1],
+    [{ role: '   ', privileges }, 1],
+    [{ roleId: 'Project Manager', privileges }, 1],
+    [{ role: 5, roleId: 'x', privileges }, 3],
+    [{ role: 'Contoso PM - Project Manager', privileges }, 0],
+    [{ roleId: '11111111-1111-1111-1111-111111111111', privileges }, 0],
+  ];
+  for (const [entry, count] of cases) {
+    const identity = roleGrantIdentityErrors(entry, roleGrantEntryLabel(entry, 0));
+    assert.strictEqual(identity.length, count, JSON.stringify({ entry, identity }));
+    const s = base();
+    s.roleGrants = [entry];
+    const gate = validateAppSpec(s, { profile: 'plan' }).errors;
+    for (const message of identity) assert.ok(gate.includes(message), JSON.stringify({ message, gate }));
+    assert.deepStrictEqual(gate.filter((e) => /not both|name the existing role to extend|role must be the non-empty display name|roleId must be a GUID/.test(e)), identity);
+  }
 });
 
 test('roleGrants: a blank role name is rejected rather than trimmed to nothing', () => {
@@ -203,6 +231,20 @@ test('resolveRoleGrantTarget: no match and an ambiguous match are both errors', 
   );
 });
 
+test('resolveRoleGrantTarget: a role the server repeats is still one role, and an answer that says more exist refuses', async () => {
+  const bu = { businessunit: () => [{ businessunitid: '44444444-4444-4444-4444-444444444444' }] };
+  // A paginating server can hand back the same row twice: that is one role, not two that share a name.
+  const t = await resolveRoleGrantTarget(fakeProvision({ ...bu, role: () => [roleRow(), roleRow()] }), grant(), {});
+  assert.strictEqual(t.roleId, '33333333-3333-3333-3333-333333333333');
+  // The SDK marks a page that is not every match with a non-enumerable `hasMore`: one row of an incomplete answer
+  // does not prove "exactly one".
+  const partial = [roleRow()];
+  Object.defineProperty(partial, 'hasMore', { value: true, enumerable: false });
+  await assert.rejects(
+    () => resolveRoleGrantTarget(fakeProvision({ ...bu, role: () => partial }), grant(), {}),
+    /the role lookup was incomplete/,
+  );
+});
 test('resolveRoleGrantTarget: a stale pinned roleId is an error, never a create trigger', async () => {
   const p = fakeProvision({ role: () => [] });
   await assert.rejects(

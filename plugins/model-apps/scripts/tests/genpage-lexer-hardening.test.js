@@ -9,6 +9,9 @@ const { performance } = require('node:perf_hooks');
 const { blankNonCodePreservingTemplateExpressions, hasDefaultExport } = require(path.join(__dirname, '..', 'lib', 'source-literals.js'));
 const { pageStructureProblems } = require(path.join(__dirname, '..', 'lib', 'page-structure.js'));
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, navigationFrontier, resolvePageRefs, strayPageRefs } = require(path.join(__dirname, '..', 'lib', 'pageref-resolver.js'));
+// These tests hold the lexer to its own rules — what it reads for certain, what it reports as a guess, and what a guess costs a page — so they read pages with
+// the lexer alone. Where the lexer guesses, the gates ask the TypeScript parser (typescript-views.js), which parser-check.test.js tests.
+require(path.join(__dirname, '..', 'lib', 'typescript-views.js')).setParserCheck(false);
 const { OBJECT_DIVISION_PAGE_RUNNABLE, MISREAD_PAGES, runnable } = require('./helpers/misread-page.js');
 
 function runNavigationSnippet(code) {
@@ -463,6 +466,11 @@ test('execution oracle: a rewrite changes only the calls JavaScript makes with a
     ['computed optional member', `Xrm.Navigation?.["navigateTo"]?.(${obj})`, true, true],
     ['computed escaped member', `Xrm.Navigation["navigate\\u0054o"](${obj})`, true, true],
     ['computed optional member, parenthesised argument', `Xrm.Navigation?.['navigateTo']?.((${obj}))`, true, true],
+    // After `return` an expression starts on the same line, so the parenthesised callee is the call; after a line break the statement is `return;`, and the call after it never runs.
+    // `await` is a keyword only in an async function, which the lexer cannot tell: the call is made there and left alone here, and the token is reported.
+    ['return, parenthesised callee', `function f() { return (navigateTo)(${obj}); } f();`, true, true],
+    ['return, a line break, parenthesised callee', `function f() { return\n(navigateTo)(${obj}); } f();`, false, false],
+    ['await in an async function, parenthesised callee', `async function f() { await (navigateTo)(${obj}); } f();`, true, false],
   ];
   for (const term of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
     // The key is `pageType` once the continuation is read; the value is "PAGEREF_detail", but spelled across the line

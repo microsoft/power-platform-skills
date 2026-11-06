@@ -55,4 +55,83 @@ function azTimeoutAdvice(command, ms = azTimeoutMs()) {
     + `${AZ_TIMEOUT_ENV}=${longer}.`;
 }
 
-module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice };
+// One argument of a command that a message tells the user — or the agent driving the skill — to paste, written so that pasting the command hands the
+// program it runs (`node`) exactly this value, as ONE argument, in the shells the skill's own commands are written for: PowerShell (Windows PowerShell 5.1
+// and PowerShell 7) and the POSIX shells (sh, bash, zsh). The skill's instructions quote arguments in single quotes ('<working-dir>/<file>.tsx'); cmd.exe,
+// which reads no single quotes, is not one of them.
+//   letters and digits of any script, and `_ . / : -`      written bare: no shell reads anything in them
+//   (not a leading `-`)
+//   anything else                                        single-quoted: inside '…' neither PowerShell nor a POSIX shell expands, substitutes or splits
+//                                                        anything, so `;`, `$(…)`, backticks, `|`, `&`, globs, `\` and white space stay literal
+//   null — no spelling, so the caller writes a placeholder and names the value outside the command (commandArgOrPlaceholder) — for:
+//     a single quote, or one PowerShell reads as one     PowerShell doubles a quote, a POSIX shell closes and reopens one: no spelling is literal in both
+//     (‘ ’ ‚ ‛), a line break or another control
+//     character (a tab is fine)
+//     a double quote; white space with a `\` at the      Windows PowerShell does not hand a native program its arguments as they are: it joins them into one
+//     end; the empty value                               command line, wrapping a value that holds white space in double quotes and escaping nothing, so the
+//                                                        program drops a `"` ('x"y.tsx' arrives as xy.tsx) and reads the closing quote after a final `\` as
+//                                                        an escaped one ('C:\Dev User\' arrives as C:\Dev User"); an empty value is not passed at all.
+//                                                        PowerShell 7.3 and later pass all three as they are; Windows PowerShell 5.1 is still the one
+//                                                        Windows ships.
+//     exactly `--%`                                      PowerShell's stop-parsing token: both PowerShells take it for the token even quoted, and drop it
+// Measured on Windows PowerShell 5.1 and PowerShell 7.6 (tests/cli-failure.test.js runs every spelling through each shell it finds and reads node's argv).
+// See https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#passing-arguments-that-contain-quote-characters and
+// https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#the-stop-parsing-token.
+// A path can come from an untrusted checkout, so a value is written bare only when it is plain: a file named `x;rm -rf ~;.tsx`, written bare or in double
+// quotes, would run its second half when the advice is pasted.
+const BARE_ARG = /^(?!-)[\p{L}\p{N}_./:-]+$/u;
+const UNQUOTABLE = /['"\u2018\u2019\u201A\u201B\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
+function commandArg(value) {
+  const text = String(value);
+  if (BARE_ARG.test(text)) return text;
+  if (UNQUOTABLE.test(text) || text === '' || text === '--%' || (/\s/u.test(text) && text.endsWith('\\'))) return null;
+  return `'${text}'`;
+}
+
+// commandArg's spelling of `value`, or — when it has none — `placeholder` (`<file>`), with the sentence a message adds to name the value as data, never as part of
+// a command.
+function commandArgOrPlaceholder(value, placeholder) {
+  const arg = commandArg(value);
+  if (arg !== null) return { arg, note: '' };
+  return {
+    arg: placeholder,
+    note: `${placeholder} is ${JSON.stringify(String(value))}; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell.`,
+  };
+}
+
+// The `--authorize <approval>` flag a message tells the maker to paste, as ONE argument. An approval is built from a name the maker wrote (a view, a form, a rule,
+// a dashboard key), so it can hold white space — `adopt:view:contoso_item/Declared Items` — and an unquoted paste reaches the CLI as two arguments
+// (`adopt:view:contoso_item/Declared`, `Items`), which it rejects as an approval nothing declares.
+// A spelling is printed only when it reaches Windows PowerShell 5.1, PowerShell 7 and the POSIX shells as that one unchanged argument (measured in each):
+//   plain (letters, digits, `_ . / : -`)   written bare, exactly as before: `--authorize adopt:view:contoso_item/Items`
+//   white space and ordinary punctuation   double-quoted, the spelling the printed approvals already used for a form, a rule and a process flow:
+//                                          `--authorize "adopt:view:contoso_item/Declared Items"`
+//   a `$`, a backtick, `\`, `!` or a curly double quote, and no quote of any kind
+//                                          commandArg's single-quoted spelling, literal in all three: `--authorize 'adopt:view:contoso_item/cost $5'`
+//   anything else (a `"`; an apostrophe together with one of the characters above; a final `\`; a control character)
+//                                          no spelling is printed. The three shells quote these characters differently — Windows PowerShell 5.1 in particular joins
+//                                          its arguments into one command line and re-splits it, so a `"` followed by white space is cut in two whatever is written
+//                                          around it — and a spelling that is wrong in one of them hands the CLI a different, shortened key. The message gives the
+//                                          exact key as a JSON string and says to pass that key as ONE `--authorize` argument.
+//   a line break (`\n`, `\r`, U+2028, U+2029) or NUL (U+0000)
+//                                          cannot be given at all: the approval parser (build-model-app.js authorizationKeys) reads a name with `.`, which stops at a
+//                                          line break, and refuses NUL by name (no operating system passes NUL in a process argument), so it refuses such a key
+//                                          whatever the shell does; the message says so.
+// Double quotes rather than commandArg's single quotes keep the spelling already printed (and pinned) for forms, rules and process flows.
+const DOUBLE_QUOTE_UNSAFE = /["$`\\!\u201C\u201D\u201E\u201F\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
+const LINE_BREAK = /[\n\r\u2028\u2029]|\u0000/;
+function authorizeFlag(approval) {
+  const text = String(approval);
+  if (BARE_ARG.test(text)) return `--authorize ${text}`;
+  if (text !== '' && !DOUBLE_QUOTE_UNSAFE.test(text)) return `--authorize "${text}"`;
+  if (LINE_BREAK.test(text)) {
+    return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it holds ${text.includes('\u0000') ? 'a NUL character (U+0000), which no command-line argument can carry and' : 'a line break, which'} the build's approval reader does not accept in a name, so this approval cannot be given: rename the item so its name has none`;
+  }
+  // Windows PowerShell 5.1 wraps an argument that holds white space in double quotes itself, so a final `\` would escape that closing quote.
+  const single = text.endsWith('\\') ? null : commandArg(text);
+  if (single !== null) return `--authorize ${single}`;
+  return `--authorize <approval> — <approval> is exactly the JSON string ${JSON.stringify(text)} (decode its escapes); its characters are quoted differently by each shell, so pass that exact key as ONE --authorize argument, for example by asking the agent to run the build with it`;
+}
+
+module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice, commandArg,
+  commandArgOrPlaceholder, authorizeFlag };

@@ -1,0 +1,104 @@
+import * as React from "react";
+import * as ReactDOM from "react-dom";
+import { {{name}} } from "../{{name}}";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { mockContext, mockProperty } from "../test/pcf-context";
+
+interface FieldElementProps {
+    onChange: (next: string) => void;
+}
+
+function render(parameters: Partial<IInputs>, disabled = false) {
+    const control = new {{name}}();
+    const notify = jest.fn();
+    const context = mockContext<IInputs>(parameters, { disabled });
+    const container = document.createElement("div");
+
+    control.init(context, notify, {});
+    ReactDOM.render(control.updateView(context), container);
+
+    return {
+        control,
+        notify,
+        container,
+        context,
+        element: control.updateView(context) as React.ReactElement<FieldElementProps>,
+        input: () => container.querySelector("input") as HTMLInputElement,
+    };
+}
+
+function renderWithStrings(parameters: Partial<IInputs>) {
+    const rendered = render(parameters);
+    (rendered.context as ComponentFramework.Context<IInputs> & { resources: ComponentFramework.Resources }).resources = {
+        getResource: (_id: string, success: (data: string) => void) => success(""),
+        getString: (key: string) => key === "{{name}}_PermissionDenied"
+            ? "Localized permission denied"
+            : key,
+    } as ComponentFramework.Resources;
+    ReactDOM.render(rendered.control.updateView(rendered.context), rendered.container);
+    return rendered;
+}
+
+test("null raw value renders an empty field", () => {
+    const { input } = render({ sampleProperty: mockProperty<string>(null) as IInputs["sampleProperty"] });
+
+    expect(input().value).toBe("");
+});
+
+test("missing parameter object does not crash", () => {
+    const { input } = render({});
+
+    expect(input().value).toBe("");
+});
+
+test("disabled mode disables the input", () => {
+    const { input } = render({ sampleProperty: mockProperty("Existing") as IInputs["sampleProperty"] }, true);
+
+    expect(input().disabled).toBe(true);
+});
+
+test("non-editable security renders read-only", () => {
+    const { input } = render({
+        sampleProperty: mockProperty("Existing", undefined, { editable: false }) as IInputs["sampleProperty"],
+    });
+
+    expect(input().readOnly).toBe(true);
+});
+
+test("unreadable security hides the field value", () => {
+    const { container, input } = render({
+        sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
+    });
+
+    expect(input().hidden).toBe(true);
+    expect(container.textContent).not.toContain("Hidden");
+});
+
+test("unreadable security uses the localized permission string", () => {
+    const { container } = renderWithStrings({
+        sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
+    });
+
+    expect(container.textContent).toContain("Localized permission denied");
+});
+
+test("change notifies exactly once and getOutputs returns the edited value", () => {
+    const { control, element, notify } = render({ sampleProperty: mockProperty("Old") as IInputs["sampleProperty"] });
+
+    element.props.onChange("New");
+    element.props.onChange("New");
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(control.getOutputs()).toEqual({ sampleProperty: "New" });
+});
+
+test("two instances keep independent state and DOM", () => {
+    const first = render({ sampleProperty: mockProperty("First") as IInputs["sampleProperty"] });
+    const second = render({ sampleProperty: mockProperty("Second") as IInputs["sampleProperty"] });
+
+    first.element.props.onChange("Changed");
+
+    expect(first.control.getOutputs()).toEqual({ sampleProperty: "Changed" });
+    expect(second.control.getOutputs()).toEqual({ sampleProperty: "Second" });
+    expect(first.container.querySelector(".{{cssClass}}") === second.container.querySelector(".{{cssClass}}")).toBe(false);
+});

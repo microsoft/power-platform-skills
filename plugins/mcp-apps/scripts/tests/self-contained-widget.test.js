@@ -32,6 +32,15 @@ test('vendored runtime matches provenance and exposes the stable global', () => 
   assert.equal(digest, provenance.sha256);
   assert.equal(provenance.packages['@modelcontextprotocol/ext-apps'].version, '1.7.5');
   assert.equal(provenance.packages['@fluentui/tokens'].version, '1.0.0-alpha.22');
+  const lock = JSON.parse(fs.readFileSync(
+    path.join(pluginRoot, 'scripts', '_vendor-build', 'package-lock.json'), 'utf8',
+  ));
+  for (const packageName of ['@modelcontextprotocol/sdk', 'zod']) {
+    assert.equal(
+      provenance.packages[packageName].version,
+      lock.packages[`node_modules/${packageName}`].version,
+    );
+  }
   assert.match(runtime, /globalThis\.McpAppsRuntime/);
   assert.match(runtime, /Self-contained MCP Apps runtime third-party licenses/);
   for (const packageName of provenance.licensePackagesEmbeddedInArtifact) {
@@ -57,6 +66,7 @@ test('third-party license texts are committed for bundled packages', () => {
     'standard-schema-spec.txt',
     'swc-helpers.txt',
     'zod.txt',
+    'zod-to-json-schema.txt',
   ]) {
     const text = fs.readFileSync(path.join(licenseDir, file), 'utf8');
     assert.ok(text.length > 500, `${file} should contain the distributed license text`);

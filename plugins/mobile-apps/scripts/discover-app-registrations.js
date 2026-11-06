@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { execFileSync } = require('child_process');
+const { AzureCliLaunchError, runAzureCli } = require('./lib/azure-cli');
 const { sanitize } = require('./lib/sanitize-external-content');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -83,18 +83,19 @@ function parseArgs(argv) {
   return options;
 }
 
-function runAzJson(args, timeout = 30000, exec = execFileSync) {
+function runAzJson(args, timeout = 30000, exec = runAzureCli) {
   let stdout;
   try {
     // Graph application pages include permission manifests and can exceed Node's
     // 1 MiB default stdout buffer even when the request succeeds.
-    stdout = exec('az', args, {
+    stdout = exec(args, {
       encoding: 'utf8',
       maxBuffer: AZURE_CLI_MAX_BUFFER_BYTES,
       timeout,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
+    if (error instanceof AzureCliLaunchError) throw error;
     const detail = String(error.stderr || error.message || '').trim();
     throw new Error(`Azure CLI command failed${detail ? `: ${detail}` : '.'}`);
   }

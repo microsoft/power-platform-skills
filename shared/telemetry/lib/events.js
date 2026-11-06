@@ -114,12 +114,20 @@ function buildEvent(envelopeName, eventName, info, severity) {
 }
 
 function buildSkillStarted(envelopeName, input) {
+  return buildSkillEvent(envelopeName, "skill_started", input, "Info");
+}
+
+function buildSkillEvent(envelopeName, eventName, input, severity = "Info") {
   return buildEvent(
     envelopeName,
-    "skill_started",
+    eventName,
     pick(input, [...COMMON_FIELDS, ...SKILL_FIELDS]),
-    "Info"
+    severity
   );
+}
+
+function buildSkillConfigured(envelopeName, input) {
+  return buildSkillEvent(envelopeName, "skill_configured", input, "Info");
 }
 
 function buildSkillCompleted(envelopeName, input) {
@@ -134,6 +142,8 @@ function buildSkillCompleted(envelopeName, input) {
 
 module.exports = {
   buildSkillStarted,
+  buildSkillEvent,
+  buildSkillConfigured,
   buildSkillCompleted,
   FIELD_TYPES,
   pick,

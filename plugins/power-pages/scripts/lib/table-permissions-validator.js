@@ -1,6 +1,8 @@
 const path = require('path');
 const { TABLE_PERMISSION_FILE_SUFFIX, loadYamlRecordsWithErrors, listYamlFiles } = require('./powerpages-config');
+const { normalizeTablePermission } = require('./non-spa-metadata');
 const { addFinding, findUnexpectedKeys, findMissingKeys, summarize } = require('./powerpages-validation-utils');
+const { resolvePowerPagesSiteRoot } = require('./validation-helpers');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BOOLEAN_FIELDS = ['append', 'appendto', 'create', 'delete', 'read', 'write'];
@@ -32,6 +34,23 @@ const TABLE_PERMISSION_ALLOWED_KEYS = new Set([
   'scope',
   'write',
 ]);
+const TABLE_PERMISSION_SOURCE_ALLOWED_KEYS = new Set([
+  ...TABLE_PERMISSION_ALLOWED_KEYS,
+  'adx_accountrelationship',
+  'adx_append',
+  'adx_appendto',
+  'adx_contactrelationship',
+  'adx_create',
+  'adx_delete',
+  'adx_entitylogicalname',
+  'adx_entityname',
+  'adx_entitypermissionid',
+  'adx_parententitypermission',
+  'adx_parentrelationship',
+  'adx_read',
+  'adx_scope',
+  'adx_write',
+]);
 
 const TABLE_PERMISSION_REQUIRED_KEYS = new Set([
   'adx_entitypermission_webrole',
@@ -53,7 +72,8 @@ function validateTablePermissions(projectRoot, options = {}) {
 
 function validateTablePermissionsWithOptions(projectRoot, options = {}) {
   const findings = [];
-  const tablePermissionsDir = path.join(projectRoot, '.powerpages-site', 'table-permissions');
+  const siteRoot = resolvePowerPagesSiteRoot(projectRoot);
+  const tablePermissionsDir = siteRoot && path.join(siteRoot, 'table-permissions');
 
   for (const filePath of listYamlFiles(tablePermissionsDir)) {
     const fileName = path.basename(filePath);
@@ -65,7 +85,12 @@ function validateTablePermissionsWithOptions(projectRoot, options = {}) {
     }
   }
 
-  const { records: permissions, errors } = loadYamlRecordsWithErrors(tablePermissionsDir, TABLE_PERMISSION_FILE_SUFFIX);
+  const loaded = loadYamlRecordsWithErrors(tablePermissionsDir, TABLE_PERMISSION_FILE_SUFFIX);
+  const permissions = loaded.records.map(normalizeTablePermission);
+  const sourceByPermission = new Map(
+    permissions.map((permission, index) => [permission, loaded.records[index]])
+  );
+  const { errors } = loaded;
   for (const error of errors) {
     addFinding(findings, 'error', `Failed to parse table permission YAML: ${error.message}`, {
       filePath: error.filePath,
@@ -84,7 +109,10 @@ function validateTablePermissionsWithOptions(projectRoot, options = {}) {
     const entityName = typeof permission.entitylogicalname === 'string' ? permission.entitylogicalname.toLowerCase() : '';
     const scope = permission.scope;
 
-    const unexpectedKeys = findUnexpectedKeys(permission, TABLE_PERMISSION_ALLOWED_KEYS);
+    const unexpectedKeys = findUnexpectedKeys(
+      sourceByPermission.get(permission),
+      TABLE_PERMISSION_SOURCE_ALLOWED_KEYS
+    );
     if (unexpectedKeys.length > 0) {
       addFinding(findings, 'error', `Table permission contains unexpected schema keys: ${unexpectedKeys.join(', ')}.`, {
         filePath: permission.filePath,

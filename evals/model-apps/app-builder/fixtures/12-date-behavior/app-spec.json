@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoDateBehavior", "publisherPrefix": "cnt" },
+  "app": { "name": "Contracts", "description": "Dates that mean a calendar day stay the same day for every user" },
+  "entities": [
+    { "schemaName": "cnt_contract", "displayName": "Contract", "pluralName": "Contracts",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "cnt_renewaldate", "displayName": "Renewal Date", "type": "DateTime", "dateTimeBehavior": "DateOnly" },
+        { "schemaName": "cnt_signedon", "displayName": "Signed On", "type": "DateTime", "dateTimeBehavior": "DateOnly", "dateFormat": "DateOnly" },
+        { "schemaName": "cnt_kickoff", "displayName": "Site Kickoff", "type": "DateTime", "dateTimeBehavior": "TimeZoneIndependent", "dateFormat": "DateAndTime" },
+        { "schemaName": "cnt_lastcontact", "displayName": "Last Contact", "type": "DateTime", "dateTimeBehavior": "UserLocal" },
+        { "schemaName": "cnt_reviewed", "displayName": "Reviewed", "type": "DateTime" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_contract", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "cnt_contract", "name": "Renewals", "columns": ["cnt_name", "cnt_renewaldate", "cnt_kickoff"] }],
+  "appShell": { "areas": [{ "label": "Contracts", "groups": [{ "label": "Work", "subAreas": [{ "entity": "cnt_contract", "title": "Contracts" }] }] }] }
+}

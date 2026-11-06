@@ -25,17 +25,17 @@ Commands run from the working directory; `scripts\` is `${PLUGIN_ROOT}\scripts`.
 
 ### Questions
 - AskUserQuestion: Create new page(s) or edit an existing one? → Create new page(s)
-- `pac model list-languages` → 1033 English en-US (RTL: No) only → no localization
+- `node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'` → 1033 English en-US (RTL: No) only → no localization
 - Description question skipped: the /genpage arguments already describe the page
 - Data source question skipped: the description names Account records → Dataverse entity: account
 - AskUserQuestion: Any specific requirements? → Filter toolbar and sortable columns
 
 ### Entity detection
-- `pac model list-tables --search 'account'` → rows account, accountleads, accountlevelmonitoring; exact logical-name match `account` → exists
+- `node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'account' --exact` → 1 table: `account` (exact logical-name match, nothing in `missing`) → exists
 - No entity creation required
 
 ### App detection
-- `pac model list` → 2 apps (Contoso Sales, Contoso Service)
+- `node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'` → 2 apps (Contoso Sales, Contoso Service)
 - AskUserQuestion: Which model-driven app should the page be added to? → Contoso Sales (11111111-1111-4111-8111-111111111111)
 
 ### Solution selection
@@ -77,7 +77,7 @@ Commands run from the working directory; `scripts\` is `${PLUGIN_ROOT}\scripts`.
 - SKIPPED: existing app Contoso Sales (11111111-1111-4111-8111-111111111111)
 
 ## Phase 4 — RuntimeTypes
-- `pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-filter-list/RuntimeTypes.ts'` → RuntimeTypes.ts written
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-filter-list/RuntimeTypes.ts'` → RuntimeTypes.ts written
 - Read RuntimeTypes.ts: account columns accountid, name, accountnumber, industrycode, address1_city, address1_country, telephone1, emailaddress1, statecode verified
 
 ## Phase 4.5 — Connector bindings

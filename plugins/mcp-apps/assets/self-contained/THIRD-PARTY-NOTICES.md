@@ -5,13 +5,14 @@
 - `@modelcontextprotocol/ext-apps` 1.7.5
 - `@fluentui/tokens` 1.0.0-alpha.22
 
-The dependency-complete `@modelcontextprotocol/ext-apps/app-with-deps` distribution and
-the Fluent token build also contain code from their runtime dependencies, including:
+The peer-dependent `@modelcontextprotocol/ext-apps` entry and Fluent token build also include their runtime dependencies.
+The SDK and Zod are bundled from the installed lockfile rather than upstream's `app-with-deps` distribution:
 
-- `@modelcontextprotocol/sdk`
+- `@modelcontextprotocol/sdk` 1.32.1
 - `@standard-schema/spec`
 - `@swc/helpers`
-- `zod`
+- `zod` 4.6.7
+- `zod-to-json-schema` 3.25.2
 
 The license texts distributed by those packages are preserved in [`licenses/`](licenses/):
 
@@ -23,6 +24,7 @@ The license texts distributed by those packages are preserved in [`licenses/`](l
 | `@standard-schema/spec` | [`standard-schema-spec.txt`](licenses/standard-schema-spec.txt) |
 | `@swc/helpers` | [`swc-helpers.txt`](licenses/swc-helpers.txt) |
 | `zod` | [`zod.txt`](licenses/zod.txt) |
+| `zod-to-json-schema` | [`zod-to-json-schema.txt`](licenses/zod-to-json-schema.txt) |
 
 See [`PROVENANCE.json`](PROVENANCE.json) and
 `scripts/_vendor-build/package-lock.json` for pinned direct build inputs and integrity

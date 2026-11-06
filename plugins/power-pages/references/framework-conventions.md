@@ -1,6 +1,6 @@
 # Framework Conventions
 
-Shared reference for skills that need to detect the frontend framework and locate key files in a Power Pages code site. Used by `create-site`, `add-seo`, and any future skills that interact with the site project structure.
+Shared reference for skills that need to detect the frontend framework and locate key files in a Power Pages SPA site. Used by `create-site`, `add-seo`, and any future skills that interact with the site project structure.
 
 ---
 

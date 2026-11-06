@@ -1,0 +1,29 @@
+{
+  "id": "dataset-overlay",
+  "title": "Dataset overlay",
+  "summary": "A fixture dataset recipe.",
+  "template": "dataset-standard",
+  "hosts": [
+    "model"
+  ],
+  "whyWanted": "Covers dataset overlay machinery.",
+  "configuration": "Map parent to a self lookup.",
+  "status": "available",
+  "certified": {
+    "model": {
+      "dataset": "2026-09-29"
+    },
+    "pages": {}
+  },
+  "propertySets": [
+    {
+      "dataSet": "sampleDataSet",
+      "name": "parent",
+      "displayNameKey": "Parent_Display",
+      "descriptionKey": "Parent_Desc",
+      "ofType": "Lookup.Simple",
+      "usage": "bound",
+      "required": false
+    }
+  ]
+}

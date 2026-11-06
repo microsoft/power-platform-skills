@@ -33,7 +33,7 @@ test('navigatesTo.targetKey must resolve to a known page key', () => {
     // undefined context on a path a user can reach by clicking the nav entry.
     { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string' } }, directEntry: { behavior: 'selector' } },
   ];
-  // Place every page in the sitemap so the every-page-placed rule (Task 3) does not fail this spec.
+  // Place every page in the sitemap so the every-page-placed rule does not fail this spec.
   s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' }, { page: 'detail', title: 'Detail' });
   assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
 
@@ -63,7 +63,18 @@ test('spec.design accepts known keys and rejects unknown ones', () => {
   assert.ok(validateAppSpec(bad, { profile: 'plan' }).errors.some((e) => /design: unknown key 'accent'/.test(e)));
 });
 
-// Minor #7 additions ------------------------------------------------------------------
+test('spec.design.style — the maker\u2019s own look in words — is a known key, and must be text that says something', () => {
+  const s = base();
+  s.design = { style: 'navy #0b2545 primary, gold #c9a227 accent, Georgia headings (from: website)', accentColor: '#0b2545' };
+  assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
+  for (const style of ['', '   ', 42, ['navy'], { primary: '#0b2545' }, null]) {
+    const bad = base();
+    bad.design = { style };
+    assert.ok(validateAppSpec(bad, { profile: 'plan' }).errors.includes('design.style must be a non-empty string: the look the maker asked for, in words'), JSON.stringify(style));
+  }
+});
+
+// Edge cases of navigatesTo, pageInput and design validation --------------------------
 
 test('navigatesTo entry with a missing or non-string targetKey errors (isV2)', () => {
   const s = base();
@@ -850,7 +861,7 @@ test('minimumPluginVersion refuses a spec that needs a newer plugin than the one
   const bad = gateErrors(spec('next'));
   assert.strictEqual(bad.length, 1);
   assert.match(bad[0], /dotted version string/);
-  // The grammar is ANCHORED, and the anchoring is the point. The reviewer caught a prefix-only
+  // The grammar is ANCHORED, and the anchoring is the point. A prefix-only
   // pattern: `2..9` matched on its leading `2` alone, and compareVersions' `parseInt(n, 10) || 0`
   // then turned the empty component into 0 and enforced **2.0.9** — a DIFFERENT floor than the
   // author wrote, with no error at all. The evident intent `2.9` IS refused by this plugin, so the
@@ -894,4 +905,56 @@ test('minimumPluginVersion refuses a spec that needs a newer plugin than the one
     fs.readFileSync = realRead;
     delete require.cache[require.resolve('../lib/app-spec.js')];
   }
+});
+
+// #799: a `views[]` key the build does not read used to validate clean and be dropped, so a view written with `filter` was built without its filter.
+const withViews = (views) => Object.assign(base(), { views });
+const viewWarnings = (views, opts = { profile: 'plan' }) => validateAppSpec(withViews(views), opts).warnings.filter((w) => /unknown key/.test(w));
+
+test('#799: a view written with `filter` warns and names `filters`; the spec still validates', () => {
+  const r = validateAppSpec(withViews([{ entity: 'contoso_order', name: 'High Priority', filter: [{ column: 'contoso_priority', operator: 'eq', value: 5 }] }]), { profile: 'plan' });
+  assert.strictEqual(r.ok, true, `a warning must not fail a spec that validated before; got ${JSON.stringify(r.errors)}`);
+  const w = r.warnings.filter((x) => /unknown key 'filter'/.test(x));
+  assert.strictEqual(w.length, 1, `expected one warning for 'filter'; got ${JSON.stringify(r.warnings)}`);
+  assert.match(w[0], /view 'High Priority'/);
+  assert.match(w[0], /did you mean 'filters'\?/);
+});
+
+test('#799: a filter item written with `column` and `operator` warns and names `attr` and `op`', () => {
+  const warnings = viewWarnings([{ entity: 'contoso_order', name: 'High Priority', filters: [{ column: 'contoso_priority', operator: 'eq', value: 5 }] }]);
+  const column = warnings.find((x) => /unknown key 'column'/.test(x));
+  const operator = warnings.find((x) => /unknown key 'operator'/.test(x));
+  assert.ok(column && /filters\[0\]/.test(column) && /did you mean 'attr'\?/.test(column), `got ${JSON.stringify(warnings)}`);
+  assert.ok(operator && /did you mean 'op'\?/.test(operator), `got ${JSON.stringify(warnings)}`);
+});
+
+test('#799: a view key that is one edit from a supported one is matched; `type`, which older docs showed, is still accepted silently', () => {
+  const warnings = viewWarnings([{ entity: 'contoso_order', name: 'Mine', column: ['contoso_name'], activeonly: false, type: 'main' }]);
+  assert.ok(warnings.some((x) => /unknown key 'column'.*did you mean 'columns'\?/.test(x)), JSON.stringify(warnings));
+  assert.ok(warnings.some((x) => /unknown key 'activeonly'.*did you mean 'activeOnly'\?/.test(x)), JSON.stringify(warnings));
+  assert.deepStrictEqual(warnings.filter((x) => /'type'/.test(x)), [], 'a spec written from the older docs must not start to warn');
+  assert.deepStrictEqual(viewWarnings([{ entity: 'contoso_order', name: 'Mine', type: 'main' }]), []);
+});
+
+test('#799: every key the build reads on a view and its filters stays warning-free', () => {
+  const views = [
+    { entity: 'contoso_order', name: 'Plain', description: 'd', columns: ['contoso_name'], sort: [{ attr: 'contoso_name', dir: 'asc' }], activeOnly: false,
+      filters: [{ attr: 'contoso_priority', op: 'eq', value: 5 }, { attr: 'contoso_priority', op: 'not-in', values: [1, 2] }, { attr: 'ownerid', op: 'eq-userid' }] },
+    { entity: 'contoso_order', name: 'Joined', reconcile: 'declared', key: 'joined', viewId: '11111111-1111-1111-1111-111111111111', columns: ['contoso_name'],
+      linkEntities: [{ name: 'contact', from: 'contactid', to: 'primarycontactid', alias: 'c', linkType: 'outer', filters: [{ attr: 'lastname', op: 'eq', value: 'Smith' }] }],
+      filters: [{ attr: 'lastname', relatedEntity: 'c', op: 'eq', value: 'Smith' }] },
+  ];
+  for (const profile of ['plan', 'deploy', 'structural']) {
+    const r = validateAppSpec(withViews(views), { profile });
+    assert.deepStrictEqual(r.warnings.filter((x) => /unknown key/.test(x)), [], `profile ${profile}`);
+    assert.deepStrictEqual(r.errors.filter((x) => /view '/.test(x)), [], `profile ${profile}`);
+  }
+});
+
+test('#799: an unknown key on a join filter warns; a hint key that collides with Object.prototype leaks nothing; non-object filters do not crash', () => {
+  const warnings = viewWarnings([{ entity: 'contoso_order', name: 'Joined', reconcile: 'declared', columns: ['contoso_name'], constructor: 1, toString: 2,
+    linkEntities: [{ name: 'contact', from: 'contactid', to: 'primarycontactid', alias: 'c', filters: [{ column: 'lastname', op: 'eq', value: 'Smith' }] }] }]);
+  assert.ok(warnings.some((x) => /linkEntities\[0\]\.filters\[0\]: unknown key 'column'/.test(x)), JSON.stringify(warnings));
+  assert.ok(warnings.every((x) => !/native code/.test(x)), JSON.stringify(warnings));
+  assert.doesNotThrow(() => validateAppSpec(withViews([{ entity: 'contoso_order', name: 'Odd', filters: ['x', null, 3] }]), { profile: 'plan' }));
 });

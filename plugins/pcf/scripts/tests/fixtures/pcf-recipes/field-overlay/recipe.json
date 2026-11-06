@@ -1,0 +1,44 @@
+{
+  "id": "field-overlay",
+  "title": "Field overlay",
+  "summary": "A fixture field recipe.",
+  "template": "field-standard",
+  "hosts": [
+    "model",
+    "pages"
+  ],
+  "whyWanted": "Covers field overlay machinery.",
+  "configuration": "Bind the rating property and optionally set max.",
+  "status": "available",
+  "certified": {
+    "model": {
+      "field": "2026-09-29"
+    },
+    "pages": {}
+  },
+  "properties": [
+    {
+      "name": "rating",
+      "displayNameKey": "Rating_Display",
+      "descriptionKey": "Rating_Desc",
+      "ofType": "Whole.None",
+      "usage": "bound",
+      "required": true
+    },
+    {
+      "name": "max",
+      "displayNameKey": "Max_Display",
+      "descriptionKey": "Max_Desc",
+      "ofType": "Whole.None",
+      "usage": "input",
+      "required": false,
+      "defaultValue": "5"
+    }
+  ],
+  "features": [
+    {
+      "name": "WebAPI",
+      "required": false
+    }
+  ]
+}
