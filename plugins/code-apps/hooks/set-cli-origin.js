@@ -59,14 +59,25 @@ function rewrite(payload, env = process.env) {
   // "Bash". Only its native camelCase event retains the actual shell identity.
   // https://docs.github.com/en/copilot/reference/hooks-reference
   if (!native && hostAgent(env) === 'copilot-cli') return null;
-  if (Object.hasOwn(env, 'PA_CLI_ORIGIN') || !invokesCli(input.command, shell)) return null;
-  const origin = `plugin/${hostAgent(env)}`;
+  if (!invokesCli(input.command, shell)) return null;
+  const agent = hostAgent(env);
+  const origin = `plugin/${agent}`;
   // A prefix, rather than a subshell/script block, preserves cd, variable scope,
   // pipelines and the original command's exit status. Runtime checks also honor
   // values supplied by the tool environment; later inline assignments win.
-  const prefix = shell === 'bash'
+  const originLine = Object.hasOwn(env, 'PA_CLI_ORIGIN') ? '' : shell === 'bash'
     ? `if [ "\${PA_CLI_ORIGIN+x}" != x ]; then export PA_CLI_ORIGIN='${origin}'; fi\n`
     : `if (-not (Test-Path Env:PA_CLI_ORIGIN)) { $env:PA_CLI_ORIGIN = '${origin}' }\n`;
+  // An inherited report may come from another host (for example, a nested agent),
+  // so always replace it with the fixed label of this host. For an unknown host,
+  // remove it so the CLI falls back to its own passive environment detection.
+  // `agent` is one of the fixed labels from hostAgent(), never user input.
+  const known = agent !== 'unknown';
+  const reportLine = shell === 'bash'
+    ? (known ? `export PA_PLUGIN_REPORT_AGENT='${agent}'\n` : 'unset PA_PLUGIN_REPORT_AGENT\n')
+    : (known ? `$env:PA_PLUGIN_REPORT_AGENT = '${agent}'\n`
+      : 'Remove-Item Env:PA_PLUGIN_REPORT_AGENT -ErrorAction SilentlyContinue\n');
+  const prefix = originLine + reportLine;
   if (input.command.startsWith(prefix)) return null;
   const updatedInput = { ...input, command: prefix + input.command };
   // Native Copilot hooks use modifiedArgs, not Claude's updatedInput. Do not grant

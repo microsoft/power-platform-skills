@@ -115,8 +115,10 @@ Always use generated services for data access.
 The Power Apps CLI (`@microsoft/power-apps-cli`) is installed into each project as a dev dependency; the Vite template doesn't include it, so `/create-code-app` adds it. It has shipped two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
 
 Shell hooks automatically supply `PA_CLI_ORIGIN=plugin/<host-agent>` for recognized
-CLI invocations without replacing explicit user values. Do not manually export
-attribution in skills. Keep both host hook configurations in sync; native Copilot
+CLI invocations without replacing explicit user values. They also set
+`PA_PLUGIN_REPORT_AGENT` to the current host (`claude-code` or `copilot-cli`) after
+clearing any inherited value, and leave it unset for an unknown host. Do not manually
+export attribution in skills. Keep both host hook configurations in sync; native Copilot
 events preserve shell identity, whereas its Claude-compatible `Bash` alias does
 not distinguish Bash from PowerShell. See [hooks/README.md](./hooks/README.md).
 Keep detection conservative and tokenizer-free: match supported single-line
@@ -168,4 +170,4 @@ on Windows and Linux with local CLI stubs. These tests never transmit telemetry.
 - The repository's `.agents/plugins/marketplace.json` exposes Code Apps only. Do not add unadapted sibling plugins.
 - Preserve user approvals when replacing client-specific tools with equivalent capabilities.
 - Keep `com.github.copilot/hooks/hooks.json` equal to the legacy root `hooks.json`.
-- Preserve the existing Code Apps attribution hooks. Do not copy Managed Apps attribution variables or agent detection into them.
+- Preserve the existing Code Apps attribution hooks. Report the agent only through the Code Apps-specific `PA_PLUGIN_REPORT_AGENT` variable; do not use Managed Apps (`MS_*`) variables.
