@@ -28,12 +28,13 @@ The [plugin website](https://microsoft.github.io/power-platform-skills/) shows w
 
 ## Before you start
 
-- **An AI assistant:** [Claude Code](https://code.claude.com/docs/en/setup), the [GitHub Copilot app](https://github.com/features/ai/github-app), or [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli).
-- **A Power Platform environment you can build in.** A [developer environment](https://learn.microsoft.com/power-platform/developer/create-developer-environment) is free and the safest place to try things.
-- **[Node.js](https://nodejs.org/en/download)**, which the installer and most plugins need.
+- **Choose an AI assistant.** Use the [GitHub Copilot app](https://github.com/features/ai/github-app), [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli), or [Claude Code](https://code.claude.com/docs/en/setup).
+- **Get a Power Platform environment.** You'll need permission to create or change resources in it.
+  For learning and experiments, start with a free [developer environment](https://learn.microsoft.com/power-platform/developer/create-developer-environment) rather than an environment with live apps or data.
+- **Install [Node.js](https://nodejs.org/en/download).** The quick installer and most plugins need it to run.
 
-Some plugins need more tools, such as the Azure CLI or the .NET SDK.
-Each plugin's page lists them, and your assistant tells you when something is missing.
+Check your chosen plugin's page for any additional tools, such as the Azure CLI or the .NET SDK.
+Requirements vary by plugin, so you don't need to install every tool up front.
 
 ## Installation
 
