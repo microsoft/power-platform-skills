@@ -24,6 +24,14 @@ function runValidator(projectRoot) {
   });
 }
 
+function runCompletionValidator(projectRoot) {
+  return spawnSync(process.execPath, [VALIDATOR_PATH, '--complete'], {
+    cwd: projectRoot,
+    input: '',
+    encoding: 'utf8',
+  });
+}
+
 const TYPE_DECLARATIONS = `
 export interface PowerPagesUser {
   userName: string;
@@ -71,6 +79,33 @@ function withMarker(projectRoot) {
   writeProjectFile(projectRoot, 'docs/auth-setup-report.html', FINISHING_MARKER);
   return projectRoot;
 }
+
+test('portable completion mode blocks missing reports rather than silently approving empty stdin', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'src/services/authService.ts', COMPLETE_AUTH_SERVICE);
+  const result = runCompletionValidator(projectRoot);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /report/i);
+});
+
+test('portable completion mode blocks absent auth artifacts after a report exists', (t) => {
+  const projectRoot = withMarker(createTempProject(t));
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  const result = runCompletionValidator(projectRoot);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /Missing auth service/);
+});
+
+test('portable completion mode validates a complete project without hook JSON', (t) => {
+  const projectRoot = withMarker(createTempProject(t));
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'src/services/authService.ts', COMPLETE_AUTH_SERVICE);
+  writeProjectFile(projectRoot, 'src/types/powerPages.d.ts', TYPE_DECLARATIONS);
+  writeProjectFile(projectRoot, 'src/components/AuthButton.tsx', AUTH_BUTTON);
+  const result = runCompletionValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
 
 // --- Skip path: no auth files at all ---
 

@@ -10,26 +10,44 @@
 // by the skill's final Phase 8.3.5. Until that report exists, the skill is
 // considered in-progress and validation silent-approves. This follows the
 // marker-file recommendation in plugins/power-pages/PLUGIN_DEVELOPMENT_GUIDE.md.
+// Other hosts run `--complete` from the site root: that mode does not need hook
+// JSON and must reject unfinished work instead of taking the hook's skip paths.
 
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
-runValidation((cwd) => {
+if (process.argv.includes('--complete')) {
+  try {
+    validateAuth(process.cwd(), true);
+  } catch (error) {
+    block(`Authentication completion validation failed: ${error.message}`);
+  }
+} else {
+  runValidation(validateAuth);
+}
+
+function validateAuth(cwd, requireComplete = false) {
   const projectRoot = findProjectRoot(cwd);
-  if (!projectRoot) return approve(); // Not a Power Pages project, skip
+  if (!projectRoot) {
+    if (requireComplete) return block('Authentication validation requires a Power Pages project.');
+    return approve();
+  }
 
   // Check if any auth files exist — if none, this wasn't an auth session
   const authServiceExists = findAuthService(projectRoot);
   const typeDeclarationsExist = findTypeDeclarations(projectRoot);
 
-  if (!authServiceExists && !typeDeclarationsExist) return approve();
+  if (!authServiceExists && !typeDeclarationsExist && !requireComplete) return approve();
 
   // Marker gate: silent-approve until the skill writes its finishing report.
   // Without this gate, re-running setup-auth on a project that has stale auth
   // files from a previous attempt would block the new run before it could
   // overwrite them.
-  if (!hasFinishingMarker(projectRoot)) return approve();
+  if (!hasFinishingMarker(projectRoot)) {
+    if (requireComplete) return block('Authentication setup report is missing; setup is not complete.');
+    return approve();
+  }
 
   const errors = [];
 
@@ -57,10 +75,8 @@ runValidation((cwd) => {
       errors.push('Auth service missing anti-forgery token handling');
     }
     // Verify provider configuration exists. The canonical pattern in
-    // authentication-reference.md is the AUTH_PROVIDERS array (even single-
-    // provider sites use a one-element array — see SKILL.md and the
-    // "Multiple Providers — Canonical AUTH_PROVIDERS Array Pattern" section
-    // of authentication-reference.md). AuthProviderConfig is the interface
+    // assets/auth-service.ts.template is the AUTH_PROVIDERS array, including
+    // single-provider sites. AuthProviderConfig is the interface
     // name and is also a valid marker (auth service must declare the type).
     if (!content.includes('AUTH_PROVIDERS') && !content.includes('AuthProviderConfig')) {
       errors.push('Auth service missing provider configuration — expected the AUTH_PROVIDERS array or AuthProviderConfig type. The canonical pattern is `export const AUTH_PROVIDERS: AuthProviderConfig[] = [...]` even when only one provider is configured.');
@@ -89,7 +105,7 @@ runValidation((cwd) => {
   }
 
   approve();
-});
+}
 
 function hasFinishingMarker(projectRoot) {
   // The skill writes `docs/auth-setup-report.html` at the end of Phase 8.3.5.
