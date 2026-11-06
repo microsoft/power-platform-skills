@@ -118,7 +118,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   bar only when none exists. To change a deployed button's label, script or other properties, delete the entity's commands (or tear down)
   and rebuild. To only show, hide, enable or disable an existing button, use `commandStates[]` (below).
 - **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
-- **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
+- **`hidden`** / **`disabled`** set *static* visibility/enablement. A modern button with `disabled: true`
+  is not shown at all (live checks found it absent from the bar, not greyed out), so `disabled` acts like
+  `hidden`. **Conditional (rule-based)
   visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
   that can't be authored headlessly.
 - **`type`** is `Button` (default), `FlyoutAnchor`, or `SplitButton`. A flyout/split container holds
@@ -144,7 +146,8 @@ It only reads; a write flag is a usage error.
   or system), `inactive`, `managed`, `not-customizable`, `flags-unreadable`, `visibility-formula`
   (Power Fx visibility or classic rules: `visibilitytype` other than empty or 0, or a visibility-formula field set; the
   empty `visibilitytype` the platform stores on a button `commands[]` wrote is static), `formula-action` (a Power Fx on-select), `version-unavailable` (the
-  platform keeps no row versions for commands, or the row has none).
+  platform keeps no row versions for commands). The listing does not check each row's own version; the
+  build does, and refuses a row without one (`command-state-version-unavailable`).
 - A bar the App Spec has no name for (a stored location other than 0, 1, 2) is `bar: "unsupported"`.
 - **`candidate` describes the row's shape only.** It does not prove the app renders the button, or
   where.
@@ -168,7 +171,9 @@ picked by its row id. Nothing else about the button changes, and a row is never 
 - **Fields are closed and exact.** `entity` is a table declared in `entities[]`; `location` is exactly
   `MainTab`, `HomeTab` or `ContextualTab` and must be the row's bar; `scope` is exactly `"table"`;
   `rowId` is the lower- or upper-case id `list-command-states.js` prints (no braces, not all zeros), one
-  entry per row; set `hidden`, `disabled` or both. A flag you leave out is not read, sent or checked;
+  entry per row; set `hidden`, `disabled` or both. A flag you leave out is never changed or compared
+  with a wanted value, but both stored flags must read as `true` or `false`: a row whose other flag
+  cannot be read is refused before anything is written (`command-state-row-unreadable`);
   `false` is an instruction, not "unset". An unknown field (for example `isdisabled`) is refused with
   `command-state-spec-invalid`.
 - **Table-scoped buttons only.** `scope: "app"` is refused with `command-state-app-scope-unverified`,
@@ -207,6 +212,9 @@ picked by its row id. Nothing else about the button changes, and a row is never 
   a saved row holds the flags, but the button may still show its old state. A row that held its flags
   after its write (or already held them) and then changed before the build finished its rows is reported
   as `drifted`, with what the build did to it first (`command-state-not-confirmed`).
+- **What the bar shows.** Live checks found a saved flag change served to a fresh browser session at
+  once; a session with cached data can keep showing the old bar until it reloads its data (refresh, or
+  clear the site's stored data). A button set to `disabled: true` was not shown at all, as with `hidden`.
 - **The end of the build checks again.** After its app work the build resolves the app afresh and reads
   every declared row once more: a table no longer in the app, or a row that no longer holds its flags,
   fails the build. Nothing is rolled back — the rows it wrote stay written, and the message says what this

@@ -17,6 +17,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 - Only table-scoped modern buttons with static visibility can be changed; app-scoped and Power Fx buttons are refused, and classic out-of-box buttons are out of reach. Removing an entry or a teardown restores no flag, and download does not write `commandStates` back (#812 stays open).
 - A table publication that was sent can still complete after a halt, or after you remove the entry; this release keeps no record of it across runs.
+- A modern button set to `disabled` is not shown at all, rather than greyed out.
 
 ## [2.23.0]
 
