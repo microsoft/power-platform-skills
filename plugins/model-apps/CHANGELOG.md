@@ -7,8 +7,8 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.24.0]
 
-- **Command buttons, read-only:** `scripts/list-command-states.js` lists an app's modern command buttons by row id: each button's bar, scope, stored hidden and disabled flags, and every reason a button cannot be changed. Nothing is written (#812).
-- **Show or hide existing buttons:** `commandStates[]` (with `minimumPluginVersion: "2.24.0"`) sets the hidden and disabled flags of an existing table-scoped modern button, by row id, with one conditional write; a dry run prints the exact approvals needed (#812).
+- **Command buttons, read-only:** `scripts/list-command-states.js` lists an app's modern command buttons by row id: each button's bar, scope, stored hidden and disabled flags, and the reasons a button is not a candidate. Nothing is written (#812).
+- **Show or hide existing buttons:** on a full build with `--publish`, `commandStates[]` (with `minimumPluginVersion: "2.24.0"`) sets the hidden and disabled flags of an existing table-scoped modern button, by row id, with one conditional write; a dry run prints the exact approvals needed (#812).
 - **Publication:** publishing a table publishes all saved customizations on it, for every app that shows it, so it has its own approval. Until that publication is confirmed, the build reports `command-state-publish-unconfirmed` and what each row is known to hold.
 - **Windows:** a brief file lock (antivirus, indexer) on the binding store, the changed-only snapshot, or page and recovery records no longer stops a build: the rename is retried up to 5 seconds, 30 in all per process, then the original error is reported (#830).
 - **Verify:** a protected duplicate rule is judged as the build judges it, so swapped condition criteria, a renamed condition key or omitted `conditions` now fail with `DRIFT`, naming the conditions, instead of passing a rule the build refuses (#831).
@@ -16,6 +16,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 ### Limits
 
 - Only table-scoped modern buttons with static visibility can be changed; app-scoped and Power Fx buttons are refused, and classic out-of-box buttons are out of reach. Removing an entry or a teardown restores no flag, and download does not write `commandStates` back (#812 stays open).
+- A table publication that was sent can still complete after a halt, or after you remove the entry; this release keeps no record of it across runs.
 
 ## [2.23.0]
 
