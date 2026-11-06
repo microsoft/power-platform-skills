@@ -67,7 +67,8 @@ function snapshotAbsent(workspaceDir) {
 // writeSync may write only part of it (see createExclusive), and a short write fsynced and renamed into
 // place is exactly the partial file this exists to prevent. A write that fails at any step removes its
 // temp and leaves the target as it was. The sitemap baseline (deployed-baseline.js) is written through it too.
-function writeFileAtomic(target, text) {
+// `opts.retryLock === false` makes the rename a single attempt, exactly as before lib/rename-retry.js (see below).
+function writeFileAtomic(target, text, opts) {
   const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     const fd = fs.openSync(tmp, 'w');
@@ -77,14 +78,18 @@ function writeFileAtomic(target, text) {
     } finally {
       fs.closeSync(fd);
     }
-    // Why repeating the rename is safe here: it is the same rename of this call's own file (`tmp` has the pid, the time
-    // and a random part in its name), and a refused rename moves nothing, so atomicity is unchanged. Every target of this
-    // function is a plugin-owned state file (the apply snapshot, the managed bindings, the baseline and the page,
-    // dashboard and web-resource records), and the writers that share one are serialised by its lease and by the re-read
-    // and compare-and-set around the write. Only a program that edits such a file by hand while this rename is refused
-    // could be overwritten, and that edit is outside what the plugin supports (the same overwrite happens if it lands
-    // just before the first attempt). The wait is bounded per call and per process: see lib/rename-retry.js.
-    renameWithRetry(fs, tmp, target);
+    // A rename that Windows refuses for a moment (a scanner or an indexer holding the file) is repeated by default, and why
+    // that is safe: it is the same rename of this call's own file (`tmp` has the pid, the time and a random part in its
+    // name), and a refused rename moves nothing, so atomicity is unchanged. It is safe for the targets whose writers are
+    // serialised by a lease and by the re-read and compare-and-set around the write: the apply snapshot, the managed
+    // bindings, and the page, dashboard and web-resource records. Only a program that edits such a file by hand while the
+    // rename is refused could be overwritten, and that edit is outside what the plugin supports (the same overwrite
+    // happens if it lands just before the first attempt). It is NOT safe for a target that an unleased writer can also
+    // write, because an older write that was refused could then land after a newer one: such a target passes
+    // `{ retryLock: false }` and renames once (the deployed baseline, which the download writes without the build lease).
+    // The wait is bounded per call and per process: see lib/rename-retry.js.
+    if (opts && opts.retryLock === false) fs.renameSync(tmp, target);
+    else renameWithRetry(fs, tmp, target);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup of the orphaned temp */ }
     throw e;

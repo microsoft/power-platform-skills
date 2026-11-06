@@ -29,8 +29,8 @@ const RENAME_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 // The wait is synchronous (Atomics.wait): nothing else in the process runs meanwhile, not the heartbeat of a
 // teardown (a beat every 60 s; a teardown with no beat for 5 min is taken for dead), not an HTTP callback (the
 // transport times out a read after 60 s and a write after 300 s). So the wait is capped twice:
-//   * RENAME_RETRY_BUDGET_MS, 5 s: the most one rename waits. Enough for a scanner or an indexer to let go of a
-//     file just written (a loaded Windows machine was seen refusing the same rename for a few seconds).
+//   * RENAME_RETRY_BUDGET_MS, 5 s: the most one rename waits. A chosen bound, not a measured hold: long enough for a
+//     scanner or an indexer to let go of a file just written, short enough to stay well inside the limits above.
 //   * PROCESS_WAIT_TOTAL_MS, 30 s: the most this process waits out locks in all, across every rename. Once the
 //     time spent reaches it, every later refused rename is ONE attempt, exactly as it was before this module, so
 //     a lock that really is held cannot add up to minutes of blocking over many writes (a teardown that records

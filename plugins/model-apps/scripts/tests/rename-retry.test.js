@@ -13,6 +13,7 @@ const { shortRenameWait, freshRenameWaitTotal } = require('./helpers/short-renam
 const { writeFileSafe } = require('../lib/safe-fs.js');
 const { openJournal } = require('../lib/build-journal.js');
 const records = require('../lib/page-ownership-records.js');
+const baseline = require('../lib/deployed-baseline.js');
 const store = require('../lib/apply-snapshot-store.js');
 const S = require('../lib/apply-snapshot.js');
 const { openManagedBindings, CODES } = require('../lib/managed-bindings.js');
@@ -26,7 +27,7 @@ const asPlatform = (t, host) => {
   t.after(() => Object.defineProperty(process, 'platform', platform));
   Object.defineProperty(process, 'platform', { ...platform, value: host });
 };
-// A short wait for the tests that keep a lock for good: the default is about a minute.
+// A short wait for the tests that keep a lock for good: the default is 5 s a rename and 30 s a process.
 const shortBudget = (t, ms = 60) => shortRenameWait(t, ms);
 
 // An fs whose rename of a file in `names` (every rename when empty) answers `code` for its first `times` calls
@@ -418,4 +419,54 @@ test('the managed binding store: a write refused for a moment is committed; a lo
   assert.equal(thrown && thrown.code, CODES.writeFailed);
   assert.match(thrown.message, /could not be written \(EPERM\)/);
   assert.equal(fs.readFileSync(first.file, 'utf8'), before, 'the first store is as it was');
+});
+
+// The download writes the deployed baseline WITHOUT the build lease, so it renames once: a write that was refused and
+// retried could land after a newer build's write and put the older baseline back.
+test('the deployed baseline: an older unleased write that is refused once does not replace the newer baseline a build wrote meanwhile', (t) => {
+  asPlatform(t, 'win32');
+  const dir = makeTempDir('rename-retry-baseline-');
+  const identity = { environment: 'https://contoso.crm.dynamics.com', appUniqueName: 'contoso_app' };
+  const spec = (name) => ({
+    solution: { uniqueName: 'contoso_solution', publisherPrefix: 'contoso' },
+    app: { name, uniqueName: 'contoso_app' }, pages: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'account', title: name }] }] }] },
+  });
+  baseline.writeBaseline(dir, spec('Initial'), identity);
+  const waits = fakeWaits(t);
+  let refused = false;
+  let calls = 0;
+  let newer = false;
+  t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+    if (to === baseline.baselinePath(dir)) {
+      calls += 1;
+      if (!refused) { refused = true; throw refusal('EPERM'); }
+    }
+    return real(from, to, ...rest);
+  });
+  const buildFinishes = () => { newer = true; baseline.writeBaseline(dir, spec('Newer completed build'), identity); };
+  // The build (under its lease) finishes at whatever moment the download waits, or right after it returns.
+  t.mock.method(Atomics, 'wait', (_a, _i, _v, ms) => { waits.push(ms); if (!newer) buildFinishes(); return 'timed-out'; });
+  let caught = null;
+  try { baseline.writeBaseline(dir, spec('Older download'), { ...identity, fromSpec: true }); } catch (e) { caught = e; }
+  if (!newer) buildFinishes();
+  assert.equal(caught && caught.code, 'EPERM', 'the refused write fails with its original error, as before');
+  assert.equal(calls, 2, 'one attempt for the download, and the build\'s own write');
+  assert.deepEqual(waits, [], 'it did not wait');
+  assert.equal(baseline.readBaseline(dir, identity).app.name, 'Newer completed build');
+});
+
+test('the retried state files still retry: the snapshot, the managed binding store and the distrust marker are covered above, and a write that opts out is the only single attempt', (t) => {
+  asPlatform(t, 'win32');
+  const dir = makeTempDir('rename-retry-optout-');
+  const file = path.join(dir, 'record.json');
+  for (const [opts, renames] of [[undefined, 3], [{ retryLock: true }, 3], [{ retryLock: false }, 1]]) {
+    let calls = 0;
+    const flaky = t.mock.method(fs, 'renameSync', (from, to, ...rest) => { calls += 1; if (calls <= 2) throw refusal('EBUSY'); return real(from, to, ...rest); });
+    const run = () => store.writeFileAtomic(file, 'text', opts);
+    if (renames === 1) assert.throws(run, { code: 'EBUSY' }); else run();
+    flaky.mock.restore();
+    assert.equal(calls, renames);
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.tmp')), [], 'no temp is left');
+  }
 });
