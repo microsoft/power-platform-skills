@@ -131,13 +131,19 @@ It supports Bash and PowerShell, both `npx --no-install pa` and the
 prefix, plus simple Bash and PowerShell output captures. Detection is limited to
 leading invocations on a single line (optionally after a simple `cd`); complex
 scripts and PowerShell `using` preambles are left unchanged. Existing
-parent-environment values and inline assignments take precedence. Unrelated
+`PA_CLI_ORIGIN` parent values and inline assignments take precedence. Unrelated
 commands are not rewritten; no model information is collected.
 
-CLI versions that support `PA_CLI_ORIGIN` record the complete value in the existing
-`cliSource` telemetry common property (queried as `customDimensions.cliSource`),
-not a new `cliOrigin` column. This plugin does not send its own telemetry or change
-the CLI's telemetry consent settings. Older CLI versions ignore the variable.
+The plugin also sets `PA_PLUGIN_REPORT_AGENT` to `claude-code` or `copilot-cli`
+for the same commands. It clears any inherited value first. For an unknown host it
+leaves the variable unset, and the CLI detects the agent from its environment.
+
+Supporting CLI versions map `PA_CLI_ORIGIN` to `power-apps-cli`, `plugin`, or
+`other` in the existing `cliSource` custom dimension
+(`customDimensions.cliSource`). They do not emit raw origin values or add a
+`cliOrigin` column. This plugin does not send telemetry or change CLI consent.
+Supporting CLI versions record only a known agent label from
+`PA_PLUGIN_REPORT_AGENT`. Older CLI versions ignore both variables.
 See [hook behavior and limitations](hooks/README.md).
 
 ## Uninstall

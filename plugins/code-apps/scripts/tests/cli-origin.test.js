@@ -111,14 +111,20 @@ test('uses each host output contract, preserving non-command fields and approval
   assert.equal(a.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.equal(updated(a).timeout, 1000);
   assert.match(updated(a).command, /plugin\/claude-code/);
+  assert.match(updated(a).command, /export PA_PLUGIN_REPORT_AGENT='claude-code'\n/);
   assert.ok(updated(a).command.endsWith(command));
   const b = rewrite(copilot(command), { COPILOT_CLI: '1' });
   assert.equal(b.modifiedArgs.description, 'CLI');
   assert.match(updated(b).command, /\$env:PA_CLI_ORIGIN = 'plugin\/copilot-cli'/);
+  assert.match(updated(b).command, /\$env:PA_PLUGIN_REPORT_AGENT = 'copilot-cli'\n/);
   assert.equal(b.permissionDecision, undefined);
   assert.equal(a.hookSpecificOutput.permissionDecision, undefined);
   assert.deepEqual(rewrite({ toolName: 'powershell', toolArgs: JSON.stringify(copilot(command).toolArgs) }, { COPILOT_CLI: '1' }), b);
-  assert.match(updated(rewrite(claude(command), {})).command, /plugin\/unknown/);
+  const unknown = updated(rewrite(claude(command), {})).command;
+  assert.match(unknown, /plugin\/unknown/);
+  assert.match(unknown, /unset PA_PLUGIN_REPORT_AGENT\n/);
+  assert.doesNotMatch(unknown, /export PA_PLUGIN_REPORT_AGENT/);
+  assert.match(updated(rewrite(copilot(command), {})).command, /Remove-Item Env:PA_PLUGIN_REPORT_AGENT/);
 });
 
 test('does not confuse hook runtime, host identity and target shell', () => {
@@ -130,11 +136,24 @@ test('does not confuse hook runtime, host identity and target shell', () => {
 
 test('preserves explicitly set parent values including empty values, and is idempotent', () => {
   for (const value of ['', 'custom-origin', ' plugin/custom ']) {
-    assert.equal(rewrite(claude('pa app list'), { PA_CLI_ORIGIN: value }), null);
+    const command = updated(rewrite(claude('pa app list'), {
+      PA_CLI_ORIGIN: value,
+      PA_PLUGIN_REPORT_AGENT: 'inherited-agent',
+      CLAUDECODE: '1',
+    })).command;
+    assert.doesNotMatch(command, /PA_CLI_ORIGIN/);
+    assert.doesNotMatch(command, /inherited-agent/);
+    assert.equal(command, "export PA_PLUGIN_REPORT_AGENT='claude-code'\npa app list");
   }
-  const input = claude('pa app list');
-  input.tool_input = updated(rewrite(input, {}));
-  assert.equal(rewrite(input, {}), null);
+  const unknownHost = updated(rewrite(claude('pa app list'), {
+    PA_PLUGIN_REPORT_AGENT: 'inherited-agent',
+  })).command;
+  assert.match(unknownHost, /unset PA_PLUGIN_REPORT_AGENT/);
+  for (const env of [{}, { PA_CLI_ORIGIN: 'custom' }]) {
+    const input = claude('pa app list');
+    input.tool_input = updated(rewrite(input, env));
+    assert.equal(rewrite(input, env), null);
+  }
   for (const payload of [null, {}, { tool_name: 42 }, { tool_name: 'Bash', tool_input: {} }]) {
     assert.equal(rewrite(payload, {}), null);
   }
@@ -148,27 +167,28 @@ for (const shell of ['bash', 'pwsh']) {
     assert.ok(installed, `${shell} must be installed in CI`);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'code-apps-origin-'));
     try {
-      fs.writeFileSync(path.join(dir, 'stub.cjs'), 'console.log(JSON.stringify({origin:process.env.PA_CLI_ORIGIN,args:process.argv.slice(2)}));process.exit(Number(process.env.STUB_EXIT||0));');
+      fs.writeFileSync(path.join(dir, 'stub.cjs'), 'console.log(JSON.stringify({origin:process.env.PA_CLI_ORIGIN,report:process.env.PA_PLUGIN_REPORT_AGENT,args:process.argv.slice(2)}));process.exit(Number(process.env.STUB_EXIT||0));');
       const isBash = shell === 'bash';
       const setup = isBash
         ? 'pa() { node stub.cjs "$@"; }; power-apps() { node stub.cjs "$@"; }; npx() { shift; "$@"; }; '
         : 'function pa { node stub.cjs @args }; function power-apps { node stub.cjs @args }; function npx { $binary=$args[1]; & $binary @($args | Select-Object -Skip 2) }; ';
       const env = { ...process.env, COPILOT_CLI: '1' };
       delete env.PA_CLI_ORIGIN;
-      const run = (command, extra = {}, prelude = setup) => {
-        const result = rewrite(copilot(command, isBash ? 'bash' : 'powershell'), env);
+      const run = (command, extra = {}, prelude = setup, hookEnv = env) => {
+        const result = rewrite(copilot(command, isBash ? 'bash' : 'powershell'), hookEnv);
         // Stub functions are test harness setup, not part of the hook input.
         const script = prelude + (updated(result)?.command || command);
         const args = isBash ? ['--noprofile', '--norc', '-c', script]
           : ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script];
-        return spawnSync(shell, args, { cwd: dir, env: { ...env, ...extra }, encoding: 'utf8', timeout: 15000 });
+        return spawnSync(shell, args, { cwd: dir, env: { ...hookEnv, ...extra }, encoding: 'utf8', timeout: 15000 });
       };
-      const check = (command, origin, extra) => {
-        const result = run(command, extra);
+      const check = (command, origin, extra, hookEnv) => {
+        const result = run(command, extra, setup, hookEnv);
         assert.equal(result.status, 0, result.stderr);
         const output = JSON.parse(result.stdout.trim());
         assert.equal(output.origin, origin);
         assert.deepEqual(output.args, ['app', 'list', 'a b']);
+        return output;
       };
       const call = 'npx --no-install pa app list "a b"';
       for (const binary of ['pa', 'power-apps']) {
@@ -179,6 +199,13 @@ for (const shell of ['bash', 'pwsh']) {
         check('${PA} app list "a b"', 'plugin/copilot-cli', { PA: 'npx --no-install pa' });
       }
       check(`cd . ${isBash ? '&&' : ';'} ${call}`, 'plugin/copilot-cli');
+      const inheritedReport = check(
+        call,
+        'plugin/copilot-cli',
+        {},
+        { ...env, PA_PLUGIN_REPORT_AGENT: 'inherited-agent' },
+      );
+      assert.equal(inheritedReport.report, 'copilot-cli');
       check(call, 'parent/custom', { PA_CLI_ORIGIN: 'parent/custom' });
       check(call, '', { PA_CLI_ORIGIN: '' });
       check((isBash ? 'PA_CLI_ORIGIN=inline/custom ' : "$env:PA_CLI_ORIGIN='inline/custom'; ") + call, 'inline/custom');
@@ -197,7 +224,7 @@ for (const shell of ['bash', 'pwsh']) {
           for (const capture of captures) {
             const result = run(capture);
             assert.equal(result.status, 0, result.stderr);
-            assert.deepEqual(JSON.parse(result.stdout.trim()), { origin: 'plugin/copilot-cli', args: ['app', 'list'] });
+            assert.deepEqual(JSON.parse(result.stdout.trim()), { origin: 'plugin/copilot-cli', report: 'copilot-cli', args: ['app', 'list'] });
           }
         }
       }

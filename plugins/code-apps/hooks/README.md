@@ -6,6 +6,11 @@ plugin prerequisite) is the only hook interpreter; Python and jq are not needed.
 Host detection uses `CLAUDECODE` / `CLAUDE_CODE_ENTRYPOINT`, then `COPILOT_CLI` /
 `COPILOT_AGENT_SESSION_ID`. It does not inspect models, prompts, or user identity.
 
+The hook also reports the host in `PA_PLUGIN_REPORT_AGENT` (`claude-code` or
+`copilot-cli`). It always clears an inherited value first, so a value from an
+outer host cannot claim to be the current host. For an unknown host, the variable
+stays unset and the CLI uses its own passive environment detection.
+
 ## Host contracts
 
 - Copilot CLI loads `com.github.copilot/hooks/hooks.json` for the portable package,
@@ -58,18 +63,22 @@ needed; unsupported syntax still executes normally without added attribution.
 PowerShell scripts beginning with `using` declarations are left unchanged. The
 hook never inserts a statement before, moves, or parses a required preamble.
 
-For a matching shell tool call, a conditional environment assignment is prepended
-to the original command, without wrapping or reconstructing it. The variable is
+For a matching shell tool call, a conditional `PA_CLI_ORIGIN` assignment and a
+`PA_PLUGIN_REPORT_AGENT` assignment (or removal, for an unknown host) are prepended
+to the original command, without wrapping or reconstructing it. The variables are
 scoped to that tool's shell process and inherited child processes (including
-other commands in the same compound call). It does not modify the user's parent
-shell. Parent values, even empty ones, are not replaced; later inline assignments
-still win. Directory changes, quoting, pipelines, and command exit status retain
-their original semantics.
+other commands in the same compound call). They do not modify the user's parent
+shell. Parent `PA_CLI_ORIGIN` values, even empty ones, are not replaced; later
+inline assignments still win. Parent `PA_PLUGIN_REPORT_AGENT` values are always
+replaced or removed. Directory changes, quoting, pipelines, and command exit
+status retain their original semantics.
 
 Handled failures (including malformed input, a missing plugin root, or failure to
 load the hook module) report a diagnostic on stderr and exit successfully with no
 rewrite, never a permission denial. Node must be available to run the launcher;
 interpreter launch failures and host timeouts are outside the script's control.
-The hook does not send telemetry. Supporting CLI versions trim the
-variable, default to `standalone` when empty/unset, and emit its entire value as
-the existing `cliSource` common property, subject to CLI telemetry consent.
+The hook does not send telemetry. Supporting CLI versions map
+`PA_CLI_ORIGIN` to `power-apps-cli`, `plugin`, or `other` in the existing
+`cliSource` custom dimension, subject to CLI telemetry consent. They do not emit
+raw origin values. Supporting CLI versions accept `PA_PLUGIN_REPORT_AGENT` only
+when it matches a known agent label, and record only that normalized label.

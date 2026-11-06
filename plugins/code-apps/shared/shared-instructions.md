@@ -166,9 +166,12 @@ The CLI has shipped two binaries — grouped `pa` (preferred) and flat `power-ap
 ## CLI Commands
 
 The plugin's shell hooks supply `PA_CLI_ORIGIN=plugin/<host-agent>` automatically
-for recognized CLI commands. Do not add manual attribution exports. Explicit
-user-supplied values win; this attribution uses the CLI's existing telemetry
-consent and `cliSource` common property, not a separate plugin telemetry stream.
+and `PA_PLUGIN_REPORT_AGENT=<host-agent>` (when the host is known) automatically
+for recognized CLI commands. Do not add manual attribution exports. An explicit
+`PA_CLI_ORIGIN` value remains unchanged. The hook replaces or removes
+`PA_PLUGIN_REPORT_AGENT` to report the current host. The CLI uses its existing
+telemetry consent and `cliSource` common property. The plugin does not send a
+separate telemetry stream.
 
 The Power Apps code app CLI (`@microsoft/power-apps-cli`) is installed into each project as a dev dependency (the Vite template doesn't include it; see [cli-binary.md](./cli-binary.md)). **Never invoke a bare `pa`/`power-apps`** — always run the locally-installed CLI through the resolved `$PA` prefix (`npx --no-install …`) from within the project directory. **Resolve the binary first (see [cli-binary.md](./cli-binary.md)); the commands below are canonical grouped `pa` templates — substitute `$PA` for the leading `pa`, and when `PA_KIND=power-apps` translate the verb path and renamed flags via the mapping tables before running.**
 
