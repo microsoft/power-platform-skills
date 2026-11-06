@@ -5,6 +5,8 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.24.0]
+
 ## [2.23.0]
 
 - **Configuration identities (opt-in):** with `configurationIdentity: "stable-v1"`, environment variables, connection references, Custom APIs and duplicate-detection rules, with their children, are created at reserved ids and bound; a create whose answer was lost is never sent again (#807).
