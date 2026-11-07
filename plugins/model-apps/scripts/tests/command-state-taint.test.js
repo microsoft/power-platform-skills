@@ -13,8 +13,11 @@
 //   write      the row PATCH's answer
 //   listing    list-command-states.js, its output as the command line emits it
 //   verify     verifyCommandStates, each declared row's detail
-//   publish    the table publication's PublishXml answer, which reaches the build's own Dataverse client and not the org: the before-app
-//              envelope's plain publish, and the managed publisher's publish of a table a managed group routes (lib/managed-scope-publisher.js)
+//   publish    the table publication's answer: the before-app envelope's plain PublishXml and the managed publisher's publish of a table a
+//              managed group routes (lib/managed-scope-publisher.js), both answered to the build's own Dataverse client and not the org; the
+//              SDK's refusal of the reconciled table's publication that follows a refused envelope, and of its settle after the final halt
+//              (`fallback`); the publish phase's SDK publication of a table (`phase8`); and the managed publisher's client failing before the
+//              request is dispatched (`managed-predispatch`)
 //
 // The one carve-out is the button's caption (`buttonlabeltext`), which the design shows to a maker: in the listing's `commands[].caption`
 // and in the approval display (console only, never journaled). A planted caption may appear there, as exactly what was read, and nowhere else.
@@ -184,6 +187,74 @@ async function inPublish(route, plant) {
   return { hits, primary: [out.caught ? out.caught.message : '', out.said].join('\n'), where: whereOf(out) };
 }
 
+// The SDK's refusal of a table's publication, planted in each position of the error it answers by value (the vendored SDK's ConnectionError:
+// its message quotes the service, its cause carries the service's error), and a transport that got no answer.
+function sdkPublishPositions() {
+  const refusalWith = (change) => () => {
+    const error = Object.assign(new Error('HTTP 503 from https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml: denied'), {
+      code: 'CONNECTION_ERROR', statusCode: 503, url: `${ORIGIN}/api/data/v9.2/PublishXml`, cause: { error: { code: '0x80040220', message: 'denied' } },
+    });
+    change(error);
+    return error;
+  };
+  return {
+    'error.message': refusalWith((e) => { e.message = `HTTP 503 from ${e.url}: ${MARKER}`; }),
+    'error.code': refusalWith((e) => { e.code = MARKER; }),
+    'error.url': refusalWith((e) => { e.url = `${ORIGIN}/${MARKER}`; }),
+    'error.cause.error.message': refusalWith((e) => { e.cause.error.message = MARKER; }),
+    'error.cause.error.code': refusalWith((e) => { e.cause.error.code = MARKER; }),
+    'no answer (transport)': refusalWith((e) => { e.statusCode = 0; e.message = `Transport failure reaching ${ORIGIN}: ${MARKER}`; delete e.cause; }),
+  };
+}
+
+// The managed publisher's PublishXml failed by the client before it was dispatched, the error's message or its code planted.
+function clientFailurePositions() {
+  return {
+    'client error.message': () => { throw Object.assign(new Error(MARKER), { code: 'ECONNRESET' }); },
+    'client error.code': () => { throw Object.assign(new Error('socket closed'), { code: MARKER }); },
+  };
+}
+
+// `fallback`: the envelope before the app is refused (its answer is clean) and the SDK's publication of the reconciled table, which follows
+// it, answers the planted refusal; the final halt then settles the publish it owes, which is refused the same way. `phase8`: the envelope is
+// answered ok and the publish phase's SDK publication of the view the build created answers it. `managed-predispatch`: the table is routed
+// to the managed publisher, whose client fails before the request is dispatched.
+async function inSdkPublish(route, plant) {
+  let hits = 0;
+  const barrier = route === 'managed-predispatch' ? createPublicationBarrier() : undefined;
+  const h = harness({
+    barrier,
+    publishAnswer: () => (route === 'fallback' ? { status: 503, body: { error: { code: '0x80040220', message: 'denied' } } } : undefined),
+    adaptSdk: (sdk) => {
+      if (route === 'fallback') sdk.findArtifact = async (kind) => (kind === 'view' ? `view-${T}` : null);
+      if (route === 'managed-predispatch') {
+        const post = sdk.dataverse.post;
+        sdk.dataverse.post = async (url, body) => {
+          if (!String(body && body.ParameterXml).includes(`<entity>${T}</entity>`)) return post(url, body);
+          hits += 1;
+          return plant();
+        };
+        return;
+      }
+      sdk.publishArtifact = async (type, id) => {
+        if (type !== 'view') return { type, id, shipped: true, publish: { kind: 'verified' } };
+        hits += 1;
+        return { type, id, shipped: false, publish: { kind: 'failed', error: plant() } };
+      };
+    },
+  });
+  const spec = specFor(undefined, { views: [{ entity: T, name: 'Active Tickets', columns: ['new_subject'] }] });
+  const { approvals } = await h.approve(spec);
+  const engine = {};
+  if (barrier) {
+    const { store } = openManagedContext({ workspaceDir: makeTempDir('cs-taint-store-'), environment: ORIGIN, appUniqueName: spec.app.uniqueName, solutionUniqueName: spec.solution.uniqueName, barrier });
+    barrier.route(T, 'a managed group of the table');
+    Object.assign(engine, { publicationBarrier: barrier, bindingGroups: { store } });
+  }
+  const out = await buildWithJournal(h, spec, approvals, engine);
+  return { hits, primary: [out.caught ? out.caught.message : '', out.said].join('\n'), where: whereOf(out) };
+}
+
 async function inListing(name, plant, position) {
   const { rows, tables, overrides, state } = planted(name, plant, () => true);
   const org = createCommandStateOrg({ tables, rows, overrides });
@@ -244,6 +315,10 @@ for (const [phase, names] of Object.entries(PHASES)) {
 for (const route of ['plain', 'managed']) {
   for (const [position, plant] of Object.entries(publishPositions())) cases.push({ phase: 'publish', name: route, position, plant });
 }
+for (const route of ['fallback', 'phase8']) {
+  for (const [position, plant] of Object.entries(sdkPublishPositions())) cases.push({ phase: 'publish', name: route, position, plant });
+}
+for (const [position, plant] of Object.entries(clientFailurePositions())) cases.push({ phase: 'publish', name: 'managed-predispatch', position, plant });
 const nameOf = (c) => `${c.phase} | ${c.name} | ${c.position}`;
 
 // The thirteen cases an independent review found leaking, each one of the matrix: an app component's objectid and component type and the
@@ -258,6 +333,9 @@ const REVIEWED = [
   'verify | row | error.message', 'verify | concurrency | error.message', 'listing | tableById | error.message',
   // The pull request's review: a refused before-app publish whose message the warning quoted.
   'publish | plain | HTTP 403 error.message', 'publish | plain | HTTP 503 error.message',
+  // A later pass: the SDK's refusal of the fallback publication, quoted in the warning and copied into the halt and the journal; and the
+  // managed publisher's refusal reason when its client failed before the request was dispatched.
+  'publish | fallback | error.message', 'publish | managed-predispatch | client error.message',
 ];
 test('the matrix holds every reviewed case', () => {
   const names = new Set(cases.map(nameOf));
@@ -268,7 +346,7 @@ for (const c of cases) {
   test(`no service text: ${nameOf(c)}`, async () => {
     const seen = c.phase === 'listing' ? await inListing(c.name, c.plant, c.position)
       : c.phase === 'verify' ? await inVerify(c.name, c.plant)
-        : c.phase === 'publish' ? await inPublish(c.name, c.plant)
+        : c.phase === 'publish' ? await (['plain', 'managed'].includes(c.name) ? inPublish(c.name, c.plant) : inSdkPublish(c.name, c.plant))
           : await inBuild(c.phase, c.name, c.plant, c.position);
     assert.ok(seen.hits > 0, 'the planted answer was read');
     if (c.phase === 'preflight' && c.position.startsWith('buttonlabeltext, at')) assert.match(seen.primary, /^command-state-approval-stale\b/, 'the stale-approval halt is reached');
@@ -276,11 +354,17 @@ for (const c of cases) {
       assert.ok(!TAINT.test(text), `${where} holds the planted text: ${text.slice(Math.max(0, text.search(TAINT) - 160), text.search(TAINT) + 60)}`);
     }
     // A refusal whose code is the platform's is still said by its status and that code: the message stays useful without the service's text.
-    if (c.position === 'error.message' || (c.name === 'write' && /^HTTP 40[34] error\.message$/.test(c.position))) {
+    if (c.phase !== 'publish' && (c.position === 'error.message' || (c.name === 'write' && /^HTTP 40[34] error\.message$/.test(c.position)))) {
       assert.match(seen.primary, /HTTP 40[34], Dataverse error 0x80040220/, 'the status and the Dataverse code are said');
     }
     if (c.phase === 'publish' && c.name === 'plain' && /^HTTP \d+ error\.message$/.test(c.position)) {
       assert.match(seen.primary, /PublishXml answered HTTP \d+, Dataverse error 0x80040220/, 'the refused publish is said by its status and code');
+    }
+    if (c.phase === 'publish' && ['fallback', 'phase8'].includes(c.name) && c.position === 'error.message') {
+      assert.match(seen.primary, /publish view Active Tickets FAILED[^\n]*: PublishXml answered HTTP 503, Dataverse error 0x80040220/, 'the SDK\'s refusal is said by its status and code');
+    }
+    if (c.name === 'managed-predispatch' && c.position === 'client error.message') {
+      assert.match(seen.primary, /PublishXml got no usable answer \(ECONNRESET\)/, 'the failure is said by its system code');
     }
   });
 }

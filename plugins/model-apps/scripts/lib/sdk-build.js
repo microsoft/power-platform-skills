@@ -3238,15 +3238,22 @@ function partialEnrichment(error) {
 // saved changes are not live. This function only reports one (a warning); publishReconciledTables, which must not let
 // the app be published ahead of such a table, halts on it. `publishedTargets`: each TABLE target (the same array) whose last
 // publish answered with positive proof that it was sent and succeeded (`proves` below, after the retry) — what publishReconciledTables
-// tells the commandStates observer was published; a caller that does not read it sees nothing new.
-async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false } = {}) {
+// tells the commandStates observer was published; a caller that does not read it sees nothing new. `answers`: each target (the same
+// array) -> the answer its last publish gave (the envelope's, or its retry's), which createTablePublication reads for the table the
+// publish named (publishScope).
+//
+// `checked` is for a build with commandStates (createTablePublication passes it): every line it prints about a failed publish says only
+// the checked facts of the answer (reportTablePush), never its text. Without it every line is the one 2.23.0 printed.
+async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false, checked = false } = {}) {
   const labelOf = targetLabel;
+  const report = (result, label) => reportTablePush(result, label, warn, checked);
   const publishOne = async ([type, id], label) => {
-    if (!keepGoing) return reportPartialPush(await provision.publishArtifact(type, id), label, warn);
+    if (!keepGoing) return report(await provision.publishArtifact(type, id), label);
     try {
-      return reportPartialPush(await provision.publishArtifact(type, id), label, warn);
+      return report(await provision.publishArtifact(type, id), label);
     } catch (e) {
-      if (typeof warn === 'function') warn(`publish ${label} FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
+      const why = checked ? serviceAnswerText(publishFailureFacts(e)) : (e && e.message) || e;
+      if (typeof warn === 'function') warn(`publish ${label} FAILED: ${why} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
       return undefined;
     }
   };
@@ -3263,6 +3270,7 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
   const publishedTargets = [];
   const all = appTarget ? [...entityTargets, appTarget] : entityTargets;
   const isApp = (target) => !!appTarget && target[0] === 'app' && target[1] === appTarget[1];
+  const answers = new Map();
   if (all.length > 1 && typeof provision.publishArtifacts === 'function') {
     let results = null;
     try {
@@ -3276,28 +3284,31 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
       results.forEach((outcome, i) => {
         if (refused(outcome)) retry.push(all[i]);
         else {
-          reportPartialPush(outcome, labelOf(all[i]), warn);
+          report(outcome, labelOf(all[i]));
+          answers.set(all[i], outcome);
           if (isApp(all[i])) appResult = outcome;
           else if (proves(outcome)) publishedTargets.push(all[i]);
         }
       });
       for (const target of retry) {
         const retried = await publishOne(target, labelOf(target));
+        answers.set(target, retried);
         if (isApp(target)) appResult = retried;
         else if (refused(retried)) failed.push({ target, error: retried.publish.error });
         else if (proves(retried)) publishedTargets.push(target);
       }
-      return { appPublished: published(appResult), appResult, failed, publishedTargets };
+      return { appPublished: published(appResult), appResult, failed, publishedTargets, answers };
     }
   }
   const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, labelOf(target))));
   entityTargets.forEach((target, i) => {
     const outcome = (outcomes || [])[i];
+    answers.set(target, outcome);
     if (refused(outcome)) failed.push({ target, error: outcome.publish.error });
     else if (proves(outcome)) publishedTargets.push(target);
   });
   const appResult = appTarget ? await publishOne(['app', appTarget[1]], appTarget[2]) : undefined;
-  return { appPublished: published(appResult), appResult, failed, publishedTargets };
+  return { appPublished: published(appResult), appResult, failed, publishedTargets, answers };
 }
 
 // What a publish target is FOR, in the words a warning or a halt prints: the names the target carries (a table's
@@ -3306,14 +3317,110 @@ function targetLabel([type, id, label]) {
   return (Array.isArray(label) ? label.join(', ') : label) || `${type} ${id}`;
 }
 
+// The checked facts of a publication the SDK refused, for a build with commandStates (lib/command-state-contract.js serviceAnswerText). The
+// SDK answers a refused PublishXml BY VALUE ({ kind: 'failed', error }), its error made by the vendored SDK as, e.g.:
+//   { name: 'ConnectionError', code: 'CONNECTION_ERROR', statusCode: 503, url: 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml',
+//     message: 'HTTP 503 from https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml: <the service's text>',
+//     cause: { error: { code: '0x80040220', message: '<the service's text>' } } }
+// and a transport that got no answer as { code: 'CONNECTION_ERROR', statusCode: 0, message: 'Transport failure reaching …: <text>' }.
+// Only the status (an HTTP status, 100-599), the Dataverse code and the error's own code are taken, and serviceAnswerText checks each again
+// (a 0x code, an upper-case system code); no message is, since every one of them can carry the service's text.
+function publishFailureFacts(error) {
+  const e = error && typeof error === 'object' ? error : {};
+  const status = [e.statusCode, e.status].find((s) => Number.isInteger(s) && s >= 100 && s <= 599);
+  const body = e.cause && typeof e.cause === 'object' && e.cause.error && typeof e.cause.error === 'object' ? e.cause.error : {};
+  return {
+    problem: 'publish-refused',
+    ...(status ? { status } : {}),
+    ...(typeof body.code === 'string' ? { dataverseCode: body.code } : {}),
+    ...(typeof e.code === 'string' ? { systemCode: e.code } : {}),
+  };
+}
+
+// reportPartialPush for a publication, worded for the build it runs in. `checked` (a build with commandStates): a failed publish is said by
+// its checked facts (publishFailureFacts), and one whose read-back could not confirm it by a fixed reason, since the SDK's reason can quote
+// the service (e.g. `the publish step failed: <its message>`). The answer handed back is the SDK's own, untouched: what decides a retry, an
+// app's proof or a halt reads its structured error. Without `checked` this IS reportPartialPush, so a build without commandStates prints
+// what 2.23.0 printed.
+function reportTablePush(result, label, warn, checked) {
+  if (!checked || !result || !result.publish || (result.publish.kind !== 'failed' && result.publish.kind !== 'unverifiable')) return reportPartialPush(result, label, warn);
+  const publish = result.publish.kind === 'failed'
+    ? { kind: 'failed', error: { message: serviceAnswerText(publishFailureFacts(result.publish.error)) } }
+    : { kind: 'unverifiable', reason: 'the published layer was not read back' };
+  reportPartialPush({ ...result, publish }, label, warn);
+  return result;
+}
+
+// ONE way the build publishes a table, and tells commandStates' observer (lib/command-state-run.js createCommandStatePublicationObserver)
+// what it published, so a table publication can no longer be added that the observer never hears about: every PublishXml of
+// sdk-build.js that can name a table goes through a member of this (the contract test in command-state-publication-build.test.js reads
+// this file and fails on one that does not; only the app's own publish, whose request names no table, is outside it).
+//   plain    a PublishXml that names the tables (table-publish.js publishTablesXml): the envelope before the app
+//   managed  the managed publisher's flush (managed-scope-publisher.js): one table's PublishXml each, `published` named; on a halt, what it
+//            settled before it (`onHalt`)
+//   sdk      publishTargets: one artifact per table, in one envelope when the SDK offers it, and the app
+//   one      the SDK's publish of one artifact (a reconcile, the app publication's table scope, when no publish phase follows)
+// Only a publication whose request named the table confirms it (the design: a real publication of the table after its latest row write).
+// For the SDK that is an answer of a kind that proves the request was sent and answered (managed-feature-contract.js
+// publishAnswerProvesPublication) whose `publishScope` is the table's own entity envelope. The vendored SDK, run over a fake transport,
+// sends a view's, a chart's, a form's and a table-bound dashboard's publish as `<entities><entity>t</entity></entities>` and answers
+// `publishScope: { envelope: 'entity', entityLogicalName: 't' }`, also for each artifact of one batch; an unbound dashboard's as
+// `<dashboards>` (envelope 'dashboard') and the app's as `<appmodules>` (envelope 'appmodule'), which name no table and confirm none.
+//
+// `observer` is null for a build without commandStates (and for a dry run): then nothing is told, and every request and every line is the
+// one 2.23.0 made. With it (or with `checked`, which settleOwedPublishes passes after the build's proof is over), every line about a failed
+// publication is said by its checked facts (lib/command-state-contract.js
+// serviceAnswerText), never the service's text. `observed` names the call site in the observer's snapshot (`path`). The observer only
+// records; what it does or throws never changes a publication or a halt.
+function createTablePublication({ observer = null, checked = !!observer, provision, runner, concurrency = 1, managedTables = null, warn } = {}) {
+  const tell = (fn) => {
+    if (!observer) return;
+    try { fn(observer); } catch { /* told only */ }
+  };
+  const lc = (value) => String(value || '').toLowerCase();
+  const names = (answer, table) => {
+    if (!table || !answer || !answer.publishScope) return false;
+    const { publishAnswerProvesPublication: proves } = require('./managed-feature-contract.js');
+    return proves(answer) && answer.publishScope.envelope === 'entity' && lc(answer.publishScope.entityLogicalName) === lc(table);
+  };
+  const sayRefusal = (outcome) => serviceAnswerText({ problem: 'publish-refused', ...((outcome && outcome.facts) || {}) });
+  return {
+    checked,
+    async plain(client, tables, { observed = 'plain-before-app' } = {}) {
+      const outcome = await publishTablesXml(client, tables, checked ? { facts: true } : undefined);
+      tell((o) => o.observePlain(tables, outcome, observed));
+      return outcome;
+    },
+    async managed(tables, { phase, path, observed = 'managed-before-app' } = {}) {
+      const flushed = await managedTables.flush(tables, {
+        phase, path, ...(checked ? { onHalt: (partial) => tell((o) => o.observeManaged(partial, observed)), sayRefusal } : {}),
+      });
+      tell((o) => o.observeManaged(flushed, observed));
+      return flushed;
+    },
+    async sdk(targets, appTarget, { tableOf = () => null, observed = 'sdk-before-app', keepGoing = false } = {}) {
+      const out = await publishTargets(provision, runner, concurrency, targets, appTarget, warn, { keepGoing, checked });
+      tell((o) => o.observeSdk(out.publishedTargets.filter((target) => names(out.answers.get(target), tableOf(target))).map(tableOf), observed));
+      return out;
+    },
+    async one(type, id, table, label, { observed } = {}) {
+      const answer = reportTablePush(await provision.publishArtifact(type, id), label, warn, checked);
+      if (names(answer, table)) tell((o) => o.observeSdk([table], observed));
+      return answer;
+    },
+  };
+}
+
 // The halt for tables whose publish was refused before the app was written. `failed` is publishTargets' `{ target, error }` per table. The message names the saved artifacts, which are the maker's (a
 // view called "SQL Timeout Reader"), and the service's answer to each. What decides whether a run again can help is each refusal's own structure — its status, its type, whether it says it must not be run
 // again — never the names: it is run again for a 429 or a 503 (the build re-runs a throttled publish as it did before this publish moved ahead of the app), and NEVER when any one table's refusal is final,
 // since the run would stop at that table again. The words that may decide are the answers' own (`retryText`, cut of the url each carries), never the names. The runner wraps this halt once more
-// (makeRunner); the policy, the status and the words are read through that wrapper.
-function reconciledPublishHalt(failed) {
+// (makeRunner); the policy, the status and the words are read through that wrapper. `checked` (a build with commandStates): the message
+// says each refusal by its checked facts (publishFailureFacts), never the service's text; the cause, the policy, the status and the words
+// that decide a retry are the same.
+function reconciledPublishHalt(failed, { checked = false } = {}) {
   const names = failed.map(({ target }) => targetLabel(target)).join('; ');
-  const detail = failed.map(({ error }) => (error && error.message) || 'refused').join('; ');
+  const detail = failed.map(({ error }) => (checked ? serviceAnswerText(publishFailureFacts(error)) : (error && error.message) || 'refused')).join('; ');
   const errors = failed.map(({ error }) => error);
   const final = errors.some((error) => retryPolicyFor(error) === RETRY.NEVER);
   const status = errors.map((error) => error && (error.statusCode || error.status)).find(isTransientStatus);
@@ -3354,14 +3461,17 @@ function reconciledPublishHalt(failed) {
 // could not be read, and which tables to publish. It is read AFTER the publishes, so what they made live is not claimed, and only for
 // forms, views and charts (table-publish.js): a column or command saved and not published is not covered, and the line says so. Without
 // `tables`, as the CLI passes none for a dry run or a build with no publish phase, nothing is read.
-async function settleOwedPublishes(provision, owed, warn, { tables } = {}) {
+// `checked`: the halted build declared commandStates (build-model-app.js passes it when the run made the feature's observer), so a failed
+// publish here is said by its checked facts too (createTablePublication); nothing is observed, since the build's proof is over.
+async function settleOwedPublishes(provision, owed, warn, { tables, checked = false } = {}) {
   const targets = Array.isArray(owed) ? owed.filter((target) => Array.isArray(target) && target[0] && target[1]) : [];
   const say = (message) => { if (typeof warn === 'function') warn(`the build stopped before its publish phase; ${message}`); };
   if (provision && targets.length) {
     try {
-      await publishTargets(provision, makeRunner({ emit: () => undefined, total: 0 }), 1, targets, null, say, { keepGoing: true });
+      const settle = createTablePublication({ observer: null, provision, runner: makeRunner({ emit: () => undefined, total: 0 }), concurrency: 1, warn: say, checked });
+      await settle.sdk(targets, null, { keepGoing: true });
     } catch (e) {
-      say(`publishing the views and forms it had already saved FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
+      say(`publishing the views and forms it had already saved FAILED: ${checked ? serviceAnswerText(publishFailureFacts(e)) : (e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
     }
   }
   // An SDK with no raw client to read with is a test double: the real one always has it, so there is nothing to say about its absence.
@@ -4228,6 +4338,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const managedTables = bindingGroups && bindingGroups.store && provision.dataverse
     ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: managedStop, settle: opts.publicationSettle })
     : null;
+  // Every table publication of the build below goes through this (createTablePublication), so the commandStates observer hears of each.
+  const tablePublication = createTablePublication({ observer: owed.commandStateObserver, provision, runner, concurrency, managedTables, warn: opts.warn });
   if (managedTables) await retireAbsentRemovedForms();
   // haltOnUnconfirmedRetirements: a dashboard or form retirement the sweeps above could not confirm ends this invocation
   // here. Both sweeps run before the first service write of the attempt (everything above only reads), so this attempt
@@ -4403,7 +4515,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // refusal below remembers it as wanted).
     if (logical && isRouted(logical)) {
       owed.barrier.allow(logical, label);
-      if (!publishInPhase8) await managedTables.flush([logical], { phase: 'publish', path: label });
+      if (!publishInPhase8) await tablePublication.managed([logical], { phase: 'publish', path: label, observed: 'managed-reconcile' });
       return;
     }
     if (logical && !owed.barrier.allow(logical, label)) return;
@@ -4412,7 +4524,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       reconciledTables.add(logical);
       return;
     }
-    reportPartialPush(await provision.publishArtifact(type, id), label, opts.warn);
+    await tablePublication.one(type, id, logical, label, { observed: 'sdk-reconcile' });
   };
   // Drain what settlement scheduled onto the build's own queues. `charts` is the charts phase's chartsToPublish;
   // the views phase passes nothing (a chart scope cannot be settled there).
@@ -4451,23 +4563,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const targets = logicals.map((logical) => owed.tables.get(logical)).filter(Boolean);
     reconciledTables.clear();
     if (!targets.length) return;
-    const { failed, publishedTargets } = await publishTargets(provision, runner, concurrency, targets, null, opts.warn);
-    // commandStates (lib/command-state-run.js): a table this SDK publication proved published is a publication of the table after its
-    // command-row writes (the commands phase sends them all before any app write, and a later write would undo the confirmation: noteRowWrite),
-    // so the observer records it — the refused envelope that sent the table here recorded only `failed`, and the table is not named again
-    // before the app (namedBeforeApp). Only publishTargets' `publishedTargets` confirm: answers of kind submitted, verified or unverifiable.
-    // A table it reports refused, or answered with a no-request kind (`notApplicable`, `none`, `notRequested`), an unknown kind or nothing,
-    // stays as it was. The observer only records: it sends nothing and never throws.
-    if (owed.commandStateObserver) {
-      const confirmed = new Set(publishedTargets);
-      owed.commandStateObserver.observeSdk(logicals.filter((logical) => confirmed.has(owed.tables.get(logical))));
-    }
+    // commandStates (lib/command-state-run.js): a table this SDK publication proved published, by a request that named it, is a publication
+    // of the table after its command-row writes (the commands phase sends them all before any app write, and a later write would undo the
+    // confirmation: noteRowWrite), so createTablePublication tells the observer — the refused envelope that sent the table here recorded only
+    // `failed`, and the table is not named again before the app (namedBeforeApp). A table it reports refused, or answered with a no-request
+    // kind (`notApplicable`, `none`, `notRequested`), an unknown kind, nothing, or a publishScope that is not the table's, stays as it was.
+    const tableOf = (target) => logicals.find((logical) => owed.tables.get(logical) === target) || null;
+    const { failed } = await tablePublication.sdk(targets, null, { tableOf, observed: 'sdk-before-app' });
     if (!failed.length) return;
     // A table whose publish the SDK refused (by value: it never throws for one) still holds its saved labels
     // unpublished, and the app's publish below would strand them for good — so the build stops before it writes the
     // app. Nothing is lost: the halt carries every table this run owes (runSdkBuild), the CLI re-runs a transient
     // refusal at once, and once no retry follows it publishes them without the app (settleOwedPublishes).
-    throw reconciledPublishHalt(failed);
+    throw reconciledPublishHalt(failed, { checked: tablePublication.checked });
   };
 
   // ...and the tables the app is PROVEN to hold a form or chart of, and the charts this run wrote. The measured strand follows from the order of the
@@ -4556,13 +4664,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // commandStates (lib/command-state-run.js): the observer only records what this path answers; it sends nothing and never throws.
       const commandStateObserver = owed.commandStateObserver;
       // The managed publisher's share of this envelope. It publishes one routed table at a time and throws on the first it cannot, so
-      // the tables it published before that halt reach the observer through `onHalt` (managed-scope-publisher.js flush): a table it
-      // confirmed is reported confirmed and the failing one `failed`, never `halted-before-send`. The halt itself is thrown as it was.
+      // the tables it published before that halt reach the observer through `onHalt` (managed-scope-publisher.js flush, which
+      // createTablePublication hands it): a table it confirmed is reported confirmed and the failing one `failed`, never
+      // `halted-before-send`. The halt itself is thrown as it was.
       const flushManaged = async () => {
-        const flushed = await managedTables.flush(owed.barrier.routedWanted(), {
-          phase: 'app-shell', path: 'tables published before the app', ...(commandStateObserver ? { onHalt: (partial) => commandStateObserver.observeManaged(partial) } : {}),
-        });
-        if (commandStateObserver) commandStateObserver.observeManaged(flushed);
+        await tablePublication.managed(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app', observed: 'managed-before-app' });
       };
       if (!publish || !client || typeof client.post !== 'function') {
         for (const logical of added || []) appAdded.add(logical);
@@ -4579,10 +4685,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // A routed table is left out of the request above and remembered as wanted: the managed publisher sends it first.
       if (managedTables) await flushManaged();
       const tables = wanted.filter((logical) => !namedBeforeApp.has(logical));
-      // With commandStates the failure is asked for its checked facts too: its warning below must not quote the platform's text.
-      const outcome = await publishTablesXml(client, tables, commandStateObserver ? { facts: true } : undefined);
-      // Only a non-empty list answered ok confirms, and only the names it carried (an empty list answers ok without a request).
-      if (commandStateObserver) commandStateObserver.observePlain(tables, outcome);
+      // With commandStates the failure is asked for its checked facts too (createTablePublication): its warning below must not quote the
+      // platform's text. Only a non-empty list answered ok confirms, and only the names it carried (an empty list answers ok without a request).
+      const outcome = await tablePublication.plain(client, tables, { observed: 'plain-before-app' });
       for (const logical of tables) namedBeforeApp.add(logical);
       if (outcome.ok) {
         reconciledTables.clear();
@@ -4734,7 +4839,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             owed.barrier.allow(logical, label);
             const failed = (error) => ({ type: target.artifact.type, id: target.artifact.id, shipped: false, publish: { kind: 'failed', error } });
             try {
-              const out = await managedTables.flush([logical], { phase: 'publish', path: label });
+              const out = await tablePublication.managed([logical], { phase: 'publish', path: label, observed: 'managed-app-publication' });
               if (out.withheld.includes(logical)) return failed({ code: 'publication-withheld', message: `the publish of table ${target.id} is withheld in this run` });
               return { type: target.artifact.type, id: target.artifact.id, shipped: true, publish: { kind: 'submitted' } };
             } catch (err) {
@@ -4745,7 +4850,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (!owed.barrier.allow(String(target.id).toLowerCase(), label)) {
             return { type: target.artifact.type, id: target.artifact.id, shipped: false, publish: { kind: 'failed', error: { code: 'publication-withheld', message: `the publish of table ${target.id} is withheld in this run` } } };
           }
-          return reportPartialPush(await provision.publishArtifact(target.artifact.type, target.artifact.id), label, opts.warn);
+          return tablePublication.one(target.artifact.type, target.artifact.id, logical, label, { observed: 'sdk-app-publication' });
         },
       },
     },
@@ -7158,7 +7263,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       phase: 'views', client: provision.dataverse, halt: managedStop, warn: opts.warn, authorizedAdoption: featureCtx.authorizedAdoption,
       ensureMember: (kind, id, table) => ensureInSolution(id, COMPONENT_TYPE[kind], table),
     });
-    if (tables.length && managedTables) await managedTables.flush(tables, { phase: 'views', path: 'recovered change of an undeclared view or chart' });
+    if (tables.length && managedTables) await tablePublication.managed(tables, { phase: 'views', path: 'recovered change of an undeclared view or chart', observed: 'managed-views-phase' });
   }
 
   // 4. Views (independent -> parallel).
@@ -7245,7 +7350,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             throw marked(err);
           }
           // A routed table is held above; the managed publisher publishes it in place of the SDK.
-          if (isRouted(logical)) await managedTables.flush([logical], { phase: 'views', path: `default views of ${logical}` });
+          if (isRouted(logical)) await tablePublication.managed([logical], { phase: 'views', path: `default views of ${logical}`, observed: 'managed-views-phase' });
           return updated;
         }
         try {
@@ -10820,7 +10925,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const asked = (spec.forms || []).some((f) => f.entity.toLowerCase() === k) || (spec.views || []).some((v) => v.entity.toLowerCase() === k) || chartsToPublish.has(k) || owed.tables.has(k);
           if (asked) ask.push(k);
         }
-        managedOut = await managedTables.flush(ask, { phase: 'publish', path: 'publish customizations' });
+        managedOut = await tablePublication.managed(ask, { phase: 'publish', path: 'publish customizations', observed: 'managed-publish-phase' });
       }
       const perEntity = []; // [type, id, names?] — first artifact found per entity
       // The table's target carries the names of what its one publish ships: what was deferred onto it (its reconciled views
@@ -10874,7 +10979,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       // A throw may come after the app's PublishXml reached the server (a lost answer): the app's exact proof is void.
       // A throw from a table publish before the app's was sent un-proves it too — conservative: the re-run proves it again.
-      const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appWithheld ? null : appTarget, opts.warn).catch(async (error) => {
+      // commandStates: each table this publish proved published, by a request that named it, is told to the observer (createTablePublication).
+      const publishedTargets = await tablePublication.sdk(perEntity, appWithheld ? null : appTarget, { tableOf: (target) => tableOfTarget.get(target) || null, observed: 'sdk-publish-phase' }).catch(async (error) => {
         if (appTarget && !appWithheld) await appPublication.noteAppPublication(result.created.app, { error });
         throw error;
       });
@@ -11046,7 +11152,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const flushed = await appPublication.flush();
   // A routed table some plain publish of this run asked for and nothing paid yet is published now, once; one that cannot be
   // (no client to publish with) leaves the build incomplete, its debt kept in the store.
-  if (managedTables && owed.barrier.routedWanted().length) await managedTables.flush(owed.barrier.routedWanted(), { phase: 'publish', path: 'managed publication' });
+  if (managedTables && owed.barrier.routedWanted().length) await tablePublication.managed(owed.barrier.routedWanted(), { phase: 'publish', path: 'managed publication', observed: 'managed-end-of-build' });
   for (const logical of owed.barrier.routedWanted()) markIncomplete({ phase: 'publish', code: 'managed-publication-owed', message: `table ${logical}: its publish is owed to the managed binding store and was not sent in this run; the change is saved, re-run the build to publish it` });
   // An app row is { id, code }; a scope row (a table) is { kind, id, code, reasons }.
   for (const { kind = 'app', id, code } of [...flushed.withheld, ...flushed.failed]) if (!(kind === 'table' && code === 'publication-withheld')) markIncomplete({ phase: 'publish', code, message: `${kind} ${id}: its publication is owed (${code}); the change is saved, re-run once the cause is cleared` });
@@ -11092,4 +11198,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, openBuildBindingGroups, protectedConfigurationInPlay, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };
+module.exports = { runSdkBuild, openBuildBindingGroups, protectedConfigurationInPlay, publishTargets, createTablePublication, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };

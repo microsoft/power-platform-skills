@@ -86,8 +86,12 @@ function createManagedTablePublisher({ store, barrier, client, halt, settle } = 
    * `onHalt(partial)`, optional: told, just before a table's halt is thrown, what this flush settled before it —
    * { published, withheld, failed } where `failed` names that table when its publish was handed to the transport (an
    * observer must not report it as never sent). It is only told: what it does or throws never changes the halt.
+   * `sayRefusal(outcome)`, optional: words a refused or unanswered PublishXml (publishTablesXml's `{ ok: false, facts }`, asked for its
+   * checked facts) for the error the halt carries, in place of its reason. A build with commandStates passes it (sdk-build.js
+   * createTablePublication): a failure the client met before the request was dispatched is thrown as it is (publishManagedScope), so the
+   * reason, which quotes the service's text, would reach the halt's finding. Without it the call and the error are the ones 2.23.0 made.
    */
-  function flush(tables, { phase = 'publish', path = 'managed publication', onHalt } = {}) {
+  function flush(tables, { phase = 'publish', path = 'managed publication', onHalt, sayRefusal } = {}) {
     const run = chain.then(async () => {
       const published = [];
       const withheld = [];
@@ -106,8 +110,9 @@ function createManagedTablePublisher({ store, barrier, client, halt, settle } = 
               // thrown here: returning normally would let the read-back "confirm" a carried group live before the send.
               // Never `definiteNoStart`: an answer, or the lack of one, is not proof the publish never started.
               handed = true;
-              const r = await publishTablesXml(client, [table]);
-              if (!r.ok) throw Object.assign(new Error(r.reason || `the publish of table ${table} was refused`), { code: 'publish-failed' });
+              const words = typeof sayRefusal === 'function';
+              const r = words ? await publishTablesXml(client, [table], { facts: true }) : await publishTablesXml(client, [table]);
+              if (!r.ok) throw Object.assign(new Error((words ? sayRefusal(r) : r.reason) || `the publish of table ${table} was refused`), { code: 'publish-failed' });
             },
           });
         } catch (err) {

@@ -3633,7 +3633,24 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   when the SDK's answer proves a request was sent and succeeded — kind `submitted`, `verified` or `unverifiable`
   (`publishAnswerProvesPublication`, `managed-feature-contract.js`; path `sdk-before-app`). A no-request kind (`none`,
   `notApplicable`, `notRequested`), an unknown kind or no kind proves nothing and leaves it unconfirmed; one the SDK
-  refuses stays unconfirmed and halts before the app as before. Every message that words a row after its step (that publication halt, the
+  refuses stays unconfirmed and halts before the app as before. **Every table publication goes through one helper**,
+  `createTablePublication` (`sdk-build.js`), which tells the observer what it published, with the path that names
+  the call site: the plain envelope (`plain-before-app`), every managed flush (`managed-before-app`,
+  `managed-views-phase`, `managed-reconcile`, `managed-app-publication`, `managed-publish-phase`,
+  `managed-end-of-build`, each with its partial result on a halt), the reconciled fallback (`sdk-before-app`), a
+  reconcile's or the app publication's own table publish (`sdk-reconcile`, `sdk-app-publication`) and the publish
+  phase's SDK publication (`sdk-publish-phase`). The first publication seen after a table's latest row write is the
+  one recorded. An SDK answer confirms a table only when it proves a request (as above) **and its `publishScope` is
+  that table's own `entity` envelope**: the vendored SDK publishes a view, chart, form or table-bound dashboard as
+  `<entities><entity>t</entity></entities>` and answers `publishScope: { envelope: 'entity', entityLogicalName: 't' }`
+  (also per artifact of one batch), while an unbound dashboard (`dashboard`) and the app (`appmodule`) name no table
+  and confirm none. A source inventory in `command-state-publication-build.test.js` fails on a table publication in
+  `sdk-build.js` outside the helper (the app's own publish in `appWriters` is the one listed exception). In a build
+  with `commandStates`, every warning, halt and journal line about a failed table publication says only its checked
+  facts (`publish-refused`: status, Dataverse code, system code) — the SDK's refusal of the fallback, its settle after
+  a final halt (`settleOwedPublishes` with `checked`), the publish phase's, and a managed publish whose client failed
+  before dispatch (the managed publisher's `sayRefusal`) — while the structured error that decides a retry is kept;
+  a build without `commandStates` prints, journals and decides exactly as before. Every message that words a row after its step (that publication halt, the
   post-write read, the final drift and late membership checks, a retry's approval halt, the CLI's result lines) words
   it from the row's **facts** — an ordered, append-only list of what each read found (matched, other flags, or could
   not be read, with the phase it was made in) and how each write was answered — through one renderer,
@@ -3671,7 +3688,7 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   by verify's details and a lost write's cause), the transport's refusal of a continuation outside the API, a
   refused row write (`command-state-run.js`, `write-refused`), and the before-app table publish's refusal warning
   (`publish-refused`: `publishTablesXml` with `facts: true` returns the status, Dataverse code or system code beside
-  its reason). The shared reader (`collectionRows`) still copies the
+  its reason), and every other failed table publication of such a build (`createTablePublication`, above). The shared reader (`collectionRows`) still copies the
   service's message and value into the errors it throws, and the publish warning of a build without `commandStates`
   still quotes the reason, so such a build prints what it always printed; this feature never says them: a refused
   read is said from the answer itself (`watched`), and a complaint

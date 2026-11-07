@@ -1138,7 +1138,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       if (writesStopped) {
         halted = stoppedAfterEarlierAttempts(err, attempt, [...owedAcrossAttempts.values()], owedLengths, deps.warn);
       } else {
-        await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()].filter((t) => publicationBarrier.allowTarget(t, 'settle after a halt')), deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
+        // A build with commandStates (the run made the feature's observer) has the settle say a failed publish by its checked facts only.
+        const settleOptions = hadPublishPhase ? { tables: specTables(spec) } : undefined;
+        await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()].filter((t) => publicationBarrier.allowTarget(t, 'settle after a halt')), deps.warn, commandStateObserver ? { ...settleOptions, checked: true } : settleOptions);
       }
       if (typeof deps.warn === 'function') for (const w of publicationBarrier.withheld()) deps.warn(describeWithheld(w));
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).

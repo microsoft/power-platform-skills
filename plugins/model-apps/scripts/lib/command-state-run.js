@@ -387,7 +387,10 @@ function commandStateSpecHalt(spec) {
 function createCommandStatePublicationObserver() {
   const tables = new Map();
   const lc = (name) => String(name).toLowerCase();
+  // The first publication seen since the table's latest row write is the one recorded: a later one of the same generation (the publish
+  // phase's, after the envelope before the app) adds nothing, and keeps the path that a result already reported.
   const confirm = (entry, path) => {
+    if (entry.outcome === 'confirmed' && entry.confirmation && entry.confirmation.generation === entry.generation) return;
     entry.outcome = 'confirmed';
     entry.confirmation = { generation: entry.generation, path };
     delete entry.reason;
@@ -430,40 +433,44 @@ function createCommandStatePublicationObserver() {
       entry.reason = 'not-observed';
       delete entry.confirmation;
     },
-    /** The plain before-app envelope: only a non-empty list answered ok confirms, and only the names it carried. */
-    observePlain(names, outcome) {
+    // Each observe* method takes the `path` that names the build's call site (sdk-build.js createTablePublication, which is the only
+    // caller): the defaults are the paths before the app, the others are the publish phase's, the views phase's, a reconcile's, the app
+    // publication's table scope and the end of the build's (e.g. `sdk-publish-phase`, `managed-publish-phase`).
+    /** A plain PublishXml that names tables (the envelope before the app): only a non-empty list answered ok confirms, and only the names it carried. */
+    observePlain(names, outcome, path = 'plain-before-app') {
       try {
         if (!Array.isArray(names) || !names.length) return;
         const ok = !!outcome && outcome.ok === true;
         for (const name of names) {
           const entry = tables.get(lc(name));
           if (!entry) continue;
-          if (ok) confirm(entry, 'plain-before-app');
+          if (ok) confirm(entry, path);
           else if (entry.outcome !== 'confirmed') entry.reason = 'failed';
         }
       } catch { /* an observation that cannot be made confirms nothing */ }
     },
     /**
-     * The SDK's publication of reconciled tables before the app (sdk-build.js publishReconciledTables), which follows a refused or absent
-     * plain envelope: only the names it proved published (a submitted, verified or unverifiable answer) confirm. A table it refused, or
-   * answered with no request made, is not named, so it keeps the reason it had.
+     * The SDK's publication of a table's artifact: the reconciled tables before the app (sdk-build.js publishReconciledTables), which follows
+     * a refused or absent plain envelope, and the publish phase's. Only the names the caller proved published confirm: an answer of kind
+     * submitted, verified or unverifiable whose publishScope is that table's entity envelope. A table it refused, or answered with no
+     * request made, is not named, so it keeps the reason it had.
      */
-    observeSdk(names) {
+    observeSdk(names, path = 'sdk-before-app') {
       try {
         if (!Array.isArray(names)) return;
-        for (const name of names) { const entry = tables.get(lc(name)); if (entry) confirm(entry, 'sdk-before-app'); }
+        for (const name of names) { const entry = tables.get(lc(name)); if (entry) confirm(entry, path); }
       } catch { /* as above */ }
     },
     /**
      * The managed publisher's flush: only the names in `published` confirm; `withheld` says why a table did not, and `failed` names the table
      * whose publish was handed to the transport and halted (managed-scope-publisher.js flush `onHalt`), so it is never called unsent.
      */
-    observeManaged(flushed) {
+    observeManaged(flushed, path = 'managed-before-app') {
       try {
         const published = flushed && Array.isArray(flushed.published) ? flushed.published : [];
         const withheld = flushed && Array.isArray(flushed.withheld) ? flushed.withheld : [];
         const failed = flushed && Array.isArray(flushed.failed) ? flushed.failed : [];
-        for (const name of published) { const entry = tables.get(lc(name)); if (entry) confirm(entry, 'managed-before-app'); }
+        for (const name of published) { const entry = tables.get(lc(name)); if (entry) confirm(entry, path); }
         for (const name of withheld) { const entry = tables.get(lc(name)); if (entry && entry.outcome !== 'confirmed') entry.reason = 'withheld'; }
         for (const name of failed) { const entry = tables.get(lc(name)); if (entry && entry.outcome !== 'confirmed') entry.reason = 'failed'; }
       } catch { /* as above */ }
