@@ -127,7 +127,7 @@ const POLICY = {
 // The sites whose code is an expression, on purpose: the code is decided at run time, so the policy cannot be read off a literal.
 const DYNAMIC = [
   { file: 'lib/sdk-build.js', expr: 'stopCode', kind: 'by-failure', what: 'a declared artifact that did not settle (managedStop): the code of its own first finding; never retried, save an identity read that met the metadata-cache lag of a table this invocation created (isFreshTableReadLag, #796), which the build\'s bounded retry rides out' },
-  { file: 'lib/entity-provision.js', expr: "(err && err.code) || 'sdk-error'", kind: 'by-failure', what: 'the runner wraps every failed step with the code of what failed' },
+  { file: 'lib/entity-provision.js', expr: 'shown.code', kind: 'by-failure', what: 'the runner wraps every failed step with the code of what failed (command-state-contract.js checkedDisplay: the error\'s own, or `sdk-error`; a table publication\'s error in a build with commandStates keeps its own only when it has a system code\'s shape)' },
   { file: 'lib/entity-provision.js', expr: 'sdkCode', kind: 'by-failure', what: 'a push the SDK refused by value, with the code the SDK gave' },
   { file: 'lib/sdk-build.js', expr: 'verdict.code', kind: 'never', what: 'the navigation verdict (app-navigation-empty): a re-run reads the same spec' },
   { file: 'lib/sdk-build.js', expr: 'incomplete[0].code', kind: 'never', what: 'the end of a build that ran every phase and saved its changes, but left a publication owed or an exact Main-form list unproven (error.incomplete): running the phases again would push the saved change again and cannot settle what is withheld or unknown; the maker re-runs once the cause is cleared' },

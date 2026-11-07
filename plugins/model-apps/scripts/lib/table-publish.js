@@ -201,27 +201,65 @@ const shown = (value) => (typeof value === 'string' ? `'${value.slice(0, 40)}'` 
 // NO list: a partial one would read as the whole. A row the read cannot place is such an answer, not a record that is published: one that carries
 // no state, or a state that is none of the four, or no id (two records of one name would collapse into one), or no table (it may be the very one a
 // reader is asking about). The three collections are read one after the other, so a bad row in the last one makes the first one's list unreadable too.
-async function readSavedNotPublished(client, tables) {
+//
+// `facts: true` adds `facts` to a failure, as publishTablesXml does, UNCHECKED: `read`, the label of the read that failed (`the saved views`),
+// and what failed about it — the answer's status and its `error.code` (`problem: 'failed'`), a thrown failure's `code`, an answer that is not a
+// list (`not-a-list`) or whose next-page link is not one (`malformed-link`), the field a row got wrong (`malformed-field`, `componentstate`), a
+// row that cannot be placed (`unplaceable`), else `unexpected`. A caller that must not print the platform's text (a build with commandStates)
+// says the failure from them alone (describeSavedNotPublished, `checked`). Without it the answer is exactly what it always was.
+async function readSavedNotPublished(client, tables, { facts = false } = {}) {
   const wanted = [...new Set((Array.isArray(tables) ? tables : []).map((t) => String(t).toLowerCase()))];
   if (!wanted.length) return { ok: true, byTable: new Map() };
-  if (!client || typeof client.get !== 'function') return { ok: false, reason: 'no client to read with' };
+  if (!client || typeof client.get !== 'function') return { ok: false, reason: 'no client to read with', ...(facts ? { facts: { problem: 'unexpected' } } : {}) };
   const found = new Map(wanted.map((table) => [table, new Map()]));
+  // With `facts`, every answer the read gets is looked at as it comes (collectionRows makes its failures of the answer's text): the last one
+  // that is not a usable page is what failed, and a thrown read is its own code.
+  let reading = null;
+  let failure = null;
+  let reader = client;
+  if (facts) {
+    const look = (response) => {
+      const body = response && response.body;
+      if (!response || response.status < 200 || response.status >= 300) {
+        const error = body && typeof body === 'object' && body.error && typeof body.error === 'object' ? body.error : {};
+        failure = { problem: 'failed', status: response && response.status, dataverseCode: error.code };
+      } else if (!body || !Array.isArray(body.value)) failure = { problem: 'not-a-list' };
+      else if (body['@odata.nextLink'] !== undefined && (typeof body['@odata.nextLink'] !== 'string' || !body['@odata.nextLink'])) failure = { problem: 'malformed-link' };
+      return response;
+    };
+    const asked = (fn) => async (...args) => {
+      try {
+        return look(await fn(...args));
+      } catch (e) {
+        failure = { problem: 'failed', systemCode: e && e.code };
+        throw e;
+      }
+    };
+    reader = { get: asked(client.get.bind(client)) };
+    if (typeof client.getAbsolute === 'function') reader.getAbsolute = asked(client.getAbsolute.bind(client));
+    if (typeof client.apiUrl === 'function') reader.apiUrl = client.apiUrl.bind(client);
+  }
   try {
     for (const layer of LAYERED) {
+      reading = layer.label;
       for (let start = 0; start < wanted.length; start += TABLES_PER_READ) {
         const filter = wanted.slice(start, start + TABLES_PER_READ).map((table) => `${layer.tableField} eq '${odataLit(table)}'`).join(' or ');
-        const rows = await collectionRows(client,
+        failure = null;
+        const rows = await collectionRows(reader,
           `/${layer.collection}/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${layer.idField},name,${layer.tableField},componentstate&$filter=${filter}`,
           layer.label);
         for (const row of rows) {
           const state = row && row.componentstate;
+          failure = { problem: 'malformed-field', field: 'componentstate' };
           if (state === undefined || state === null) throw new Error(`${layer.label}: the answer names no saved or published state (componentstate), so what is published cannot be told`);
           const code = stateOf(state);
           if (code === null) throw new Error(`${layer.label}: a record carries componentstate ${shown(state)}, which is not a saved or published state`);
+          failure = { problem: 'unplaceable' };
           const tableValue = row[layer.tableField];
           if (typeof tableValue !== 'string' || !tableValue.trim()) throw new Error(`${layer.label}: a record has no ${layer.tableField}, so the table it belongs to cannot be told`);
           const idValue = row[layer.idField];
           if (typeof idValue !== 'string' || !idValue.trim()) throw new Error(`${layer.label}: a record has no ${layer.idField}, so it cannot be told from another`);
+          failure = null;
           const table = tableValue.trim().toLowerCase();
           if (!found.has(table) || (code !== UNPUBLISHED && code !== DELETED_UNPUBLISHED)) continue;
           const id = idValue.trim().toLowerCase();
@@ -231,7 +269,9 @@ async function readSavedNotPublished(client, tables) {
       }
     }
   } catch (e) {
-    return { ok: false, reason: clipReason((e && e.message) || e) };
+    const reason = clipReason((e && e.message) || e);
+    if (!facts) return { ok: false, reason };
+    return { ok: false, reason, facts: { read: reading, ...(failure || { problem: 'unexpected' }) } };
   }
   const kindOrder = LAYERED.map((layer) => layer.kind);
   const byTable = new Map();
@@ -286,12 +326,22 @@ const MAX_NAMES = 20;
 // The sentence a halted build adds when it stopped before its publish phase: what `read` found saved and not published on the spec's tables, or
 // — when it could not read — that it could not, with the tables to publish. `null` when there is nothing to say: nothing is saved and
 // unpublished. It names forms, views and charts only, and says so: a column or a command saved and not published is not read here.
-function describeSavedNotPublished(read, tables) {
+// `checked` (a build with commandStates): a read that failed is said by its checked facts (readSavedNotPublished `facts`, worded by
+// command-state-contract.js serviceAnswerText): which read it was, by one of the three fixed labels, and what failed, never the platform's
+// text. What a read that succeeded found is said the same either way: the names of the maker's own forms, views and charts.
+function describeSavedNotPublished(read, tables, { checked = false } = {}) {
   if (!read) return null;
   const names = [...new Set((Array.isArray(tables) ? tables : []).map((t) => String(t)))];
   if (!read.ok) {
     if (!names.length) return null;
-    return `which forms, views and charts on the spec's tables are saved but not published could not be read (${read.reason}). Run the build again with --publish, or publish these tables in Power Apps: ${tableList(names, MAX_NAMES)}.`;
+    let reason = read.reason;
+    if (checked) {
+      const { serviceAnswerText } = require('./command-state-contract.js');
+      const { read: label, ...failure } = read.facts || { problem: 'unexpected' };
+      const which = LAYERED.find((layer) => layer.label === label);
+      reason = `${which ? `${which.label}: ` : ''}${serviceAnswerText(failure)}`;
+    }
+    return `which forms, views and charts on the spec's tables are saved but not published could not be read (${reason}). Run the build again with --publish, or publish these tables in Power Apps: ${tableList(names, MAX_NAMES)}.`;
   }
   if (!read.byTable || !read.byTable.size) return null;
   const records = (list) => {

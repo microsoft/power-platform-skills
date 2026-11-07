@@ -3640,7 +3640,10 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   `managed-end-of-build`, each with its partial result on a halt), the reconciled fallback (`sdk-before-app`), a
   reconcile's or the app publication's own table publish (`sdk-reconcile`, `sdk-app-publication`) and the publish
   phase's SDK publication (`sdk-publish-phase`). The first publication seen after a table's latest row write is the
-  one recorded. An SDK answer confirms a table only when it proves a request (as above) **and its `publishScope` is
+  one recorded. The SDK publication tells the observer of each table **as its answer proves it** (`publishTargets`'
+  `onProven`), not once the call returns, so a later target that throws — the real SDK's `ARTIFACT_NOT_FOUND`
+  preflight of an artifact its workspace does not hold, a retry, or the single-target pass after a batch that threw —
+  does not take back a table already proven; a partial or failed batch confirms nothing. An SDK answer confirms a table only when it proves a request (as above) **and its `publishScope` is
   that table's own `entity` envelope**: the vendored SDK publishes a view, chart, form or table-bound dashboard as
   `<entities><entity>t</entity></entities>` and answers `publishScope: { envelope: 'entity', entityLogicalName: 't' }`
   (also per artifact of one batch), while an unbound dashboard (`dashboard`) and the app (`appmodule`) name no table
@@ -3649,8 +3652,14 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   with `commandStates`, every warning, halt and journal line about a failed table publication says only its checked
   facts (`publish-refused`: status, Dataverse code, system code) — the SDK's refusal of the fallback, its settle after
   a final halt (`settleOwedPublishes` with `checked`), the publish phase's, and a managed publish whose client failed
-  before dispatch (the managed publisher's `sayRefusal`) — while the structured error that decides a retry is kept;
-  a build without `commandStates` prints, journals and decides exactly as before. Every message that words a row after its step (that publication halt, the
+  before dispatch (the managed publisher's `sayRefusal`) — while the structured error that decides a retry is kept.
+  An error a table publication **throws** (phase 8 or the reconciled fallback) is thrown on unchanged — its message,
+  code, cause and status still decide the retry — and carries a non-enumerable mark (`withCheckedDisplay`,
+  `command-state-contract.js`) that the runner's halt and journal line say instead of its message (`checkedDisplay`
+  in `makeRunner`), with its code kept only when it has a system code's shape. After a final halt, a failed read of
+  what is still saved and not published (`readSavedNotPublished` with `facts`) is said as that read, by its label and
+  checked facts (`describeSavedNotPublished` with `checked`); what a read that succeeded found is listed the same way
+  either way. A build without `commandStates` prints, journals and decides exactly as before. Every message that words a row after its step (that publication halt, the
   post-write read, the final drift and late membership checks, a retry's approval halt, the CLI's result lines) words
   it from the row's **facts** — an ordered, append-only list of what each read found (matched, other flags, or could
   not be read, with the phase it was made in) and how each write was answered — through one renderer,

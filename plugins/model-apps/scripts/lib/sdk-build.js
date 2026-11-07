@@ -177,7 +177,7 @@ const { openManagedContext, isStoreEnvironment, attemptProvenUnsent, discoverMan
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
 const { commandStateMode, commandStateSpecHalt, createCommandStateRun, createCommandStatePublicationObserver, CODES: COMMAND_STATE_CODES, REMEDY: COMMAND_STATE_REMEDY } = require('./command-state-run.js');
 const { createCommandStateTransport } = require('./command-state-transport.js');
-const { serviceAnswerText } = require('./command-state-contract.js');
+const { serviceAnswerText, withCheckedDisplay } = require('./command-state-contract.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 // The configuration kinds (environment variables, connection references, Custom APIs, duplicate rules) and the solution's version:
@@ -3243,8 +3243,10 @@ function partialEnrichment(error) {
 // publish named (publishScope).
 //
 // `checked` is for a build with commandStates (createTablePublication passes it): every line it prints about a failed publish says only
-// the checked facts of the answer (reportTablePush), never its text. Without it every line is the one 2.23.0 printed.
-async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false, checked = false } = {}) {
+// the checked facts of the answer (reportTablePush), never its text. Without it every line is the one 2.23.0 printed. `onProven(target,
+// answer)`: told of each table target as soon as its answer proves its publication (createTablePublication's observer), so a later throw
+// cannot take back what was proven; it is only told, and never changes a request, an answer or what is thrown.
+async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false, checked = false, onProven = null } = {}) {
   const labelOf = targetLabel;
   const report = (result, label) => reportTablePush(result, label, warn, checked);
   const publishOne = async ([type, id], label) => {
@@ -3271,6 +3273,12 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
   const all = appTarget ? [...entityTargets, appTarget] : entityTargets;
   const isApp = (target) => !!appTarget && target[0] === 'app' && target[1] === appTarget[1];
   const answers = new Map();
+  // Each table target whose answer proves its publication, told as it is received: a later target (or the retry of one) that THROWS ends
+  // this call before it returns anything, and must not take back what was already proven (createTablePublication). Told once per target,
+  // only when it proves (a refused, a notApplicable or a missing answer is never told), and the app never.
+  const prove = (target, outcome) => {
+    if (typeof onProven === 'function' && !isApp(target) && !refused(outcome) && proves(outcome)) onProven(target, outcome);
+  };
   if (all.length > 1 && typeof provision.publishArtifacts === 'function') {
     let results = null;
     try {
@@ -3286,6 +3294,7 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
         else {
           report(outcome, labelOf(all[i]));
           answers.set(all[i], outcome);
+          prove(all[i], outcome);
           if (isApp(all[i])) appResult = outcome;
           else if (proves(outcome)) publishedTargets.push(all[i]);
         }
@@ -3293,6 +3302,7 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
       for (const target of retry) {
         const retried = await publishOne(target, labelOf(target));
         answers.set(target, retried);
+        prove(target, retried);
         if (isApp(target)) appResult = retried;
         else if (refused(retried)) failed.push({ target, error: retried.publish.error });
         else if (proves(retried)) publishedTargets.push(target);
@@ -3300,7 +3310,11 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
       return { appPublished: published(appResult), appResult, failed, publishedTargets, answers };
     }
   }
-  const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, labelOf(target))));
+  const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => {
+    const outcome = await publishOne(target, labelOf(target));
+    prove(target, outcome);
+    return outcome;
+  }));
   entityTargets.forEach((target, i) => {
     const outcome = (outcomes || [])[i];
     answers.set(target, outcome);
@@ -3384,6 +3398,18 @@ function createTablePublication({ observer = null, checked = !!observer, provisi
     return proves(answer) && answer.publishScope.envelope === 'entity' && lc(answer.publishScope.entityLogicalName) === lc(table);
   };
   const sayRefusal = (outcome) => serviceAnswerText({ problem: 'publish-refused', ...((outcome && outcome.facts) || {}) });
+  // An error a publication THROWS (the SDK's preflight of an artifact its workspace does not hold, a provider, a callback) is thrown on as
+  // it is; with `checked` it carries, beside it, the checked words the halt says of it instead of its message (command-state-contract.js
+  // withCheckedDisplay). A BuildHalt is the build's own words already (a throttle budget's stop), and is left as it is.
+  const thrown = async (fn) => {
+    if (!checked) return fn();
+    try {
+      return await fn();
+    } catch (e) {
+      if (!(e && e.name === 'BuildHalt')) withCheckedDisplay(e, serviceAnswerText(publishFailureFacts(e)));
+      throw e;
+    }
+  };
   return {
     checked,
     async plain(client, tables, { observed = 'plain-before-app' } = {}) {
@@ -3399,12 +3425,16 @@ function createTablePublication({ observer = null, checked = !!observer, provisi
       return flushed;
     },
     async sdk(targets, appTarget, { tableOf = () => null, observed = 'sdk-before-app', keepGoing = false } = {}) {
-      const out = await publishTargets(provision, runner, concurrency, targets, appTarget, warn, { keepGoing, checked });
-      tell((o) => o.observeSdk(out.publishedTargets.filter((target) => names(out.answers.get(target), tableOf(target))).map(tableOf), observed));
-      return out;
+      // Each table is told as its answer proves it (publishTargets' onProven), not once the call returns: a later target that throws
+      // ends the call, and the tables already proven stay told.
+      const onProven = (target, answer) => {
+        const table = tableOf(target);
+        if (names(answer, table)) tell((o) => o.observeSdk([table], observed));
+      };
+      return thrown(() => publishTargets(provision, runner, concurrency, targets, appTarget, warn, { keepGoing, checked, onProven }));
     },
     async one(type, id, table, label, { observed } = {}) {
-      const answer = reportTablePush(await provision.publishArtifact(type, id), label, warn, checked);
+      const answer = reportTablePush(await thrown(() => provision.publishArtifact(type, id)), label, warn, checked);
       if (names(answer, table)) tell((o) => o.observeSdk([table], observed));
       return answer;
     },
@@ -3462,7 +3492,8 @@ function reconciledPublishHalt(failed, { checked = false } = {}) {
 // forms, views and charts (table-publish.js): a column or command saved and not published is not covered, and the line says so. Without
 // `tables`, as the CLI passes none for a dry run or a build with no publish phase, nothing is read.
 // `checked`: the halted build declared commandStates (build-model-app.js passes it when the run made the feature's observer), so a failed
-// publish here is said by its checked facts too (createTablePublication); nothing is observed, since the build's proof is over.
+// publish here is said by its checked facts too (createTablePublication), and so is a failed read of what is still saved and not published
+// (describeSavedNotPublished `checked`); nothing is observed, since the build's proof is over.
 async function settleOwedPublishes(provision, owed, warn, { tables, checked = false } = {}) {
   const targets = Array.isArray(owed) ? owed.filter((target) => Array.isArray(target) && target[0] && target[1]) : [];
   const say = (message) => { if (typeof warn === 'function') warn(`the build stopped before its publish phase; ${message}`); };
@@ -3478,7 +3509,9 @@ async function settleOwedPublishes(provision, owed, warn, { tables, checked = fa
   const client = provision && provision.dataverse;
   if (typeof warn !== 'function' || !Array.isArray(tables) || !tables.length || !client || typeof client.get !== 'function') return;
   try {
-    const text = describeSavedNotPublished(await readSavedNotPublished(client, tables), tables);
+    const text = checked
+      ? describeSavedNotPublished(await readSavedNotPublished(client, tables, { facts: true }), tables, { checked: true })
+      : describeSavedNotPublished(await readSavedNotPublished(client, tables), tables);
     if (text) say(text);
   } catch { /* the halt is what the operator must see; a report on what else is not live never hides it */ }
 }

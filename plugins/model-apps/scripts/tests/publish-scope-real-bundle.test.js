@@ -1168,7 +1168,8 @@ for (const [what, damaged] of [
 // edit that calls the SDK for the app directly — a new path, say — cannot skip it. This reads the engine's source, because that is where a new path would be written.
 // (The request is made once for what it names, so a run in which the app step has made it cannot show that a LATER writer forgot to ask: this is what shows it.)
 test('sdk-build.js reaches the SDK for the app only through appWriters, and each writer sends the request before its first write of the app', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8');
+  // A checkout may give the file CRLF line endings; every pattern below is written for LF.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8').replace(/\r\n/g, '\n');
   // Code only: a comment may name what it explains.
   const code = source.split('\n').map((line) => line.replace(/^\s*\/\/.*$/, '').replace(/\s\/\/\s.*$/, '')).join('\n');
   const begin = code.indexOf('const appWriters = {');

@@ -175,6 +175,27 @@ function serviceAnswerText({ problem = 'failed', status, dataverseCode, systemCo
   return `${what}${fields.length ? ` (${fields.join(', ')})` : ''}${remedy ? `; ${remedy}` : ''}`;
 }
 
+// What a halt says about an error a build with commandStates caught at a table publication (sdk-build.js createTablePublication) and
+// threw on unchanged. The error stays the one thrown — its message, code, cause and status are what decide a retry (retry-policy.js
+// judgeFailure reads its words), so none of them is rewritten — and this mark beside it is what the runner that turns it into a halt
+// (entity-provision.js makeRunner) says instead: the checked text (serviceAnswerText) and a code that is the error's own only when it has a
+// system code's shape (an SDK's CONNECTION_ERROR, ARTIFACT_NOT_FOUND), else the runner's own `sdk-error`. An error carries no mark in a
+// build without commandStates, so there the halt is the one 2.23.0 made. Non-enumerable, so nothing that copies or serialises the error
+// carries it; an error that cannot take it (frozen, or not an object) keeps its own words.
+const CHECKED_DISPLAY = Symbol.for('model-apps.command-state.checked-display');
+function withCheckedDisplay(error, text) {
+  if (!error || typeof error !== 'object') return error;
+  const code = typeof error.code === 'string' && SYSTEM_CODE.test(error.code) ? error.code : 'sdk-error';
+  try { Object.defineProperty(error, CHECKED_DISPLAY, { value: { text: String(text), code }, enumerable: false, configurable: true }); } catch { /* keeps its own words */ }
+  return error;
+}
+/** @returns {{ text: string, code: string }} what a halt says of `error`: its checked mark, else its own message and code. */
+function checkedDisplay(error) {
+  const mark = error && typeof error === 'object' ? error[CHECKED_DISPLAY] : undefined;
+  if (mark) return mark;
+  return { text: String((error && error.message) || error), code: (error && error.code) || 'sdk-error' };
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // The App Spec's `commandStates[]`: the hidden / disabled state of an EXISTING table-scoped modern command, named by its row id.
 //   { "entity": "contoso_order", "location": "MainTab", "scope": "table", "rowId": "11111111-1111-4111-8111-111111111111", "hidden": true }
@@ -410,7 +431,7 @@ function commandStateAuthorizationKeys(raw, spec) {
 
 module.exports = {
   LOCATION_BY_BAR, BAR_BY_LOCATION, UNSUPPORTED_BAR, ROW_VERSION, ROW_SELECT, REASONS, CODE_BY_REASON,
-  codeForReasons, canonicalRowId, guidOf, CommandStateError, serviceAnswerText, SERVICE_PROBLEMS, SERVICE_FIELDS,
+  codeForReasons, canonicalRowId, guidOf, CommandStateError, serviceAnswerText, SERVICE_PROBLEMS, SERVICE_FIELDS, withCheckedDisplay, checkedDisplay,
   COMMAND_STATES_MIN_VERSION, WIRE_FLAG, SPEC_FLAG,
   usesCommandStates, validateCommandStates, normalizeCommandState, normalizeCommandStates, wireDesired, diffCommandFlags, canonicalOrigin,
   commandStateApprovalKey, commandTablePublishApprovalKey, commandStateAuthorizationKeys, isCommandStateToken,

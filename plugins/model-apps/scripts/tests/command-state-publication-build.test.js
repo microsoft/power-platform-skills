@@ -141,11 +141,15 @@ test('the managed flush tells onHalt what it settled before a halt, and the halt
 const sdkRefusal = () => Object.assign(new Error(`HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml: ${MARKER}`), {
   code: 'CONNECTION_ERROR', statusCode: 400, cause: { error: { code: '0x80040220', message: MARKER } },
 });
+// A publication that THROWS instead (`sdkThrows`): an error of the same shape thrown, as a provider or a callback can; the real SDK throws
+// before any request for an artifact its workspace does not hold (ARTIFACT_NOT_FOUND), which the real-bundle case below runs.
+const sdkThrown = () => Object.assign(new Error(MARKER), { code: 'CONNECTION_ERROR', statusCode: 400, cause: { error: { code: '0x80040220', message: MARKER } } });
 const entityScope = (type, id) => ({ envelope: 'entity', entityLogicalName: id.includes(T2) ? T2 : T, blastRadiusWarning: 'the table is published' });
-function reconciling({ commandStates = true, tables = [T], sdkRefuses = () => false, batch = false, sdkKind = () => 'verified', scopeOf = entityScope } = {}) {
+function reconciling({ commandStates = true, tables = [T], sdkRefuses = () => false, sdkThrows = () => false, batch = false, sdkKind = () => 'verified', scopeOf = entityScope } = {}) {
   const sdkPublishes = [];
   const answer = (type, id) => {
     sdkPublishes.push(`${type} ${id}`);
+    if (sdkThrows(type, id)) throw sdkThrown();
     if (sdkRefuses(type, id, sdkPublishes.length)) return { type, id, shipped: false, publish: { kind: 'failed', error: sdkRefusal() } };
     const kind = sdkKind(type, id, sdkPublishes.length);
     const publishScope = scopeOf(type, id);
@@ -283,12 +287,13 @@ test('an SDK publication answered submitted (shipped false), verified or unverif
 // names the table; an answer that names another table, an envelope that names none (a dashboard's, the app's), or none, confirms nothing.
 // `scopeOf(type, table)` is the answer's publishScope (default: the table's entity envelope, the app's appmodule one); `kind(type, table)` its
 // kind; `refuses(type, table)` answers the SDK's refusal instead; `plain(tables)` answers the envelope before the app.
-function publishing({ commandStates = true, tables = [T], batch = false, scopeOf, kind = () => 'verified', refuses = () => false, plain = () => refused(503), barrier, adaptSdk } = {}) {
+function publishing({ commandStates = true, tables = [T], batch = false, scopeOf, kind = () => 'verified', refuses = () => false, throws = () => false, plain = () => refused(503), barrier, adaptSdk } = {}) {
   const tableOfId = new Map();
   const sdkPublishes = [];
   const answer = (type, id) => {
     sdkPublishes.push(`${type} ${id}`);
     const table = tableOfId.get(id) || null;
+    if (throws(type, table)) throw sdkThrown();
     if (refuses(type, table)) return { type, id, shipped: false, publish: { kind: 'failed', error: sdkRefusal() } };
     const k = kind(type, table);
     const publishScope = scopeOf ? scopeOf(type, table) : table ? entityScope(type, table) : { envelope: 'appmodule', blastRadiusWarning: 'the app is published' };
@@ -486,6 +491,204 @@ test('a publish owed after a halt that throws or is refused is said by its check
     `view Two: HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml: ${MARKER}`,
     `view Three: Transport failure reaching ${ORIGIN}/api/data/v9.2/PublishXml: ${MARKER}`,
   ]);
+});
+
+// ---- A table publication that THROWS (sdk-build.js createTablePublication) ----
+// The vendored SDK answers a refused or unanswered PublishXml by value, but throws before any request for an artifact its workspace does not
+// hold (ARTIFACT_NOT_FOUND), and a provider or a callback can throw too. Two things hold whatever throws, and wherever:
+//   - a table a request already proved published stays confirmed: the helper hears each target as it settles, so a later target's throw, a
+//     retry's after the batch, or the single-target pass's after a batch that threw does not erase it; the table whose publication threw
+//     stays unconfirmed, and the error is the one thrown, unchanged;
+//   - with commandStates the halt and every line around it say the thrown error by its checked facts; its code, cause, status and retry
+//     policy are the same as without, where it is quoted as 2.23.0 quoted it.
+test('a table the real SDK published stays confirmed when a later target of the same publication throws before its request', async () => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+  const { createTablePublication } = require('../lib/sdk-build.js');
+  const { createCommandStatePublicationObserver } = require('../lib/command-state-run.js');
+  const { mapLimit } = require('../lib/entity-provision.js');
+  const requests = [];
+  const client = Object.fromEntries(['get', 'post', 'patch', 'put', 'delete'].map((method) => [method, async (url, body) => {
+    requests.push({ method, url, body });
+    return method === 'get' ? { status: 200, body: { value: [] } } : { status: 204 };
+  }]));
+  client.apiUrl = (p) => `${ORIGIN}/api/data/v9.2${p}`;
+  const sdk = createMakerSdk({ instanceUrl: ORIGIN, httpClient: client, workspaceStorage: createNodeWorkspaceStorage(makeTempDir('cs-pub-real-')) });
+  await sdk.initWorkspace();
+  // A view of new_ticket the workspace holds, and one of new_case it does not: the SDK publishes the first and refuses the second locally.
+  const view = await sdk.createArtifact('view', { name: 'Existing View', entityLogicalName: T, columns: [{ name: 'new_subject' }] });
+  const MISSING = '99999999-9999-4999-8999-999999999999';
+  for (const batch of [false, true]) {
+    const runs = {};
+    for (const commandStates of [true, false]) {
+      const observer = commandStates ? createCommandStatePublicationObserver() : null;
+      if (observer) for (const table of [T, T2]) { observer.register(table); observer.noteRowWrite(table); }
+      const thrown = [];
+      const provision = { publishArtifact: async (type, id) => sdk.publishArtifact(type, id).catch((e) => { thrown.push(e); throw e; }) };
+      if (batch) provision.publishArtifacts = async (targets) => sdk.publishArtifacts(targets);
+      const start = requests.length;
+      const pub = createTablePublication({ observer, provision, runner: { mapLimit }, concurrency: 1, warn: () => {} });
+      const caught = await pub.sdk([['view', view.id], ['view', MISSING]], null, { tableOf: (target) => (target[1] === view.id ? T : T2), observed: 'sdk-publish-phase' }).then(() => null, (e) => e);
+      const what = `batch=${batch} commandStates=${commandStates}`;
+      assert.strictEqual(caught && caught.code, 'ARTIFACT_NOT_FOUND', what);
+      assert.strictEqual(caught, thrown[thrown.length - 1], `${what}: the error is the SDK's own`);
+      const sends = requests.slice(start).filter((r) => /PublishXml/.test(r.url));
+      assert.strictEqual(sends.length, 1, `${what}: one request, for the view the workspace holds`);
+      assert.match(sends[0].body.ParameterXml, new RegExp(`<entity>${T}</entity>`), what);
+      runs[commandStates] = sends.map((r) => r.body.ParameterXml);
+      if (!observer) continue;
+      observer.attachFailure(caught);
+      assert.deepStrictEqual(caught.commandStates.publication.map((p) => [p.entity, p.outcome, p.path || p.reason]),
+        [[T2, 'unconfirmed', 'halted-before-send'], [T, 'confirmed', 'sdk-publish-phase']], what);
+      assert.deepStrictEqual(caught.commandStatePublicationError.tables, [T2], what);
+    }
+    assert.deepStrictEqual(runs.true, runs.false, `batch=${batch}: the same request with the feature off`);
+  }
+});
+
+test('a table proven by the batch stays confirmed when another table\'s retry throws; a batch that proves nothing confirms nothing', async () => {
+  const { createTablePublication, publishTargets } = require('../lib/sdk-build.js');
+  const serial = { mapLimit: async (items, n, fn) => { const out = []; for (const [i, item] of items.entries()) out.push(await fn(item, i)); return out; } };
+  const scope = (table) => ({ envelope: 'entity', entityLogicalName: table });
+  const tableOf = (target) => (target[1] === 'v1' ? T : T2);
+  const publishOf = async (provision) => {
+    const heard = [];
+    const pub = createTablePublication({ observer: { observeSdk: (names, path) => heard.push([names, path]) }, provision, runner: serial, warn: () => {} });
+    const caught = await pub.sdk([['view', 'v1'], ['view', 'v2']], null, { tableOf, observed: 'sdk-publish-phase' }).then(() => null, (e) => e);
+    return { heard, caught };
+  };
+  // v1 (new_ticket) is published in the batch, v2 (new_case) refused there; its retry alone throws.
+  const boom = sdkThrown();
+  const retried = await publishOf({
+    publishArtifacts: async (targets) => targets.map(({ type, id }) => (id === 'v1'
+      ? { type, id, publish: { kind: 'verified' }, publishScope: scope(T) }
+      : { type, id, publish: { kind: 'failed', error: sdkRefusal() }, publishScope: scope(T2) })),
+    publishArtifact: async () => { throw boom; },
+  });
+  assert.strictEqual(retried.caught, boom, 'the retry\'s error, unchanged');
+  assert.deepStrictEqual(retried.heard, [[[T], 'sdk-publish-phase']]);
+  // A batch answered for one target of two is no answer: nothing it says is read, and the single-target pass that follows proves nothing
+  // before v2 throws.
+  const partial = await publishOf({
+    publishArtifacts: async () => [{ type: 'view', id: 'v1', publish: { kind: 'verified' }, publishScope: scope(T) }],
+    publishArtifact: async (type, id) => { if (id === 'v2') throw boom; return { type, id, publish: { kind: 'notApplicable' }, publishScope: scope(T) }; },
+  });
+  assert.strictEqual(partial.caught, boom);
+  assert.deepStrictEqual(partial.heard, []);
+  // A batch that throws, then the single-target pass: v1 proven, then v2 throws.
+  const fallback = await publishOf({
+    publishArtifacts: async () => { throw new Error('batch preflight'); },
+    publishArtifact: async (type, id) => { if (id === 'v2') throw boom; return { type, id, publish: { kind: 'submitted' }, publishScope: scope(T) }; },
+  });
+  assert.strictEqual(fallback.caught, boom);
+  assert.deepStrictEqual(fallback.heard, [[[T], 'sdk-publish-phase']]);
+  // The thrown error is the SDK's own: its words stay what they were, for what decides a retry reads them (retry-policy.js judgeFailure).
+  assert.strictEqual(boom.message, MARKER);
+  // publishTargets tells only an answer that proves a request was sent: none for a no-request kind, whatever envelope it carries.
+  const told = [];
+  await publishTargets({ publishArtifact: async (type, id) => ({ type, id, publish: { kind: 'notApplicable' }, publishScope: scope(T) }) }, serial, 1,
+    [['view', 'v1']], null, () => {}, { onProven: (target) => told.push(target) });
+  assert.deepStrictEqual(told, []);
+});
+
+test('a reconcile\'s own table publication that throws is said by its checked facts with commandStates, and is the SDK\'s error unchanged', async () => {
+  const { createTablePublication } = require('../lib/sdk-build.js');
+  const { checkedDisplay } = require('../lib/command-state-contract.js');
+  for (const observer of [{ observeSdk: () => {} }, null]) {
+    const boom = sdkThrown();
+    const pub = createTablePublication({ observer, provision: { publishArtifact: async () => { throw boom; } }, runner: { mapLimit: async () => [] }, warn: () => {} });
+    const caught = await pub.one('view', 'v1', T, 'view Open Tickets', { observed: 'sdk-reconcile' }).then(() => null, (e) => e);
+    assert.strictEqual(caught, boom);
+    assert.strictEqual(caught.message, MARKER);
+    assert.deepStrictEqual(checkedDisplay(caught), observer
+      ? { text: 'PublishXml answered HTTP 400, Dataverse error 0x80040220', code: 'CONNECTION_ERROR' }
+      : { text: MARKER, code: 'CONNECTION_ERROR' });
+  }
+});
+
+// The halt a thrown publication ends a build with, on and off: everything that decides it is the same; only its words differ.
+const haltFacts = (halt) => halt && [halt.code, halt.phase, halt.retry, halt.recoverable, halt.statusCode, halt.cause && halt.cause.code, halt.cause && halt.cause.statusCode];
+
+test('a publish-phase table publication that throws after another table\'s was proven: that one stays confirmed, and the halt is said by its checked facts', async () => {
+  for (const batch of [false, true]) {
+    const on = publishing({ tables: [T, T2], batch, throws: (type, table) => table === T2 });
+    const out = await run(on);
+    const what = `batch=${batch}`;
+    assert.ok(out.caught, what);
+    assert.deepStrictEqual(outcomeOf(out), [[T2, 'unconfirmed', 'failed'], [T, 'confirmed', 'sdk-publish-phase']], what);
+    assert.ok(out.caught.message.includes('PublishXml answered HTTP 400, Dataverse error 0x80040220'), `${what}: ${out.caught.message}`);
+    assert.ok(!TAINT.test(everywhere(out)), `${what}: the thrown error's text is nowhere`);
+    const off = publishing({ commandStates: false, tables: [T, T2], batch, throws: (type, table) => table === T2 });
+    const outOff = await run(off, false);
+    assert.ok(outOff.caught && outOff.caught.message.includes(MARKER), `${what}: without commandStates the halt quotes it as before`);
+    assert.deepStrictEqual(haltFacts(out.caught), haltFacts(outOff.caught), `${what}: the same halt but for its words`);
+    assert.deepStrictEqual(off.sdkPublishes, on.sdkPublishes, `${what}: the same publications`);
+  }
+});
+
+test('a reconciled table\'s SDK publication that throws after another\'s was proven: that one stays confirmed, and every line says the error by its checked facts', async () => {
+  for (const batch of [false, true]) {
+    const on = reconciling({ tables: [T, T2], batch, sdkThrows: (type, id) => id === `view-${T2}` });
+    const out = await run(on);
+    const what = `batch=${batch}`;
+    assert.ok(out.caught, what);
+    assert.deepStrictEqual(outcomeOf(out), [[T2, 'unconfirmed', 'failed'], [T, 'confirmed', 'sdk-before-app']], what);
+    assert.ok(!TAINT.test(everywhere(out)), `${what}: the thrown error's text is nowhere`);
+    assert.ok(out.caught.message.includes('PublishXml answered HTTP 400, Dataverse error 0x80040220'), `${what}: ${out.caught.message}`);
+    const off = reconciling({ commandStates: false, tables: [T, T2], batch, sdkThrows: (type, id) => id === `view-${T2}` });
+    const outOff = await run(off, false);
+    assert.ok(outOff.caught && outOff.caught.message.includes(MARKER), what);
+    assert.deepStrictEqual(haltFacts(out.caught), haltFacts(outOff.caught), `${what}: the same halt but for its words`);
+    assert.deepStrictEqual(off.sdkPublishes, on.sdkPublishes, `${what}: the same publications`);
+  }
+});
+
+// After a final halt the build reads what is still saved and not published on the spec's tables (table-publish.js readSavedNotPublished).
+// When that READ fails, a build with commandStates says it by its checked facts, as a read (its status, its Dataverse code, the system code
+// of a read with no answer, or the field a row got wrong), never the service's text; without, it is quoted as 2.23.0 quoted it. What the read
+// found when it succeeded is said the same way in both.
+test('after a halt, a saved-layer read that fails is said by its checked facts with commandStates, and quoted without', async () => {
+  const { settleOwedPublishes } = require('../lib/sdk-build.js');
+  const row = (fields) => ({ savedqueryid: '77777777-7777-4777-8777-777777777777', name: 'Open Tickets', returnedtypecode: T, componentstate: 1, ...fields });
+  const views = (rows) => async (url) => ({ status: 200, body: { value: /savedqueries/.test(url) ? rows : [] } });
+  const reads = {
+    refused: async () => ({ status: 403, body: { error: { code: '0x80040220', message: MARKER } } }),
+    'refused, code planted': async () => ({ status: 403, body: { error: { code: MARKER, message: 'denied' } } }),
+    lost: async () => { throw Object.assign(new Error(`socket closed: ${MARKER}`), { code: 'ECONNRESET' }); },
+    'bad componentstate': views([row({ componentstate: MARKER })]),
+    'no table': views([row({ returnedtypecode: '' })]),
+    'not a list': async () => ({ status: 200, body: { value: MARKER } }),
+  };
+  const CHECKED = {
+    refused: 'the saved views: HTTP 403, Dataverse error 0x80040220; check that the signed-in account can read it, and look the error code up',
+    'refused, code planted': 'the saved views: HTTP 403; check that the signed-in account can read it, and look the error code up',
+    lost: 'the saved views: no usable answer (ECONNRESET); check the connection and run it again',
+    'bad componentstate': 'the saved views: the answer holds an unreadable value (componentstate); run it again, and if it persists check the environment\'s answer for this read',
+    'no table': 'the saved views: the answer holds a row that cannot be placed; run it again, and if it persists check the environment\'s answer for this read',
+    'not a list': 'the saved views: the answer is not a list of rows; run it again, and if it persists check the environment\'s answer for this read',
+  };
+  const settle = async (get, checked) => {
+    const said = [];
+    await settleOwedPublishes({ dataverse: { apiUrl: (p) => `${ORIGIN}/api/data/v9.2${p}`, get } }, [], (m) => said.push(m), { tables: [T], checked });
+    return said;
+  };
+  const couldNot = /^the build stopped before its publish phase; which forms, views and charts on the spec's tables are saved but not published could not be read \((.*)\)\. Run the build again with --publish, or publish these tables in Power Apps: new_ticket\.$/;
+  for (const [what, get] of Object.entries(reads)) {
+    const on = await settle(get, true);
+    assert.strictEqual(on.length, 1, what);
+    assert.strictEqual((couldNot.exec(on[0]) || [])[1], CHECKED[what], `${what}: ${on[0]}`);
+    const off = await settle(get, false);
+    assert.strictEqual(off.length, 1, what);
+    assert.ok(couldNot.test(off[0]), `${what}: ${off[0]}`);
+    if (['refused', 'lost', 'bad componentstate'].includes(what)) assert.ok(TAINT.test(off[0]), `${what}: without commandStates the reason is quoted as before: ${off[0]}`);
+  }
+  // A read is named only by one of its three fixed labels: a label it does not know is left out, whatever it holds.
+  const { describeSavedNotPublished } = require('../lib/table-publish.js');
+  const odd = describeSavedNotPublished({ ok: false, reason: MARKER, facts: { read: MARKER, problem: 'failed', status: 403 } }, [T], { checked: true });
+  assert.strictEqual((couldNot.exec(`the build stopped before its publish phase; ${odd}`) || [])[1], 'HTTP 403; check that the signed-in account can read it, and look the error code up');
+  // A read that succeeds lists what it found, the same with the feature on and off.
+  const found = views([row({})]);
+  assert.deepStrictEqual(await settle(found, true), await settle(found, false));
+  assert.match((await settle(found, true))[0], /saved but not published on the spec's tables — new_ticket: view Open Tickets\./);
 });
 
 // The inventory: every request in lib/sdk-build.js that can publish a table is made inside createTablePublication or publishTargets (which

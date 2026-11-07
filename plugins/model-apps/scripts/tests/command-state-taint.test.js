@@ -215,18 +215,39 @@ function clientFailurePositions() {
   };
 }
 
+// The read of the saved layer after a final halt (table-publish.js readSavedNotPublished), planted in each position of its answer: the error's
+// code or message at a refusal, a body that is not JSON, no answer at all, a row's state and table, and a next-page link. A record's NAME is
+// not planted: what the read found is listed by name when it succeeds, with the feature on and off alike (the maker's views and forms).
+function savedReadPositions() {
+  const row = (fields) => ({ status: 200, body: { value: [{ savedqueryid: '77777777-7777-4777-8777-777777777777', name: 'Open Tickets', returnedtypecode: T, componentstate: 1, ...fields }] } });
+  return {
+    'HTTP 403 error.message': () => ({ status: 403, body: { error: { code: '0x80040220', message: MARKER } } }),
+    'HTTP 403 error.code': () => ({ status: 403, body: { error: { code: MARKER, message: 'denied' } } }),
+    'HTTP 502 non-JSON body': () => ({ status: 502, body: `<html><body>${MARKER}</body></html>` }),
+    'no answer error.message': () => { throw Object.assign(new Error(MARKER), { code: 'ECONNRESET' }); },
+    'no answer error.code': () => { throw Object.assign(new Error('socket closed'), { code: MARKER }); },
+    componentstate: () => row({ componentstate: MARKER }),
+    returnedtypecode: () => row({ returnedtypecode: MARKER }),
+    '@odata.nextLink': () => ({ status: 200, body: { value: [], '@odata.nextLink': MARKER } }),
+  };
+}
+
 // `fallback`: the envelope before the app is refused (its answer is clean) and the SDK's publication of the reconciled table, which follows
 // it, answers the planted refusal; the final halt then settles the publish it owes, which is refused the same way. `phase8`: the envelope is
-// answered ok and the publish phase's SDK publication of the view the build created answers it. `managed-predispatch`: the table is routed
-// to the managed publisher, whose client fails before the request is dispatched.
+// answered ok and the publish phase's SDK publication of the view the build created answers it. `fallback-thrown` and `phase8-thrown`: the
+// same publications THROW the planted error instead of answering it (the SDK throws for a local preflight, a provider or a callback can for
+// anything), which the halt is made of. `managed-predispatch`: the table is routed to the managed publisher, whose client fails before the
+// request is dispatched. `fallback-read`: the fallback's publication is refused cleanly, the halt is final, and the read of what is still
+// saved and not published on the spec's tables that follows it (table-publish.js readSavedNotPublished) answers the plant.
 async function inSdkPublish(route, plant) {
   let hits = 0;
   const barrier = route === 'managed-predispatch' ? createPublicationBarrier() : undefined;
+  const fallback = route.startsWith('fallback');
   const h = harness({
     barrier,
-    publishAnswer: () => (route === 'fallback' ? { status: 503, body: { error: { code: '0x80040220', message: 'denied' } } } : undefined),
+    publishAnswer: () => (fallback ? { status: 503, body: { error: { code: '0x80040220', message: 'denied' } } } : undefined),
     adaptSdk: (sdk) => {
-      if (route === 'fallback') sdk.findArtifact = async (kind) => (kind === 'view' ? `view-${T}` : null);
+      if (fallback) sdk.findArtifact = async (kind) => (kind === 'view' ? `view-${T}` : null);
       if (route === 'managed-predispatch') {
         const post = sdk.dataverse.post;
         sdk.dataverse.post = async (url, body) => {
@@ -236,9 +257,25 @@ async function inSdkPublish(route, plant) {
         };
         return;
       }
+      if (route === 'fallback-read') {
+        let refusedOnce = false;
+        sdk.dataverse.get = async (url) => {
+          if (!refusedOnce || !/^\/(savedqueries|systemforms|savedqueryvisualizations)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(url)) return { status: 200, body: { value: [] } };
+          hits += 1;
+          return plant(url);
+        };
+        sdk.publishArtifact = async (type, id) => {
+          if (type !== 'view') return { type, id, shipped: true, publish: { kind: 'verified' } };
+          refusedOnce = true;
+          const error = Object.assign(new Error(`HTTP 400 from ${ORIGIN}/api/data/v9.2/PublishXml: denied`), { code: 'CONNECTION_ERROR', statusCode: 400, cause: { error: { code: '0x80040220', message: 'denied' } } });
+          return { type, id, shipped: false, publish: { kind: 'failed', error } };
+        };
+        return;
+      }
       sdk.publishArtifact = async (type, id) => {
         if (type !== 'view') return { type, id, shipped: true, publish: { kind: 'verified' } };
         hits += 1;
+        if (route.endsWith('-thrown')) throw plant();
         return { type, id, shipped: false, publish: { kind: 'failed', error: plant() } };
       };
     },
@@ -315,10 +352,11 @@ for (const [phase, names] of Object.entries(PHASES)) {
 for (const route of ['plain', 'managed']) {
   for (const [position, plant] of Object.entries(publishPositions())) cases.push({ phase: 'publish', name: route, position, plant });
 }
-for (const route of ['fallback', 'phase8']) {
+for (const route of ['fallback', 'phase8', 'fallback-thrown', 'phase8-thrown']) {
   for (const [position, plant] of Object.entries(sdkPublishPositions())) cases.push({ phase: 'publish', name: route, position, plant });
 }
 for (const [position, plant] of Object.entries(clientFailurePositions())) cases.push({ phase: 'publish', name: 'managed-predispatch', position, plant });
+for (const [position, plant] of Object.entries(savedReadPositions())) cases.push({ phase: 'publish', name: 'fallback-read', position, plant });
 const nameOf = (c) => `${c.phase} | ${c.name} | ${c.position}`;
 
 // The thirteen cases an independent review found leaking, each one of the matrix: an app component's objectid and component type and the
@@ -336,6 +374,9 @@ const REVIEWED = [
   // A later pass: the SDK's refusal of the fallback publication, quoted in the warning and copied into the halt and the journal; and the
   // managed publisher's refusal reason when its client failed before the request was dispatched.
   'publish | fallback | error.message', 'publish | managed-predispatch | client error.message',
+  // The final review: the read of the saved layer after a final halt, refused with the service's message; and a publication that throws,
+  // at the publish phase and at the fallback, whose error's message the halt and the journal copied.
+  'publish | fallback-read | HTTP 403 error.message', 'publish | phase8-thrown | error.message', 'publish | fallback-thrown | error.message',
 ];
 test('the matrix holds every reviewed case', () => {
   const names = new Set(cases.map(nameOf));
@@ -362,6 +403,12 @@ for (const c of cases) {
     }
     if (c.phase === 'publish' && ['fallback', 'phase8'].includes(c.name) && c.position === 'error.message') {
       assert.match(seen.primary, /publish view Active Tickets FAILED[^\n]*: PublishXml answered HTTP 503, Dataverse error 0x80040220/, 'the SDK\'s refusal is said by its status and code');
+    }
+    if (c.phase === 'publish' && ['fallback-thrown', 'phase8-thrown'].includes(c.name) && c.position === 'error.message') {
+      assert.match(seen.primary, /PublishXml answered HTTP 503, Dataverse error 0x80040220/, 'the thrown error is said by its status and code');
+    }
+    if (c.name === 'fallback-read' && c.position === 'HTTP 403 error.message') {
+      assert.match(seen.primary, /could not be read \(the saved views: HTTP 403, Dataverse error 0x80040220; check that the signed-in account can read it/, 'the failed read is said as a read, by its status and code');
     }
     if (c.name === 'managed-predispatch' && c.position === 'client error.message') {
       assert.match(seen.primary, /PublishXml got no usable answer \(ECONNRESET\)/, 'the failure is said by its system code');
