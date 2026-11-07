@@ -15,7 +15,7 @@ function parseArgs(argv) {
     const value = argv[index];
     if (value === '--input' || value === '--output') {
       const next = argv[index + 1];
-      if (!next) throw new Error(`${value} requires a path`);
+      if (!next || next.startsWith('--')) throw new Error(`Argument '${value}' requires a path value to be provided`);
       result[value.slice(2)] = path.resolve(next);
       index += 1;
     } else if (value === '--prepare') {
@@ -25,7 +25,7 @@ function parseArgs(argv) {
     }
   }
   if (!result.input) {
-    throw new Error('Usage: inline-self-contained-runtime.js --input <html> [--output <html>] [--prepare]');
+    throw new Error('Usage: inline-self-contained-runtime.js --input <html_file> [--output <html_file>] [--prepare]');
   }
   result.output ||= result.input;
   return result;

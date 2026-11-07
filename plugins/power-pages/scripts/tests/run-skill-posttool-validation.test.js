@@ -129,6 +129,51 @@ test('hook spawns the reconcile backstop and heals a skipped refresh after an AL
   assert.doesNotMatch(res.stderr, /reconcile/i, 'a successful reconcile must not write failure noise to stderr');
 });
 
+test('hook forwards reconcile debug diagnostics on success when DEBUG is enabled', (t) => {
+  function setupTestSite() {
+    const root = makeProject(t);
+    writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+      SITE_NAME: 'T',
+      pipelineMeta: { lastDeploy: null },
+      hostResolution: { status: 'NoHost' },
+      steps: [{ name: 'Deploy via pipeline to Staging', status: 'pending' }],
+      stages: [{ label: 'Staging', envUrl: 'https://stg.crm.dynamics.com/', type: 'target' }],
+    });
+    writeJson(path.join(root, 'docs', 'alm', 'last-host-check.json'), {
+      resolutionStatus: 'AvailableUsingCustomHost',
+    });
+    // Force an I/O error during mirrorHostResolutionSnapshot by creating a directory at the .tmp path
+    fs.mkdirSync(path.join(root, 'docs', 'alm', 'alm-host-resolution.json.tmp'), { recursive: true });
+
+    // Marker written AFTER the plan (deploy marker triggers reconcile for deploy-pipeline)
+    writeJson(path.join(root, 'docs', 'alm', 'last-deploy.json'), {
+      pipelineId: 'p1',
+      stageRunId: 'sr1',
+      solutionName: 'MySolution',
+      stageName: 'Staging',
+      status: 'Succeeded',
+      deployedAt: '2026-06-16T00:00:00.000Z',
+      componentCount: 118,
+    });
+    backdatePlan(root);
+    return root;
+  }
+
+  // 1. Without DEBUG: successful reconciliation stays quiet on stderr
+  const rootQuiet = setupTestSite();
+  const resQuiet = runHook(rootQuiet, 'deploy-pipeline');
+  assert.equal(resQuiet.status, 0, `hook should exit 0; stderr=${resQuiet.stderr}`);
+  assert.match(resQuiet.stdout, /refreshed automatically/i);
+  assert.doesNotMatch(resQuiet.stderr, /Failed to mirror host resolution snapshot/);
+
+  // 2. With DEBUG: stderr from successful reconcile is forwarded
+  const rootDebug = setupTestSite();
+  const resDebug = runHook(rootDebug, 'deploy-pipeline', { DEBUG: '1' });
+  assert.equal(resDebug.status, 0, `hook should exit 0; stderr=${resDebug.stderr}`);
+  assert.match(resDebug.stdout, /refreshed automatically/i);
+  assert.match(resDebug.stderr, /Failed to mirror host resolution snapshot/);
+});
+
 test('hook forwards reconcile failure detail to stderr without changing the exit code', (t) => {
   // A malformed plan file makes refresh-alm-plan-data.js --reconcile throw and exit
   // non-zero with its reason on stderr. The hook must (a) surface that — the prior
