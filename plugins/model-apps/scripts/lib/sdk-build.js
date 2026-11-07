@@ -3256,7 +3256,8 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
   const refused = (result) => !!(result && result.publish && result.publish.kind === 'failed');
   // The proof publishedTargets collects, which is NOT `published` above: only a kind that says the request was sent and answered success
   // (managed-feature-contract.js publishAnswerProvesPublication: submitted, verified, unverifiable). `published` also passes `none`,
-  // `notApplicable` and any unknown kind — answers the real SDK gives with no request sent — and stays as it is for appPublished.
+  // `notApplicable` (a result the real SDK gives with no request sent) and any unknown kind (which proves nothing either way), and stays
+  // as it is for appPublished.
   const { publishAnswerProvesPublication: proves } = require('./managed-feature-contract.js');
   const failed = [];
   const publishedTargets = [];
