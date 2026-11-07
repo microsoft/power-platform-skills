@@ -444,6 +444,16 @@ function createCommandStatePublicationObserver() {
       } catch { /* an observation that cannot be made confirms nothing */ }
     },
     /**
+     * The SDK's publication of reconciled tables before the app (sdk-build.js publishReconciledTables), which follows a refused or absent
+     * plain envelope: only the names it answered as published confirm. A table it refused is not named, so it keeps the reason it had.
+     */
+    observeSdk(names) {
+      try {
+        if (!Array.isArray(names)) return;
+        for (const name of names) { const entry = tables.get(lc(name)); if (entry) confirm(entry, 'sdk-before-app'); }
+      } catch { /* as above */ }
+    },
+    /**
      * The managed publisher's flush: only the names in `published` confirm; `withheld` says why a table did not, and `failed` names the table
      * whose publish was handed to the transport and halted (managed-scope-publisher.js flush `onHalt`), so it is never called unsent.
      */
@@ -726,17 +736,33 @@ function createCommandStateRun({ spec, transport, origin, approvals = {}, publis
 
   // The final proof (assertComplete): a fresh app context, then every declared row read and judged against it and its flags compared. Each
   // read is noted in the row's facts, so the preface (said after the reads) and a drifted row's message say what the reads found.
+  // EVERY row is read, even after one has failed: a row read after the first failure would otherwise keep only its commands-phase facts, and
+  // the halt and the result would say nothing of what it holds at the end. The halt is the first failure's — its code, its detail, its
+  // wording — with the later failures' own messages after it; the code decides the retry policy and the exit, so those stay as they were.
+  // Nothing is written here. An error that is not this feature's (a defect, a transport that broke its contract) still ends the proof at once.
   async function recheckAtCompletion() {
     try {
       requireTransport({ write: false });
       const context = await resolveCommandStateContext(transport, { appUniqueName: spec.app.uniqueName, entities: [...new Set(states.map((s) => s.entity))] });
+      const failures = [];
       for (const s of states) {
-        const { row } = await readJudged(context, s, 'final');
+        let row;
+        try {
+          ({ row } = await readJudged(context, s, 'final'));
+        } catch (error) {
+          if (!(error instanceof CommandStateError)) throw error;
+          failures.push(error);
+          continue;
+        }
         if (!matches(s, row)) {
           // Its own remedy, not command-state-not-confirmed's: the commands phase read every row it wrote back holding the flags, so this
           // is a change made during the build, after that read. The row's recorded outcome stays what its step was.
-          throw new CommandStateError(CODES.notConfirmed, ROW_MESSAGES.finalDrift(rowResultOf(s.rowId)));
+          failures.push(new CommandStateError(CODES.notConfirmed, ROW_MESSAGES.finalDrift(rowResultOf(s.rowId))));
         }
+      }
+      if (failures.length) {
+        const [first, ...later] = failures;
+        throw new CommandStateError(first.code, [first.message, ...later.map((e) => e.message)].join('; '), first.detail);
       }
     } catch (error) {
       if (!(error instanceof CommandStateError)) throw error;

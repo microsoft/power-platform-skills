@@ -1,8 +1,8 @@
 'use strict';
 // The command-state publication observer (lib/command-state-run.js createCommandStatePublicationObserver): it only records what the build's
 // existing before-app table publication answered, and it is the one thing that lets an apply with command states report success. Only a
-// non-empty plain publish answered ok, or a managed flush that lists the table as published, confirms a table — and only until the next row
-// write on it.
+// non-empty plain publish answered ok, a managed flush that lists the table as published, or the SDK's publication of a reconciled table
+// answered as published confirms a table — and only until the next row write on it.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -40,6 +40,19 @@ test('a managed flush confirms only the tables it lists as published; a withheld
   o.observeManaged({ withheld: ['new_a'] });
   o.observePlain(['new_a'], { ok: false });
   assert.strictEqual(outcomes(o)[0][1], 'confirmed');
+});
+
+test('the SDK\'s publication of reconciled tables confirms only the tables it names, and a later row write needs a new one', () => {
+  const o = observerWith('new_a', 'new_b');
+  o.observePlain(['new_a', 'new_b'], { ok: false });
+  o.observeSdk(undefined);
+  o.observeSdk('new_b');
+  o.observeSdk(['NEW_A', 'new_other']);
+  assert.deepStrictEqual(outcomes(o), [['new_a', 'confirmed'], ['new_b', 'unconfirmed']]);
+  assert.strictEqual(o.snapshot()[0].path, 'sdk-before-app');
+  assert.strictEqual(o.snapshot()[1].reason, 'failed', 'a table it does not name keeps the reason it had');
+  o.noteRowWrite('new_a');
+  assert.deepStrictEqual(o.unconfirmed(), ['new_a', 'new_b']);
 });
 
 test('a row write after a confirmation needs a new one: an earlier publication cannot pay for a later write', () => {

@@ -1,11 +1,12 @@
 'use strict';
 // The table publication of a build with commandStates, end to end through the build's own entry (build-model-app.js) and its journal: the
-// before-app envelope's plain PublishXml and the managed publisher's PublishXml of a table a managed group routes
-// (lib/managed-scope-publisher.js). Two things are pinned here:
+// before-app envelope's plain PublishXml, the managed publisher's PublishXml of a table a managed group routes
+// (lib/managed-scope-publisher.js), and the SDK's publication of a reconciled table after the envelope is refused. Three things are pinned here:
 //   - a refused publication is said by its checked facts only (lib/command-state-contract.js serviceAnswerText), never by the platform's
 //     text, while a build without commandStates keeps quoting that text as it always did;
 //   - a table the managed publisher confirmed is reported confirmed even when a later table's publish halts the build, and the table whose
-//     publish failed is reported `failed`, never as unsent; the halt itself is the one the build always threw.
+//     publish failed is reported `failed`, never as unsent; the halt itself is the one the build always threw;
+//   - a reconciled table the SDK published after the refused envelope is confirmed by that publication, and one it refused stays `failed`.
 // tests/command-state-taint.test.js plants the marker in every position of these answers; this file pins the wording and the outcomes.
 
 const test = require('node:test');
@@ -122,4 +123,77 @@ test('the managed flush tells onHalt what it settled before a halt, and the halt
   assert.strictEqual(throwing.thrown, throwing.made[0], 'an onHalt that throws does not replace the halt');
   const none = await run(undefined);
   assert.strictEqual(none.thrown, none.made[0], 'without onHalt the halt is thrown as before');
+});
+
+// A build that reconciles an existing view of a declared table defers the view's publish onto that table (sdk-build.js publishReconciled);
+// the before-app envelope names the table, and when the envelope is refused the SDK publishes the reconciled table instead
+// (publishReconciledTables). `sdkRefuses(type, id)` says which of the SDK's publishes it refuses; `batch` gives the SDK the publish of
+// several artifacts in one request (publishArtifacts), which publishTargets uses for more than one table and retries a refused one alone.
+function reconciling({ commandStates = true, tables = [T], sdkRefuses = () => false, batch = false } = {}) {
+  const sdkPublishes = [];
+  const answer = (type, id) => {
+    sdkPublishes.push(`${type} ${id}`);
+    return sdkRefuses(type, id, sdkPublishes.length) ? { type, id, shipped: false, publish: { kind: 'failed', error: Object.assign(new Error(MARKER), { statusCode: 400 }) } } : { type, id, shipped: true, publish: { kind: 'verified' } };
+  };
+  const h = harness({
+    tables: { [T]: { metadataId: MD }, [T2]: { metadataId: MD2 } },
+    rows: [commandRow(ROW, T, MD), commandRow(ROW2, T2, MD2)],
+    publishAnswer: () => refused(503),
+    adaptSdk: (sdk) => {
+      // The view the spec declares on each table already exists, so the build reconciles it: view-new_ticket, view-new_case.
+      sdk.findArtifact = async (kind, identity) => (kind === 'view' ? `view-${JSON.stringify(identity).includes(T2) ? T2 : T}` : null);
+      sdk.publishArtifact = async (type, id) => answer(type, id);
+      if (batch) sdk.publishArtifacts = async (targets) => targets.map(({ type, id }) => answer(type, id));
+    },
+  });
+  const entities = [
+    { schemaName: T, displayName: 'Ticket', primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' } },
+    { schemaName: T2, displayName: 'Case', primaryAttribute: { schemaName: 'new_title', displayName: 'Title' } },
+  ];
+  const views = tables.map((entity) => ({ entity, name: entity === T ? 'Active Tickets' : 'Open Cases', columns: [entity === T ? 'new_subject' : 'new_title'] }));
+  const states = tables.map((entity) => (entity === T ? HIDE : { ...HIDE, entity: T2, rowId: ROW2 }));
+  const spec = specFor(commandStates ? states : null, { entities, views });
+  return { h, spec, sdkPublishes };
+}
+const run = async ({ h, spec }, commandStates = true) => buildWithJournal(h, spec, commandStates ? (await h.approve(spec)).approvals : { rows: new Set(), tables: new Set() });
+
+test('a reconciled table the SDK published after the refused before-app envelope is confirmed by that publication', async () => {
+  const on = reconciling();
+  const out = await run(on);
+  assert.ifError(out.caught);
+  assert.deepStrictEqual(on.h.published, [[T]], 'the envelope named the table once, and was refused');
+  assert.ok(on.sdkPublishes.includes(`view view-${T}`), 'the SDK published the reconciled table');
+  assert.deepStrictEqual(out.result.commandStates.publication, [{ entity: T, outcome: 'confirmed', basis: 'existing-before-app-table-envelope', path: 'sdk-before-app' }]);
+  assert.ok(!TAINT.test(everywhere(out)));
+  // Without commandStates the same build sends the same requests and also completes.
+  const off = reconciling({ commandStates: false });
+  const outOff = await run(off, false);
+  assert.ifError(outOff.caught);
+  assert.deepStrictEqual([off.h.published, off.sdkPublishes], [on.h.published, on.sdkPublishes]);
+});
+
+test('a reconciled table whose SDK publication is refused stays unconfirmed, and the build halts before the app as it always did', async () => {
+  const on = reconciling({ sdkRefuses: (type) => type === 'view' });
+  const out = await run(on);
+  assert.strictEqual(out.caught && out.caught.code, 'reconciled-publish-failed', out.caught && out.caught.message);
+  assert.deepStrictEqual(out.caught.commandStates.publication, [{ entity: T, outcome: 'unconfirmed', basis: 'existing-before-app-table-envelope', reason: 'failed', code: 'command-state-publish-unconfirmed' }]);
+  assert.deepStrictEqual(out.caught.commandStatePublicationError.tables, [T]);
+  const off = reconciling({ commandStates: false, sdkRefuses: (type) => type === 'view' });
+  const outOff = await run(off, false);
+  assert.strictEqual(outOff.caught && outOff.caught.code, 'reconciled-publish-failed');
+  assert.strictEqual(outOff.caught.message, out.caught.message, 'the halt is the same with the feature off');
+});
+
+test('of two reconciled tables published in one SDK request, only the one it published is confirmed; one published on its retry is confirmed too', async () => {
+  // new_ticket is refused in the batch and again alone; new_case is published in the batch.
+  const refusedTwice = reconciling({ tables: [T, T2], batch: true, sdkRefuses: (type, id) => id === `view-${T}` });
+  const out = await run(refusedTwice);
+  assert.strictEqual(out.caught && out.caught.code, 'reconciled-publish-failed', out.caught && out.caught.message);
+  assert.deepStrictEqual(out.caught.commandStates.publication.map((p) => [p.entity, p.outcome, p.path || p.reason]), [[T2, 'confirmed', 'sdk-before-app'], [T, 'unconfirmed', 'failed']]);
+  // new_ticket is refused in the batch and published on its retry alone.
+  let tries = 0;
+  const retried = reconciling({ tables: [T, T2], batch: true, sdkRefuses: (type, id) => id === `view-${T}` && ++tries === 1 });
+  const outRetried = await run(retried);
+  assert.ifError(outRetried.caught);
+  assert.deepStrictEqual(outRetried.result.commandStates.publication.map((p) => [p.entity, p.outcome, p.path]), [[T2, 'confirmed', 'sdk-before-app'], [T, 'confirmed', 'sdk-before-app']]);
 });

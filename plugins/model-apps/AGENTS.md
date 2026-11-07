@@ -3623,10 +3623,15 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   a freshly resolved app context (the commands phase's context is not membership proof) and must still hold its
   flags; a failure keeps its own code, `command-state-context-unverified` or `command-state-not-confirmed` (a row
   that no longer matches is worded from what this run did to it, never as an accepted write it did not make), and
-  rolls nothing back. Second, every declared table must be confirmed published; only that failure halts with
+  rolls nothing back. That check reads every declared row once, even after one has failed, and notes each read in the
+  row's facts; the halt is the first failure's (its code, retry policy and wording), followed by each later failure.
+  Second, every declared table must be confirmed published; only that failure halts with
   `command-state-publish-unconfirmed` (worded per table from its rows' facts: saved / held after a write with no
   usable answer / already held / held other flags at its last read / could not be read at its last read / write
-  outcome unknown / not written). Every message that words a row after its step (that publication halt, the
+  outcome unknown / not written). A reconciled table the plain request did not publish (it was refused, or there is
+  no raw client to send it) is published by the SDK (`publishReconciledTables`), and that publication confirms it when
+  the SDK answers it as published (path `sdk-before-app`); one the SDK refuses stays unconfirmed and halts before the
+  app as before. Every message that words a row after its step (that publication halt, the
   post-write read, the final drift and late membership checks, a retry's approval halt, the CLI's result lines) words
   it from the row's **facts** — an ordered, append-only list of what each read found (matched, other flags, or could
   not be read, with the phase it was made in) and how each write was answered — through one renderer,

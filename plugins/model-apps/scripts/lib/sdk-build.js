@@ -3236,7 +3236,9 @@ function partialEnrichment(error) {
 // in force once the app is published, and the publish phase is what does that. `failed`: `{ target, error }` for each
 // TABLE target whose last publish the SDK refused by value (`publish.kind === 'failed'`, after the retry below), so its
 // saved changes are not live. This function only reports one (a warning); publishReconciledTables, which must not let
-// the app be published ahead of such a table, halts on it.
+// the app be published ahead of such a table, halts on it. `publishedTargets`: each TABLE target (the same array) whose last
+// publish answered as published (`published` below, after the retry) — what publishReconciledTables tells the commandStates
+// observer was published; a caller that does not read it sees nothing new.
 async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false } = {}) {
   const labelOf = targetLabel;
   const publishOne = async ([type, id], label) => {
@@ -3253,6 +3255,7 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
   const published = (result) => !!(result && result.publish && result.publish.kind && result.publish.kind !== 'failed' && result.publish.kind !== 'notRequested');
   const refused = (result) => !!(result && result.publish && result.publish.kind === 'failed');
   const failed = [];
+  const publishedTargets = [];
   const all = appTarget ? [...entityTargets, appTarget] : entityTargets;
   const isApp = (target) => !!appTarget && target[0] === 'app' && target[1] === appTarget[1];
   if (all.length > 1 && typeof provision.publishArtifacts === 'function') {
@@ -3270,23 +3273,26 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
         else {
           reportPartialPush(outcome, labelOf(all[i]), warn);
           if (isApp(all[i])) appResult = outcome;
+          else if (published(outcome)) publishedTargets.push(all[i]);
         }
       });
       for (const target of retry) {
         const retried = await publishOne(target, labelOf(target));
         if (isApp(target)) appResult = retried;
         else if (refused(retried)) failed.push({ target, error: retried.publish.error });
+        else if (published(retried)) publishedTargets.push(target);
       }
-      return { appPublished: published(appResult), appResult, failed };
+      return { appPublished: published(appResult), appResult, failed, publishedTargets };
     }
   }
   const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, labelOf(target))));
   entityTargets.forEach((target, i) => {
     const outcome = (outcomes || [])[i];
     if (refused(outcome)) failed.push({ target, error: outcome.publish.error });
+    else if (published(outcome)) publishedTargets.push(target);
   });
   const appResult = appTarget ? await publishOne(['app', appTarget[1]], appTarget[2]) : undefined;
-  return { appPublished: published(appResult), appResult, failed };
+  return { appPublished: published(appResult), appResult, failed, publishedTargets };
 }
 
 // What a publish target is FOR, in the words a warning or a halt prints: the names the target carries (a table's
@@ -4436,10 +4442,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // This is the SDK's publish of the reconciled tables: publishTablesBeforeApp sends them by name, with the other tables it publishes before the
   // app, when it can, and comes here when that request is refused and when there is no raw client.
   const publishReconciledTables = async () => {
-    const targets = [...reconciledTables].filter((l) => owed.barrier.allow(l, 'tables published before the app')).map((logical) => owed.tables.get(logical)).filter(Boolean);
+    const logicals = [...reconciledTables].filter((l) => owed.barrier.allow(l, 'tables published before the app'));
+    const targets = logicals.map((logical) => owed.tables.get(logical)).filter(Boolean);
     reconciledTables.clear();
     if (!targets.length) return;
-    const { failed } = await publishTargets(provision, runner, concurrency, targets, null, opts.warn);
+    const { failed, publishedTargets } = await publishTargets(provision, runner, concurrency, targets, null, opts.warn);
+    // commandStates (lib/command-state-run.js): a table this SDK publication answered as published is a publication of the table after its
+    // command-row writes (the commands phase sends them all before any app write, and a later write would undo the confirmation: noteRowWrite),
+    // so the observer records it — the refused envelope that sent the table here recorded only `failed`, and the table is not named again
+    // before the app (namedBeforeApp). Only the answers publishTargets counted as published confirm; a table it reports refused, or answered
+    // with nothing, stays as it was. The observer only records: it sends nothing and never throws.
+    if (owed.commandStateObserver) {
+      const confirmed = new Set(publishedTargets);
+      owed.commandStateObserver.observeSdk(logicals.filter((logical) => confirmed.has(owed.tables.get(logical))));
+    }
     if (!failed.length) return;
     // A table whose publish the SDK refused (by value: it never throws for one) still holds its saved labels
     // unpublished, and the app's publish below would strand them for good — so the build stops before it writes the

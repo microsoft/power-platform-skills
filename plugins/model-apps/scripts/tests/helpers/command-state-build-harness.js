@@ -40,7 +40,9 @@ const tablesOf = (body) => [...String((body && body.ParameterXml) || '').matchAl
 // `publishAnswer(tables)` may answer one publish otherwise (a refusal of one table, say); undefined keeps `publishStatus`.
 // `barrier`: the publication barrier the build is given (publicationBarrier). With one, every publish passes its gate (gateRequest) the
 // way the shipped transport's does, so a table the barrier routes is published by the managed publisher under its send permit.
-function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPublish, publishAnswer, barrier, tables = { [T]: { metadataId: MD } }, ...orgOptions } = {}) {
+// `adaptSdk(sdk)`: changes the mock SDK each build is given — for a build that finds an existing view to reconcile (findArtifact), or
+// whose SDK publication of an artifact answers otherwise (publishArtifact).
+function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPublish, publishAnswer, barrier, adaptSdk, tables = { [T]: { metadataId: MD } }, ...orgOptions } = {}) {
   const org = createCommandStateOrg({ writable: true, tables, rows, ...orgOptions });
   const client = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: org.request, sleep: async () => {}, sendOnce: commandStateSendOnce });
   const transport = createCommandStateTransport({ client, apiUrl: (p) => `${API}${p}` });
@@ -73,6 +75,7 @@ function harness({ rows = [commandRow(ROW, T, MD)], publishStatus = 204, onPubli
       // group, so it reads none; a read is a fixture error, not a service answer.
       ...(gated ? { get: async (url) => { throw new Error(`the harness reads no layers (${url})`); } } : {}),
     };
+    if (adaptSdk) adaptSdk(sdk);
     return { sdk, calls };
   };
   const build = async (spec, opts = {}) => {

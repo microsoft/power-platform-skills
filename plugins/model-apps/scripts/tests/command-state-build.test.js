@@ -297,6 +297,33 @@ test('the final proof also fails a row that no longer holds the declared flags a
   assert.strictEqual(error.commandStates.rows[0].outcome, 'acknowledged');
 });
 
+test('the final proof reads every declared row: two rows changed after the publication are both read, noted and named, with the first one\'s code', async () => {
+  const finalReads = (error) => error.commandStates.rows.map((r) => [r.rowId, r.facts.filter((f) => f.phase === 'final').map((f) => f.result)]);
+  for (const [what, change, overrides, reads, code] of [
+    ['both changed', (rows) => { rows[0].hidden = false; rows[1].isdisabled = false; }, () => undefined, ['differed', 'differed'], 'command-state-not-confirmed'],
+    // The first row changed and the second could not be read: the code is still the first failure's.
+    ['one changed, one unreadable', (rows) => { rows[0].hidden = false; }, (req) => (req.method === 'GET' && req.path.startsWith(`/appactions(${ROW2})`) ? json(503, {}) : undefined), ['differed', 'unreadable'], 'command-state-not-confirmed'],
+    // The first row could not be read and the second changed: the code is the unreadable row's, as it was when the proof stopped there.
+    ['one unreadable, one changed', (rows) => { rows[1].isdisabled = false; }, (req) => (req.method === 'GET' && req.path.startsWith(`/appactions(${ROW})`) ? json(503, {}) : undefined), ['unreadable', 'differed'], 'command-state-row-unreadable'],
+  ]) {
+    const rows = [commandRow(ROW, T, MD), commandRow(ROW2, T, MD, { location: 1 })];
+    let armed = false;
+    const h = harness({ rows, overrides: (req) => (armed ? overrides(req) : undefined), onPublish: () => { armed = true; change(rows); } });
+    const spec = specFor([HIDE, { entity: T, location: 'HomeTab', scope: 'table', rowId: ROW2, disabled: true }]);
+    const { approvals } = await h.approve(spec);
+    const { error } = await h.build(spec, { ...APPLY, commandStateApprovals: approvals });
+    assert.strictEqual(error && error.code, code, `${what}: ${error && error.message}`);
+    assert.strictEqual(error.retry, require('../lib/retry-policy.js').RETRY.NEVER, what);
+    assert.deepStrictEqual(finalReads(error), [[ROW, [reads[0]]], [ROW2, [reads[1]]]], `${what}: every row was read once at the end`);
+    assert.strictEqual(h.patches().length, 2, `${what}: nothing more was written`);
+    assert.deepStrictEqual(error.commandStates.rows.map((r) => r.outcome), ['acknowledged', 'acknowledged'], what);
+    // The halt names both rows after the preface, the first failure first.
+    const after = error.message.slice(error.message.indexOf('): ') + 3);
+    assert.ok(after.indexOf(ROW) >= 0 && after.indexOf(ROW2) > after.indexOf(ROW), `${what}: ${after}`);
+    if (reads[0] === 'differed') assert.match(after, /^command state [^:]+: written by this build: [^;]*; then a read at the end of the build found hidden false, disabled false, not the declared flags — this build did not overwrite that change/, what);
+  }
+});
+
 test('a row this build left unchanged that drifts before the final proof fails without a write being claimed', async () => {
   const rows = [commandRow(ROW, T, MD, { hidden: true })];
   const h = harness({ rows, onPublish: () => { rows[0].hidden = false; rows[0]['@odata.etag'] = 'W/"2000"'; } });
