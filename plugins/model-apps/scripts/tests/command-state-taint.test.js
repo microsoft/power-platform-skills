@@ -36,8 +36,8 @@ const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { openManagedContext } = require('../lib/managed-bindings.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 
-const MARKER = 'review-service-message W/"498763"';
-const TAINT = /review-service-message|498763/;
+const MARKER = 'planted-service-message W/"498763"';
+const TAINT = /planted-service-message|498763/;
 const LISTING = path.resolve(__dirname, '..', 'list-command-states.js');
 const apiOf = (req) => /^(.*\/api\/data\/v9\.\d+)/.exec(req.url)[1];
 const isGet = (req) => req.method === 'GET';
@@ -359,28 +359,27 @@ for (const [position, plant] of Object.entries(clientFailurePositions())) cases.
 for (const [position, plant] of Object.entries(savedReadPositions())) cases.push({ phase: 'publish', name: 'fallback-read', position, plant });
 const nameOf = (c) => `${c.phase} | ${c.name} | ${c.position}`;
 
-// The thirteen cases an independent review found leaking, each one of the matrix: an app component's objectid and component type and the
+// Known leak cases, each one of the matrix: an app component's objectid and component type and the
 // app read's next-page link, at the preflight and in the final proof; the objectid and the link in the listing and in verify; and a refused
-// row read, table-row-version read and table read by metadata id, whose message is the service's but whose Dataverse code must be said. Two
-// more came from a later review: the before-app publish refused with the service's message.
-const REVIEWED = [
+// row read, table-row-version read and table read by metadata id, whose message is the service's but whose Dataverse code must be said.
+const KNOWN_LEAKS = [
   'preflight | components | objectid', 'final | components | objectid', 'preflight | components | componenttype', 'final | components | componenttype',
   'preflight | app | @odata.nextLink (another origin)', 'final | app | @odata.nextLink (another origin)',
   'listing | components | objectid', 'listing | app | @odata.nextLink (another origin)',
   'verify | components | objectid', 'verify | app | @odata.nextLink (another origin)',
   'verify | row | error.message', 'verify | concurrency | error.message', 'listing | tableById | error.message',
-  // The pull request's review: a refused before-app publish whose message the warning quoted.
+  // A refused before-app publish whose message the warning quoted.
   'publish | plain | HTTP 403 error.message', 'publish | plain | HTTP 503 error.message',
-  // A later pass: the SDK's refusal of the fallback publication, quoted in the warning and copied into the halt and the journal; and the
+  // The SDK's refusal of the fallback publication, quoted in the warning and copied into the halt and the journal; and the
   // managed publisher's refusal reason when its client failed before the request was dispatched.
   'publish | fallback | error.message', 'publish | managed-predispatch | client error.message',
-  // The final review: the read of the saved layer after a final halt, refused with the service's message; and a publication that throws,
+  // The read of the saved layer after a final halt, refused with the service's message; and a publication that throws,
   // at the publish phase and at the fallback, whose error's message the halt and the journal copied.
   'publish | fallback-read | HTTP 403 error.message', 'publish | phase8-thrown | error.message', 'publish | fallback-thrown | error.message',
 ];
-test('the matrix holds every reviewed case', () => {
+test('the matrix holds every known leak case', () => {
   const names = new Set(cases.map(nameOf));
-  assert.deepStrictEqual(REVIEWED.filter((n) => !names.has(n)), []);
+  assert.deepStrictEqual(KNOWN_LEAKS.filter((n) => !names.has(n)), []);
 });
 
 for (const c of cases) {

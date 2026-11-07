@@ -23,8 +23,8 @@ const { createManagedTablePublisher } = require('../lib/managed-scope-publisher.
 const { RETRY } = require('../lib/retry-policy.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 
-const MARKER = 'review-service-message W/"498763"';
-const TAINT = /review-service-message|498763/;
+const MARKER = 'planted-service-message W/"498763"';
+const TAINT = /planted-service-message|498763/;
 const T2 = 'new_case';
 const MD2 = '55555555-5555-4555-8555-555555555555';
 const ROW2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
