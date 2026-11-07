@@ -3615,8 +3615,9 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   request, or the managed publisher's flush for a managed table (the supported overlap: the existing publisher
   publishes it, the observer reads its `published` list), named each table after its latest row write. The managed
   publisher publishes one routed table at a time and throws on the first it cannot; before it throws, its flush tells
-  an optional `onHalt` what it settled (`published`, `withheld`, and `failed`: the table whose publish was sent and
-  failed), so a table published before the halt is reported confirmed and the failing one `failed`, never as unsent.
+  an optional `onHalt` what it settled (`published`, `withheld`, and `failed`: the table whose publish was attempted
+  and not confirmed - the request may or may not have been sent), so a table published before the halt is reported
+  confirmed and the failing one `failed`, never as confirmed and never as untouched.
   `onHalt` is only told: the halt thrown is the publisher's own, whatever it does. An apply
   succeeds only when both final checks pass. First, after the build's app work, every declared row is judged against
   a freshly resolved app context (the commands phase's context is not membership proof) and must still hold its
