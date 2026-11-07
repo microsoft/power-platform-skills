@@ -31,9 +31,11 @@ const { odataLit } = require('./odata.js');
 // The app's build lease (lib/app-operation-lease.js), and the one derivation of the app's unique name it is keyed by.
 const { withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
 const { appUniqueName } = require('./sdk-build.js');
+const { usesCommandStates } = require('./command-state-contract.js');
 
 // Why a changed-only apply runs whole while protected configuration is in play (the decision's reason, printed and in the result).
 const PROTECTED_CONFIGURATION_FULL = 'protected configuration is in play (configurationIdentity "stable-v1", or configuration state in the binding store) — full build, so its checks run before any write and its changes are applied';
+const COMMAND_STATES_FULL = 'the spec declares commandStates — full build, so every declared command row is read and its change approved before any write';
 
 // ---- PURE decision ------------------------------------------------------------------------------------
 
@@ -342,6 +344,11 @@ async function runChangedOnlyApplyHeld({ spec, opts, deps }) {
   if (deps.managedCreateGate && (decision.decision === 'fast' || decision.decision === 'noop')) {
     decision = { ...decision, decision: 'full', reason: PROTECTED_CONFIGURATION_FULL };
   }
+  // commandStates are applied only by a full build (lib/command-state-run.js commandStateMode): it reads every declared row and asks for
+  // approval of what it finds, which the snapshot cannot stand in for — a row edited in the designer since leaves the spec unchanged.
+  if (usesCommandStates(spec) && (decision.decision === 'fast' || decision.decision === 'noop')) {
+    decision = { ...decision, decision: 'full', reason: COMMAND_STATES_FULL };
+  }
   log(`▸ changed-only: ${decision.decision.toUpperCase()} — ${decision.reason}`);
 
   if (decision.decision === 'noop') {
@@ -546,4 +553,5 @@ module.exports = {
   fullApplyOpts,
   distrustWorkspace,
   PROTECTED_CONFIGURATION_FULL,
+  COMMAND_STATES_FULL,
 };

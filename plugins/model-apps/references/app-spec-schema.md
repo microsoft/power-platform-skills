@@ -35,6 +35,7 @@ to read the SDK, the lint, or the engine to author a spec. Common asks → how t
 | A related record's card shown on a form | `forms[].quickViews[]` (lookup + a `QuickView` form by name) | forms |
 | A command-bar button that runs JS | `commands[]` (`library` + `function`; optional `hidden`/`disabled`) | commands |
 | A command **drop-down menu** of buttons | `commands[].type: "FlyoutAnchor"` + `children[]` | commands |
+| Show, hide, enable or disable an **existing** modern button | `commandStates[]` by `rowId` (from `list-command-states.js`; table scope only; needs `--publish` and exact approvals; [advanced](app-spec-schema-advanced.md#commandstates-optional--show-or-hide-existing-buttons)) | commandStates |
 | A dashboard of chart/list tiles | `dashboards[]` (`tiles[]` reference declared `views`/`charts`) | dashboards |
 | A dashboard in the app nav | a `dashboard` sitemap subarea in `appShell` (auto-pins it) | appShell |
 | A table in the app but not its navigation | `app.tables` (logical names; additive membership) | app |
@@ -832,6 +833,7 @@ list with "reach for it when…" guidance.
 | `globalChoices[]` | shared option sets |
 | `webResources[]` | client-side logic |
 | `commands[]` | modern command-bar buttons |
+| `commandStates[]` | show, hide, enable or disable an existing table-scoped modern button by its row id |
 | `businessRules[]` | declarative form logic, no code |
 | `businessProcessFlows[]` | guided, staged process on a table |
 | `dashboards[]` | chart/list/iframe/web-resource tiles |

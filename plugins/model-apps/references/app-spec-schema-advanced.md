@@ -114,11 +114,13 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   takes no arguments. **Without a parameter the function is invoked with no arguments**, so
   `primaryControl` is `undefined` and the button appears to do nothing — the error is visible only
   in the browser console, and the build, the deployed rows and `--verify` all still look correct.
-- **Button edits are not applied on rebuild.** The command phase is discover-then-skip: it creates a
-  bar only when none exists. To change a deployed button, delete the entity's commands (or tear down)
-  and rebuild.
+- **Button edits in `commands[]` are not applied on rebuild.** The command phase is discover-then-skip: it creates a
+  bar only when none exists. To change a deployed button's label, script or other properties, delete the entity's commands (or tear down)
+  and rebuild. To only show, hide, enable or disable an existing button, use `commandStates[]` (below).
 - **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
-- **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
+- **`hidden`** / **`disabled`** set *static* visibility/enablement. A modern button with `disabled: true`
+  is not shown at all (live checks found it absent from the bar, not greyed out), so `disabled` acts like
+  `hidden`. **Conditional (rule-based)
   visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
   that can't be authored headlessly.
 - **`type`** is `Button` (default), `FlyoutAnchor`, or `SplitButton`. A flyout/split container holds
@@ -126,6 +128,106 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   the menu items live under it. Top-level buttons emit as **loose controls**; a *titled* group is not
   supported (it needs a parent command-bar row the SDK doesn't synthesize from scratch). The command
   lands in the Default solution but is entity-scoped, so it shows on the entity's command bar.
+
+### Listing the existing buttons — `list-command-states.js` (read-only)
+```bash
+node scripts/list-command-states.js --env <envUrl> --app <uniqueName> [--entity <logical>] [--location MainTab|HomeTab|ContextualTab]
+```
+Prints every modern command button of the app's tables (or of the one `--entity`), each with its
+`rowId`, `bar`, `scope` (`table`, `app`, `other-app`), stored `hidden` / `disabled`, and `candidate`.
+It only reads; a write flag is a usage error.
+- **Pick a button by `rowId`, never by caption.** Two buttons with the same caption on one bar each
+  name the other in `sameCaption`; an unlabelled button has `caption: null`.
+- **Excluded buttons are listed, not left out**, each with every reason it is not a candidate:
+  `shape-unreadable`, `id-mismatch`, `context-not-table`, `context-mismatch`, `table-not-in-app`,
+  `location-unsupported`, `location-mismatch`, `app-scoped` (scoped to an app — this one or another — not to its table: only
+  table-scoped buttons are candidates in this version), `not-standard-button`
+  (a flyout or split container, or a group), `nested` (a menu item), `not-default-origin` (migrated
+  or system), `inactive`, `managed`, `not-customizable`, `flags-unreadable`, `visibility-formula`
+  (Power Fx visibility or classic rules: `visibilitytype` other than empty or 0, or a visibility-formula field set; the
+  empty `visibilitytype` the platform stores on a button `commands[]` wrote is static), `formula-action` (a Power Fx on-select), `version-unavailable` (the
+  platform keeps no row versions for commands). The listing does not check each row's own version; the
+  build does, and refuses a row without one (`command-state-version-unavailable`).
+- A bar the App Spec has no name for (a stored location other than 0, 1, 2) is `bar: "unsupported"`.
+- **`candidate` describes the row's shape only.** It does not prove the app renders the button, or
+  where.
+- A failed or incomplete read prints `{ "ok": false, "code": "command-state-…", "error" }` with
+  exit 1 — never a shorter list.
+
+## commandStates[] (optional — show or hide existing buttons)
+```jsonc
+"minimumPluginVersion": "2.24.0",            // required: an older plugin refuses the spec instead of ignoring it
+"app": { "uniqueName": "new_support", ... },  // required: the app the buttons are checked against
+"commandStates": [
+  { "entity": "new_ticket", "location": "MainTab", "scope": "table",
+    "rowId": "11111111-1111-4111-8111-111111111111",   // from list-command-states.js — never invented
+    "hidden": true },                                  // and/or "disabled": true|false
+  { "entity": "new_ticket", "location": "HomeTab", "scope": "table",
+    "rowId": "22222222-2222-4222-8222-222222222222", "hidden": false, "disabled": false }
+]
+```
+Sets the stored **hidden** and **disabled** flags of a modern command button that already exists,
+picked by its row id. Nothing else about the button changes, and a row is never created.
+- **Fields are closed and exact.** `entity` is a table declared in `entities[]`; `location` is exactly
+  `MainTab`, `HomeTab` or `ContextualTab` and must be the row's bar; `scope` is exactly `"table"`;
+  `rowId` is the lower- or upper-case id `list-command-states.js` prints (no braces, not all zeros), one
+  entry per row; set `hidden`, `disabled` or both. A flag you leave out is never changed or compared
+  with a wanted value, but both stored flags must read as `true` or `false`: a row whose other flag
+  cannot be read is refused before anything is written (`command-state-row-unreadable`);
+  `false` is an instruction, not "unset". An unknown field (for example `isdisabled`) is refused with
+  `command-state-spec-invalid`.
+- **Table-scoped buttons only.** `scope: "app"` is refused with `command-state-app-scope-unverified`,
+  and so is a row that turns out to be scoped to an app.
+- **Only candidates are written:** an active, unmanaged, customizable, top-level plain button with no
+  Power Fx visibility or on-select formula, on the declared table and bar, that the platform keeps row
+  versions for — the listing's `candidate: true`. A button with an empty (null) `visibilitytype` and
+  every visibility-formula field empty — what `commands[]` writes — counts as static; the build never
+  writes `visibilitytype`.
+- **Only a full build with `--publish` applies them.** A partial range, a changed-only fast apply or an
+  apply without `--publish` is refused before anything is read (`command-state-phase-unsupported`,
+  `command-state-publish-required`); exactly `--stage data` leaves them alone. A spec that also has
+  keyed `commands[]` (`key`) is refused (`command-state-keyed-unsupported`), and so is `commands[]` that
+  would create a new bar on a table whose existing button `commandStates` edits
+  (`command-state-legacy-create-conflict`): create the button in one build, add its state in a later one.
+- **Exact approvals, printed by a dry run.** A dry run reads each row and prints, for every row that
+  needs a change, `--authorize overwrite:command-state:<table>/<bar>/<rowId>/<sha256>` — one version of
+  one row under one intent in one environment — and for every declared table
+  `--authorize publish:command-state-table:<table>/<sha256>`. An apply without every one of them
+  writes nothing (`command-state-approval-required`, `command-state-publication-approval-required`);
+  a row changed after its dry run needs a new token (`command-state-approval-stale`). There is no
+  wildcard and no blanket approval. Such a halt prints the tokens it needs on the console, never into
+  the build's log or status files.
+- **Publishing a table publishes ALL saved customizations on it** (anyone's, not only these buttons),
+  for every app that shows the table — which is why it has its own approval.
+- **One conditional write per row.** The build sends only the flags that differ, with `If-Match` on
+  the version it read. A row changed in between is refused (`command-state-version-conflict`) and never
+  overwritten. A write whose answer was lost is never sent again (`command-state-write-unknown`): read
+  the row with `list-command-states.js` before building again.
+- **Success needs the table's publication.** The build publishes each declared table with the tables
+  it publishes before the app; until that publication is seen to succeed after the row's write, the
+  build reports `command-state-publish-unconfirmed`, saying for each table what its rows are known to
+  hold ("saved, not published"; or, when that is all it knows, "held after a write with no usable answer",
+  "held other flags than declared at its last read", "could not be read at its last read", "write outcome
+  unknown" or "not written") —
+  a saved row holds the flags, but the button may still show its old state. A row that held its flags
+  after its write (or already held them) and then changed before the build finished its rows is reported
+  as `drifted`, with what the build did to it first (`command-state-not-confirmed`).
+- **What the bar shows.** Live checks found a saved flag change served to a fresh browser session at
+  once; a session with cached data can keep showing the old bar until it reloads its data (refresh, or
+  clear the site's stored data). A button set to `disabled: true` was not shown at all, as with `hidden`.
+- **The end of the build checks again.** After its app work the build resolves the app afresh and reads
+  every declared row once more: a table no longer in the app, or a row that no longer holds its flags,
+  fails the build. Nothing is rolled back — the rows it wrote stay written, and the message says what this
+  build did to each row (wrote it, found it already set, or sent a write that got no usable answer) and
+  what each read found. When the build retries itself, a row an earlier attempt wrote is still reported
+  as written by that attempt, and is never written again.
+- **Delayed publication is not fenced.** A table publish that was sent can still complete after a
+  halt, or after you remove the entry. This release keeps no record across runs: the next publishing
+  run requests the table again only because `commandStates` still names it.
+- **`--verify` checks stored flags** of each declared row — not how the button renders (a verify of
+  `--stage data` lists them as phase-skipped and reads no row). A changed-only
+  apply of a spec with `commandStates` always runs the full build. Removing an entry, or a teardown,
+  does not restore a flag, and download does not write `commandStates` back into a spec.
 
 ## businessRules[] (optional — declarative form logic, no code)
 
@@ -1268,6 +1370,17 @@ the field builds exactly as before.
   `configuration-row-not-found` even when a namesake exists, an item with no binding (or no readable
   binding store) fails with `create-identity-unverified`, and an item whose create is still being
   settled is reported unverified. Keep the build workspace with the binding store where verify runs.
+  A protected duplicate rule's conditions are checked at their bound ids too, as the build pairs them:
+  criteria swapped between two bound condition rows fails with `DRIFT`, naming the conditions
+  (`/conditions/<key>`), as the build refuses that rule (`configuration-edit-unsupported`). Verify
+  judges that rule with the build's own read-only check, so an edit the build refuses fails with
+  `DRIFT`, naming what it can: a condition added, removed or renamed in the declaration, a condition
+  row the declaration does not name, `conditions` omitted while the rule's binding holds conditions, or
+  a changed root field (for example `/matchingEntity`). `/definition` appears alone when the build
+  refuses and no declared field says why (for example the rule's publication state changed). A bound
+  row that is gone stays `configuration-row-not-found`, a binding read that could not be completed stays
+  `create-identity-unverified`, and a rule whose content could not be read whole keeps its own read
+  error (for example `DUPLICATE_RULE_READ_INCOMPLETE`): no edit can be judged from any of them.
 - **Checked before anything is sent.** Every declared protected item is read and judged before the
   build's first service change, the solution version included: a first create's reserved id and its
   namesake lookup too, so a create that would stop with `create-identity-conflict` or

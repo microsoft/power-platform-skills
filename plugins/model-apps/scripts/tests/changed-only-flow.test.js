@@ -356,6 +356,24 @@ test('run: with protected configuration in play (a managed-create gate) neither 
   }
 });
 
+// commandStates are applied only by a full build, which reads every declared row and asks for approval of what it finds: an unchanged spec is not
+// proof that a row still holds its flags (it can have been edited in the designer since), so neither a NOOP nor a FAST apply is taken.
+test('run: a spec that declares commandStates never takes a NOOP or a FAST apply — the full build runs', async () => {
+  const withStates = () => ({ ...baseSpec(), commandStates: [{ entity: 'new_x', location: 'MainTab', scope: 'table', rowId: '11111111-1111-4111-8111-111111111111', hidden: true }] });
+  for (const content of ['v1', 'v2']) {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(withStates(), 'v1'));
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: withStates(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor(content) }) });
+      assert.notStrictEqual(r.noop, true, content);
+      assert.strictEqual(r.changedOnly.decision, 'full', content);
+      assert.strictEqual(r.changedOnly.reason, flow.COMMAND_STATES_FULL, content);
+      assert.strictEqual(record.length, 1, `${content}: the full build ran`);
+      assert.strictEqual(record[0].phases, undefined, `${content}: every phase`);
+    } finally { rm(dir); }
+  }
+});
 test('run: FULL baseline (fresh app, appId null at start) writes an ELIGIBLE snapshot', async () => {
   const dir = ws();
   try {
