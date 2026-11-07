@@ -3629,9 +3629,11 @@ row id from `list-command-states.js`. It is not a reconcile of `commands[]`: the
   `command-state-publish-unconfirmed` (worded per table from its rows' facts: saved / held after a write with no
   usable answer / already held / held other flags at its last read / could not be read at its last read / write
   outcome unknown / not written). A reconciled table the plain request did not publish (it was refused, or there is
-  no raw client to send it) is published by the SDK (`publishReconciledTables`), and that publication confirms it when
-  the SDK answers it as published (path `sdk-before-app`); one the SDK refuses stays unconfirmed and halts before the
-  app as before. Every message that words a row after its step (that publication halt, the
+  no raw client to send it) is published by the SDK (`publishReconciledTables`), and that publication confirms it only
+  when the SDK's answer proves a request was sent and succeeded — kind `submitted`, `verified` or `unverifiable`
+  (`publishAnswerProvesPublication`, `managed-feature-contract.js`; path `sdk-before-app`). A no-request kind (`none`,
+  `notApplicable`, `notRequested`), an unknown kind or no kind proves nothing and leaves it unconfirmed; one the SDK
+  refuses stays unconfirmed and halts before the app as before. Every message that words a row after its step (that publication halt, the
   post-write read, the final drift and late membership checks, a retry's approval halt, the CLI's result lines) words
   it from the row's **facts** — an ordered, append-only list of what each read found (matched, other flags, or could
   not be read, with the phase it was made in) and how each write was answered — through one renderer,

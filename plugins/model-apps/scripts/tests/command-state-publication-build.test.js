@@ -129,11 +129,15 @@ test('the managed flush tells onHalt what it settled before a halt, and the halt
 // the before-app envelope names the table, and when the envelope is refused the SDK publishes the reconciled table instead
 // (publishReconciledTables). `sdkRefuses(type, id)` says which of the SDK's publishes it refuses; `batch` gives the SDK the publish of
 // several artifacts in one request (publishArtifacts), which publishTargets uses for more than one table and retries a refused one alone.
-function reconciling({ commandStates = true, tables = [T], sdkRefuses = () => false, batch = false } = {}) {
+// `sdkKind(type, id, n)` is the kind of an answer it does not refuse (default `verified`); `shipped` is true only for `verified`, as the SDK
+// answers (a `submitted` answer, and the `notApplicable` it gives for an artifact it sent nothing for, have `shipped: false`).
+function reconciling({ commandStates = true, tables = [T], sdkRefuses = () => false, batch = false, sdkKind = () => 'verified' } = {}) {
   const sdkPublishes = [];
   const answer = (type, id) => {
     sdkPublishes.push(`${type} ${id}`);
-    return sdkRefuses(type, id, sdkPublishes.length) ? { type, id, shipped: false, publish: { kind: 'failed', error: Object.assign(new Error(MARKER), { statusCode: 400 }) } } : { type, id, shipped: true, publish: { kind: 'verified' } };
+    if (sdkRefuses(type, id, sdkPublishes.length)) return { type, id, shipped: false, publish: { kind: 'failed', error: Object.assign(new Error(MARKER), { statusCode: 400 }) } };
+    const kind = sdkKind(type, id, sdkPublishes.length);
+    return { type, id, shipped: kind === 'verified', publish: kind === undefined ? {} : { kind } };
   };
   const h = harness({
     tables: { [T]: { metadataId: MD }, [T2]: { metadataId: MD2 } },
@@ -196,4 +200,57 @@ test('of two reconciled tables published in one SDK request, only the one it pub
   const outRetried = await run(retried);
   assert.ifError(outRetried.caught);
   assert.deepStrictEqual(outRetried.result.commandStates.publication.map((p) => [p.entity, p.outcome, p.path]), [[T2, 'confirmed', 'sdk-before-app'], [T, 'confirmed', 'sdk-before-app']]);
+});
+// An SDK answer proves a publication only by a kind that says the request was sent and answered success (publishAnswerProvesPublication):
+// the real SDK answers `notApplicable`, with `shipped: false` and no request sent, for an artifact it has nothing to publish for, so such an
+// answer — like `none`, `notRequested`, a kind it does not know, or none — leaves the table unconfirmed and the build ends
+// `command-state-publish-unconfirmed`, on each of publishTargets' three paths. With the feature off the same build completes as it always did.
+const NO_PROOF = ['notApplicable', 'none', 'notRequested', 'queued', undefined];
+const outcomeOf = (out) => (out.caught ? out.caught.commandStates : out.result.commandStates).publication.map((p) => [p.entity, p.outcome, p.path || p.reason]);
+
+test('an SDK publication answered with no request made, or an unknown kind, does not confirm the reconciled table (single publish)', async () => {
+  for (const kind of NO_PROOF) {
+    const on = reconciling({ sdkKind: (type) => (type === 'view' ? kind : 'verified') });
+    const out = await run(on);
+    assert.strictEqual(out.caught && out.caught.code, 'command-state-publish-unconfirmed', `${kind}: ${out.caught && out.caught.message}`);
+    assert.deepStrictEqual(outcomeOf(out), [[T, 'unconfirmed', 'failed']], String(kind));
+    assert.ok(on.sdkPublishes.includes(`view view-${T}`), `${kind}: the SDK was asked to publish the reconciled table`);
+    assert.ok(!TAINT.test(everywhere(out)), String(kind));
+    const off = reconciling({ commandStates: false, sdkKind: (type) => (type === 'view' ? kind : 'verified') });
+    const outOff = await run(off, false);
+    assert.ifError(outOff.caught);
+    assert.deepStrictEqual([off.h.published, off.sdkPublishes], [on.h.published, on.sdkPublishes], `${kind}: the same requests with the feature off`);
+  }
+});
+
+test('an SDK batch publication answered with no request made does not confirm that table, on the first pass or on its retry', async () => {
+  for (const kind of NO_PROOF) {
+    const firstPass = reconciling({ tables: [T, T2], batch: true, sdkKind: (type, id) => (id === `view-${T}` ? kind : 'verified') });
+    const out = await run(firstPass);
+    assert.strictEqual(out.caught && out.caught.code, 'command-state-publish-unconfirmed', `${kind}: ${out.caught && out.caught.message}`);
+    assert.deepStrictEqual(outcomeOf(out), [[T2, 'confirmed', 'sdk-before-app'], [T, 'unconfirmed', 'failed']], `first pass ${kind}`);
+    // new_ticket is refused in the batch, and its retry alone is answered with the kind.
+    let tries = 0;
+    const retry = reconciling({ tables: [T, T2], batch: true, sdkRefuses: (type, id) => id === `view-${T}` && ++tries === 1, sdkKind: (type, id) => (id === `view-${T}` ? kind : 'verified') });
+    const outRetry = await run(retry);
+    assert.strictEqual(outRetry.caught && outRetry.caught.code, 'command-state-publish-unconfirmed', `${kind}: ${outRetry.caught && outRetry.caught.message}`);
+    assert.deepStrictEqual(outcomeOf(outRetry), [[T2, 'confirmed', 'sdk-before-app'], [T, 'unconfirmed', 'failed']], `retry ${kind}`);
+    assert.ok(retry.sdkPublishes.filter((p) => p === `view view-${T}`).length >= 2, `${kind}: new_ticket was retried after the refused batch`);
+    assert.ok(!TAINT.test(everywhere(out)) && !TAINT.test(everywhere(outRetry)), String(kind));
+  }
+});
+
+test('an SDK publication answered submitted (shipped false), verified or unverifiable confirms the reconciled table on each path', async () => {
+  for (const kind of ['submitted', 'verified', 'unverifiable']) {
+    const single = await run(reconciling({ sdkKind: () => kind }));
+    assert.ifError(single.caught);
+    assert.deepStrictEqual(outcomeOf(single), [[T, 'confirmed', 'sdk-before-app']], `single ${kind}`);
+    const batch = await run(reconciling({ tables: [T, T2], batch: true, sdkKind: () => kind }));
+    assert.ifError(batch.caught);
+    assert.deepStrictEqual(outcomeOf(batch), [[T2, 'confirmed', 'sdk-before-app'], [T, 'confirmed', 'sdk-before-app']], `batch ${kind}`);
+    let tries = 0;
+    const retry = await run(reconciling({ tables: [T, T2], batch: true, sdkRefuses: (type, id) => id === `view-${T}` && ++tries === 1, sdkKind: () => kind }));
+    assert.ifError(retry.caught);
+    assert.deepStrictEqual(outcomeOf(retry), [[T2, 'confirmed', 'sdk-before-app'], [T, 'confirmed', 'sdk-before-app']], `retry ${kind}`);
+  }
 });

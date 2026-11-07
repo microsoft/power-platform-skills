@@ -445,7 +445,8 @@ function createCommandStatePublicationObserver() {
     },
     /**
      * The SDK's publication of reconciled tables before the app (sdk-build.js publishReconciledTables), which follows a refused or absent
-     * plain envelope: only the names it answered as published confirm. A table it refused is not named, so it keeps the reason it had.
+     * plain envelope: only the names it proved published (a submitted, verified or unverifiable answer) confirm. A table it refused, or
+   * answered with no request made, is not named, so it keeps the reason it had.
      */
     observeSdk(names) {
       try {
