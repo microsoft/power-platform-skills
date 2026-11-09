@@ -20,6 +20,29 @@ both passes without modifying live files before the approved apply step.
 Validate saved state and snapshot/remediation records before dereferencing them;
 invalid input must produce a clear error without replacing usable state or partially
 applying a proposal with missing staged files.
+Keep migration instructions shell-independent: use `migration-runtime.js` for
+discovery, UTF-8 solution capture, delays, and bounded read-only polling, not
+PowerShell/Bash loops. PAC runs through the shared argument-array runner; retain
+complete verbose responses for agent-owned history/chunk report updates.
+After report initialization, every skill-owned input/manual-action pause must
+show the report-wide required-action notice. Reuse approval gates for existing
+approvals; use `--set-input` for other questions and clear it when resolved.
+Never treat a notification as approval or advance migration progress for it.
+Approved package installs reuse the indeterminate now-running bar and elapsed
+timer through installed-version verification; never invent an install percentage
+or advance migration phases for a package's progress display.
+Restart remains after activation in Phase 3, before Phase 4 runtime validation.
+Use `scripts/restart-site.js` only with explicit restart consent; verify the saved
+environment, Portal ID (not the Dataverse record ID), and site origin. Never
+automatically repeat an uncertain POST. Read-only readiness checks and manual
+fallback must not be reported as proof of a restart without prior submission
+or explicit user confirmation.
+Phase 4.1 offers Run now to invoke the existing test-site skill in the migration
+conversation, only after the user chooses it. Preserve its read-only scope and
+user-controlled login. Keep input notices/progress synchronized and record only
+the current matching-site result; warnings, skipped scope, cancellation and
+unavailable tools are not an unconditional pass. Preserve earlier-result,
+defer/skip and final-status/rollback choices.
 Regression coverage lives in `scripts/tests/{diff-snapshots,snapshot-site,update-state,generate-migration-reports,apply-remediation}.test.js`.
 
 ## Non-SPA creation and shared design quality

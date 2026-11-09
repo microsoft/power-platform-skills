@@ -33,6 +33,10 @@
  *   node update-state.js --output-dir <DIR> --set-approval 2 in-phase
  *   node update-state.js --output-dir <DIR> --clear-approval
  *
+ *   # notify the user of a non-phase-approval input or manual-action pause
+ *   node update-state.js --output-dir <DIR> --set-input '{"requiredAction":"Restart the site, then confirm completion in chat."}'
+ *   node update-state.js --output-dir <DIR> --clear-input
+ *
  *   # atomically clear an approval gate and mark a phase in-progress (use this
  *   # after the user answers an AskUserQuestion approval gate — avoids the
  *   # transient "Awaiting Approval" pill that would otherwise appear between
@@ -92,6 +96,7 @@ const {
   APPROVAL_KIND,
   PROMPT_STATUS,
   TRACK,
+  normalizePendingInput,
   buildInitialState,
   rebuildPhasesForTrack,
 } = require('./lib/migration-state-schema');
@@ -278,6 +283,7 @@ function cmdInit(args) {
       'sdm-snapshot.json', 'edm-snapshot.json', 'migration-data-diff.json',
       'remediation-diff.json', 'customization-report.html',
       'plugin-remediation-prompt.txt', 'dme-remediation-prompt.txt',
+      'migration-status.json', 'migration-status.txt',
     ]) {
       fs.rmSync(path.join(outputDir, filename), { force: true });
     }
@@ -400,6 +406,8 @@ function cmdSetApproval(args) {
   }
   const state = loadState(outputDir);
   state.approvalGate = { phaseId, kind };
+  state.pendingInput = null;
+  state.currentOperation = null;
   persist(state, outputDir);
   console.log(`✓ Approval gate → phase ${phaseId} (${kind})`);
 }
@@ -409,6 +417,7 @@ function cmdClearApproval(args) {
   if (!outputDir) throw new Error('--clear-approval requires --output-dir');
   const state = loadState(outputDir);
   state.approvalGate = null;
+  state.pendingInput = null;
   persist(state, outputDir);
   console.log('✓ Approval gate cleared');
 }
@@ -429,10 +438,40 @@ function cmdApproveAndStart(args) {
   const phase = state.phases.find((p) => p.id === phaseId);
   if (!phase) throw new Error(`--approve-and-start: phase ${phaseId} not found in state`);
   state.approvalGate = null;
+  state.pendingInput = null;
   phase.status = PHASE_STATUS.IN_PROGRESS;
   if (!phase.startedAt) phase.startedAt = new Date().toISOString();
   persist(state, outputDir);
   console.log(`✓ Approval cleared and phase ${phaseId} → in-progress`);
+}
+
+function cmdSetInput(args) {
+  const outputDir = args['output-dir'];
+  if (!outputDir) throw new Error('--set-input requires --output-dir');
+  const raw = args['set-input'];
+  if (typeof raw !== 'string') throw new Error('--set-input requires a JSON string value');
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`--set-input requires valid JSON: ${error.message}`);
+  }
+  const pendingInput = normalizePendingInput(payload);
+  if (!pendingInput) throw new Error('--set-input requires an object with a non-empty "requiredAction" string');
+  const state = loadState(outputDir);
+  state.pendingInput = pendingInput;
+  state.currentOperation = null;
+  persist(state, outputDir);
+  console.log(`✓ Input needed: ${pendingInput.requiredAction}`);
+}
+
+function cmdClearInput(args) {
+  const outputDir = args['output-dir'];
+  if (!outputDir) throw new Error('--clear-input requires --output-dir');
+  const state = loadState(outputDir);
+  state.pendingInput = null;
+  persist(state, outputDir);
+  console.log('✓ Input notification cleared');
 }
 
 function cmdSetPrompt(args) {
@@ -593,6 +632,7 @@ function cmdSetOperation(args) {
     expectedDurationSec,
     poll,
   };
+  state.pendingInput = null;
   persist(state, outputDir);
   console.log(`✓ Operation: ${payload.label}${poll ? ` (attempt ${poll.attempt}/${poll.max})` : ''}`);
 }
@@ -680,6 +720,8 @@ function main() {
     if (args['set-approval'] !== undefined) return cmdSetApproval(args);
     if (args['clear-approval']) return cmdClearApproval(args);
     if (args['approve-and-start'] !== undefined) return cmdApproveAndStart(args);
+    if (args['set-input'] !== undefined) return cmdSetInput(args);
+    if (args['clear-input']) return cmdClearInput(args);
     if (args['set-prompt'] !== undefined) return cmdSetPrompt(args);
     if (args['set-customization-report'] !== undefined) return cmdSetCustomizationReport(args);
     if (args['set-refs-migration'] !== undefined) return cmdSetRefsMigration(args);

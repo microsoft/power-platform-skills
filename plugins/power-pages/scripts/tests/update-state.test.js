@@ -100,6 +100,105 @@ test('switching tracks preserves shared progress and approval gates', (t) => {
   assert.deepEqual(after.site, before.site);
 });
 
+test('input notices preserve migration gates/progress and clear when the pause resolves', (t) => {
+  const fixture = setup(t);
+  assert.equal(fixture.run().status, 0);
+  const run = (args) => {
+    const result = fixture.run([], ['--output-dir', fixture.output, ...args]);
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(fs.readFileSync(fixture.statePath, 'utf8'));
+  };
+  run(['--approve-and-start', '1']);
+  const before = run(['--set-operation', '{"label":"Checking metadata"}']);
+  const waiting = run(['--set-input', JSON.stringify({ requiredAction: '  Provide the Portal ID.  ' })]);
+  assert.equal(waiting.pendingInput.requiredAction, 'Provide the Portal ID.');
+  assert.match(waiting.pendingInput.responseLocation, /migration conversation/);
+  assert.equal(waiting.currentOperation, null);
+  assert.deepEqual(waiting.phases, before.phases);
+  assert.deepEqual(waiting.approvalGate, before.approvalGate);
+  assert.deepEqual(waiting.site, before.site);
+  assert.equal(run(['--set-track', 'B']).pendingInput.requiredAction, waiting.pendingInput.requiredAction);
+  assert.equal(run(['--clear-input']).pendingInput, null);
+  assert.equal(run(['--clear-input']).pendingInput, null);
+
+  const pause = () => run(['--set-input', '{"requiredAction":"Confirm restart.","responseLocation":"Migration chat"}']);
+  assert.equal(pause().pendingInput.responseLocation, 'Migration chat');
+  assert.equal(run(['--set-operation', '{"label":"Verifying restart"}']).pendingInput, null);
+  pause();
+  const approval = run(['--set-approval', '2', 'phase-start']);
+  assert.equal(approval.pendingInput, null);
+  assert.equal(approval.currentOperation, null);
+  pause();
+  assert.deepEqual(run(['--clear-input']).approvalGate, approval.approvalGate);
+  pause();
+  assert.equal(run(['--clear-approval']).pendingInput, null);
+  pause();
+  assert.equal(run(['--approve-and-start', '2']).pendingInput, null);
+});
+
+test('invalid input notices cannot replace usable state or report files', (t) => {
+  const fixture = setup(t);
+  assert.equal(fixture.run().status, 0);
+  const stateBefore = fs.readFileSync(fixture.statePath, 'utf8');
+  const reportPath = path.join(fixture.output, 'datamodel-migration-report.html');
+  const reportBefore = fs.readFileSync(reportPath, 'utf8');
+  for (const raw of ['{', 'null', '[]', '1', 'true', '""', '{}',
+    '{"requiredAction":null}', '{"requiredAction":" "}', '{"requiredAction":1}',
+    '{"requiredAction":"Confirm.","responseLocation":null}',
+    '{"requiredAction":"Confirm.","responseLocation":" "}']) {
+    const result = fixture.run([], ['--output-dir', fixture.output, '--set-input', raw]);
+    assert.equal(result.status, 1, raw);
+    assert.match(result.stderr, /--set-input|Pending input/);
+    assert.equal(fs.readFileSync(fixture.statePath, 'utf8'), stateBefore);
+    assert.equal(fs.readFileSync(reportPath, 'utf8'), reportBefore);
+  }
+});
+
+test('legacy saved states without pendingInput render and accept new input notices', (t) => {
+  const fixture = setup(t);
+  assert.equal(fixture.run().status, 0);
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, 'utf8'));
+  delete state.pendingInput;
+  fs.writeFileSync(fixture.statePath, JSON.stringify(state));
+  const result = fixture.run([], ['--output-dir', fixture.output, '--render-only']);
+  assert.equal(result.status, 0, result.stderr);
+  const paused = fixture.run([], ['--output-dir', fixture.output, '--set-input', '{"requiredAction":"Confirm restart."}']);
+  assert.equal(paused.status, 0, paused.stderr);
+});
+
+test('package progress preserves elapsed time and completed metadata while references remain pending', (t) => {
+  const fixture = setup(t);
+  assert.equal(fixture.run().status, 0);
+  const run = (args) => {
+    const result = fixture.run([], ['--output-dir', fixture.output, ...args]);
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(fs.readFileSync(fixture.statePath, 'utf8'));
+  };
+  run(['--approve-and-start', '1']);
+  run(['--set-phase', '1', '--status', 'completed']);
+  run(['--set-phase', '2', '--status', 'in-progress']);
+  const before = run(['--set-step', '2.2', '--status', 'completed']);
+  run(['--set-input', '{"requiredAction":"Approve the additional V2 package installation."}']);
+  const label = 'Installing PowerPages_ProgramRegistration_V2';
+  const installing = run(['--set-operation', JSON.stringify({ label, detail: 'Installation in progress.' })]);
+  assert.equal(installing.pendingInput, null);
+  assert.equal(installing.currentOperation.expectedDurationSec, null);
+  assert.equal(installing.currentOperation.poll, null);
+  assert.deepEqual(installing.phases, before.phases);
+  assert.ok(installing.phases[2].subSteps.every((step) => step.status === 'pending'));
+
+  const startedAt = '2026-01-01T12:00:00Z';
+  installing.currentOperation.startedAt = startedAt;
+  fs.writeFileSync(fixture.statePath, JSON.stringify(installing));
+  const verifying = run(['--set-operation', JSON.stringify({ label, detail: 'Installation accepted; verifying installed version.' })]);
+  assert.equal(verifying.currentOperation.startedAt, startedAt);
+  assert.deepEqual(verifying.phases, before.phases);
+  const reportPath = path.join(fixture.output, 'datamodel-migration-report.html');
+  assert.match(fs.readFileSync(reportPath, 'utf8'), /class="now-running-bar-fill now-running-bar-indeterminate"/);
+  assert.equal(run(['--clear-operation']).currentOperation, null);
+  assert.doesNotMatch(fs.readFileSync(reportPath, 'utf8'), /data-now-running data-op-started-at=/);
+});
+
 test('force reset clears generated artifacts but keeps downloaded source and inputs', (t) => {
   const fixture = setup(t);
   assert.equal(fixture.run().status, 0);
@@ -107,6 +206,7 @@ test('force reset clears generated artifacts but keeps downloaded source and inp
     'sdm-snapshot.json', 'edm-snapshot.json', 'migration-data-diff.json',
     'remediation-diff.json', 'customization-report.html',
     'plugin-remediation-prompt.txt', 'dme-remediation-prompt.txt',
+    'migration-status.json', 'migration-status.txt',
   ];
   for (const name of artifacts) fs.writeFileSync(path.join(fixture.output, name), '{}');
   fs.mkdirSync(path.join(fixture.output, 'remediation-staged'));

@@ -154,6 +154,22 @@ function makePhasesFromBlueprint(blueprints) {
   }));
 }
 
+function normalizePendingInput(value) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value) ||
+      typeof value.requiredAction !== 'string' || !value.requiredAction.trim()) {
+    throw new Error('Pending input must be an object with a non-empty "requiredAction" string.');
+  }
+  if (value.responseLocation !== undefined &&
+      (typeof value.responseLocation !== 'string' || !value.responseLocation.trim())) {
+    throw new Error('Pending input "responseLocation" must be a non-empty string when supplied.');
+  }
+  return {
+    requiredAction: value.requiredAction.trim(),
+    responseLocation: value.responseLocation?.trim() || 'Return to the migration conversation and provide your response.',
+  };
+}
+
 /**
  * Build a fresh migration-state.json skeleton. Defaults to the Authoring Track; the skill
  * calls `--set-track A|B` at the end of step 1.7 once env type and migration
@@ -189,6 +205,8 @@ function buildInitialState({ webSiteId, outputDir, track = DEFAULT_TRACK, starte
       phaseId: 1,
       kind: APPROVAL_KIND.PHASE_START,
     },
+    // Informational pauses must not replace or approve a migration gate.
+    pendingInput: null,
     augmentedPrompts: {
       plugin: null,
       dme: null,
@@ -245,6 +263,7 @@ module.exports = {
   APPROVAL_KIND,
   PROMPT_STATUS,
   TRACK,
+  normalizePendingInput,
   DEFAULT_TRACK,
   PHASE_BLUEPRINTS_BY_TRACK,
   // Back-compat exports — `PHASE_BLUEPRINT` was the pre-track flat list. We

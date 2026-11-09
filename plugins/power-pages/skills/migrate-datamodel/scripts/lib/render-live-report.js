@@ -21,6 +21,7 @@ const {
   SUB_STEP_STATUS,
   APPROVAL_KIND,
   PROMPT_STATUS,
+  normalizePendingInput,
 } = require('./migration-state-schema');
 const {
   NONCONFIGURATION_CATEGORIES,
@@ -94,46 +95,35 @@ function overallPercent(state) {
 }
 
 function statusPillFor(state) {
-  // 1. A phase is actively running → "In Progress".
-  const inProgress = state.phases.find((p) => p.status === PHASE_STATUS.IN_PROGRESS);
-  if (inProgress) {
-    const gate = state.approvalGate;
-    // In-phase approval gate piggybacks on a running phase — show that explicitly.
-    if (gate && gate.kind === APPROVAL_KIND.IN_PHASE && gate.phaseId === inProgress.id) {
-      return `Awaiting Approval — Phase ${inProgress.id} (in-phase)`;
-    }
-    return `In Progress · Phase ${inProgress.id} of ${state.phases.length}`;
-  }
-
-  // 2. Phase-start gate is set and nothing is running yet → waiting for user.
+  if (state.pendingInput) return 'Input needed';
+  // A pending question/gate takes precedence over recorded phase progress.
   const gate = state.approvalGate;
-  if (gate && gate.kind === APPROVAL_KIND.PHASE_START) {
-    return `Awaiting Approval — Phase ${gate.phaseId}`;
+  if (gate) {
+    return `Awaiting Approval — Phase ${gate.phaseId}${gate.kind === APPROVAL_KIND.IN_PHASE ? ' (in-phase)' : ''}`;
   }
 
-  // 3. Every phase is completed → done.
+  const inProgress = state.phases.find((p) => p.status === PHASE_STATUS.IN_PROGRESS);
+  if (inProgress) return `In Progress · Phase ${inProgress.id} of ${state.phases.length}`;
+
   const allDone = state.phases.every((p) => p.status === PHASE_STATUS.COMPLETED);
   if (allDone) return 'Migration Complete';
 
-  // 4. Nothing running, no gate, not done → transitional. Surface the next phase
+  // Nothing running, no gate, not done → transitional. Surface the next phase
   //    so the user sees forward motion rather than a stale "Awaiting Approval"
   //    pill while the agent runs the next --set-phase call.
   const nextPending = state.phases.find((p) => p.status !== PHASE_STATUS.COMPLETED);
   if (nextPending) return `Ready · Phase ${nextPending.id} of ${state.phases.length}`;
 
-  // 5. Defensive fallback (no phases at all).
   return 'Migration Complete';
 }
 
 function pillSeverityClass(state) {
+  if (state.pendingInput || state.approvalGate) return 'pending';
   const inProgress = state.phases.find((p) => p.status === PHASE_STATUS.IN_PROGRESS);
   if (inProgress) return 'in-progress';
   const allDone = state.phases.every((p) => p.status === PHASE_STATUS.COMPLETED);
   if (allDone) return 'done';
-  // Transitional "Ready" state — visually treat as in-progress so the user sees motion.
-  const gate = state.approvalGate;
-  if (!gate) return 'in-progress';
-  return 'pending';
+  return 'in-progress';
 }
 
 // ── Approval-banner copy (track-aware: keyed by phase + kind + Authoring/Downstream track) ────────
@@ -170,7 +160,7 @@ const APPROVAL_COPY = {
     heading: 'Approve to start Phase 3: Migration Execution',
     body: [
       'Phase 2 has finished: metadata migrated to EDM tables, customizations remediated and uploaded.',
-      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the metadata migration landed cleanly before refs are migrated. Then it migrates transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-skipped if you chose <code>--mode all</code> in Phase 2), activates EDM via <code>--updateDataModelVersion</code>, and prompts you to restart the site.',
+      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the metadata migration landed cleanly before refs are migrated. Then it migrates transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-skipped if you chose <code>--mode all</code> in Phase 2), activates EDM via <code>--updateDataModelVersion</code>, and asks you to approve an API restart with readiness verification (manual fallback if unavailable).',
     ],
     approve: '› Yes, start migration execution',
     cancel: '› Cancel — stop before migration',
@@ -179,7 +169,7 @@ const APPROVAL_COPY = {
     heading: 'Approve to start Phase 3: Migration Execution',
     body: [
       'Phase 2 confirmed configuration metadata is present in the target environment.',
-      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the upstream-imported metadata landed cleanly before refs are migrated. Then it migrates transactional references, locates the auto-generated customization report, remediates any customizations that surface (stronger warning — Prod findings usually indicate an ALM gap), activates EDM, and prompts you to restart the site.',
+      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the upstream-imported metadata landed cleanly before refs are migrated. Then it migrates transactional references, locates the auto-generated customization report, remediates any customizations that surface (stronger warning — Prod findings usually indicate an ALM gap), activates EDM, and asks you to approve an API restart with readiness verification (manual fallback if unavailable).',
     ],
     approve: '› Yes, start migration execution',
     cancel: '› Cancel — stop before migration',
@@ -188,7 +178,7 @@ const APPROVAL_COPY = {
     heading: 'Approve to start Phase 4: Post-Migration Validation',
     body: [
       'Migration execution is complete. The site is now on Enhanced Data Model. The pre-flight SDM ↔ EDM metadata diff in Phase 3.1 already confirmed every metadata record made it across.',
-      '<strong>Phase 4</strong> recommends <code>/test-site</code> for browser-based runtime smoke testing and offers an optional rollback if validation surfaces problems.',
+      '<strong>Phase 4</strong> offers <strong>Run now</strong> in the migration conversation to launch <code>/power-pages:test-site</code> for browser-based runtime smoke testing. You can also report an earlier run, defer, or skip. Optional rollback remains a separate choice if validation surfaces problems.',
     ],
     approve: '› Yes, start validation',
     cancel: '› Cancel — I\'ll validate manually',
@@ -349,19 +339,19 @@ function renderOverviewSection(state, snapshots) {
     <h4>Authoring Track — phase detail</h4>
     <ul>
       <li><strong>Phase 2:</strong> capture an SDM baseline snapshot → migrate metadata with <code>pac pages migrate-datamodel</code> → locate the auto-emitted customization report → remediate by staging FetchXML/Liquid auto-rewrites plus augmented prompts for plugins &amp; Data Model Extensions → apply the staged diff and upload back with <code>pac pages upload --modelVersion 1</code>.</li>
-      <li><strong>Phase 3:</strong> SDM↔EDM data-diff validation (pre-refs safety gate) → transactional references migration (auto-skipped when mode was <code>all</code>) → EDM activation via <code>--updateDataModelVersion --portalId</code> → user-confirmed site restart.</li>
+      <li><strong>Phase 3:</strong> SDM↔EDM data-diff validation (pre-refs safety gate) → transactional references migration (auto-skipped when mode was <code>all</code>) → EDM activation via <code>--updateDataModelVersion --portalId</code> → approved API restart and readiness verification (manual fallback).</li>
     </ul>
 
     <h4>Downstream Track — phase detail</h4>
     <ul>
       <li><strong>Phase 2 (shorter):</strong> verify metadata is present in the target environment → capture snapshots → confirm readiness via a user-facing gate before Phase 3 moves transactional data.</li>
-      <li><strong>Phase 3 (longer):</strong> data-diff validation → migrate refs with <code>--mode configurationDataReferences</code> → locate the customization report → remediate with the same staged-rewrite / augmented-prompt flow (stronger warning, since Prod/Test/UAT findings usually signal an upstream ALM gap) → activate EDM → confirm site restart.</li>
-      <li><strong>Phase 4</strong> (both tracks): a runtime smoke-test recommendation and a final status summary.</li>
+      <li><strong>Phase 3 (longer):</strong> data-diff validation → migrate refs with <code>--mode configurationDataReferences</code> → locate the customization report → remediate with the same staged-rewrite / augmented-prompt flow (stronger warning, since Prod/Test/UAT findings usually signal an upstream ALM gap) → activate EDM → approved API restart and readiness verification (manual fallback).</li>
+      <li><strong>Phase 4</strong> (both tracks): choose <strong>Run now</strong> in the migration conversation for the recommended runtime smoke test, report an earlier run, or defer/skip; then record final status.</li>
     </ul>
   </div>
 
   <div class="stats-grid">
-    <div class="stat-card"><div class="stat-num">${pct}%</div><div class="stat-label">Overall</div></div>
+    <div class="stat-card"><div class="stat-num">${pct}%</div><div class="stat-label">Workflow completion</div></div>
     <div class="stat-card"><div class="stat-num">${completed} / ${total}</div><div class="stat-label">Sub-steps</div></div>
     <div class="stat-card"><div class="stat-num">${escapeHtml(elapsed)}</div><div class="stat-label">Elapsed</div></div>
     <div class="stat-card"><div class="stat-num">${phasesDone} / ${state.phases.length}</div><div class="stat-label">Phases done</div></div>
@@ -371,7 +361,6 @@ ${renderSiteCard(state)}
 
 ${renderConfidenceStat(snapshots.sdmSnapshot, snapshots.edmSnapshot)}
 
-${renderApprovalBanner(state)}
 </div>`;
 }
 
@@ -439,7 +428,7 @@ ${approvalGates.map((g) => `    <li>${escapeHtml(g)}</li>`).join('\n')}
     <li>Customization remediation diff and augmented prompts produced (if findings)</li>
     <li>SDM and EDM snapshots captured for verifiable post-migration data diff</li>
     <li>Optional rollback path available via Portal Id + <code>--revertToStandardDataModel</code></li>
-    <li>Runtime smoke test recommended via separate <code>/test-site &lt;URL&gt;</code> invocation</li>
+    <li>Runtime smoke test via <strong>Run now</strong> in the migration conversation using <code>/power-pages:test-site &lt;URL&gt;</code>, or an explicit earlier result, deferral, or decline</li>
   </ul>
 </div>`;
 }
@@ -1248,7 +1237,15 @@ ${subStepsBlock}
 
 // ── Approval banner ────────────────────────────────────────────────────────
 
-function renderApprovalBanner(state) {
+function renderUserActionBanner(state) {
+  const input = normalizePendingInput(state.pendingInput);
+  if (input) {
+    return `<section class="approval-banner" id="user-action-notice" role="alert" aria-labelledby="user-action-title">
+  <h3 id="user-action-title">Your input is needed</h3>
+  <p>${escapeHtml(input.requiredAction)}</p>
+  <p class="approval-instr"><strong>Where to respond:</strong> ${escapeHtml(input.responseLocation)}</p>
+</section>`;
+  }
   const gate = state.approvalGate;
   if (!gate) return '';
   const track = state.track;
@@ -1263,14 +1260,14 @@ function renderApprovalBanner(state) {
   const bodyHtml = copy.body
     .map((p) => `  <p>${escapeHtmlAllowingInline(p)}</p>`)
     .join('\n');
-  return `<div class="approval-banner">
-  <h3>${escapeHtml(copy.heading)}</h3>
+  return `<section class="approval-banner" id="user-action-notice" role="alert" aria-labelledby="user-action-title">
+  <h3 id="user-action-title">${escapeHtml(copy.heading)}</h3>
 ${bodyHtml}
   <p class="approval-instr"><strong>To approve and continue</strong>, respond in your Claude Code chat with:</p>
   <div class="action-cmd">${escapeHtml(copy.approve)}</div>
   <p class="approval-instr"><strong>To cancel</strong>:</p>
   <div class="action-cmd">${escapeHtml(copy.cancel)}</div>
-</div>`;
+</section>`;
 }
 
 // ── Augmented prompts ──────────────────────────────────────────────────────
@@ -1597,7 +1594,7 @@ details > summary { cursor:pointer; color:var(--accent); font-size:12px; padding
 details[open] > summary { margin-bottom:6px; }
 
 /* Approval banner */
-.approval-banner { background:var(--warning-bg); border:1px solid var(--warning-border); border-left:4px solid var(--warning); border-radius:var(--radius); padding:20px 24px; margin-top:20px; box-shadow:var(--shadow-4); }
+.approval-banner { background:var(--warning-bg); border:1px solid var(--warning-border); border-left:4px solid var(--warning); border-radius:var(--radius); padding:20px 24px; margin:20px 28px; scroll-margin-top:100px; box-shadow:var(--shadow-4); }
 .approval-banner h3 { margin:0 0 10px; color:var(--warning); font-size:15px; font-weight:700; }
 .approval-banner p { margin:8px 0; color:var(--text); font-size:13px; line-height:1.65; }
 .approval-banner .approval-instr { margin-top:14px; }
@@ -1836,7 +1833,9 @@ function renderTopbar(state) {
   </div>
   <div class="topbar-right">
     ${contextHtml}
-    <span class="status-pill ${pillClass}">${escapeHtml(pill)}</span>
+    ${state.pendingInput || state.approvalGate
+      ? `<a class="status-pill ${pillClass}" href="#user-action-notice">${escapeHtml(pill)}</a>`
+      : `<span class="status-pill ${pillClass}">${escapeHtml(pill)}</span>`}
   </div>
 </div>`;
 }
@@ -1852,6 +1851,7 @@ function renderTopbar(state) {
 // state. data-op-expected-sec, when present, drives a determinate bar that eases
 // toward the estimate; without it the bar is indeterminate.
 function renderNowRunningBanner(state) {
+  if (state.pendingInput || state.approvalGate) return '';
   const op = state.currentOperation;
   if (!op || !op.label) return '';
   const startedAt = op.startedAt || state.lastUpdatedAt;
@@ -1924,6 +1924,7 @@ ${CSS}
 <body>
 
 ${renderTopbar(state)}
+${renderUserActionBanner(state)}
 ${renderNowRunningBanner(state)}
 
 <div class="layout">
@@ -2044,6 +2045,17 @@ ${TAB_JS}
   var TAB_KEY = 'sdmEdmReport:activeTab';
   var DETAILS_KEY = 'sdmEdmReport:openDetails';
   var statusEl = document.getElementById('live-refresh-status');
+  var inputNotice = document.getElementById('user-action-notice');
+  var topbar = document.querySelector('.topbar');
+  if (inputNotice && topbar) {
+    // Context pills wrap on small screens; a fixed anchor offset hides the
+    // notice heading behind the sticky header.
+    function updateNoticeOffset() {
+      inputNotice.style.scrollMarginTop = (topbar.offsetHeight + 16) + 'px';
+    }
+    updateNoticeOffset();
+    window.addEventListener('resize', updateNoticeOffset);
+  }
 
   // Stable key for a <details> card so its open/closed state survives a reload even
   // when a count in the summary ticks up ("Show 7 chunks" -> "Show 9 chunks"). Key on

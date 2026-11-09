@@ -82,7 +82,11 @@ function runPac(args, deps = {}) {
   }
 
   try {
-    output = readFileTail(logPath, PAC_LOG_TAIL_BYTES, fsImpl);
+    // Migration discovery/polling must retain leading solution anchors and all
+    // chunk details. Existing mutation callers still receive a bounded log tail.
+    output = deps.captureAll
+      ? fsImpl.readFileSync(logPath, 'utf8')
+      : readFileTail(logPath, PAC_LOG_TAIL_BYTES, fsImpl);
     if (!output && commandOutput !== undefined && commandOutput !== null) {
       output = String(commandOutput);
     }

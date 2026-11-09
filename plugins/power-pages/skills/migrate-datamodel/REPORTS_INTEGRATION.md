@@ -4,6 +4,66 @@ This document explains how to integrate the HTML report templates and generation
 
 > **Note on the execution report.** Parts of this guide are historical. The **execution/progress report** (`datamodel-migration-report.html`) is now the **live report**, rendered from `migration-state.json` by `scripts/lib/render-live-report.js` and driven by `scripts/update-state.js` — it is re-rendered after every step, not produced from a static template. `generate-migration-reports.js` owns only the **customization report**, the staged remediation rewrites, and the augmented prompts. Disregard any step below that describes `generate-migration-reports.js` generating or writing the execution report.
 
+## Waiting for user input
+
+The live report displays one required-action notice above all tabs. Existing
+`--set-approval` gates retain their approve/cancel instructions. For other pauses
+after initialization, use `update-state.js --set-input` with a JSON object containing
+`requiredAction` and, optionally, `responseLocation`. The default response location
+is the migration conversation. The notice is informational: it does not approve
+a gate or change phase/step progress.
+
+Set the notice before asking for input or handing off a manual action, and use
+`--clear-input` after a valid answer or cancellation. Keep it visible while the
+user is still completing the same action or correcting invalid input. Input/approval
+notices suppress the now-running banner; starting a new operation clears an input
+notice. Before executing resumed work, resolve any saved pending question first.
+The sticky status pill links to the notice even when the user has selected another
+tab. Older state files without `pendingInput` continue to render normally.
+
+## Package installation progress
+
+Approved agent-run package installations reuse the report-wide now-running banner:
+`--set-operation` with `label: "Installing <PACKAGE_NAME>"` and a descriptive
+`detail`, without `expectedDurationSec` or `poll`. This gives an animated
+indeterminate bar and elapsed time, not an installation percentage or ETA.
+Keep the banner through asynchronous installation and installed-package/version
+verification; clear it when verified or before handing control back to the user.
+See [Package installation progress](./SKILL.md#package-installation-progress) for
+the shared lifecycle used by dependency, template, and late-precheck installs.
+
+## Restart and readiness
+
+The restart remains in Phase 3, after activation (Authoring 3.4 / Downstream 3.6),
+not after Phase 4 validation. Ask for explicit approval, show the existing
+indeterminate now-running banner, and run the plugin's `scripts/restart-site.js`.
+Clear the operation when it exits. Record actual submission/readiness results in
+the existing `site-restart` decision and restart sub-step output.
+
+The helper checks the saved environment, Portal ID and site origin before one
+restart POST, then waits for API operation completion and anonymous HTTP
+reachability. Runtime correctness is still checked in Phase 4. On failure,
+show an input notice and offer read-only verification or manual fallback; never
+automatically repeat an uncertain mutation or claim that a healthy site alone
+proves a restart occurred. See [Restart Site](./SKILL.md#34-restart-site-api-first-manual-fallback).
+
+## Runtime smoke testing
+
+Phase 4.1 offers **Run now** in the migration conversation and invokes the existing
+`power-pages:test-site` skill only after that choice. No separate session is
+required. Report an earlier run, defer, and skip remain available.
+
+Show an input notice for the choice and for any browser-login/continue question.
+During the run, use the indeterminate `Testing migrated site` operation; keep
+Phase 4 and step 4.1 in progress. Clear the operation when testing ends, including
+failure or cancellation. The migration agent remains the sole state/report writer.
+
+Accept only the current run's matching-site test report. Record its outcome,
+counts, skipped scope and report path in step output and the `runtime-smoke-test`
+decision. Warnings, incomplete checks, unavailable tools and user-reported results
+must remain distinguishable from an executed passing test. Finishing the sub-step
+for an explicit defer/skip does not mean runtime validation passed.
+
 ## Folder Structure
 
 ```
@@ -30,7 +90,7 @@ plugins/power-pages/skills/migrate-datamodel/
 
 **Implementation:**
 
-```bash
+```text
 # Phase 8 step 1: Download Customization Report
 pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --siteCustomizationReportPath "./migration-report"
 
@@ -38,12 +98,7 @@ pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --siteCustomizationReport
 # ... parsing logic ...
 
 # Phase 8 step 3: Generate HTML report
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" \
-  --customization-report "./migration-report/SiteCustomization.csv" \
-  --site-name "<SITE_NAME>" \
-  --website-id "<WEBSITE_ID>" \
-  --template-name "<TEMPLATE_NAME>" \
-  --output-dir "./migration-reports"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --customization-report "./migration-report/SiteCustomization.csv" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --template-name "<TEMPLATE_NAME>" --output-dir "./migration-reports"
 
 # Share with user
 echo "Customization report: file://$(pwd)/migration-reports/customization-report.html"
@@ -53,15 +108,8 @@ echo "Customization report: file://$(pwd)/migration-reports/customization-report
 
 For automatable fixes (Data Model Extensions only), the same script is invoked with `--automate` and `--env-url`:
 
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" \
-  --site-name "<SITE_NAME>" \
-  --website-id "<WEBSITE_ID>" \
-  --siteCustomizationReportPath "./migration-report/SiteCustomization.csv" \
-  --env-url "https://org.crm.dynamics.com" \
-  --automate \
-  --environment-type "<ENV_TYPE>" \
-  --output-dir "./migration-reports"
+```text
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --siteCustomizationReportPath "./migration-report/SiteCustomization.csv" --env-url "https://org.crm.dynamics.com" --automate --environment-type "<ENV_TYPE>" --output-dir "./migration-reports"
 ```
 
 The script creates missing string attributes via Dataverse Web API and logs results into the execution report. All other customization types (Liquid, FetchXML, plugins, workflows) are flagged as manual.
@@ -77,18 +125,12 @@ The script creates missing string attributes via Dataverse Web API and logs resu
 
 **Implementation:**
 
-```bash
+```text
 # During Phases 1–11: skill collects timing and results
 # Track all commands, results, and timing
 
 # At end of Phase 12: generate execution report
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" \
-  --site-name "<SITE_NAME>" \
-  --website-id "<WEBSITE_ID>" \
-  --portal-id "<PORTAL_ID>" \
-  --template-name "<TEMPLATE_NAME>" \
-  --execution-data "phase1,phase2,phase3,phase4,phase5,phase6,phase7,phase8,phase9,phase10,phase11,phase12" \
-  --output-dir "./migration-reports"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --portal-id "<PORTAL_ID>" --template-name "<TEMPLATE_NAME>" --execution-data "phase1,phase2,phase3,phase4,phase5,phase6,phase7,phase8,phase9,phase10,phase11,phase12" --output-dir "./migration-reports"
 
 # Share with user
 echo "Execution report: file://$(pwd)/migration-reports/datamodel-migration-report.html"
@@ -183,13 +225,8 @@ During skill execution, collect:
 
 The skill calls the script after parsing the CSV from PAC CLI:
 
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
-  --customization-report "<REPORT_PATH>" `
-  --site-name "<SITE_NAME>" `
-  --website-id "<WEBSITE_ID>" `
-  --template-name "<TEMPLATE_NAME>" `
-  --output-dir "<OUTPUT_DIR>"
+```text
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --customization-report "<REPORT_PATH>" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --template-name "<TEMPLATE_NAME>" --output-dir "<OUTPUT_DIR>"
 ```
 
 Open the generated HTML report in your browser: `file://<OUTPUT_DIR>/customization-report.html`
@@ -198,28 +235,16 @@ Open the generated HTML report in your browser: `file://<OUTPUT_DIR>/customizati
 
 The same script runs with `--automate` to apply safe fixes via Dataverse API (Data Model Extensions only):
 
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
-  --site-name "<SITE_NAME>" `
-  --website-id "<WEBSITE_ID>" `
-  --siteCustomizationReportPath "<REPORT_PATH>" `
-  --env-url "<ENV_URL>" `
-  --automate `
-  --environment-type "<ENV_TYPE>" `
-  --output-dir "<OUTPUT_DIR>"
+```text
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --siteCustomizationReportPath "<REPORT_PATH>" --env-url "<ENV_URL>" --automate --environment-type "<ENV_TYPE>" --output-dir "<OUTPUT_DIR>"
 ```
 
 ### Phase 12: Final Execution Report
 
 At the end of post-migration validation:
 
-```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
-  --site-name "<SITE_NAME>" `
-  --website-id "<WEBSITE_ID>" `
-  --portal-id "<PORTAL_ID>" `
-  --template-name "<TEMPLATE_NAME>" `
-  --output-dir "<OUTPUT_DIR>"
+```text
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --portal-id "<PORTAL_ID>" --template-name "<TEMPLATE_NAME>" --output-dir "<OUTPUT_DIR>"
 ```
 
 The execution report includes:
@@ -297,8 +322,8 @@ No `npm install` is required to run the script.
 After running the generation script:
 
 ```
-✓ Customization report generated: C:\path\to\migration-reports\customization-report.html
-✓ Execution report generated: C:\path\to\migration-reports\datamodel-migration-report.html
+✓ Customization report generated: <OUTPUT_DIR>/customization-report.html
+✓ Execution report generated: <OUTPUT_DIR>/datamodel-migration-report.html
 
 Reports generated successfully!
 Open in browser: file:///C:/path/to/migration-reports/customization-report.html

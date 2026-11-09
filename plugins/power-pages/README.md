@@ -40,6 +40,16 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 | [PAC CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
 
+The data-model migration skill does not require PowerShell. Its Node.js helper
+handles site discovery, UTF-8 output capture, and bounded status polling on
+Windows, macOS, and Linux. Ensure PAC is available on the agent process's `PATH`;
+use the linked installation guidance for your operating system.
+
+After EDM activation, migration can restart the site through the Power Platform
+API with explicit user approval, using the existing PAC/Azure CLI sign-ins and
+the caller's permissions. It verifies site readiness before Phase 4 runtime
+validation and retains a manual restart fallback when automation is unavailable.
+
 ## Skills
 
 The plugin provides 40 skills: 39 user-invocable skills and one model-only worker.

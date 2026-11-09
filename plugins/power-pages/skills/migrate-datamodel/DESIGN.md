@@ -22,7 +22,7 @@ On the **Authoring Track** (17 sub-steps total), **Phase 2 — Configuration Mig
 
 On the **Downstream Track** (18 sub-steps total), **Phase 2 — Setting Up Metadata** is shorter because configuration metadata is assumed to have arrived via ALM: verify the metadata is present in the target environment (2.1), capture snapshots for later diffs (2.2), and confirm metadata readiness via a user-facing gate before Phase 3 starts moving transactional data (2.3). **Phase 3 — Migration Execution** is longer here because customizations are scanned and remediated after the refs migration emits its own customization report: data diff validation (3.1), migrate refs with `--mode configurationDataReferences` (3.2), locate the customization report (3.3), remediate customizations with the same staged-rewrite and augmented-prompt flow as the Authoring Track but with a stronger warning since Prod/Test/UAT findings typically signal an ALM gap upstream (3.4), activate EDM (3.5), and confirm the site restart (3.6).
 
-**Phase 4 — Post-Migration Validation** is also shared across tracks and consists of two sub-steps: a runtime smoke-test recommendation that points the user at the `/test-site` flow (4.1) and a final status summary that records skill usage and writes the final execution report (4.2).
+**Phase 4 — Post-Migration Validation** is also shared across tracks and consists of two sub-steps: an optional runtime smoke test with **Run now** invoking the existing `/power-pages:test-site` skill in the migration conversation (4.1), and a final status summary that records skill usage and writes the final execution report (4.2). Users can instead report an earlier run, defer, or decline. In-session tests preserve user-controlled login and the existing read-only 25-page limit; the migration report records actual results, warnings, skipped scope, or an incomplete run rather than treating the request to test as a pass.
 
 > **Note:** EDM migration is a preview feature. Behavior may change before GA. Always test on a non-production environment first.
 
@@ -94,7 +94,7 @@ The skill is organized into **4 high-level phases**. Each phase contains numbere
 | Sub-step | Key Commands |
 | --- | --- |
 | 1.1 | `pac --version`, `pac auth list/who` |
-| 1.2 | `Test-Path .\website.yml` + AskUserQuestion |
+| 1.2 | `node <plugin-root>/skills/migrate-datamodel/scripts/migration-runtime.js discover --path "."` + AskUserQuestion |
 | 1.3 | `pac pages list -v` |
 | 1.4 | `pac pages migrate-datamodel --webSiteId <…> --checkMigrationStatus [--verbose]` |
 | 1.5 | `pac solution list --includeSystemSolutions` |
@@ -171,7 +171,7 @@ parent/
 │   ├── website.yml
 │   ├── web-templates/
 │   └── ...
-└── migration-reports/                 ← <OUTPUT_DIR> = "..\migration-reports"
+└── migration-reports/                 ← <OUTPUT_DIR> = "../migration-reports"
     └── (same contents as above)
 ```
 
@@ -180,15 +180,20 @@ The "go one step back" rule keeps the site dir clean for source control.
 ### Resolution algorithm (step 1.2)
 
 ```text
-Test-Path .\website.yml
-├── True  → <SITE_ROOT> = "."        ; <OUTPUT_DIR> = "..\migration-reports"
-└── False → look for subdir with website.yml
-    ├── Exactly one subdir → <SITE_ROOT> = .\<subdir>   ; <OUTPUT_DIR> = ".\migration-reports"
-    └── Zero or multiple   → download to .\mysite\<auto-slug> in step 2.2;
-                              <OUTPUT_DIR> = ".\migration-reports"
+migration-runtime.js discover --path "."
+├── Direct website.yml (including .powerpages-site/) → siteRoot + sibling migration-reports
+└── Otherwise → look for immediate child site directories
+    ├── Exactly one site → siteRoot + migration-reports in cwd
+    └── Zero or multiple → siteRoot=null; select/download the intended site
 ```
 
 `<SITE_ROOT>` and `<OUTPUT_DIR>` resolved once in step 1.2 and used as durable values across all subsequent phases.
+
+The migration runtime uses Node.js rather than a particular shell: `solutions`
+captures the complete PAC list as UTF-8, and `poll` performs at most 30 read-only
+checks with 60-second waits between attempts. Full status responses remain
+available for the existing agent-owned history/chunk report updates. PowerShell
+is not a prerequisite on Windows, macOS, or Linux.
 
 ### Output artifacts
 
@@ -202,7 +207,7 @@ Test-Path .\website.yml
 
 ### CSV Location-column path handling
 
-PAC writes paths to its internal scan temp directory in the CSV's `Location` column (e.g., `\\?\C:\Users\...\Temp\<site-slug>\web-templates\X\Y.html`). These paths are unusable as-is because:
+PAC writes paths to its internal scan temp directory in the CSV's `Location` column (e.g., `\\?\C:\Users\...\Temp\<site-slug>/web-templates\X\Y.html`). These paths are unusable as-is because:
 
 1. The `\\?\` Windows extended-path prefix breaks Node's URL parser (used by Claude Code when rendering markdown file links — the `?` becomes `%3F` in `pathToFileURL`).
 2. The temp directory may be cleaned up after the scan; it's not where the user should operate.
@@ -367,7 +372,7 @@ For FetchXML and Liquid rewrites, map `adx_*` entity → `powerpagecomponenttype
 
 ## Key PAC CLI Commands
 
-```powershell
+```text
 # Auth & discovery
 pac auth create -u <Dataverse URL>
 pac auth who
