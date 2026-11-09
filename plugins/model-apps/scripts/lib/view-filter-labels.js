@@ -30,7 +30,9 @@
 
 const { choiceValueMap, labelText, labelAliases, lookupColumnsFor } = require('./app-spec.js');
 const { odataLit } = require('./odata.js');
+const { isChoiceOptionObject } = require('./schema-feature-contract.js');
 const { labelsByLcid, readMetadata } = require('./lookup-labels.js');
+const { isDeclaredView } = require('./view-reconcile.js');
 
 // A value that is already an option VALUE (or any other number) is not a label, so an integer string — or a
 // comma-separated list of them, the form a multi-select's value takes — is never resolved and never read for.
@@ -68,7 +70,7 @@ function declaredLabels(spec, column) {
   const shared = !inline && column && column.globalChoice
     ? (((spec.globalChoices || []).find((g) => g && lc(g.name) === lc(column.globalChoice)) || {}).options || [])
     : [];
-  return (inline || shared).map((o) => labelText(o, spec && spec.languageCode)).filter(Boolean);
+  return (inline || shared).map((o) => labelText(isChoiceOptionObject(o) ? o.label : o, spec && spec.languageCode)).filter(Boolean);
 }
 
 // What the spec says about an attribute of the view's table: a declared column (its App Spec type), the
@@ -125,6 +127,9 @@ const hasLabelUses = (spec, view) => labelUses(spec, view).length > 0;
 // read: it is populated for a LOCAL set too, and then carries only the set's name. `Label` is read by
 // language code rather than through `UserLocalizedLabel`, which is only the calling user's language — a
 // filter may name a label in any.
+// A status reason (an option of a table's Status attribute, `statuscode`) also carries the state it belongs to,
+// `"State": 0`, which is kept as `state`; no other kind of option has one, and its options are answered as before.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/statusoptionmetadata
 function parseOptions(rawOptions, languageCode) {
   const options = [];
   for (const raw of Array.isArray(rawOptions) ? rawOptions : []) {
@@ -133,7 +138,7 @@ function parseOptions(rawOptions, languageCode) {
     const labels = Object.values(byLcid);
     const user = raw.Label && raw.Label.UserLocalizedLabel && raw.Label.UserLocalizedLabel.Label;
     if (typeof user === 'string' && user.trim() && !labels.includes(user)) labels.push(user);
-    options.push({ value: Number(raw.Value), labels, shown: labelText(byLcid, languageCode) || labels[0] || String(raw.Value) });
+    options.push({ value: Number(raw.Value), labels, shown: labelText(byLcid, languageCode) || labels[0] || String(raw.Value), ...(Number.isInteger(raw.State) ? { state: raw.State } : {}) });
   }
   return options;
 }
@@ -146,8 +151,13 @@ function parseOptions(rawOptions, languageCode) {
 //      https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/enumattributemetadata
 const OPTION_CASTS = ['Picklist', 'MultiSelectPicklist', 'State', 'Status'];
 
+// The read of one kind of a table's choice attributes, with every option and every language of its labels:
+//   /EntityDefinitions(LogicalName='new_customer')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)
+// Shared with the status reason read verify makes (lib/status-reasons-keys.js), so the two cannot ask differently.
+const optionCastUrl = (entityLogical, cast) => `/EntityDefinitions(LogicalName='${odataLit(lc(entityLogical))}')/Attributes/Microsoft.Dynamics.CRM.${cast}AttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`;
+
 // The choice attributes of one table, with every option and every language of its label:
-//   { state: 'ok', attributes: Map(logicalName -> { kind, options: [{ value, labels, shown }] }), complete, why? }
+//   { state: 'ok', attributes: Map(logicalName -> { kind, options: [{ value, labels, shown, state? }] }), complete, why? }
 //   { state: 'absent' }                      — the table is not in the environment (every cast answered 404)
 //   { state: 'error', why }                  — nothing could be read
 // `complete` is false when a cast failed: what the others returned is usable, but an attribute missing from
@@ -162,10 +172,9 @@ const OPTION_CASTS = ['Picklist', 'MultiSelectPicklist', 'State', 'Status'];
 // "nothing there". Remove this when the SDK offers a read of a column's options that neither writes the
 // workspace nor drops languages.
 async function readChoiceAttributes(client, entityLogical, { languageCode } = {}) {
-  const base = `/EntityDefinitions(LogicalName='${odataLit(lc(entityLogical))}')/Attributes/Microsoft.Dynamics.CRM.`;
   const reads = await Promise.all(OPTION_CASTS.map(async (cast) => {
     try {
-      const res = await client.get(`${base}${cast}AttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`);
+      const res = await client.get(optionCastUrl(entityLogical, cast));
       return { cast, res };
     } catch (err) {
       return { cast, why: (err && err.message) || String(err) };
@@ -617,12 +626,41 @@ function labelLintWarnings(spec, view) {
   return out;
 }
 
+// The views whose filter labels the build resolves, and lint checks. A declared view (lib/view-reconcile.js) can also filter on a table it
+// joins — a join's own `filters`, or a filter whose `relatedEntity` names a join — and such a label is an option of the
+// JOINED table, so each of those groups is read as a view of that table; the view's other filters stay on its own table.
+// Any other view is handed on as it is, so a spec without a declared join reads exactly what it read before.
+function viewsForLabels(spec) {
+  const out = [];
+  for (const v of spec.views || []) {
+    const joins = v && isDeclaredView(v) && Array.isArray(v.linkEntities) ? v.linkEntities.filter((l) => l && typeof l.name === 'string') : [];
+    if (!joins.length) { out.push(v); continue; }
+    const tableOf = new Map(joins.map((l) => [String(l.alias || l.name).toLowerCase(), l.name.toLowerCase()]));
+    const related = new Map();
+    const own = [];
+    for (const f of Array.isArray(v.filters) ? v.filters : []) {
+      const table = f && f.relatedEntity !== undefined ? tableOf.get(String(f.relatedEntity).toLowerCase()) : undefined;
+      if (f && f.relatedEntity !== undefined) {
+        // A relatedEntity that names no join is the view's validation error (compileViewIntent), not a label to read.
+        if (table) related.set(table, [...(related.get(table) || []), f]);
+      } else own.push(f);
+    }
+    out.push(own.length === (v.filters || []).length ? v : { ...v, filters: own });
+    for (const l of joins) if (Array.isArray(l.filters) && l.filters.length) out.push({ name: v.name, entity: l.name.toLowerCase(), filters: l.filters });
+    for (const [table, filters] of related) out.push({ name: v.name, entity: table, filters });
+  }
+  return out;
+}
+
 module.exports = {
   labelUses,
   hasLabelUses,
+  viewsForLabels,
   labelLintWarnings,
   readChoiceAttributes,
   readGlobalChoiceOptions,
+  optionCastUrl,
+  parseOptions,
   makeChoiceReader,
   makeGlobalChoiceReader,
   memoizeChoiceReader,

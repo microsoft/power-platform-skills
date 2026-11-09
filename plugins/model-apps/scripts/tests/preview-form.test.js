@@ -96,3 +96,31 @@ test('invalid App Spec prints validation errors instead of throwing from the ren
   assert.match(res.stderr, /form references unknown entity 'new_missing'/);
   assert.doesNotMatch(res.stderr, /TypeError/);
 });
+
+// A key a form's `fieldOptions` entry does not take is refused by the build and the lint, but a release before that check
+// accepted it and built the form without the option. The preview reads the spec under the structural profile, as teardown
+// does, where that finding is a warning: the form still renders, without the misspelled option.
+function specWithFieldOptions(entry) {
+  const spec = validSpec();
+  spec.forms[0] = { entity: 'new_account', name: 'Account Main', fieldOptions: { new_status: entry } };
+  return spec;
+}
+
+test('a form whose fieldOptions entry carries a key it does not take still renders, without that option', () => {
+  const res = run(['--spec', '@' + writeSpec(specWithFieldOptions({ readOnlyy: true })), '--entity', 'new_account']);
+
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /Account Main/);
+  assert.match(res.stdout, /Status/);
+  assert.doesNotMatch(res.stdout, /read-only/, 'the misspelled option is not applied');
+});
+
+test('such a form is still refused for any other problem of its fieldOptions, and the unknown key is no part of the refusal', () => {
+  const res = run(['--spec', '@' + writeSpec(specWithFieldOptions({ readOnlyy: true, readOnly: false }))]);
+
+  assert.equal(res.status, 1);
+  assert.equal(res.stdout, '');
+  assert.match(res.stderr, /Invalid App Spec:/);
+  assert.match(res.stderr, /fieldOptions\['new_status'\] sets readOnly: false/);
+  assert.doesNotMatch(res.stderr, /unknown key/);
+});

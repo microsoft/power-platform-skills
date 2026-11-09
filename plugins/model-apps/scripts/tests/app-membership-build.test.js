@@ -5,8 +5,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runSdkBuild, appDef } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, appDef } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { membershipSpec, membershipSdk, FORM_A, FORM_B, DASHBOARD, META, APP } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 test('appDef carries resolved Main ids and excludes the conflicting created Main pin by id', () => {
   const result = { forms: { contoso_item: FORM_B, contact: DASHBOARD }, views: {}, charts: {} };
@@ -25,9 +29,19 @@ for (const publish of [false, true]) {
     assert.deepEqual(fake.pushes[0].components.mainFormsByTable, { contoso_item: [FORM_A] });
     const firstPush = fake.events.findIndex(([event]) => event === 'push');
     const pin = fake.events.findIndex(([event, action]) => event === 'post' && action === '/AddAppComponents');
-    const republish = fake.events.findIndex(([event, action]) => event === 'post' && action === '/PublishXml');
+    // The PublishXml that names the app: with --publish the build first publishes the tables it changed, those whose Main forms its own write of the app adds,
+    // and those the app is proven to hold forms or charts of.
+    const republish = fake.events.findIndex(([event, action, body]) => event === 'post' && action === '/PublishXml' && /<appmodule>/.test(body.ParameterXml));
     assert.ok(pin > firstPush, JSON.stringify(fake.events));
     assert.ok(republish > pin, 'a fresh create already published before pinning; its hidden tables must not be left pending');
+    // This build changes no table and the app does not exist yet, so with --publish the one table it publishes before the app is created is the navigation's:
+    // the SDK adds its active Main forms when it creates the app. The table the spec only pins in `app.tables` is a table component, which the SDK expands no
+    // form of, so it is not named. Without --publish nothing is published ahead of the app.
+    const tableEvents = fake.events.filter(([event, action, body]) => event === 'post' && action === '/PublishXml' && !/<appmodule>/.test(body.ParameterXml));
+    assert.deepEqual(tableEvents.map(([, , body]) => body.ParameterXml), publish ? ['<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>'] : []);
+    if (publish) {
+      assert.ok(fake.events.indexOf(tableEvents[0]) < fake.events.findIndex(([event]) => event === 'create'), 'and it is published before the app is created');
+    }
     assert.equal(fake.pending, false);
     assert.equal(fake.events.filter(([event, url]) => event === 'get' && url.includes("objecttypecode eq 'contoso_item'")).length, 1,
       'resolve the directive once per run, even across a fetch and finalizer push');
@@ -40,6 +54,47 @@ test('omitted membership directives cost no component reads or extra publish', a
   await runSdkBuild(membershipSpec({ hidden: false, mainForms: false }), { sdk: fake.sdk, apply: true, phases: ['app-shell'] });
   assert.ok(!fake.events.some(([event]) => event === 'get' || event === 'post'));
   assert.equal(fake.pushes[0].components.mainFormsByTable, undefined);
+});
+
+for (const livePlan of [false, true]) {
+  test(`the ${livePlan ? 'live' : 'offline'} dry run lists each exact Main-form removal, with its scope and the app publish it owes`, async () => {
+    const spec = membershipSpec({ hidden: false });
+    spec.app.mainFormsOnUpdate = 'exact';
+    spec.minimumPluginVersion = '2.21.0';
+    const fake = membershipSdk({ existing: true });
+    const result = await runSdkBuild(spec, { sdk: fake.sdk, apply: false, phases: ['app-shell'], livePlan, emit: () => {} });
+    const removals = result.planItems.filter((item) => item.op === 'app-main-forms-removal');
+    assert.equal(removals.length, 1, JSON.stringify(result.planItems));
+    assert.equal(removals[0].phase, 'app-shell');
+    assert.equal(removals[0].destructive, true);
+    assert.match(removals[0].description, /removes other Main forms of contoso_item from the app's membership; no form is deleted/);
+    assert.match(removals[0].label, /--allow-destructive/);
+    assert.deepEqual(removals[0].publication, { kind: 'app', app: 'contoso_membership' });
+    assert.ok(!fake.events.some(([event]) => ['post', 'create', 'push', 'publish'].includes(event)), 'a dry run writes nothing');
+  });
+}
+
+test('the live dry run of a new app lists the exact Main forms without counting a removal', async () => {
+  const spec = membershipSpec({ hidden: false });
+  spec.app.mainFormsOnUpdate = 'exact';
+  spec.minimumPluginVersion = '2.21.0';
+  const fake = membershipSdk({ existing: false });
+  const result = await runSdkBuild(spec, { sdk: fake.sdk, apply: false, phases: ['app-shell'], livePlan: true, emit: () => {} });
+  const removal = result.planItems.find((item) => item.op === 'app-main-forms-removal');
+  assert.ok(removal, JSON.stringify(result.planItems));
+  assert.equal(removal.destructive, false);
+  assert.match(removal.label, /the app is new, so no Main form is taken out/);
+});
+
+test('a dry run without exact Main forms lists no removal and keeps its plan items unchanged', async () => {
+  for (const livePlan of [false, true]) {
+    const fake = membershipSdk({ existing: true });
+    const result = await runSdkBuild(membershipSpec({ hidden: false }), { sdk: fake.sdk, apply: false, phases: ['app-shell'], livePlan, emit: () => {} });
+    assert.ok(result.planItems.length > 0);
+    for (const item of result.planItems) {
+      for (const key of ['op', 'destructive', 'description', 'publication']) assert.ok(!(key in item), `${key} on ${item.label}`);
+    }
+  }
 });
 
 test('a navigation table redundantly listed in app.tables is proven without another pin or publish', async () => {
@@ -127,7 +182,7 @@ for (const publish of [false, true]) {
     const fake = membershipSdk({ existing: true });
     await runSdkBuild(membershipSpec(), {
       sdk: fake.sdk, apply: true, phases: ['app-shell', 'pages', 'publish'], publish, appDir: dir,
-      genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }) },
+      genpage: fakeGenpage(),
     });
     assert.equal(fake.pushes.length, 1, 'existing-app app-shell defers its push to the pages finalizer');
     assert.deepEqual(fake.pushes[0].components.mainFormsByTable, { contoso_item: [FORM_A] });

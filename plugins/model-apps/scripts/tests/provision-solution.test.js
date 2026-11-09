@@ -289,23 +289,27 @@ function solutionHarness({ argv, sdkFactoryThrows = null, initThrows = null, rmT
   const fsCalls = [];
   const real = require('../lib/dataverse-auth.js');
   const emitted = [];
+  const fsStub = {
+    mkdtempSync: (p) => { fsCalls.push({ op: 'mkdtemp', p }); return p + 'XXXX'; },
+    rmSync: (p, o) => {
+      fsCalls.push({ op: 'rm', p, o });
+      if (rmThrows) throw new Error(rmThrows);
+    },
+  };
   const cli = loadCli(scriptPath, {
     argv: argv || [ENVU, 'my_solution', 'My Solution'],
     requires: {
-      fs: {
-        mkdtempSync: (p) => { fsCalls.push({ op: 'mkdtemp', p }); return p + 'XXXX'; },
-        rmSync: (p, o) => {
-          fsCalls.push({ op: 'rm', p, o });
-          if (rmThrows) throw new Error(rmThrows);
-        },
-      },
+      fs: fsStub,
+      // The throwaway workspace is made by the plugin's one maker of them (lib/temp-workspace.js), which works on the real file system: the harness stands
+      // in for it with the very call the script made before it existed, so what this test pins — that it is made, and removed on every exit path — is as it was.
+      './lib/temp-workspace.js': { makeTempWorkspace: (prefix) => fsStub.mkdtempSync(path.join(require('node:os').tmpdir(), prefix)) },
       './lib/dataverse-auth': {
         parseArgs: real.parseArgs,
         validateFlags: real.validateFlags,
         emitResult: (ok, payload) => { emitted.push({ ok, payload }); },
       },
       './lib/sdk-http-client': { createAzHttpClient: () => ({}) },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         // The CLI builds its store explicitly via the /node adapter, so the mocked bundle must
         // expose it. The marker carries the root so assertions can still check WHERE the throwaway
         // workspace was placed.

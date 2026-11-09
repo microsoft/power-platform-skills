@@ -57,6 +57,15 @@ function normalizeLineEndings(content) {
   return content.replace(/\r\n?/g, '\n');
 }
 
+function assertVsCodeUpdatePath(content) {
+  assert.match(content, /Open the integrated terminal/);
+  assert.match(content, /`copilot plugin marketplace update power-platform-skills`/);
+  assert.match(content, /`copilot plugin update mobile-app@power-platform-skills`/);
+  assert.match(content, /\*\*Developer: Reload Window\*\*/);
+  assert.match(content, /Rerun this skill/);
+  assert.doesNotMatch(content, /Extensions view|select \*\*Update\*\*/i);
+}
+
 test('normalizeLineEndings makes Windows skill frontmatter parseable', () => {
   const content = '---\r\nuser-invocable: true\r\n---\r\n\r\n# Skill\r\n';
   const normalized = normalizeLineEndings(content);
@@ -117,7 +126,7 @@ test('formatUpdateMessage uses the plain plugin name without a marketplace', () 
   assert.doesNotMatch(message, /@/);
 });
 
-test('formatUpdateMessage gives VS Code UI guidance without CLI commands', () => {
+test('formatUpdateMessage gives VS Code copied installs verified CLI guidance', () => {
   const message = formatUpdateMessage(
     'mobile-app',
     '0.3.0',
@@ -126,9 +135,8 @@ test('formatUpdateMessage gives VS Code UI guidance without CLI commands', () =>
     'vscode'
   );
 
-  assert.match(message, /Agent Plugins\/Extensions view/);
-  assert.match(message, /reload VS Code/);
-  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
+  assertVsCodeUpdatePath(message);
+  assert.doesNotMatch(message, /claude plugin/);
 });
 
 test('formatUpdateMessage gives unknown hosts neutral UI guidance', () => {
@@ -144,18 +152,21 @@ test('formatUpdateMessage gives unknown hosts neutral UI guidance', () => {
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
-test('formatUpdateMessage gives local checkouts source-specific guidance', () => {
+test('formatUpdateMessage gives local live sources administrator guidance', () => {
   const message = formatUpdateMessage(
     'mobile-app',
     '0.3.0',
     '0.4.0',
     'power-platform-skills',
-    'claude',
+    'vscode',
     'checkout'
   );
 
-  assert.match(message, /loaded from a local checkout/);
-  assert.match(message, /Update that checkout/);
+  assert.match(message, /loaded live from a local source/);
+  assert.match(message, /Copilot cannot update it/);
+  assert.match(message, /person who configured the local marketplace or plugin directory/);
+  assert.match(message, /\*\*Developer: Reload Window\*\*/);
+  assert.doesNotMatch(message, /\bGit\b|git pull|rebase/);
   assert.doesNotMatch(message, /plugin marketplace update|plugin update mobile-app/);
 });
 
@@ -230,11 +241,11 @@ test('checkForUpdate works for a standalone installed plugin without Git metadat
   });
 
   assert.match(message, /Plugin update available: mobile-app 0\.3\.0 -> 0\.4\.0/);
-  assert.match(message, /Agent Plugins\/Extensions view/);
-  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
+  assertVsCodeUpdatePath(message);
+  assert.doesNotMatch(message, /claude plugin/);
 });
 
-test('checkForUpdate gives source guidance for a local checkout', async (t) => {
+test('checkForUpdate gives administrator guidance for a local live marketplace', async (t) => {
   const checkoutPluginRoot = createCheckoutPlugin(t, '0.3.0');
   const message = await checkForUpdate({
     pluginRoot: checkoutPluginRoot,
@@ -242,7 +253,9 @@ test('checkForUpdate gives source guidance for a local checkout', async (t) => {
     fetchRemotePlugin: async () => ({ version: '0.4.0' }),
   });
 
-  assert.match(message, /loaded from a local checkout/);
+  assert.match(message, /loaded live from a local source/);
+  assert.match(message, /Copilot cannot update it/);
+  assert.doesNotMatch(message, /\bGit\b|git pull|rebase/);
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
@@ -288,6 +301,12 @@ test('every public skill runs or owns the plugin check before its workflow', () 
     const content = normalizeLineEndings(fs.readFileSync(skillPath, 'utf8'));
     if (/^name: check-updates$/m.test(content)) {
       assert.match(content, /^## Step 1: Check The Plugin$/m);
+      assert.match(content, /local marketplace directory/);
+      assert.match(content, /walking its ancestors for a `\.git` directory or gitfile/);
+      assert.match(content, /Copilot cannot update a plugin loaded live from a local source/);
+      assert.match(content, /do not recommend[\s\S]*Git commands/);
+      assert.match(content, /Do not modify that source automatically/);
+      assertVsCodeUpdatePath(content);
       continue;
     }
     const allowedTools = content.match(/^allowed-tools:\s*(.+)$/m);

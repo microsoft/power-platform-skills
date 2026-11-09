@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const runner = require('../lib/process-runner.js');
+const { clockStartedWith } = require('./helpers/started-clock.js');
 
 const scratchDirs = [];
 const scratch = (prefix) => {
@@ -179,6 +180,145 @@ test('a native executable receives any argument unchanged through the runner', {
   const values = ['a "quoted" value', '100% & more!', 'C:\\dir with space\\', 'x\\"y'];
   const out = runner.runSync('fakenode', ['-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1)))', ...values], { encoding: 'utf8', timeout: 30000 }, { env });
   assert.deepStrictEqual(JSON.parse(out), values);
+});
+
+// ── a launcher that only forwards ──────────────────────────────────────────────────────────────────────────────────────────────
+// The Windows MSI installs pac as a two-line pac.cmd beside a native pac.launcher.exe. Run through cmd.exe, a `%` or a double quote in an argument cannot reach pac
+// unchanged (and is refused for that reason), so such a launcher is recognised by its EXACT text and its program is started directly, with every argument as given.
+const MSI_LAUNCHER = '@echo off\r\n"%~dp0pac.launcher.exe" %*\r\n';
+
+test('forwardedProgram recognises a launcher that only starts the program beside it with %*, and nothing that does more or less', () => {
+  const present = new Set(['C:\\Pac\\pac.cmd', 'C:\\Pac\\pac.launcher.exe']);
+  const forwarded = (text, options = {}) => runner.forwardedProgram('C:\\Pac\\pac.cmd', { readFile: () => text, exists: (p) => present.has(p), ...options });
+  for (const text of [
+    MSI_LAUNCHER,
+    '@echo off\n"%~dp0pac.launcher.exe" %*\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %*',
+    '\uFEFF@echo off\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@ECHO OFF\r\n@"%~dp0pac.launcher.exe" %*\r\n',
+    '"%~dp0pac.launcher.exe" %*\r\n',
+    'echo off\r\n"%~dp0pac.launcher.exe"   %*\r\n\r\n',
+  ]) assert.strictEqual(forwarded(text), 'C:\\Pac\\pac.launcher.exe', JSON.stringify(text));
+  // Blank lines — nothing but spaces and tabs — are no-ops to cmd.exe, wherever they stand; so are leading and trailing spaces on a line and the case of the words.
+  for (const text of [
+    '\r\n\r\n@echo off\r\n\r\n"%~dp0pac.launcher.exe" %*\r\n\r\n',
+    '  \t\r\n@echo off  \r\n \t \r\n  "%~dp0pac.launcher.exe" %*  \t\r\n',
+    '@Echo   Off\r\n"%~DP0pac.launcher.exe" %*\r\n',
+    '\uFEFF\r\n"%~dp0pac.launcher.exe" %*\r\n',
+  ]) assert.strictEqual(forwarded(text), 'C:\\Pac\\pac.launcher.exe', JSON.stringify(text));
+  // Whatever the program is named, the text alone decides: every file is there, and none of these is a launcher that only forwards.
+  for (const text of [
+    '@echo off\r\nset PAC_X=1\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %* & echo done\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %1 %2\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" --verbose %*\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %*\r\nexit /b 1\r\n',
+    '@echo off\r\ncall "%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\r\n"%~dp0bin\\pac.launcher.exe" %*\r\n',
+    '@echo off\r\n"%~dp0..\\pac.launcher.exe" %*\r\n',
+    '@echo off\r\n"C:\\Tools\\pac.launcher.exe" %*\r\n',
+    '@echo off\r\n"%~dp0pac.cmd" %*\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" ^%*\r\n',
+    '',
+  ]) assert.strictEqual(forwarded(text, { exists: () => true }), null, JSON.stringify(text));
+  // The lines are cmd.exe's, not the regular expression's: `echo off "…"` on ONE line is the ECHO command with an argument — cmd.exe prints it and starts nothing — so a text that
+  // only LOOKS like a forwarder is not one, whatever separates its words; nor is anything that is not exactly an optional `@echo off` line and then the one forwarding line.
+  for (const text of [
+    '@echo off "%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off "%~dp0pac.launcher.exe" %*',
+    'echo off   "%~dp0pac.launcher.exe" %*\n',
+    '@echo off\t"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off & "%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off && "%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off ^\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %*^\r\n',
+    '@echo on\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off.\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo,off\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\r\n@echo off\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '"%~dp0pac.launcher.exe" %*\r\n@echo off\r\n',
+    '"%~dp0pac.launcher.exe" %*\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %*\r\n:end\r\n',
+    '@echo off\r\nREM a comment\r\n"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\r\r"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\r"%~dp0pac.launcher.exe" %*\r\n',
+    '@echo off\n\u00a0\n"%~dp0pac.launcher.exe" %*\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %*\u0000\r\n',
+    '@echo off\r\n"%~dp0pac.launcher.exe" %*\f\r\n',
+  ]) assert.strictEqual(forwarded(text, { exists: () => true }), null, JSON.stringify(text));
+  assert.strictEqual(forwarded(MSI_LAUNCHER + ' '.repeat(2000), { exists: () => true }), null, 'a launcher this simple is a few dozen bytes: a large file is not one');
+  assert.strictEqual(forwarded(MSI_LAUNCHER, { exists: (p) => p === 'C:\\Pac\\pac.cmd' }), null, 'the program it names has to be there');
+  assert.strictEqual(forwarded(MSI_LAUNCHER, { readFile: () => { throw new Error('EACCES'); }, exists: () => true }), null, 'a launcher that cannot be read is not recognised');
+});
+
+test('a launcher that only forwards is started as its program, so a % or a double quote reaches it unchanged — and a batch file that does anything else keeps the checked route and its refusals', () => {
+  const present = new Set(['C:\\Pac\\pac.cmd', 'C:\\Pac\\pac.launcher.exe']);
+  const options = { platform: 'win32', env: winEnv('C:\\Pac'), exists: (p) => present.has(p), readFile: () => MSI_LAUNCHER };
+  const args = ['connection', 'list', 'https://contoso.sharepoint.com/sites/Team%20Site', '100%', '%PATH%', 'a "quoted" value', 'x\\"y', 'Hello!', 'a & b | c', ''];
+  const inv = runner.invocation('pac', args, options);
+  assert.strictEqual(inv.file, 'C:\\Pac\\pac.launcher.exe');
+  assert.deepStrictEqual(inv.args, args);
+  assert.deepStrictEqual(inv.options, { shell: false, windowsHide: true });
+  for (const text of ['@echo off\r\nset PAC_X=1\r\n"%~dp0pac.launcher.exe" %*\r\n', '@echo off\r\n"%~dp0pac.launcher.exe" %1 %2\r\n']) {
+    assert.throws(() => runner.invocation('pac', ['a', '100%'], { ...options, readFile: () => text }), (e) => e.code === 'EARGUMENT' && /cannot pass "100%" to pac\.cmd/.test(e.message), text);
+  }
+  assert.throws(() => runner.invocation('pac', ['100%'], { ...options, exists: (p) => p === 'C:\\Pac\\pac.cmd' }), (e) => e.code === 'EARGUMENT', 'no program beside it: the checked route');
+  // Only a batch file is looked into: a native pac.exe is started as it always was, and so is anything that is not on Windows.
+  assert.strictEqual(runner.invocation('pac', ['100%'], { platform: 'win32', env: winEnv('C:\\Pac'), exists: (p) => p === 'C:\\Pac\\pac.exe', readFile: () => { throw new Error('not read'); } }).file, 'C:\\Pac\\pac.exe');
+  assert.strictEqual(runner.invocation('pac', ['100%'], { platform: 'linux', env: { PATH: '/opt/pac' }, exists: (p) => p === '/opt/pac/pac', readFile: () => { throw new Error('not read'); } }).file, '/opt/pac/pac');
+});
+
+test('through the runner, an MSI-shaped pac.cmd hands every argument to its native program unchanged — a % and a double quote included — and no command inside one runs', { skip: process.platform !== 'win32' }, () => {
+  const dir = scratch('process-runner-msi-');
+  const program = path.join(dir, 'report-arguments.js');
+  // node.exe stands in for pac.launcher.exe: the preload answers before node looks for the script its first argument would name (which is why that argument is a plain word).
+  fs.writeFileSync(program, "process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exit(0);\n", 'utf8');
+  fs.writeFileSync(path.join(dir, 'pac.cmd'), MSI_LAUNCHER, 'utf8');
+  fs.copyFileSync(process.execPath, path.join(dir, 'pac.launcher.exe'));
+  const marker = path.join(dir, 'MARKER');
+  // Inside double quotes NODE_OPTIONS reads a backslash as an escape, which JSON.stringify's doubled backslashes satisfy.
+  const env = { ...process.env, Path: dir, PATH: dir, NODE_OPTIONS: `--require=${JSON.stringify(program)}` };
+  const values = [
+    'https://contoso.sharepoint.com/sites/Team%20Site',
+    '100%',
+    '%PATH%',
+    '%PATH%!x',
+    'a "quoted" value',
+    'x\\"y',
+    'C:\\dir with space\\',
+    `a & echo x> ${marker}`,
+    'a | b < c > d ^ e ( f )',
+    'Hello!',
+    '東京 page',
+    '',
+  ];
+  const out = runner.runSync('pac', ['check', ...values], { encoding: 'utf8', timeout: 30000, env }, { env });
+  assert.deepStrictEqual(JSON.parse(out), values);
+  assert.ok(!fs.existsSync(marker), 'no command other than the program ran');
+});
+
+// What cmd.exe makes of `@echo off "%~dp0x.exe" %*` on ONE line is the ECHO command with arguments: it prints them and starts nothing. A runner that read the text as a forwarder would
+// start x.exe itself — running a program the batch file never ran, with arguments (a `%`) that the checked route refuses — so the real launcher decides, not a lookalike.
+test('a one-line `@echo off "%~dp0x.exe" %*` is the ECHO command, not a forwarder: through the runner it starts nothing — as under cmd.exe — and keeps the refusal of a %', { skip: process.platform !== 'win32' }, () => {
+  const dir = scratch('process-runner-echo-');
+  const marker = path.join(dir, 'RAN');
+  const payload = path.join(dir, 'payload.cjs');
+  fs.writeFileSync(payload, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'the native program ran');\n`, 'utf8');
+  fs.copyFileSync(process.execPath, path.join(dir, 'not-pac.exe'));
+  fs.writeFileSync(path.join(dir, 'pac.cmd'), '@echo off "%~dp0not-pac.exe" %*\r\n', 'utf8');
+  const env = { ...process.env, Path: dir, PATH: dir };
+
+  assert.strictEqual(runner.forwardedProgram(path.join(dir, 'pac.cmd')), null, 'the file is not recognised as a forwarder');
+  // An argument cmd.exe can carry: the launcher runs under cmd.exe, which echoes its words — the program is never started.
+  const echoed = runner.spawnResultSync('pac', [payload, 'plain'], { encoding: 'utf8', timeout: 30000, env }, { env });
+  assert.strictEqual(echoed.error, undefined);
+  assert.strictEqual(echoed.status, 0);
+  assert.match(echoed.stdout, /^off "[^"]*not-pac\.exe" /, 'cmd.exe printed what the line says');
+  assert.ok(!fs.existsSync(marker), 'the program beside the launcher was not started');
+  // The `%` the checked route refuses: it is refused, and still nothing runs.
+  const refused = runner.spawnResultSync('pac', [payload, '100%'], { encoding: 'utf8', timeout: 30000, env }, { env });
+  assert.strictEqual(refused.error && refused.error.code, 'EARGUMENT');
+  assert.ok(!fs.existsSync(marker), 'nothing ran for the refused argument either');
 });
 
 // ── killProcessTree ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -543,5 +683,172 @@ test('killProcessTree ends a real POSIX child and the grandchild it started, thr
   } finally {
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
     if (grandchild) { try { process.kill(grandchild, 'SIGKILL'); } catch { /* already gone */ } }
+  }
+});
+
+// ── spawnResultTree ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// spawnResultSync's asynchronous twin, for a call that may have to be ENDED: the same result, but one that outlasts its timeout has its whole tree ended
+// before the call settles — spawnSync ends only the process it started, which for a batch launcher is the cmd.exe, not the program the launcher runs.
+const NODE_NAME = path.basename(process.execPath, path.extname(process.execPath));
+const nodeEnv = () => ({ ...process.env, Path: path.dirname(process.execPath), PATH: path.dirname(process.execPath) });
+// A process ended by SIGKILL can stay listed for a moment as a zombie until it is reaped: gone means gone within a short wait.
+async function goneWithin(pid, ms) {
+  for (const until = Date.now() + ms; processAlive(pid) && Date.now() < until;) await pause(50);
+  return !processAlive(pid);
+}
+
+test('spawnResultTree reports a call that finished on its own the way spawnResultSync does — and a launch failure through error, never by rejecting', async () => {
+  const env = nodeEnv();
+  assert.deepStrictEqual(
+    await runner.spawnResultTree(NODE_NAME, ['-e', "process.stdout.write('out'); process.stderr.write('err')"], { timeout: 30000 }, { env }),
+    { status: 0, signal: null, stdout: 'out', stderr: 'err' }
+  );
+  const failed = await runner.spawnResultTree(NODE_NAME, ['-e', "process.stderr.write('bad'); process.exitCode = 3"], { timeout: 30000 }, { env });
+  assert.deepStrictEqual([failed.status, failed.stderr, 'error' in failed], [3, 'bad', false]);
+  const bytes = await runner.spawnResultTree(NODE_NAME, ['-e', "process.stdout.write('b')"], { encoding: 'buffer' }, { env });
+  assert.ok(Buffer.isBuffer(bytes.stdout) && bytes.stdout.toString() === 'b');
+  const missing = await runner.spawnResultTree('no-such-program-anywhere', [], {}, { env });
+  assert.deepStrictEqual([missing.status, missing.error.code], [null, 'ENOENT']);
+  const refused = await runner.spawnResultTree('pac', ['100%'], {}, { platform: 'win32', env: winEnv('C:\\Pac'), exists: (p) => p === 'C:\\Pac\\pac.cmd', readFile: () => '@echo off\r\nset PAC_X=1\r\n' });
+  assert.deepStrictEqual([refused.status, refused.error.code], [null, 'EARGUMENT']);
+});
+
+test('spawnResultTree ends a call that outlasts its timeout: the process is gone when it settles, what it wrote before is kept, and the error is ETIMEDOUT', async () => {
+  const dir = scratch('process-runner-deadline-');
+  const running = path.join(dir, 'running.txt');
+  const script = path.join(dir, 'idle.js');
+  fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(running)}, String(process.pid)); process.stdout.write(String(process.pid)); setTimeout(() => {}, 120000);\n`, 'utf8');
+  const started = Date.now();
+  const result = await runner.spawnResultTree(NODE_NAME, [script], { timeout: 1000 }, { env: nodeEnv(), clock: clockStartedWith(running) });
+  const pid = Number(result.stdout);
+  try {
+    assert.ok(pid > 0, `what it wrote before it was ended is in the result: ${JSON.stringify(result.stdout)}`);
+    assert.deepStrictEqual([result.status, result.error && result.error.code], [null, 'ETIMEDOUT']);
+    assert.ok(Date.now() - started < 60000, 'it settled when the process was ended, not at the 120 s the process would have run');
+    assert.strictEqual(await goneWithin(pid, 10000), true, 'the process is no longer running');
+    // What the caller may claim: the pipes closed after the kill, so nothing the call started still holds them.
+    assert.deepStrictEqual([result.error.containment, result.error.pid], ['confirmed', pid], 'the ending is confirmed, and names the process the call started');
+  } finally {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+test('spawnResultTree ends a call that writes past maxBuffer, as spawnSync reports it — ENOBUFS — with the process gone', async () => {
+  const script = "process.stderr.write(String(process.pid) + '\\n'); const chunk = 'x'.repeat(65536); setInterval(() => process.stdout.write(chunk), 5);";
+  const result = await runner.spawnResultTree(NODE_NAME, ['-e', script], { timeout: 60000, maxBuffer: 100000 }, { env: nodeEnv() });
+  const pid = Number(result.stderr.split('\n')[0]);
+  try {
+    assert.deepStrictEqual([result.status, result.error && result.error.code], [null, 'ENOBUFS']);
+    assert.ok(pid > 0);
+    assert.strictEqual(await goneWithin(pid, 10000), true, 'the process that was flooding the pipe is no longer running');
+    assert.strictEqual(result.error.containment, 'confirmed');
+  } finally {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+test('spawnResultTree ends a batch launcher AND the program it started (real cmd.exe) — the program a spawnSync timeout would leave running', { skip: process.platform !== 'win32' }, async () => {
+  const dir = scratch('process-runner-tree-call-');
+  const pidFile = path.join(dir, 'program.pid');
+  const script = path.join(dir, 'idle.js');
+  // The timer is a backstop: whatever a failing test leaves behind ends by itself.
+  fs.writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 120000);\n`, 'utf8');
+  fs.writeFileSync(path.join(dir, 'fakecli.cmd'), `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`, 'utf8');
+  const result = await runner.spawnResultTree('fakecli', ['x'], { timeout: 1000 }, { env: { ...process.env, Path: dir, PATH: dir }, clock: clockStartedWith(pidFile) });
+  const program = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0;
+  try {
+    assert.strictEqual(result.error && result.error.code, 'ETIMEDOUT');
+    assert.ok(program > 0, 'the launcher started its program');
+    assert.strictEqual(await goneWithin(program, 10000), true, 'the program the launcher started is gone, not left running');
+    assert.strictEqual(result.error.containment, 'confirmed', 'and the call says its tree was ended, which is what happened');
+  } finally {
+    try { process.kill(program, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+test('spawnResultTree gives a process that survives the kill a grace period for its pipes to close, then settles without it — saying the ending is NOT confirmed — and asks for the kill once', async () => {
+  // The deadline and the grace period are timers this test fires by hand, so nothing waits in real time.
+  const timers = [];
+  const clock = {
+    setTimeout: (fn, ms) => { const timer = { fn, ms, cleared: false, unref() {} }; timers.push(timer); return timer; },
+    clearTimeout: (timer) => { timer.cleared = true; },
+  };
+  const asked = [];
+  const run = runner.spawnResultTree(NODE_NAME, ['-e', 'setTimeout(() => {}, 120000)'], { timeout: 1234 }, { env: nodeEnv(), clock, killTree: (child) => asked.push(child) });
+  try {
+    assert.deepStrictEqual(timers.map((t) => t.ms), [1234], 'the deadline is the caller\'s timeout');
+    timers[0].fn();
+    timers[0].fn();
+    assert.strictEqual(asked.length, 1, 'the tree is asked to end once, however often the deadline fires');
+    assert.deepStrictEqual(timers.map((t) => t.ms), [1234, 5000], 'a process that outlives the kill is waited for 5 s and no longer');
+    timers[1].fn();
+    const result = await run;
+    assert.deepStrictEqual([result.status, result.signal, result.error.code], [null, 'SIGKILL', 'ETIMEDOUT']);
+    assert.deepStrictEqual([result.error.containment, result.error.pid], ['unconfirmed', asked[0].pid], 'the pipes never closed: a process the call started may still be running');
+    assert.ok(timers.every((t) => t.cleared), 'settling clears both timers');
+  } finally {
+    for (const child of asked) { try { process.kill(child.pid, 'SIGKILL'); } catch { /* already gone */ } }
+  }
+});
+
+test('spawnResultTree settles when a process the call started still holds the pipes of a child that has already exited — and says the survivor is NOT stopped, with the survivor really running', async () => {
+  // The child starts a grandchild that inherits its pipes, reports the grandchild's pid and exits: 'exit' comes at once and 'close' only when the grandchild lets go. The grandchild is
+  // detached because libuv on Windows ends everything a process started when that process exits, which would close the pipes at once.
+  const dir = scratch('process-runner-held-pipes-');
+  const reported = path.join(dir, 'reported.txt');
+  const script = path.join(dir, 'parent.js');
+  fs.writeFileSync(script, [
+    "const { spawn } = require('node:child_process');",
+    "const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });",
+    `process.stdout.write(String(g.pid), () => { require('node:fs').writeFileSync(${JSON.stringify(reported)}, String(process.pid)); process.exit(0); });`,
+  ].join('\n'), 'utf8');
+  // The deadline counts from the report; the grace period that follows is a fraction of a second instead of 5 s.
+  const gated = clockStartedWith(reported);
+  let timers = 0;
+  const clock = { setTimeout: (fn, ms) => gated.setTimeout(fn, (timers += 1) === 1 ? ms : 500), clearTimeout: gated.clearTimeout };
+  const result = await runner.spawnResultTree(NODE_NAME, [script], { timeout: 1000 }, { env: nodeEnv(), clock });
+  const grandchild = Number(result.stdout);
+  try {
+    assert.ok(grandchild > 0, `what it wrote is in the result: ${JSON.stringify(result.stdout)}`);
+    assert.strictEqual(result.error && result.error.code, 'ETIMEDOUT');
+    // The claim is the point: the survivor was not ended, so the call must not say it was.
+    assert.strictEqual(processAlive(grandchild), true, 'the process the call started is STILL RUNNING when the call settles');
+    assert.deepStrictEqual([result.error.containment, result.error.pid], ['unconfirmed', Number(fs.readFileSync(reported, 'utf8'))], 'and the call says so, naming the process it started — the one that has exited');
+  } finally {
+    try { process.kill(grandchild, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+test('a process whose call settled while something it started still holds the pipes can exit on its own — the pipes are let go, not waited for', () => {
+  const { spawnSync } = require('node:child_process');
+  const dir = scratch('process-runner-exit-');
+  const reported = path.join(dir, 'reported.txt');
+  const parent = path.join(dir, 'parent.js');
+  fs.writeFileSync(parent, [
+    "const { spawn } = require('node:child_process');",
+    "const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });",
+    `process.stdout.write(String(g.pid), () => { require('node:fs').writeFileSync(${JSON.stringify(reported)}, '1'); process.exit(0); });`,
+  ].join('\n'), 'utf8');
+  // The program that makes the call, and then does nothing: it ends when nothing it holds is left open — which is the point.
+  const driver = path.join(dir, 'driver.js');
+  fs.writeFileSync(driver, [
+    `const runner = require(${JSON.stringify(require.resolve('../lib/process-runner.js'))});`,
+    `const gated = require(${JSON.stringify(require.resolve('./helpers/started-clock.js'))}).clockStartedWith(${JSON.stringify(reported)});`,
+    'let timers = 0;',
+    'const clock = { setTimeout: (fn, ms) => gated.setTimeout(fn, (timers += 1) === 1 ? ms : 300), clearTimeout: gated.clearTimeout };',
+    `const env = { ...process.env, Path: ${JSON.stringify(path.dirname(process.execPath))}, PATH: ${JSON.stringify(path.dirname(process.execPath))} };`,
+    `runner.spawnResultTree(${JSON.stringify(NODE_NAME)}, [${JSON.stringify(parent)}], { timeout: 500 }, { env, clock }).then((r) => {`,
+    '  console.log(JSON.stringify({ code: r.error && r.error.code, grandchild: Number(r.stdout) }));',
+    '});',
+  ].join('\n'), 'utf8');
+  const run = spawnSync(process.execPath, [driver], { encoding: 'utf8', timeout: 30000 });
+  let grandchild = 0;
+  try {
+    const said = JSON.parse(String(run.stdout).trim().split('\n').pop() || '{}');
+    grandchild = said.grandchild || 0;
+    assert.strictEqual(said.code, 'ETIMEDOUT', run.stderr);
+    assert.deepStrictEqual([run.status, run.signal], [0, null], 'the process ended by itself, not by the 30 s the test allows');
+  } finally {
+    try { process.kill(grandchild, 'SIGKILL'); } catch { /* already gone */ }
   }
 });

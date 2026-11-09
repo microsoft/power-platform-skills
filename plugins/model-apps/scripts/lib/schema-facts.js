@@ -6,6 +6,7 @@
 // offline eval harness diffs per build. Pure (no I/O, no SDK): it derives everything deterministically
 // from the App Spec, reusing the SAME naming/value rules the engine uses, so a fact equals what WOULD
 // be provisioned — not a naive spec echo. See docs/app-builder-design.md §13.2, §14.
+const { normalizeChoiceOptions } = require('./schema-feature-contract.js');
 const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName, quickCreateEnabledFor, labelText, lookupLabelFor } = require('./app-spec.js');
 
 const lc = (s) => String(s || '').toLowerCase();
@@ -87,7 +88,7 @@ function relationshipFacts(spec) {
 function schemaFacts(spec) {
   const s = spec || {};
   return {
-    globalChoices: (s.globalChoices || []).map((g) => ({ name: lc(g.name), options: (g.options || []).map((label, i) => ({ value: 100000000 + i, label: labelText(label, s.languageCode) || '' })) })).sort(byKey('name')),
+    globalChoices: (s.globalChoices || []).map((g) => ({ name: lc(g.name), options: normalizeChoiceOptions(g.options || []).map(({ value, label }) => ({ value, label: labelText(label, s.languageCode) || '' })) })).sort(byKey('name')),
     tables: (s.entities || []).map((e) => tableFacts(s, e)).sort(byKey('logicalName')),
     relationships: relationshipFacts(s),
   };

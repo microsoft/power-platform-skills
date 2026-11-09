@@ -10,6 +10,7 @@ const {
 } = require('./lib/telemetry/lib/user-config.js');
 const { pluginLogDir, latestSessionLog } = require('./lib/telemetry/lib/local-log.js');
 const { isProvisioned } = require('./lib/telemetry/resolver.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = 'USAGE: node scripts/telemetry-config.js [--action <on|off|status>]';
 
@@ -18,6 +19,7 @@ function main(argv = process.argv.slice(2)) {
   const flagError = validateFlags(argv, { known: ['action'], needValue: ['action'] });
   const action = flags.action || 'status';
   if (flagError || positional.length || !['on', 'off', 'status'].includes(action)) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`${flagError || 'Action must be on, off or status.'}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -53,7 +55,8 @@ function main(argv = process.argv.slice(2)) {
     const latest = latestSessionLog(configDir, 'pcf');
     if (latest) console.log(`Most recent session: ${latest}`);
   }
-  console.log('An enabled, provisioned release records only skill_started base fields: skill, plugin, PAC, agent, OS and Node versions, session and correlation IDs, plus orgId and tenantId when PAC is signed in; no user object ID or eventInfo fields.');
+  console.log('An enabled, provisioned release records skill_started base fields: skill, plugin, PAC, agent, OS and Node versions, session and correlation IDs, plus orgId and tenantId when PAC is signed in; no user object ID.');
+  console.log('When a control push finishes, skill_completed also records its outcome, duration, a fixed error class and whether the registration was verified, with the orgId and tenantId of the environment it targeted; never control, solution or environment names.');
   console.log('Never sent: file paths, cwd, environment variables, prompts, arguments, tool inputs, site names, Dataverse URLs, stack traces, error messages, credentials, usernames or hostnames.');
   console.log('Opt out: /pcf:telemetry off or POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1 (highest precedence).');
 }

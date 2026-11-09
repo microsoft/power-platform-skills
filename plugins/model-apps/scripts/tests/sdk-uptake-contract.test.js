@@ -261,8 +261,15 @@ test('REAL BUNDLE: a wrongly-shaped condition is now REFUSED at push, closing th
   // that could never fire.
   //
   // The SDK now runs the business-rule designer's own completeness validator on EVERY save, so the
-  // trap is closed at the source: the push is refused and the operator is told which clause and
-  // action are missing. Keeping the old assertion would pin the SDK to the defect.
+  // trap is closed at the source: the push is refused and the operator is told what is missing.
+  // Keeping the old assertion would pin the SDK to the defect.
+  //
+  // What the message names moved with the designer: a rule may now leave out its IF condition when
+  // its actions are ones Dataverse accepts without one (action-only rules), so a missing clause is no
+  // longer an error by itself. The ignored `thenActions` leave this rule with no action at all, and
+  // that is what the refusal names, e.g.:
+  //   Validation failed for businessRule/<id>:
+  //     • /rootCondition (root): A business rule must include at least one action step. [business-rule-NO_ACTION]
   const { sdk, calls } = await sdkWith();
   const art = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', {
@@ -277,8 +284,8 @@ test('REAL BUNDLE: a wrongly-shaped condition is now REFUSED at push, closing th
     (err) => {
       assert.match(err.message, /Validation failed/i, `expected a validation refusal; got: ${err.message}`);
       // The operator must be told WHAT is missing, not merely that something is.
-      assert.match(err.message, /clause/i, 'the message names the missing clause');
-      assert.match(err.message, /action/i, 'the message names the missing action');
+      assert.match(err.message, /at least one action step/i, 'the message names the missing action');
+      assert.match(err.message, /\[business-rule-NO_ACTION\]/, 'with the rule it broke');
       return true;
     }
   );

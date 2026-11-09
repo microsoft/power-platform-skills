@@ -8,6 +8,8 @@
 //    or a `pac.cmd` shim depending on how it was installed. Node refuses to start a `.cmd`/`.bat`
 //    with `shell: false` (EINVAL since Node 18.20.2 / 20.12.2), so a shim has to run under cmd.exe.
 //    See: https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
+//    cmd.exe adds nothing to a shim that only forwards its arguments to a native program beside it
+//    (the Windows MSI's `pac.cmd`): such a launcher is started as that program — see forwardedProgram.
 //    `shell: true` is not the answer: it joins the arguments with spaces and hands the string to
 //    cmd.exe without quoting any of them. So a shim runs as `cmd.exe /d /s /v:off /c <shim> <args>`,
 //    and every argument must be INERT for cmd.exe — see CMD_INERT_ARG.
@@ -49,6 +51,46 @@ function cmdArgument(value, { bangExpands = false } = {}) {
 // shims this plugin runs (az.cmd, npm.cmd, npx.cmd) do not. An unreadable shim is assumed to.
 function shimExpandsBang(file, readFile = (p) => fs.readFileSync(p, 'latin1')) {
   try { return /enabledelayedexpansion/i.test(readFile(file)); } catch { return true; }
+}
+
+// A batch launcher that does nothing but start a native program beside it with the arguments it was given — the whole of the Power Platform CLI's `pac.cmd`, the launcher
+// the Windows MSI installs (a two-line text file, which `pac.launcher.exe` then resolves to the installed version):
+//     @echo off
+//     "%~dp0pac.launcher.exe" %*
+// cmd.exe adds nothing to such a launcher except its parsing, and that parsing is exactly what makes a `%` (or a double quote) in an argument impossible to hand over
+// unchanged: the launcher IS the program it forwards to, so that program is started directly, as an install of `pac.exe` is, and the arguments reach it as
+// given (libuv writes the command line by the C runtime's rules). `%~dp0` is the launcher's own folder:
+// https://learn.microsoft.com/windows-server/administration/windows-commands/call#batch-parameters
+//
+// The recognition follows how cmd.exe reads a batch file — a line at a time — and is by the launcher's EXACT lines: at most one `@echo off` line, then ONE line that starts the
+// sibling `<name>.exe` (a plain file name, no folder) with `%*`; blank lines (spaces and tabs only) are no-ops and may stand anywhere, and the program must be a file next to it.
+// The lines matter. `@echo off "%~dp0pac.launcher.exe" %*` on ONE line is not a launcher: `echo off "…"` is the ECHO command with an argument, so cmd.exe prints the text and starts
+// nothing (https://learn.microsoft.com/windows-server/administration/windows-commands/echo) — and a text that merely LOOKS like a forwarder, started as a program, would run what
+// the batch file never ran, with arguments the checked route would have refused. Anything else — a line that sets a variable, picks a version itself, forwards `%1 %2`, joins two
+// commands with `&` or ends in a caret that continues onto the next line, a control character other than a line end — is not recognised and keeps the checked cmd.exe route, with its refusals.
+const ECHO_OFF_LINE = /^[ \t]*@?echo[ \t]+off[ \t]*$/i;
+const FORWARD_LINE = /^[ \t]*@?"%~dp0([A-Za-z0-9_][A-Za-z0-9_.-]*\.exe)"[ \t]+%\*[ \t]*$/i;
+const BLANK_LINE = /^[ \t]*$/;
+
+// The physical lines of a batch file's text: a line ends at LF, a CR before the LF belongs to the line end (CRLF), and a byte order mark is dropped. Any other character stays in its
+// line — a lone CR, NUL or form feed included — where the patterns above refuse it, because they allow nothing in a line but the command and spaces and tabs.
+function launcherLines(text) {
+  return String(text).replace(/^\uFEFF/, '').split(/\r?\n/);
+}
+
+function forwardedProgram(file, { readFile = (p) => fs.readFileSync(p, 'utf8'), exists = isFile } = {}) {
+  let text;
+  try { text = String(readFile(file)); } catch { return null; }
+  if (text.length > 1024) return null; // a launcher this simple is a few dozen bytes
+  const meaningful = launcherLines(text).filter((line) => !BLANK_LINE.test(line));
+  let forwardLine;
+  if (meaningful.length === 1) forwardLine = meaningful[0];
+  else if (meaningful.length === 2 && ECHO_OFF_LINE.test(meaningful[0])) forwardLine = meaningful[1];
+  else return null;
+  const match = FORWARD_LINE.exec(forwardLine);
+  if (!match) return null;
+  const program = path.win32.join(path.win32.dirname(file), match[1]);
+  return exists(program) ? program : null;
 }
 
 // The value of an environment variable the way Node passes it to a child on Windows, where names
@@ -145,6 +187,9 @@ function invocation(name, args = [], { platform = process.platform, env = proces
   if (platform !== 'win32' || !WINDOWS_BATCH.test(file)) {
     return { file, args: argv, options: { shell: false, windowsHide: true } };
   }
+  // A launcher that only forwards to a native program beside it is started as that program (see forwardedProgram): nothing is parsed by cmd.exe, so nothing is refused.
+  const forwarded = forwardedProgram(file, { readFile, exists });
+  if (forwarded) return { file: forwarded, args: argv, options: { shell: false, windowsHide: true } };
   const bangExpands = argv.some((a) => a.includes('!')) && shimExpandsBang(file, readFile);
   const refused = argv.find((a) => cmdArgument(a, { bangExpands }) === null);
   if (refused !== undefined || /[%!"]/.test(file)) {
@@ -198,6 +243,91 @@ function spawnResultSync(name, args, options = {}, deps = {}) {
     return { status: null, signal: null, stdout: '', stderr: '', error };
   }
   return childProcess.spawnSync(inv.file, inv.args, withOptions(inv, options));
+}
+
+// How long a call that ran out of time waits for the pipes of the tree it ended to close — so that what the processes wrote before they died is in the result — before
+// it settles anyway (a process that was not in the tree can hold them open for ever).
+const TREE_CLOSE_GRACE_MS = 5000;
+
+/**
+ * spawnResultSync's asynchronous twin, for a call that may have to be ENDED: the same result — `{ status, signal, stdout, stderr, error? }`, never rejecting, a launch
+ * failure through `error` — and the options `encoding`, `maxBuffer` and `timeout` of spawnSync, but a call that outlasts its `timeout` has its WHOLE process tree ended
+ * (killProcessTree) before the call settles. spawnSync cannot do that: it ends only the process it started, and on Windows that is cmd.exe running a batch launcher
+ * (`pac.cmd`), whose child — the program that is actually working, and may be importing a solution — goes on running after the call has reported that it timed out.
+ * The result of a call that was ended has `error.code` `ETIMEDOUT`; one that wrote past `maxBuffer` was ended too, with `ENOBUFS`.
+ *
+ * What such an error says about the process is `error.containment`, and a caller must not claim more than it says. `'confirmed'`: the pipes closed after the kill, so nothing that was holding them
+ * is left — the call's process and every process that held its output were stopped. That is ALL it proves: a process the call started that never held the pipes (detached, with streams of its
+ * own) is not covered, and can outlive the kill unnoticed, so a message says "pac and every process that held its output were stopped" (lib/pac-fallback.js stopClaim) and not that the tree is gone.
+ * `'unconfirmed'`: the wait for the pipes (TREE_CLOSE_GRACE_MS) ran out first, so a process the call started still holds them and may
+ * still be running — the case killProcessTree cannot reach, because it will not end a tree by the pid of a launcher that has already exited (the number may be another process's
+ * by then) and what that launcher started has been re-parented, out of every tree that can be walked from a live pid. `error.pid` is the process the call started, when it has one:
+ * for an unconfirmed ending that process is usually gone, and the survivor's own id is not known.
+ * `deps` are the seams of `invocation`, plus `killTree` and `clock` ({ setTimeout, clearTimeout }) for a test.
+ */
+function spawnResultTree(name, args, options = {}, deps = {}) {
+  const { timeout = 0, maxBuffer = 1024 * 1024, encoding = 'utf8', ...spawnOptions } = options;
+  const killTree = deps.killTree || killProcessTree;
+  const clock = deps.clock || { setTimeout, clearTimeout };
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawnProcess(name, args, { stdio: ['ignore', 'pipe', 'pipe'], ...spawnOptions }, deps);
+    } catch (error) {
+      resolve({ status: null, signal: null, stdout: '', stderr: '', error });
+      return;
+    }
+    const out = [];
+    const err = [];
+    let written = 0;
+    let settled = false;
+    let timer = null;
+    let grace = null;
+    let ending = null; // the error a call that is being ended will report, once its pipes have closed
+    const decode = (chunks) => (encoding === 'buffer' ? Buffer.concat(chunks) : Buffer.concat(chunks).toString(encoding));
+    const settle = (status, signal, error, pipesClosed = false) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clock.clearTimeout(timer);
+      if (grace !== null) clock.clearTimeout(grace);
+      if (error && ending) {
+        // Said before the result is handed over: 'close' fired (every pipe is closed, so nothing that was started holds one), or the grace period ended with a pipe still open.
+        error.containment = pipesClosed ? 'confirmed' : 'unconfirmed';
+        if (Number.isInteger(child.pid)) error.pid = child.pid;
+      }
+      resolve({ status, signal, stdout: decode(out), stderr: decode(err), ...(error ? { error } : {}) });
+      if (error && ending) {
+        // A process that outlived the kill holds these pipes open, and a pipe nobody finished reading keeps this process alive at exit.
+        for (const stream of [child.stdout, child.stderr]) {
+          try { if (stream) stream.destroy(); } catch { /* already closed */ }
+        }
+        if (typeof child.unref === 'function') child.unref();
+      }
+    };
+    const end = (error) => {
+      if (ending || settled) return;
+      ending = error;
+      try { killTree(child); } catch { /* ended or not, the call is reported */ }
+      grace = clock.setTimeout(() => settle(null, 'SIGKILL', ending, false), TREE_CLOSE_GRACE_MS);
+      if (grace && typeof grace.unref === 'function') grace.unref();
+    };
+    const collect = (chunks) => (chunk) => {
+      chunks.push(chunk);
+      written += chunk.length;
+      if (written > maxBuffer) end(Object.assign(new Error(`spawn ${name} ENOBUFS`), { code: 'ENOBUFS' }));
+    };
+    // EMFILE and ENFILE leave the pipes unset, hence the guards.
+    if (child.stdout) child.stdout.on('data', collect(out));
+    if (child.stderr) child.stderr.on('data', collect(err));
+    // 'close', not 'exit': 'exit' comes when the process itself ends, while a process it started can still hold the pipes and write.
+    child.on('error', (error) => settle(null, null, error));
+    child.on('close', (status, signal) => (ending ? settle(null, signal || 'SIGKILL', ending, true) : settle(status, signal)));
+    if (timeout > 0) {
+      timer = clock.setTimeout(() => end(Object.assign(new Error(`spawn ${name} ETIMEDOUT`), { code: 'ETIMEDOUT' })), timeout);
+      // The child keeps the loop alive while it runs; the deadline must not be what keeps a process running once it does not.
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    }
+  });
 }
 
 // execFile-shaped: the callback receives a resolution failure as its error, asynchronously.
@@ -328,6 +458,7 @@ module.exports = {
   cmdArgument,
   descendantPids,
   envValue,
+  forwardedProgram,
   withOptions,
   execFileAsync,
   invocation,
@@ -336,6 +467,7 @@ module.exports = {
   runSync,
   spawnProcess,
   spawnResultSync,
+  spawnResultTree,
   startTimes,
   windowsCmd,
   withPathFirst,

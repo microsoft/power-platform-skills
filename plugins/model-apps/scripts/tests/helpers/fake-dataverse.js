@@ -26,6 +26,8 @@
 // Wire shapes mirrored (abridged):
 //   GET  /savedqueries(<id>)?$select=savedqueryid                                    -> ETag header (the row token)
 //   GET  /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=…  -> the row + "@odata.etag"
+//   GET  /savedqueries(<id>)?$select=name,…                                          -> the published layer (404 if never published)
+//   GET  /savedqueries/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$filter=returnedtypecode eq 'x' or …  -> the saved layer, `componentstate` 0 or 1 (`$filter` by table, or by id: `savedqueryid eq <guid> or …`)
 //   GET  /EntityDefinitions(LogicalName='x')?$select=MetadataId,EntitySetName        -> the table's metadata
 //   GET  /solutioncomponents?$select=objectid,componenttype,rootcomponentbehavior&$filter=_solutionid_value eq <id> and (componenttype eq 26 or …)
 //   PATCH /savedqueries(<id>)?$select=savedqueryid   If-Match, Prefer: return=representation -> 200 + ETag
@@ -55,7 +57,7 @@ const KINDS = {
 // The solution component type of each row type: Saved Query, System Form, Saved Query Visualization.
 const COMPONENT_KIND = { 26: 'savedqueries', 60: 'systemforms', 59: 'savedqueryvisualizations' };
 
-function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoSD' }, pageSize, failSolutionComponentReads = false, heldTables = {}, failTableIdReads = false } = {}) {
+function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoSD' }, pageSize, failSolutionComponentReads = false, heldTables = {}, failTableIdReads = false, failUnpublishedReads = false, publishBumpsVersion = false } = {}) {
   const solutionId = solution.id || randomUUID();
   const tables = { savedqueries: new Map(), systemforms: new Map(), savedqueryvisualizations: new Map() };
   const members = new Set(); // `${componentType}:${lower-case id}`
@@ -65,6 +67,7 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
   const publishes = []; // entity logical names, one array entry per PublishXml entity element
   let denyWrites = null; // (request) => HTTP status | undefined — lets a test make a write fail
   let failTableIds = failTableIdReads; // answers 500 to a metadata read that asks for `MetadataId`, and to no other
+  let failUnpublished = failUnpublishedReads; // answers 500 to the saved-layer read of a collection (RetrieveUnpublishedMultiple), and to no other
 
   const entityIdOf = (logical) => {
     if (!entityIds.has(logical)) entityIds.set(logical, randomUUID());
@@ -149,10 +152,36 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
       if (!row) return notFound();
       const body = { ...clone(row.data), '@odata.etag': etagOf(row) };
       if (m[3]) return reply(200, body, { etag: etagOf(row) });
+      // A plain read that selects more than the id answers the PUBLISHED layer, as the platform does: the row as its
+      // table was last published, and 404 for a row no publish has named (lib/savedquery-published.js reads both layers).
+      const selected = String(query.get('$select') || '').split(',').filter(Boolean);
+      if (selected.some((f) => f !== KINDS[m[1]].id)) {
+        if (!row.publishedData) return notFound();
+        return reply(200, { ...clone(row.publishedData), '@odata.etag': etagOf(row) }, { etag: etagOf(row) });
+      }
       return reply(200, { [KINDS[m[1]].id]: row.data[KINDS[m[1]].id], '@odata.etag': etagOf(row) }, { etag: etagOf(row) });
     }
     if ((m = /^\/(savedqueries|systemforms|savedqueryvisualizations)$/.exec(p))) {
       const rows = [...tables[m[1]].values()].map((row) => clone(row.data)).filter((data) => matches(data, query.get('$filter')));
+      return page(path, rows, query);
+    }
+    // The saved layer of a whole collection: one row per record, `componentstate` 0 (Published) when its saved version is the one last
+    // published and 1 (Unpublished) when a save, or the creation, has not been published (the shape `apps.js` documents for the app
+    // collection). `$filter` is `<field> eq '<table>'` terms joined by `or`, or `<id field> eq <guid>` terms joined by `or`, the lookup of
+    // records by id that the inventory of what an app holds makes; both, or neither, are honoured as the platform does.
+    if ((m = /^\/(savedqueries|systemforms|savedqueryvisualizations)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)$/.exec(p))) {
+      if (failUnpublished) return reply(500, { error: { code: '0x80040E14', message: 'simulated failure' } });
+      const filter = String(query.get('$filter') || '');
+      const wanted = [...filter.matchAll(/ eq '([^']*)'/g)].map((term) => term[1]);
+      const wantedIds = [...filter.matchAll(new RegExp(`${KINDS[m[1]].id} eq (${GUID})`, 'gi'))].map((term) => normId(term[1]));
+      const select = String(query.get('$select') || '').split(',').map((name) => name.trim()).filter(Boolean);
+      const rows = [...tables[m[1]].values()]
+        .filter((row) => !wanted.length || wanted.includes(row.data[KINDS[m[1]].entity]))
+        .filter((row) => !wantedIds.length || wantedIds.includes(normId(row.data[KINDS[m[1]].id])))
+        .map((row) => {
+          const full = { ...clone(row.data), componentstate: row.publishedVersion === row.version ? 0 : 1 };
+          return select.length ? Object.fromEntries(Object.entries(full).filter(([name]) => select.includes(name))) : full;
+        });
       return page(path, rows, query);
     }
     if (p === '/solutions') {
@@ -205,7 +234,14 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
       for (const entity of [...xml.matchAll(/<entity>([^<]+)<\/entity>/g)].map((x) => x[1])) {
         publishes.push(entity);
         for (const kind of Object.keys(tables)) {
-          for (const row of tables[kind].values()) if (row.data[KINDS[kind].entity] === entity) row.publishedVersion = row.version;
+          for (const row of tables[kind].values()) {
+            if (row.data[KINDS[kind].entity] !== entity) continue;
+            // `publishBumpsVersion` models a publish that moves the row's token as well (the SDK re-baselines its copies after a publish of
+            // its own because it does), so a copy held across a publish the SDK did not make is stale.
+            if (publishBumpsVersion) row.version += 1;
+            row.publishedVersion = row.version;
+            row.publishedData = clone(row.data);
+          }
         }
       }
       return reply(204, {});
@@ -272,6 +308,7 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
             layoutxml: grid(`${entity}_name`) },
           version: 1, publishedVersion: 1,
         });
+        tables.savedqueries.get(id).publishedData = clone(tables.savedqueries.get(id).data);
       }
     },
     mark: () => requests.length,
@@ -295,6 +332,7 @@ function createFakeDataverse({ entities = {}, solution = { uniqueName: 'ContosoS
     holdTable: (logical, behavior) => { held.set(logical, behavior); },
     entityId: entityIdOf,
     failTableIdReads: (fails) => { failTableIds = fails; },
+    failUnpublishedReads: (fails) => { failUnpublished = fails; },
   };
 }
 

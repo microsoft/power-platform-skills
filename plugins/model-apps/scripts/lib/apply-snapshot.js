@@ -13,7 +13,7 @@
 //      never leave a stale snapshot that reads eligible.
 //   3. debt accrues on any unsupported/removal edit; eligible:true requires empty debt; debt clears ONLY
 //      by a verifier that matches the SPECIFIC debt reason (a plain full rebuild that re-skips a stale
-//      artifact must NOT clear it — Sol build-time note).
+//      artifact must NOT clear it).
 //   4. Identity binding: orgId (live WhoAmI) + envUrl + appUniqueName must match the live target, else the
 //      snapshot is for a DIFFERENT env/app and MUST be ignored (full build).
 //   5. A teardown writes a TOMBSTONE (eligible:false + teardown-in-progress debt) BEFORE deleting anything.
@@ -90,7 +90,7 @@ function serializeEnvelope(envelope) {
 // live = { orgId, envUrl, appUniqueName, appId? }. orgId + envUrl + appUniqueName must ALL match. appId is a
 // STRONG identity signal: if the snapshot recorded an appId, the live app MUST resolve to exactly that id —
 // a null live appId (app deleted, or the discovery query failed) is treated as a MISMATCH, never a vacuous
-// pass (Sol #4 / Opus C1: an eligible snapshot must not survive its app being deleted into a false noop).
+// pass (an eligible snapshot must not survive its app being deleted into a false noop).
 // A snapshot with NO recorded appId (a legacy/partial write) skips the appId check. Returns { ok, reason }.
 function identityMatches(envelope, live) {
   if (!isEnvelope(envelope)) return { ok: false, reason: 'no valid snapshot' };
@@ -123,7 +123,7 @@ function addDebt(envelope, entry) {
 
 // Clear debt entries for which `predicate(entry)` is true. The caller MUST only clear debt with a verifier
 // that matches the SPECIFIC reason — e.g. a placement re-verify may clear a placement debt but must NOT
-// clear an event/quick-view debt (Sol build-time note). The pure module just applies the caller's
+// clear an event/quick-view debt. The pure module just applies the caller's
 // predicate; it deliberately offers no "clear all" shortcut. Mutates + returns env.
 function clearDebtMatching(envelope, predicate) {
   if (!isEnvelope(envelope) || typeof predicate !== 'function') return envelope;

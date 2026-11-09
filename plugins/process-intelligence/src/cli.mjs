@@ -13,7 +13,7 @@ import { ConnectionSession } from './connection-session.mjs';
 
 const invalid = message => invalidConfiguration(message, 'INVALID_ARGUMENTS');
 
-export const usage = `Process Intelligence Azure CLI bridge (Node.js 22/24). Diagnostics go to stderr; serve reserves stdout for MCP.
+export const usage = `Process Intelligence Azure CLI bridge (Node.js 22+). Diagnostics go to stderr; serve reserves stdout for MCP.
 resolve-environment --cloud Public --environment ENVIRONMENT-ID
 config --profile NAME --cloud CLOUD --tenant GUID --environment ENVIRONMENT-ID
        [--audience HTTPS-RESOURCE]

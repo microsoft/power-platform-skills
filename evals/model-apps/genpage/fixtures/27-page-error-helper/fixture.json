@@ -1,0 +1,28 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed trace of a compliant attended create run for eval 27, not an agent capture. An existing table (salesorder) is shown as an order grid with a selected-order panel and an Approve button bound to the existing cnt_ApproveOrder Custom API Action. The page is built on the page error block of references/rules.md: a cached list read, an awaited read of the selected order and the Action report every failure through reportPageError into a rendered PageErrorBar, inside PageErrorBoundary. The newly authored plan records its assumptions (two planner defaults) and its per-page records (None.), the approved preview carries the same records, and provenance is verified with --require-assumptions.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan (Steps 1-7, 1b Custom API discovery)",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 4.6 and 4.6c: Custom API bindings and the actions file",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 5a and 5b: Single-page fast path",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy and Prompt semantics",
+    "plugins/model-apps/references/plan-schema.md Assumptions, data semantics and lookup metadata",
+    "plugins/model-apps/references/rules.md Critical Rule 22 and Missing Error Handling",
+    "plugins/model-apps/references/custom-api.md Verified Action pattern",
+    "plugins/model-apps/references/data-caching.md Pattern 1"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": [
+    "prompt.txt",
+    "agent-message.txt",
+    "page-name.txt",
+    "approved-plan.md",
+    "actions.json",
+    "custom-api-bindings.md"
+  ],
+  "semantics": {
+    "approvedPlan": "approved-plan.md"
+  }
+}

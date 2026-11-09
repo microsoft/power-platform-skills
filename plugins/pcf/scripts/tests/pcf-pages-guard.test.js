@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const Module = require('node:module');
 const { performance } = require('node:perf_hooks');
 const { scanSource, featureCoherence, gateSources } = require('../lib/pcf-code-gate.js');
 
@@ -313,6 +314,10 @@ for (const [name, relative] of [
     assert.match(text, /aliasing[^.\n]*`const d = context\.device; d\.captureImage\(\)`/i);
     assert.match(text, /dynamic dispatch/i);
     assert.match(text, /parenthesized receivers/i);
+    assert.match(text, /except a function- or block-local `const` bound to an object literal[^\n]*used only to call those functions[^\n]*fail closed/i);
+    assert.match(text, /early-return guards and calls in `else` branches are reported by design[^\n]*deliberate fail-closed limit[^\n]*positive guard block/i);
+    assert.match(text, /parenthesized receivers[^\n]*`\.bind`[^\n]*`Reflect\.apply`[^\n]*detected like direct calls/i);
+    assert.match(text, /`factory\?\.<T>\(context\.device\)\.captureImage\(\)`[^\n]*over-report/);
     assert.match(text, /runtime verification on the target Power Pages site[^.\n]*required/i);
   });
 }
@@ -432,6 +437,216 @@ test('Pages detection never promotes non-null assertions or escaped keys into gu
     assert.deepEqual(codesFor(withinGuard(`${comparison}; ${CALL};`)), [], comparison);
   }
   assert.deepEqual(codesFor(`if (!context.device?.captureImage) { ${CALL}; }`), ['PCF_PAGES_API']);
+});
+
+const DISPATCH_FORMS = [
+  ['parenthesized namespace receiver', '(context.device).captureImage()'],
+  ['parenthesized root receiver', '(context).device.captureImage()'],
+  ['nested parenthesized receivers', '((context).device).captureImage()'],
+  ['parenthesized receiver with optional call', '(context.device)?.captureImage?.()'],
+  ['parenthesized receiver after return', 'return (context.device).captureImage()'],
+  ['template-literal method key', 'context.device[`captureImage`]()'],
+  ['template-literal namespace key', 'context[`device`].captureImage()'],
+  ['escaped template-literal key', 'context.device[`capture\\u0049mage`]()'],
+  ['call dispatch', 'context.device.captureImage.call(context.device)'],
+  ['apply dispatch', 'context.device.captureImage.apply(context.device, [])'],
+  ['bind dispatch', 'context.device.captureImage.bind(context.device)()'],
+  ['optional call dispatch', 'context.device.captureImage?.call(context.device)'],
+  ['Reflect.apply dispatch', 'Reflect.apply(context.device.captureImage, context.device, [])'],
+  ['Reflect.apply of a parenthesized receiver', 'Reflect.apply((context.device).captureImage, context.device, [])'],
+  ['utility call dispatch', 'context.utils.lookupObjects.call(undefined, {})', 'Utility', 'utils', 'lookupObjects'],
+  ['parenthesized utility receiver', '(context.utils).lookupObjects({})', 'Utility', 'utils', 'lookupObjects'],
+];
+
+for (const [name, call, feature = 'Device.captureImage', namespace = 'device', method = 'captureImage'] of DISPATCH_FORMS) {
+  test(`Pages detection recognizes ${name}`, () => {
+    const statement = `${call};`;
+    const body = call.startsWith('return ') ? `function f(context) { ${statement} }` : statement;
+    const guarded = `function g(context) { if (typeof context.${namespace}?.${method} === "function") { ${statement} } }`;
+    assert.deepEqual({
+      unguarded: codesFor(body, feature),
+      guarded: codesFor(guarded, feature),
+      invalidGuard: codesFor(guarded.replace('if (typeof', 'if (ready || typeof'), feature),
+      undeclared: codesFor(body, null, ['model']),
+      textOnly: codesFor(`// ${call}\nconst note = ${JSON.stringify(call)};`, null),
+      fallback: findingsFor(guarded, feature, ['pages'], { indexer: throwingIndexer }).map((finding) => finding.code),
+    }, {
+      unguarded: ['PCF_PAGES_API'],
+      guarded: [],
+      invalidGuard: ['PCF_PAGES_API'],
+      undeclared: ['PCF_FEATURE_UNDECLARED'],
+      textOnly: [],
+      fallback: ['PCF_PAGES_API'],
+    });
+  });
+}
+
+test('Pages detection keeps call results, comma groups and dynamic keys out of the dispatch forms', () => {
+  for (const text of [
+    'foo(context.device).captureImage();',
+    'context.device.captureImage.name;',
+    'const fn = context.device.captureImage.call;',
+    'Reflect.apply(other.captureImage, context.device, []);',
+    'Reflect.apply(fn, context.device, []);',
+    'Other.apply(context.device.captureImage, context.device, []);',
+    'context.device[`capture${suffix}`]();',
+  ]) {
+    assert.deepEqual(codesFor(text, null).filter((code) => code === 'PCF_PAGES_API'), [], text);
+  }
+  // The new forms are detected only: they are not new proof syntax.
+  for (const condition of [
+    'typeof (context.device)?.captureImage === "function"',
+    'typeof context.device[`captureImage`] === "function"',
+    'typeof context.device.captureImage.call === "function"',
+  ]) {
+    assert.deepEqual(codesFor(`if (${condition}) { ${CALL}; }`), ['PCF_PAGES_API'], condition);
+  }
+});
+
+test('Pages detection reads optional and generic call arguments as arguments, not grouped receivers', () => {
+  const factory = 'const factory = (value) => ({ captureImage() { return "local"; } });\n';
+  const generic = 'function factory<T>(value: T) { return { captureImage() { return "local"; } }; }\n';
+  const method = 'const factory = { create<T>(value: T) { return { captureImage() { return "local"; } }; } };\n';
+  for (const text of [
+    `${factory}function run(context) { return factory?.(context.device).captureImage(); }`,
+    `${factory}function run(context) { return factory?.(context.device)?.captureImage(); }`,
+    `${generic}function run(context) { return factory<unknown>(context.device).captureImage(); }`,
+    `${method}function run(context) { return factory.create<unknown>(context.device).captureImage(); }`,
+    `${factory}function run(context) { return factory(context.device).captureImage(); }`,
+  ]) {
+    assert.deepEqual(codesFor(text, null), [], text);
+    assert.deepEqual(codesFor(text, null, ['model']), [], text);
+  }
+  // After an analyzer failure the fallback reads the optional call the same way.
+  assert.deepEqual(findingsFor(`${factory}factory?.(context.device).captureImage();`, null, ['pages'], { indexer: throwingIndexer })
+    .map((finding) => finding.code), []);
+  // Known limit, in the safe direction: after an optional call with type arguments the parenthesis is still
+  // read as a grouped receiver, so the factory result's method is reported as a Pages call (an over-report).
+  for (const text of [
+    `${generic}function run(context) { return factory?.<unknown>(context.device).captureImage(); }`,
+    `${method}function run(context) { return factory.create?.<unknown>(context.device).captureImage(); }`,
+  ]) {
+    assert.deepEqual(codesFor(text, null), ['PCF_FEATURE_UNDECLARED', 'PCF_PAGES_API'], text);
+  }
+  // A grouped receiver after an operator or keyword is still read through.
+  for (const text of ['ready && (context.device).captureImage();', 'value = (context.device).captureImage();', 'void (context.device).captureImage();']) {
+    assert.deepEqual(codesFor(text, null), ['PCF_FEATURE_UNDECLARED', 'PCF_PAGES_API'], text);
+  }
+});
+
+test('Pages proof refuses early exits and else branches of a negated method check by design', () => {
+  // A deliberate fail-closed limit: code that runs between a negated check and the call, such as a later
+  // operand of the same condition, can remove the method without a write the analyzer sees.
+  const negated = 'typeof context.device?.captureImage !== "function"';
+  for (const body of [
+    `if (${negated}) return; ${CALL};`,
+    `if (${negated}) { return; } ${CALL};`,
+    `if (${negated}) throw new Error("no camera"); ${CALL};`,
+    `if (!context.device?.captureImage) return; ${CALL};`,
+    `if (!(${PROOF})) return; ${CALL};`,
+    `if (${negated}) return; return ${CALL};`,
+    `if (${negated}) return; const image = ${CALL};`,
+    `if (${negated}) { consume(); } else { ${CALL}; }`,
+    `if (${negated}) consume(); else ${CALL};`,
+    `if (${negated} || !state.ready) return; return ${CALL};`,
+    `if (!(${PROOF} && state > 0)) return; ${CALL};`,
+    `if (${negated}) return; Object.assign(context.device, { captureImage: undefined }); ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(`function capture(context, state, consume) { ${body} }`), ['PCF_PAGES_API'], body);
+  }
+  assert.deepEqual(codesFor(`function capture(contexts) { for (const context of contexts) { if (${negated}) continue; ${CALL}; } }`),
+    ['PCF_PAGES_API']);
+  const [finding] = findingsFor(`function capture(context) { if (${negated}) return; ${CALL}; }`);
+  assert.match(finding.message, /early-return guards and aliases are not recognized/);
+  // The recommended rewrite: a positive guard block around the call.
+  assert.deepEqual(codesFor(`function capture(context) { if (${PROOF}) { ${CALL}; } }`), []);
+  assert.deepEqual(codesFor(`async function capture(context, consume) { if (${PROOF}) { const image = await ${CALL}; consume(image); } }`), []);
+});
+
+test('Pages detection ignores a context-named local object literal that is provably not the PCF context', () => {
+  for (const name of ['ctx', 'context', '_context', 'pcfContext']) {
+    const text = `function render() {\n  const ${name} = { device: { captureImage() { return 1; }, "pickFile": async () => [] }, utils: { lookupObjects: function (options) { return []; }, max: 3 } };\n  ${name}.device.captureImage(); ${name}.device.pickFile(); ${name}.utils.lookupObjects(options);\n}`;
+    assert.deepEqual(codesFor(text, null), [], name);
+    assert.deepEqual(codesFor(text, null, ['model']), [], name);
+  }
+  for (const text of [
+    '{ const ctx = { device: { captureImage: () => ({ id: "local", size: [1, 2] }) } }; ctx.device.captureImage(); }',
+    'function render() { const ctx = { device: { captureImage(a, b) { return null; } } }\n  ctx?.device?.captureImage?.(a); }',
+    'function render() { const ctx = { device: { captureImage: async function named() { return; } } }; new ctx.device.captureImage(); }',
+  ]) {
+    assert.deepEqual(codesFor(text, null), [], text);
+  }
+  // A literal whose function runs other code is not set aside; the call inside is read on its own too.
+  assert.deepEqual(codesFor('function render() { const ctx = { device: { captureImage: () => context.device.captureImage() } }; ctx.device.captureImage(); }'),
+    ['PCF_PAGES_API', 'PCF_PAGES_API']);
+});
+
+test('Pages detection keeps the error for context-named objects it cannot prove local', () => {
+  const local = 'device: { captureImage() { return "local"; } }';
+  for (const body of [
+    // Not a local, inert const literal.
+    'let ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'const ctx = { device: real.device }; ctx.device.captureImage();',
+    'const ctx = { device }; ctx.device.captureImage();',
+    'const ctx = { ...base }; ctx.device.captureImage();',
+    'const ctx = { [key]: {} }; ctx.device.captureImage();',
+    'const ctx = { get device() { return real; } }; ctx.device.captureImage();',
+    'const ctx = { __proto__: { device: { captureImage() {} } } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() {} }, device: real }; ctx.device.captureImage();',
+    'const ctx = { device: { *captureImage() {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage(): void {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage(v = real) {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage({ device }) {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage: real.captureImage } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() {} } } as unknown as Context; ctx.device.captureImage();',
+    'const ctx = useContext(PcfContext); ctx.device.captureImage();',
+    // A function in the literal that runs, reads or returns anything else.
+    `const ctx = { ${local}, update(value) { this.device = value.device; } }; ctx.update(api); ctx.device.captureImage();`,
+    `const ctx = { ${local}, expose() { return this; } }; Object.assign(ctx.expose(), api); ctx.device.captureImage();`,
+    `let escaped; const ctx = { ${local}, leak() { escaped = this; } }; ctx.leak(); escaped.device = api.device; ctx.device.captureImage();`,
+    `const ctx = { ${local}, update(value) { this.device = value.device; } }; ctx.update?.(api); ctx.device.captureImage();`,
+    `const ctx = { ${local}, update() { ctx.device = api.device; } }; ctx.update(); ctx.device.captureImage();`,
+    `const ctx = { ${local}, update() { super.__defineGetter__("device", () => api.device); } }; ctx.update(); ctx.device.captureImage();`,
+    'const ctx = { device: { captureImage(c) { return c.device.captureImage(); } } }; ctx.device.captureImage(api);',
+    'const ctx = { device: { captureImage: (c) => c } }; ctx.device.captureImage(api.device).captureImage();',
+    'const ctx = { device: { captureImage() { return real; } } }; ctx.device.captureImage().captureImage();',
+    'const ctx = { device: { captureImage() { return arguments; } } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() { consume(); return 1; } } }; ctx.device.captureImage();',
+    // A use other than a call of the literal's own function.
+    'const ctx = {}; ctx.__defineGetter__("device", () => api.device); ctx.device.captureImage();',
+    `const ctx = { ${local} }; ctx.hasOwnProperty("device"); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; ctx.device.captureImage.call(api.device);`,
+    `const ctx = { ${local} }; helper(ctx); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; const d = ctx.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; ctx.device.captureImage = real; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; Object.assign(ctx.device, real); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; delete ctx.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; (ctx).device.captureImage();`,
+    `const ctx = { ${local} }; const alias = ctx; alias.device = api.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; return [ctx, ctx.device.captureImage()];`,
+    // Something else could reach the binding: eval, a with statement, an inner declaration.
+    `const ctx = { ${local} }; eval("ctx.device = api.device"); ctx.device.captureImage();`,
+    `const ctx = { ${local} }, other = 1; { const ctx = real; ctx.device.captureImage(); }`,
+    `const ctx = { ${local} }; function inner(ctx) { ctx.device.captureImage(); }`,
+    `const ctx = { ${local} }; button.onclick = (ctx) => ctx.device.captureImage();`,
+  ]) {
+    assert.ok(codesFor(`function run(api, real, base, key, device, helper, consume, button, PcfContext) { ${body} }`, null).includes('PCF_PAGES_API'), body);
+  }
+  for (const text of [
+    // Only the context-named root itself is set aside, never a receiver under another root.
+    'function run(api) { const props = { context: null }; Object.assign(props, { context: api }); props.context.device.captureImage(); }',
+    'function run(api) { const state = { context: null }; const alias = state; alias.context = api; state.context.device.captureImage(); }',
+    'function run(api) { const props = { context: { device: { captureImage() {} } } }; props.context.device.captureImage(); }',
+    // A program-level const can be reached from other scripts; a with statement can rebind the name.
+    'const ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'export const ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'function run(api) { const ctx = { device: { captureImage() {} } }; with (api) { ctx.device.captureImage(); } }',
+    'function render(ctx) { ctx.device.captureImage(); }',
+    'class C { init(context) { this._context = context; } run() { this._context.device.captureImage(); } }',
+  ]) {
+    assert.ok(codesFor(text, null).includes('PCF_PAGES_API'), text);
+    assert.ok(codesFor(text, null, ['model']).includes('PCF_FEATURE_UNDECLARED'), text);
+  }
 });
 
 test('Pages detection decodes escapes without evaluating malformed or non-identifier keys', () => {
@@ -621,45 +836,137 @@ test('Pages proof keeps lexical this in arrows but not rebinding functions or cl
   assert.match(findingsFor(THIS_CALL).find((finding) => finding.code === 'PCF_PAGES_API').message, /this\._ctx\?\.device\?\.captureImage/);
 });
 
-// These generous CI bounds distinguish indexed lookup from repeatedly scanning a guard's
-// deeply nested body. The smaller realistic fixture also catches per-call scope rescans.
-const NESTED_SCAN_LIMIT_MS = 1500;
-const CONTROL_SCAN_LIMIT_MS = 500;
+// Complexity guards. They exist to catch a rescan that turns linear work into quadratic (or
+// exponential) work, not to measure how fast a machine is, so none of them bounds a wall-clock time
+// that load alone can exceed (the old fixed 500-1500 ms bounds failed on a busy machine):
+//  - Where the gate exposes its work (lexer passes, the line-start table) the test counts that work.
+//    A count does not depend on load.
+//  - Otherwise the test times one fixture at a quarter of its size and at full size and bounds the
+//    growth. Linear work grows about 4x (2-6x measured); quadratic work grows 16x. A slow or busy
+//    machine slows both runs alike, so the ratio holds. Each side is the fastest of several runs, so
+//    a pause that hits one run is ignored, and a ratio over the limit is measured again (a real
+//    regression exceeds it every time).
+//  - Every timed test keeps an absolute ceiling, at least 10x the old bound, as a catastrophe guard.
+const GROWTH_RUNS = 5;
+const GROWTH_ATTEMPTS = 3;
+const GROWTH_LIMIT = 10;
+const CATASTROPHE_LIMIT_MS = 15000;
 
-function timedScan(text) {
-  const started = performance.now();
-  const findings = [...scanSource(FILE, text), ...findingsFor(text)];
-  return { elapsed: performance.now() - started, findings };
+function fastest(runs, fn) {
+  let best = Infinity;
+  for (let i = 0; i < runs; i += 1) {
+    const started = performance.now();
+    fn();
+    best = Math.min(best, performance.now() - started);
+    // Already past the catastrophe ceiling: more runs only make a failing test slower.
+    if (best > CATASTROPHE_LIMIT_MS) break;
+  }
+  return best;
+}
+
+// `build(scale)` returns the fixture at `scale` of its full size; `run(text)` returns the findings.
+// Returns the findings for the full-size fixture so the caller can keep asserting on them.
+function assertLinearGrowth(t, label, build, run) {
+  const small = build(0.25);
+  const full = build(1);
+  // The first runs pay for JIT compilation, which is not growth with size.
+  run(small);
+  run(small);
+  let growth = Infinity;
+  let fullMs = Infinity;
+  for (let attempt = 1; attempt <= GROWTH_ATTEMPTS && growth >= GROWTH_LIMIT; attempt += 1) {
+    const smallMs = fastest(GROWTH_RUNS, () => run(small));
+    fullMs = fastest(GROWTH_RUNS, () => run(full));
+    // Timer noise dominates below a millisecond, so do not divide by less.
+    growth = fullMs / Math.max(smallMs, 1);
+    t.diagnostic(`${label}: ${smallMs.toFixed(3)} ms at 1/4 size, ${fullMs.toFixed(3)} ms at full size, growth ${growth.toFixed(2)}x (attempt ${attempt})`);
+  }
+  assert.ok(growth < GROWTH_LIMIT, `${label}: work grew ${growth.toFixed(2)}x for 4x the input; linear work grows about 4x and quadratic work 16x`);
+  assert.ok(fullMs < CATASTROPHE_LIMIT_MS, `${label}: ${fullMs.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+  return run(full);
+}
+
+function scanBoth(text, feature, hosts) {
+  return [...scanSource(FILE, text), ...findingsFor(text, feature, hosts)];
+}
+
+// A second copy of the gate whose lexer calls are counted. The gate reads its lexer through a
+// destructured import, so the counting wrapper must be in place when the module loads; the shared
+// exports and the first copy (the one every other test uses) are restored straight after.
+// Lexer passes are the unit of work for .ts angle-bracket types: the file must be lexed a bounded
+// number of times however many types it holds, because each pass reads the whole file.
+function loadCountingGate() {
+  const literalsPath = require.resolve('../lib/source-literals.js');
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const literals = require(literalsPath);
+  const original = literals.blankNonCodePreservingTemplateExpressions;
+  const stats = { calls: 0, chars: 0 };
+  const loaded = require.cache[gatePath];
+  literals.blankNonCodePreservingTemplateExpressions = function counting(text, options) {
+    stats.calls += 1;
+    stats.chars += text.length;
+    return original.call(this, text, options);
+  };
+  delete require.cache[gatePath];
+  try {
+    return { gate: require(gatePath), stats };
+  } finally {
+    literals.blankNonCodePreservingTemplateExpressions = original;
+    if (loaded) require.cache[gatePath] = loaded;
+    else delete require.cache[gatePath];
+  }
+}
+
+const counting = loadCountingGate();
+
+function lexWork(fn) {
+  counting.stats.calls = 0;
+  counting.stats.chars = 0;
+  const result = fn();
+  return { calls: counting.stats.calls, chars: counting.stats.chars, result };
+}
+
+// Measured: 2-4 lexer passes and 2-4 characters lexed per source character, however many casts the
+// file holds. Lexing once per type (the sequential loop) reads the whole file 31 to 601 times, so
+// 8 leaves room for another pass without letting that regression through.
+const MAX_LEX_PASSES = 8;
+function assertBoundedLexing(label, text, work) {
+  assert.ok(work.calls <= MAX_LEX_PASSES, `${label}: ${work.calls} lexer passes (limit ${MAX_LEX_PASSES})`);
+  assert.ok(work.chars <= MAX_LEX_PASSES * text.length,
+    `${label}: lexed ${work.chars} characters of a ${text.length}-character file (limit ${MAX_LEX_PASSES}x)`);
 }
 
 test('Pages proof indexes the 5000-line nested fixture without quadratic rescans', (t) => {
-  const text = [
-    `if (${PROOF}) {`,
-    ...Array(8).fill(`${CALL};`),
-    ...Array(2495).fill('run(() => {'),
-    ...Array(2495).fill('});'),
-    '}',
-  ].join('\n');
-  assert.equal(text.split('\n').length, 5000);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`nested timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
-  assert.ok(elapsed < NESTED_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${NESTED_SCAN_LIMIT_MS} ms`);
-  assert.deepEqual(findings, []);
+  // The guard's body nests 2495 callbacks deep; a lookup that rebalances the body for each scope or
+  // call, instead of reading the index, makes this fixture quadratic.
+  const build = (scale) => {
+    const depth = Math.round(2495 * scale);
+    return [
+      `if (${PROOF}) {`,
+      ...Array(8).fill(`${CALL};`),
+      ...Array(depth).fill('run(() => {'),
+      ...Array(depth).fill('});'),
+      '}',
+    ].join('\n');
+  };
+  assert.equal(build(1).split('\n').length, 5000);
+  assert.deepEqual(assertLinearGrowth(t, 'nested', build, scanBoth), []);
 });
 
 test('Pages proof indexes a 3000-line realistic control with 40 guarded calls', (t) => {
-  const lines = ['class Control {', 'init(context: Context) {', `if (${PROOF}) {`];
-  for (let i = 0; i < 40; i += 1) {
-    lines.push('this.handlers.push((item: Item) => {', ...Array(70).fill('consume(item);'), `${CALL};`, '});');
-  }
-  while (lines.length < 2997) lines.push('consume(null);');
-  lines.push('}', '}', '}');
-  const text = lines.join('\n');
-  assert.equal(lines.length, 3000);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`control timing: ${elapsed.toFixed(3)} ms; 40 guarded calls`);
-  assert.ok(elapsed < CONTROL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${CONTROL_SCAN_LIMIT_MS} ms`);
-  assert.deepEqual(findings, []);
+  // Calls and lines scale together, so a per-call rescan of the control grows with both.
+  const build = (scale) => {
+    const total = Math.round(3000 * scale);
+    const lines = ['class Control {', 'init(context: Context) {', `if (${PROOF}) {`];
+    for (let i = 0; i < Math.round(40 * scale); i += 1) {
+      lines.push('this.handlers.push((item: Item) => {', ...Array(70).fill('consume(item);'), `${CALL};`, '});');
+    }
+    while (lines.length < total - 3) lines.push('consume(null);');
+    lines.push('}', '}', '}');
+    return lines.join('\n');
+  };
+  assert.equal(build(1).split('\n').length, 3000);
+  assert.deepEqual(assertLinearGrowth(t, 'control', build, scanBoth), []);
 });
 
 const DEFAULT_CALLBACK = 'function render(cb = () => { if (true) { return 1; } }) { return cb(); }';
@@ -881,6 +1188,110 @@ for (const [name, body] of [
   });
 }
 
+test('Pages proof expires after a parameter-default write that a same-named body declaration does not hide', () => {
+  // A function with parameter expressions evaluates its defaults before its body's declarations exist,
+  // so the default writes the outer context however the body declares the name.
+  for (const body of [
+    `function reset(v = (context.device = {})) { let context; } ${CALL};`,
+    `function reset(v = (context.device = {})) { var context; } ${CALL};`,
+    `function reset(v = (context = next)) { const context = other; consume(context); } ${CALL};`,
+    `function reset({ v = (context.device = {}) } = {}) { let context; } ${CALL};`,
+    `const reset = function (v = (context.device = {})) { var context; }; ${CALL};`,
+    `const reset = (v = (context.device = {})) => { let context; }; ${CALL};`,
+    `const h = { reset(v = (context.device = {})) { var context; } }; ${CALL};`,
+    `class H { reset(v = (context.device = {})) { let context; } } ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API'], body);
+  }
+});
+
+test('Pages proof keeps body declarations local when a function has parameter expressions', () => {
+  for (const body of [
+    `function reset(v = 1) { let context = next; context = other; consume(context); } ${CALL};`,
+    `function reset(v = 1) { var context = next; context.device = other; } ${CALL};`,
+    `function reset(v = (other = next)) { var context; context = next; } ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), [], body);
+  }
+  // A call in such a body reads the body's own declaration, which no outer proof covers.
+  for (const kind of ['let', 'var']) {
+    assert.deepEqual(codesFor(withinGuard(`function reset(v = 1) { ${kind} context = next; ${CALL}; }`)), ['PCF_PAGES_API'], kind);
+  }
+});
+
+const THIS_CONTEXT_GUARD = 'typeof this._context.device?.captureImage === "function"';
+const THIS_CONTEXT_CALL = 'this._context.device.captureImage()';
+const inGuardedMethod = (classBody, after = `${THIS_CONTEXT_CALL};`) =>
+  `class C { run() { if (${THIS_CONTEXT_GUARD}) { class D { ${classBody} } ${after} } } }`;
+
+test('Pages proof expires after a this write in a computed class member key', () => {
+  // A computed key is evaluated where the class is defined, so its `this` is the enclosing method's.
+  // https://tc39.es/ecma262/#sec-runtime-semantics-classdefinitionevaluation
+  for (const member of [
+    '[this._context.device = null]() {}',
+    '[this._context.device = null] = 1;',
+    'static [this._context.device = null]() {}',
+    'static [this._context.device = null] = 1;',
+    'get [this._context.device = null]() { return 1; }',
+    'async *[this._context.device = null]() {}',
+    'value = 1; [this._context = null]() {}',
+    'run() {} [this._context.device = null]() {}',
+    'static { consume(1); } [this._context.device = null]() {}',
+    'value\n[this._context.device = null]() {}',
+    'value: number\n[this._context.device = null]() {}',
+    'value?: string\n[this._context.device = null]() {}',
+    '#value\n[this._context.device = null]() {}',
+    'static #value\n[this._context.device = null]() {}',
+    '@decorate [this._context.device = null]() {}',
+    '@decorate() [this._context.device = null]() {}',
+    '@scope.decorate [this._context.device = null]() {}',
+    '@decorate\n[this._context.device = null]() {}',
+    'handler = () => {}\n[this._context.device = null]() {}',
+    'count = next++\n[this._context.device = null]() {}',
+    'first = 1\nsecond\n[this._context.device = null]() {}',
+    'run(): void\n[this._context.device = null]() {}',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), ['PCF_PAGES_API'], member);
+  }
+});
+
+test('Pages proof keeps the class instance as this inside class member bodies and initializers', () => {
+  for (const member of [
+    'run() { this._context.device = null; }',
+    'value = (this._context.device = null);',
+    '[key] = (this._context.device = null);',
+    'static { this._context = null; }',
+    'value = { a: 1 }\n[this._context.device = null];',
+    'value = source\n[this._context.device = null];',
+    'value = read()\n[this._context.device = null];',
+    'value: number[] = []\n[this._context.device = null];',
+    'value = function () { return {}; }\n[this._context.device = null];',
+    'value = class {}\n[this._context.device = null];',
+    'value = () => source\n[this._context.device = null];',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), [], member);
+  }
+  // A call in a computed key runs under the enclosing proof; one in a member body does not.
+  assert.deepEqual(codesFor(inGuardedMethod(`[${THIS_CONTEXT_CALL}]() {}`, '')), []);
+  assert.deepEqual(codesFor(inGuardedMethod(`value: number\n[${THIS_CONTEXT_CALL}]() {}`, '')), []);
+  assert.deepEqual(codesFor(inGuardedMethod(`value = source\n[${THIS_CONTEXT_CALL}];`, '')), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(`class D { [${THIS_CONTEXT_CALL}]() {} }`), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(inGuardedMethod(`run() { ${THIS_CONTEXT_CALL}; }`, '')), ['PCF_PAGES_API']);
+});
+
+test('Pages proof keeps the inner class this for a computed key after an assertion initializer or a generic decorator', () => {
+  // Known limit, behaving as before: the member scanner does not recognize these keys as member starts, so
+  // `this` in them is still read as the inner class's instance and a write there does not end the outer proof.
+  for (const member of [
+    'value = {} as object\n[this._context.device = null]() {}',
+    '@decorate<number>() [this._context.device = null]() {}',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), [], member);
+  }
+  // The same key on its own line after the generic decorator is recognized.
+  assert.deepEqual(codesFor(inGuardedMethod('@decorate<number>()\n[this._context.device = null]() {}')), ['PCF_PAGES_API']);
+});
+
 for (const [name, call, plainCall = CALL, proof = PROOF] of [
   ['method non-null run', 'context.device.captureImage!!()'],
   ['root and namespace non-null runs', 'context!!!.device!!?.captureImage!!()'],
@@ -987,32 +1398,134 @@ test('Fixed-id detection keeps later JSX after unmatched braces and inside templ
   }
 });
 
-// Pathological but finite input should stay bounded; CI runners can be much slower
-// than the local median target, so this catches rescans without enforcing machine speed.
-const PATHOLOGICAL_SCAN_LIMIT_MS = 1500;
+// The line-location tests place their verdict on the real scan path (scanSource and featureCoherence over a file
+// of 4000 calls), so quadratic work anywhere on it fails them - in the helper that finds a line or in its callers -
+// and the shipped gate carries no test hook or counter. Two checks, with different limits:
+//  1. A count, which does not depend on the machine: the characters read through slice, substring, split and
+//     matchAll while the scan runs. Re-splitting text.slice(0, offset), or rebuilding the line-start table, for
+//     every finding reads the text again each time, so it passes the limit by orders of magnitude. The count
+//     cannot see a loop that reads text[at] or a linear table search.
+//  2. A growth ratio (assertLinearGrowth) of the real scan, which catches the first of those. It reads the clock, so it is not
+//     load-independent: it compares the fastest of several runs at a quarter of the size with the same at full size,
+//     measures again before it fails, and keeps the 15 s catastrophe ceiling. A pause that hits one phase can
+//     still move the ratio, which is why the count above carries the cases it can see.
+// A linear search of the line-start table is quadratic too, but its few million probes cost far less than the
+// scan's own work per finding, so the ratio of the whole scan cannot see it. A third check measures lineOf alone,
+// on a test-only copy of the gate; the end-to-end check above is what proves the scan reaches the real lookup.
+// The old fixed 1500 ms bound is gone.
+function stringReadsDuring(scan) {
+  const read = { chars: 0 };
+  const proto = String.prototype;
+  const originals = { slice: proto.slice, substring: proto.substring, split: proto.split, matchAll: proto.matchAll };
+  // Slices count by the length they return (the scanner's own slices are a few characters long); split and
+  // matchAll count by the text they read. The methods are replaced only while the scan runs, and restored whatever happens.
+  proto.slice = function slice(...args) {
+    const piece = originals.slice.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.substring = function substring(...args) {
+    const piece = originals.substring.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.split = function split(...args) {
+    read.chars += this.length;
+    return originals.split.apply(this, args);
+  };
+  proto.matchAll = function matchAll(...args) {
+    read.chars += this.length;
+    return originals.matchAll.apply(this, args);
+  };
+  let result;
+  try {
+    result = scan();
+  } finally {
+    Object.assign(proto, originals);
+  }
+  return { chars: read.chars, result };
+}
 
-test('Pages diagnostics index line locations instead of rescanning per call', (t) => {
-  const count = 4000;
-  const text = `${CALL};\n`.repeat(count);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`line-location timing: ${elapsed.toFixed(3)} ms; ${count} calls`);
-  assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+// Measured on a 4000-line file: about 7 characters read per source character (the lexer's split and the
+// scanner's few-character slices). A split of the prefix reads about 2000 characters per source character and a
+// table rebuilt per finding about 4000. 20 leaves room for another pass without letting either through.
+const MAX_TEXT_READS = 20;
+const LINE_LOCATION_CALLS = 4000;
+const lineLocationSource = (scale) => `${CALL};\n`.repeat(Math.round(LINE_LOCATION_CALLS * scale));
+const scanLineLocations = (text) => [...scanSource(FILE, text), ...findingsFor(text)];
+const assertLineLocations = (findings, count) => {
   assert.equal(findings.length, count);
   assert.ok(findings.every((finding, i) => finding.code === 'PCF_PAGES_API' && finding.line === i + 1));
+};
+
+test('Pages diagnostics index line locations instead of rescanning per call', () => {
+  const text = lineLocationSource(1);
+  const { chars, result: findings } = stringReadsDuring(() => scanLineLocations(text));
+  assertLineLocations(findings, LINE_LOCATION_CALLS);
+  assert.ok(chars <= MAX_TEXT_READS * text.length, `the scan read ${chars} characters through slice, substring, split and matchAll for a ${text.length}-character file (limit ${MAX_TEXT_READS}x)`);
 });
 
-for (const [name, text, feature] of [
-  ['10000 unmatched angles', 'const value = ' + 'a<'.repeat(10000), null],
-  ['8000 guard parentheses', `if (${'('.repeat(8000)}${PROOF}${')'.repeat(8000)}) { ${CALL}; }`, 'Device.captureImage'],
-  ['8000 nested for statements', FOR_CHAIN, null],
+test('Pages diagnostics take time in proportion to the number of calls', (t) => {
+  assertLineLocations(assertLinearGrowth(t, 'line locations', lineLocationSource, scanLineLocations), LINE_LOCATION_CALLS);
+});
+
+// A test-only copy of the gate that also exports its private lineOf: the production source plus one appended line,
+// compiled outside require.cache, so the shipped module and every other test are untouched.
+function loadGateWithLineOf() {
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const copy = new Module(gatePath, module);
+  copy.filename = gatePath;
+  copy.paths = Module._nodeModulePaths(path.dirname(gatePath));
+  copy._compile(`${fs.readFileSync(gatePath, 'utf8')}\nmodule.exports.lineOf = lineOf;\n`, gatePath);
+  return copy.exports;
+}
+
+test('Line lookups grow linearly with the number of lines', (t) => {
+  const { lineOf } = loadGateWithLineOf();
+  const lineLength = `${CALL};\n`.length;
+  const build = (scale) => `${CALL};\n`.repeat(Math.round(8000 * scale));
+  // The line of the first character of every line. lineOf keeps the table of the last text it saw, so reset it
+  // first: each run then builds the table and does every lookup, as a scan of a new file does.
+  const run = (text) => {
+    lineOf('', 0);
+    const lines = [];
+    for (let offset = 0; offset < text.length; offset += lineLength) lines.push(lineOf(text, offset));
+    return lines;
+  };
+  const lines = assertLinearGrowth(t, 'line lookups', build, run);
+  assert.equal(lines.length, 8000);
+  assert.ok(lines.every((line, i) => line === i + 1));
+});
+
+test('The test copy of the gate locates lines the way the shipped gate does', () => {
+  const { lineOf } = loadGateWithLineOf();
+  // LF, CR LF, a lone CR and the two Unicode separators each end a line; CR LF is one terminator.
+  const text = 'a\nb\r\nc\rd\u2028e\u2029f';
+  const lineAtEachCharacter = [...text].map((_, index) => text.slice(0, index).split(/\r\n|[\n\r\u2028\u2029]/).length);
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n' && text[index - 1] === '\r') continue;
+    assert.equal(lineOf(text, index), lineAtEachCharacter[index], `offset ${index}`);
+  }
+  assert.equal(loadGateWithLineOf().scanSource(FILE, `${CALL};`).length, scanSource(FILE, `${CALL};`).length);
+});
+
+test('The shipped gate exports only its three entry points', () => {
+  assert.deepEqual(Object.keys(require('../lib/pcf-code-gate.js')).sort(), ['featureCoherence', 'gateSources', 'scanSource']);
+});
+
+// The tests below scale their fixture and bound the growth (see assertLinearGrowth), so a slow
+// or busy machine cannot fail them.
+
+for (const [name, build, feature] of [
+  ['10000 unmatched angles', (scale) => 'const value = ' + 'a<'.repeat(Math.round(10000 * scale)), null],
+  ['8000 guard parentheses', (scale) => {
+    const depth = Math.round(8000 * scale);
+    return `if (${'('.repeat(depth)}${PROOF}${')'.repeat(depth)}) { ${CALL}; }`;
+  }, 'Device.captureImage'],
+  ['8000 nested for statements', (scale) => 'for(;;)'.repeat(Math.round(8000 * scale)) + 'consume(1);', null],
 ]) {
   test(`Source analysis bounds ${name}`, (t) => {
-    const started = performance.now();
-    const findings = [...scanSource(FILE, text), ...findingsFor(text, feature)];
-    const elapsed = performance.now() - started;
-    t.diagnostic(`${name} timing: ${elapsed.toFixed(3)} ms`);
-    assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
-    assert.deepEqual(findings, []);
+    assert.deepEqual(assertLinearGrowth(t, name, build, (text) => scanBoth(text, feature)), []);
   });
 }
 
@@ -1132,14 +1645,9 @@ test('Pages unknown write targets expire only tracked roots inside the target', 
 
 for (const [name, receiver] of [['distinct receiver names', (i) => `p${i}`], ['one shared receiver name', () => 'p']]) {
   test(`Source binding analysis bounds 2000 functions with ${name}`, (t) => {
-    const text = Array.from({ length: 2000 }, (_, i) =>
+    const build = (scale) => Array.from({ length: Math.round(2000 * scale) }, (_, i) =>
       `function f${i}(${receiver(i)}) { ${receiver(i)}.context.webAPI.retrieveRecord(); }`).join('\n');
-    const started = performance.now();
-    const findings = [...scanSource(FILE, text), ...findingsFor(text, 'WebAPI', ['model'])];
-    const elapsed = performance.now() - started;
-    t.diagnostic(`${name} timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
-    assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
-    assert.deepEqual(findings, []);
+    assert.deepEqual(assertLinearGrowth(t, name, build, (text) => scanBoth(text, 'WebAPI', ['model'])), []);
   });
 }
 
@@ -1238,9 +1746,12 @@ test('.tsx sources keep TypeScript\'s JSX reading of angle brackets', () => {
 });
 
 test('.ts angle-bracket types the gate cannot blank fall back fail closed', () => {
+  // An unterminated type, and types the gate can only blank one lex at a time (each one after a
+  // comment) in a file large enough to pass the lexing budget.
+  const padding = `/*${' padding'.repeat(4000)} */\n`;
   for (const [name, text] of [
     ['unterminated type', `const value = <Record<string, unknown>raw;\n${CALL};`],
-    ['more types than the pass limit', `let v;\n${'v = <T>v;\n'.repeat(300)}${CALL};`],
+    ['types past the lexing budget', `let v;\n${padding}${'v = /* cast */ <T>v;\n'.repeat(300)}${CALL};`],
   ]) {
     assert.deepEqual(scanSource(FILE, text).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE'], name);
     const gated = gateSources({
@@ -1253,8 +1764,8 @@ test('.ts angle-bracket types the gate cannot blank fall back fail closed', () =
 });
 
 test('Source analysis bounds a .ts control with many angle-bracket types', (t) => {
-  // Each blanked type costs one more lex of the whole file; a large control with 30 assertions
-  // must still finish well within the bound and keep its findings.
+  // Each blanked type used to cost one more lex of the whole file; a large control with 30 assertions
+  // must be lexed a bounded number of times and keep its findings.
   const lines = ['export class C {', '  public init(context: ComponentFramework.Context<IInputs>): void {'];
   for (let i = 0; i < 900; i += 1) {
     lines.push(i % 30 === 0
@@ -1264,11 +1775,63 @@ test('Source analysis bounds a .ts control with many angle-bracket types', (t) =
   lines.push(`    ${CALL};`, '  }', '}');
   const text = lines.join('\n');
   const started = performance.now();
-  const findings = findingsFor(text);
+  const work = lexWork(() => counting.gate.featureCoherence({ features: [{ name: 'Device.captureImage' }] },
+    [{ file: FILE, text }], ['pages']));
   const elapsed = performance.now() - started;
-  t.diagnostic(`.ts angle-type timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
-  assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
-  assert.deepEqual(findings.map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', lines.length - 2]]);
+  t.diagnostic(`.ts angle-type work: ${work.calls} lexer passes, ${work.chars} characters lexed of ${text.length}; ${elapsed.toFixed(3)} ms`);
+  assertBoundedLexing('30 casts', text, work);
+  assert.ok(elapsed < CATASTROPHE_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+  assert.deepEqual(work.result.map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', lines.length - 2]]);
+});
+
+test('.ts files with hundreds of angle-bracket types stay analyzable', (t) => {
+  const guarded = withinGuard(`${CALL};`);
+  const control = (casts) => {
+    const lines = ['export class C {', '  public run(context: ComponentFramework.Context<IInputs>): void {', '    let v: unknown;'];
+    for (let i = 0; i < 1500; i += 1) {
+      lines.push(i % 5 === 0 && casts-- > 0
+        ? `    const el${i} = <HTMLDivElement>document.createElement("div"); v = <unknown>el${i};`
+        : `    const value${i}: Array<number> = [${i}, ${i + 1}]; total += value${i}.length > 1 ? ${i} : 0;`);
+    }
+    lines.push(`    ${guarded}`, '  }', '}');
+    return lines.join('\n');
+  };
+  const longType = `{ ${Array.from({ length: 400 }, (_, i) => `field${i}: string;`).join(' ')} }`;
+  for (const [name, text] of [
+    ['300 casts in a small file', `let v;\n${'v = <T>v;\n'.repeat(300)}${guarded}`],
+    ['600 casts in a 100 KB control', control(300)],
+    ['nested, adjacent and grouped casts', `let v;\n${'v = <A><B<C>>(<D>v); const f = <T>(x: T): T => x;\n'.repeat(100)}${guarded}`],
+    ['a type longer than 4096 characters', `const shape = <${longType}>raw;\n${guarded}`],
+  ]) {
+    const started = performance.now();
+    const work = lexWork(() => counting.gate.gateSources({ manifestModel: { features: [{ name: 'Device.captureImage' }] }, sources: [{ file: FILE, text }], hosts: ['pages'] }));
+    const elapsed = performance.now() - started;
+    const gated = work.result;
+    t.diagnostic(`${name}: ${work.calls} lexer passes, ${work.chars} characters lexed of ${text.length}; ${elapsed.toFixed(3)} ms`);
+    assert.deepEqual(gated, { ok: true, errors: [], warnings: [] }, name);
+    assertBoundedLexing(name, text, work);
+    assert.ok(elapsed < CATASTROPHE_LIMIT_MS, `${name}: ${elapsed.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+    const unguarded = text.replace(guarded, `${CALL};`);
+    const callLine = unguarded.split('\n').findIndex((line) => line.includes(CALL)) + 1;
+    assert.deepEqual(findingsFor(unguarded).map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', callLine]], name);
+  }
+});
+
+test('.ts angle-bracket types in strings, comments, template text and regexes never hide code', () => {
+  const lines = [
+    'let v;',
+    'const html = "(<b>" + `(<i>${v}<u>` + \'(<s>\' + `${`(<q>`}`;',
+    '// (<T> v = 1',
+    '/* = <T> */ const re = /(<T>)/g;',
+    ...Array(60).fill('v = <T>v; v = (<T>v); if (count < limit && other > 2) { v = <Array<T>>v; }'),
+    `${CALL};`,
+    'const note = `= <b>${v}</b> = <i>`; v = <T>v;',
+    `${CALL};`,
+  ];
+  const text = lines.join('\n');
+  assert.deepEqual(scanSource(FILE, text), []);
+  assert.deepEqual(findingsFor(text).map((finding) => [finding.code, finding.line]),
+    [['PCF_PAGES_API', lines.length - 2], ['PCF_PAGES_API', lines.length]]);
 });
 
 for (const relative of [
@@ -1282,8 +1845,9 @@ for (const relative of [
     assert.match(text, /Pages API calls[^.\n]*unguarded/i);
     assert.match(text, /lexer failure[^.\n]*comments?[^.\n]*strings?[^.\n]*report/i);
     if (relative === 'AGENTS.md') {
-      assert.match(text, /later release[^.\n]*parameter-default writes[^.\n]*body declarations/i);
-      assert.match(text, /computed class member keys/i);
+      assert.match(text, /parameter default reaches the outer binding[^.\n]*body declares the same name/i);
+      assert.match(text, /`this` in a computed class member key[^\n]*enclosing method's[^.\n]*ends that method's proof/i);
+      assert.match(text, /Two forms behave as before[^\n]*type assertion or `satisfies`[^\n]*decorator with type arguments/i);
       assert.match(text, /\.ts` files[^.\n]*angle-bracket types[^.\n]*JSX/i);
       assert.match(text, /unterminated such type[^.\n]*lexer-failure path/i);
     } else {

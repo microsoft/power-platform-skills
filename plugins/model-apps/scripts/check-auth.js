@@ -1,21 +1,26 @@
 #!/usr/bin/env node
 
-// Consolidated auth + connectivity pre-flight for the entity-creation flow.
-// Runs every check the orchestrator needs in Phase 2a so the agent gets one
-// structured result instead of stringing together shell commands.
+// Consolidated auth + connectivity pre-flight. Runs every check a skill needs before it touches an
+// environment, so the agent gets one structured result instead of stringing together shell commands.
+//
+// This file ships byte for byte in model-apps and in pcf (scripts/validate-plugin-copies.js keeps the two
+// equal), and the steps that run `pac` differ between them. Nothing it prints is therefore worded for one
+// plugin's flows: the text states the rule that holds in both — only a step that runs `pac` needs the pac
+// login — and the skill that ran the check knows which of its steps those are.
 //
 // Usage:
 //   node check-auth.js [--env <envUrl>] [<envUrl>] [--require-pac]
 //
 // The env URL may be passed as `--env <url>` (the flag build/verify/teardown use) or positionally;
-// if omitted, the script tries to read it from `pac org who`. Pass `--require-pac` (genpage) to make
-// a missing pac login a hard blocker; without it (app-builder), pac is only a warning.
+// if omitted, the script tries to read it from `pac org who`. Pass `--require-pac` when the next steps run
+// `pac` (model-apps' genpage and pcf's push and package paths do) to make a missing pac login a hard blocker;
+// without it (model-apps' app-builder, pcf's verification and inventory), pac is only a warning.
 //
 // Output (stdout JSON, exit 0 even on auth failure — failures are in the fields):
 //   {
 //     "ok": true|false,
 //     "blocker": null | "az_missing" | "az_not_logged_in" | "az_timeout" | "pac_not_logged_in" | "pac_timeout"
-//                     | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
+//                     | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error" | "no_customization_role",
 //     "message": "human-readable next step",
 //     "warnings": ["..."],
 //     "azUser": "...",
@@ -25,20 +30,36 @@
 //     "whoAmI": { "ok": true, "userId": "...", "organizationId": "..." }
 //   }
 //
-// PAC login is NOT required to pass: the app-builder build/verify/teardown flow authenticates to
-// Dataverse with the `az` token (the SDK's az-token HttpClient), and WhoAmI below is the
-// authoritative test. PAC is only needed for the genpage `pages` phase (`pac model genpage ...`),
-// so a missing/for-different-identity pac login is surfaced as a WARNING, not a hard blocker.
+// PAC login is NOT required to pass unless the caller asks for it (--require-pac): a flow that
+// authenticates to Dataverse with the `az` token alone (model-apps builds, verifies and tears down through
+// the SDK's az-token HttpClient; pcf verifies and inventories the same way) needs no pac login, and WhoAmI
+// below is the authoritative test. PAC is only used by the steps that run it and, when --env is omitted, to
+// read the environment; a missing/for-different-identity pac login is surfaced as a WARNING, not a hard
+// blocker.
+//
+// After a passing WhoAmI one more GET (`solutions?$select=solutionid&$top=1`, the first read a build makes)
+// checks the identity can read customizations: an HTTP 403 `0x80042f09` ("has not been assigned any roles")
+// is `ok: false` with blocker `no_customization_role`. Any other outcome of that read is a warning only.
 //
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
 const { execFileAsync } = require('./lib/process-runner.js');
 const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags, tokenFailureKind, tokenFailureMessage } = require('./lib/dataverse-auth');
 const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./lib/cli-failure.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // `pac org who` cold-starts the PAC CLI's .NET runtime (~7 s measured on Windows), and longer on a busy
 // machine; a probe that runs out of time is reported as that, never as "not logged in".
 const PAC_PROBE_TIMEOUT_MS = 60000;
+
+// What a missing pac login costs, as the warnings state it. Only a run WITHOUT --require-pac reads it: a caller
+// whose next steps run `pac` passes the flag and gets a hard block instead. The wording is the rule every plugin
+// that ships this file can stand behind (see the header); naming one plugin's pac steps here is what made pcf
+// print model-apps' flows.
+const PAC_OPTIONAL_NOTE = 'That does not block a step that signs in with the az token alone: only a step that runs `pac` needs the login, and so does reading the environment when --env is omitted.';
+
+// The Dataverse error code of a read refused to a user who holds no security role (see the capability probe in main()).
+const NO_ROLE_CODE = '0x80042f09';
 
 // Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
 // the first positional arg, so a caller can copy the `--env` form here without silently passing
@@ -94,7 +115,11 @@ function runQuietAsync(cmd, args, timeoutMs) {
   };
 }
 
+// The result is a fixed shape whose strings are not bounded: a refused WhoAmI's whole diagnostic is its `message`, and a
+// mistyped flag is quoted in a usage blocker. The process exits right after this one write, so the write is made blocking
+// first (lib/output-redaction.js makeWritesBlocking): on Linux and macOS a pipe would otherwise take only what fits at once.
 function emit(payload) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(payload) + '\n');
   process.exit(0);
 }
@@ -158,15 +183,16 @@ async function main() {
     }));
   }
   let envUrl = parseEnvUrl(argv);
-  // Genpage deploys pages via `pac model genpage ...`, so its callers pass --require-pac to keep a
-  // missing pac login a hard blocker. The app-builder build path only needs the az token, so it
-  // omits the flag and a missing pac login is downgraded to a warning.
+  // A caller whose next steps run `pac` passes --require-pac to keep a missing pac login a hard blocker
+  // (model-apps' genpage discovers connections through a script that falls back to pac; pcf's push and package
+  // paths run it). A caller that only needs the az token omits the flag, and a missing pac login is downgraded
+  // to a warning.
   const requirePac = argv.includes('--require-pac');
   const warnings = [];
 
   // Every probe below is a cold CLI start. Measured on Windows: `pac org who` ~7 s, and each `az`
   // call ~3-5 s. Run one after another (az --version, az account show, pac, then az again for the
-  // WhoAmI token), the preflight cost ~19 s at the start of every /genpage and /app-builder run.
+  // WhoAmI token), the preflight cost ~19 s at the start of every skill run that begins with it.
   // pac needs nothing from az, so it is started FIRST and runs while the az probes run; with an explicit
   // environment the token read and WhoAmI are independent of the account probe too (warmDataverseToken).
   const pacOrgProbe = runQuietAsync('pac', ['org', 'who'], PAC_PROBE_TIMEOUT_MS);
@@ -231,7 +257,7 @@ async function main() {
     }
   }
 
-  // 2) pac user + env URL (best-effort — pac is NOT required for the Dataverse build path)
+  // 2) pac user + env URL (best-effort — a pac login is NOT required unless the caller passed --require-pac)
   const pacProbe = await pacOrgProbe.promise;
   const pacOrg = pacProbe.out;
   const pacSlow = pacProbe.failure === 'timeout';
@@ -247,7 +273,7 @@ async function main() {
   if (!pacUser) {
     const slowPac = `\`pac org who\` did not answer within ${PAC_PROBE_TIMEOUT_MS / 1000} s — the PAC CLI can be that slow to start on a busy machine, so its login is unknown, not missing`;
     if (requirePac) {
-      // Genpage caller (--require-pac): pac is genuinely required to upload pages, so keep the hard block.
+      // The caller passed --require-pac because its next steps run pac, so keep the hard block.
       return emit(
         buildResult({
           azUser,
@@ -258,12 +284,11 @@ async function main() {
         })
       );
     }
-    // App-builder path: not a blocker — the build/verify/teardown flow uses the az token, not pac.
-    // Only the genpage `pages` phase shells out to `pac model genpage`. Warn so a genpage run isn't surprised.
+    // No --require-pac: not a blocker. The caller authenticates with the az token, and pac is used only by a step that
+    // runs it and to read the environment when --env is omitted. Warn so a later pac step is not a surprise.
     warnings.push(pacSlow
-      ? `${slowPac}. This is only required for the genpage \`pages\` phase (\`pac model genpage ...\`); table/column/form/view/app builds authenticate with the az token.`
-      : 'PAC CLI is not logged in. This is only required for the genpage `pages` phase (`pac model genpage ...`); ' +
-        'table/column/form/view/app builds authenticate with the az token. Run `pac auth create --environment <url>` if you need genpage.');
+      ? `${slowPac}. ${PAC_OPTIONAL_NOTE}`
+      : `PAC CLI is not logged in. ${PAC_OPTIONAL_NOTE} Run \`pac auth create --environment <url>\` before such a step.`);
   }
   if (!envUrl) {
     return emit(
@@ -353,15 +378,55 @@ async function main() {
     );
   }
 
+  // 4) Capability probe. WhoAmI answers for ANY user the environment knows, role or not, so it said "ready" for an identity
+  //    that holds no security role: every customization read then fails, and the first build step is where the maker found out.
+  //    One read the build itself starts with (its solution) tells. Measured on an identity with no role:
+  //      GET solutions?$select=solutionid&$top=1  ->  HTTP 403
+  //      {"error":{"code":"0x80042f09","message":"The user with id <id> has not been assigned any roles. They need a role with the prvReadCustomization privilege."}}
+  //    (`sitemaps`, `roles` and `publishers` answered the same.) A COUNT of the user's roles would be wrong: privileges also come
+  //    through teams, so a user with no role of their own can read customizations. The code decides, never the words — the platform
+  //    answers in the caller's language. Any other outcome of the probe (another 403 code, a 5xx, a transport failure) proves nothing
+  //    about roles, so it is a warning and never a verdict: a false "no role" would send a working maker to an administrator.
+  //    https://learn.microsoft.com/power-platform/admin/security-roles-privileges
+  let probe = null;
+  try {
+    probe = await dataverseRequest(envUrl, 'GET', 'solutions?$select=solutionid&$top=1', null, { timeout: 30000 });
+  } catch (e) {
+    warnings.push(`Could not confirm the identity can read customizations (${e.message}). WhoAmI passed, so this is not taken as a missing role.`);
+  }
+  if (probe) {
+    const probeCode = probe.data && probe.data.error && probe.data.error.code;
+    if (probe.status === 403 && String(probeCode || '').toLowerCase() === NO_ROLE_CODE) {
+      const otherIdentity = pacUser && !identitiesMatch
+        ? ` Or sign in as the PAC user if that identity holds a role: \`az login --username ${pacUser}\`.`
+        : '';
+      return emit(
+        buildResult({
+          azUser,
+          pacUser,
+          envUrl,
+          identitiesMatch,
+          warnings,
+          whoAmI: { ok: true, userId: whoRes.data?.UserId, organizationId: whoRes.data?.OrganizationId },
+          blocker: 'no_customization_role',
+          message: `WhoAmI passed, but "${azUser}" has no security role in ${envUrl}, so it cannot read customizations (HTTP 403 ${NO_ROLE_CODE}: the prvReadCustomization privilege is missing). Ask an environment administrator to assign a role such as System Customizer.${otherIdentity}`,
+        })
+      );
+    }
+    if (probe.status < 200 || probe.status >= 300) {
+      warnings.push(`Could not confirm the identity can read customizations (HTTP ${probe.status}${probeCode ? ` ${probeCode}` : ''}). WhoAmI passed, so this is not taken as a missing role.`);
+    }
+  }
+
   // A pac probe that ran out of time says THAT here too — its warning already does, and "not logged in" beside
   // it contradicted it: a slow PAC CLI's login is unknown, not missing.
   const readyMessage = !pacUser
     ? (pacSlow
-      ? `Ready (az signed in as ${azUser}, env ${envUrl}). PAC's login is unknown — \`pac org who\` did not answer in time; it is only needed for the genpage pages phase.`
-      : `Ready (az signed in as ${azUser}, env ${envUrl}). PAC is not logged in — only needed for the genpage pages phase.`)
+      ? `Ready (az signed in as ${azUser}, env ${envUrl}). PAC's login is unknown — \`pac org who\` did not answer in time; only a step that runs pac needs it.`
+      : `Ready (az signed in as ${azUser}, env ${envUrl}). PAC is not logged in — only a step that runs pac needs it.`)
     : identitiesMatch
       ? `Ready (az + pac both signed in as ${azUser}, env ${envUrl}).`
-      : `Ready, but az ("${azUser}") and pac ("${pacUser}") use different identities. WhoAmI passed so this works for now — but if entity creation later returns 403, run \`az login --username ${pacUser}\` to align them.`;
+      : `Ready, but az ("${azUser}") and pac ("${pacUser}") use different identities. WhoAmI passed so this works for now — but if a later step returns 403, run \`az login --username ${pacUser}\` to align them.`;
   return emit({
     ok: true,
     blocker: null,

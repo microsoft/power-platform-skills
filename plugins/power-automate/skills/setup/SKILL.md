@@ -82,7 +82,11 @@ az account get-access-token --resource https://service.flow.microsoft.com --outp
 FlowAgent itself auto-detects the cloud the same way; you can override the
 detection with `PA_CLOUD=commercial|gcc|gcchigh|dod`.
 - **If it works**: Move on.
-- **If it fails with "AADSTS"**: The user's account may not have Power Automate access. Tell them: "Your Azure account doesn't seem to have access to Power Automate. Check with your IT admin that you have a Power Automate license."
+- **If it fails with "AADSTS65002"** (common in GCC High): the Azure CLI app isn't
+  preauthorized for the Power Automate resource in that cloud. This is not a license
+  problem. Register a public-client app with delegated Power Automate (Flow service)
+  permissions and set `PA_CLIENT_ID=<app-id>`; flow commands then use that app.
+- **If it fails with any other "AADSTS"**: The user's account may not have Power Automate access. Tell them: "Your Azure account doesn't seem to have access to Power Automate. Check with your IT admin that you have a Power Automate license."
 - **If it fails with other errors**: Show the error and suggest they contact IT support.
 - **If they're on a sovereign cloud and connection-management commands fail**: keep
   the original error and inspect its code. `AADSTS650057` can indicate an invalid

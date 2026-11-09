@@ -10,6 +10,7 @@ const path = require('node:path');
 const { renderAppPreview } = require('./lib/app-preview.js');
 const { parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function main() {
   const argv = process.argv.slice(2);
@@ -17,6 +18,7 @@ function main() {
   const USAGE = 'Usage: node scripts/preview-app.js --spec @<app-folder>/app-spec.json';
   const flagError = validateFlags(argv, { known: ['spec'], needValue: ['spec'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }

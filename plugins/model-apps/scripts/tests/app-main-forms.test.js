@@ -85,3 +85,40 @@ test('app.mainForms alone requires a 2.13 capability-floor lint advisory', () =>
   spec.minimumPluginVersion = '2.13.0';
   assert.ok(!lintAppSpec(spec).warnings.some((line) => /minimumPluginVersion/.test(line)));
 });
+
+test('app.mainFormsOnUpdate takes "addOnly" or "exact", and "exact" needs a Main-form list; pinDeclaredArtifacts takes only true', () => {
+  for (const [app, ok] of [
+    [{ mainFormsOnUpdate: 'addOnly' }, true],
+    [{ mainFormsOnUpdate: 'exact', mainForms: { contoso_item: ['Summary'] } }, true],
+    [{ pinDeclaredArtifacts: true }, true],
+    [{ mainFormsOnUpdate: 'Exact', mainForms: { contoso_item: ['Summary'] } }, /app\.mainFormsOnUpdate must be "addOnly" or "exact"/],
+    [{ mainFormsOnUpdate: true }, /app\.mainFormsOnUpdate must be "addOnly" or "exact"/],
+    [{ mainFormsOnUpdate: 'exact' }, /app\.mainFormsOnUpdate "exact" needs app\.mainForms with at least one table and form/],
+    [{ mainFormsOnUpdate: 'exact', mainForms: {} }, /app\.mainFormsOnUpdate "exact" needs app\.mainForms with at least one table and form/],
+    [{ pinDeclaredArtifacts: false }, /app\.pinDeclaredArtifacts must be true or omitted/],
+    [{ pinDeclaredArtifacts: 'yes' }, /app\.pinDeclaredArtifacts must be true or omitted/],
+  ]) {
+    const spec = specWith();
+    Object.assign(spec.app, app);
+    const result = validateAppSpec(spec, { profile: 'plan' });
+    if (ok === true) assert.equal(result.ok, true, `${JSON.stringify(app)}: ${result.errors.join('; ')}`);
+    else {
+      assert.equal(result.ok, false, `${JSON.stringify(app)} must be refused`);
+      assert.match(result.errors.join('; '), ok);
+    }
+  }
+});
+
+test('app.mainFormsOnUpdate or app.pinDeclaredArtifacts requires a 2.21 capability-floor lint advisory; neither leaves the advisories as they were', () => {
+  for (const app of [{ mainFormsOnUpdate: 'exact', mainForms: { contoso_item: ['Summary'] } }, { pinDeclaredArtifacts: true }]) {
+    const spec = specWith();
+    Object.assign(spec.app, app);
+    spec.minimumPluginVersion = '2.20.0';
+    assert.ok(lintAppSpec(spec).warnings.some((line) => /minimumPluginVersion.*2\.21\.0.*app\.mainFormsOnUpdate or app\.pinDeclaredArtifacts/.test(line)), JSON.stringify(app));
+    spec.minimumPluginVersion = '2.21.0';
+    assert.ok(!lintAppSpec(spec).warnings.some((line) => /minimumPluginVersion/.test(line)), JSON.stringify(app));
+  }
+  const plain = specWith({ contoso_item: ['Summary'] });
+  plain.minimumPluginVersion = '2.13.0';
+  assert.ok(!lintAppSpec(plain).warnings.some((line) => /minimumPluginVersion/.test(line)));
+});

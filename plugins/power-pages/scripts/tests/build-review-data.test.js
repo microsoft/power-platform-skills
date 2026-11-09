@@ -31,7 +31,7 @@ function runCli(args, env = {}) {
   });
 }
 
-test('SECTION_MAP recognizes the six known per-skill files', () => {
+test('SECTION_MAP recognizes the known per-skill files', () => {
   const expected = [
     'scan-code.json',
     'scan-site.json',
@@ -39,6 +39,7 @@ test('SECTION_MAP recognizes the six known per-skill files', () => {
     'manage-firewall.json',
     'audit-permissions.json',
     'setup-auth.json',
+    'analyze-performance.json',
   ];
   for (const file of expected) {
     assert.ok(SECTION_MAP[file], `${file} missing from SECTION_MAP`);

@@ -1,0 +1,1 @@
+Created the Customer Opportunities page: every opportunity with an account or contact customer, a search of the loaded rows by customer name, Open customer, Change customer, and one account's own opportunities (its direct customer opportunities, as you chose). Each failure is reported once and shown where it happened.

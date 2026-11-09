@@ -52,9 +52,13 @@ for domain definitions, frozen comparison baselines and evidence statuses.
 
 ## Prerequisites
 
-- Node.js 22 or 24 LTS. A built copy needs neither npm nor .NET.
+- Node.js 22+; use a maintained LTS release. A built copy needs neither npm nor .NET.
 - An authorized Power Automate Process Mining account and environment.
 - Azure CLI 2.54 or later on PATH.
+
+Startup enforces the minimum version, not an LTS-major allowlist. CI covers Node.js 22, 24 and 26.
+Other majors, including odd-numbered and future releases, are not rejected solely for their
+version, but this does not guarantee compatibility with untested releases.
 
 ### Cloud support
 
@@ -319,7 +323,7 @@ only information the user supplies. See [connection patterns](references/connect
 | Symptom | Action |
 |---|---|
 | Server bundle missing | Run `npm ci` and `npm run build` explicitly from the plugin directory |
-| Node missing or unsupported | Install Node.js 22 or 24 LTS and put `node` on PATH |
+| Node missing or too old | Install a maintained Node.js 22+ LTS release and put `node` on PATH |
 | No profile selected | Use setup and explicitly call `pi_activate_profile`; local status remains available |
 | Azure CLI missing or too old | Install Azure CLI 2.54+ on PATH |
 | Environment discovery unavailable or denied | Check the selected environment and directory-read access, or use an explicitly confirmed tenant with offline `config`; discovery is Public-only |

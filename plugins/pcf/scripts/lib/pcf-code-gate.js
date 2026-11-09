@@ -13,6 +13,7 @@ const IDENTIFIER_ESCAPE = /\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})/y;
 const SOURCE_OPERATOR = /(?:>>>=|\*\*=|&&=|\|\|=|\?\?=|<<=|>>=|===|!==|=>|\?\.|\.\.\.|\+\+|--|==|!=|<=|>=|&&|\|\||\?\?|\*\*|[+\-*/%&|^]=)/y;
 const ASSIGNMENT_OPERATORS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']);
 const HEAD_MODIFIERS = new Set(['async', 'get', 'set', 'static', 'public', 'private', 'protected', 'readonly', 'abstract', 'override']);
+const CLASS_MEMBER_MODIFIERS = new Set([...HEAD_MODIFIERS, 'declare', 'accessor']);
 const READ_FOLLOWERS = new Set(['(', ')', ']', '}', ',', ';', '?', ':', '!', '++', '--', '+', '-', '*', '/', '%', '**', '&', '|', '^', '<', '>', '<=', '>=', '==', '!=', '===', '!==', '&&', '||', '??', ...ASSIGNMENT_OPERATORS]);
 const READ_PREFIX_WORDS = ['return', 'throw', 'yield', 'await', 'typeof', 'void', 'new', 'delete', 'case', 'else', 'in', 'instanceof', 'as', 'satisfies', 'let', 'const', 'var', 'function', 'class'];
 const CONTEXT_NAME = /^_*(?:pcf)?(?:context|ctx)$/i;
@@ -646,16 +647,21 @@ function lexSource(file, text, lex, opts) {
 // A .ts file has no JSX, so a `<` where an operand starts can only open a type. Blank that `<…>` span
 // (types carry no calls) and lex again, until no such `<` remains. Only the span from the first
 // operand `<` on is in doubt after a pass, because the lexer read everything after it as JSX.
+// One lex per type made the cost the file size times its types, so a large control with a few hundred
+// casts went to the fail-closed path. Each pass now also blanks the later types a raw-text scan
+// proposes (proposedAngleTypes), lexes once, and keeps a proposal only when that lex confirms the
+// sequential loop would have blanked the same span (acceptedAngleTypes); the rest are dropped and
+// found again one pass at a time, so the result is the sequential loop's.
 // See TypeScript's TSX rules: https://www.typescriptlang.org/docs/handbook/jsx.html#the-as-operator
-const TS_ANGLE_TYPE_PASSES = 256;
-// Total characters lexed across passes. Past it, or past the pass limit, the file goes to the
-// lexer-failure path: one PCF_CODE_UNPARSEABLE warning, and its Pages API calls are treated as
-// unguarded (fail closed). Each pass re-lexes the whole file, because the lexer cannot restart midway
-// and its reading after the first JSX misread is not trusted, so the cost is the file size times its
-// angle-bracket types. 6M characters is a 40 KB control with 150 of them, about 1.5 s on a dev box.
+// Total characters lexed across passes. Past it the file goes to the lexer-failure path: one
+// PCF_CODE_UNPARSEABLE warning, and its Pages API calls are treated as unguarded (fail closed). Each pass
+// re-lexes the whole file, because the lexer cannot restart midway and its reading after the first JSX
+// misread is not trusted. 6M characters is a 40 KB control lexed 150 times, about 1.5 s on a dev box.
 const TS_ANGLE_TYPE_BUDGET = 6000000;
 // Longest `<…>` type read. A longer one is far more likely an unbalanced `<` than a type.
-const TS_ANGLE_TYPE_MAX_CHARS = 4096;
+const TS_ANGLE_TYPE_MAX_CHARS = 16384;
+// Passes whose proposals the lex did not confirm before the gate stops proposing for the file.
+const TS_ANGLE_TYPE_MISSES = 8;
 
 function isPlainTypeScript(file) {
   // .ts, .mts and .cts. A .tsx file keeps the lexer's JSX reading.
@@ -664,21 +670,170 @@ function isPlainTypeScript(file) {
 
 function lexTypeScriptAngleTypes(text, lex, opts) {
   let source = text;
+  let mask = null;
   let from = 0;
   let lexed = 0;
-  for (let pass = 0; ; pass += 1) {
-    lexed += source.length;
-    if (pass > TS_ANGLE_TYPE_PASSES || lexed > TS_ANGLE_TYPE_BUDGET) {
-      throw new Error('too many TypeScript angle-bracket types to analyze');
-    }
-    const mask = lex(source, opts);
+  let misses = 0;
+  const lexWithinBudget = (value, options = opts) => {
+    lexed += value.length;
+    if (lexed > TS_ANGLE_TYPE_BUDGET) throw new Error('too many TypeScript angle-bracket types to analyze');
+    return lex(value, options);
+  };
+  // Confirming a proposal relies on the shared lexer's report of every place it read by look-ahead
+  // (onAmbiguity); an injected lexer is read one type at a time.
+  const speculate = lex === blankNonCodePreservingTemplateExpressions;
+  for (;;) {
+    if (mask === null) mask = lexWithinBudget(source);
     const at = nextOperandAngle(mask, from);
     if (at === -1) return { source, mask };
     const end = angleTypeEnd(source, at);
     if (end === -1) throw new Error('unterminated TypeScript angle-bracket type');
-    source = blankKeepingLines(source, at, end + 1);
+    const spans = [[at, end], ...(speculate && misses < TS_ANGLE_TYPE_MISSES ? proposedAngleTypes(source, end + 1) : [])];
+    // A proposal must not remove a character that ends a literal or steers a regex scan (/ \ " ' ` [ ]):
+    // the lexer reads an earlier regex such as /Button>…</ to the first / it finds, so blanking that /
+    // in a later span would change the reading before the span (a span is balanced in ( ) { } < >).
+    const unsafe = spans.findIndex(([start, stop], i) => i > 0 && /[/\\"'`[\]]/.test(source.slice(start, stop + 1)));
+    if (unsafe !== -1) spans.length = unsafe;
+    const candidate = blankSpans(source, spans);
+    if (spans.length === 1) {
+      source = candidate;
+      mask = null;
+    } else {
+      let lookahead = Infinity;
+      const candidateMask = lexWithinBudget(candidate, { ...opts, onAmbiguity: (offset, kind) => {
+        lookahead = Math.min(lookahead, offset);
+        if (typeof opts?.onAmbiguity === 'function') opts.onAmbiguity(offset, kind);
+      } });
+      const accepted = acceptedAngleTypes(candidate, candidateMask, spans, lookahead);
+      if (accepted === spans.length) {
+        // The candidate's reading is trusted up to its next operand `<`, which the next pass finds.
+        source = candidate;
+        mask = candidateMask;
+      } else {
+        misses += 1;
+        source = blankSpans(source, spans.slice(0, accepted));
+        mask = null;
+      }
+      spans.length = accepted;
+    }
+    from = spans.at(-1)[1] + 1;
+  }
+}
+
+function acceptedAngleTypes(candidate, mask, spans, lookahead) {
+  // How many spans, in order, the sequential loop would also have blanked. The first was found in a
+  // trusted reading. The lexer reads a position from the text before it, except where it decides by
+  // look-ahead (`lookahead` is the first such place) or where a literal it opened needs a terminator
+  // further on (lexTypeScriptAngleTypes keeps those characters out of every later span). So a later
+  // span at `at` before that place is confirmed when every span before it is, so the candidate is read
+  // up to `at` exactly as the sequential loop reads it, and in that reading: no operand `<` is left
+  // between it and the previous span (the sequential loop would have taken that one first); the
+  // character before it is code the mask keeps, not a string, template, comment or regex (whose text
+  // the mask blanks, or whose delimiter it keeps: " ' ` /); and an operand starts there, so the `<`
+  // that stood there opened a type.
+  let accepted = 1;
+  for (; accepted < spans.length; accepted += 1) {
+    const at = spans[accepted][0];
+    if (at >= lookahead) break;
+    if (operandAngleBetween(mask, spans[accepted - 1][1] + 1, at)) break;
+    const before = previousNonSpaceIndex(mask, at);
+    if (before !== previousNonSpaceIndex(candidate, at)) break;
+    if (before !== -1 && (mask[before] !== candidate[before] || '"\'`/'.includes(candidate[before]))) break;
+    if (!expressionPosition(mask, at)) break;
+  }
+  return accepted;
+}
+
+function operandAngleBetween(mask, from, to) {
+  for (let i = mask.indexOf('<', from); i !== -1 && i < to; i = mask.indexOf('<', i + 1)) {
+    if (mask[i + 1] === '<' || mask[i + 1] === '=' || mask[i - 1] === '<') continue;
+    if (expressionPosition(mask, i)) return true;
+  }
+  return false;
+}
+
+// A `<` after one of these, or after one of the words below, is where an operand starts. Any other `<`
+// is a comparison, a shift or type arguments. A `/` is left out: it may end a regex.
+const ANGLE_TYPE_AFTER = new Set(['=', '(', ',', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '^', '~', '>', '']);
+const ANGLE_TYPE_AFTER_WORDS = new Set(['return', 'typeof', 'void', 'delete', 'await', 'yield', 'case', 'throw', 'else', 'do', 'in', 'of']);
+
+function proposedAngleTypes(source, from) {
+  // Proposals only: acceptedAngleTypes confirms each before it counts, so this scan may be wrong in
+  // either direction. It skips strings, comments, template text (keeping `${…}` code) and regexes, and
+  // stops once it has read twice the file's length in candidate types.
+  const spans = [];
+  const templates = [];
+  let previous = '>';
+  let word = '';
+  let budget = source.length * 2;
+  for (let i = from; i < source.length && budget > 0; i += 1) {
+    const c = source[i];
+    if (/\s/.test(c)) continue;
+    if (c === '"' || c === "'") {
+      i = quotedEnd(source, i, source.length);
+      if (i === -1) break;
+      previous = c;
+      word = '';
+    } else if (c === '`' || (c === '}' && templates.at(-1) === 0)) {
+      if (c === '}') templates.pop();
+      let j = i + 1;
+      for (; j < source.length && source[j] !== '`' && !(source[j] === '$' && source[j + 1] === '{'); j += 1) {
+        if (source[j] === '\\') j += 1;
+      }
+      if (j >= source.length) break;
+      if (source[j] === '$') { templates.push(0); j += 1; previous = '{'; } else previous = '`';
+      i = j;
+      word = '';
+    } else if (c === '/' && (source[i + 1] === '/' || source[i + 1] === '*')) {
+      // Comments are skipped without changing `previous`: `= /* cast */ <T>v` still proposes.
+      const close = source[i + 1] === '/' ? source.slice(i).search(/[\n\r\u2028\u2029]/) + i : source.indexOf('*/', i + 2) + 1;
+      if (close < i) break;
+      i = close;
+    } else if (c === '/' && (ANGLE_TYPE_AFTER.has(previous) || ANGLE_TYPE_AFTER_WORDS.has(word))) {
+      let j = i + 1;
+      for (let inClass = false; j < source.length && (inClass || source[j] !== '/'); j += 1) {
+        if (source[j] === '\\') j += 1;
+        else if (source[j] === '[') inClass = true;
+        else if (source[j] === ']') inClass = false;
+        else if (/[\n\r\u2028\u2029]/.test(source[j])) break;
+      }
+      i = j;
+      previous = '/';
+      word = '';
+    } else if (c === '<' && source[i + 1] !== '<' && source[i + 1] !== '=' && source[i - 1] !== '<'
+      && (ANGLE_TYPE_AFTER.has(previous) || ANGLE_TYPE_AFTER_WORDS.has(word))) {
+      const end = angleTypeEnd(source, i);
+      budget -= end === -1 ? Math.min(TS_ANGLE_TYPE_MAX_CHARS, source.length - i) : end - i;
+      if (end !== -1) {
+        spans.push([i, end]);
+        i = end;
+      }
+      previous = '>';
+      word = '';
+    } else if (IDENTIFIER_CONTINUE.test(c)) {
+      const start = i;
+      while (i + 1 < source.length && IDENTIFIER_CONTINUE.test(source[i + 1])) i += 1;
+      word = source.slice(start, i + 1);
+      previous = 'a';
+    } else {
+      if (c === '{' && templates.length) templates[templates.length - 1] += 1;
+      else if (c === '}' && templates.length) templates[templates.length - 1] -= 1;
+      previous = c;
+      word = '';
+    }
+  }
+  return spans;
+}
+
+function blankSpans(source, spans) {
+  // Line terminators stay, so lineOf() reports the same line for every later finding.
+  let blanked = '';
+  let from = 0;
+  for (const [start, end] of spans) {
+    blanked += source.slice(from, start) + source.slice(start, end + 1).replace(/[^\n\r\u2028\u2029]/g, ' ');
     from = end + 1;
   }
+  return blanked + source.slice(from);
 }
 
 function nextOperandAngle(mask, from) {
@@ -739,13 +894,6 @@ function quotedEnd(source, start, limit) {
     else if (quote !== '`' && /[\n\r\u2028\u2029]/.test(source[i])) return -1;
   }
   return -1;
-}
-
-function blankKeepingLines(source, start, end) {
-  // Line terminators stay, so lineOf() reports the same line for every later finding.
-  return source.slice(0, start)
-    + source.slice(start, end).replace(/[^\n\r\u2028\u2029]/g, ' ')
-    + source.slice(end);
 }
 
 function stringLikeRanges(src, mask) {
@@ -968,9 +1116,17 @@ function decodeStaticKey(raw) {
 
 function indexedPath(index, start) {
   if (index.paths.has(start)) return index.paths.get(start);
+  const { tokens } = index;
+  const path = { ...readMemberPath(index, [tokens[start].name || tokens[start].value], start + 1),
+    token: start, start: tokens[start].start };
+  index.paths.set(start, path);
+  return path;
+}
+
+function readMemberPath(index, names, end) {
+  // Reads the members after names[0] (or after a group holding a path): .name, ?.name, ["name"] and
+  // [`name`]. Any other computed key makes the path `unknown`.
   const { tokens, text } = index;
-  const names = [tokens[start].name || tokens[start].value];
-  let end = start + 1;
   let unknown = false;
   while (end < tokens.length) {
     // Postfix ! is erased ONLY in this detection view. != / !== are whole operator
@@ -988,8 +1144,14 @@ function indexedPath(index, start) {
     }
     if (tokens[member]?.value === '[' && tokens[member].match >= 0) {
       const close = tokens[member].match;
-      const key = close === member + 2 && tokens[member + 1].kind === 'string'
-        ? decodeStaticKey(text.slice(tokens[member + 1].start, tokens[member + 1].end)) : null;
+      let key = null;
+      if (close === member + 2 && tokens[member + 1].kind === 'string') {
+        key = decodeStaticKey(text.slice(tokens[member + 1].start, tokens[member + 1].end));
+      } else if (close === member + 3 && tokens[member + 1].value === TEMPLATE_QUOTE && tokens[member + 2].value === TEMPLATE_QUOTE) {
+        // The mask blanks template text and keeps `${…}` code, so two adjacent back-ticks are a
+        // template with no substitution: context.device[`captureImage`]() names the method.
+        key = decodeTemplateKey(text.slice(tokens[member + 1].start, tokens[member + 2].end));
+      }
       end = close + 1;
       if (!key) { unknown = true; break; }
       names.push(key);
@@ -998,9 +1160,14 @@ function indexedPath(index, start) {
     break;
   }
   const call = tokens[end]?.value === '(' || (tokens[end]?.value === '?.' && tokens[end + 1]?.value === '(');
-  const path = { names, end, unknown, call, token: start, start: tokens[start].start };
-  index.paths.set(start, path);
-  return path;
+  return { names, end, unknown, call };
+}
+
+function decodeTemplateKey(raw) {
+  // A no-substitution template is cooked like a string literal: the same escapes, line continuations
+  // and identifier test, so decode its body as one. https://tc39.es/ecma262/#sec-template-literals
+  if (raw.length < 2 || raw[0] !== TEMPLATE_QUOTE || raw.at(-1) !== TEMPLATE_QUOTE || raw.includes('${')) return null;
+  return decodeStaticKey(`"${raw.slice(1, -1)}"`);
 }
 
 function angleBoundary(tokens, start, direction) {
@@ -1008,13 +1175,16 @@ function angleBoundary(tokens, start, direction) {
   return tokens.angles.get(start) ?? -1;
 }
 
-function typedHeadBody(tokens, close) {
+function typedHeadBody(tokens, close, mask) {
   let i = close + 1;
   if (tokens[i]?.value !== ':') return tokens[i]?.value === '{' ? i : -1;
   let needsType = true;
   for (i += 1; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token.value === '{' && !needsType) return i;
+    // A return type does not continue across a line break into `[`: in a class body
+    // run(): void\n[key]() {} is an overload signature and a computed member, not one method.
+    if (token.value === '[' && !needsType && mask && LINE_TERMINATOR.test(mask.slice(tokens[i - 1].end, token.start))) return -1;
     if (['(', '[', '{', '<'].includes(token.value)) {
       const end = token.value === '<' ? angleBoundary(tokens, i, 1) : token.match;
       if (end < 0) return -1;
@@ -1162,7 +1332,7 @@ function indexHeads(index) {
         next += 1;
       }
       if (tokens[next]?.value !== '(' || tokens[next].match < 0) continue;
-      const body = typedHeadBody(tokens, tokens[next].match);
+      const body = typedHeadBody(tokens, tokens[next].match, index.mask);
       addHead({ kind: 'function', arrow: false, start: tokenKeyword(tokens, i - 1, 'async') ? i - 1 : i, keyword: i, name, parameters: next, body });
     } else if (tokenKeyword(tokens, i, 'class') && !inMethodPosition(i)) {
       let body = i + 1;
@@ -1208,7 +1378,7 @@ function indexHeads(index) {
   }
   for (let open = 0; open < tokens.length; open += 1) {
     if (tokens[open].value !== '(' || tokens[open].match < 0 || !inContainer(open)) continue;
-    const body = typedHeadBody(tokens, tokens[open].match);
+    const body = typedHeadBody(tokens, tokens[open].match, index.mask);
     if (body < 0 || bodies.has(body)) continue;
     let name = open - 1;
     if (tokens[name]?.value === '>') {
@@ -1264,6 +1434,15 @@ function indexScopes(index) {
     scopes.push(scope);
     blockScopes.set(i, scope);
     if (head) head.scope = scope;
+    // A function with parameter expressions evaluates its defaults before the body's declarations
+    // exist, in a separate environment: function f(v = (context.device = {})) { let context; } writes
+    // the outer context. Give the body its own var/lexical scope so a body declaration cannot capture
+    // a root that a default reads or writes. Defaults and computed pattern keys are the parameter
+    // expressions; a stray '=' or '[' in a type only adds a scope that changes no binding.
+    // https://tc39.es/ecma262/#sec-functiondeclarationinstantiation (steps 27-28)
+    if (head && head.kind === 'function' && scope.kind === 'function' && hasParameterExpressions(tokens, head)) {
+      scopes.push({ kind: 'body', start: tokens[i].start, body: tokens[i].start, end, roots: new Set(), head });
+    }
   }
   for (const head of heads) {
     if (tokens[head.body]?.value === '{') continue;
@@ -1271,6 +1450,18 @@ function indexScopes(index) {
     const scope = makeScope(head, head.body, tokens[end]?.start ?? index.mask.length);
     scopes.push(scope);
     head.scope = scope;
+  }
+  // A computed class member key is evaluated where the class is defined: in class D { [this.x = 1]() {} }
+  // `this` is the enclosing method's, not D's instance. The key gets a scope of its own that bindingFor
+  // resolves `this` through, past the class. Only a `[` that begins a member is a key; in
+  // value = {}\n[k] the `[` indexes the initializer, whose `this` is the instance.
+  // https://tc39.es/ecma262/#sec-runtime-semantics-classdefinitionevaluation
+  for (const head of heads) {
+    const open = head.body;
+    if (head.kind !== 'class' || tokens[open]?.value !== '{' || tokens[open].match < 0) continue;
+    for (const key of classMemberKeys(index, open)) {
+      scopes.push({ kind: 'class-key', start: tokens[key].start, body: tokens[key].start, end: tokens[tokens[key].match].end, roots: new Set() });
+    }
   }
   for (const control of controls) {
     if (control.kind !== 'for') continue;
@@ -1300,7 +1491,7 @@ function indexScopes(index) {
       // A static block owns its var/function declarations; var context inside it
       // must not shadow or write context outside the class.
       // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Static_initialization_blocks
-      scope.function = ['program', 'function', 'opaque', 'static'].includes(scope.kind) ? scope : scope.parent?.function;
+      scope.function = ['program', 'function', 'body', 'opaque', 'static'].includes(scope.kind) ? scope : scope.parent?.function;
       scope.parentFunction = scope.parent?.function;
       active.push(scope);
     }
@@ -1308,6 +1499,83 @@ function indexScopes(index) {
   }
   index.scopes = scopes;
   index.blockScopes = blockScopes;
+}
+
+function classMemberKeys(index, classBody) {
+  // The `[` tokens of a class body that begin a member's computed key. Members are read forwards, one
+  // class-level token or bracketed group at a time:
+  //   class D { [k]() {} }   x = 1; [k] = 2   static [k]() {}   get [k]() {}   *[k]() {}   m() {} [k]() {}
+  //   @decorate [k]() {}     @decorate() [k]() {}
+  // A member ends at `;`, after a method body or static block, or at a line break the next token cannot
+  // continue (ASI). Before a `[` on a new line that is:
+  //   - always, after a member with no initializer: value / #value / value: number / m(): void. A type
+  //     does not continue across a line break into `[` (TypeScript reads `number\n[k]` as two members);
+  //   - after an initializer only when it cannot be indexed: an arrow function body `() => {}` or a
+  //     postfix `++`/`--`. Otherwise value = {}\n[k] indexes the initializer, whose `this` is the instance.
+  // https://tc39.es/ecma262/#sec-rules-of-automatic-semicolon-insertion and
+  // https://www.typescriptlang.org/docs/handbook/decorators.html
+  const { tokens, mask, bodies, containers } = index;
+  const keys = [];
+  const close = tokens[classBody].match;
+  let member;
+  const reset = () => { member = { named: false, initializer: false, decorator: null, last: -1 }; };
+  reset();
+  const indexable = (last) => {
+    const token = tokens[last];
+    if (['++', '--'].includes(token.value)) return false;
+    if (token.value !== '}' || token.match < 0) return true;
+    return !bodies.get(token.match)?.arrow || containers.has(token.match);
+  };
+  const endsOperand = (last) => ['}', '++', '--'].includes(tokens[last].value) || canEndOperand(index, last);
+  for (let i = classBody + 1; i < close; i += 1) {
+    const token = tokens[i];
+    const lineBreak = member.last >= 0 && LINE_TERMINATOR.test(mask.slice(tokens[member.last].end, token.start));
+    if (token.value === '[' && lineBreak && member.named && (!member.initializer || !indexable(member.last))) reset();
+    // first = 1\nsecond: an initializer that ends an operand cannot run on into a name, so the line
+    // break ends the member.
+    else if (lineBreak && member.initializer && endsOperand(member.last)
+      && ((token.kind !== 'punctuation' && !['in', 'instanceof', 'as', 'satisfies'].includes(token.value))
+        || ['#', '@'].includes(token.value))) reset();
+    const end = ['(', '[', '{'].includes(token.value) && token.match > i ? token.match : i;
+    if (member.decorator) {
+      // @a.b.c, @a(…) and @(…) decorate the member that follows; they do not name it.
+      const name = member.decorator === 'name' && token.kind === 'identifier';
+      if (name || (member.decorator === 'dot' && token.value === '.')) {
+        member.decorator = name ? 'dot' : 'name';
+        member.last = i;
+        continue;
+      }
+      member.decorator = null;
+      if (token.value === '(' && end > i) { member.last = end; i = end; continue; }
+    }
+    if (token.value === ';') { reset(); continue; }
+    if (token.value === '@') member.decorator = 'name';
+    else if (token.value === '[') {
+      if (!member.named) keys.push(i);
+      member.named = true;
+    } else if (token.value === '{' && !member.initializer
+      && (bodies.get(i)?.method || tokenKeyword(tokens, i - 1, 'static'))) {
+      reset();
+      i = end;
+      continue;
+    } else if (token.value === '=') {
+      member.initializer = true;
+      member.named = true;
+    } else if (!(token.kind === 'identifier' && CLASS_MEMBER_MODIFIERS.has(token.value) && !member.named)
+      && !['*', '#'].includes(token.value)) member.named = true;
+    member.last = end;
+    i = end;
+  }
+  return keys;
+}
+
+function hasParameterExpressions(tokens, head) {
+  const open = head.parameters;
+  if (open === undefined || open < 0 || tokens[open]?.value !== '(' || tokens[open].match < 0) return false;
+  for (let i = open + 1; i < tokens[open].match; i += 1) {
+    if (tokens[i].value === '=' || tokens[i].value === '[') return true;
+  }
+  return false;
 }
 
 function topLevelTokenRanges(tokens, start, end, separator) {
@@ -1502,7 +1770,7 @@ function bindingFor(scope, root) {
   // uses, memoizing each visited scope so deep callback chains are walked once per root.
   const pending = [];
   let binding;
-  for (let owner = scope; owner; owner = owner.parent) {
+  for (let owner = scope; owner;) {
     if (owner.bindings.has(root)) { binding = owner.bindings.get(root); break; }
     pending.push(owner);
     if (!owner.parent || owner.declarations.has(root) || owner.kind === 'opaque'
@@ -1510,6 +1778,9 @@ function bindingFor(scope, root) {
       binding = owner.id;
       break;
     }
+    // `this` in a computed class member key is the enclosing scope's: step past the class itself.
+    owner = root === 'this' && owner.kind === 'class-key' && owner.parent.kind === 'class' && owner.parent.parent
+      ? owner.parent.parent : owner.parent;
   }
   for (const owner of pending) owner.bindings.set(root, binding);
   return binding;
@@ -1646,6 +1917,9 @@ function indexSource(text, mask) {
   indexDeclarations(index);
   indexWrites(index);
   index.members = indexedMembers(index);
+  // A context-named local const bound to an inert object literal, used only to call its own functions, is
+  // that literal, not the PCF context: const ctx = { device: { captureImage() { return 1; } } }; ctx.device.captureImage().
+  index.members = index.members.filter((member) => !localObjectMember(index, member));
   const methods = new Map(index.members.filter((member) => member.call && ['device', 'utils'].includes(member.namespace))
     .map((member) => [member.names.join('.'), member.names]));
   for (const control of index.controls) {
@@ -1670,27 +1944,289 @@ function indexSource(text, mask) {
   return index;
 }
 
-function indexedMembers(index) {
-  const members = [];
+function localObjectMember(index, member) {
+  // The context is recognized by name (CONTEXT_NAME), so an unrelated object named ctx or context
+  // would read as the PCF context. A call is set aside only when it provably runs a function written
+  // in a local object literal that nothing else can reach or change:
+  //   function render() { const ctx = { device: { captureImage() { return 1; } } }; ctx.device.captureImage(); }
+  // A parameter, a field, a call result such as useContext(...) or anything else keeps the name rule,
+  // because it may hold the real context. Proven when all of these hold:
+  //   - the context-named root itself holds the namespace (ctx.device, not props.context.device);
+  //   - its binding is local to a function or block (not the program, which other scripts share), with
+  //     exactly one declaration, `const <root> = { … }`, ending the statement;
+  //   - the literal is inert (inertLiteral): static keys, nested inert literals, plain literals and
+  //     functions whose body returns only such values, so a call through it runs no other code and
+  //     returns nothing from outside it;
+  //   - every other use of the binding calls one of those functions through its own keys, such as
+  //     ctx.device.captureImage(), and no write reaches the binding: the literal is never passed,
+  //     aliased, returned or changed, and no inherited method (ctx.__defineGetter__) is called on it;
+  //   - the file has no eval, with statement or unreadable identifier escape, which could reach the
+  //     binding without naming it in code.
+  const { tokens } = index;
+  const root = member.names[0];
+  if (root === 'this' || !CONTEXT_NAME.test(root) || member.namespacePath !== `${root}.${member.namespace}`
+    || member.first !== member.token || tokens[member.token]?.kind !== 'identifier') return false;
+  index.dynamicNames ??= tokens.some((token) => token.name === 'eval' || (token.kind === 'unknown-identifier' && !token.name))
+    || index.controls.some((control) => control.kind === 'with');
+  if (index.dynamicNames) return false;
+  const binding = bindingFor(tokens[member.token].scope, root);
+  index.localObjects ||= new Map();
+  const key = `${binding}:${root}`;
+  if (!index.localObjects.has(key)) index.localObjects.set(key, inertConstObject(index, binding, root));
+  return index.localObjects.get(key);
+}
+
+function inertConstObject(index, binding, root) {
+  const { tokens, mask } = index;
+  if (['program', 'opaque'].includes(index.scopes[binding].kind)) return false;
+  const declarations = index.scopes[binding].declarations.get(root) || [];
+  if (declarations.length !== 1) return false;
+  const keyword = tokenIndexAt(tokens, declarations[0]);
+  const name = keyword + 1;
+  const open = keyword + 3;
+  if (!tokenKeyword(tokens, keyword, 'const') || tokens[name]?.kind !== 'identifier' || tokens[name].value !== root
+    || tokens[name + 1]?.value !== '=' || tokens[open]?.value !== '{' || tokens[open].match < 0) return false;
+  const close = tokens[open].match;
+  const after = tokens[close + 1];
+  // `{ … }` must end the initializer: `;`, `,` or `}` next, or a line break before a statement (ASI),
+  // not `as T`, a call or an index that would make the binding something else.
+  if (after && ![';', ',', '}'].includes(after.value) && !(LINE_TERMINATOR.test(mask.slice(tokens[close].end, after.start))
+    && after.kind === 'identifier' && !['as', 'satisfies', 'in', 'instanceof'].includes(after.value))) return false;
+  const members = inertLiteral(index, open);
+  if (!members) return false;
+  index.rootUses ||= rootUses(index);
+  for (const position of index.rootUses.writes.get(`${binding}:${root}`) || []) {
+    if (position !== tokens[name].start) return false;
+  }
+  for (const use of index.rootUses.reads.get(`${binding}:${root}`) || []) {
+    if (use === name) continue;
+    const path = indexedPath(index, use);
+    if (index.rootRoles.get(use) !== 'read' || !path.call || path.unknown || path.names.length < 2) return false;
+    // Every name on the way must be the literal's own: an object up to the last, a function at the end.
+    for (let length = 2; length <= path.names.length; length += 1) {
+      const kind = members.get(path.names.slice(1, length).join('.'));
+      if (kind !== (length === path.names.length ? 'function' : 'object')) return false;
+    }
+  }
+  return true;
+}
+
+function rootUses(index) {
+  // Every occurrence of a context-named root, and every recorded write, grouped by binding and root
+  // name, so proving several bindings costs one pass over the tokens and writes.
+  const reads = new Map();
+  const writes = new Map();
   for (let i = 0; i < index.tokens.length; i += 1) {
-    if (!index.tokens[i].name || ['.', '?.'].includes(index.tokens[i - 1]?.value)
-      || index.rootRoles?.get(i) === 'member') continue;
-    const path = indexedPath(index, i);
-    const member = contextMember(path);
-    if (member) members.push(member);
+    const root = trackedRoot(index, i);
+    if (!root || root === 'this' || !CONTEXT_NAME.test(root) || index.patternKeys.has(i)
+      || index.rootRoles.get(i) === 'member') continue;
+    const key = `${bindingFor(index.tokens[i].scope, root)}:${root}`;
+    if (!reads.has(key)) reads.set(key, []);
+    reads.get(key).push(i);
+  }
+  for (const [key, positions] of index.writes) {
+    // Keys are `<binding>:<path>` with an optional `.*`; the root is the path's first name.
+    const separator = key.indexOf(':');
+    const root = key.slice(separator + 1).split('.')[0];
+    const target = `${key.slice(0, separator)}:${root}`;
+    if (!writes.has(target)) writes.set(target, []);
+    writes.get(target).push(...positions);
+  }
+  return { reads, writes };
+}
+
+function inertLiteral(index, open) {
+  // The own members of an inert object literal, by dotted path ('device' → 'object',
+  // 'device.captureImage' → 'function'), or null. Inert means no code in it can run anything else,
+  // read anything from outside it or hand out a reference to it:
+  //   - every key is static (a name or a string), not __proto__ and not repeated; no accessor,
+  //     spread, shorthand, computed key or generator;
+  //   - every value is a nested inert literal, a string, number, true, false or null, an array of
+  //     those, or a method, function or arrow expression (async allowed) whose parameters are plain
+  //     names and whose body is empty, returns such a value, or (an arrow) is such a value. A body
+  //     that names anything at all, this or a parameter included, is refused.
+  // https://tc39.es/ecma262/#sec-object-initializer
+  const { tokens, text } = index;
+  const group = (at, value) => tokens[at]?.value === value && tokens[at].match > at ? tokens[at].match : -1;
+  const literal = (at) => ['string', 'number'].includes(tokens[at]?.kind)
+    || ['true', 'false', 'null'].some((word) => tokenKeyword(tokens, at, word));
+  // A value filling exactly [from, to) that runs nothing and refers to nothing.
+  const inertValue = (from, to) => {
+    if (to - from === 1) return literal(from);
+    if (group(from, '(') === to - 1) return inertValue(from + 1, to - 1);
+    if (group(from, '{') === to - 1) return Boolean(inertLiteral(index, from));
+    if (group(from, '[') !== to - 1) return false;
+    return topLevelTokenRanges(tokens, from + 1, to - 1, ',').every(([a, b]) => a === b || inertValue(a, b));
+  };
+  const parameters = (at) => {
+    const close = group(at, '(');
+    if (close === -1 || close === at + 1) return close;
+    const names = topLevelTokenRanges(tokens, at + 1, close, ',');
+    return names.every(([a, b], i) => (a === b && i === names.length - 1 && i > 0)
+      || (b === a + 1 && tokens[a].kind === 'identifier' && !['this', 'arguments', 'eval'].includes(tokens[a].value)))
+      ? close : -1;
+  };
+  const inertBody = (at, to) => {
+    if (group(at, '{') !== to - 1) return false;
+    let end = to - 1;
+    if (tokens[end - 1]?.value === ';') end -= 1;
+    return end === at + 1 || (tokenKeyword(tokens, at + 1, 'return') && (end === at + 2 || inertValue(at + 2, end)));
+  };
+  // A function or arrow expression filling [from, to).
+  const functionValue = (from, to) => {
+    let at = tokenKeyword(tokens, from, 'async') ? from + 1 : from;
+    if (tokenKeyword(tokens, at, 'function')) {
+      at += 1;
+      if (tokens[at]?.kind === 'identifier') at += 1;
+      const close = parameters(at);
+      return close !== -1 && inertBody(close + 1, to);
+    }
+    const close = tokens[at]?.kind === 'identifier' && !['this', 'arguments', 'eval'].includes(tokens[at].value) ? at : parameters(at);
+    if (close === -1 || tokens[close + 1]?.value !== '=>' || close + 2 >= to) return false;
+    return tokens[close + 2].value === '{' && group(close + 2, '{') === to - 1 ? inertBody(close + 2, to) : inertValue(close + 2, to);
+  };
+  const members = new Map();
+  const pending = [[open, '']];
+  while (pending.length) {
+    const [start, prefix] = pending.pop();
+    const keys = new Set();
+    for (const [from, to] of topLevelTokenRanges(tokens, start + 1, tokens[start].match, ',')) {
+      if (from === to) continue;
+      let at = from;
+      if (tokenKeyword(tokens, at, 'async') && tokens[at + 1]?.value !== '(' && tokens[at + 1]?.value !== ':') at += 1;
+      if (['get', 'set'].some((word) => tokenKeyword(tokens, at, word)) && tokens[at + 1]?.value !== '('
+        && tokens[at + 1]?.value !== ':') return null;
+      const key = tokens[at]?.kind === 'identifier' ? tokens[at].value
+        : tokens[at]?.kind === 'string' ? decodeStaticKey(text.slice(tokens[at].start, tokens[at].end)) : null;
+      if (!key || key === '__proto__' || keys.has(key)) return null;
+      keys.add(key);
+      const path = prefix ? `${prefix}.${key}` : key;
+      const close = parameters(at + 1);
+      if (close !== -1) {
+        if (!inertBody(close + 1, to)) return null;
+        members.set(path, 'function');
+        continue;
+      }
+      if (at !== from || tokens[at + 1]?.value !== ':' || at + 2 >= to) return null;
+      const value = at + 2;
+      if (group(value, '{') === to - 1) {
+        members.set(path, 'object');
+        pending.push([value, path]);
+      } else if (functionValue(value, to)) members.set(path, 'function');
+      else if (!inertValue(value, to)) return null;
+    }
   }
   return members;
 }
+
+function tokenIndexAt(tokens, start) {
+  let lo = 0;
+  let hi = tokens.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (tokens[mid].start < start) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function indexedMembers(index) {
+  // Members are keyed by their root token: a grouped path that reads on past its group replaces the
+  // shorter member at the same root, so (context.utils).lookupObjects() is one use, not two.
+  const members = new Map();
+  const add = (path, first) => {
+    const member = contextMember(path);
+    if (!member) return;
+    member.first = first;
+    if (!member.call && reflectApplyTarget(index, first, member)) member.call = true;
+    members.set(member.token, member);
+  };
+  for (let i = 0; i < index.tokens.length; i += 1) {
+    if (!index.tokens[i].name || ['.', '?.'].includes(index.tokens[i - 1]?.value)
+      || index.rootRoles?.get(i) === 'member') continue;
+    add(indexedPath(index, i), i);
+  }
+  // Grouping needs the control and container index (a `(` after `if (…)` groups, after a name it
+  // calls), so the first, root-collecting pass reads plain paths only. A guard proof is itself a
+  // plain path, so its root is collected there.
+  if (index.controlCloses) {
+    for (const [path, first] of groupedPaths(index)) {
+      if (index.rootRoles.get(path.token) !== 'member') add(path, first);
+    }
+  }
+  return [...members.values()].sort((a, b) => a.token - b.token);
+}
+
+function groupedPaths(index) {
+  // (context.device).captureImage() and ((context).device).captureImage(): a group that holds only a
+  // member path is that path, so reading continues after the `)`. A `(` that follows an operand calls
+  // it instead (foo(context.device).captureImage() calls whatever foo returns), and a group holding
+  // anything else, such as (0, context.device), is not unwrapped. Each run of directly nested groups
+  // is read once, from its innermost path outwards, so 8000 nested parentheses stay linear.
+  const { tokens } = index;
+  const grouping = (open) => tokens[open]?.value === '(' && tokens[open].match >= 0 && !canEndOperand(index, open - 1)
+    && !callHead(index, open);
+  const paths = [];
+  for (let open = 0; open < tokens.length; open += 1) {
+    if (!grouping(open) || grouping(open - 1)) continue;
+    const run = [open];
+    while (grouping(run.at(-1) + 1)) run.push(run.at(-1) + 1);
+    const root = run.at(-1) + 1;
+    if (!tokens[root]?.name) continue;
+    let path = indexedPath(index, root);
+    for (let level = run.length - 1; level >= 0; level -= 1) {
+      const close = tokens[run[level]].match;
+      if (path.unknown || path.call || path.end !== close) break;
+      path = { ...readMemberPath(index, [...path.names], close + 1), token: root, start: tokens[root].start };
+      paths.push([path, run[level]]);
+    }
+  }
+  return paths;
+}
+
+function callHead(index, open) {
+  // A `(` also calls when it follows an optional-call `?.` or a type-argument list after a callee:
+  //   factory?.(context.device).captureImage()          calls factory, then a method of its result
+  //   factory<T>(context.device).captureImage()          TypeScript generic call (likewise obj.m<T>(…))
+  // Neither `(` groups, so the argument is not the receiver of the method after the `)`.
+  // https://tc39.es/ecma262/#prod-OptionalChain and
+  // https://www.typescriptlang.org/docs/handbook/2/generics.html#generic-types
+  const { tokens } = index;
+  const previous = open - 1;
+  if (tokens[previous]?.value === '?.') return true;
+  if (tokens[previous]?.value !== '>') return false;
+  const less = angleBoundary(tokens, previous, -1);
+  return less > 0 && canEndOperand(index, less - 1);
+}
+
+function reflectApplyTarget(index, first, member) {
+  // Reflect.apply(context.device.captureImage, thisArg, args) calls the method it is given as its first
+  // argument. https://tc39.es/ecma262/#sec-reflect.apply
+  const { tokens } = index;
+  const open = first - 1;
+  return member.names.length === member.methodPath.split('.').length && !member.unknown
+    && tokens[open]?.value === '(' && tokens[open - 1]?.kind === 'identifier' && tokens[open - 1].value === 'apply'
+    && tokens[open - 2]?.value === '.'
+    && tokenKeyword(tokens, open - 3, 'Reflect')
+    && (tokens[member.end]?.value === ',' || member.end === tokens[open].match);
+}
+
+// `.call(`, `.apply(` and `.bind(` on a method invoke it with another `this` (binding returns a copy
+// whose only use is to be called). https://tc39.es/ecma262/#sec-properties-of-the-function-prototype-object
+const DISPATCH_METHODS = new Set(['call', 'apply', 'bind']);
 
 function contextMember(path) {
   // Only the name immediately before the namespace matters: props.context.device
   // and this._ctx.utils count, but this.state.device and helpers.utils do not.
   const namespaceIndex = path.names.findIndex((name, i) => i > 0 && CONTEXT_NAMESPACES.has(name) && CONTEXT_NAME.test(path.names[i - 1]));
   if (namespaceIndex < 0) return null;
-  return { ...path, namespace: path.names[namespaceIndex], method: path.names[namespaceIndex + 1],
+  const methodEnd = namespaceIndex + 2;
+  const dispatch = path.names.length === methodEnd + 1 && DISPATCH_METHODS.has(path.names[methodEnd]);
+  const names = dispatch ? path.names.slice(0, methodEnd) : path.names;
+  return { ...path, names, namespace: path.names[namespaceIndex], method: path.names[namespaceIndex + 1],
     namespacePath: path.names.slice(0, namespaceIndex + 1).join('.'),
-    methodPath: path.names.slice(0, namespaceIndex + 2).join('.'),
-    call: path.call && !path.unknown && path.names.length === namespaceIndex + 2 };
+    methodPath: path.names.slice(0, methodEnd).join('.'),
+    call: path.call && !path.unknown && (path.names.length === methodEnd || dispatch) };
 }
 
 function skipSourceSpace(mask, start) {
@@ -1703,7 +2239,8 @@ function fallbackMembers(text, mask) {
   // Read each reference once, advancing past consumed members, on the blanked mask:
   //   props.context?.device["captureImage"]!!()
   // Quoted static keys are decoded from the original offsets, never evaluated.
-  // No delimiter, scope, declaration or guard analysis is retried here.
+  // No delimiter, scope, declaration or guard analysis is retried here. A group that holds only a
+  // path is read through, (context.device).captureImage(), and Reflect.apply(<method>, …) is a call.
   const roots = new RegExp(`${IDENTIFIER.source}|\\\\`, 'gu');
   const members = [];
   let match;
@@ -1712,40 +2249,95 @@ function fallbackMembers(text, mask) {
     if (!root) continue;
     roots.lastIndex = root.end;
     if (!root.name || previousNonSpace(mask, match.index) === '.') continue;
-    const names = [root.name];
-    let end = root.end;
-    let unknown = false;
-    while (end < mask.length) {
-      let next = skipSourceSpace(mask, end);
-      let asserted = next;
-      while (mask[asserted] === '!') asserted = skipSourceSpace(mask, asserted + 1);
-      if (['.', '[', '('].includes(mask[asserted]) || mask.startsWith('?.', asserted)) next = asserted;
-      let member = next;
-      if (mask.startsWith('?.', member)) member = skipSourceSpace(mask, member + 2);
-      else if (mask[member] === '.') member = skipSourceSpace(mask, member + 1);
-      else if (mask[member] !== '[') { end = next; break; }
-      if (mask[member] === '[') {
-        const keyStart = skipSourceSpace(mask, member + 1);
-        const quoted = ['"', "'"].includes(mask[keyStart]) ? readQuotedLiteral(mask, keyStart) : null;
-        const close = quoted && skipSourceSpace(mask, quoted.end);
-        if (!quoted || mask[close] !== ']') { unknown = true; end = member; break; }
-        const key = decodeStaticKey(text.slice(keyStart, quoted.end));
-        end = close + 1;
-        if (!key) { unknown = true; break; }
-        names.push(key);
-      } else {
-        const name = member !== next && sourceIdentifierAt(mask, member);
-        if (!name?.name) { end = next; break; }
-        names.push(name.name);
-        end = name.end;
-      }
+    let path = readFallbackPath(text, mask, [root.name], root.end);
+    let first = match.index;
+    for (;;) {
+      const open = previousNonSpaceIndex(mask, first);
+      const close = skipSourceSpace(mask, path.end);
+      if (path.unknown || path.call || mask[open] !== '(' || mask[close] !== ')' || !fallbackGrouping(mask, open)) break;
+      path = readFallbackPath(text, mask, path.names, close + 1);
+      first = open;
     }
-    const call = mask[end] === '(' || (mask.startsWith('?.', end) && mask[skipSourceSpace(mask, end + 2)] === '(');
-    const member = contextMember({ names, start: match.index, unknown, call });
+    const member = contextMember({ names: path.names, start: match.index, unknown: path.unknown, call: path.call });
+    if (member && !member.call && member.names.length === member.methodPath.split('.').length && !member.unknown) {
+      const open = previousNonSpaceIndex(mask, first);
+      const after = mask[skipSourceSpace(mask, path.end)];
+      member.call = mask[open] === '(' && /(?:^|[^$\w.])Reflect\s*\.\s*apply\s*$/.test(mask.slice(Math.max(0, open - 64), open))
+        && (after === ',' || after === ')');
+    }
     if (member) members.push(member);
-    roots.lastIndex = Math.max(roots.lastIndex, end);
+    roots.lastIndex = Math.max(roots.lastIndex, path.end);
   }
   return members;
+}
+
+function readFallbackPath(text, mask, names, end) {
+  let unknown = false;
+  while (end < mask.length) {
+    let next = skipSourceSpace(mask, end);
+    let asserted = next;
+    while (mask[asserted] === '!') asserted = skipSourceSpace(mask, asserted + 1);
+    if (['.', '[', '('].includes(mask[asserted]) || mask.startsWith('?.', asserted)) next = asserted;
+    let member = next;
+    if (mask.startsWith('?.', member)) member = skipSourceSpace(mask, member + 2);
+    else if (mask[member] === '.') member = skipSourceSpace(mask, member + 1);
+    else if (mask[member] !== '[') { end = next; break; }
+    if (mask[member] === '[') {
+      const keyStart = skipSourceSpace(mask, member + 1);
+      let keyEnd = -1;
+      let key = null;
+      if (['"', "'"].includes(mask[keyStart])) {
+        const quoted = readQuotedLiteral(mask, keyStart);
+        keyEnd = quoted ? quoted.end : -1;
+        if (quoted) key = decodeStaticKey(text.slice(keyStart, quoted.end));
+      } else if (mask[keyStart] === TEMPLATE_QUOTE) {
+        keyEnd = templateEnd(text, keyStart);
+        if (keyEnd !== -1) key = decodeTemplateKey(text.slice(keyStart, keyEnd));
+      }
+      const close = keyEnd === -1 ? -1 : skipSourceSpace(mask, keyEnd);
+      if (close === -1 || mask[close] !== ']') { unknown = true; end = member; break; }
+      end = close + 1;
+      if (!key) { unknown = true; break; }
+      names.push(key);
+    } else {
+      const name = member !== next && sourceIdentifierAt(mask, member);
+      if (!name?.name) { end = next; break; }
+      names.push(name.name);
+      end = name.end;
+    }
+  }
+  const call = mask[end] === '(' || (mask.startsWith('?.', end) && mask[skipSourceSpace(mask, end + 2)] === '(');
+  return { names, end, unknown, call };
+}
+
+function templateEnd(text, start) {
+  // End (exclusive) of the template literal opened at `start`, or -1 when it holds a substitution.
+  for (let i = start + 1; i < text.length; i += 1) {
+    if (text[i] === '\\') i += 1;
+    else if (text[i] === TEMPLATE_QUOTE) return i + 1;
+    else if (text[i] === '$' && text[i + 1] === '{') return -1;
+  }
+  return -1;
+}
+
+function previousNonSpaceIndex(text, index) {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (!/\s/.test(text[i])) return i;
+  }
+  return -1;
+}
+
+function fallbackGrouping(mask, open) {
+  // A `(` groups unless it follows an operand, which it then calls: foo(context.device).x is foo's
+  // result. After a keyword such as return or typeof an operand starts, so the `(` groups.
+  const before = previousNonSpaceIndex(mask, open);
+  if (before === -1) return true;
+  // factory?.(context.device) is an optional call: its argument is not a receiver.
+  if (mask[before] === '.' && mask[before - 1] === '?') return false;
+  if (!IDENTIFIER_CONTINUE.test(mask[before]) && !/[)\]"'`]/.test(mask[before])) return true;
+  const word = /[$\w]+$/.exec(mask.slice(Math.max(0, before - 16), before + 1));
+  return Boolean(word) && ['return', 'typeof', 'await', 'void', 'yield', 'case', 'throw', 'in', 'of', 'new', 'delete', 'else', 'do']
+    .includes(word[0]) && previousNonSpace(mask, before + 1 - word[0].length) !== '.';
 }
 
 function firstAtOrAfter(positions, start) {

@@ -123,10 +123,38 @@ test('verify-model-app rejects an unknown flag rather than ignoring it', () => {
   assert.match(r.stderr, /unknown flag\(s\): --workspce \(did you mean --workspace\?\)/);
 });
 
+// verify-model-app takes the flag the build takes (a build run with it writes its form captions in that language), reads it as the build does,
+// and refuses a bad one — all before it reads the spec's environment, so none of these runs touches the network.
+test('verify-model-app takes the build\'s --language-code, and refuses one that is no LCID, a pair that disagrees and a typo of it', () => {
+  const base = [script('verify-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC];
+  for (const [what, extra, message] of [
+    ['a language tag', ['--language-code', 'de-DE'], /--language-code \/ --languageCode must be digits only, a positive integer LCID up to 65535 \(got 'de-DE'\)/],
+    ['a pair that disagrees', ['--language-code', '1031', '--languageCode', '1036'], /--language-code '1031' and --languageCode '1036' disagree — pass only one/],
+    ['a flag with no value', ['--languageCode'], /--languageCode/],
+    ['a typo of it', ['--language-cod', '1036'], /unknown flag\(s\): --language-cod/],
+  ]) {
+    const r = run([...base, ...extra]);
+    assert.strictEqual(r.code, 1, `${what}: ${r.stderr}`);
+    assert.match(r.stderr, message, what);
+    assert.match(r.stderr, /Usage: node verify-model-app\.js .*\[--language-code\|--languageCode <lcid>\]/, `${what}: the usage names the flag`);
+  }
+});
+
 test('a correct invocation still succeeds after the guard', () => {
   const existed = fs.existsSync(SAMPLES_WORKSPACE);
   const r = run([script('build-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC, '--no-live-plan', '--stage', 'ui', '--workspace', tempWorkspace()]);
   assert.strictEqual(r.code, 0, r.stderr);
   assert.strictEqual(JSON.parse(r.stdout).dryRun, true);
   assert.strictEqual(fs.existsSync(SAMPLES_WORKSPACE), existed, 'the run left no workspace in the committed samples folder');
+});
+
+// --preview-push builds on the live plan of a dry run: with --apply or --no-live-plan it is refused before anything is read.
+test('build-model-app refuses --preview-push with --apply or --no-live-plan, with its usage', () => {
+  for (const extra of [['--apply'], ['--no-live-plan']]) {
+    const r = run([script('build-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', '@' + SPEC, '--preview-push', ...extra, '--workspace', tempWorkspace()]);
+    assert.strictEqual(r.code, 1, `${extra}: ${r.stderr}`);
+    assert.match(r.stderr, /--preview-push runs on a dry run with the live plan; drop --apply \/ --no-live-plan/);
+    assert.match(r.stderr, /Usage: node scripts\/build-model-app\.js .*\[--preview-push\]/);
+    assert.strictEqual(r.stdout, '', 'no result: nothing ran');
+  }
 });

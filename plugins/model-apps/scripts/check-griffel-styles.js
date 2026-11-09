@@ -2,7 +2,7 @@
 'use strict';
 // Pre-transpile gate for /genpage: does a generated page write a CSS shorthand that Griffel drops at runtime?
 //
-// `pac model genpage transpile` does not run `makeStyles` and TypeScript does not know Griffel's list, so a page with `borderWidth: '1px'` in a style object
+// Compiling a page does not run `makeStyles` and TypeScript does not know Griffel's list, so a page with `borderWidth: '1px'` in a style object
 // compiles, uploads and then renders without the border (the browser console logs `@griffel/react: You are using unsupported shorthand CSS property`). The rule itself
 // — which ten properties, and where in the page they count — lives in lib/griffel-styles.js. This wrapper exists so the orchestrator, an AI following SKILL.md,
 // gets a yes/no answer it cannot talk itself past, instead of a grep it has to read the result of.
@@ -12,14 +12,15 @@
 //
 // Output (one JSON line) and exit code:
 //   0  {"ok":true,"filePath":…,"calls":1,"problems":[]}
-//   3  {"ok":false,…,"problems":[{"code","property","line","column","longhands","within","value","message"}]}   — rewrite those keys with the longhands, then check again
+//   3  {"ok":false,…,"problems":[{"code","property","line","column","longhands","within","value","owner","branch","arms","message"}]}   — rewrite those keys with the longhands, then check again
 //   1  {"ok":false,"error":…}   — usage error, or the file cannot be read
 // `calls` is how many makeStyles calls were read. A problem's `code` is `unsupported-shorthand`; or `unread-style-object`, a style object the checker cannot see — one
 // passed to the call (`makeStyles(styles)`), a slot or a selector given a variable, a spread of anything but an inline object — whose keys may be any of the ten, or a
 // computed key it cannot read as a name (`[key]: …`), so it is never reported as clean (write it inline); or — where the checker cannot read the code for certain —
 // `unverifiable-style-call` and `unbalanced-style-call`. `within` is
 // the slot, selectors and at-rules a key sits under (`["root", ":hover"]`): where it is apart from its line, and `value` is what the key is set to, as written (a quoted
-// string as its text in double quotes, anything else as its source text): together they let genpage-upload.js tell a key a page already had, set the same, from a new or
+// string as its text in double quotes, anything else as its source text); `owner` is the hook the key is in (the name it is bound to at the top of the page, or null when the page does not prove one),
+// and `branch` and `arms` the arm of each condition above it: together they let genpage-upload.js tell a key a page already had, set the same, from a new or
 // a changed one.
 
 const fs = require('node:fs');

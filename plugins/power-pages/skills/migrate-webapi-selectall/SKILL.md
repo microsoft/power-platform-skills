@@ -6,7 +6,7 @@ description: >-
   Use whenever a user mentions Web API wildcard or select-all remediation,
   fields settings containing *, data-exposure review, wildcard deprecation
   readiness, or Web API failures after wildcard retirement. Applies to both
-  traditional sites using HTML, CSS, JavaScript, Liquid, and downloaded YAML,
+  non-SPA sites using HTML, CSS, JavaScript, Liquid, and downloaded YAML,
   and SPA sites using React, Vue, Angular, Astro, or TypeScript. The agent must
   inspect every source Web API call and consumer, report exact fixes for every
   wildcard, report every already-explicit configuration, apply approved edits,
@@ -30,7 +30,7 @@ Dataverse table schema; it must not decide which columns the code needs.
 
 Support both:
 
-- traditional sites with HTML, JavaScript, Liquid, web templates, and
+- non-SPA sites with HTML, JavaScript, Liquid, web templates, and
   aggregate YAML;
 - SPA sites with React, Vue, Angular, Astro, TypeScript, downloaded
   deployment YAML, or mixed custom JavaScript.
@@ -81,7 +81,7 @@ or upload.
 3. Detect site markers independently:
    - `powerpages.config.json` indicates an SPA site;
    - root `website.yml`, root `sitesetting.yml`, or `.powerpages-site/`
-     indicates downloaded declarative artifacts;
+     indicates downloaded non-SPA artifacts;
    - when both appear, scan both layouts.
 4. Read `.solution-manifest.json` when present. This migration changes existing
    settings; do not create or select another solution.
@@ -160,8 +160,8 @@ For SPA sites:
 5. Search editable roots such as configured source directories and framework
    application directories.
 
-For traditional sites, search editable JavaScript, Liquid, web templates, web
-files, and other authored source. Do not exclude an authored traditional web
+For non-SPA sites, search editable JavaScript, Liquid, web templates, web
+files, and other authored source. Do not exclude an authored non-SPA web
 file merely because it is deployed as a web file.
 
 Search source extensions including `.js`, `.jsx`, `.ts`, `.tsx`, `.vue`,
@@ -363,7 +363,7 @@ partial configuration set and do not perform a broad rollback over user work.
    - required setting columns are present;
    - normal record GETs use explicit `$select`;
    - expanded, lookup, write, FetchXML, file, and image columns remain covered.
-5. Run the existing project build for SPA sites. For traditional sites,
+5. Run the existing project build for SPA sites. For non-SPA sites,
    inspect edited JavaScript and Liquid syntax and use existing site tests when
    available.
 6. Finalize the report status and every entry status, then delete the previous
@@ -411,7 +411,7 @@ Use `AskUserQuestion`: `Deploy now` or `Keep local only`.
   configuration edits, run the existing production build, then run
   `pac pages upload-code-site --rootPath "<PROJECT_ROOT>" --siteName
   "<SITE_NAME>"`.
-- For traditional sites, run `pac pages upload --path "<PROJECT_ROOT>"
+- For non-SPA sites, run `pac pages upload --path "<PROJECT_ROOT>"
   --environment "<ENVIRONMENT>" --modelVersion "<Standard|Enhanced>"
   --deploymentProfile "<PROFILE>"`.
 

@@ -78,7 +78,9 @@ ASSERTIONS.set('plan: every planned item targets a known engine phase', ({ facts
 
 ASSERTIONS.set('security: the plan authors exactly one role per declared persona', ({ facts, spec }) => {
   const declared = (spec.personas || []).length;
-  const planned = (facts.plan.byPhase && facts.plan.byPhase.security) || 0;
+  // Count role items only: the security phase also plans field security profiles (and role grants),
+  // which are not persona roles. Plan labels look like `security\tsecurity role "Support Agent" (2 jobs)`.
+  const planned = (facts.plan.labels || []).filter((l) => l.startsWith('security\tsecurity role "')).length;
   return declared === planned ? PASS : fail(`declared ${declared} persona(s) but planned ${planned} security role item(s)`);
 });
 
@@ -216,6 +218,24 @@ ASSERTIONS.set('ui: wire-facts build exactly the expected views and charts', ({ 
   return PASS;
 });
 
+// expect.viewFilters = [{ entity, view, attr, op, value? }]: a filter the PROMPT names for a view (written here from the prompt, never
+// read off the fixture being graded). It must appear among the view's compiled conditions, which are what the build reads from the
+// supported filters[] { attr, op, value } shape; the active-records condition is not part of the comparison. A misspelled key
+// (`filter`, `column`, `operator`) is ignored by the build, leaves no condition, and so fails here — as a missing filter does. The prompt
+// names a filter on the view's own table, so a condition scoped to a joined table (a declared view's `relatedEntity`) does not satisfy it.
+ASSERTIONS.set('ui: a view filter the prompt names is built from filters[] attr/op/value', ({ facts, eval: ev }) => {
+  const expected = ev.expect && ev.expect.viewFilters;
+  if (!Array.isArray(expected) || !expected.length) return fail('no independent view-filter expectations');
+  for (const want of expected) {
+    const view = facts.ui.views.find((v) => String(v.entity).toLowerCase() === String(want.entity).toLowerCase() && v.name === want.view);
+    if (!view) return fail(`view '${want.view}' on ${want.entity} is not built`);
+    const hit = view.conditions.some((c) => !c.scope && c.attribute === String(want.attr).toLowerCase() && c.operator === (want.op || 'eq')
+      && (want.value === undefined ? c.value === undefined : c.value === String(want.value)));
+    if (!hit) return fail(`view '${want.view}': no condition ${want.attr} ${want.op || 'eq'} ${want.value === undefined ? '' : JSON.stringify(want.value)}; got ${JSON.stringify(view.conditions)}`);
+  }
+  return PASS;
+});
+
 // #2 (default-view lookups not truncated) + #7 (enriched default views drop createdon).
 ASSERTIONS.set('ui: enriched default views keep parent lookups and drop createdon', ({ facts }) => {
   const dv = (facts.ui && facts.ui.defaultViews) || {};
@@ -313,7 +333,7 @@ ASSERTIONS.set('changed-only: page bytes use a page-only fast path data-model ed
 // generate-pages stage -------------------------------------------------------
 
 ASSERTIONS.set('generate-pages: no PAGEREF_ navigation target is left unresolved', ({ facts }) => {
-  if (facts.page === null) return skip('pageref-resolver.js not landed (Plan 3)');
+  if (facts.page === null) return skip('pageref-resolver.js not landed');
   return facts.page.unresolved.length
     ? fail(`unresolved PAGEREF_: ${facts.page.unresolved.join(', ')}`)
     : PASS;
@@ -803,6 +823,414 @@ ASSERTIONS.set('round-trip: a download recovers no column the spec never authore
     if (invented.length) return fail(`${r.entity}: download invented column(s) ${invented.join(', ')}`);
     const system = r.systemAttributes.filter((c) => r.recoveredColumns.includes(c));
     if (system.length) return fail(`${r.entity}: download recovered stock attribute(s) ${system.join(', ')}`);
+  }
+  return PASS;
+});
+
+// per-eval expectations (evals 11-13)  2.21.0 schema authoring, graded against independent
+// `expect` blocks so a fixture that drifts from its prompt fails rather than grading itself.
+
+// Plugin versions compare numerically per part ("2.21.0" > "2.9.9").
+const versionAtLeast = (v, min) => {
+  const a = String(v || '0').split('.').map(Number); const b = min.split('.').map(Number);
+  for (let i = 0; i < b.length; i++) { if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i]; }
+  return true;
+};
+
+// expect.optionValues keys are a global choice name ("cnt_region") or "<table>.<column>" for an
+// inline choice, each mapping a value to the label the prompt gives it ({ "1": "North" }). Each must be
+// written as an explicit { value, label } option carrying that label: as the label itself, or as the
+// entry for the spec's base language (languageCode, default 1033) of an LCID label map. A swap of two
+// labels keeps every number, so the number alone is not enough.
+ASSERTIONS.set('author: option values the maker depends on are written as { value, label } and the spec asks for 2.21.0', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.optionValues;
+  if (!expected || !Object.keys(expected).length) return fail('no independent option-value expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  for (const [key, values] of Object.entries(expected)) {
+    let options;
+    if (key.includes('.')) {
+      const [table, column] = key.split('.');
+      const ent = (spec.entities || []).find((e) => e.schemaName === table);
+      const col = ent && (ent.columns || []).find((c) => c.schemaName === column);
+      options = col && col.options;
+    } else {
+      const gc = (spec.globalChoices || []).find((g) => g.name === key);
+      options = gc && gc.options;
+    }
+    if (!Array.isArray(options)) return fail(`${key}: no options declared`);
+    const base = String(spec.languageCode || 1033);
+    for (const [value, label] of Object.entries(values)) {
+      const opt = options.find((o) => o && typeof o === 'object' && o.value === Number(value) && o.label);
+      if (!opt) return fail(`${key}: value ${value} not written as { value, label }`);
+      const got = typeof opt.label === 'object' ? opt.label[base] : opt.label;
+      if (got !== label) return fail(`${key}: value ${value} is labelled ${JSON.stringify(got)}, expected ${JSON.stringify(label)}`);
+    }
+  }
+  return PASS;
+});
+
+// expect.dateTimeBehavior maps "<table>.<column>" to the behaviour the prompt implies; "UserLocal"
+// also accepts an omitted behaviour, because UserLocal is the platform default.
+ASSERTIONS.set('author: calendar days use DateOnly, a same-clock time uses TimeZoneIndependent, a per-user time is UserLocal or omitted', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.dateTimeBehavior;
+  if (!expected || !Object.keys(expected).length) return fail('no independent date behaviour expectations');
+  for (const [key, want] of Object.entries(expected)) {
+    const [table, column] = key.split('.');
+    const ent = (spec.entities || []).find((e) => e.schemaName === table);
+    const col = ent && (ent.columns || []).find((c) => c.schemaName === column);
+    if (!col) return fail(`${key}: column not declared`);
+    if (col.type !== 'DateTime') return fail(`${key}: type ${col.type}, expected DateTime`);
+    const got = col.dateTimeBehavior;
+    const ok = want === 'UserLocal' ? (got === undefined || got === 'UserLocal') : got === want;
+    if (!ok) return fail(`${key}: dateTimeBehavior ${got === undefined ? '(omitted)' : got}, expected ${want}`);
+  }
+  return PASS;
+});
+
+// expect.fieldSecurity = { secured: ["<table>.<column>"], assigned: [profile keys], unassigned: [profile keys],
+//   grants: { <profile key>: { "<table>.<column>": [rights] } }, principals: { <profile key>: { teams: [ids], users: [ids] } } }.
+// The secured set must match exactly, every secured column needs a profile permission that grants
+// something, and only the profiles the prompt names someone for may carry an assignment. The profile
+// set and each profile's granted rights (every permission key set to true, so an unasked-for right
+// fails too) must match `grants` exactly, and each assigned profile's teams and users must be the
+// ones in `principals` (GUIDs compare case-insensitively; an absent kind means none).
+ASSERTIONS.set('author: confidential columns are isSecured with explicit profiles; assignees are named, never inferred, and an unassigned profile says so', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.fieldSecurity;
+  if (!expected) return fail('no independent field security expectations');
+  const secured = (spec.entities || []).flatMap((e) => (e.columns || []).filter((c) => c.isSecured === true).map((c) => `${e.schemaName}.${c.schemaName}`));
+  if (!eq(sorted(secured), sorted(expected.secured))) return fail(`secured columns [${sorted(secured).join(', ')}], expected [${sorted(expected.secured).join(', ')}]`);
+  const profiles = spec.fieldSecurityProfiles || [];
+  const rights = (x) => Object.keys(x || {}).filter((k) => k !== 'table' && k !== 'column' && x[k] === true).sort();
+  const covered = new Set(profiles.flatMap((p) => (p.permissions || []).filter((x) => rights(x).length).map((x) => `${x.table}.${x.column}`)));
+  const uncovered = secured.filter((c) => !covered.has(c));
+  if (uncovered.length) return fail(`secured column(s) with no profile permission: ${uncovered.join(', ')}`);
+  const hasAssignee = (p) => !!(p.assignTo && ['teams', 'users'].some((k) => Array.isArray(p.assignTo[k]) && p.assignTo[k].length));
+  const assigned = profiles.filter(hasAssignee).map((p) => p.key);
+  const unassigned = profiles.filter((p) => !hasAssignee(p)).map((p) => p.key);
+  if (!eq(sorted(assigned), sorted(expected.assigned))) return fail(`assigned profiles [${sorted(assigned).join(', ')}], expected [${sorted(expected.assigned).join(', ')}]`);
+  if (!eq(sorted(unassigned), sorted(expected.unassigned))) return fail(`unassigned profiles [${sorted(unassigned).join(', ')}], expected [${sorted(expected.unassigned).join(', ')}]`);
+  const grants = expected.grants || {};
+  if (!eq(sorted(profiles.map((p) => p.key)), sorted(Object.keys(grants)))) return fail(`profiles [${sorted(profiles.map((p) => p.key)).join(', ')}], expected [${sorted(Object.keys(grants)).join(', ')}]`);
+  for (const p of profiles) {
+    const got = {};
+    for (const x of p.permissions || []) {
+      const r = rights(x);
+      if (r.length) got[`${x.table}.${x.column}`] = sorted([...new Set([...(got[`${x.table}.${x.column}`] || []), ...r])]);
+    }
+    const want = Object.fromEntries(Object.entries(grants[p.key]).map(([c, r]) => [c, sorted(r)]));
+    const norm = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]));
+    if (norm(got) !== norm(want)) return fail(`${p.key}: grants ${norm(got)}, expected ${norm(want)}`);
+    const named = (expected.principals || {})[p.key] || {};
+    for (const kind of ['teams', 'users']) {
+      const have = sortedLc((p.assignTo || {})[kind]);
+      if (!eq(have, sortedLc(named[kind]))) return fail(`${p.key}: ${kind} [${have.join(', ')}], expected [${sortedLc(named[kind]).join(', ')}]`);
+    }
+  }
+  return PASS;
+});
+
+// per-eval expectations (evals 14-15)  app membership authoring, graded against independent
+// `expect.appMembership` blocks. "exact" removes forms from an existing app, so it must follow an
+// explicit "only these forms" ask; an "add a form" ask expects mainFormsOnUpdate absent or "addOnly".
+const sameNames = (a, b) => eq(sorted((a || []).map((n) => String(n).toLowerCase())), sorted((b || []).map((n) => String(n).toLowerCase())));
+ASSERTIONS.set('author: "only these forms" lists them in app.mainForms with mainFormsOnUpdate "exact"; "add a form" never asks for exact', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.appMembership;
+  if (!expected || !expected.mainForms) return fail('no independent app membership expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const app = spec.app || {};
+  const listed = Object.fromEntries(Object.entries(app.mainForms || {}).map(([table, names]) => [table.toLowerCase(), names]));
+  for (const [table, names] of Object.entries(expected.mainForms)) {
+    if (!sameNames(listed[table.toLowerCase()], names)) return fail(`app.mainForms.${table} [${(listed[table.toLowerCase()] || []).join(', ')}], expected [${names.join(', ')}]`);
+  }
+  const want = expected.mainFormsOnUpdate || 'addOnly';
+  const got = app.mainFormsOnUpdate || 'addOnly';
+  return got === want ? PASS : fail(`app.mainFormsOnUpdate ${app.mainFormsOnUpdate === undefined ? '(omitted)' : app.mainFormsOnUpdate}, expected ${want}`);
+});
+
+// expect.appMembership.offNavigation names the tables the prompt keeps out of the navigation while asking
+// for one of their charts or views; the fixture must really declare such an artifact, or the eval grades nothing.
+ASSERTIONS.set('author: a new app with a chart or view of a table outside its navigation pins the declared artifacts', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.appMembership;
+  if (!expected || !Array.isArray(expected.offNavigation) || !expected.offNavigation.length) return fail('no independent off-navigation expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const navigation = new Set(((spec.appShell && spec.appShell.areas) || []).flatMap((a) => (a.groups || []).flatMap((g) => g.subAreas || []))
+    .filter((s) => s.entity).map((s) => String(s.entity).toLowerCase()));
+  for (const table of expected.offNavigation) {
+    const t = table.toLowerCase();
+    if (navigation.has(t)) return fail(`${table} is in the navigation, expected outside it`);
+    const artifacts = [...(spec.charts || []), ...(spec.views || [])].filter((a) => String(a.entity || '').toLowerCase() === t);
+    if (!artifacts.length) return fail(`no chart or view of ${table} is declared`);
+  }
+  const app = spec.app || {};
+  return (app.pinDeclaredArtifacts === true) === (expected.pinDeclaredArtifacts === true) ? PASS
+    : fail(`app.pinDeclaredArtifacts ${app.pinDeclaredArtifacts === undefined ? '(omitted)' : app.pinDeclaredArtifacts}, expected ${expected.pinDeclaredArtifacts === true}`);
+});
+
+// Declared reconciliation (2.21.0, references/app-spec-schema-advanced.md). A new app authors every view and chart it
+// declares, so each one is reconcile: "declared". The evals graded here ask for no declared form, dashboard, business rule or
+// process flow (those are opt-in at the maker's request; fixtures 21–24 cover them), so in them nothing else may carry
+// reconcile; a command `key` is refused in this version. A declared chart on a new table cannot store a title, and a declared view named like the table's stock
+// "Active/Inactive <plural>" view would be an adoption on the very first build.
+function declaredProblems(spec) {
+  const problems = [];
+  for (const v of spec.views || []) {
+    if (v.reconcile !== 'declared') problems.push(`view '${v.name}' is not reconcile: "declared"`);
+    const ent = (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === String(v.entity).toLowerCase());
+    const plural = ent && typeof ent.pluralName === 'string' ? ent.pluralName.toLowerCase() : null;
+    if (plural && [`active ${plural}`, `inactive ${plural}`].includes(String(v.name).toLowerCase())) problems.push(`view '${v.name}' is the stock default view's name`);
+  }
+  for (const ch of spec.charts || []) {
+    if (ch.reconcile !== 'declared') problems.push(`chart '${ch.name}' is not reconcile: "declared"`);
+    if (ch.title !== undefined) problems.push(`chart '${ch.name}' sets a title a new chart cannot store`);
+  }
+  for (const [kind, list] of Object.entries(spec)) {
+    if (kind === 'views' || kind === 'charts' || !Array.isArray(list)) continue;
+    for (const item of list) if (item && typeof item === 'object' && item.reconcile !== undefined) problems.push(`${kind} '${item.name || item.entity || '?'}' carries reconcile`);
+  }
+  const walk = (node, parentKey) => {
+    if (Array.isArray(node)) { for (const x of node) { if (parentKey === 'commands' && x && typeof x === 'object' && x.key !== undefined) problems.push(`command '${x.label || x.name || x.key}' carries a key`); walk(x, null); } return; }
+    if (node && typeof node === 'object') for (const [k, v] of Object.entries(node)) walk(v, k);
+  };
+  walk(spec, null);
+  return problems;
+}
+ASSERTIONS.set('author: every view and chart of a new app is declared, and no other kind carries reconcile or a command key', ({ spec }) => {
+  if (!(spec.views || []).length && !(spec.charts || []).length) return fail('the spec declares no view or chart');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const problems = declaredProblems(spec);
+  return problems.length ? fail(problems.join('; ')) : PASS;
+});
+
+// expect.quickFind maps each new table to the identifiers the prompt says users search by. Every table the spec creates
+// gets reviewed search columns: its primary name first among equals, plus those identifiers. Change tracking is not part
+// of search, so it stays off unless the eval asks for it.
+ASSERTIONS.set('author: each new table searches on its primary name plus the identifiers the prompt names', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.quickFind;
+  if (!expected || typeof expected !== 'object' || !Object.keys(expected).length) return fail('no independent search-column expectations');
+  for (const e of spec.entities || []) {
+    const table = String(e.schemaName).toLowerCase();
+    const cols = e.quickFind && Array.isArray(e.quickFind.findColumns) ? e.quickFind.findColumns.map((c) => String(c).toLowerCase()) : null;
+    if (!cols) return fail(`${table} declares no quickFind.findColumns`);
+    if (new Set(cols).size !== cols.length) return fail(`${table} lists a search column twice`);
+    const primary = e.primaryAttribute && String(e.primaryAttribute.schemaName || '').toLowerCase();
+    if (primary && !cols.includes(primary)) return fail(`${table} does not search its primary name ${primary}`);
+    for (const want of expected[table] || []) if (!cols.includes(want.toLowerCase())) return fail(`${table} does not search ${want}`);
+    if (e.changeTrackingEnabled === true && ev.expect.changeTracking !== true) return fail(`${table} turns change tracking on unasked`);
+  }
+  for (const table of Object.keys(expected)) {
+    if (!(spec.entities || []).some((e) => String(e.schemaName).toLowerCase() === table.toLowerCase())) return fail(`${table} is not a table the spec creates`);
+  }
+  return PASS;
+});
+
+// expect.linkEntities maps "<table>/<view name>" to the related tables the prompt asks that view to show. Exactly those
+// views join, each one is declared (only a declared view applies its joins), and every related column names a join of its view.
+ASSERTIONS.set('author: a column from a related table joins that table on the view that shows it, and only there', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.linkEntities;
+  if (!expected || typeof expected !== 'object' || !Object.keys(expected).length) return fail('no independent join expectations');
+  const want = new Map(Object.entries(expected).map(([k, v]) => [k.toLowerCase(), v.map((t) => t.toLowerCase()).sort()]));
+  for (const v of spec.views || []) {
+    const id = `${String(v.entity).toLowerCase()}/${String(v.name).toLowerCase()}`;
+    const links = Array.isArray(v.linkEntities) ? v.linkEntities : [];
+    const related = (v.columns || []).filter((c) => c && typeof c === 'object' && c.relatedEntity !== undefined);
+    if (!want.has(id)) {
+      if (links.length || related.length) return fail(`view '${v.name}' joins a related table the prompt did not ask it to show`);
+      continue;
+    }
+    if (v.reconcile !== 'declared') return fail(`view '${v.name}' joins but is not reconcile: "declared"`);
+    const joined = links.map((l) => String(l.name).toLowerCase()).sort();
+    if (JSON.stringify(joined) !== JSON.stringify(want.get(id))) return fail(`view '${v.name}' joins [${joined}], expected [${want.get(id)}]`);
+    const handles = new Set(links.map((l) => String(l.alias || l.name).toLowerCase()));
+    if (!related.length) return fail(`view '${v.name}' shows no column of the joined table`);
+    for (const c of related) if (!handles.has(String(c.relatedEntity).toLowerCase())) return fail(`view '${v.name}' column ${c.name} names no join of the view (${c.relatedEntity})`);
+    want.delete(id);
+  }
+  return want.size ? fail(`no view ${[...want.keys()].join(', ')}`) : PASS;
+});
+
+// per-eval expectations (eval 17 "declared web resource") — reconcile: "declared" on webResources[] (2.21.0). Graded
+// against the eval's own expect.declaredWebResources, so a fixture that declares another resource fails.
+ASSERTIONS.set('author: a web resource the maker asked to keep in step is declared, never shared, and is the only kind besides views and charts that carries reconcile', ({ facts, spec, eval: ev }) => {
+  const want = (ev.expect && ev.expect.declaredWebResources) || [];
+  if (!want.length) return fail('no independent declared-web-resource expectations');
+  const declared = (spec.webResources || []).filter((w) => w && w.reconcile === 'declared');
+  const names = declared.map((w) => String(w.name).toLowerCase()).sort();
+  if (JSON.stringify(names) !== JSON.stringify(want.map((n) => n.toLowerCase()).sort())) return fail(`declared web resources [${names}], expected [${want}]`);
+  if (declared.some((w) => w.external === true)) return fail('a declared web resource is external');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  // The product's own gate (validateAppSpec): a spec that declares one without the floor is warned.
+  const gate = (facts.author.validate.warnings || []).filter((w) => w.includes('minimumPluginVersion'));
+  if (gate.length) return fail(gate.join('; '));
+  for (const [kind, list] of Object.entries(spec)) {
+    if (['views', 'charts', 'webResources'].includes(kind) || !Array.isArray(list)) continue;
+    for (const item of list) if (item && typeof item === 'object' && item.reconcile !== undefined) return fail(`${kind} '${item.name || item.entity || '?'}' carries reconcile, which this release does not apply`);
+  }
+  return PASS;
+});
+
+// Configuration items (2.21.0, references/app-spec-schema.md → Configuration items). expect.configuration names, from
+// the prompt alone, the items an app needs: its environment variables (and which are secrets), connection references,
+// Custom APIs, the tables its duplicate rules are on, and the solution version. The spec declares exactly those, and
+// carries no value that differs per environment: no current value, no connection id, and no defaultValue on a secret —
+// those belong in the deployment-settings file the build reads, which is never part of the shared spec.
+ASSERTIONS.set('author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec', ({ spec, eval: ev }) => {
+  const want = ev.expect && ev.expect.configuration;
+  if (!want || typeof want !== 'object') return fail('no independent configuration expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const version = spec.solution && spec.solution.version;
+  if ((want.solutionVersion || undefined) !== version) return fail(`solution.version ${version === undefined ? '(omitted)' : version}, expected ${want.solutionVersion || '(omitted)'}`);
+  const list = (field) => (Array.isArray(spec[field]) ? spec[field] : []);
+  const kinds = [
+    ['environmentVariables', (e) => e.schemaName],
+    ['connectionReferences', (e) => e.logicalName],
+    ['customApis', (e) => e.uniqueName],
+    ['duplicateDetectionRules', (e) => e.entity],
+  ];
+  for (const [field, keyOf] of kinds) {
+    const got = sortedLc(list(field).map(keyOf));
+    if (!eq(got, sortedLc(want[field]))) return fail(`${field} [${got}], expected [${sortedLc(want[field])}]`);
+  }
+  const secrets = sortedLc(list('environmentVariables').filter((v) => v.type === 'secret').map((v) => v.schemaName));
+  if (!eq(secrets, sortedLc(want.secrets))) return fail(`secret variables [${secrets}], expected [${sortedLc(want.secrets)}]`);
+  for (const v of list('environmentVariables')) {
+    for (const key of ['value', 'currentValue']) if (v[key] !== undefined) return fail(`environment variable ${v.schemaName} states its ${key} in the spec`);
+    if (v.type === 'secret' && v.defaultValue !== undefined) return fail(`secret variable ${v.schemaName} states a defaultValue in the spec`);
+  }
+  for (const r of list('connectionReferences')) if (r.connectionId !== undefined) return fail(`connection reference ${r.logicalName} states a connectionId in the spec`);
+  return PASS;
+});
+
+// expect.appTheme (eval 19) states the branding the prompt asks for: the base colour, the header colours, a font only when
+// the prompt names one, and whether it asks for a logo. A theme is Preview and only for an explicit branding ask, so a prompt
+// with no expect.appTheme expects no app.theme at all. The logo must be an image web resource the spec declares, never a URL.
+const IMAGE_WEB_RESOURCE_TYPES = new Set(['png', 'jpg', 'gif', 'svg', 'ico']);
+const sameColour = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+ASSERTIONS.set('author: a theme is declared only on an explicit branding ask, with the asked colours, no unasked font, and a declared image web resource as the logo, never a URL', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.appTheme;
+  const theme = spec.app && spec.app.theme;
+  if (!expected) return theme === undefined ? PASS : fail('app.theme is declared, but the prompt asks for no branding');
+  if (!theme || typeof theme !== 'object') return fail('the prompt asks for branding, but app.theme is not declared');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  if (expected.basePaletteColor && !sameColour(theme.basePaletteColor, expected.basePaletteColor)) return fail(`basePaletteColor ${theme.basePaletteColor || '(omitted)'}, expected ${expected.basePaletteColor}`);
+  for (const [slot, colour] of Object.entries(expected.appHeader || {})) {
+    const have = theme.appHeader && theme.appHeader[slot];
+    if (!sameColour(have, colour)) return fail(`appHeader.${slot} ${have || '(omitted)'}, expected ${colour}`);
+  }
+  if (theme.font !== undefined && !expected.font) return fail(`font '${theme.font}' is declared, but the prompt names none`);
+  const logo = theme.logo && theme.logo.webResourceName;
+  if (!expected.logo) return logo === undefined ? PASS : fail('a logo is declared, but the prompt asks for none');
+  if (typeof logo !== 'string' || !logo) return fail('the prompt asks for a logo, but app.theme.logo names no web resource');
+  if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(logo)) return fail(`the logo '${logo}' is a URL, not a web resource`);
+  const declared = (spec.webResources || []).find((wr) => wr && String(wr.name).toLowerCase() === logo.toLowerCase());
+  if (!declared) return fail(`the logo '${logo}' is not a declared web resource`);
+  return IMAGE_WEB_RESOURCE_TYPES.has(String(declared.type || '').toLowerCase()) ? PASS : fail(`the logo '${logo}' is a ${declared.type || 'js'} web resource, not an image`);
+});
+
+// verify reads a declared theme once, as API state (verify-spec.js says so in the check's detail), and passes only a live one.
+ASSERTIONS.set('verify: a declared app theme is read back once, as API state, and passes only when live', ({ facts }) => {
+  const checks = ((facts.verify && facts.verify.checks) || []).filter((c) => c.kind === 'app-theme');
+  if (checks.length !== 1) return fail(`${checks.length} app-theme checks, expected 1`);
+  if (checks[0].present !== true) return fail(`app.theme did not verify: ${checks[0].detail}`);
+  return /API state, not render proof/.test(checks[0].detail) ? PASS : fail(`the theme check does not say it is API state: ${checks[0].detail}`);
+});
+
+// expect.createIdentity (eval 20) is set only for a new-app prompt. Stable create ids change the ids the build creates
+// with, so a spec the maker downloaded or already builds must never gain the field: with no expect.createIdentity the
+// spec must not carry it. When set, it needs the 2.21.0 floor (an older plugin ignores the field and creates with fresh
+// ids) and at least one declared view or chart, the only creates it covers in this release.
+ASSERTIONS.set('author: a new app opts into stable create ids with the 2.21.0 floor, and a downloaded or existing spec never gains them', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.createIdentity;
+  if (!expected) return spec.createIdentity === undefined ? PASS : fail(`createIdentity ${JSON.stringify(spec.createIdentity)} is set, but the prompt is not a new app`);
+  if (spec.createIdentity !== expected) return fail(`createIdentity ${JSON.stringify(spec.createIdentity)}, expected ${JSON.stringify(expected)}`);
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const declared = [...(spec.views || []), ...(spec.charts || [])].filter((x) => x && x.reconcile === 'declared');
+  return declared.length ? PASS : fail('createIdentity is set, but no view or chart is declared, so no create uses it');
+});
+
+// The stop on an unsent local edit is the stable-id behaviour a maker meets first, and it is stricter than a merge. The
+// runner grades the spec alone, so the explanation is graded where the agent reads it: the /app-builder skill's
+// createIdentity bullet. `facts.appBuilderSkill` lets a unit test grade a drifted copy without editing the real file.
+const APP_BUILDER_SKILL = path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'skills', 'app-builder', 'SKILL.md');
+ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stops a stable build and running again does not merge it', ({ facts }) => {
+  let skill = facts && typeof facts.appBuilderSkill === 'string' ? facts.appBuilderSkill : null;
+  if (skill === null) {
+    try { skill = require('node:fs').readFileSync(APP_BUILDER_SKILL, 'utf8'); } catch (e) { return fail(`the app-builder skill cannot be read: ${e.message}`); }
+  }
+  // Bullets in the skill start a line with "- **"; the createIdentity guidance is one such bullet.
+  const bullet = skill.replace(/\r\n/g, '\n').split(/\n(?=- \*\*)/).find((b) => b.includes('createIdentity'));
+  if (!bullet) return fail('the skill has no createIdentity guidance');
+  const needs = [
+    [/stable-v1/, 'the value to write'],
+    [/\bnew\*?\*? app/i, 'that it is for a new app'],
+    [/downloaded/i, 'that a downloaded spec never gains it'],
+    [/create-completion-required/, 'the stop it reports'],
+    [/does not merge/i, 'that running again does not merge the edit'],
+  ];
+  const missing = needs.filter(([re]) => !re.test(bullet)).map(([, what]) => what);
+  return missing.length ? fail(`the createIdentity guidance does not say ${missing.join(', ')}`) : PASS;
+});
+
+// Optional capabilities are OFF unless the maker asks for them (or says yes when /app-builder offers one; references/authoring-flow.md,
+// Level (a0) and (b)). This suite grades the spec, not the conversation, so what it pins is the spec-level opt-in, in both directions,
+// on EVERY fixture: the spec carries an app theme, a configuration item, or a declared form, dashboard, business rule or process flow
+// only when the prompt asks for it (no expectation = none is allowed). Whether the offer itself is made needs a transcript of a
+// conversation (EVAL_GUIDE.md, "Optional capabilities").
+// It grades presence and absence by capability kind and table, and nothing else: a name, a stage label, a tile order or a scope is the
+// maker's to choose, so none of them is compared here, and this check grades no shape at all. Shape is graded elsewhere only in part:
+// the common process assertions check well-formedness, fixture 21 has its own layout assertions, and the declared dashboard,
+// rules and flow of fixtures 22-24 have no shape assertion yet (EVAL_GUIDE.md, "Optional capabilities").
+//   expect.appTheme       as the theme assertion reads it (set = a theme is asked for)
+//   expect.configuration  as the configuration assertion reads it (a non-empty list, or solutionVersion, is an ask)
+//   expect.declared       { forms|dashboards|businessRules|businessProcessFlows: { tables: [table...], minCount: n } }
+//                         for each kind the prompt asks to keep declared. The tables that carry a `reconcile: "declared"` artifact of
+//                         that kind must be exactly `tables` (a dashboard has no table, so it states none), and there must be at least
+//                         `minCount` of them (default 1) where the prompt states a count. A kind it does not list allows none.
+const lc = (v) => String(v === undefined ? '' : v).toLowerCase();
+const DECLARED_KINDS = ['forms', 'dashboards', 'businessRules', 'businessProcessFlows'];const CONFIGURATION_LISTS = ['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules'];
+const nonEmptyList = (list) => Array.isArray(list) && list.length > 0;
+ASSERTIONS.set('author: an optional capability is in the spec only when the prompt asks for it, and each one it asks for is authored as expected', ({ spec, eval: ev }) => {
+  const expect = (ev && ev.expect) || {};
+  const theme = spec.app && spec.app.theme;
+  if (theme !== undefined && !expect.appTheme) return fail('app.theme is declared, but the prompt asks for no branding');
+  if (theme === undefined && expect.appTheme) return fail('the prompt asks for branding, but app.theme is not declared');
+  const config = expect.configuration && typeof expect.configuration === 'object' ? expect.configuration : {};
+  for (const field of CONFIGURATION_LISTS) {
+    const have = nonEmptyList(spec[field]);
+    const want = nonEmptyList(config[field]);
+    if (have && !want) return fail(`${field} is declared, but the prompt asks for no such configuration item`);
+    if (!have && want) return fail(`the prompt asks for ${field} [${config[field]}], but the spec declares none`);
+  }
+  const version = spec.solution && spec.solution.version;
+  if (version !== undefined && !config.solutionVersion) return fail(`solution.version ${version} is declared, but the prompt asks for no version`);
+  if (version === undefined && config.solutionVersion) return fail(`the prompt asks for solution.version ${config.solutionVersion}, but the spec omits it`);
+  const declaredExpect = expect.declared && typeof expect.declared === 'object' ? expect.declared : {};
+  for (const kind of Object.keys(declaredExpect)) if (!DECLARED_KINDS.includes(kind)) return fail(`expect.declared names the unknown kind '${kind}'`);
+  let anyDeclared = false;
+  for (const kind of DECLARED_KINDS) {
+    const got = (Array.isArray(spec[kind]) ? spec[kind] : []).filter((x) => x && typeof x === 'object' && x.reconcile === 'declared');
+    const want = declaredExpect[kind];
+    if (!want) {
+      if (got.length) return fail(`${kind} declared on [${got.map((x) => x.entity || '(no table)')}], but the prompt asks to keep no ${kind} declared`);
+      continue;
+    }
+    if (got.length < (want.minCount || 1)) return fail(`${kind}: ${got.length} declared, but the prompt asks for ${want.minCount || 1}; missing (deleted, or without reconcile "declared")`);
+    if (Array.isArray(want.tables)) {
+      const have = [...new Set(got.map((x) => lc(x.entity)))].sort();
+      const asked = [...new Set(want.tables.map(lc))].sort();
+      if (!eq(have, asked)) return fail(`${kind} declared on [${have}], the prompt asks for [${asked}]; unasked: [${have.filter((t) => !asked.includes(t))}], missing: [${asked.filter((t) => !have.includes(t))}]`);
+    }
+    anyDeclared = true;
+  }
+  if (anyDeclared && !versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  return PASS;
+});
+
+// A maker who says no to business rules and process flows gets none of ANY kind: the declared-capability check above sees only
+// `reconcile: "declared"`, and a plain rule or flow is authored without it. expect.noBusinessLogic is written from the prompt.
+ASSERTIONS.set('author: a maker who declines business rules and process flows gets no rule and no flow of any kind', ({ spec, eval: ev }) => {
+  if (!ev.expect || ev.expect.noBusinessLogic !== true) return fail('no independent expectation that the prompt declines business rules and process flows');
+  for (const kind of ['businessRules', 'businessProcessFlows']) {
+    if (nonEmptyList(spec[kind])) return fail(`${kind} is declared (${spec[kind].map((x) => (x && x.name) || '?').join(', ')}), but the prompt declines them`);
   }
   return PASS;
 });

@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { assertGolden } = require('./helpers/golden.js');
 const { loadCli } = require('./helpers/cli-harness.js');
-const { parseManifest } = require('../lib/pcf-manifest.js');
+const { parseManifest, lintManifest } = require('../lib/pcf-manifest.js');
 const { planScaffold } = require('../lib/pcf-scaffold.js');
 
 const {
@@ -49,16 +49,6 @@ function exampleIntent(overrides = {}) {
       },
     }],
     pages: { journeys: ['form-field'] },
-    ...overrides,
-  };
-}
-
-function matrix(overrides = {}) {
-  return {
-    hosts: {
-      pages: { fieldTypes: ['Whole.None', 'SingleLine.Text'] },
-    },
-    unsupportedPropertyTypes: ['File', 'Image'],
     ...overrides,
   };
 }
@@ -358,7 +348,7 @@ test('lintBindingIntent reports PCF_INTENT_QC_SUBGRID', () => {
       target: { controlId: 'Contacts', table: 'contact', view: 'Active Contacts', relationship: 'account_contact' },
       parameters: { records: { dataset: { name: 'records', propertySets: [{ name: 'email', column: 'emailaddress1' }] } } },
     }],
-  }), { manifestModel: manifestModel(), matrix: matrix() });
+  }), { manifestModel: manifestModel() });
 
   assertFinding(findings, 'PCF_INTENT_QC_SUBGRID', 'error');
 });
@@ -376,7 +366,7 @@ test('lintBindingIntent reports PCF_INTENT_PAGES_MULTI_FIELD', () => {
         max: { column: 'new_maxrating' },
       },
     }],
-  }), { manifestModel: manifestModel(), matrix: matrix() });
+  }), { manifestModel: manifestModel() });
 
   assertFinding(findings, 'PCF_INTENT_PAGES_MULTI_FIELD', 'error');
 });
@@ -384,7 +374,7 @@ test('lintBindingIntent reports PCF_INTENT_PAGES_MULTI_FIELD', () => {
 test('lintBindingIntent reports PCF_INTENT_PAGES_NEEDS_WEB', () => {
   const findings = lintBindingIntent(exampleIntent({
     bindings: [{ ...exampleIntent().bindings[0], clients: ['phone'] }],
-  }), { manifestModel: manifestModel(), matrix: matrix() });
+  }), { manifestModel: manifestModel() });
 
   assertFinding(findings, 'PCF_INTENT_PAGES_NEEDS_WEB', 'error');
 });
@@ -392,7 +382,6 @@ test('lintBindingIntent reports PCF_INTENT_PAGES_NEEDS_WEB', () => {
 test('lintBindingIntent reports PCF_INTENT_PAGES_VIRTUAL from the manifest model', () => {
   const findings = lintBindingIntent(exampleIntent(), {
     manifestModel: manifestModel({ control: { controlType: 'virtual' } }),
-    matrix: matrix(),
   });
 
   assertFinding(findings, 'PCF_INTENT_PAGES_VIRTUAL', 'error');
@@ -401,17 +390,33 @@ test('lintBindingIntent reports PCF_INTENT_PAGES_VIRTUAL from the manifest model
 test('lintBindingIntent reports PCF_INTENT_PAGES_VIRTUAL from the intent template when no manifest is supplied', () => {
   const findings = lintBindingIntent(exampleIntent({
     control: { ...exampleIntent().control, template: 'field-virtual' },
-  }), { matrix: matrix() });
+  }));
 
   assertFinding(findings, 'PCF_INTENT_PAGES_VIRTUAL', 'error');
 });
 
 test('lintBindingIntent does not reuse PCF_INTENT_PAGES_VIRTUAL for field-type policy checks', () => {
-  const findings = lintBindingIntent(exampleIntent({
-    properties: [{ name: 'value', usage: 'bound', type: 'File', required: true }],
-  }), { matrix: matrix() });
+  // The Pages field-type policy is the manifest lint's, read from the shipped compatibility matrix:
+  // a File column bound on a standard control is reported there under its own codes. The intent lint
+  // must not report the same control as a virtual one; a virtual manifest shows the code it would use.
+  const fileBound = parseManifest([
+    '<?xml version="1.0" encoding="utf-8" ?>',
+    '<manifest><control namespace="Contoso.Controls" constructor="StarRating" version="1.0.0"',
+    ' display-name-key="StarRating" description-key="StarRating" control-type="standard">',
+    '<property name="value" display-name-key="value" of-type="File" usage="bound" required="true" />',
+    '<resources><code path="index.ts" order="1" /></resources></control></manifest>',
+  ].join(''));
+  assert.deepEqual(fileBound.errors || [], []);
+  const policy = lintManifest(fileBound.model, { hosts: ['pages'] });
+  assert.deepEqual(codes(policy.errors).sort(), ['PCF_PAGES_FIELD_TYPE', 'PCF_TYPE_UNSUPPORTED']);
 
-  assert.ok(!findings.some((finding) => finding.code === 'PCF_INTENT_PAGES_VIRTUAL'));
+  const intent = exampleIntent({
+    properties: [{ name: 'value', usage: 'bound', type: 'File', required: true }],
+    bindings: [{ ...exampleIntent().bindings[0], parameters: { value: { column: 'new_rating' } } }],
+  });
+  assert.deepEqual(codes(lintBindingIntent(intent, { manifestModel: fileBound.model })), []);
+  const virtual = { ...fileBound.model, control: { ...fileBound.model.control, controlType: 'virtual' } };
+  assert.deepEqual(codes(lintBindingIntent(intent, { manifestModel: virtual })), ['PCF_INTENT_PAGES_VIRTUAL']);
 });
 
 test('lintBindingIntent blocks Pages dataset templates without a manifest or bindings', () => {
@@ -452,7 +457,7 @@ test('lintBindingIntent reports PCF_INTENT_PARAM_UNKNOWN', () => {
       ...exampleIntent().bindings[0],
       parameters: { value: { column: 'new_rating' }, unexpected: { static: 'x', type: 'SingleLine.Text' } },
     }],
-  }), { manifestModel: manifestModel(), matrix: matrix() });
+  }), { manifestModel: manifestModel() });
 
   assertFinding(findings, 'PCF_INTENT_PARAM_UNKNOWN', 'error');
 });
@@ -478,7 +483,6 @@ test('lintBindingIntent reports PCF_INTENT_BOUND_NOT_MAPPED but exempts grid Eve
         { name: 'EventName', usage: 'bound', required: true },
       ],
     }),
-    matrix: matrix(),
   });
   assertFinding(missing, 'PCF_INTENT_BOUND_NOT_MAPPED', 'error');
 
@@ -496,14 +500,13 @@ test('lintBindingIntent reports PCF_INTENT_BOUND_NOT_MAPPED but exempts grid Eve
     }],
   }), {
     manifestModel: manifestModel({ properties: [{ name: 'EventName', usage: 'bound', required: true }] }),
-    matrix: matrix(),
   });
   assert.ok(!codes(grid).includes('PCF_INTENT_BOUND_NOT_MAPPED'));
 });
 
 test('lintBindingIntent no longer guides unsupported Pages list setup', () => {
   const intent = exampleIntent({ pages: { journeys: ['list'] } });
-  const findings = lintBindingIntent(intent, { manifestModel: manifestModel(), matrix: matrix() });
+  const findings = lintBindingIntent(intent, { manifestModel: manifestModel() });
   assert.ok(!codes(findings).includes('PCF_INTENT_LIST_NEEDS_VIEW_CONFIG'));
   assert.doesNotMatch(renderPlanMarkdown(intent, { lint: findings }), /List: configure|verify the rendered dataset/);
 });

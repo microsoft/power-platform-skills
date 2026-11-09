@@ -4,7 +4,7 @@
 // WHY THIS EXISTS. The pages use @fluentui/react-components, whose styles are Griffel's. Griffel does not support a few CSS shorthands: `resolveStyleRules` skips
 // the property and, in the browser, logs
 //   @griffel/react: You are using unsupported shorthand CSS property "borderWidth". Please check your "makeStyles" calls, there *should not* be following: ...
-// Nothing earlier notices. The page type-checks, `pac model genpage transpile` does not execute `makeStyles`, and the deploy succeeds — the page then renders
+// Nothing earlier notices. The page type-checks, compiling it does not execute `makeStyles`, and the deploy succeeds — the page then renders
 // without the border, the colour or the reset the author wrote. The only guard used to be an agent grepping the page for `borderWidth`, which covers one of the
 // ten properties and, as a text search, reads a string, a comment and an inline `style={{ … }}` the same as a style key.
 //
@@ -392,6 +392,134 @@ function styleFunctionCalls(mask, src, match, angles) {
       argFrom: first, argTo: close === -1 ? -1 : expressionEnd(mask, match, angles, first, close) });
   }
   return calls;
+}
+
+// The name a makeStyles call's hook is bound to, where the page PROVES it — or null, and then the call is nobody's. This is how a key is told to belong to a call when a page is compared with an earlier version of
+// itself (griffelProblemsNotIn): two hooks both have a slot called `root`, so a key that left one and appeared in the other has to be told from the key that stayed, and nothing but the hook's own name tells the two
+// calls apart whatever happens to the file between the versions (hooks reordered, one inserted before them, a type added). What is proved, at the top of the page (not inside any `(`, `[` or `{`: not in a function, a
+// block, a class, an argument, an array or an object, where the same name can be a different hook in each — every function may have its own `useStyles`):
+//   const usePanel = makeStyles({ … })           export const usePanel = …        let and var; parentheses around the call are allowed
+//   const usePanel: Hook = makeStyles({ … })     a type annotation is read through, whatever is in it: its name is the type's, not the hook's (`Hook`)
+//   usePanel = makeStyles(…)                     an assignment
+//   hooks.panel = makeStyles(…)                  a property of a name, written out: `hooks.panel`
+// Anything else is not proved: a default export, an argument, an object member, a function that returns the call, a computed or compound target (`hooks[x] =`, `||=`), a local of a function, a block or a class, a
+// declaration list the lexer cannot read — and a name that two calls of the page share (griffelStyleProblems). The order of a call among the others is no proof either: with the hooks reordered the same
+// ordinal is another hook, which is how a key moved to another hook came to be counted as the one that stayed.
+// `callee` is where the call starts (`Fluent.makeStyles(` starts at `Fluent`).
+function bindingNameOf(ctx, callee) {
+  const { mask } = ctx;
+  let k = previousSignificant(mask, callee);
+  while (k >= 0 && mask[k] === '(') k = previousSignificant(mask, k);
+  // `=` alone: not `==`, `===`, `!=`, `<=`, `>=` or `=>`, and not a compound assignment (`+=`, `||=`).
+  if (k < 0 || mask[k] !== '=' || mask[k + 1] === '=' || mask[k + 1] === '>' || (k > 0 && '=!<>+-*/%&|^?'.includes(mask[k - 1]))) return null;
+  const target = bindingTarget(ctx, k);
+  return target !== null && !enclosed(ctx, target.at) ? target.name : null;
+}
+
+// What an `=` assigns to, as { name, at } — `at` where the target starts — or null when it is not a name the page can be said to bind: a variable (`usePanel`), a property of names (`hooks.panel`), either as
+// the declaration of a variable with a type annotation, or as the statement that is (or follows) one.
+function bindingTarget(ctx, eq) {
+  const { mask } = ctx;
+  // A declaration with a type annotation: the `=` that ends the annotation is the one the declaration's name is found by.
+  const annotated = annotatedBindings(ctx).get(eq);
+  if (annotated) return annotated;
+  const word = identifierEndingAt(mask, previousSignificant(mask, eq) + 1);
+  if (!word) return null;
+  const parts = [word.name];
+  let start = word.start;
+  for (let dot = previousSignificant(mask, start); dot >= 0 && mask[dot] === '.'; dot = previousSignificant(mask, start)) {
+    // `a.b`, not a spread (`...b`) or an optional chain (`a?.b`), and the name before the dot is a name: `make().b = …` and `a[0].b = …` are not written out.
+    if (mask[dot - 1] === '.' || mask[dot - 1] === '?') return null;
+    const owner = identifierEndingAt(mask, previousSignificant(mask, dot) + 1);
+    if (!owner) return null;
+    parts.unshift(owner.name);
+    start = owner.start;
+  }
+  // What stands before the target: nothing, the end of a statement or of a declarator, or a declaration's keyword — and for a variable's own name only. A name or anything else before it is not a statement that assigns
+  // (`static x = …`, `else x = …`, `a ? b : x = …`), and what it is cannot be told here.
+  const prior = previousSignificant(mask, start);
+  const name = parts.join('.');
+  if (prior < 0 || STATEMENT_ENDS.has(mask[prior])) return { name, at: start };
+  const keyword = ID_PART.test(mask[prior]) ? identifierEndingAt(mask, prior + 1) : null;
+  return keyword && parts.length === 1 && DECLARATION_WORDS.has(keyword.name) ? { name, at: start } : null;
+}
+const DECLARATION_WORDS = new Set(['const', 'let', 'var']);
+// What may stand before an assignment that starts a statement or a declarator, or ends a statement without a semicolon: a statement, a block, a parameter list, a declarator list, a chained assignment, a string.
+const STATEMENT_ENDS = new Set([';', '}', ')', ',', '=', ']', '"', "'", '`']);
+// The words that join or start types and are never the last of a type: `keyof T`, `typeof x`, `readonly string[]`, `new () => T`, `A extends B ? C : D`, `x is T`. Any other name ends a type, and a name straight after it
+// is not part of it.
+const TYPE_OPERATORS = new Set(['keyof', 'typeof', 'readonly', 'unique', 'infer', 'extends', 'new', 'abstract', 'asserts', 'is', 'in', 'out']);
+
+// The declarations of variables that carry a type annotation — `const usePanel: Hook = …`, `export let usePanel: () => Record<string, string> = …` — by the `=` that ends the annotation, as { name, at }: computed once
+// per page. The name before the `:` is the variable's, and what stands between the `:` and the `=` is a type, which may hold brackets, type arguments and arrows of its own (so the `=` of a `=>` is not the end).
+function annotatedBindings(ctx) {
+  if (ctx.annotated) return ctx.annotated;
+  const { mask } = ctx;
+  const found = new Map();
+  const declaration = new RegExp('(?<![\\p{ID_Continue}$.])(?:const|let|var)(?![\\p{ID_Continue}$])', 'gu');
+  for (let m = declaration.exec(mask); m; m = declaration.exec(mask)) {
+    const at = skipSpace(mask, m.index + m[0].length);
+    const id = readIdentifier(mask, at);
+    const colon = id ? skipSpace(mask, id.end) : -1;
+    if (!id || mask[colon] !== ':') continue;
+    const end = annotationEnd(ctx, colon + 1);
+    if (end !== -1) found.set(end, { name: id.name, at });
+  }
+  ctx.annotated = found;
+  return found;
+}
+
+// Where the type annotation that starts at `from` ends: the `=` of the initializer, or -1 when what follows does not read as one type and then an `=` — a statement with no initializer that is followed by another
+// (`let usePanel: Hook` and, on the next line, `useCard = …`: two names in a row are two statements), a `;`, a `,` or a bracket that closes what was never opened. Brackets and type arguments are jumped whole
+// (their `=>`, `=` and `;` are theirs), and so is the arrow of a function type.
+function annotationEnd({ mask, match, angles }, from) {
+  let k = skipSpace(mask, from);
+  // A name, a bracket group or a string ends a type unless an operator follows: another name straight after it is not part of it.
+  let ended = false;
+  while (k < mask.length) {
+    const c = mask[k];
+    if (c === '{' || c === '(' || c === '[') {
+      if (match[k] === -1) return -1;
+      k = skipSpace(mask, match[k] + 1);
+      ended = true;
+    } else if (c === '<' && angles[k] !== -1) {
+      k = skipSpace(mask, angles[k] + 1);
+      ended = true;
+    } else if (c === '=') {
+      if (mask[k + 1] !== '>') return mask[k + 1] === '=' ? -1 : k;
+      k = skipSpace(mask, k + 2);
+      ended = false;
+    } else if (c === '"' || c === "'" || c === '`') {
+      const close = mask.indexOf(c, k + 1);
+      if (close === -1) return -1;
+      k = skipSpace(mask, close + 1);
+      ended = true;
+    } else if (ID_START.test(c)) {
+      const id = readIdentifier(mask, k);
+      if (ended && !TYPE_OPERATORS.has(id.name)) return -1;
+      ended = !TYPE_OPERATORS.has(id.name);
+      k = skipSpace(mask, id.end);
+    } else if (c === ';' || c === ',' || c === '}' || c === ')' || c === ']' || c === '>') {
+      return -1;
+    } else {
+      // `|`, `&`, `.`, `?`, `:`, `-` or a digit: the type goes on.
+      ended = false;
+      k = skipSpace(mask, k + 1);
+    }
+  }
+  return -1;
+}
+
+// Whether `at` is inside a bracket pair — a `(`, `[` or `{` and its closer — which is to say anywhere but the top of the page: a function, a block, a class, an argument, an array, an object. A bracket that is
+// never closed holds everything after it (a page that is cut off).
+function enclosed({ mask, match }, at) {
+  for (let i = 0; i < at; i += 1) {
+    const c = mask[i];
+    if (c !== '{' && c !== '(' && c !== '[') continue;
+    if (match[i] === -1 || match[i] > at) return true;
+    i = match[i];
+  }
+  return false;
 }
 
 // The `,` that ends the expression starting at `from` inside a bracket group that closes at `close` — a member of an object, an argument of a call — or `close`. A
@@ -910,19 +1038,20 @@ function primitiveValue({ mask }, from, to) {
 }
 
 // Every unsupported key under the object whose `{` is at `open`, depth first. `slotObject` is true for the object of slots, whose keys are slot names. `trail` is the names of
-// the keys the object hangs under — the slot, then each selector or at-rule below it — and `findings` collects { name, at, longhands, within, value }, with `within` that trail (a spread, or a
-// computed key that is not a string, is `...` or `[…]` in it): where a key is, apart from the line it is on, so that a page can be told from an earlier version of itself; and `value`, what
+// the keys the object hangs under — the slot, then each selector or at-rule below it — and `findings` collects { name, at, longhands, within, arms, value }, with `within` that trail (a spread, or a
+// computed key that is not a string, is `...` or `[…]` in it): where a key is, apart from the line it is on, so that a page can be told from an earlier version of itself; `arms`, which of the objects
+// written in a value the key was found in, level by level (armOf): a condition chooses between objects written in one value (`root: dark ? { … } : { … }`), and the trail says "root" of both; and `value`, what
 // it is set to (valueText), so that a key given another value is not taken for the same one. A member whose value is a style object the checker cannot see — a slot, a selector or a
 // spread not written as style objects it reads (styleObjectsOf; a spread inside a style object may also be a trusted helper) — is a finding too, `{ unread, at, within, value }`,
 // `unread` saying which it is; the objects written inline in its value are still read. So is a getter that runs, whatever its key (ranGetter). The members are the ones the object holds as Griffel reads it (heldMembers).
-function scanStyleObject(ctx, open, findings, slotObject, trail = []) {
+function scanStyleObject(ctx, open, findings, slotObject, trail = [], arms = []) {
   if (trail.length > MAX_STYLE_DEPTH) {
     findings.push({ unread: 'deep', at: open, within: trail, value: '' });
     return;
   }
-  for (const { member, within } of heldMembers(ctx, open, findings, slotObject, trail)) {
+  for (const { member, within, arms: heldArms, slot } of heldMembers(ctx, open, findings, slotObject, trail, false, 0, arms)) {
     if (!slotObject && member.name !== null && UNSUPPORTED_GRIFFEL_SHORTHANDS.has(member.name)) {
-      findings.push({ name: member.name, at: member.nameAt, longhands: UNSUPPORTED_GRIFFEL_SHORTHANDS.get(member.name), within, value: valueText(ctx, member) });
+      findings.push({ name: member.name, at: member.nameAt, longhands: UNSUPPORTED_GRIFFEL_SHORTHANDS.get(member.name), within, arms: heldArms, value: valueText(ctx, member) });
     }
     const here = [...within, member.name === null ? '[…]' : member.name];
     // Keyframes are not style objects (see the header), so an animation's frames are not read. A SLOT may be called animationName: its object is a style object.
@@ -956,12 +1085,27 @@ function scanStyleObject(ctx, open, findings, slotObject, trail = []) {
         findings.push(ranGetter(ctx, member, here));
       }
     }
-    // A getter's body is code, not an object: it is not searched for objects written inline. Any other member's objects are style objects one level down.
-    if (!member.getter) for (const nested of objectsIn(ctx, member.valueFrom, member.valueTo)) scanStyleObject(ctx, nested, findings, false, here);
+    // A getter's body is code, not an object: it is not searched for objects written inline. Any other member's objects are style objects one level down, each told by its order among those written in the value.
+    if (!member.getter) objectsIn(ctx, member.valueFrom, member.valueTo).forEach((nested, index) => scanStyleObject(ctx, nested, findings, false, here, [...heldArms, armOf(slot, index)]));
   }
 }
 
-// The members the object whose `{` is at `open` holds as Griffel reads it, in the order JavaScript defines them, each as { member, within }. Its own members, and
+// What tells the objects a value can be apart where their keys cannot: the order of the object among those written in the value (`dark ? { … } : { … }` has two, an unread call's arguments may have several), as
+// a string — and, for a member no name tells apart from the others of its object, a spread (`s0`, `s1`…) or a computed key (`k0`, `k1`…), its order among those, before it: `s1:0` is the first object of the second
+// spread. A member with a name has none (`slot` is ''), because `within` has the name, and a reordering of named slots is not a move.
+const armOf = (slot, index) => (slot ? `${slot}:${index}` : String(index));
+function memberSlots(members) {
+  const slots = new Map();
+  let spreads = 0;
+  let computed = 0;
+  for (const member of members) {
+    if (member.spread) slots.set(member, `s${spreads++}`);
+    else if (!member.proto && keyOf(member) === null) slots.set(member, `k${computed++}`);
+  }
+  return slots;
+}
+
+// The members the object whose `{` is at `open` holds as Griffel reads it, in the order JavaScript defines them, each as { member, within, arms, slot }. Its own members, and
 // what an inline spread copies in — the spread object's OWN members only: a spread copies own enumerable properties, never what its object inherits
 // (CopyDataProperties, https://tc39.es/ecma262/#sec-copydataproperties) — and what a prototype set by `__proto__: { … }` adds, which `for … in` reads. Then as
 // JavaScript resolves them: the last definition of a key is the property, so a member that a later member of the same key certainly replaces never reaches Griffel
@@ -971,13 +1115,17 @@ function scanStyleObject(ctx, open, findings, slotObject, trail = []) {
 // any key); the objects written inline in it are still read, at this object's level. A getter a spread copies has RUN — the copy reads every key of its object,
 // which calls it — so taking out the value it returned does not take out what it did: `ran` marks it, and it is a finding where it is taken out (ranGetter), as it
 // is where it is held (scanStyleObject). `ownOnly` reads an object a spread copies; `depth` counts spreads and prototypes nested in one another, past
-// MAX_STYLE_DEPTH unread.
-function heldMembers(ctx, open, findings, slotObject, trail, ownOnly = false, depth = 0) {
+// MAX_STYLE_DEPTH unread. `arms` is which object of which value this object is (armOf), from the call's argument down, and an entry has the arms of the object it is a member of — a spread's objects add
+// their own — and `slot` the order of the member among those no name tells apart (memberSlots).
+function heldMembers(ctx, open, findings, slotObject, trail, ownOnly = false, depth = 0, arms = []) {
   const own = [];
   const inherited = [];
-  for (const member of objectMembers(ctx, open)) {
+  const members = objectMembers(ctx, open);
+  const slots = memberSlots(members);
+  for (const member of members) {
+    const slot = slots.get(member) || '';
     if (!member.spread && !member.proto) {
-      own.push({ member, within: trail, certain: true });
+      own.push({ member, within: trail, arms, slot, certain: true });
       continue;
     }
     if (member.proto && ownOnly) continue;
@@ -998,16 +1146,16 @@ function heldMembers(ctx, open, findings, slotObject, trail, ownOnly = false, de
         findings.push({ unread, at: member.nameAt, within, value: valueText(ctx, member) });
       }
       if (depth < MAX_STYLE_DEPTH) {
-        for (const nested of objectsIn(ctx, member.valueFrom, member.valueTo)) {
-          for (const entry of heldMembers(ctx, nested, findings, slotObject, within, copied, depth + 1)) into.push({ ...entry, certain: false });
-        }
+        objectsIn(ctx, member.valueFrom, member.valueTo).forEach((nested, index) => {
+          for (const entry of heldMembers(ctx, nested, findings, slotObject, within, copied, depth + 1, [...arms, armOf(slot, index)])) into.push({ ...entry, certain: false });
+        });
       }
       continue;
     }
     const certain = member.spread && !ctx.conditional && objects.length === 1;
-    for (const object of objects) {
-      for (const entry of heldMembers(ctx, object, findings, slotObject, within, copied, depth + 1)) into.push({ ...entry, certain: certain && entry.certain, ran: ran(entry) });
-    }
+    objects.forEach((object, index) => {
+      for (const entry of heldMembers(ctx, object, findings, slotObject, within, copied, depth + 1, [...arms, armOf(slot, index)])) into.push({ ...entry, certain: certain && entry.certain, ran: ran(entry) });
+    });
   }
   const last = new Map();
   own.forEach((entry, i) => {
@@ -1129,8 +1277,12 @@ function unreadMessage(kind, name, value) {
  *   `calls` is how many makeStyles calls with an inline object were read. A problem is
  *     `unsupported-shorthand` — a key Griffel drops, with the line and column of the key, the longhands to write, `within`: the slot, selectors and at-rules the key sits under
  *                               (`["root", ":hover"]`), and `value`: what the key is set to, as written (`"red"` for either quoting of the string red, `tokens.colorBrandStroke1` for an
- *                               expression — nothing is evaluated). Together they tell the same key, still there and set to the same, from a new or a changed one when a page is compared
- *                               with an earlier version of itself;
+ *                               expression — nothing is evaluated), `owner`: the makeStyles call the key is in (`usePanel`: the name its hook is bound to at the top of the page, read through a type
+ *                               annotation, or `hooks.panel` for a property — or null for a call the page does not prove a name for: in a function, an argument, a default export, or a name two calls share),
+ *                               `branch`: which of that call's style objects, where a condition chooses between two (`dark ? { … } : { … }`; 0 for the first, and for a call with one), and `arms`: which
+ *                               of the objects written in each value below it the key is in, level by level (`dark ? { … } : { … }` in a slot, a selector's value or a spread; a spread or a computed key
+ *                               is told by its order among those of its object: `["0", "s1:0"]` is the first object of the second spread in the first object of the slot's value). Together they tell the same
+ *                               key, still there and set to the same, from a new or a changed one when a page is compared with an earlier version of itself;
  *     `unread-style-object`     — a style object the checker cannot see, so it cannot say what keys it holds: the call's own (`makeStyles(styles)`), a slot's or a selector's that is
  *                               not written inline (a getter's included), or a spread of anything but an inline object or a trusted Griffel helper; a getter that runs, whatever
  *                               key it defines (its code may change what Griffel reads); or a computed key it
@@ -1155,6 +1307,13 @@ function griffelStyleProblems(source) {
   const problems = [];
   let read = 0;
   const calls = styleFunctionCalls(mask, src, match, angles);
+  // Each call is told by the name its hook is bound to (bindingNameOf): every call starts its own slots, so two hooks both have a `root`, and a page compared with an earlier version of itself
+  // (griffelProblemsNotIn) must know a key's call to say it is the one the page had. Only a name the page proves, and uses once, tells: every call is counted, the ones that are not read as well, so a call that
+  // cannot be read does not make a name look unique; a name two calls are bound to — a `var` redeclared, an assignment made twice — says nothing of which is which, and neither call is anybody's (`owner` null).
+  const bound = calls.map((call) => bindingNameOf(ctx, call.callee));
+  const uses = new Map();
+  for (const name of bound) if (name !== null) uses.set(name, (uses.get(name) || 0) + 1);
+  calls.forEach((call, i) => { call.owner = bound[i] !== null && uses.get(bound[i]) === 1 ? bound[i] : null; });
   for (const call of calls) {
     const at = locate(starts, call.callee);
     const unbalanced = call.close === -1 || (call.objectOpen !== -1 && call.objectClose === -1);
@@ -1183,13 +1342,19 @@ function griffelStyleProblems(source) {
     }
     read += 1;
     const findings = [];
-    for (const open of slots) scanStyleObject(ctx, open, findings, call.spec.slots);
+    // `branch` is which of the call's style objects a key is in: a condition chooses between them (`dark ? { … } : { … }`), and styleObjectsOf lists them in the order they are written, arms of a nested
+    // condition in place. A call with one object has branch 0.
+    slots.forEach((open, branch) => {
+      const first = findings.length;
+      scanStyleObject(ctx, open, findings, call.spec.slots);
+      for (let i = first; i < findings.length; i += 1) Object.assign(findings[i], { owner: call.owner, branch });
+    });
     for (const f of findings) {
       if (f.unread) {
         problems.push({ code: 'unread-style-object', ...locate(starts, f.at), within: f.within, value: f.value,
           message: unreadMessage(f.unread, f.key ?? f.within[f.within.length - 1], f.value) });
       } else {
-        problems.push({ code: 'unsupported-shorthand', property: f.name, ...locate(starts, f.at), longhands: f.longhands, within: f.within, value: f.value, message: shorthandMessage(f.name, f.longhands) });
+        problems.push({ code: 'unsupported-shorthand', property: f.name, ...locate(starts, f.at), longhands: f.longhands, within: f.within, value: f.value, owner: f.owner, branch: f.branch, arms: f.arms, message: shorthandMessage(f.name, f.longhands) });
       }
     }
   }
@@ -1224,37 +1389,38 @@ const isShorthandProblem = (problem) => problem.code === 'unsupported-shorthand'
 
 /**
  * Which of `problems` the page's deployed version already had. `deployed` is that version's problems (griffelStyleProblems of the source that was deployed). A key counts as already
- * there when the deployed page has the same key set to the same value in the same place (`within`: the slot, selectors and at-rules it sits under) and, failing that, the same key set to
- * the same value anywhere that nothing else has claimed — so a slot that was renamed, or a rule that was moved, does not turn a key Griffel was already dropping into a new one. A key given
- * ANOTHER value is a new one: Griffel drops it just the same, so the page would show none of the change the maker meant, which is what this check exists to stop (a value is compared as
- * written — `value` of the problem — and nothing is evaluated). Each key of the deployed page is spent once, so a second `borderColor` where there was one is new. A problem that is not a
- * shorthand — a call the checker cannot read — is never "already there": what it hides cannot be compared with anything.
+ * there only when the deployed page has the same key set to the same value in the same place: the slot, selectors and at-rules it sits under (`within`), of the same makeStyles call (`owner`),
+ * the same branch of its style object (`branch`) and the same arm of every condition below it (`arms`). Every call has a `root` slot, and a condition can choose between two objects that both have one — at
+ * the call, in a slot, under a selector, in a spread — so a place told by `within` alone would take a key removed from one call or arm and set to the same value in another for the one the page already had;
+ * the call and the arms say it is a new one. The call is told by the name its hook is bound to at the top of the page — through a type annotation, or a property it is assigned to — so hooks that swap
+ * places in the file keep their keys; a call the page does not prove a name for (in a function, an argument, a default export, or a name two calls share) is nobody's: it has no earlier self to be matched with,
+ * and its keys are new. Where the correspondence cannot be shown — another name, another arm — the key is new, never inherited. A key set in another place is a
+ * new one even when the deployed page held the same value somewhere else — an edit that removes a key in one place and sets it to the same value in another has added a key where there was
+ * none: Griffel drops it just the same, so the page would show none of what the edit meant, which is what this check exists to stop. (A slot that was renamed, or a rule that was moved under
+ * another selector, is that too: the source cannot say a rename from a removal and an addition, and the cost of the wrong guess is a key that ships without its style. The way on is the same
+ * as for any new key — delete it, or write the longhands.) A key given ANOTHER value in the same place is a new one for the same reason (a value is compared as written — `value` of the problem
+ * — and nothing is evaluated). Each key of the deployed page is spent once, so a second `borderColor` where there was one is new. A problem that is not a shorthand — a call the checker cannot
+ * read — is never "already there": what it hides cannot be compared with anything.
  * @returns {{ added: object[], inherited: object[] }} the problems the deployed page did not have, and those it did, each in source order
  */
 function griffelProblemsNotIn(problems, deployed) {
-  const keyOf = (p) => `${p.property}\u0001${p.value}`;
-  const placeOf = (p) => `${(p.within || []).join('\u0000')}\u0001${keyOf(p)}`;
-  const inPlace = new Map();
-  const anywhere = new Map();
-  const spend = (map, key, by) => map.set(key, (map.get(key) || 0) + by);
+  // The place of a key; null for one nothing can be matched with (a call that is nobody's). A problem with no `owner` at all — one made by hand, not by griffelStyleProblems — has the one the others lack.
+  const placeOf = (p) => (isShorthandProblem(p) && p.owner !== null
+    ? `${p.owner ?? ''}\u0002${p.branch ?? ''}\u0003${(p.arms || []).join('\u0004')}\u0001${(p.within || []).join('\u0000')}\u0001${p.property}\u0001${p.value}`
+    : null);
+  const held = new Map();
   for (const d of deployed || []) {
-    if (!isShorthandProblem(d)) continue;
-    spend(inPlace, placeOf(d), 1);
-    spend(anywhere, keyOf(d), 1);
+    const place = placeOf(d);
+    if (place !== null) held.set(place, (held.get(place) || 0) + 1);
   }
   const added = [];
   const inherited = [];
-  const unplaced = [];
   for (const p of problems) {
-    if (!isShorthandProblem(p)) added.push(p);
-    else if ((inPlace.get(placeOf(p)) || 0) > 0) {
-      spend(inPlace, placeOf(p), -1);
-      spend(anywhere, keyOf(p), -1);
+    const place = placeOf(p);
+    if (place !== null && (held.get(place) || 0) > 0) {
+      held.set(place, held.get(place) - 1);
       inherited.push(p);
-    } else unplaced.push(p);
-  }
-  for (const p of unplaced) {
-    if ((anywhere.get(keyOf(p)) || 0) > 0) { spend(anywhere, keyOf(p), -1); inherited.push(p); } else added.push(p);
+    } else added.push(p);
   }
   const bySource = (a, b) => a.line - b.line || a.column - b.column;
   return { added: added.sort(bySource), inherited: inherited.sort(bySource) };

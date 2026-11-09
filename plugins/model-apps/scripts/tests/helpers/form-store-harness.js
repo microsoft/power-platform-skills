@@ -12,6 +12,7 @@ const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../../vendor/cds-maker-sdk.cjs');
 const { verifySpec } = require('../../lib/verify-spec.js');
 const { readerFor } = require('../../verify-model-app.js');
+const { EXPORT_PATH } = require('./translation-export.js');
 
 const guid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -20,11 +21,25 @@ const SUBGRID_CLASS_ID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
 const VIEW_ID = guid(7777);
 const DEFAULT_ATTRIBUTES = { new_name: 'String', new_code: 'String', new_notes: 'Memo', new_area: 'String', new_extra: 'String' };
 
-function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES } = {}) {
+// The labels of a FormXML in the languages `languages` (LCIDs) only. Measured live: a form published with Spanish (3082) captions in an
+// organization whose base language is English (1033) stores both languages — a translation export finds them — yet the published FormXML the
+// Web API returns carries the labels in 1033 alone, with or without an Accept-Language of the other language. `store.readLanguages` makes a
+// harness read that way (see createHarness); a label the SDK serializes is `<label description="…" languagecode="1036" />`.
+const onlyLanguages = (formxml, languages) => String(formxml).replace(/<label\b[^>]*?\blanguagecode="(\d+)"[^>]*?\/>/g, (label, lcid) => (languages.includes(Number(lcid)) ? label : ''));
+
+// `languageCode` is the organization's base language, what a read of the organization answers. `sdkLanguageCode` is the language the SDK is MADE
+// for — the one the build writes its labels in, which `--language-code` can set apart from the organization's — and is the SDK's own default
+// when it is left out. `createSdk` makes the SDK (the raw bundle's factory unless a test names another: the production factory over the production HTTP client, say).
+function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Main', attributes = DEFAULT_ATTRIBUTES, languageCode = 1033, sdkLanguageCode, createSdk = createMakerSdk } = {}) {
   const dirs = [];
   const store = { row: { formid: formId, name: formName, objecttypecode: entity, type: 2, isdefault: true } };
+  // A form as a read returns it: whole, unless `store.readLanguages` (a list of LCIDs) limits the languages its labels are shown in.
+  const shown = (row) => (store.readLanguages && row.formxml ? { ...clone(row), formxml: onlyLanguages(row.formxml, store.readLanguages) } : clone(row));
   const writes = [];
   const reads = [];
+  // The translation exports a verify asked for. `store.exportTranslation` is what the platform answers one with — an `{ status, headers, body }`, or a function of the request body
+  // that gives one — and a verify is given the reader's translationLabels only when it is set (see verifyForms), so a test that does not configure an export never reaches it.
+  const exportsAsked = [];
   let revision = 1;
   const response = (body, status = 200) => ({ status, headers: { etag: `W/"${revision}"` }, body });
   const httpClient = {
@@ -36,14 +51,22 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
           Attributes: Object.entries(attributes).map(([LogicalName, AttributeType]) => ({ LogicalName, AttributeType })) });
       }
       if (/EntityDefinitions\(LogicalName='systemform'\)/.test(decoded)) return response({ EntitySetName: 'systemforms' });
+      // The organization's base language: `--verify` reads it to know which language the build wrote a string tab or section label in.
+      if (/EntityDefinitions\(LogicalName='organization'\)/.test(decoded)) return response({ EntitySetName: 'organizations' });
+      if (/\/organizations(?:\?|$)/i.test(url)) return response({ value: [{ languagecode: languageCode }] });
       if (/systemforms\(/i.test(url)) {
         assert.ok(store.row.formxml, 'a fetch reads a form that has been serialized');
-        return response(clone(store.row));
+        return response(shown(store.row));
       }
-      if (/\/systemforms(?:\?|$)/i.test(url)) return response({ value: store.row.formxml ? [clone(store.row)] : [] });
+      if (/\/systemforms(?:\?|$)/i.test(url)) return response({ value: store.row.formxml ? [shown(store.row)] : [] });
       assert.fail(`unexpected GET: ${url}`);
     },
     post: async (url, body) => {
+      if (EXPORT_PATH.test(url)) {
+        exportsAsked.push({ url, body: clone(body) });
+        assert.ok(store.exportTranslation, 'a translation export was asked for, and this harness has none to answer with');
+        return typeof store.exportTranslation === 'function' ? store.exportTranslation(body) : store.exportTranslation;
+      }
       writes.push({ method: 'post', url, body: clone(body) });
       if (/\/systemforms(?:\?|$)/i.test(url)) {
         store.row = { ...store.row, ...body, formid: formId };
@@ -66,8 +89,8 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
   const freshSdk = async (workspaceDir) => {
     const dir = workspaceDir || fs.mkdtempSync(path.join(os.tmpdir(), 'form-layout-rt-'));
     if (!workspaceDir) dirs.push(dir);
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir),
-      instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+    const sdk = createSdk({ workspaceStorage: createNodeWorkspaceStorage(dir),
+      instanceUrl: 'https://contoso.crm.dynamics.com', httpClient, ...(sdkLanguageCode ? { languageCode: sdkLanguageCode } : {}) });
     await sdk.initWorkspace();
     const mutations = [];
     // These wrappers record calls and delegate every one to the real bundle.
@@ -85,7 +108,7 @@ function createHarness({ formId = guid(1), entity = 'new_ticket', formName = 'Ma
     return { sdk, mutations, dir };
   };
   const cleanup = () => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); };
-  return { store, writes, reads, freshSdk, cleanup, formId, entity, attributes };
+  return { store, writes, reads, exportsAsked, freshSdk, cleanup, formId, entity, attributes };
 }
 
 // Put a form on the server the way the engine's create does — a minimal artifact, each compiled tab added
@@ -100,8 +123,9 @@ async function seedForm(h, tabs, { name = 'Main', entity = h.entity } = {}) {
   return h.formId;
 }
 
-// `--verify` over what the server holds, through the plugin's own reader (the published formxml query).
-async function verifyForms(h, spec) {
+// `--verify` over what the server holds, through the plugin's own reader (the published formxml query). `opts` are verifySpec's own. The reader also asks for a translation
+// export (its translationLabels) when the harness has one to answer with (`store.exportTranslation`).
+async function verifyForms(h, spec, opts) {
   const fetched = await h.freshSdk();
   const live = readerFor(fetched.sdk, spec.app.uniqueName);
   const read = {
@@ -110,8 +134,9 @@ async function verifyForms(h, spec) {
     sitemapXml: async () => '',
     queryRecords: live.queryRecords,
     formTopology: live.formTopology,
+    ...(h.store.exportTranslation ? { translationLabels: live.translationLabels } : {}),
   };
-  return verifySpec(spec, read);
+  return verifySpec(spec, read, opts);
 }
 
 // The FormXML of the section `name`.

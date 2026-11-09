@@ -78,6 +78,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .reasoning-block{background:var(--surface2);border-left:2px solid var(--accent);border-radius:var(--radius-sm);padding:10px 14px;margin-top:10px;font-size:12px;line-height:1.7;white-space:pre-wrap;}
 .fix-block{background:var(--pass-bg);border-left:2px solid var(--pass);border-radius:var(--radius-sm);padding:10px 14px;margin-top:8px;font-size:12px;line-height:1.7;}
 .fix-block strong{color:var(--pass);}
+.ai-block{background:rgba(98,100,167,0.08);border-left:2px solid var(--accent);border-radius:var(--radius-sm);padding:10px 14px;margin-top:8px;font-size:12px;line-height:1.7;}
+.mitigation-block{background:var(--surface2);border-left:2px solid var(--warning);border-radius:var(--radius-sm);padding:10px 14px;margin-top:8px;font-size:12px;line-height:1.7;}
 
 .detail-table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0;}
 .detail-table th{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);padding:10px 12px;border-bottom:2px solid var(--border);}
@@ -165,6 +167,8 @@ function findingHtml(f, idx) {
       (f.location ? '<div style="margin-top:10px;font-size:12px;"><span class="field-label">Location:</span> <code style="background:var(--surface2);padding:1px 5px;border-radius:3px;">' + esc(f.location) + '</code></div>' : '') +
       (f.details ? '<div style="margin-top:10px;font-size:12px;line-height:1.7;">' + escMultiline(f.details) + '</div>' : '') +
       (f.reasoning ? '<div style="margin-top:10px;"><div class="field-label">Why this matters</div><div class="reasoning-block">' + escMultiline(f.reasoning) + '</div></div>' : '') +
+      (f.aiSuggestion ? '<div style="margin-top:8px;"><div class="field-label">AI suggestion</div><div class="ai-block">' + escMultiline(f.aiSuggestion) + '</div></div>' : '') +
+      (f.mitigation ? '<div style="margin-top:8px;"><div class="field-label">Mitigation</div><div class="mitigation-block">' + escMultiline(f.mitigation) + '</div></div>' : '') +
       (f.fix ? '<div style="margin-top:8px;"><div class="field-label">Suggested Fix</div><div class="fix-block">' + escMultiline(f.fix) + '</div></div>' : '') +
     '</div>' +
   '</div>';

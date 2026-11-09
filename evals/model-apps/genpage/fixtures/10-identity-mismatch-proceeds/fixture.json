@@ -1,0 +1,28 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed trace of a compliant attended create run for eval 10, not an agent capture: the branch where the auth pre-flight passes with a warning. The planner confirms cr_widget is absent by an exact logical-name search; check-auth.js then returns ok:true with identitiesMatch:false (az and pac are signed in as different identities, and WhoAmI works). The orchestrator shows the one-line warning verbatim, with its az login --username fix for the pac identity, and goes on: the entity-builder provisions cr_widget (its re-probes return the same warning, which it logs in its transaction log), the user declines sample data, and the page is uploaded with cr_widget as its data source. tool-results.json records every logged command in order.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 0: Create Working Directory",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 0.5: Initialize Local-Dev Manifest",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan (Steps 1-7)",
+    "plugins/model-apps/agents/genpage-planner.md Step 4: Entity Detection, Dominant-prefix detection, Solution Selection",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 2a: Pre-flight: az + pac + Dataverse",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 2b: Invoke entity-builder",
+    "plugins/model-apps/agents/genpage-entity-builder.md Step 2: Verify Auth and Connectivity",
+    "plugins/model-apps/agents/genpage-entity-builder.md Steps 3-8 (provision-entities.js, sample data declined)",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 4: Generate RuntimeTypes",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 5a and 5b: Single-page fast path",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy and Prompt semantics",
+    "plugins/model-apps/references/plan-schema.md Required Structure"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": [
+    "prompt.txt",
+    "agent-message.txt",
+    "page-name.txt",
+    "provision-input.json",
+    "RuntimeTypes.ts"
+  ]
+}

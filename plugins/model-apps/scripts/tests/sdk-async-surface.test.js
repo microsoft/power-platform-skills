@@ -27,8 +27,8 @@
 // matched against the RAW source and only dismissed when two INDEPENDENT signals agree, so a flaw
 // in its lexer produces a false positive (loud, waivable) rather than a hidden call.
 //
-// It is not sound, and cannot be made sound with regular expressions. Four rounds of adversarial
-// review each found new constructs, and the residual known limits are:
+// It is not sound, and cannot be made sound with regular expressions. Repeated adversarial
+// review kept finding new constructs, and the residual known limits are:
 //   * PARAMETER destructuring — `function use({ getArtifact }) { getArtifact(id); }`. No textual
 //     anchor distinguishes an ObjectPattern from an ObjectExpression, so trying to catch it flagged
 //     every mock object literal in the suite. An AST distinguishes them; a regex cannot.
@@ -441,7 +441,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /['\"]/.test(v);\nconst a = provision.getArtifact('f', id);",
     'a call after an apostrophe that cannot be a string (unterminated on its line)':
       "const n = 5; // it's fine\nconst a = provision.getArtifact('f', id);",
-    // Sol round 3: SAME-LINE ambiguity, where the newline fallback cannot help. These are the
+    // SAME-LINE ambiguity, where the newline fallback cannot help. These are the
     // cases that motivated inverting the scan to dismiss-only-when-provably-inert.
     'SAME LINE: a regex after a control paren whose quote could close before the call':
       "if (c) /['\"]/.test(v) && provision.getArtifact('form', id);",
@@ -449,12 +449,12 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "const n = x++ / provision.getArtifact('form', id) / divisor;",
     'SAME LINE: a regex containing a backtick, with a real template later on the line':
       "if (c) /`/.test(v) && provision.getArtifact('f', id); const s = `ok`;",
-    // Sol round 3: binding forms a narrow character class silently missed.
+    // Binding forms a narrow character class silently missed.
     'destructured with a DEFAULT': "const { getArtifact = fallback } = provision;",
     'destructured with a rename AND a default': "const { getArtifact: read = fallback } = provision;",
     'destructured with a REST element': "const { getArtifact, ...rest } = provision;",
     'destructured with a COMPUTED key': "const { ['getArtifact']: read } = provision;",
-    // Sol round 4: constructs where NO raw candidate was produced, or both dismissal signals
+    // Constructs where NO raw candidate was produced, or both dismissal signals
     // agreed wrongly.
     'a comment between receiver and method (comments are whitespace in JS)':
       "provision /* note */ .getArtifact('form', id);",
@@ -466,7 +466,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /`/.test(v);\n /* legacy */ provision.getArtifact('f', id);\nconst s = `ok`;",
     'a default that is a CALL in a destructuring pattern':
       "const { getArtifact = fallback() } = provision;",
-    // Sol round 5 (non-blocking, fixed anyway): a LINE comment is whitespace too, and a composed
+    // A LINE comment is whitespace too, and a composed
     // desync could satisfy the block-comment-continuation exception on a multiplication line.
     'a LINE comment between receiver and method':
       "provision // note\n  .getArtifact('form', id);",
@@ -528,7 +528,7 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
   const waiverCase = (line) => isWaiverLine(line);
   assert.strictEqual(waiverCase('  // sdk-async-ok: handed to Promise.all'), true, 'a whole-line comment waives');
   assert.strictEqual(waiverCase("  console.log('sdk-async-ok');"), false, 'a marker inside a STRING must not waive');
-  // Sol round 3: inference-from-absence also mistook regex and template text for a comment.
+  // Inference-from-absence also mistook regex and template text for a comment.
   assert.strictEqual(waiverCase('  const marker = /sdk-async-ok/;'), false, 'a marker inside a REGEX must not waive');
   assert.strictEqual(waiverCase('  const marker = `${v}sdk-async-ok`;'), false, 'a marker inside a TEMPLATE must not waive');
   assert.strictEqual(waiverCase('  x(); // sdk-async-ok'), false,
@@ -621,141 +621,10 @@ test('the committed bundle MATCHES its recorded provenance (a bundle-only change
   assert.strictEqual(prov.nostub, false,
     'the committed bundle was built WITH the stubs (a NOSTUB build pulls in shell packages that '
     + 'must not ship in a public repo)');
-  // The recorded subject is committed to a PUBLIC repo, so it must not carry the upstream
-  // merge-tool's PR id: unresolvable from here, and it advertises a tracker nobody reading this can
-  // open. `sanitizeSubject` strips it at record time; this pins the committed artifact, which is the
-  // thing that actually ships.
-  //
-  // Asserts against the sanitizer's OWN patterns rather than a local copy, so a prefix shape added
-  // there can never be one this check silently stops looking for.
-  const { MERGE_PREFIXES } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-  assert.strictEqual(typeof prov.subject, 'string', 'the upstream commit subject is recorded');
-  for (const re of MERGE_PREFIXES) {
-    assert.doesNotMatch(prov.subject, re,
-      `the recorded subject must not keep an upstream merge-tool prefix (matched ${re})`);
-  }
-});
-
-// The sanitizer that produces the above. Unit-tested against the shapes the SDK's own history
-// actually emits, plus the cases where it must NOT fire — a subject that merely mentions a merge is
-// prose, and over-stripping would destroy the only human-readable part of the provenance record.
-//
-// Every id used here is SYNTHETIC. An earlier version of this test quoted the real upstream PR id as
-// its example, which reintroduced into a public file exactly the identifier the function exists to
-// remove — the fix and the test cancelling each other out.
-test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
-  const { sanitizeSubject, NO_DESCRIPTION } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-
-  assert.strictEqual(
-    sanitizeSubject('Merged PR 12345678: feat(cds-maker-sdk): configurable authoring LCID'),
-    'feat(cds-maker-sdk): configurable authoring LCID');
-  assert.strictEqual(
-    sanitizeSubject('merged pr 42 : fix(sdk): tolerate a missing label'),
-    'fix(sdk): tolerate a missing label');
-  // A GitHub merge subject with a description after the branch ref keeps only the description.
-  assert.strictEqual(
-    sanitizeSubject('Merge pull request #4312 from someone/some-branch: fix(sdk): tolerate a missing label'),
-    'fix(sdk): tolerate a missing label');
-  // The `#` is OPTIONAL — not every tool emits it, and requiring it let a real merge subject through
-  // untouched while every test stayed green.
-  assert.strictEqual(
-    sanitizeSubject('Merge pull request 4312 from someone/some-branch: fix(sdk): x'),
-    'fix(sdk): x');
-  // The ref is matched with [^:\s]+, not \S+. A greedy \S+ swallows a colon that belongs to the
-  // DESCRIPTION, silently deleting the part that says what changed.
-  assert.strictEqual(
-    sanitizeSubject('Merge pull request #9 from owner/ref:fix(sdk): tolerate x'),
-    'fix(sdk): tolerate x');
-
-  // Must NOT fire: the prefix is anchored, so a mid-sentence mention survives verbatim.
-  const prose = 'fix(sdk): revert the change merged PR 99 introduced';
-  assert.strictEqual(sanitizeSubject(prose), prose, 'a mid-sentence mention is prose, not a prefix');
-  const plain = 'feat(sdk): add setHeaderAndNavigationRefresh';
-  assert.strictEqual(sanitizeSubject(plain), plain, 'an already-clean subject is unchanged');
-
-  // A subject that is ONLY a prefix yields a neutral placeholder. Returning the ORIGINAL (the
-  // previous behaviour) put the identifier straight back and produced a value that failed the
-  // committed-provenance assertion above — the sanitizer breaking its own contract.
-  assert.strictEqual(sanitizeSubject('Merged PR 123:'), NO_DESCRIPTION);
-  assert.strictEqual(sanitizeSubject('Merge pull request #4312 from someone/some-branch'), NO_DESCRIPTION,
-    'GitHub puts the description on the body line, so a bare merge subject is entirely prefix');
-  // COLONLESS prefix-only subject. This is supported deliberately: requiring the colon left it
-  // unchanged, and the invariant test could not see the hole because it uses the same patterns as
-  // its oracle. Recorded as an exact input->output pair so the decision is visible, not implied.
-  assert.strictEqual(sanitizeSubject('Merged PR 123'), NO_DESCRIPTION,
-    'a bare "Merged PR <n>" with no colon is still entirely prefix');
-
-  // NEGATIVE CONTROLS for the colon-or-end alternation: text after the id is a real description, so
-  // the subject is prose and must survive untouched. If these ever start changing, the alternation
-  // has become too greedy.
-  for (const keep of ['Merged PR 99 rollback of the shell change', 'Merge pull request 7 from owner/ref is not this shape']) {
-    assert.strictEqual(sanitizeSubject(keep), keep, `must not fire on: ${keep}`);
-  }
-  // Non-strings pass through, because `git()` records null when the call fails and null must stay
-  // distinguishable from an empty subject.
-  assert.strictEqual(sanitizeSubject(null), null);
-});
-
-test('sanitizeSubject strips ARBITRARILY nested prefixes, not a fixed number', () => {
-  // A capped loop looked defensive and silently reintroduced the bug past the cap: at a cap of 8,
-  // nine nested prefixes returned a value still carrying the ninth. Depths well past any plausible
-  // cap are asserted here. This cannot PROVE no cap is ever reintroduced — a cap above 100 would
-  // still pass — but it catches any cap small enough that a reviewer would plausibly write it.
-  const { sanitizeSubject, NO_DESCRIPTION } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-
-  for (const depth of [1, 2, 8, 9, 25, 100]) {
-    const nested = Array.from({ length: depth }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'real description';
-    assert.strictEqual(sanitizeSubject(nested), 'real description',
-      `depth ${depth} must strip every prefix`);
-  }
-  // Nested prefixes with NO description at the end still resolve to the placeholder.
-  const bare = Array.from({ length: 12 }, (_, i) => `Merged PR ${i + 1}:`).join(' ');
-  assert.strictEqual(sanitizeSubject(bare), NO_DESCRIPTION);
-  // Mixed tools nest too.
-  assert.strictEqual(
-    sanitizeSubject('Merged PR 5: Merge pull request 9 from owner/ref: real desc'),
-    'real desc');
-});
-
-test('sanitizeSubject output can NEVER match a merge prefix (the actual contract)', () => {
-  // Case-by-case assertions only prove the cases someone thought of. The property that matters is
-  // that NO input produces an output still carrying a prefix — which is what the committed
-  // PROVENANCE.json must satisfy.
-  //
-  // STATED LIMIT, because it is easy to over-read this test: its oracle is MERGE_PREFIXES, the same
-  // set the implementation strips with. It therefore proves "no output matches a pattern we
-  // enumerate" — NOT "no output retains a merge prefix in some syntax nobody enumerated". A new
-  // merge-tool syntax is invisible to both halves at once. The exact input->output assertions above
-  // are what pin the enumerated shapes; this pins that stripping is exhaustive for them.
-  const { sanitizeSubject, MERGE_PREFIXES } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
-
-  const corpus = [
-    'Merged PR 12345678: feat(sdk): x',
-    'Merged PR 123:',
-    'Merged PR 123',
-    '  merged   pr   7  :  ',
-    'Merge pull request #4312 from someone/some-branch',
-    'Merge pull request 4312 from someone/some-branch',
-    'Merge pull request #4312 from someone/some-branch: desc',
-    'Merge pull request #9 from owner/ref:fix(sdk): tolerate x',
-    'Merged PR 1: Merged PR 2: doubly prefixed',
-    Array.from({ length: 9 }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'nine deep',
-    Array.from({ length: 40 }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'forty deep',
-    'Merged PR 5: Merge pull request 9 from owner/ref: mixed nesting',
-    'feat(sdk): plain',
-    'fix(sdk): revert the change merged PR 99 introduced',
-    'Merged PR 99 rollback of the shell change',
-    '',
-    '   ',
-  ];
-
-  for (const input of corpus) {
-    const out = sanitizeSubject(input);
-    for (const re of MERGE_PREFIXES) {
-      assert.doesNotMatch(out, re,
-        `sanitizeSubject(${JSON.stringify(input)}) returned ${JSON.stringify(out)}, which still matches ${re}`);
-    }
-  }
+  // The record names its source by commit SHA alone. It once also carried the subject of the commit the build ran on — normally
+  // the monorepo's HEAD, a change that is usually not about the SDK at all — and a commit subject in a public file is an internal
+  // change title, which can even carry a merge tool's PR id. The build no longer writes one; this keeps one from coming back.
+  assert.strictEqual('subject' in prov, false, 'PROVENANCE.json carries no commit subject: the SHA is what identifies the source');
 });
 
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {
@@ -889,7 +758,7 @@ function calledName(call) {
 }
 
 /**
- * How `src` guards the throwaway workspace it makes. null when it makes none — no `mkdtempSync`, or no `createMakerSdk` call
+ * How `src` guards the throwaway workspace it makes. null when it makes none — no `mkdtempSync` or `makeTempWorkspace`, or no `createMakerSdk` call
  * to guard — else `{ problem }`: null when the guard is sound, otherwise what is wrong with it. The construction is found by
  * position, as the first one after the directory is made (verify-model-app.js builds its SDK in a helper below the factory).
  */
@@ -902,7 +771,10 @@ function throwawayWorkspaceGuard(src) {
   walk(parsed.ast, (node, ancestors) => {
     // `ancestors` is closest first: the first function in it is the one this node is written in (null at the top level).
     const scope = ancestors.find((a) => FUNCTION_NODES.has(a.type)) || null;
+    // The directory is made by `fs.mkdtempSync` — what every entry point called before the plugin had one maker of throwaway workspaces — or by a call of
+    // `makeTempWorkspace` (lib/temp-workspace.js), which is what they call now. A CALL: the name is also in the import that brings the function in.
     if (node.type === 'Identifier' && node.name === 'mkdtempSync') made.push({ node, scope });
+    else if (node.type === 'CallExpression' && calledName(node) === 'makeTempWorkspace') made.push({ node, scope });
     else if (node.type === 'CallExpression' && calledName(node) === 'createMakerSdk') constructions.push({ node, scope });
     else if (node.type === 'TryStatement') tries.push({ node, scope });
   });
@@ -988,6 +860,24 @@ test('the guard check accepts the cleanups the entry points use, in a catch or i
   ]) {
     assert.deepStrictEqual(throwawayWorkspaceGuard(factory(guard)), { problem: null }, guard);
   }
+});
+
+test('the guard check reads a directory made by makeTempWorkspace — what the entry points call — exactly as one made by mkdtempSync', () => {
+  const made = (guard) => `
+    async function make(env) {
+      const dir = makeTempWorkspace('model-app-');
+      try { const sdk = createMakerSdk({ instanceUrl: env }); await sdk.initWorkspace(); return { sdk }; } ${guard}
+    }`;
+  assert.deepStrictEqual(throwawayWorkspaceGuard(made('catch (err) { fs.rmSync(dir, { recursive: true, force: true }); throw err; }')), { problem: null });
+  assert.match(throwawayWorkspaceGuard(made('catch (err) { throw err; }')).problem, GUARD_PROBLEM);
+  const unguarded = `
+    async function make(env) {
+      const dir = makeTempWorkspace('model-app-');
+      const sdk = createMakerSdk({ instanceUrl: env });
+      try { await sdk.initWorkspace(); } catch (err) { cleanup(); throw err; }
+      return sdk;
+    }`;
+  assert.match(throwawayWorkspaceGuard(unguarded).problem, /must be inside a try/);
 });
 
 test('the guard check does not take for a cleanup what is not one: no clause, a comment, a string, a helper it does not know', () => {
@@ -1097,7 +987,7 @@ test('every CLI that mints a throwaway workspace constructs the SDK INSIDE its c
   const checked = [];
   for (const file of files) {
     const src = fs.readFileSync(path.join(dir, file), 'utf8');
-    if (!src.includes('mkdtempSync') || !/createMakerSdk\(/.test(src)) continue;
+    if (!/\b(mkdtempSync|makeTempWorkspace)\b/.test(src) || !/createMakerSdk\(/.test(src)) continue;
     const guard = throwawayWorkspaceGuard(src);
     if (!guard) continue;
     assert.ok(guard.problem === null, `${file}: ${guard.problem}`);

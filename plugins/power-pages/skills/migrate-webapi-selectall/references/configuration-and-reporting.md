@@ -12,7 +12,7 @@
 
 Scan every layout because framework choice does not determine serialization.
 
-Traditional and downloaded declarative sites commonly use an aggregate file:
+Non-SPA and downloaded non-SPA sites commonly use an aggregate file:
 
 ```text
 sitesetting.yml
@@ -159,5 +159,5 @@ If explicit settings still have unresolved missing or overbroad fields, set
 - [Query data using portals Web API](https://learn.microsoft.com/en-us/power-pages/configure/read-operations)
 - [Use portals Web API write, update, and delete operations](https://learn.microsoft.com/en-us/power-pages/configure/write-update-delete-operations)
 - [Overview of developer capabilities](https://learn.microsoft.com/en-us/power-pages/configure/developer-overview)
-- [Create a code site using AI coding agents](https://learn.microsoft.com/en-us/power-pages/configure/create-code-site-using-claude-code)
+- [Create a SPA site using AI coding agents](https://learn.microsoft.com/en-us/power-pages/configure/create-code-site-using-claude-code)
 - [Power Platform CLI pages commands](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/pages)

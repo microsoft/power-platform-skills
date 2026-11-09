@@ -12,6 +12,7 @@ function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..'
 
 const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE, formLayoutNames, subgridRelationshipName } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
+const { isDeclaredView, compileViewIntent } = pluginLib('view-reconcile.js');
 const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
 const { subgridSectionIntent, isNonFieldControl } = pluginLib('artifact-intent.js');
 const { SUBGRID_CLASS_ID, splitSubgrids, columnItems } = pluginLib('form-subgrid-placement.js');
@@ -19,7 +20,7 @@ const { TIMELINE_CLASS_ID, wantsTimeline } = pluginLib('form-timeline.js');
 const { decodeXmlEntities } = pluginLib('sitemap-pages.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
-const { isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
+const { formOrderSpecOf, isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
 // Round-trip (edit/download) + teardown oracles: both plugin primitives are PURE — planTeardown does
 // no I/O, and hydrateSpec takes an injected `read`, so we can grade the compared hydration subset
 // and the reverse-of-build teardown plan offline. This does not execute a rebuild. See EVAL_GUIDE.md.
@@ -29,7 +30,7 @@ const { hydrateSpec } = pluginLib('hydrate-spec.js');
 // `columns[]`. Grading it here (rather than only in the plugin's unit tests) puts the download
 // side of the round-trip under the same fixture corpus as the build side.
 const { entityFromMetadata, parseDownloadedPages, assignPageKeys } = pluginLib2('download-model-app.js');
-const { unescapePacName } = pluginLib('genpage-cli.js');
+const { unescapePacName } = pluginLib('genpage-sdk.js');
 const { classifyChanges } = pluginLib('classify-changes.js');
 const { annotateContentHashes, pageSourceFileErrors } = pluginLib('content-hash.js');
 const { makeEnvelope, markEligible, parseEnvelope, serializeEnvelope, isFastPathEligible } = pluginLib('apply-snapshot.js');
@@ -112,11 +113,46 @@ function planFacts(spec) {
   return { byPhase, phases: Object.keys(byPhase), labels: items.map((i) => `${i.phase}\t${i.label}`) };
 }
 
+// compileViewIntent reads filters, linkEntities (and each join's filters), columns and sort as arrays and throws a TypeError on any other
+// shape (`linkEntities: {}` -> "(v.linkEntities || []).forEach is not a function"). The author gate (validateAppSpec) already reports each
+// of those precisely (`views[0].linkEntities must be an array`), and the build refuses such a spec, so a view the compiler cannot read has
+// no conditions. Letting the TypeError escape would replace that diagnostic and every other grade of the fixture with one generic failure.
+// Only a TypeError is treated this way; any other failure of the compiler is a real fault and still surfaces.
+function compileDeclaredView(v, resolveValue) {
+  try { return compileViewIntent(v, { resolveValue }); }
+  catch (e) {
+    if (e instanceof TypeError) return { intent: null };
+    throw e;
+  }
+}
+
+// The conditions the build gives a view from its filters[], each `{ attribute, operator, value }` plus `scope` (the join alias) on one that
+// constrains a joined table. The build compiles a view one of two ways and the facts must follow it: a declared view (`reconcile:
+// "declared"`) goes through compileViewIntent, which scopes a condition to its join (`relatedEntity`); every other view goes through viewDef,
+// which reads no scope at all. Reading a declared view through viewDef would grade a filter on a joined table as one on the view's own table.
+function viewConditions(spec, v, d) {
+  // The leading active-records condition (statecode eq 0, when activeOnly is not false) is the build's own, not the author's filter.
+  const authored = (list) => (v.activeOnly !== false ? list.slice(1) : list);
+  if (!isDeclaredView(v)) return authored(d.filters.conditions).map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value }));
+  // The build resolves a choice label to its value with resolveFilterValue, which sdk-build does not export; a one-condition view built by
+  // viewDef on the condition's own table runs exactly that rule.
+  const resolveValue = (table, attr, value) => viewDef(spec, { entity: table, name: 'x', activeOnly: false, filters: [{ attr, op: 'eq', value }] }).filters.conditions[0].value;
+  const { intent } = compileDeclaredView(v, resolveValue);
+  // A declared view that does not compile is refused by the build: no view, so no filter.
+  if (!intent) return [];
+  return authored(intent.filters.conditions).map((c) => ({ attribute: c.attribute, operator: c.operator, value: c.value, ...(c.entityname ? { scope: c.entityname } : {}) }));
+}
+
 // ui: normalized view/chart/form facts from the pure def builders — the pre-serialization equivalents
 // of wire-facts.js (viewFacts/chartFacts/formFacts), deterministic with no live env or bundle round-trip.
 function wireFacts(spec) {
   return {
-    views: (spec.views || []).map((v) => { const d = viewDef(spec, v); return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name) }; }),
+    views: (spec.views || []).map((v) => {
+      const d = viewDef(spec, v);
+      // What viewConditions returns is what the author's filters[] compiled to, so a filter the build ignored (a misspelled key) leaves
+      // nothing here.
+      return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name), conditions: viewConditions(spec, v, d) };
+    }),
     charts: (spec.charts || []).map((c) => { const d = chartDef(spec, c); return { entity: d.entityLogicalName, name: d.name, measure: d.series[0].aggregate, groupBy: d.categories[0].attribute }; }),
     forms: (spec.forms || []).map((f) => {
       const authoredShape = authoredFormShape(f);
@@ -615,12 +651,25 @@ function makeAllPresentReader(spec, formEvidence = null) {
     servedMainForms: async (entityLogical) => formEvidence
       ? ((formEvidence.servedMainForms || {})[lc(entityLogical)] || [])
       : (plannedMainFormSequence(spec, entityLogical) || []).map((f) => ({ id: `form:${mainFormName(f)}`, name: mainFormName(f) })),
+    // The app holds exactly the listed Main forms. An "exact" list (app.mainFormsOnUpdate) has to be asked for
+    // strictly: a lenient read can drop a row it cannot place, so it would prove "only these forms" from part of the list.
+    appMainForms: async (_appUnique, mainForms, opts) => (spec.app && spec.app.mainFormsOnUpdate === 'exact' && !(opts && opts.strict)
+      ? { kind: 'inconclusive', reason: 'an exact Main-form list was read without strict' }
+      : { kind: 'read', tables: Object.keys(mainForms || {}).map((table) => ({ table: lc(table), extras: [], missing: [] })), formNames: {} }),
+    // app.theme (Preview): verify asks for the theme only when the spec declares one, and the real reader answers with
+    // lib/app-theme.js verifyAppTheme's shape, [{ key, ok, state: 'live'|'pendingPublish'|'mismatch'|'unknown' }]. The
+    // environment matches the spec by this reader's premise, so the declared theme is live. Without it a themed spec failed
+    // verify offline on a gap in this fixture ("the app theme reader is unavailable"), not on a finding about the spec.
+    appTheme: async () => [{ key: 'app.theme', ok: true, state: 'live' }],
   };
 }
 
 function requiredVerifyChecks(spec, reader) {
-  const mains = [...new Set((spec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
-  const ordered = mains.filter((entity) => plannedMainFormSequence(spec, entity));
+  // Verify expects a form order only of the Main forms the build orders, which leaves out a declared form (the shared rule,
+  // formOrderSpecOf in lib/form-order.js), so a table whose only Main form is declared owes no form-order check.
+  const orderSpec = formOrderSpecOf(spec);
+  const mains = [...new Set((orderSpec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
+  const ordered = mains.filter((entity) => plannedMainFormSequence(orderSpec, entity));
   const pages = (spec.pages || []).filter((p) => {
     const source = normalizePageSource(p);
     return source && source.kind === 'tsx' && source.codeFile;
@@ -639,6 +688,7 @@ function requiredVerifyChecks(spec, reader) {
     'form-subgrid': (spec.forms || []).reduce((n, f) => n + splitSubgrids(formLayoutNames(f), f.subgrids).placed
       .filter((p) => subgridRelationshipName(spec, f.entity, p.sg.childEntity)).length, 0),
     'form-order-served': typeof reader.servedMainForms === 'function' ? ordered.length : 0,
+    'app-main-forms': Object.keys((spec.app && spec.app.mainForms) || {}).length,
     'business-rule': (spec.businessRules || []).length,
     'business-process-flow': (spec.businessProcessFlows || []).length,
     role: (spec.personas || []).length,
@@ -776,8 +826,8 @@ async function changedOnlyFacts(spec, fixture) {
   }
 }
 
-// page: PAGEREF_ resolution facts (Plan 3). Returns null when pageref-resolver isn't loaded →
-// the assertion layer emits SKIP (loose Plan-3 coupling). When present, each declared nav edge
+// page: PAGEREF_ resolution facts. Returns null when pageref-resolver isn't loaded →
+// the assertion layer emits SKIP (loose coupling). When present, each declared nav edge
 // is represented as a canonical navigateTo call site so resolvePageRefs can parse and resolve it.
 // A missing keyToId entry → unresolved entry (tests prove the assertion can FAIL).
 function pageFacts(spec) {

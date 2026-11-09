@@ -180,6 +180,10 @@ function tryRecoverRunLock(directory, options) {
     fs.linkSync(lockPath, recoveryPath);
   } catch (error) {
     if (error.code === 'ENOENT') return true;
+    // Windows can deny the recovery link while another owner unlinks the lock.
+    // Retry within the acquisition deadline; a denied link never grants ownership.
+    // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-deletefilew#remarks
+    if (error.code === 'EPERM') return false;
     if (error.code !== 'EEXIST') throw error;
     const claimedOwner = readLockOwner(recoveryPath);
     if (claimedOwner && !processIsAlive(claimedOwner.pid, options)) {

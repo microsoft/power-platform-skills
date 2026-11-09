@@ -31,7 +31,7 @@ test('deploy profile (default) requires every page implemented (tsx)', () => {
 test('plan/design profile allows an intent page', () => {
   const s = base();
   s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'intent' } }];
-  // Every page must appear as a sitemap subarea (Task 3 / Plan 5 v2) for a spec that will be built.
+  // Every page must appear as a sitemap subarea for a spec that will be built.
   s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'Main', subAreas: [{ page: 'ov', title: 'Overview' }] }] }] };
   assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
   assert.strictEqual(validateAppSpec(s, { profile: 'design' }).ok, true);
@@ -67,7 +67,7 @@ test('structural profile ignores page implementation entirely', () => {
   assert.strictEqual(validateAppSpec(s, { profile: 'structural' }).ok, true);
 });
 
-// Minor #7 additions ------------------------------------------------------------------
+// Edge cases of profile handling and the codeFile checks -------------------------------
 
 test('unknown profile returns a clear error immediately', () => {
   const r = validateAppSpec(base(), { profile: 'nonexistent' });

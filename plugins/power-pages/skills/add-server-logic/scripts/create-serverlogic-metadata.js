@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Creates a server logic metadata YAML file for Power Pages code sites.
+// Creates a server logic metadata YAML file for Power Pages SPA sites.
 // Generates UUID, validates inputs, and writes correctly-formatted YAML.
 //
 // Usage:

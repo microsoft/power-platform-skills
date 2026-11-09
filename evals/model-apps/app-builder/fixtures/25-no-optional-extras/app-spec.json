@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoPartsCounter", "publisherPrefix": "cnt" },
+  "app": {
+    "name": "Parts Counter",
+    "description": "Parts and their stock level"
+  },
+  "entities": [
+    { "schemaName": "cnt_part", "displayName": "Part", "pluralName": "Parts",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [
+        { "schemaName": "cnt_stock", "displayName": "Stock", "type": "Integer" },
+        { "schemaName": "cnt_price", "displayName": "Price", "type": "Money" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_part", "name": "Information", "layout": "auto" }],
+  "views": [{ "entity": "cnt_part", "name": "All Parts", "columns": ["cnt_name", "cnt_stock", "cnt_price"] }],
+  "appShell": { "areas": [{ "label": "Parts", "groups": [{ "label": "Stock", "subAreas": [{ "entity": "cnt_part", "title": "Parts" }] }] }] }
+}

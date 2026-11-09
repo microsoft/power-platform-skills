@@ -9,6 +9,7 @@ const path = require('node:path');
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const { readEntityWithDescriptions, readRelationships, runDownload } = require('../download-model-app.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 const tempDirs = [];
 test.after(() => {
@@ -110,11 +111,11 @@ function normalizedUrl(url) {
 
 function matchAuxRoute(url) {
   const text = normalizedUrl(url);
-  if (/\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(text)) return 'entity-labels';
+  if (/\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&\$expand=Keys\(\$select=SchemaName,DisplayName,KeyAttributes,IsManaged\)$/.test(text)) return 'entity-labels';
   if (/\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName$/.test(text)) return 'attribute-labels';
-  if (/MoneyAttributeMetadata\?\$select=LogicalName,IsBaseCurrency$/.test(text)) return 'money';
-  if (/PicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,IsGlobal,Options\)/.test(text)) return 'picklist';
-  if (/MultiSelectPicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,IsGlobal,Options\)/.test(text)) return 'multiselect';
+  if (/MoneyAttributeMetadata\?\$select=LogicalName,IsBaseCurrency,MinValue,MaxValue,Precision,PrecisionSource$/.test(text)) return 'money';
+  if (/PicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,DisplayName,IsGlobal,Options\)/.test(text)) return 'picklist';
+  if (/MultiSelectPicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,DisplayName,IsGlobal,Options\)/.test(text)) return 'multiselect';
   return null;
 }
 
@@ -615,29 +616,11 @@ function richDownloadFixture() {
       },
     },
   }, { appId, layerId, sitemapXml });
-  const genpageCli = {
-    enumerateEnv: async () => ({
-      ok: true,
-      ids: [pageOverview.toLowerCase(), pageDetail.toLowerCase()],
-      pages: [{ pageId: pageOverview, name: 'Overview' }, { pageId: pageDetail, name: 'Detail' }],
-    }),
-    download: async ({ outputDir, pageIds }) => {
-      for (const pageId of pageIds) {
-        const pageDir = path.join(outputDir, pageId);
-        fs.mkdirSync(pageDir, { recursive: true });
-        fs.writeFileSync(path.join(pageDir, 'page.tsx'),
-          pageId === pageOverview
-            ? 'export default function Overview() { return "overview"; }\n'
-            : 'export default function Detail() { return "detail"; }\n',
-          'utf8');
-        fs.writeFileSync(path.join(pageDir, 'config.json'),
-          JSON.stringify({ dataSources: pageId === pageOverview ? ['contoso_alpha'] : ['contoso_beta'] }),
-          'utf8');
-      }
-      return true;
-    },
-  };
-  return { sdk, genpageCli, appId, appUnique, auxStats, relStats };
+  const genpage = fakeGenpage({ pages: [
+    { pageId: pageOverview, name: 'Overview', source: 'export default function Overview() { return "overview"; }\n', dataSources: ['contoso_alpha'] },
+    { pageId: pageDetail, name: 'Detail', source: 'export default function Detail() { return "detail"; }\n', dataSources: ['contoso_beta'] },
+  ] });
+  return { sdk, genpage, appId, appUnique, auxStats, relStats };
 }
 
 async function runDownloadSnapshot(concurrency) {
@@ -645,7 +628,7 @@ async function runDownloadSnapshot(concurrency) {
   const fixture = richDownloadFixture();
   const { result, stderr } = await captureStderr(() => runDownload({
     sdk: fixture.sdk,
-    genpageCli: fixture.genpageCli,
+    genpage: fixture.genpage,
     outDir,
     appId: fixture.appId,
     appUnique: fixture.appUnique,

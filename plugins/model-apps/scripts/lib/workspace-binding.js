@@ -56,6 +56,8 @@ const WORKSPACE_ORG_MISMATCH = 'WORKSPACE_ORG_MISMATCH';
 const WORKSPACE_NOT_INITIALIZED = 'WORKSPACE_NOT_INITIALIZED';
 // The plugin's own: the halt for a manifest the SDK could not read at all (below). The SDK has no code for it.
 const WORKSPACE_MANIFEST_INVALID = 'WORKSPACE_MANIFEST_INVALID';
+// The name of the build lock an apply holds in its workspace (lib/app-operation-lease.js): the hash of the app's name, 64 hex digits.
+const BUILD_LOCK = /^app-build\.[0-9a-f]{64}\.lock$/;
 
 function isWorkspaceOrgMismatch(err) {
   return !!err && typeof err === 'object' && err.code === WORKSPACE_ORG_MISMATCH;
@@ -149,6 +151,9 @@ function listsNoArtifact(file) {
 // see the header). Conservative on purpose: "nothing" is only answered when every entry was seen and is one of those,
 // so a file of any other name (a baseline, a receipt, a journal, an operator's note), a link, a manifest that lists an
 // artifact, a tree deeper or larger than that scaffold, and anything that could not be read all count as something.
+// One file is not: the build lock an apply holds while it runs (`app-build.<sha256>.lock`, lib/app-operation-lease.js).
+// The apply that meets this folder took it before it opened the folder, so the folder always holds it here; it records
+// which process is building, never anything that was built, and is gone when that build ends.
 // Read-only.
 function holdsNothing(folder) {
   const MAX_DEPTH = 4; // `.metadata/<type>` is two deep; the rest is margin
@@ -173,6 +178,7 @@ function holdsNothing(folder) {
   let manifest = false;
   for (const entry of entries) {
     seen += 1;
+    if (entry.isFile() && BUILD_LOCK.test(entry.name)) continue;
     if (entry.isFile() && entry.name === WORKSPACE_MANIFEST) {
       if (!listsNoArtifact(path.join(folder, entry.name))) return false;
       manifest = true;

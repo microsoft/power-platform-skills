@@ -58,7 +58,7 @@ Look for `powerpages.config.json` in the current directory or immediate subdirec
 
 Use the **Explore agent** to quickly scan the site for existing backend integrations:
 
-> "Analyze this Power Pages code site for existing backend integrations:
+> "Analyze this Power Pages SPA site for existing backend integrations:
 > 1. Check `.powerpages-site/server-logic/` — list any existing server logic endpoints
 > 2. Check `.powerpages-site/cloud-flow-consumer/` — list any registered cloud flows
 > 3. Search frontend code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for calls to `/_api/` (Web API) and `/_api/serverlogics/` (Server Logic) and `/_api/cloudflow/` (Cloud Flows)

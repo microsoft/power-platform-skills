@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 const realAuth = require('../lib/dataverse-auth.js');
+const { withThrowawaySdk } = require('../lib/throwaway-sdk.js');
 
 const SCRIPT = path.resolve(__dirname, '..', 'list-languages.js');
 const ENV = 'https://contoso.crm.dynamics.com';
@@ -29,25 +30,31 @@ async function run(argv, answer = { baseLanguage: 1033, provisioned: [1033], ava
         throw exit;
       },
     },
-    './lib/sdk-http-client.js': {
-      createAzHttpClient: (env) => {
-        events.push({ type: 'client', env });
-        return { marker: 'az-client', env };
-      },
-    },
-    './vendor/cds-maker-sdk.cjs': {
-      createNodeWorkspaceStorage: (dir) => ({ dir }),
-      createMakerSdk: (cfg) => {
-        events.push({ type: 'sdk', cfg });
-        // Only the one method the script may call: any other (initWorkspace, a workspace read) is a TypeError.
-        return {
-          getEnvironmentLanguages: async () => {
-            events.push({ type: 'getEnvironmentLanguages' });
-            if (typeof answer === 'function') return answer();
-            return answer;
+    // The throwaway-workspace lifecycle is the real one (lib/throwaway-sdk.js); only the SDK and the client it makes are stubs.
+    './lib/throwaway-sdk.js': {
+      withThrowawaySdk: (options, runWith) => withThrowawaySdk({
+        ...options,
+        deps: {
+          createAzHttpClient: (env) => {
+            events.push({ type: 'client', env });
+            return { marker: 'az-client', env };
           },
-        };
-      },
+          makerSdk: {
+            createNodeWorkspaceStorage: (dir) => ({ dir }),
+            createMakerSdk: (cfg) => {
+              events.push({ type: 'sdk', cfg });
+              // Only the one method the script may call: any other (initWorkspace, a workspace read) is a TypeError.
+              return {
+                getEnvironmentLanguages: async () => {
+                  events.push({ type: 'getEnvironmentLanguages' });
+                  if (typeof answer === 'function') return answer();
+                  return answer;
+                },
+              };
+            },
+          },
+        },
+      }, runWith),
     },
   };
   const cli = loadCli(SCRIPT, { requires, argv });
@@ -204,97 +211,16 @@ test('the script is a CLI only when run directly, and exports the read for the r
   assert.strictEqual(typeof mod.readLanguages, 'function');
 });
 
-// --- the documents that send the planner to it ------------------------------------------------------------
+// --- the planner's example --------------------------------------------------------------------------------
+// There is no `pac model list-languages` behind the script (every /genpage page operation needs the Azure CLI, so a fallback that
+// avoided it bought nothing), and scripts/tests/pac-fallback-commands.test.js pins that no script runs the command. What the DOCUMENTS
+// say is pinned below: the planner, the skill and the references name the script as the only source, a failed read ends language
+// detection, and README says that deploying a page needs `az`.
 
 const PLUGIN = path.resolve(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(PLUGIN, ...parts), 'utf8');
-// Whitespace folded and a block quote's `> ` marker dropped: the documents wrap their lines and the checks below read
-// sentences.
-const squash = (text) => text.replace(/^>\s?/gm, '').replace(/\s+/g, ' ');
-// The planner's own section on language detection, up to the next `### ` heading.
-function languageSection() {
-  const planner = read('agents', 'genpage-planner.md');
-  const start = planner.indexOf('### Detect Configured Languages');
-  const end = planner.indexOf('\n### ', start + 1);
-  assert.ok(start !== -1 && end !== -1, 'the planner has a Detect Configured Languages section');
-  return planner.slice(start, end);
-}
-
-test('the planner, the genpage skill and the references run the script first — `pac model list-languages` only comes after it', () => {
-  for (const parts of [['agents', 'genpage-planner.md'], ['skills', 'genpage', 'SKILL.md'], ['references', 'localization.md'], ['references', 'rules.md'], ['references', 'plan-schema.md']]) {
-    const text = read(...parts);
-    const script = text.indexOf('list-languages.js');
-    const pac = text.indexOf('pac model list-languages');
-    assert.ok(script !== -1, `${parts.join('/')} names the script`);
-    assert.ok(pac === -1 || script < pac, `${parts.join('/')} names the script before the command that falls back on it`);
-  }
-  const section = languageSection();
-  assert.match(section, /^node "\$\{PLUGIN_ROOT\}\/scripts\/list-languages\.js" --env '<envUrl>'$/m);
-  assert.match(section, /`<LCID> <Code> \u2014 RTL: Yes\|No`/, 'the line the plan carries is unchanged');
-  assert.match(squash(read('skills', 'genpage', 'SKILL.md')), /Language detection \(`node "\$\{PLUGIN_ROOT\}\/scripts\/list-languages\.js" --env '<envUrl>'`; when that exits non-zero, `pac model list-languages --environment '<envUrl>'` \u2014 the Azure CLI is not needed here\) \u2014 only on new-page path/);
-});
-
-test('the planner falls back to `pac model list-languages` on ANY non-zero exit of the script — decided by the exit status, never by a phrase of the message', () => {
-  const section = languageSection();
-  const text = squash(section);
-  // The script first, then the rule, then `pac` as a command of its own in a fenced block.
-  const script = section.indexOf('node "${PLUGIN_ROOT}/scripts/list-languages.js"');
-  const rule = section.indexOf('**Any non-zero exit');
-  const pac = section.search(/^pac model list-languages --environment '<envUrl>'$/m);
-  assert.ok(script !== -1 && script < rule && rule < pac, `script ${script} < rule ${rule} < pac ${pac}`);
-  assert.match(section, /```powershell\r?\npac model list-languages --environment '<envUrl>'\r?\n```/);
-  assert.match(text, /decide by the exit status, never by the wording of the message/);
-  // A script that never answers is a failure too: what ends it is the shell tool giving up, not an exit status.
-  assert.match(text, /\*\*Any non-zero exit \u2014 or no answer before your shell tool gives up \u2014 means the script could not read the languages; decide by the exit status, never by the wording of the message\.\*\*/);
-  // The fallback reads the environment the script was given. Without `--environment`, `pac` answers for the active organization of its
-  // auth profile, and the plan would carry another environment's languages under this environment's URL.
-  assert.match(text, /Pass the same `<envUrl>` the script was given: without `--environment`, `pac` answers for the active organization of its auth profile, which is not necessarily the environment this plan is for/);
-  // What the rule must not be: a trigger on a phrase. The sign-in advice `Run 'az login' first` is what ONE of the
-  // client's failures says; a missing Azure CLI, a slow one and a token another tenant refuses say something else,
-  // and the planner took each of those for "any other failure", reported it and stopped.
-  assert.doesNotMatch(text, /Run 'az login' first/);
-  // And no failure turns into a request that the user sign in: this flow works without `az`.
-  assert.doesNotMatch(text, /needs_input/);
-  assert.match(text, /do not stop and do not ask the user to run `az login`/);
-  assert.match(text, /`\/genpage` has never needed `az` for a page over existing entities or mock data/);
-  // `<envUrl>` is the column `pac auth list` prints ("Environment Url"); `Org URL:` is the line of `pac org who`.
-  assert.match(text, /`<envUrl>` is the selected environment's `Environment Url` from the `pac auth list` table \(Step 2; the `Org URL:` line of `pac org who` is the same address\)/);
-});
-
-test('the planner says it fell back — in the log and in its report of the environment — and stops only when pac fails too', () => {
-  const text = squash(languageSection());
-  assert.match(text, /Then \*\*say that you did\*\*/);
-  assert.match(text, /In `workflow-log\.md`, record the script's command line with its result \(its stdout, or its stderr when stdout is empty\), and then the `pac model list-languages` line with its table, each verbatim/);
-  assert.match(text, /In your report of the environment, say so: "Languages read with `pac model list-languages`: the languages script could not read them/);
-  assert.match(text, /If `pac model list-languages` fails as well, report that and stop\. Never assume the environment is English-only/);
-  // A failed read prints its JSON on stdout; a usage error exits 1 before any read and prints nothing there.
-  assert.match(text, /A failed read prints `\{ "ok": false, "error": "\u2026", "code": "\u2026" \}` on stdout \(`code` only when the SDK gave one\); a usage error, such as an `--env` that carries a path, prints nothing there and names the flag on stderr/);
-  // The commands a log records verbatim include the fallback, as it is run: pinned to the environment.
-  assert.match(squash(read('agents', 'genpage-planner.md')), /`` `pac model list-languages --environment '<envUrl>'` `` \(the fallback below\)/);
-  // The section stops in one place only: when pac fails too. A second stop — on one code of the script, say — would keep the planner from the
-  // fallback for the very failures the fallback is for. Its words say "stop" twice: "do not stop" (for az) and "report that and stop".
-  assert.strictEqual((text.match(/\bstop\b/gi) || []).length, 2, 'no stop but the two this test names');
-  assert.match(text, /do not stop and do not ask the user to run `az login`/);
-});
-
-test('README\u2019s promise — /genpage works without az for pages over existing entities or mock data — is still true: its one az read falls back to pac', () => {
-  const readme = squash(read('README.md'));
-  assert.match(readme, /Without `az`, the `\/genpage` skill still works for pages over existing entities or mock data \u2014 it only fails when entity creation is needed\./);
-  assert.match(readme, /Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not\./);
-  // The planner's section is what makes the sentence true: without the fallback the first step of every new page needs az.
-  assert.match(squash(languageSection()), /fall back to the command that read the languages before this script, which signs in through `pac`/);
-});
-
-// Without `--environment`, `pac model list-languages` answers for the ACTIVE organization of pac's auth profile — not necessarily the environment the
-// plan is for — so a document that tells the planner to run it, or names it as the fallback, names the pinned command. (The planner's own section is
-// pinned above, where it gives the command; its later sentences refer to it by name.)
-test('every document that names the fallback names it pinned to the environment', () => {
-  for (const parts of [['skills', 'genpage', 'SKILL.md'], ['README.md'], ['references', 'localization.md'], ['references', 'plan-schema.md'], ['references', 'rules.md'], ['AGENTS.md']]) {
-    const text = read(...parts);
-    assert.ok(text.includes('pac model list-languages'), `${parts.join('/')} names the fallback`);
-    assert.deepStrictEqual(text.match(/pac model list-languages(?! --environment '<envUrl>')/g) || [], [], `${parts.join('/')} names it without --environment`);
-  }
-});
+// Whitespace collapsed (and a Windows checkout's CRLF with it), and a block quote's `>` markers dropped: the documents wrap their lines differently.
+const squash = (text) => text.replace(/^[ \t]*>[ \t]?/gm, '').replace(/\s+/g, ' ');
 
 test('the planner\u2019s example output is the shape — and the exact ASCII text — the script prints, field for field', () => {
   const { describeEnvironmentLanguages } = require('../lib/lcid-cultures.js');
@@ -309,6 +235,62 @@ test('the planner\u2019s example output is the shape — and the exact ASCII tex
   assert.deepStrictEqual(Object.keys(example.languages[0]), Object.keys(real.languages[0]));
   assert.deepStrictEqual(example.languages.map((l) => [l.lcid, l.code, l.rtl]), real.languages.map((l) => [l.lcid, l.code, l.rtl]));
   assert.deepStrictEqual(example.summary, real.summary);
+});
+
+// What the documents say about the languages. The planner is headless, so its text is the whole of the rule.
+test('the planner reads the languages with the script alone, and a failed read ends language detection — it reports why, stops, and never assumes English', () => {
+  const planner = squash(read('agents', 'genpage-planner.md'));
+  assert.match(planner, /with the plugin's own script\. It is the only source: it reads them through the SDK with the Azure CLI \(`az`\) token, which every `\/genpage` page operation needs anyway\./);
+  assert.match(planner, /\*\*Any non-zero exit — or no answer before your shell tool gives up — means the script could not read the languages; decide by the exit status, never by the wording of the message\.\*\*/);
+  assert.match(planner, /the SDK reports all of these alike, as `CONNECTION_ERROR`, so no code tells them apart\./);
+  assert.match(planner, /\*\*A failed read ends language detection: report why and stop\.\*\*/);
+  assert.match(planner, /Never assume the environment is English-only — the plan's localization decision depends on this answer — and never read languages from any other source: there is none\./);
+  assert.match(planner, /record the command and that result in `workflow-log\.md` verbatim/);
+  // The retired advice: do not stop, do not ask for az login, fall back to pac, and say so.
+  assert.doesNotMatch(planner, /has never needed `az`|do not stop and do not ask the user to run `az login`|fall back to the command that read the languages|Languages read with|\(the fallback below\)|when you fell back to it/);
+  // The skill's Phase 1 says the same in a line.
+  assert.match(squash(read('skills', 'genpage', 'SKILL.md')), /Language detection \(`node "\$\{PLUGIN_ROOT\}\/scripts\/list-languages\.js" --env '<envUrl>'` — the only source of the environment's languages: when it fails, report why and stop, never assume the environment is English-only\)/);
+});
+
+test('no document names a fallback for the languages: the planner, the skill, the references and README name the script alone', () => {
+  for (const parts of [['agents', 'genpage-planner.md'], ['skills', 'genpage', 'SKILL.md'], ['references', 'localization.md'], ['references', 'plan-schema.md'], ['references', 'rules.md'], ['README.md']]) {
+    const text = squash(read(...parts));
+    assert.doesNotMatch(text, /pac model list-languages/, `${parts.join('/')} names the retired fallback`);
+    assert.doesNotMatch(text, /fell back to|its fallback is|or its fallback|when that script cannot read them/i, `${parts.join('/')} still describes a fallback`);
+  }
+  assert.match(squash(read('references', 'localization.md')), /non-English language via `scripts\/list-languages\.js`\. English-only environments/);
+  assert.match(squash(read('references', 'localization.md')), /\(run by the planner during requirements gathering; it is the only source of the environment's languages\)/);
+  assert.match(squash(read('references', 'plan-schema.md')), /marked `— RTL` when `scripts\/list-languages\.js` reports `rtl: true` for it — e\.g\./);
+  assert.match(squash(read('references', 'rules.md')), /only when `scripts\/list-languages\.js` reports multiple configured languages OR any non-English language\./);
+});
+
+// README's account of `az`: it is what every Dataverse call authenticates with, generative pages included (they are written through the SDK, not through `pac model genpage`), and the language read has no
+// `pac` fallback — so a deploy needs `az`, and a machine without it gets the reason, never an English default. The README that said /genpage worked without `az` for a page over existing entities or
+// mock data was true only while a `pac` fallback stood behind the language read and `pac` wrote the pages; neither is so now. Its account of what `pac` is still for — sign-in, the environment, the
+// version, where it steps in for three scripts and a tabular connector's tables and columns — is pinned here too, since a README that still gave `pac` the type generator would send an agent to a command that is gone.
+test('README says az is needed for every Dataverse call, pages included, that the language read has no pac fallback, and what pac is still for', () => {
+  const readme = squash(read('README.md'));
+  assert.match(readme, /\| \[Azure CLI\]\([^)]*\) \(`az`\) \| Every Dataverse call — tables, apps, languages, entity creation and generative pages — and the Power Apps service token that reading connections and connector metadata uses \|/);
+  assert.match(readme, /`az` is what every Dataverse call authenticates with — listing tables, apps and languages, entity creation, and the generative pages themselves, which are written, read and deleted through the bundled SDK, not through `pac model genpage`/);
+  assert.match(readme, /\*\*Deploying a page needs `az`\*\*, and so does detecting the environment's languages: there is no `pac` fallback for either, so a missing or signed-out `az` ends language detection with the reason, never with an English default\./);
+  assert.match(readme, /`pac` signs you in and chooses the environment, and steps in for the connection, connector and deployment-settings scripts only where the SDK has no route or refuses \(`connectionsSource` or `source` says which answered; `connectionsFallback` or `fallback` says why the SDK did not\)\. It also lists a tabular connector's tables \(`pac model genpage list-connector-tables`; no script wraps it\), and `scripts\/connector\.js schema --dataset --table` reads a table's columns through `pac`: the plugin cannot build the client the SDK reads a connector's tables with\. The type generator, the page listing and download, and putting a page in an app, taking it out and deleting it are the SDK's too \(`scripts\/genpage\.js`\), so they need `az` and no `pac`\./);
+  // The promise the old paragraph made, and the fallback that backed it, are gone.
+  assert.doesNotMatch(readme, /Without `az`, the `\/genpage` skill still works|falls back to `pac model list-languages`|uses `az` when it is signed in/);
+  // The prerequisites table names what `pac` is still for — sign-in, the environment and the version, the three fallbacks, a tabular connector's table columns and the one list no script wraps — not the commands the scripts replaced.
+  assert.match(readme, /\| \[PAC CLI\]\([^)]*\) > 2\.10\.0 \| Signing in, choosing the environment and reading the CLI version \(`pac auth`, `pac org who`, `pac help`\); the fallbacks of the connection, connector and deployment-settings scripts; reading a tabular connector's table columns \(`scripts\/connector\.js schema --dataset --table`\); and listing a tabular connector's tables, which no script wraps \(`pac model genpage list-connector-tables`\) \|/);
+  assert.doesNotMatch(readme, /Schema generation, app creation, table listing, deployment|type generator \(`pac model genpage generate-types`\)|runs `pac model genpage generate-types`|schema generation \(`generate-types`\)/);
+  // The steps and the technology list say the same: the schema is `genpage.js types`, and pac is sign-in, the environment, the fallbacks and a tabular connector's tables and columns.
+  assert.match(readme, /6\. \*\*Generate schema\*\* — runs `scripts\/genpage\.js types` \(the SDK's type generator\) for Dataverse entity pages/);
+  assert.match(readme, /- \*\*PAC CLI\*\* — sign-in and environment choice, the fallbacks of the connection, connector and deployment-settings scripts, and a tabular connector's tables and columns \(`pac model genpage list-connector-tables`, `scripts\/connector\.js schema --dataset --table`\); pages, their schema and their listing, download and removal go through the bundled SDK/);
+});
+
+// README's account of where a deployed page lands: a page needs no app, and it is in an app's navigation only when the upload names the app (`--app-id`) AND asks for the placement
+// (`--add-to-sitemap`). An app named alone only pins the default views of the page's tables — genpage-upload.js does exactly that (genpage-upload.test.js pins it), and refuses the
+// placement without the app. The README that said a page "is added to one when you name it" left out the second flag.
+test('README says a page is added to an app\'s navigation only when the upload names the app and asks for the placement, and that the app alone only pins its tables\' views', () => {
+const readme = squash(read('README.md'));
+assert.match(readme, /8\. \*\*Deploy\*\* — writes the page through the bundled SDK \(`scripts\/genpage-upload\.js`\); a page needs no app, and is added to an app's navigation only when the upload names the app \(`--app-id`\) and asks for the placement \(`--add-to-sitemap`\) — `--app-id` alone only pins the default views of the page's tables in the app\. For a new app the first page is deployed first, then the app is created from it, then the other pages are added/);
+assert.doesNotMatch(readme, /is added to one when you name it/);
 });
 
 // --- end to end: the real script in a real process ---------------------------------------------------------

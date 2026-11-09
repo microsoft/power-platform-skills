@@ -19,6 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pageFileProblems, pagesTables } = require('./lib/page-file-targets.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function checkPageFiles({ planPath, workingDir }) {
   if (!planPath) return { exit: 1, result: { ok: false, error: '--plan is required' } };
@@ -57,6 +58,9 @@ function parseArgv(argv) {
 
 if (require.main === module) {
   const { exit, result } = checkPageFiles(parseArgv(process.argv.slice(2)));
+  // The result lists every file and problem of the plan, and the process exits right after it: the write is
+  // made blocking first, or a pipe on Linux and macOS takes only what fits at once (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exit(exit);
 }

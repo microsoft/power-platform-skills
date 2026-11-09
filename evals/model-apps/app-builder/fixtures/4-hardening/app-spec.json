@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "solution": { "uniqueName": "Hardening", "displayName": "Hardening", "publisherPrefix": "new" },
-  "app": { "name": "Hardening", "description": "Exercises the 2026-07-15 fixes: lookup-heavy default views (#2), N:N ordering (#3), sub-grid section+title (#5), and valid sample-data binds/choices (#1/#4)." },
+  "app": { "name": "Hardening", "description": "Exercises the hardening fixes: lookup-heavy default views, N:N ordering, sub-grid section+title, and valid sample-data binds/choices." },
   "entities": [
     {
       "schemaName": "new_customer", "displayName": "Customer", "pluralName": "Customers",
@@ -43,7 +43,7 @@
   ],
   "views": [
     {
-      "entity": "new_ticket", "type": "main", "name": "Open Tickets",
+      "entity": "new_ticket", "name": "Open Tickets",
       "columns": ["new_subject", "new_status"], "sort": [{ "attr": "new_subject", "dir": "asc" }], "activeOnly": true
     }
   ],

@@ -121,12 +121,12 @@ test('REAL BUNDLE: an answer it cannot read as a list of languages fails ENVIRON
   }
 });
 
-// Every way the Azure CLI or the identity can fail, through the REAL token reader and client. The planner falls back to
-// `pac model list-languages` on ANY non-zero exit of the script, so what these pin is that each one is a rejected
-// read — never an answer, and never an English default in the place of one. The SDK reports them all as the same
-// `CONNECTION_ERROR`: a failure before any answer (statusCode 0) wraps the client's own error, so a missing Azure CLI
-// reads like a dropped connection, and a refusal carries its HTTP status. Nothing in either is a code a planner could
-// match, which is why its rule is the exit status.
+// Every way the Azure CLI or the identity can fail, through the REAL token reader and client. No `pac` command stands behind the
+// script (every /genpage page operation needs the Azure CLI), so a failed read ends language detection, and what these pin is
+// that each one is a rejected read — never an answer, and never an English default in the place of one. The SDK reports them all
+// as the same `CONNECTION_ERROR`: a failure before any answer (statusCode 0) wraps the client's own error, so a missing Azure
+// CLI reads like a dropped connection, and a refusal carries its HTTP status. Nothing in either is a code a caller could
+// match, which is why the caller decides by the exit status.
 //   az missing   `spawn az ENOENT: not found on PATH`  (process-runner.js)     -> kind 'missing'
 //   az too slow  `ETIMEDOUT`                                                   -> kind 'timeout'   (cli-failure.js)
 //   az signed out  any other failure of `az account get-access-token`          -> kind 'failed'

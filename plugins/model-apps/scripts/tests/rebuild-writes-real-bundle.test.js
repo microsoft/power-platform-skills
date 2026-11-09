@@ -22,7 +22,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
-const { runSdkBuild, settleOwedPublishes } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder, ownAppFolder } = require('./helpers/own-app-folder.js');
+const { recordBuildFailure, installBuildFailureDiagnostics } = require('./helpers/build-failure-diagnostics.js');
+installBuildFailureDiagnostics(test);
+const { runSdkBuild: runSdkBuildInPlace, settleOwedPublishes } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { createFakeDataverse } = require('./helpers/fake-dataverse.js');
 
 const COMPONENT = { view: 26, chart: 59, form: 60 };
@@ -96,7 +101,15 @@ function scenario(fakeOptions = {}) {
   async function build(spec, { publish = true, phases, sdk, warnings = [] } = {}) {
     const mark = fake.mark();
     const useSdk = sdk || await sdkOver();
-    const result = await runSdkBuild(spec, { sdk: useSdk, apply: true, publish, phases: phases || PHASES, warn: (w) => warnings.push(String(w)) });
+    // A build that throws is usually one the test provokes (a failed write) and checks with assert.rejects; the one-off failure
+    // of a build that should succeed (a file missing from the workspace) is diagnosed from the output alone, because the folder
+    // is gone afterwards. The error is rethrown as it was; what the two folders held is printed only if the test fails.
+    let result;
+    try {
+      result = await runSdkBuild(spec, { sdk: useSdk, apply: true, publish, phases: phases || PHASES, warn: (w) => warnings.push(String(w)) });
+    } catch (error) {
+      throw recordBuildFailure(error, [{ label: 'scenario workspace', dir }, { label: 'app folder', dir: ownAppFolder({ apply: true }).appDir }]);
+    }
     return { result, mark, writes: fake.writeCounts(mark), warnings, sdk: useSdk };
   }
   return { fake, dir, sdkOver, build };
@@ -639,6 +652,35 @@ test('rebuild writes: a spec column a maker removed from a view in Dataverse is 
   assert.equal(again.writes['PATCH savedqueries'], 1, JSON.stringify(again.writes));
   assert.match(view().data.layoutxml, /<cell name="new_code"/, 'the spec\'s column is back');
   assert.deepEqual(s.fake.unpublished(), [], 'and it is published');
+});
+
+// A view's filter can hold a `<link-entity>`: a condition on RELATED rows ("tickets with a task that has a due date",
+// `link-type="any"`). The SDK keeps such a filter — the whole of it, its sibling conditions included — only in its own copy
+// of the view's FetchXML, so the typed `filters` of a fetched view are empty. A rebuild changes a view's columns and
+// description and nothing else of its query, so the filter a maker made must come through it untouched.
+test('rebuild writes: a view whose filter holds a related-rows condition keeps it when a column is added, and an unchanged rebuild writes nothing', async () => {
+  const s = scenario();
+  await s.build(specFor());
+  const view = () => s.fake.rows('savedqueries').find((r) => r.data.name === 'Open Tickets');
+  const filter = '<filter type="and"><condition attribute="new_code" operator="eq" value="A" />'
+    + '<link-entity name="new_task" from="new_taskid" to="new_taskid" link-type="any"><filter type="and"><condition attribute="new_due" operator="not-null" /></filter></link-entity></filter>';
+  // The maker adds the condition in the designer: the query gains the filter, and the row moves on.
+  view().data.fetchxml = view().data.fetchxml.replace(/<\/entity>/, `${filter}</entity>`);
+  view().version += 1;
+
+  const grown = await s.build(specFor({ viewColumns: ['new_name', 'new_code', 'new_area'] }));
+  assert.equal(grown.writes['PATCH savedqueries'], 1, JSON.stringify(grown.writes));
+  const [save] = s.fake.saves(grown.mark);
+  assert.match(save.body.layoutxml, /<cell name="new_area"/, 'the spec\u2019s new column is written');
+  assert.match(save.body.fetchxml, /<attribute name="new_area"/, 'and fetched');
+  const spaced = (xml) => xml.replace(/\s*\/>/g, ' />');
+  assert.ok(spaced(save.body.fetchxml).includes(spaced(filter)), `the filter, link-entity and all, is written back as it was:\n${save.body.fetchxml}`);
+  assert.ok(spaced(view().data.fetchxml).includes(spaced(filter)), 'and is what the view holds now');
+
+  const again = await s.build(specFor({ viewColumns: ['new_name', 'new_code', 'new_area'] }));
+  assert.equal(again.writes['PATCH savedqueries'], undefined, JSON.stringify(again.writes));
+  assert.ok(spaced(view().data.fetchxml).includes(spaced(filter)));
+  assert.deepEqual(s.fake.unpublished(), []);
 });
 
 test('rebuild writes: a description the spec sets, changed by a maker in Dataverse, is pushed back', async () => {

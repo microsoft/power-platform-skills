@@ -1861,7 +1861,7 @@ For Astro projects, use `src/services/authService.ts` directly in component scri
 
 ### Required: Disable Profile Redirect (All Providers)
 
-Power Pages code sites do not have a built-in profile page. After login, Power Pages attempts to redirect to `/profile`, which returns a 404 on code sites. Disable this with a site setting:
+Power Pages SPA sites do not have a built-in profile page. After login, Power Pages attempts to redirect to `/profile`, which returns a 404 on SPA sites. Disable this with a site setting:
 
 **Site setting name:** `Authentication/Registration/ProfileRedirectEnabled`
 **Value:** `false`
@@ -2419,7 +2419,7 @@ name: Code-Site-Shell-Header
 ```html
 <div/>
 <script>
-  // Code Site Shell Header — Server-to-SPA redirect for auth pages.
+  // SPA Site Shell Header — Server-to-SPA redirect for auth pages.
   // Uses a separate template because pac pages upload-code-site wipes the original Header.
   (function () {
     var path = window.location.pathname.toLowerCase();
