@@ -9,6 +9,19 @@ native metadata, Liquid, Bootstrap, and Design Studio-compatible content.
 
 Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creating new skills and agents.
 
+## Data-model migration reliability
+
+Keep `migrate-datamodel`'s four phases, track selection, and approval gates unchanged
+when maintaining its scripts. Snapshot comparisons must not pass incomplete parses
+or ambiguous duplicate identities. Initialization must verify the website and
+environment identity before resuming or resetting an existing folder. Remediation
+reruns rebuild the selected FetchXML/Liquid passes from current source, preserving
+both passes without modifying live files before the approved apply step.
+Validate saved state and snapshot/remediation records before dereferencing them;
+invalid input must produce a clear error without replacing usable state or partially
+applying a proposal with missing staged files.
+Regression coverage lives in `scripts/tests/{diff-snapshots,snapshot-site,update-state,generate-migration-reports,apply-remediation}.test.js`.
+
 ## Non-SPA creation and shared design quality
 
 `scripts/telemetry-config.js` delegates preference changes to the bundled shared CLI and adds the non-SPA creation disclosure.

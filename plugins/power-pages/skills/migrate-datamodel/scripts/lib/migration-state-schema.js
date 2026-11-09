@@ -179,6 +179,7 @@ function buildInitialState({ webSiteId, outputDir, track = DEFAULT_TRACK, starte
       template: null,
       environment: null,
       environmentName: null,
+      environmentUrl: null,
       migrationMode: null,
       siteRoot: null,
       outputDir,

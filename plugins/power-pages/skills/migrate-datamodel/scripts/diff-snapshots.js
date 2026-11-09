@@ -54,6 +54,7 @@ const KEY_FIELDS = {
   webPages: ['kind', 'name', 'partialUrl', 'language'],
   contentSnippets: ['name', 'language'],
   webLinkSets: ['name', 'language'],
+  webLinks: ['parentSet', 'name', 'language'],
   webTemplates: ['name'],
   webFiles: ['name', 'partialUrl'],
   pageTemplates: ['name'],
@@ -87,7 +88,7 @@ const VALUE_FIELDS = {
 };
 
 function makeKey(rec, fields) {
-  return fields.map((f) => String(rec[f] ?? '')).join('|');
+  return JSON.stringify(fields.map((f) => String(rec[f] ?? '')));
 }
 
 // Treat null and 0 as equivalent: PAC only writes statecode for inactive
@@ -119,15 +120,25 @@ function diffCategory(category, sdmInventory, edmInventory) {
   const keyFields = KEY_FIELDS[category] || ['name'];
   const valueField = VALUE_FIELDS[category];
 
-  const sdmMap = new Map();
-  for (const rec of sdmInventory) sdmMap.set(makeKey(rec, keyFields), rec);
-  const edmMap = new Map();
-  for (const rec of edmInventory) edmMap.set(makeKey(rec, keyFields), rec);
+  // Duplicate logical identities cannot be paired reliably. Do not silently
+  // overwrite them, even when both downloads contain the same record count.
+  const duplicateKeys = { sdm: [], edm: [] };
+  function index(records, duplicates) {
+    const map = new Map();
+    for (const rec of records) {
+      const key = makeKey(rec, keyFields);
+      if (map.has(key)) duplicates.push(key);
+      else map.set(key, rec);
+    }
+    return map;
+  }
+  const sdmMap = index(sdmInventory, duplicateKeys.sdm);
+  const edmMap = index(edmInventory, duplicateKeys.edm);
 
   const missingInEdm = [];   // present in SDM, not in EDM
   const extraInEdm = [];     // present in EDM, not in SDM
   const stateChanged = [];   // present in both, but statecode differs
-  const contentChanged = []; // present in both, but contentHash differs (only if both had hashes)
+  const contentChanged = []; // includes a companion file/hash missing on only one side
   const valueChanged = [];   // present in both, but value field differs (siteSettings)
 
   for (const [key, sdmRec] of sdmMap) {
@@ -139,7 +150,7 @@ function diffCategory(category, sdmInventory, edmInventory) {
     if (normalizeStateCode(sdmRec.stateCode) !== normalizeStateCode(edmRec.stateCode)) {
       stateChanged.push({ key, sdmStateCode: sdmRec.stateCode, edmStateCode: edmRec.stateCode, record: sdmRec });
     }
-    if (sdmRec.contentHash != null && edmRec.contentHash != null && sdmRec.contentHash !== edmRec.contentHash) {
+    if ((sdmRec.contentHash ?? null) !== (edmRec.contentHash ?? null)) {
       contentChanged.push({ key, sdmHash: sdmRec.contentHash, edmHash: edmRec.contentHash, record: sdmRec });
     }
     if (valueField) {
@@ -170,7 +181,9 @@ function diffCategory(category, sdmInventory, edmInventory) {
   );
 
   let status = 'pass';
-  if (isSdmOnlyDifference) {
+  if (duplicateKeys.sdm.length > 0 || duplicateKeys.edm.length > 0) {
+    status = 'fail';
+  } else if (isSdmOnlyDifference) {
     status = 'warn';
   } else if (missingInEdm.length > 0 || extraInEdm.length > 0 || sdmCount !== edmCount) {
     status = 'fail';
@@ -188,6 +201,7 @@ function diffCategory(category, sdmInventory, edmInventory) {
     stateChanged,
     contentChanged,
     valueChanged,
+    duplicateKeys,
     sdmOnlyCategory: SDM_ONLY_CATEGORIES.has(category),
   };
 }
@@ -234,6 +248,26 @@ function main() {
   const sdm = JSON.parse(fs.readFileSync(sdmPath, 'utf8'));
   const edm = JSON.parse(fs.readFileSync(edmPath, 'utf8'));
 
+  for (const [label, snapshot] of [['sdm', sdm], ['edm', edm]]) {
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) ||
+        !snapshot.inventory || typeof snapshot.inventory !== 'object' || Array.isArray(snapshot.inventory)) {
+      throw new Error(`${label} snapshot must contain an inventory object`);
+    }
+    if (Object.values(snapshot.inventory).some((records) => !Array.isArray(records))) {
+      throw new Error(`${label} snapshot inventory categories must be arrays`);
+    }
+    if (Object.values(snapshot.inventory).some((records) =>
+      records.some((record) => !record || typeof record !== 'object' || Array.isArray(record)))) {
+      throw new Error(`${label} snapshot inventory records must be objects`);
+    }
+    if (snapshot.parseErrors != null && (
+      typeof snapshot.parseErrors !== 'object' || Array.isArray(snapshot.parseErrors) ||
+      Object.values(snapshot.parseErrors).some((errors) => !Array.isArray(errors))
+    )) {
+      throw new Error(`${label} snapshot parseErrors must contain arrays of errors`);
+    }
+  }
+
   if (sdm.label !== 'sdm') console.warn(`Warning: --sdm file has label '${sdm.label}', expected 'sdm'`);
   if (edm.label !== 'edm') console.warn(`Warning: --edm file has label '${edm.label}', expected 'edm'`);
 
@@ -246,7 +280,9 @@ function main() {
     sdmCapturedAt: sdm.capturedAt,
     edmCapturedAt: edm.capturedAt,
     comparedAt: new Date().toISOString(),
-    overallStatus: 'pass',
+    overallStatus: Object.values(sdm.parseErrors || {}).some((errors) => errors.length > 0) ||
+      Object.values(edm.parseErrors || {}).some((errors) => errors.length > 0) ? 'fail' : 'pass',
+    parseErrors: { sdm: sdm.parseErrors || {}, edm: edm.parseErrors || {} },
     categories: {},
     summary: null,
   };
@@ -268,6 +304,11 @@ function main() {
   // Console summary
   console.log(`✓ Wrote ${outPath}\n`);
   console.log(`  Overall status: ${statusGlyph(diff.overallStatus)} ${diff.overallStatus.toUpperCase()}\n`);
+  for (const [label, categories] of Object.entries(diff.parseErrors)) {
+    for (const [category, errors] of Object.entries(categories)) {
+      if (errors.length > 0) console.error(`${label} ${category}: ${errors.length} snapshot parse error(s); comparison is incomplete.`);
+    }
+  }
   console.log(`  Category                    SDM    EDM    Status   Notes`);
   console.log(`  ──────────────────────────  ─────  ─────  ───────  ─────────────────────────────`);
   for (const [cat, c] of Object.entries(diff.categories)) {
@@ -291,6 +332,9 @@ function main() {
     if (c.stateChanged.length) notes.push(`${c.stateChanged.length} state changed`);
     if (c.contentChanged.length) notes.push(`${c.contentChanged.length} content changed`);
     if (c.valueChanged.length) notes.push(`${c.valueChanged.length} value changed`);
+    if (c.duplicateKeys?.sdm.length || c.duplicateKeys?.edm.length) {
+      notes.push('duplicate identities; records cannot be paired reliably');
+    }
     console.log(
       `  ${cat.padEnd(26)}  ${String(c.sdmCount).padStart(5)}  ${String(c.edmCount).padStart(5)}  ${statusGlyph(c.status)} ${c.status.padEnd(5)}  ${notes.join(', ')}`,
     );

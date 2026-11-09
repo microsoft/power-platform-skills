@@ -21,7 +21,8 @@
  *   - --discard: skip the copy, just delete the staged dir (used on cancel).
  *   - --dry-run: print what would happen, touch nothing.
  *
- * Exit codes: 0 = ok, 2 = bad usage, 3 = nothing-to-apply, 4 = copy error.
+ * Exit codes: 0 = ok, 2 = bad usage, 3 = nothing-to-apply,
+ *             4 = invalid manifest, missing staged file, or copy error.
  */
 
 const fs = require('fs');
@@ -87,7 +88,26 @@ function main() {
   }
 
   const payload = JSON.parse(fs.readFileSync(diffPath, 'utf-8'));
-  const files = payload.files || [];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !Array.isArray(payload.files)) {
+    throw new Error('remediation-diff.json must contain an object with a files array');
+  }
+  const files = payload.files;
+  for (const entry of files) {
+    if (!entry || typeof entry !== 'object' || typeof entry.relativePath !== 'string' ||
+        entry.relativePath.trim() === '') {
+      throw new Error('Every remediation file entry must contain a non-empty relativePath string');
+    }
+    const stagedRelative = path.relative(path.resolve(stagedDir), path.resolve(stagedDir, entry.relativePath));
+    const liveRelative = path.relative(path.resolve(siteRoot), path.resolve(siteRoot, entry.relativePath));
+    if ([stagedRelative, liveRelative].some((rel) =>
+      !rel || path.isAbsolute(rel) || rel === '..' || rel.startsWith(`..${path.sep}`))) {
+      throw new Error(`Remediation path must stay inside the staged and site roots: ${entry.relativePath}`);
+    }
+    const stagedPath = path.join(stagedDir, entry.relativePath);
+    if (!fs.existsSync(stagedPath) || !fs.statSync(stagedPath).isFile()) {
+      throw new Error(`Staged file missing or not a file: ${stagedPath}`);
+    }
+  }
 
   if (files.length === 0) {
     console.log('Remediation diff manifest contains zero files — nothing to apply.');
@@ -138,4 +158,9 @@ function main() {
   console.log(`\n✓ Applied ${applied}/${files.length} remediation file(s) to ${siteRoot}.`);
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(4);
+}

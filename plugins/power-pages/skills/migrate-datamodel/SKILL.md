@@ -46,13 +46,13 @@ Throughout this skill, progress is mirrored to two files inside `<OUTPUT_DIR>`:
 - `migration-state.json` — single source of truth for current state
 - `datamodel-migration-report.html` — auto-regenerated from state after every update; user opens in browser to watch progress
 
-**Init point.** As soon as `<OUTPUT_DIR>` is resolved (end of step 1.2) AND WebSiteId is known (from `$ARGUMENTS=GUID`, `website.yml`, or step 1.3 site discovery), run once:
+**Init point.** At the end of step 1.3, when the parent output directory, WebSiteId, environment name/URL, and website slug are known, run once:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/update-state.js" --init --output-dir "<OUTPUT_DIR>" --website-id "<WEBSITE_ID>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/update-state.js" --init --output-dir "<PARENT_OUTPUT_DIR>" --website-id "<WEBSITE_ID>" --env-name "<ENV_NAME>" --env-url "<ENV_URL>" --slug "<URL_SLUG>"
 ```
 
-After init, each sub-step below ends with a **→ Update report** callout. Execute each as a `node update-state.js --output-dir "<OUTPUT_DIR>" <args>` call. The CLI accepts:
+Capture the printed migration subfolder as `<MIGRATION_OUTPUT_DIR>` (also called `<OUTPUT_DIR>` below); the init argument is its **parent**, not the migration subfolder itself. After init, each sub-step below ends with a **→ Update report** callout. Execute each as a `node update-state.js --output-dir "<OUTPUT_DIR>" <args>` call. The CLI accepts:
 
 | Command | Use |
 |---|---|
@@ -352,10 +352,13 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 >   --output-dir "<PARENT_OUTPUT_DIR>" \
 >   --website-id "<WEBSITE_ID>" \
 >   --env-name "<ENV_NAME>" \
+>   --env-url "<ENV_URL>" \
 >   --slug "<URL_SLUG>"
 > ```
 >
 > The command creates a per-migration subfolder `<PARENT_OUTPUT_DIR>/<sanitized-env>--<sanitized-slug>/` and writes `migration-state.json` + `datamodel-migration-report.html` inside it. It prints the resolved subfolder path on stdout — **capture that path as `<MIGRATION_OUTPUT_DIR>` and use it as `--output-dir` for every subsequent `update-state.js` call and as the artifacts directory throughout the rest of the skill.** Pass `--force` only if you intentionally want to wipe an existing migration in the same subfolder.
+>
+> Resume and reset verify the website ID, environment URL/name, and original slug before reusing a folder; a sanitized-name collision stops with an error rather than opening another migration. Older state without `site.environmentUrl` must be checked against its original environment before recording the verified URL with `--set-site '{"environmentUrl":"<ENV_URL>"}'`. A force reset clears generated snapshots, comparisons, reports, prompts, and staged remediation, but preserves downloaded site source.
 >
 > Then batch-update the steps that ran before init:
 >
@@ -1251,8 +1254,8 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    Per-category status:
    - **pass** — same identity set, no differences
-   - **warn** — identity match but some records changed statecode/value, OR an SDM-only category (e.g., `tags`, `websiteBindings`) shows 0 records in EDM (expected — EDM YAML format doesn't surface those; records still in `powerpagecomponent`)
-   - **fail** — records actually missing/extra (excluding SDM-only categories)
+   - **warn** — identity match but some records changed statecode/value/content (including a companion content hash present on only one side), OR an SDM-only category (e.g., `tags`, `websiteBindings`) shows 0 records in EDM (expected — EDM YAML format doesn't surface those; records still in `powerpagecomponent`)
+   - **fail** — records actually missing/extra (excluding SDM-only categories), ambiguous duplicate identities, or parse errors in either snapshot. Parse errors are retained in the diff output; repair the baseline/download before treating the comparison as complete.
 
    **Nonconfiguration feature handling:** The Microsoft EDM documentation defines Ad, Poll, Poll Option, Poll Submission, External Identity, Portal comment, Invitation, Invitation Redemption, Setting, and WebFormSession as nonconfiguration tables. These categories are outside the SDM↔EDM metadata comparison and do not affect the diff status or migration totals. File-backed categories remain in the raw snapshots for audit evidence, while the live report lists the complete documented set and distinguishes detected data from categories not represented by the site download. `pollPlacements` remains in the metadata comparison because it is virtual configuration represented by the EDM component model; a missing placement is still a migration finding.
 

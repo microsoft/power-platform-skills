@@ -47,8 +47,9 @@ function parseArgs(argv) {
 function safeReaddir(p) {
   try {
     return fs.readdirSync(p, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (e) {
+    if (e.code === 'ENOENT') return [];
+    throw new Error(`Could not read snapshot directory ${p}: ${e.message}`);
   }
 }
 
@@ -493,4 +494,6 @@ function main() {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { safeReaddir };

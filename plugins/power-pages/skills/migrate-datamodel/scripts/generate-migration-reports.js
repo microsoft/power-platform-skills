@@ -896,33 +896,41 @@ function annotateLiquidEntitiesInContent(content) {
  */
 function unifiedDiff(oldContent, newContent, filePath) {
   if (oldContent === newContent) return '';
+  const header = `--- ${filePath}\n+++ ${filePath}\n`;
+  const prefixes = { context: '  ', removed: '- ', added: '+ ' };
+  const out = diffLines(oldContent, newContent).map((line) => prefixes[line.type] + line.text);
+  return header + out.join('\n') + '\n';
+}
+
+function diffLines(oldContent, newContent) {
   const oldLines = oldContent.split('\n');
   const newLines = newContent.split('\n');
-  const header = `--- ${filePath}\n+++ ${filePath}\n`;
-
-  // Greedy block diff: walk both line arrays in parallel.
-  const out = [];
+  const stream = [];
   let i = 0;
   let j = 0;
   while (i < oldLines.length || j < newLines.length) {
     if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
-      out.push(`  ${oldLines[i]}`);
+      stream.push({ type: 'context', text: oldLines[i], oldLine: i + 1, newLine: j + 1 });
       i++;
       j++;
     } else {
-      // Find next sync point.
       let oi = i;
       let nj = j;
       while (oi < oldLines.length && newLines.indexOf(oldLines[oi], j) === -1) oi++;
       while (nj < newLines.length && oldLines.indexOf(newLines[nj], i) === -1) nj++;
-      for (let k = i; k < oi; k++) out.push(`- ${oldLines[k]}`);
-      for (let k = j; k < nj; k++) out.push(`+ ${newLines[k]}`);
+      // Reordered lines (old A,B; new B,A) otherwise leave both cursors
+      // stationary. Represent this pair as a replacement to guarantee progress.
+      if (oi === i && nj === j) {
+        oi = Math.min(i + 1, oldLines.length);
+        nj = Math.min(j + 1, newLines.length);
+      }
+      for (let k = i; k < oi; k++) stream.push({ type: 'removed', text: oldLines[k], oldLine: k + 1 });
+      for (let k = j; k < nj; k++) stream.push({ type: 'added', text: newLines[k], newLine: k + 1 });
       i = oi;
       j = nj;
     }
   }
-
-  return header + out.join('\n') + '\n';
+  return stream;
 }
 
 /**
@@ -937,29 +945,7 @@ function unifiedDiff(oldContent, newContent, filePath) {
  */
 const CONTEXT_LINES = 3;
 function structuredDiff(oldContent, newContent) {
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-
-  // Build a tagged stream: 'context' | 'removed' | 'added'.
-  const stream = [];
-  let i = 0;
-  let j = 0;
-  while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
-      stream.push({ type: 'context', text: oldLines[i], oldLine: i + 1, newLine: j + 1 });
-      i++;
-      j++;
-    } else {
-      let oi = i;
-      let nj = j;
-      while (oi < oldLines.length && newLines.indexOf(oldLines[oi], j) === -1) oi++;
-      while (nj < newLines.length && oldLines.indexOf(newLines[nj], i) === -1) nj++;
-      for (let k = i; k < oi; k++) stream.push({ type: 'removed', text: oldLines[k], oldLine: k + 1 });
-      for (let k = j; k < nj; k++) stream.push({ type: 'added', text: newLines[k], newLine: k + 1 });
-      i = oi;
-      j = nj;
-    }
-  }
+  const stream = diffLines(oldContent, newContent);
 
   // Slice into hunks: a hunk is a run of non-context lines bracketed by
   // up to CONTEXT_LINES of context on either side. Adjacent change runs
@@ -1188,6 +1174,30 @@ function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResult
   return { outPath, fileCount: files.length };
 }
 
+function prepareRemediation(sitePath, outputDir, requestedKinds) {
+  const kinds = new Set(requestedKinds);
+  const manifestPath = path.join(outputDir, 'remediation-diff.json');
+  if (fs.existsSync(manifestPath)) {
+    const previous = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (!previous || typeof previous.siteRoot !== 'string' ||
+        path.resolve(previous.siteRoot) !== path.resolve(sitePath) || !Array.isArray(previous.files)) {
+      throw new Error('Existing remediation manifest does not match the selected site root');
+    }
+    for (const entry of previous.files) {
+      if (!entry || !['fetchxml', 'liquid', 'fetchxml+liquid'].includes(entry.kind)) {
+        throw new Error(`Unknown remediation kind: ${entry?.kind}`);
+      }
+      for (const kind of entry.kind.split('+')) kinds.add(kind);
+    }
+  }
+  // Rebuild all previously selected passes from current live source. This
+  // preserves separate FetchXML/Liquid invocations without trusting stale staged
+  // content or carrying forward a manifest after a zero-change rerun.
+  fs.rmSync(manifestPath, { force: true });
+  fs.rmSync(path.join(outputDir, 'remediation-staged'), { recursive: true, force: true });
+  return kinds;
+}
+
 // ---------------------------------------------------------------------------
 // Augmented prompts for customer-owned code (Plugin + DME remediation)
 // ---------------------------------------------------------------------------
@@ -1378,10 +1388,22 @@ async function main() {
       );
     }
 
+    let remediationKinds = new Set();
+    if (args['automate-fetchxml'] || args['automate-liquid']) {
+      const sitePath = args['site-path'] || args['sitePath'];
+      if (!sitePath || !fs.existsSync(sitePath)) {
+        throw new Error('--site-path must identify an existing downloaded site for remediation');
+      }
+      remediationKinds = prepareRemediation(sitePath, args['output-dir'], [
+        ...(args['automate-fetchxml'] ? ['fetchxml'] : []),
+        ...(args['automate-liquid'] ? ['liquid'] : []),
+      ]);
+    }
+
     // Run FetchXML auto-rewriter if requested
     let fetchXmlRewriteResults = null;
     let sitePathUsed = null;
-    if (args['automate-fetchxml']) {
+    if (remediationKinds.has('fetchxml')) {
       const sitePath = args['site-path'] || args['sitePath'];
       if (!sitePath) {
         console.error('Error: --site-path <path> is required with --automate-fetchxml. Point this at your `pac pages download` output directory.');
@@ -1395,7 +1417,7 @@ async function main() {
 
     // Run Liquid entities[''] semi-auto rewriter if requested
     let liquidRewriteResults = null;
-    if (args['automate-liquid']) {
+    if (remediationKinds.has('liquid')) {
       const sitePath = args['site-path'] || args['sitePath'];
       if (!sitePath) {
         console.error('Error: --site-path <path> is required with --automate-liquid. Point this at your `pac pages download` output directory.');
@@ -1452,4 +1474,6 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { diffLines, structuredDiff, unifiedDiff };

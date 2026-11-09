@@ -42,7 +42,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 39 skills: 38 user-invocable skills and one model-only worker.
+The plugin provides 40 skills: 39 user-invocable skills and one model-only worker.
 They cover the full lifecycle of a Power Pages site - scaffolding,
 non-SPA authoring, deployment, data modeling, backend integration, authentication, localization,
 ALM and CI/CD, security review, performance analysis, testing, auditing, and platform migrations. Each user-invocable

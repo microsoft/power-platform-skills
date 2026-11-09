@@ -11,7 +11,7 @@
  *   # (writes migration-state.json + datamodel-migration-report.html into
  *   #  <PARENT_DIR>/<sanitized-env>--<sanitized-slug>/)
  *   node update-state.js --init --output-dir <PARENT_DIR> \
- *       --website-id <GUID> --env-name "<NAME>" --slug "<SLUG>"
+ *       --website-id <GUID> --env-name "<NAME>" --slug "<SLUG>" --env-url "<ENV_URL>"
  *   # add --force to overwrite an existing migration in the same subfolder.
  *   # Without --force, --init re-uses the existing state (resume mode).
  *   # The command prints the resolved subfolder path on success \u2014 use that
@@ -155,14 +155,35 @@ function trackName(track) {
   return `Unknown (${track})`;
 }
 
+function environmentOrigin(raw) {
+  const url = new URL(raw);
+  if (url.protocol !== 'https:' || url.username || url.password ||
+      url.search || url.hash || url.pathname !== '/') {
+    throw new Error('--env-url / environmentUrl must be an HTTPS environment origin, for example https://contoso.crm.dynamics.com');
+  }
+  return url.origin;
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function loadState(outputDir) {
   const p = statePathFor(outputDir);
   if (!fs.existsSync(p)) {
     throw new Error(
-      `migration-state.json not found at ${p}. Run \`update-state.js --init --output-dir <PARENT_DIR> --website-id <GUID> --env-name <NAME> --slug <SLUG>\` first (the init command creates a per-migration subfolder and prints its path — use that subfolder as --output-dir for all subsequent commands).`,
+      `migration-state.json not found at ${p}. Run \`update-state.js --init --output-dir <PARENT_DIR> --website-id <GUID> --env-name <NAME> --env-url <ENV_URL> --slug <SLUG>\` first (the init command creates a per-migration subfolder and prints its path — use that subfolder as --output-dir for all subsequent commands).`,
     );
   }
-  return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  const state = JSON.parse(fs.readFileSync(p, 'utf-8'));
+  if (!isRecord(state) || !isRecord(state.site) || typeof state.site.webSiteId !== 'string' ||
+      !Array.isArray(state.phases) || state.phases.length === 0 ||
+      state.phases.some((phase) => !isRecord(phase) || !Array.isArray(phase.subSteps) ||
+        phase.subSteps.some((step) => !isRecord(step))) ||
+      !isRecord(state.augmentedPrompts)) {
+    throw new Error(`Invalid migration state at ${p}: expected site identity, phases with subSteps, and augmentedPrompts objects. Restore a valid migration-state.json before continuing.`);
+  }
+  return state;
 }
 
 function loadSnapshotIfExists(outputDir, label) {
@@ -201,9 +222,12 @@ function loadRenderOpts(outputDir) {
 
 function persist(state, outputDir) {
   state.lastUpdatedAt = new Date().toISOString();
+  // Rendering validates nested report inputs too. Never replace usable state
+  // with an update that cannot be rendered.
+  const html = renderLiveReport(state, loadRenderOpts(outputDir));
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(statePathFor(outputDir), JSON.stringify(state, null, 2) + '\n', 'utf-8');
-  fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state, loadRenderOpts(outputDir)), 'utf-8');
+  fs.writeFileSync(reportPathFor(outputDir), html, 'utf-8');
 }
 
 function cmdInit(args) {
@@ -211,6 +235,7 @@ function cmdInit(args) {
   const webSiteId = args['website-id'];
   const envName = args['env-name'];
   const slug = args['slug'];
+  const envUrl = args['env-url'];
   const force = !!args['force'];
   if (!parentDir) throw new Error('--init requires --output-dir (the parent directory; a per-migration subfolder is created inside it)');
   if (!webSiteId) throw new Error('--init requires --website-id');
@@ -220,19 +245,49 @@ function cmdInit(args) {
   if (typeof slug !== 'string' || slug.trim() === '') {
     throw new Error('--init requires --slug "<SLUG>" (the website slug from `pac pages list -v`, used to namespace the migration subfolder)');
   }
+  if (typeof envUrl !== 'string' || envUrl.trim() === '') {
+    throw new Error('--init requires --env-url "<ENV_URL>" to verify the migration environment on resume');
+  }
+  const environmentUrl = environmentOrigin(envUrl);
 
   const subdirName = buildMigrationSubdir({ envName, slug, webSiteId });
   const outputDir = path.join(parentDir, subdirName);
   const statePath = statePathFor(outputDir);
 
-  if (fs.existsSync(statePath) && !force) {
-    console.log(`⚠ Existing migration found at ${statePath}`);
-    console.log('  Re-using existing state (resume mode). Pass --force to reset and start fresh.');
-    return;
+  if (fs.existsSync(statePath)) {
+    const existing = loadState(outputDir);
+    // Display names and sanitized slugs are not unique. Check the original
+    // identity before either resuming or force-resetting this directory.
+    if (String(existing.site.webSiteId).toLowerCase() !== String(webSiteId).toLowerCase() ||
+        existing.site.environmentName !== envName || existing.site.slug !== slug ||
+        existing.site.environmentUrl !== environmentUrl) {
+      throw new Error(`Migration identity mismatch at ${statePath}; refusing to resume or overwrite it. ` +
+        'Verify the site and environment. For older state without environmentUrl, verify its origin before recording it with --set-site.');
+    }
+    if (!force) {
+      console.log(`⚠ Existing migration found at ${statePath}`);
+      console.log('  Re-using existing state (resume mode). Pass --force to reset and start fresh.');
+      console.log(`Use --output-dir "${outputDir}" for every subsequent update-state.js call.`);
+      return;
+    }
+  }
+
+  if (force) {
+    // Reset only generated migration artifacts, never the downloaded site tree.
+    for (const filename of [
+      'sdm-snapshot.json', 'edm-snapshot.json', 'migration-data-diff.json',
+      'remediation-diff.json', 'customization-report.html',
+      'plugin-remediation-prompt.txt', 'dme-remediation-prompt.txt',
+    ]) {
+      fs.rmSync(path.join(outputDir, filename), { force: true });
+    }
+    fs.rmSync(path.join(outputDir, 'remediation-staged'), { recursive: true, force: true });
   }
 
   const state = buildInitialState({ webSiteId, outputDir });
   state.site.environmentName = envName;
+  state.site.environmentUrl = environmentUrl;
+  state.site.slug = slug;
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
   fs.writeFileSync(reportPathFor(outputDir), renderLiveReport(state, loadRenderOpts(outputDir)), 'utf-8');
@@ -254,6 +309,7 @@ function cmdSetSite(args) {
   } catch (e) {
     throw new Error(`--set-site: could not parse JSON: ${e.message}`);
   }
+  if (!isRecord(patch)) throw new Error('--set-site expects a JSON object');
   const state = loadState(outputDir);
   const allowed = [
     'name',
@@ -264,6 +320,7 @@ function cmdSetSite(args) {
     'template',
     'environment',
     'environmentName',
+    'environmentUrl',
     'migrationMode',
     'siteRoot',
   ];
@@ -271,7 +328,10 @@ function cmdSetSite(args) {
     if (!allowed.includes(k)) {
       throw new Error(`--set-site: unknown field '${k}'. Allowed: ${allowed.join(', ')}`);
     }
-    state.site[k] = patch[k];
+    if (patch[k] !== null && typeof patch[k] !== 'string') {
+      throw new Error(`--set-site: ${k} must be a string or null`);
+    }
+    state.site[k] = k === 'environmentUrl' ? environmentOrigin(patch[k]) : patch[k];
   }
   persist(state, outputDir);
   console.log(`✓ Site updated: ${Object.keys(patch).join(', ')}`);
@@ -464,6 +524,13 @@ function cmdSetRefsMigration(args) {
   }
   if (payload.runs !== undefined && !Array.isArray(payload.runs)) {
     throw new Error('--set-refs-migration: runs must be an array');
+  }
+  if (payload.stepHistory?.some((step) => !isRecord(step))) {
+    throw new Error('--set-refs-migration: stepHistory entries must be objects');
+  }
+  if (payload.runs?.some((run) => !isRecord(run) || (run.chunks != null &&
+      (!Array.isArray(run.chunks) || run.chunks.some((chunk) => !isRecord(chunk)))))) {
+    throw new Error('--set-refs-migration: runs and chunks entries must be objects, and chunks must be an array');
   }
   if (payload.error !== undefined && payload.error !== null && typeof payload.error !== 'string') {
     throw new Error('--set-refs-migration: error must be a string');
