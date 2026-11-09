@@ -205,17 +205,60 @@ test('mixed selections stop as a batch and retain enabled, blocked, and unverifi
   assert.equal(result.allowed, false);
   assert.equal(result.status, 'unverified');
   assert.deepEqual(result.providers.map((item) => item.status), ['blocked', 'unverified', 'enabled']);
+  assert.ok(result.message.startsWith('Your administrator has restricted the use of Facebook OAuth for this website.'));
+  assert.doesNotMatch(result.message, /setup is allowed/);
 });
 
 test('known disabled parents are retained when another read cannot be verified', async () => {
   const h = harness({
     [ROOT]: { ok: true, statusCode: 200, body: false },
-    [FACEBOOK]: { ok: false, statusCode: 404 },
+    [FACEBOOK]: { ok: false, statusCode: 403 },
   });
   const result = await checker.checkAuthGovernance(options, h.dependencies);
   assert.equal(result.status, 'unverified');
-  assert.match(result.message, /Also disabled for this portal:\n- External authentication/);
-  assert.match(result.message, /Facebook OAuth.*HTTP 404/);
+  const restriction = 'Your administrator has restricted the use of External authentication for this website. Contact your administrator if you need this setting enabled.';
+  assert.equal(result.message.split('\n\n')[0], restriction);
+  assert.equal(result.providers[0].message, result.message);
+  assert.match(result.message, /Facebook OAuth.*HTTP 403/);
+  assert.doesNotMatch(result.message, /Also disabled|\(EnableExternalAuthProviders\)/);
+  await assert.rejects(checker.isFacebookOAuthEnabled(options, h.dependencies), (error) => {
+    assert.ok(error instanceof checker.AuthGovernanceVerificationError);
+    assert.ok(error.message.startsWith(restriction));
+    return true;
+  });
+});
+
+test('denied batch summaries never start with an enabled provider or an unknown policy', async () => {
+  for (const providers of [
+    ['google', 'facebook', 'oidc'], ['oidc', 'google', 'facebook'], ['facebook', 'oidc', 'google'],
+  ]) {
+    for (const oidcResponse of [{ ok: true, statusCode: 200, body: true }, { ok: false, statusCode: 403 }]) {
+      const h = harness({
+        [FACEBOOK]: { ok: true, statusCode: 200, body: false },
+        EnableProtocolOpenIdConnect: oidcResponse,
+      });
+      const result = await checker.checkAuthGovernance({ ...options, providers }, h.dependencies);
+      assert.equal(result.allowed, false);
+      assert.equal(result.status, oidcResponse.ok ? 'blocked' : 'unverified');
+      assert.equal(result.message.split('\n\n')[0],
+        'Your administrator has restricted the use of Facebook OAuth for this website. Contact your administrator if you need this setting enabled.');
+      assert.doesNotMatch(result.message, /setup is allowed|Enabled requirements|https:/);
+      assert.equal(result.providers.find((item) => item.provider === 'google').allowed, true);
+      if (!oidcResponse.ok) assert.match(result.message, /OpenID Connect protocol.*HTTP 403/);
+    }
+  }
+});
+
+test('shared disabled parents appear once in batch messages and unknown-only batches do not claim restrictions', async () => {
+  const disabled = harness({ [ROOT]: { ok: true, statusCode: 200, body: false } });
+  const result = await checker.checkAuthGovernance({ ...options, providers: ['google', 'facebook'] }, disabled.dependencies);
+  assert.equal(result.status, 'blocked');
+  assert.equal((result.message.match(/External authentication/g) || []).length, 1);
+  const unknown = harness({ [FACEBOOK]: { ok: false, statusCode: 403 } });
+  const unverified = await checker.checkAuthGovernance({ ...options, providers: ['google', 'facebook'] }, unknown.dependencies);
+  assert.equal(unverified.status, 'unverified');
+  assert.doesNotMatch(unverified.message, /Your administrator has restricted|setup is allowed/);
+  assert.match(unverified.message, /Facebook OAuth.*HTTP 403/);
 });
 
 test('invalid target identities and providers fail before resolving auth or reading policies', async () => {
@@ -405,6 +448,25 @@ test('CLI emits the complete decision and exits 0/1/2 for enabled/blocked/unveri
   }
 });
 
+test('CLI denied batches use restriction-first messages and retain fail-closed exit codes', async () => {
+  for (const [responses, providers, exitCode, label] of [
+    [{ [FACEBOOK]: { ok: true, statusCode: 200, body: false } }, 'google,facebook', 1, 'Facebook OAuth'],
+    [{ [ROOT]: { ok: true, statusCode: 200, body: false }, [FACEBOOK]: { ok: false, statusCode: 403 } },
+      'facebook', 2, 'External authentication'],
+  ]) {
+    const { output, exitCode: actualExit } = await invokeCli(harness(responses), [
+      '--tenantId', tenantId, '--envId', envId, '--portalId', portalId, '--providers', providers,
+    ]);
+    assert.equal(actualExit, exitCode);
+    assert.equal(output.allowed, false);
+    assert.equal(output.message.split('\n\n')[0],
+      `Your administrator has restricted the use of ${label} for this website. Contact your administrator if you need this setting enabled.`);
+    assert.doesNotMatch(output.message, /setup is allowed|Also disabled/);
+    if (exitCode === 2) assert.match(output.message, /HTTP 403/);
+    else assert.equal(output.providers[0].allowed, true);
+  }
+});
+
 test('CLI tenant mismatch/unavailability exits 2 with zero governance requests', async () => {
   for (const overrides of [{ tenantId: portalId }, { tenantId: undefined }, { token: testToken(portalId) }]) {
     const h = harness({}, overrides);
@@ -574,7 +636,7 @@ test('Case 53: disabled and unreadable requirements are reported separately', as
   });
   const result = await numberedDecision(t, 53, h, options, 'unverified', [ROOT]);
   assert.deepEqual(result.providers[0].verificationErrors.map((item) => item.policy), [FACEBOOK]);
-  assert.match(result.message, /Also disabled for this portal:\n- External authentication/);
+  assert.ok(result.message.startsWith('Your administrator has restricted the use of External authentication for this website.'));
 });
 
 test('Case 54: mismatched environment stops before policy reads', async (t) => {
@@ -697,6 +759,8 @@ test('blocked-message instructions omit supplementary guidance unless requested 
   assert.match(reference, /unless the user explicitly asks for those details/);
   assert.match(reference, /read-only recheck made no additional changes/);
   assert.match(reference, /never suggest enabling a policy as a substitute for verification/);
+  assert.match(reference, /portals\[\]\.portalId/);
+  assert.match(reference, /Denied batch\s+messages must omit enabled-provider success messages/);
 });
 
 test('Case 63: keep-only newly surfaced providers have a documented preflight gate [instruction check only]', (t) => {

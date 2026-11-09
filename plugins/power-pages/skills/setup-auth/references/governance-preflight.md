@@ -13,7 +13,7 @@ account. Retain this confirmed `TENANT_ID` for every preflight and recheck; if t
 target changes, confirm its owner again. Never switch accounts automatically.
 
 Resolve the project's environment GUID and **Power Platform host ID** from the
-target environment's website inventory (`id`/`Id`), matching the project's
+target environment's normalized website inventory (`portals[].portalId`), matching the project's
 Dataverse `websiteRecordId` and deployed URL. Do not select by name alone, use
 the Dataverse record ID as `portalId`, or use a failed/obsolete host. If the
 identity is ambiguous, stop and ask the user to confirm the target.
@@ -22,6 +22,9 @@ For inventory reads, reuse `fetchPortalsPaged(context)` exported by
 `skills/manage-governance/scripts/list-portals.js`, passing the normal
 `scripts/lib/power-platform-api.js` resolved context. Do not run the governance
 inventory CLI with its implicit TIP configuration or trust partial/error results.
+`fetchPortalsPaged(context)` returns `{ portals, error }`; match each entry's
+`portalId`, `websiteRecordId`, and `websiteUrl`. Raw API `id`/`Id` fields are
+normalized by the helper and are not fields on these returned entries.
 
 Run from the project's signed-in PAC environment:
 
@@ -109,6 +112,12 @@ Do not append policy-state summaries, portal/environment details, admin links,
 or configuration navigation unless the user explicitly asks for those details.
 The structured checker result retains policy states and target IDs for
 diagnostics; omitting them from the message does not change the governance gate.
+When disabled policies and verification failures coexist, show the approved
+restriction sentence for known disabled labels first, followed by separate
+verification-error guidance; the result remains `unverified`. Denied batch
+messages must omit enabled-provider success messages, regardless of provider
+order. Use unique disabled labels across the batch so shared parents appear
+only once, while retaining every provider's structured diagnostics.
 
 Only if the user requests configuration guidance: for commercial cloud, link to
 https://admin.powerplatform.microsoft.com/manage/portals/settings. If the deep

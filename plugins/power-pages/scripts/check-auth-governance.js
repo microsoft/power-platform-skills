@@ -84,27 +84,33 @@ function readState(body) {
   return 'unknown';
 }
 
+function decisionMessage(label, policies) {
+  const blockedPolicies = policies.filter((item) => item.state === 'disabled');
+  const verificationErrors = policies.filter((item) => item.state === 'unknown');
+  if (!blockedPolicies.length && !verificationErrors.length) {
+    return `${label} setup is allowed by portal governance.`;
+  }
+  const sections = [];
+  if (blockedPolicies.length) {
+    sections.push(`Your administrator has restricted the use of ${blockedPolicies.map((item) => item.label).join(', ')} for this website. ` +
+      'Contact your administrator if you need this setting enabled.');
+  }
+  if (verificationErrors.length) {
+    sections.push(`${label} setup stopped because portal governance could not be verified.\n\n` +
+      verificationErrors.map((item) => `- ${item.label} (${item.policy}): ${item.error.message}`).join('\n'));
+    sections.push('Resolve the verification errors and retry before changing provider settings or the login page.');
+  }
+  sections.push('This read-only check made no provider settings or login-page changes.');
+  return sections.join('\n\n');
+}
+
 function providerResult(provider, policies) {
   const definition = PROVIDERS[provider];
   const required = definition.policies.map((policy) => policies.find((item) => item.policy === policy));
   const blockedPolicies = required.filter((item) => item.state === 'disabled');
   const verificationErrors = required.filter((item) => item.state === 'unknown');
   const status = verificationErrors.length ? 'unverified' : blockedPolicies.length ? 'blocked' : 'enabled';
-  let message = `${definition.label} setup is allowed by portal governance.`;
-  if (status === 'blocked') {
-    message = `Your administrator has restricted the use of ${blockedPolicies.map((item) => item.label).join(', ')} for this website. ` +
-      'Contact your administrator if you need this setting enabled.\n\n' +
-      'This read-only check made no provider settings or login-page changes.';
-  } else if (status === 'unverified') {
-    message = `${definition.label} setup stopped because portal governance could not be verified.\n\n` +
-      verificationErrors.map((item) => `- ${item.label} (${item.policy}): ${item.error.message}`).join('\n');
-    if (blockedPolicies.length) {
-      message += '\n\nAlso disabled for this portal:\n' +
-        blockedPolicies.map((item) => `- ${item.label} (${item.policy})`).join('\n');
-    }
-    message += '\n\nResolve the verification errors and retry before changing provider settings or the login page. ' +
-      'This read-only check made no provider settings or login-page changes.';
-  }
+  const message = decisionMessage(definition.label, required);
   return { provider, label: definition.label, status, allowed: status === 'enabled', blockedPolicies, verificationErrors, message };
 }
 
@@ -180,7 +186,10 @@ async function checkAuthGovernance(options, dependencies = {}) {
     : results.some((result) => result.status === 'blocked') ? 'blocked' : 'enabled';
   return {
     tenantId: tenantId ?? null, envId, portalId, status, allowed: status === 'enabled', policies, providers: results,
-    message: results.map((result) => result.message).join('\n\n'),
+    // Summarize denied batches from unique policies, not provider order: allowed
+    // siblings must not lead the message or repeat a shared parent's restriction.
+    message: status === 'enabled' ? results.map((result) => result.message).join('\n\n')
+      : decisionMessage(results.length === 1 ? results[0].label : 'Authentication', policies),
   };
 }
 
