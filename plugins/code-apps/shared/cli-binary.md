@@ -88,6 +88,32 @@ $PA --version   # prints the installed CLI version, e.g. 1.3.0
 - **Most flags are unchanged** — only the selector flags in the flag mapping table are renamed on `pa`. Connection ID (`-c`), dataset (`-d`), environment (`-e`), and display name (`-n` on `init`/`connection create`) are identical on both binaries.
 - **Whether `-c` is required depends on the CLI version.** For connector data sources, `-c <connection-id>` is optional only when `PA_INLINE_CONNECTIONS=yes`; otherwise it's required. Follow [connector-reference.md](./connector-reference.md) instead of deciding per skill.
 
+## Command-scoped attribution
+
+Apply this prefix only when a Code Apps skill initiates a resolved CLI command:
+
+```bash
+env -u PA_PLUGIN_REPORT_AGENT PA_CLI_ORIGIN="${PA_CLI_ORIGIN-plugin}" $PA app list
+```
+
+Replace `app list` with the required operation and retain its arguments.
+Translate flat-binary operations using the mapping table below.
+For output capture, place the prefix inside the command substitution:
+
+```bash
+apps="$(env -u PA_PLUGIN_REPORT_AGENT PA_CLI_ORIGIN="${PA_CLI_ORIGIN-plugin}" $PA app list --json)"
+```
+
+`env` applies these values only to the CLI child process.
+The `${PA_CLI_ORIGIN-plugin}` expression preserves user values, including an empty value.
+Removing an inherited plugin report lets the CLI detect the current AI tool.
+Do not manually select an agent label or set passive detection markers.
+Do not use this prefix for user-authored commands or non-CLI tools.
+Do not export these variables into the parent shell.
+Use Bash for these examples, as with the existing `$PA` resolution contract.
+If Bash is unavailable, run the CLI without attribution rather than modify a shared
+PowerShell environment or block the requested operation.
+
 ---
 
 ## Command mapping table (grouped `pa` ↔ flat `power-apps`)

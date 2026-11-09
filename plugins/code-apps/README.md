@@ -58,13 +58,13 @@ The portable manifest alone does not establish client runtime support.
 | Shared skills | [skills](./skills) | The same 15 workflows for all clients |
 | Legacy architect | [agents/code-app-architect.md](./agents/code-app-architect.md) | Architecture guidance in legacy clients |
 | Native Copilot architect | [com.github.copilot/agents/code-app-architect.agent.md](./com.github.copilot/agents/code-app-architect.agent.md) | Copilot-specific agent discovery |
-| Native Copilot hooks | [com.github.copilot/hooks/hooks.json](./com.github.copilot/hooks/hooks.json) | Existing CLI attribution in portable clients |
+| Empty hook configurations | [com.github.copilot/hooks/hooks.json](./com.github.copilot/hooks/hooks.json) | Preserve discovery paths without intercepting tools |
 
 Skills retain their existing tool declarations, model preferences, and invocation settings.
 Client-specific metadata support varies. These settings do not establish strict Agent Skills conformance.
 Resource links resolve relative to each document, so they do not require client-specific variable expansion.
 The architect agent is client-specific, not a portable Agent Plugins component.
-The package retains the existing Code Apps attribution hooks. It does not include MCP servers.
+The package registers no tool hooks. It does not include MCP servers.
 
 ## Available Skills
 
@@ -124,27 +124,20 @@ Use the documented update action for other clients.
 
 ## CLI attribution
 
-Before recognized Power Apps CLI shell commands, the plugin supplies
-`PA_CLI_ORIGIN=plugin/<host-agent>` (`claude-code`, `copilot-cli`, or `unknown`).
-It supports Bash and PowerShell, both `npx --no-install pa` and the
-`npx --no-install power-apps` fallback, direct binaries, and the resolved `$PA`
-prefix, plus simple Bash and PowerShell output captures. Detection is limited to
-leading invocations on a single line (optionally after a simple `cd`); complex
-scripts and PowerShell `using` preambles are left unchanged. Existing
-`PA_CLI_ORIGIN` parent values and inline assignments take precedence. Unrelated
-commands are not rewritten; no model information is collected.
-
-The plugin also sets `PA_PLUGIN_REPORT_AGENT` to `claude-code` or `copilot-cli`
-for the same commands. It clears any inherited value first. For an unknown host it
-leaves the variable unset, and the CLI detects the agent from its environment.
+Only CLI commands initiated by a Code Apps skill receive `PA_CLI_ORIGIN=plugin`.
+The command-scoped prefix preserves explicit user origins, including empty values.
+It removes an inherited `PA_PLUGIN_REPORT_AGENT` from that child process only.
+The CLI detects the AI tool from its environment. The plugin does not guess agent labels.
+No pre-tool hook intercepts unrelated commands, Node checks, builds, or package installs.
+Attribution does not modify the parent shell or later commands.
 
 Supporting CLI versions map `PA_CLI_ORIGIN` to `power-apps-cli`, `plugin`, or
 `other` in the existing `cliSource` custom dimension
 (`customDimensions.cliSource`). They do not emit raw origin values or add a
 `cliOrigin` column. This plugin does not send telemetry or change CLI consent.
-Supporting CLI versions record only a known agent label from
-`PA_PLUGIN_REPORT_AGENT`. Older CLI versions ignore both variables.
-See [hook behavior and limitations](hooks/README.md).
+Supporting CLI versions record a normalized AI-tool label from passive environment detection.
+See [attribution safety](hooks/README.md) and
+[command-scoped instructions](shared/cli-binary.md#command-scoped-attribution).
 
 ## Uninstall
 
