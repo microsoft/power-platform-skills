@@ -1228,3 +1228,147 @@ test('verify under the opt-in never falls back to a name: no binding store, no b
   pending.pending.push({ family: 'customApi', key: 'contoso_calc', code: 'managed-settlement-pending' });
   assert.equal(definitions(await read.configuration(configSpec(), undefined, pending))['customApi contoso_Calc'], 'managed-settlement-pending');
 });
+
+// ---------------------------------------------------------------------------------------------
+// Verify pairs a protected rule's conditions at the ids its binding holds, as the build's plan does: criteria swapped between two
+// bound condition rows is a change the build refuses (configuration-edit-unsupported), so verify must fail it too.
+
+const TWO_CONDITIONS = [{ key: 'e', column: 'emailaddress1', match: 'exact' }, { key: 'l', column: 'lastname', match: 'exact' }];
+const twoRules = () => configSpec(rule({ conditions: TWO_CONDITIONS }));
+const conditionRow = (h, column) => h.org.rows('duplicateruleconditions').find((r) => r.baseattributename === column);
+const patchRow = async (h, set, id, body) => {
+  const res = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/${set}(${id})`, method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.ok(res.statusCode < 300, `${set}: ${res.statusCode}`);
+};
+const verifyRule = (h, spec = twoRules(), view = viewOf(h)) => readerFor(h.sdk, 'contoso_configured').configuration(spec, undefined, view);
+const ruleCheck = (checks) => checks.find((c) => c.kind === 'duplicateRule' && c.name === 'definition');
+const setCriteria = (h, row, column) => patchRow(h, 'duplicateruleconditions', row.duplicateruleconditionid, { baseattributename: column, matchingattributename: column });
+const assertBuildStops = async (h) => {
+  const out = await pass(h, twoRules());
+  assert.equal(out.halt && out.halt.code, 'configuration-edit-unsupported', out.halt && out.halt.message);
+  assert.equal(out.halt.phase, 'preflight');
+  assert.deepEqual(out.sent, [], 'nothing is sent');
+};
+
+test('verify fails a protected rule whose bound condition rows swapped their criteria, naming the conditions; the build refuses it too', async () => {
+  const h = await harness();
+  await created(h, twoRules());
+  const e = conditionRow(h, 'emailaddress1');
+  const l = conditionRow(h, 'lastname');
+  await setCriteria(h, e, 'lastname');
+  await setCriteria(h, l, 'emailaddress1');
+  const mark = h.org.requests.length;
+  const check = ruleCheck(await verifyRule(h));
+  assert.equal(check.ok, false, 'the same rule the build refuses must not verify');
+  assert.equal(check.code, 'DRIFT');
+  assert.deepEqual(check.fields, ['/conditions', '/conditions/e', '/conditions/l']);
+  assert.deepEqual(writesSince(h, mark), [], 'verify sends nothing');
+  await assertBuildStops(h);
+});
+
+// The complete verify output for the swapped state without the opt-in, as the unchanged code produces it for this org: every kind's checks.
+const PLAIN_SWAPPED_OUTPUT = [
+  { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'definition', ok: true },
+  { kind: 'customApi', key: 'contoso_Calc', name: 'definition', ok: true },
+  { kind: 'customApi', key: 'contoso_Calc', name: 'implementation', ok: false, code: 'CUSTOM_API_IMPLEMENTATION_UNPROVEN' },
+  { kind: 'duplicateRule', key: 'email', name: 'definition', ok: true },
+  { kind: 'duplicateRule', key: 'email', name: 'publication', ok: true },
+];
+test('verify still passes an unchanged protected rule, and name lookup (no opt-in) passes a real swap exactly as before', async () => {
+  const h = await harness();
+  await created(h, twoRules());
+  assert.deepEqual(ruleCheck(await verifyRule(h)), { kind: 'duplicateRule', key: 'email', name: 'definition', ok: true });
+  // Both rows are taken before either is changed: the second lookup would otherwise find the first row again.
+  const e = conditionRow(h, 'emailaddress1');
+  const l = conditionRow(h, 'lastname');
+  await setCriteria(h, e, 'lastname');
+  await setCriteria(h, l, 'emailaddress1');
+  assert.deepEqual([e, l].map((r) => r.baseattributename), ['lastname', 'emailaddress1'], 'the rows really are swapped');
+  const { configurationIdentity, ...plain } = twoRules();
+  assert.equal(configurationIdentity, 'stable-v1');
+  assert.deepEqual(await verifyRule(h, plain), PLAIN_SWAPPED_OUTPUT, 'name lookup judges by content: the complete output is what it was before');
+});
+
+test('a protected rule whose bound condition was deleted and made again still fails verify as not found, and a real criteria change is still drift', async () => {
+  const h = await harness();
+  await created(h, twoRules());
+  const e = conditionRow(h, 'emailaddress1');
+  const ruleId = e._regardingobjectid_value;
+  const gone = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/duplicateruleconditions(${e.duplicateruleconditionid})`, method: 'DELETE', headers: {} });
+  assert.ok(gone.statusCode < 300);
+  await insertRow(h.org, 'duplicateruleconditions', { baseattributename: 'emailaddress1', matchingattributename: 'emailaddress1', operatorcode: e.operatorcode, 'regardingobjectid@odata.bind': `/duplicaterules(${ruleId})` });
+  const remade = ruleCheck(await verifyRule(h));
+  assert.equal(remade.code, B.NOT_FOUND_CODE, 'a bound row is never replaced by a namesake');
+  assert.equal(remade.fields, undefined);
+  const h2 = await harness();
+  await created(h2, twoRules());
+  await setCriteria(h2, conditionRow(h2, 'lastname'), 'firstname');
+  const changed = ruleCheck(await verifyRule(h2));
+  assert.equal(changed.ok, false);
+  assert.equal(changed.code, 'DRIFT');
+  assert.ok(changed.fields.includes('/conditions') && changed.fields.includes('/conditions/l') && !changed.fields.includes('/conditions/e'), changed.fields.join(','));
+  await assertBuildStops(h2);
+});
+
+// Verify and the build's preflight judge a bound protected rule by one function (judgeBoundShape + editVerdict), so for every state
+// of the rule they must agree: verify passes exactly when the preflight halts nothing for it. Each state runs verify, then the
+// preflight, on the same fake org and binding store.
+const addRow = (h, column, over = {}) => {
+  const sample = conditionRow(h, 'emailaddress1');
+  return insertRow(h.org, 'duplicateruleconditions', {
+    baseattributename: column, matchingattributename: column, operatorcode: sample.operatorcode, ignoreblankvalues: false,
+    'regardingobjectid@odata.bind': `/duplicaterules(${sample._regardingobjectid_value})`, ...over,
+  });
+};
+const SWAP = async (h) => { const e = conditionRow(h, 'emailaddress1'); const l = conditionRow(h, 'lastname'); await setCriteria(h, e, 'lastname'); await setCriteria(h, l, 'emailaddress1'); };
+const withConditions = (conditions) => configSpec(rule({ conditions }));
+const E = TWO_CONDITIONS[0];
+const L = TWO_CONDITIONS[1];
+const STATES = [
+  { name: 'unchanged', pass: true },
+  { name: 'reordered in the declaration', spec: () => withConditions([L, E]), pass: true },
+  { name: 'a single condition', base: configSpec(), spec: () => configSpec(), pass: true },
+  { name: 'swapped criteria', change: SWAP, pass: false, fields: ['/conditions', '/conditions/e', '/conditions/l'] },
+  { name: 'a changed criterion', change: (h) => setCriteria(h, conditionRow(h, 'lastname'), 'firstname'), pass: false, fields: ['/conditions', '/conditions/l'] },
+  { name: 'a renamed key', spec: () => withConditions([{ ...E, key: 'e2' }, L]), pass: false, fields: ['/conditions', '/conditions/e2'] },
+  { name: 'a declared condition added', spec: () => withConditions([...TWO_CONDITIONS, { key: 'f', column: 'firstname', match: 'exact' }]), pass: false, fields: ['/conditions', '/conditions/f'] },
+  { name: 'a declared condition removed', spec: () => withConditions([E]), pass: false, fields: ['/conditions'] },
+  { name: 'an extra server row', change: (h) => addRow(h, 'firstname'), pass: false, fields: ['/conditions'] },
+  { name: 'a hand-added duplicate of a bound condition declared under a new key', change: (h) => addRow(h, 'emailaddress1'), spec: () => withConditions([...TWO_CONDITIONS, { key: 'x', column: 'emailaddress1', match: 'exact' }]), pass: false, fields: ['/conditions', '/conditions/x'] },
+  { name: 'conditions omitted over bound ones', spec: () => configSpec(rule({ conditions: undefined })), pass: false, fields: ['/conditions'] },
+  { name: 'a rule field changed by hand', change: (h) => patchRow(h, 'duplicaterules', h.org.rows('duplicaterules')[0].duplicateruleid, { name: 'Renamed by hand' }), pass: false, fields: ['/name'] },
+  { name: 'a changed name and swapped criteria', change: SWAP, spec: () => configSpec(rule({ name: 'Other name', conditions: TWO_CONDITIONS })), pass: false, fields: ['/name', '/conditions', '/conditions/e', '/conditions/l'] },
+  { name: 'a changed name and a declared condition added', spec: () => configSpec(rule({ name: 'Other name', conditions: [...TWO_CONDITIONS, { key: 'f', column: 'firstname', match: 'exact' }] })), pass: false, fields: ['/name', '/conditions', '/conditions/f'] },
+  { name: 'a changed name and a declared condition removed', spec: () => configSpec(rule({ name: 'Other name', conditions: [E] })), pass: false, fields: ['/name', '/conditions'] },
+  { name: 'a hand-added row declared under two new keys (the comparison cannot pair them)', base: configSpec(), change: (h) => addRow(h, 'lastname'), spec: () => withConditions([E, { key: 'l', column: 'lastname', match: 'exact' }, { key: 'l2', column: 'lastname', match: 'exact' }]), pass: false, fields: ['/conditions', '/conditions/l', '/conditions/l2'] },
+  { name: 'another matching table', spec: () => configSpec(rule({ matchingEntity: 'account', conditions: TWO_CONDITIONS })), pass: false, fields: ['/matchingEntity'] },
+  { name: 'swapped criteria and a status change', change: SWAP, spec: () => configSpec(rule({ status: 'unpublished', conditions: TWO_CONDITIONS })), pass: false, fields: ['/conditions', '/conditions/e', '/conditions/l', '/status'] },
+  { name: 'a bound row deleted', change: async (h) => { const row = conditionRow(h, 'lastname'); const res = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/duplicateruleconditions(${row.duplicateruleconditionid})`, method: 'DELETE', headers: {} }); assert.ok(res.statusCode < 300); }, pass: false, code: B.NOT_FOUND_CODE },
+  { name: 'an unpublished bound rule without conditions', base: configSpec(rule({ status: 'unpublished', conditions: [] })), spec: () => configSpec(rule({ status: 'unpublished', conditions: [] })), pass: true },
+];
+
+async function agreeOn(state) {
+  const h = await harness();
+  await created(h, state.base || twoRules());
+  if (state.change) await state.change(h);
+  const spec = state.spec ? state.spec() : state.base || twoRules();
+  const mark = h.org.requests.length;
+  const check = ruleCheck(await verifyRule(h, spec));
+  assert.deepEqual(writesSince(h, mark), [], `${state.name}: verify sends nothing`);
+  const out = await pass(h, spec);
+  const halted = out.halt !== null;
+  assert.equal(check.ok === true, !halted, `${state.name}: verify ${check.ok ? 'passes' : `fails ${check.code}`}, the preflight ${halted ? `halts ${out.halt.code}` : 'does not halt'}`);
+  assert.equal(check.ok === true, state.pass, state.name);
+  if (state.fields) { assert.equal(check.code, 'DRIFT', `${state.name}: ${check.code}`); assert.deepEqual(check.fields, state.fields, state.name); }
+  if (state.code) { assert.equal(check.code, state.code, state.name); assert.equal(out.halt.code, state.code, state.name); }
+  if (halted) assert.deepEqual(out.sent, [], `${state.name}: a halted build sent nothing`);
+}
+
+test('verify and the build preflight agree on every state of a bound protected rule, and verify never writes', async () => {
+  // Every state runs, so one failure does not hide the next.
+  const failures = [];
+  for (const state of STATES) {
+    try { await agreeOn(state); } catch (error) { failures.push(String(error.message).split('\n').filter(Boolean).slice(0, 3).join(' | ').slice(0, 300)); }
+  }
+  assert.deepEqual(failures, [], 'every state agrees');
+});

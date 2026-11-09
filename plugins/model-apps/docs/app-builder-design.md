@@ -624,6 +624,11 @@ full build / HALT.
 4. **app-shell sitemap** — structural sitemap change only (app.description/icon excluded).
 Additions of NEW top-level artifacts, removals, and charts/commands/dashboards/web-resource-content/AI ⇒
 full build, and they incur sticky **debt**.
+A spec that declares `commandStates[]` (2.24.0) is never fast-applied and never a no-op: a full build reads
+every declared command row and asks for approval of what it finds, which an unchanged snapshot cannot stand
+in for (`COMMAND_STATES_FULL`, `lib/changed-only-flow.js`). A change to them (added, changed or no longer
+declared, matched by row id) is a full-build reason with **no** debt: the full build applies it, and an entry
+no longer declared leaves its row as it is, which no later build could close either.
 
 ## Snapshot envelope (`<workspace>/apply-snapshot.json`, schema 3, atomic)
 `{ schema, orgId (live WhoAmI), envUrl, appUniqueName, appId, solutionUniqueName, generation (uuid),

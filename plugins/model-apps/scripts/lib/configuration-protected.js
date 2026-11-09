@@ -174,6 +174,19 @@ async function locateItem(env, kind, key) {
 }
 
 /**
+ * The read-only first step of the build's judgment of a bound item (the preflight, and verify for a rule): what its plan would
+ * change (editShapeOf) as { shape }, or as { halt: { code, message, id? } } when nothing can be judged from it — a read that
+ * did not complete (create-identity-unverified), or a bound row that is gone (configuration-row-not-found, never replaced by
+ * a namesake). One function, so verify and the build cannot read the same state two ways. It sends nothing.
+ */
+async function judgeBoundShape(dataverse, kind, planned) {
+  const shape = await B.editShapeOf(dataverse, planned);
+  if (shape.state !== 'complete') return { halt: { code: UNVERIFIED_CODE, message: `the ${kind} "${planned.key}" could not be read completely` } };
+  if (shape.missing.length) return { halt: { id: shape.missing[0].id, code: B.NOT_FOUND_CODE, message: `a bound row of ${kind} "${planned.key}" is gone; it is not replaced by a namesake` } };
+  return { shape };
+}
+
+/**
  * The verdict on a bound item's edit (editShapeOf), or null when the protected path can make it:
  *   a rule: any change at all is unsupported (created, published once, then only verified);
  *   a Custom API: one request on its own, the root PATCH with one or more new children, or two or more new children only.
@@ -522,9 +535,9 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       // removal the protected path does not make, authorized or not. A settings entry that leaves the value alone ("" or
       // none) or replaces it is not a clear; those keep the ordinary path and its authorization.
       const clears = kind === 'environmentVariable' && clearsValue(bindings, item.planned.key);
-      const shape = await B.editShapeOf(dataverse, item.planned);
-      if (shape.state !== 'complete') { halts.push({ kind, key: item.planned.key, code: UNVERIFIED_CODE, message: `the ${kind} "${item.planned.key}" could not be read completely` }); continue; }
-      if (shape.missing.length) { halts.push({ kind, key: item.planned.key, id: shape.missing[0].id, code: B.NOT_FOUND_CODE, message: `a bound row of ${kind} "${item.planned.key}" is gone; it is not replaced by a namesake` }); continue; }
+      const judged = await judgeBoundShape(dataverse, kind, item.planned);
+      if (judged.halt) { halts.push({ kind, key: item.planned.key, ...judged.halt }); continue; }
+      const { shape } = judged;
       // A clear plans no value row, so a value row under the definition is the removal the clear would send.
       const verdict = clears ? (shape.removals.length ? { code: B.DELETE_CODE, message: VALUE_REMOVAL_MESSAGE } : null)
         : kind === 'customApi' || kind === 'duplicateRule' ? editVerdict(kind, shape)
@@ -805,7 +818,8 @@ function manifestStore(manifest) {
 /**
  * Verify's port for the protected kinds (verify-model-app.js, under the opt-in): the same exact location the build uses
  * (locateItem), over the workspace's binding store as verify reads it (`manifest`), and READ-ONLY — it never sends, settles
- * or recovers anything. resolve({ kind, key }) answers { state: 'present', id } for a committed binding whose rows all
+ * or recovers anything. resolve({ kind, key }) answers { state: 'present', id, childIds } (the bound child rows, slot -> id) for a
+ * committed binding whose rows all
  * read present at their exact ids; anything else throws, typed, and verify reports that code for the item:
  *   configuration-row-not-found   a bound row is gone (a namesake elsewhere never stands in);
  *   managed-settlement-pending    an attempt is still pending: nothing is proved yet (verify-spec.js lists it unverified);
@@ -820,7 +834,31 @@ function protectedVerifyPort({ spec, manifest, dataverse, solution, bindings }) 
     protects: (kind) => KINDS.has(kind),
     async resolve({ kind, key }) {
       const item = await locateItem(await env(), kind, key);
-      if (item.state === 'bound') return { state: 'present', id: item.planned.plan.rows[0].id };
+      // The ids of the child rows the binding holds (slot -> id): verify pairs a rule's conditions at them, as the build's plan does
+      // (configuration-artifacts.js locateExactly). A declared child the binding does not hold yet is planned as a create at
+      // a derived id: that id is not bound to anything, so it is left out.
+      // A bound rule is judged as the build's preflight judges it (judgeBoundShape + editVerdict over the same plan), read-only, so
+      // verify refuses what a build would refuse: a condition the plan would create (a new or renamed key), a bound or extra row
+      // the declaration does not name, a changed rule, an omitted `conditions` over bound ones. What the preflight cannot judge
+      // (an incomplete read, a bound row gone) throws here with its own typed code. The refusal rides along as data: verify
+      // still reports the content differences, and fails when either finds one.
+      if (item.state === 'bound') {
+        const childIds = Object.fromEntries(item.planned.rows.filter((r) => r.slot !== null && r.mode === 'update').map((r) => [r.slot, r.id]));
+        const out = { state: 'present', id: item.planned.plan.rows[0].id, childIds };
+        if (kind === 'duplicateRule') {
+          const judged = await judgeBoundShape((await env()).dataverse, kind, item.planned);
+          if (judged.halt) throw stop(judged.halt.code, judged.halt.message, { kind, key: item.planned.key, ...(judged.halt.id ? { id: judged.halt.id } : {}) });
+          const verdict = editVerdict(kind, judged.shape);
+          if (verdict) {
+            out.buildRefusal = {
+              code: verdict.code,
+              created: item.planned.rows.filter((r) => r.kind === 'duplicateRuleCondition' && r.mode === 'create').map((r) => r.slot),
+              removed: judged.shape.removals.length > 0,
+            };
+          }
+        }
+        return out;
+      }
       if (item.state === 'pending') throw stop(PENDING_CODE, `the ${kind} "${item.planned.key}" has an attempt still pending; it is not verified until a build settles it`, { kind, key: item.planned.key });
       throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" has no committed binding in this workspace's binding store; it is never verified by name`, { kind, key: item.planned.key });
     },

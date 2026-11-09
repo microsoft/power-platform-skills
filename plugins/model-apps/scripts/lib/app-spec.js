@@ -3538,6 +3538,12 @@ function validateAppSpec(spec, opts = {}) {
       checkCmdAction(`command '${c.label}' on ${c.entity}`, c.library, c.function);
     }
   }
+  // commandStates (2.24.0): the hidden / disabled state of existing modern command rows, by row id (lib/command-state-contract.js). Loaded only for a
+  // spec that has the key, so every other spec validates exactly as before. Nothing here touches commands[] above: the two never share an entry.
+  // The structural profile (teardown, preview) reads a spec only for what it names, so there the findings are warnings, as for configuration.
+  if (Object.prototype.hasOwnProperty.call(spec, 'commandStates')) {
+    (profile === 'structural' ? warnings : errors).push(...require('./command-state-contract.js').validateCommandStates(spec).errors);
+  }
   // Declared reconciliation (2.21.0). Command keys and row pins, a table's Quick Find columns, and the kinds that do NOT take
   // `reconcile` in this release. Every field is optional; a spec that uses none of them gets no finding from this block.
   {
