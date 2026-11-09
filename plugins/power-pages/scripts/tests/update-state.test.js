@@ -200,3 +200,19 @@ test('valid nullable site fields and pending reference runs still render success
   assert.equal(state.site.name, null);
   assert.equal(state.refsMigration.status, 'Running');
 });
+
+test('environment URL can be cleared without bypassing resume identity checks', (t) => {
+  const fixture = setup(t);
+  assert.equal(fixture.run().status, 0);
+  const cleared = fixture.run([], ['--output-dir', fixture.output, '--set-site', '{"environmentUrl":null}']);
+  assert.equal(cleared.status, 0, cleared.stderr);
+  const state = JSON.parse(fs.readFileSync(fixture.statePath, 'utf8'));
+  assert.equal(state.site.environmentUrl, null);
+  const resumed = fixture.run();
+  assert.equal(resumed.status, 1);
+  assert.match(resumed.stderr, /identity mismatch/);
+  const restored = fixture.run([], ['--output-dir', fixture.output, '--set-site',
+    JSON.stringify({ environmentUrl: `${envUrl}/` })]);
+  assert.equal(restored.status, 0, restored.stderr);
+  assert.equal(fixture.run().status, 0);
+});

@@ -331,7 +331,7 @@ function cmdSetSite(args) {
     if (patch[k] !== null && typeof patch[k] !== 'string') {
       throw new Error(`--set-site: ${k} must be a string or null`);
     }
-    state.site[k] = k === 'environmentUrl' ? environmentOrigin(patch[k]) : patch[k];
+    state.site[k] = k === 'environmentUrl' && patch[k] !== null ? environmentOrigin(patch[k]) : patch[k];
   }
   persist(state, outputDir);
   console.log(`✓ Site updated: ${Object.keys(patch).join(', ')}`);
