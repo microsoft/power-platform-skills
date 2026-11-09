@@ -84,7 +84,7 @@ function readState(body) {
   return 'unknown';
 }
 
-function providerResult(provider, policies, apiHost) {
+function providerResult(provider, policies) {
   const definition = PROVIDERS[provider];
   const required = definition.policies.map((policy) => policies.find((item) => item.policy === policy));
   const blockedPolicies = required.filter((item) => item.state === 'disabled');
@@ -92,21 +92,8 @@ function providerResult(provider, policies, apiHost) {
   const status = verificationErrors.length ? 'unverified' : blockedPolicies.length ? 'blocked' : 'enabled';
   let message = `${definition.label} setup is allowed by portal governance.`;
   if (status === 'blocked') {
-    // The commercial PPAC deep link is not a verified sovereign-cloud route.
-    // Keep the documented admin-center entry point as the fallback.
-    const adminUrl = apiHost === CLOUD_TO_API.Public
-      ? 'https://admin.powerplatform.microsoft.com/manage/portals/settings'
-      : 'https://aka.ms/ppac';
-    const enabledPolicies = required.filter((item) => item.state === 'enabled');
-    message = `${definition.label} configuration cannot proceed due to portal governance restrictions.\n\n` +
-      (enabledPolicies.length ? `Enabled requirements: ${enabledPolicies.map((item) => item.label).join(', ')}.\n\n` : '') +
-      'Disabled requirements for this portal:\n' +
-      blockedPolicies.map((item) => `- ${item.label} (${item.policy})`).join('\n') +
-      `\n\nA Power Platform administrator can review these policies in Power Pages governance settings: ${adminUrl}\n` +
-      'Navigate to Manage > Products > Power Pages > Settings > Authentication. ' +
-      'Select each disabled authentication option, select the target environment > Manage, ' +
-      'and allow this portal in the site selection. Review the affected sites and apply the update.\n\n' +
-      'Once updated, retry setup. Allowing a policy does not configure the identity provider. ' +
+    message = `Your administrator has restricted the use of ${blockedPolicies.map((item) => item.label).join(', ')} for this website. ` +
+      'Contact your administrator if you need this setting enabled.\n\n' +
       'This read-only check made no provider settings or login-page changes.';
   } else if (status === 'unverified') {
     message = `${definition.label} setup stopped because portal governance could not be verified.\n\n` +
@@ -188,7 +175,7 @@ async function checkAuthGovernance(options, dependencies = {}) {
       return { ...item, error: { code: 'ReadFailed', statusCode: 0, message: 'Portal-level governance read failed without a response. Check connectivity and retry.' } };
     }
   }));
-  const results = providers.map((provider) => providerResult(provider, policies, context?.apiHost));
+  const results = providers.map((provider) => providerResult(provider, policies));
   const status = results.some((result) => result.status === 'unverified') ? 'unverified'
     : results.some((result) => result.status === 'blocked') ? 'blocked' : 'enabled';
   return {

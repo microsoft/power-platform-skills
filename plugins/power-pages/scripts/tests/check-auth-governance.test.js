@@ -83,7 +83,8 @@ for (const [provider, wrapper, policies] of methods) {
       assert.equal(result.allowed, false);
       assert.equal(result.status, 'blocked');
       assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), [policy]);
-      assert.match(result.message, /configuration cannot proceed due to portal governance restrictions/);
+      assert.equal(result.message.split('\n\n')[0],
+        `Your administrator has restricted the use of ${result.providers[0].blockedPolicies[0].label} for this website. Contact your administrator if you need this setting enabled.`);
       assert.equal(await checker[wrapper](options, h.dependencies), false);
     }
   });
@@ -97,42 +98,35 @@ test('Facebook messages list all and only disabled requirements for every combin
     const result = await checker.checkAuthGovernance(options, harness(responses).dependencies);
     const message = result.message;
     assert.equal(result.status, 'blocked');
-    assert.match(message, /^Facebook configuration cannot proceed due to portal governance restrictions\./);
-    assert.match(message, /Disabled requirements for this portal:/);
-    assert.match(message, /A Power Platform administrator/);
-    assert.match(message, /https:\/\/admin\.powerplatform\.microsoft\.com\/manage\/portals\/settings/);
-    assert.match(message, /Manage > Products > Power Pages > Settings > Authentication/);
-    assert.match(message, /target environment > Manage/);
-    assert.match(message, /allow this portal in the site selection/);
-    assert.match(message, /Once updated, retry setup/);
+    assert.equal(message.split('\n\n')[0],
+      `Your administrator has restricted the use of ${result.providers[0].blockedPolicies.map((item) => item.label).join(', ')} for this website. Contact your administrator if you need this setting enabled.`);
+    assert.doesNotMatch(message, /Enabled requirements|Disabled requirements|https:|Manage >|Once updated/);
     assert.match(message, /read-only check made no provider settings or login-page changes/);
-    assert.equal(message.includes('Enabled requirements:'), disabled.length < policies.length);
-    for (const policy of policies) assert.equal(message.includes(`(${policy})`), disabled.includes(policy));
+    for (const policy of policies) assert.ok(!message.includes(policy));
     assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), disabled);
   }
 });
 
-test('OIDC blocker shows enabled parents and only the disabled policy to change', async () => {
+test('OIDC blocker omits supplementary guidance but retains structured policy states', async () => {
   const policy = 'EnableProtocolOpenIdConnect';
   const result = await checker.checkAuthGovernance(
     { ...options, providers: ['oidc'] },
     harness({ [policy]: { ok: true, statusCode: 200, body: false } }).dependencies
   );
-  assert.match(result.message, /Enabled requirements: External authentication\./);
-  assert.match(result.message, /- OpenID Connect protocol \(EnableProtocolOpenIdConnect\)/);
-  assert.doesNotMatch(result.message, /\(EnableExternalAuthProviders\)/);
-  assert.match(result.message, /Allowing a policy does not configure the identity provider/);
+  assert.equal(result.message,
+    'Your administrator has restricted the use of OpenID Connect protocol for this website. Contact your administrator if you need this setting enabled.\n\n' +
+    'This read-only check made no provider settings or login-page changes.');
+  assert.deepEqual(result.policies.map((item) => [item.policy, item.state]), [[ROOT, 'enabled'], [policy, 'disabled']]);
 });
 
-test('sovereign blockers do not send administrators to the commercial deep link', async () => {
+test('sovereign blockers omit admin links and configuration navigation', async () => {
   for (const apiHost of new Set(Object.values(CLOUD_TO_API).filter((host) => host !== CLOUD_TO_API.Public))) {
     const h = harness({ [FACEBOOK]: { ok: true, statusCode: 200, body: false } }, {
       apiHost, baseUrl: `${apiHost}/powerpages/environments/${envId}`,
     });
     const result = await checker.checkAuthGovernance(options, h.dependencies);
     assert.equal(result.status, 'blocked');
-    assert.match(result.message, /https:\/\/aka\.ms\/ppac/);
-    assert.doesNotMatch(result.message, /https:\/\/admin\.powerplatform\.microsoft\.com/);
+    assert.doesNotMatch(result.message, /https:|Manage >/);
   }
 });
 
@@ -491,7 +485,7 @@ for (const [group, provider] of ['google', 'facebook', 'microsoft'].entries()) {
       const h = harness(responses);
       const result = await numberedDecision(t, id, h, { ...options, providers: [provider] }, expected, blocked);
       assert.deepEqual(h.calls.map((call) => call.policy), policies);
-      for (const policy of policies) assert.equal(result.message.includes(`(${policy})`), blocked.includes(policy));
+      assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), blocked);
       assert.equal(await checker[wrapper](options, h.dependencies), expected === 'enabled');
     });
   }
@@ -507,7 +501,7 @@ for (const [group, provider] of ['oidc', 'saml', 'ws-federation', 'local'].entri
       const h = harness(responses);
       const result = await numberedDecision(t, id, h, { ...options, providers: [provider] }, blocked.length ? 'blocked' : 'enabled', blocked);
       assert.deepEqual(h.calls.map((call) => call.policy), policies);
-      for (const policy of policies) assert.equal(result.message.includes(`(${policy})`), blocked.includes(policy));
+      assert.deepEqual(result.providers[0].blockedPolicies.map((item) => item.policy), blocked);
     });
   }
 }
@@ -691,14 +685,16 @@ function workflowSources() {
   };
 }
 
-test('blocked-message instructions include confirmed targets, admin navigation, and late-change disclosure', () => {
+test('blocked-message instructions omit supplementary guidance unless requested and disclose earlier changes', () => {
   const { skill, reference } = workflowSources();
   assert.match(skill, /Blocked-message presentation/);
+  const approvedMessage = 'Your administrator has restricted the use of [authentication Protocol/Provider] for this website. Contact your administrator if you need this setting enabled.';
+  assert.ok(skill.includes(approvedMessage));
+  assert.ok(reference.includes(approvedMessage));
   assert.match(skill, /Apply this format at every later preflight gate/);
-  assert.match(reference, /\{SITE_NAME\}/);
-  assert.match(reference, /\{ENVIRONMENT_NAME\}/);
-  assert.match(reference, /https:\/\/admin\.powerplatform\.microsoft\.com\/manage\/portals\/settings/);
-  assert.match(reference, /OpenID Connect > \{ENVIRONMENT_NAME\} > Manage/);
+  assert.match(skill, /Do not append policy-state summaries/);
+  assert.match(skill, /unless the user explicitly asks for those details/);
+  assert.match(reference, /unless the user explicitly asks for those details/);
   assert.match(reference, /read-only recheck made no additional changes/);
   assert.match(reference, /never suggest enabling a policy as a substitute for verification/);
 });

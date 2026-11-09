@@ -99,37 +99,34 @@ includes any known disabled requirements.
 
 ### User-facing blocked message
 
-Use professional, actionable wording for every blocked preflight, including late
-rechecks. Include the confirmed site and environment names from discovery; if a
-name is unavailable, use the confirmed ID instead. Do not infer display names
-from an ID or hardcode a previous project's names into the shared checker.
+Start every blocked preflight, including late rechecks, with this exact message:
 
-For commercial cloud, link to
+> Your administrator has restricted the use of [authentication Protocol/Provider] for this website. Contact your administrator if you need this setting enabled.
+
+Replace the placeholder with the disabled protocol/provider label(s), not
+enabled parent options or unverified requirements. Keep the wording unchanged.
+Do not append policy-state summaries, portal/environment details, admin links,
+or configuration navigation unless the user explicitly asks for those details.
+The structured checker result retains policy states and target IDs for
+diagnostics; omitting them from the message does not change the governance gate.
+
+Only if the user requests configuration guidance: for commercial cloud, link to
 https://admin.powerplatform.microsoft.com/manage/portals/settings. If the deep
 link redirects, the navigation is **Manage > Products > Power Pages > Settings >
 Authentication**. For other clouds, use the tenant's verified admin-center URL
 when available, otherwise the documented entry point https://aka.ms/ppac;
 do not invent sovereign-cloud deep links.
 
-Example when only OIDC is disabled (substitute this run's confirmed values):
+Example when only OIDC is disabled:
 
-> **OIDC configuration cannot proceed for {SITE_NAME} due to portal governance
-> restrictions.** External authentication is enabled, but OpenID Connect
-> (`EnableProtocolOpenIdConnect`) is disabled.
+> Your administrator has restricted the use of OpenID Connect protocol for this website. Contact your administrator if you need this setting enabled.
 >
-> A Power Platform administrator can review this in [Power Pages governance
-> settings](https://admin.powerplatform.microsoft.com/manage/portals/settings):
-> **Authentication > OpenID Connect > {ENVIRONMENT_NAME} > Manage**, then allow
-> **{SITE_NAME}** in the site selection, review the affected sites, and apply the
-> update.
->
-> Once updated, retry setup. No identity provider settings or custom login page
-> changes have been made in this run.
+> No identity provider settings or custom login page changes have been made in this run.
 
-For other providers or multiple disabled requirements, list **all and only**
-the disabled policy labels and keys, and direct the administrator to each
-corresponding authentication option. Mention enabled requirements only when
-verified; do not describe unknown responses as disabled. An allowed policy
+For other providers or multiple disabled requirements, substitute **all and only**
+the disabled labels into the approved message. Keep policy keys and enabled
+requirements in the structured diagnostics rather than the default message.
+Do not describe unknown responses as disabled. An allowed policy
 permits maker configuration; it does not create or configure the IdP.
 
 The example's no-change statement applies only when this run has made no
