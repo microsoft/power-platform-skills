@@ -5,6 +5,8 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.25.0]
+
 ## [2.24.0]
 
 - **Command buttons, read-only:** `scripts/list-command-states.js` lists an app's modern command buttons by row id: each button's bar, scope, stored hidden and disabled flags, and the reasons a button is not a candidate. Nothing is written (#812).
