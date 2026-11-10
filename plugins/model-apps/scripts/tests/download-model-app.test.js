@@ -2378,6 +2378,44 @@ for (const [missing, removed] of [['a page folder', []], ['the page.tsx of a pag
   });
 }
 
+// Only a missing path (ENOENT, ENOTDIR) shows an entry is gone: any other error of the last inspection says so, with its code.
+test('writePageTree: a file of the new tree that cannot be inspected before the swap is named as such, not as gone, and pages/ is as it was (#814)', () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-swap-inspect-'));
+  try {
+    seedEditedPages(out);
+    const before = treeBytes(out);
+    const suffix = path.join('new', SWAP_A, 'page.tsx');
+    const eio = Object.assign(new Error('EIO: injected, lstat'), { code: 'EIO', syscall: 'lstat' });
+    let written = false;
+    let reads = 0;
+    let stillThere = null;
+    // Once the file is in place (writeFileSafe's rename onto it), the guard's own check reads it first; the second read is the final
+    // check's, and it fails while the file is there.
+    const faulty = { ...fs, renameSync(from, to) {
+      fs.renameSync(from, to);
+      if (String(to).endsWith(suffix)) written = true;
+    }, lstatSync(p, ...args) {
+      if (written && String(p).endsWith(suffix) && ++reads === 2) {
+        stillThere = fs.lstatSync(p).isFile();
+        throw eio;
+      }
+      return fs.lstatSync(p, ...args);
+    } };
+    assert.throws(() => writePageTree(path.join(out, 'pages'), [{ pageId: SWAP_A, files: { 'page.tsx': DOWNLOADED_A } }], { fs: faulty, warn: () => {} }), (e) => {
+      assert.strictEqual(e.code, 'IO_ERROR');
+      assert.strictEqual(e.cause, eio);
+      assert.match(e.message, /the file .*page\.tsx this download wrote could not be inspected \(EIO\)\. The page folder is as it was/);
+      assert.doesNotMatch(e.message, /no longer there/);
+      return true;
+    });
+    assert.strictEqual(stillThere, true, 'the file was there when its inspection failed');
+    assert.deepStrictEqual(treeBytes(out), before, 'pages/ is as it was');
+    assert.deepStrictEqual(leftovers(out), [], 'the swap folder is removed');
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
 test('the CLI without --include-managed: a successful download answers, asks, prints and writes exactly what it did when it wrote pages/ itself (#814)', async (t) => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-same-'));
   const seed = () => {

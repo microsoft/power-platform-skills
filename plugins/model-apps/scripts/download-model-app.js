@@ -3110,7 +3110,11 @@ function writePageTree(pagesRoot, pages, opts = {}) {
         cause = e;
       }
       if (stat && (kind === 'folder' ? stat.isDirectory() : stat.isFile())) return;
-      const error = pageTreeError(`could not write the page folder ${pagesRoot}: the ${kind} ${shown(p)} this download wrote is ${stat ? `no longer a ${kind}` : `no longer there (${(cause && cause.code) || cause})`}. The page folder is as it was, and the downloaded pages were not moved into it`, cause);
+      // Only a missing path shows the entry is gone; any other error (EIO, EACCES, ...) leaves it unknown, and says so.
+      const code = (cause && cause.code) || cause;
+      const gone = cause && (cause.code === 'ENOENT' || cause.code === 'ENOTDIR');
+      const what = stat ? `is no longer a ${kind}` : gone ? `is no longer there (${code})` : `could not be inspected (${code})`;
+      const error = pageTreeError(`could not write the page folder ${pagesRoot}: the ${kind} ${shown(p)} this download wrote ${what}. The page folder is as it was, and the downloaded pages were not moved into it`, cause);
       error.code = 'IO_ERROR';
       throw error;
     };
