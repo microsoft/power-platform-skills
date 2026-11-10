@@ -1250,6 +1250,8 @@ test('deploy: a page already deployed with a dropped key and sent again UNCHANGE
     assert.ok(warning.includes('detail.tsx:7:24: `borderColor` is not supported by Griffel'), 'and the second');
     assert.ok(warning.includes(BOTH_WAYS_OUT), 'both ways out');
     assert.match(warning, /lists every one\); once the page's source changes, the build holds it to the check and stops on anything the check still reports\.$/);
+    // The page is deployed already, so the checker it suggests is the one for an existing page: its scroll findings are notes (Styling gotchas 6).
+    assert.ok(warning.includes('`node scripts/check-griffel-styles.js --file <page.tsx> --existing`'), warning);
     // A caller that does not listen (no `warn`) goes on all the same: the warning is advice, never a condition.
     await app.rebuild({ baselineSpec, warn: undefined }).run();
   } finally { app.cleanup(); }
@@ -1301,6 +1303,7 @@ test('deploy: a page that is UPDATED with a changed source is held to the check 
       assert.ok(e.message.includes('detail.tsx:4:5: `borderWidth`') && e.message.includes('detail.tsx:7:24: `borderColor`'), 'each key, where it is');
       assert.ok(e.message.includes(BOTH_WAYS_OUT), 'both ways out');
       assert.ok(e.message.includes('Its source changed since the last build recorded for it, so it is held to the check as a new page is; left as it was, it would only be warned about. Fix them in the page\'s source'), 'and why this page is held to it');
+      assert.ok(e.message.includes('`node scripts/check-griffel-styles.js --file <page.tsx> --existing` lists every one'), 'a changed page is still a deployed one: the checker it suggests reports scroll findings as notes');
       return true;
     });
     assert.deepStrictEqual(r.genpageCli.uploads, [], 'neither page was written');
@@ -1342,6 +1345,7 @@ test('deploy: a page that exists but has no record in this workspace is warned a
       assert.strictEqual(r.warnings.length, 1, what);
       assert.ok(r.warnings[0].startsWith('page "Detail" is already deployed, and this workspace holds no record of what the last build sent for it, so the build cannot tell whether this send changes it; it goes on, as builds did before this check. '), `${what}: ${r.warnings[0]}`);
       assert.ok(r.warnings[0].includes('detail.tsx:4:5: `borderWidth`') && r.warnings[0].includes(BOTH_WAYS_OUT), what);
+      assert.ok(r.warnings[0].includes('`node scripts/check-griffel-styles.js --file <page.tsx> --existing`'), `${what}: the checker for a deployed page`);
       assert.ok(r.warnings[0].endsWith('once a build has recorded this page, a change to its source is held to the check, and the build stops on anything the check still reports.'), `${what}: what happens from then on`);
     }
   } finally { app.cleanup(); }
@@ -1354,6 +1358,7 @@ test('deploy: a page that exists but has no record in this workspace is warned a
     await assert.rejects(
       runSdkBuild(fresh.spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir: fresh.appDir, genpageCli, phases: PHASES, baselineSpec }),
       (e) => e.code === 'pages-griffel-shorthand' && /page "Detail" writes CSS/.test(e.message) && !/Its source changed/.test(e.message)
+        && e.message.includes('`node scripts/check-griffel-styles.js --file <page.tsx>` lists every one')
     );
     assert.deepStrictEqual(genpageCli.uploads, []);
   } finally { fs.rmSync(fresh.appDir, { recursive: true, force: true }); }
@@ -1399,7 +1404,7 @@ test('deploy: a makeStyles call the checker cannot read is reported as that — 
       assert.ok(e.message.startsWith('page "Detail" has makeStyles calls the Griffel check could not read, so it cannot tell whether the page writes CSS that Griffel drops at runtime — detail.tsx:3:19: the makeStyles call here cannot be checked for certain'), e.message);
       assert.doesNotMatch(e.message, /writes CSS that Griffel drops at runtime, so the page would deploy without it/, 'it is not said to write any');
       assert.match(e.message, /put an operand in parentheses, \(\{ … \}\) \/ 2 or \(\/re\/\)\.test\(text\), or end the statement with a ";" — or move the makeStyles call above it\./);
-      assert.match(e.message, /Its source changed since the last build recorded for it, so it is held to the check as a new page is; left as it was, it would only be warned about\. Change the page's source as that says \(`node scripts\/check-griffel-styles\.js --file <page\.tsx>` shows what it cannot read\), then re-run\.$/);
+      assert.match(e.message, /Its source changed since the last build recorded for it, so it is held to the check as a new page is; left as it was, it would only be warned about\. Change the page's source as that says \(`node scripts\/check-griffel-styles\.js --file <page\.tsx> --existing` shows what it cannot read\), then re-run\.$/);
       return true;
     });
     assert.deepStrictEqual(held.genpageCli.uploads, []);

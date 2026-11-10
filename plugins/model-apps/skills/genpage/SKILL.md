@@ -886,7 +886,7 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
 9. Check the generated file for the Griffel shorthands that `makeStyles` drops at
-   runtime:
+   runtime, and for a scroll context:
 
    ```powershell
    node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
@@ -918,6 +918,13 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    keys, and so is a key computed from an expression (`[key]: …`), whose name it
    cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
    `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+
+   The same command checks that the page establishes a scroll context
+   (`references/rules.md`, **Page Layout**): the host shows a page in a container of
+   fixed height and never scrolls it, so a page with none is cut off below the fold.
+   `no-scroll-context`, `scroll-context-unproven` and `scroll-context-padding` are
+   problems like any other, each with the edit that fixes it: apply it and run the
+   check again.
 
    Then review the page for iteration that another page compiler can lose:
 
@@ -1039,7 +1046,8 @@ check themselves; run it on every generated page, exactly as in step 9 of Phase 
 node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
 ```
 
-and fix what it reports in the page yourself before Phase 6. A page that has not
+and fix what it reports in the page yourself before Phase 6, its scroll context
+included (step 9). A page that has not
 exited 0 is not deployed. Review every generated page for iteration that another page
 compiler can lose as well, and fix it yourself: the workers follow the same rule
 (`references/rules.md`, **Common Errors > 5. Iteration that another page compiler can lose**).
@@ -1194,7 +1202,8 @@ did not already have (below). The result is `"code":"griffel-shorthand"`, with e
 and what each way out does in `error` (and the same list in `problems`). That is the same check as
 `check-griffel-styles.js`, held at the one place every upload passes, so a page that skipped the earlier gate still cannot
 ship a key it added without its border. Fix the page and run the upload again; no flag skips it, and
-`--overwrite-deployed` does not. The upload reads the code file once and writes exactly the text it checked, so a change saved
+`--overwrite-deployed` does not. The upload does not check a page's scroll context: only `check-griffel-styles.js`
+does (Phase 5b step 9). The upload reads the code file once and writes exactly the text it checked, so a change saved
 to the file after the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: the SDK
 compiles the checked file itself.
 

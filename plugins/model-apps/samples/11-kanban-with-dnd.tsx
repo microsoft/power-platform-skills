@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {
     makeStyles,
+    mergeClasses,
     tokens,
     Card,
     CardHeader,
@@ -180,6 +181,7 @@ const useStyles = makeStyles({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        overflowY: 'auto',
         paddingInline: tokens.spacingHorizontalL,
         paddingBlock: tokens.spacingVerticalL,
         gap: tokens.spacingVerticalM,
@@ -375,9 +377,7 @@ function PageBody(props: GeneratedComponentProps) {
             <div className={styles.board}>
                 {COLUMNS.map((col) => {
                     const items = tasks.filter((t) => t.statuscode === col.key);
-                    const columnClass = `${styles.column} ${
-                        hoverColumn === col.key ? styles.columnHover : ''
-                    }`;
+                    const columnClass = mergeClasses(styles.column, hoverColumn === col.key && styles.columnHover);
                     return (
                         <div
                             key={col.key}
@@ -399,9 +399,7 @@ function PageBody(props: GeneratedComponentProps) {
                                     </Caption1>
                                 ) : (
                                     items.map((task) => {
-                                        const cardClass = `${styles.card} ${
-                                            draggingId === task.activityid ? styles.cardDragging : ''
-                                        }`;
+                                        const cardClass = mergeClasses(styles.card, draggingId === task.activityid && styles.cardDragging);
                                         return (
                                             <Card
                                                 key={task.activityid}

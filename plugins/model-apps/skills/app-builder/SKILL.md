@@ -573,6 +573,12 @@ After plan-mode approval (before the full build):
    that starts with `--`, `&`, `:` or `@` is read); Fluent's `...shorthands.*(…)` and
    `...typographyStyles.*` may be spread as they are.
 
+   The same command checks that each page establishes a scroll context (`references/rules.md`,
+   **Page Layout**): the host shows a page in a container of fixed height and never scrolls it, so a
+   page with none is cut off below the fold. `no-scroll-context`, `scroll-context-unproven` and
+   `scroll-context-padding` are problems like any other, each with the edit that fixes it: apply it
+   and run the check again.
+
    Review every generated page for iteration that another page compiler can lose as well:
 
    Pages this plugin uploads are compiled with iterator support (ES5 with `downlevelIteration`), so a
@@ -1039,9 +1045,10 @@ Then:
    the folder that pins `languageCode` needs neither). Do not guess it: a spec whose titles were read in the
    wrong language writes them over the right ones on the next build.
 2. Edit `app-spec.json` (and any page `.tsx`) for the requested change. A page you edit by hand is
-   checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx>`
+   checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx> --existing`
    on it before you rebuild (the rule and the ten shorthands are in Phase 1.5, step 5) and fix what it
-   reports. A key the page already had when it was downloaded is reported too: the deployed page renders
+   reports. `--existing` reports the page's scroll context (`references/rules.md`, **Page Layout**) in
+   `notes` without changing the exit code: tell the user about each note and offer the edit it gives. A key the page already had when it was downloaded is reported too: the deployed page renders
    without it today, so deleting it keeps the page looking as it does, while writing the longhands makes
    the style start to render — delete it unless the user wants that change. The build runs the same
    check on every page it uploads that is new or that you changed since the last successful apply of this app, and halts as
