@@ -1176,9 +1176,9 @@ ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stop
 // only when the prompt asks for it (no expectation = none is allowed). Whether the offer itself is made needs a transcript of a
 // conversation (EVAL_GUIDE.md, "Optional capabilities").
 // It grades presence and absence by capability kind and table, and nothing else: a name, a stage label, a tile order or a scope is the
-// maker's to choose, so none of them is compared here, and this check grades no shape at all. Shape is graded elsewhere only in part:
-// the common process assertions check well-formedness, fixture 21 has its own layout assertions, and the declared dashboard,
-// rules and flow of fixtures 22-24 have no shape assertion yet (EVAL_GUIDE.md, "Optional capabilities").
+// maker's to choose, so none of them is compared here, and this check grades no shape at all. Shape is graded elsewhere: the common
+// process assertions check well-formedness, fixture 21 has its own layout assertions, and the declared dashboard, rules and flow of
+// fixtures 22-24 each have a shape assertion of their own (the "declared shapes" block below; EVAL_GUIDE.md, "Optional capabilities").
 //   expect.appTheme       as the theme assertion reads it (set = a theme is asked for)
 //   expect.configuration  as the configuration assertion reads it (a non-empty list, or solutionVersion, is an ask)
 //   expect.declared       { forms|dashboards|businessRules|businessProcessFlows: { tables: [table...], minCount: n } }
@@ -1234,5 +1234,127 @@ ASSERTIONS.set('author: a maker who declines business rules and process flows ge
   }
   return PASS;
 });
+
+// --- BEGIN declared shapes (fixtures 22-24; EVAL_GUIDE.md, "Optional capabilities") ---
+// What the capability check above leaves out: the shape of what a declared dashboard, business rule or process flow holds. Each is
+// graded from facts.declaredShapes (what the plugin compiles for it) against expectations written from the PROMPT, never from the
+// spec or from what was compiled: expect.declaredDashboards, expect.declaredRules and expect.declaredFlows. A name, a tile's order,
+// a stage's exact label, the steps of a stage and any property the prompt leaves unsaid are the maker's to choose, so none is
+// compared. An artifact the plugin could not compile (an `error` shape) fails with the reason.
+const describeCondition = (c) => `${c.field} ${c.operator}${c.option !== undefined ? ` "${c.option}"` : c.value !== undefined ? ` ${c.value}` : ''}`;
+const describeAction = (a) => (a.field ? `${a.type} ${a.field}` : a.type);
+
+// Pairs each wanted item with a distinct actual one (a greedy, order-free match; the wanted items of one set differ in what they
+// name, so the first fit is the only fit) and returns what is wanted but unmatched and what is left over.
+function pairOff(wanted, actual, fits) {
+  const free = [...actual];
+  const missing = [];
+  for (const w of wanted) {
+    const at = free.findIndex((a) => fits(a, w));
+    if (at < 0) missing.push(w); else free.splice(at, 1);
+  }
+  return { missing, extra: free };
+}
+
+const tileIdentity = (want) => (tile) => {
+  if (tile.type !== want.type) return false;
+  if (want.type === 'iframe') return tile.url === want.url;
+  if (lc(tile.entity) !== lc(want.entity)) return false;
+  if (want.type === 'list') return tile.viewId === `view:${lc(want.entity)}|${want.view}`;
+  if (want.type === 'chart') return tile.chartId === `chart:${lc(want.entity)}|${want.chart}` && (want.view === undefined || tile.viewId === `view:${lc(want.entity)}|${want.view}`);
+  return false;
+};
+const describeTile = (want) => (want.type === 'iframe' ? `iframe of ${want.url}` : want.type === 'list' ? `list of view "${want.view}" on ${want.entity}` : `chart "${want.chart}" on ${want.entity}`);
+
+function dashboardProblems(dashboard, want) {
+  const broken = dashboard.tiles.find((t) => t.error);
+  if (broken) return [`the ${broken.type || 'unknown'} tile "${broken.name || ''}" does not compile: ${broken.error}`];
+  if (dashboard.tiles.length !== want.tiles.length) return [`${dashboard.tiles.length} tile(s) [${dashboard.tiles.map((t) => t.type)}], the prompt asks for ${want.tiles.length} [${want.tiles.map((t) => t.type)}]`];
+  const free = [...dashboard.tiles];
+  const problems = [];
+  for (const t of want.tiles) {
+    const at = free.findIndex(tileIdentity(t));
+    if (at < 0) { problems.push(`no tile is the ${describeTile(t)} the prompt asks for`); continue; }
+    const [tile] = free.splice(at, 1);
+    if (t.minColspan !== undefined && tile.colspan < t.minColspan) problems.push(`the ${describeTile(t)} is ${tile.colspan} column(s) wide, the prompt asks for at least ${t.minColspan}`);
+    if (t.minRowspan !== undefined && tile.rowspan < t.minRowspan) problems.push(`the ${describeTile(t)} is ${tile.rowspan} row(s) tall, the prompt asks for more than ${t.minRowspan - 1}`);
+  }
+  return problems;
+}
+
+ASSERTIONS.set('process: a declared dashboard holds exactly the tiles the prompt describes, each bound to the view, chart or address it names and sized as asked', ({ facts, eval: ev }) => {
+  const want = ev && ev.expect && ev.expect.declaredDashboards;
+  if (!Array.isArray(want) || !want.length) return fail('no independent expectation of the declared dashboards (expect.declaredDashboards)');
+  const got = facts.declaredShapes.dashboards;
+  if (got.length !== want.length) return fail(`${got.length} declared dashboard(s) [${got.map((d) => d.name)}], the prompt asks for ${want.length}`);
+  const free = [...got];
+  for (const [i, w] of want.entries()) {
+    const verdicts = free.map((d) => dashboardProblems(d, w));
+    const at = verdicts.findIndex((p) => p.length === 0);
+    if (at < 0) return fail(`dashboard ${i + 1}: ${verdicts[0].join('; ')}`);
+    free.splice(at, 1);
+  }
+  return PASS;
+});
+
+const conditionFits = (actual, want) => lc(actual.field) === lc(want.field) && actual.operator === want.operator
+  && (want.option !== undefined ? (actual.options || []).some((o) => lc(o) === lc(want.option)) : want.value === undefined || String(actual.value) === String(want.value));
+const actionFits = (actual, want) => actual.type === want.type && (want.field === undefined || lc(actual.field) === lc(want.field))
+  && (want.lock === undefined || actual.lock === want.lock) && (want.required === undefined || actual.required === want.required)
+  && (want.visible === undefined || actual.visible === want.visible) && (want.hasMessage !== true || actual.hasMessage === true);
+
+function ruleProblems(rule, want) {
+  const problems = [];
+  // A Draft rule is inert (it never runs for the user), and the prompt asks for rules that operate.
+  if (String(rule.status === undefined || rule.status === null ? 'Active' : rule.status).toLowerCase() !== 'active') problems.push(`its status is ${rule.status}, the prompt asks for a rule that is Active`);
+  if (want.scope !== undefined && lc(rule.scope) !== lc(want.scope)) problems.push(`its scope is ${rule.scope}, the prompt asks for ${want.scope}`);
+  if (want.logic !== undefined && String(rule.logic).toUpperCase() !== String(want.logic).toUpperCase()) problems.push(`its conditions combine with ${rule.logic}, the prompt asks for ${want.logic}`);
+  const { missing, extra } = pairOff(want.do || [], rule.actions, actionFits);
+  if (missing.length) problems.push(`it lacks the action(s) [${missing.map(describeAction)}] the prompt asks for`);
+  if (extra.length) problems.push(`it carries the action(s) [${extra.map(describeAction)}] the prompt does not ask for`);
+  return problems;
+}
+
+ASSERTIONS.set('process: each declared business rule has the condition, scope and actions the prompt describes', ({ facts, eval: ev }) => {
+  const want = ev && ev.expect && ev.expect.declaredRules;
+  if (!Array.isArray(want) || !want.length) return fail('no independent expectation of the declared rules (expect.declaredRules)');
+  const got = facts.declaredShapes.rules;
+  const broken = got.find((r) => r.error);
+  if (broken) return fail(`the rule "${broken.name || ''}" does not compile: ${broken.error}`);
+  if (got.length !== want.length) return fail(`${got.length} declared rule(s) [${got.map((r) => r.name)}], the prompt asks for ${want.length}`);
+  const free = [...got];
+  for (const w of want) {
+    const at = free.findIndex((r) => {
+      const { missing, extra } = pairOff(w.when || [], r.conditions, conditionFits);
+      return !missing.length && !extra.length;
+    });
+    if (at < 0) return fail(`no declared rule fires on exactly [${(w.when || []).map(describeCondition)}]; the declared rules fire on ${got.map((r) => `[${r.conditions.map(describeCondition)}]`).join(', ')}`);
+    const [rule] = free.splice(at, 1);
+    const problems = ruleProblems(rule, w);
+    if (problems.length) return fail(`the rule that fires on [${(w.when || []).map(describeCondition)}]: ${problems.join('; ')}`);
+  }
+  return PASS;
+});
+
+ASSERTIONS.set('process: a declared process flow has exactly the stages the prompt names, in order', ({ facts, eval: ev }) => {
+  const want = ev && ev.expect && ev.expect.declaredFlows;
+  if (!Array.isArray(want) || !want.length) return fail('no independent expectation of the declared flows (expect.declaredFlows)');
+  const got = facts.declaredShapes.flows;
+  const broken = got.find((f) => f.error);
+  if (broken) return fail(`the flow "${broken.name || ''}" does not compile: ${broken.error}`);
+  if (got.length !== want.length) return fail(`${got.length} declared flow(s) [${got.map((f) => f.name)}], the prompt asks for ${want.length}`);
+  const free = [...got];
+  for (const [i, w] of want.entries()) {
+    const patterns = (w.stages || []).map((s) => new RegExp(s.pattern, 'i'));
+    const verdicts = free.map((f) => (f.stages.length !== patterns.length
+      ? `${f.stages.length} stage(s) [${f.stages}], the prompt names ${patterns.length}`
+      : patterns.map((re, k) => (re.test(f.stages[k]) ? null : `stage ${k + 1} is "${f.stages[k]}", which is not /${re.source}/i`)).filter(Boolean).join('; ')));
+    const at = verdicts.findIndex((v) => v === '');
+    if (at < 0) return fail(`flow ${i + 1}: ${verdicts[0]}`);
+    free.splice(at, 1);
+  }
+  return PASS;
+});
+// --- END declared shapes ---
 
 module.exports = { ASSERTIONS };
