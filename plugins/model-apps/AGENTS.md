@@ -1714,6 +1714,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   lossy-download gate, the App Spec validation and, for `--include-managed`, the fragments file — a refusal
   or a failed write before then leaves `pages/`, `app-spec.json` and the baseline as they were. A library
   caller that omits `stagePages` still has `runDownload` write `pages/` itself.
+  **`app-spec.json` is checked with the tree, written after it.** Right after `stagedPages.check`, `main` runs
+  `assertFileReplaceable` (`lib/safe-fs.js`) on the spec: the refusals `writeFileSafe` would make at write
+  time (a link, a folder, a hard link — `UNSAFE_OUTPUT` — or a read-only file, `IO_ERROR` `read-only`), plus a
+  folder in which no new file can be made (`IO_ERROR` `folder-not-writable`, found by creating and removing an
+  empty `.app-spec.json.<pid>.<hex>.tmp`, since on Windows a folder's access list, not its mode, decides). Any
+  of them stops the download before the fragments file or `pages/` is written, and the error ends "The
+  download stopped before writing anything". **Residual limit:** the spec is still written after `pages/` is
+  replaced, and the two are not one transaction. A write of the spec that fails for a reason no look
+  beforehand can see (a full disk, a lock taken meanwhile, a crash) leaves `pages/` holding this download's
+  pages — the previous pages are not kept — beside the previous spec (or none), which does not describe
+  them. The error keeps the write's code and says exactly that; running the same download again makes them
+  match. No copy of the previous pages and no recovery folder is made.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,
@@ -2979,7 +2991,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   It is settled after the restore and the validation and before anything is published: `main` passes
   `runDownload` `stagePages` (as it does for every download), which writes the page tree to a hidden staging
   folder inside `<out>`, reads it back and answers `stagedPages` (`check`, `publish`); the tree, the spec and
-  the baseline are written only after the fragments file, so a failure there leaves every output as it was. The
+  the baseline are written only after the fragments file, so a failure there leaves every output as it was (and
+  a tree or an `app-spec.json` that cannot be replaced is refused before the fragments file is written). The
   restored form is the group's `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A
   plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the

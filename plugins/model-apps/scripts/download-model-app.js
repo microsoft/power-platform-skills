@@ -61,7 +61,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
+const { assertSafeOutputDir, assertPlainFileTarget, assertFileReplaceable, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
 const { renameWithRetry } = require('./lib/rename-retry.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
@@ -4084,6 +4084,16 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
+// `error` with `sequel` (what the refusal or failure means for the app folder) added to its message. Its code and reason are kept, so a
+// caller that tells one failure from another by them still can; the original is its cause.
+function withSequel(error, sequel) {
+  if (!error || typeof error.message !== 'string') return error;
+  const told = new Error(`${error.message.replace(/\.\s*$/, '')}. ${sequel}`, { cause: error });
+  if (error.code !== undefined) told.code = error.code;
+  if (error.reason !== undefined) told.reason = error.reason;
+  return told;
+}
+
 async function main(deps = {}) {
   const argv = deps.argv || process.argv.slice(2);
   // Test seam: every side effect of main() — the process streams and exit, the result printer, the
@@ -4303,11 +4313,21 @@ async function main(deps = {}) {
       );
     }
     // The staged page tree is published here, for every download, after validation and everything else that can stop the download: its
-    // checks first (writePageTree's own refusals, made without writing), then, for the managed download, the fragments file, then the
-    // tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves pages/, the spec and the
-    // baseline as they were, and a tree that cannot be replaced stops the managed download before its fragments file is written.
+    // checks first (writePageTree's own refusals, made without writing, and the refusals writeFileSafe would make of app-spec.json —
+    // a link, a folder, a hard link, a read-only file or a folder where no new file can be made), then, for the managed download, the
+    // fragments file, then the tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves
+    // pages/, the spec and the baseline as they were, and a tree or a spec that cannot be replaced stops the managed download before its
+    // fragments file is written. The spec is still written after the tree: a write of it that fails for a reason no look beforehand can
+    // see (a full disk, a lock taken meanwhile) leaves the new pages with the previous spec, and its error says so.
     let managedFragments = null;
-    if (result.stagedPages) result.stagedPages.check();
+    if (result.stagedPages) {
+      result.stagedPages.check();
+      try {
+        assertFileReplaceable(specPath);
+      } catch (e) {
+        throw withSequel(e, `The download stopped before writing anything: ${path.join(outDir, 'pages')} and ${specPath} are as they were`);
+      }
+    }
     if (includeManaged) {
       try {
         managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
@@ -4320,7 +4340,16 @@ async function main(deps = {}) {
       }
     }
     if (result.stagedPages) result.stagedPages.publish();
-    writeFileSafe(specPath, JSON.stringify(spec, null, 2));
+    try {
+      writeFileSafe(specPath, JSON.stringify(spec, null, 2));
+    } catch (e) {
+      if (!result.stagedPages) throw e;
+      // pages/ was replaced a moment ago and the previous pages are not kept, so the folder now pairs this download's pages with a spec
+      // that does not describe them. A failed writeFileSafe never touches the file it was writing, so that spec is the one from before.
+      const pagesDir = path.join(outDir, 'pages');
+      const left = fs.existsSync(specPath) ? 'it is still the spec from before this download, which does not describe them' : 'there is none';
+      throw withSequel(e, `${pagesDir} now holds this download's pages (the previous pages are not kept), but ${specPath} was not written: ${left}. Run the same download again to make them match`);
+    }
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
     // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this

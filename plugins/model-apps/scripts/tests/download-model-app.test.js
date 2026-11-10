@@ -2444,10 +2444,97 @@ test('the CLI without --include-managed: a successful download answers, asks, pr
     assert.ok(fs.readFileSync(path.join(out, 'pages', SWAP_A, 'page.tsx'), 'utf8').includes('PAGEREF_'), 'the navigating page was rewritten');
     assert.ok(fs.existsSync(path.join(out, 'app-spec.json')));
     assert.deepStrictEqual(leftovers(out), []);
+    assert.deepStrictEqual(fs.readdirSync(out).filter((n) => n.startsWith('.app-spec.json.')), [], 'no temporary file of the spec is left');
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
 });
+
+// ── app-spec.json is written after pages/ is published: what would refuse its write is refused before pages/ is touched ──────────────
+
+// A temporary sibling writeFileSafe makes for <out>/app-spec.json (`.app-spec.json.<pid>.<8 hex>.tmp`), under either name of <out>:
+// the pre-check's probe is one, and so is the file whose rename gives <out>/app-spec.json its new content.
+const specTemp = (out) => {
+  const outs = new Set([out, fs.realpathSync.native(out)]);
+  return (p) => path.basename(String(p)).startsWith('.app-spec.json.') && outs.has(path.dirname(String(p)));
+};
+
+for (const [what, plant, refusal] of [
+  ['a hard link', (file, elsewhere) => fs.linkSync(file, path.join(elsewhere, 'twin.json')), (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'hard-link'],
+  ['read-only', (file) => fs.chmodSync(file, 0o444), (e) => e.code === 'IO_ERROR' && e.reason === 'read-only'],
+  ['a folder', (file) => { fs.rmSync(file); fs.mkdirSync(file); fs.writeFileSync(path.join(file, 'kept.txt'), 'the maker\'s file'); }, (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'not-file'],
+  ['a symbolic link', (file, elsewhere) => {
+    const real = path.join(elsewhere, 'real-spec.json');
+    fs.writeFileSync(real, MAKER_SPEC);
+    fs.rmSync(file);
+    fs.symlinkSync(real, file, 'file');
+  }, (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'link'],
+  ['in a folder where no new file can be made', (file, elsewhere, t, out) => failFs(t, 'openSync', (p, flags) => flags === 'wx' && specTemp(out)(p), 'EACCES'), (e) => e.code === 'IO_ERROR' && e.reason === 'folder-not-writable'],
+]) {
+  test(`the CLI without --include-managed: an app-spec.json that is ${what} is refused before pages/ is touched: the maker's pages and spec are as they were, and nothing is left`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-refused-'));
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-elsewhere-'));
+    const specFile = path.join(out, 'app-spec.json');
+    try {
+      seedEditedPages(out);
+      fs.writeFileSync(specFile, MAKER_SPEC);
+      try {
+        plant(specFile, elsewhere, t, out);
+      } catch (e) {
+        if (e && e.code === 'EPERM' && what === 'a symbolic link') { t.skip('this account cannot make a symbolic link'); return; }
+        throw e;
+      }
+      const before = treeBytes(out);
+      const res = await cliDownload(t, out);
+      assert.deepStrictEqual(treeBytes(out), before, 'pages/ and app-spec.json are as they were');
+      assert.deepStrictEqual(leftovers(out), [], 'no staging or swap folder is left');
+      assert.deepStrictEqual(fs.readdirSync(out).filter((n) => n.startsWith('.app-spec.json.')), [], 'no temporary file is left');
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && refusal(res.thrown), String(res.thrown && res.thrown.stack));
+      assert.match(res.thrown.message, /^refusing to write .*app-spec\.json: /);
+      assert.ok(res.thrown.message.endsWith(`. The download stopped before writing anything: ${path.join(out, 'pages')} and ${specFile} are as they were`), res.thrown.message);
+    } finally {
+      try { fs.chmodSync(specFile, 0o666); } catch { /* removed already */ }
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+}
+
+// A write of the spec that fails for a reason no look beforehand can see (a full disk, a lock, a crash) comes after pages/ is published,
+// as it did: the error says so plainly, and the same download run again makes the two match.
+for (const hadSpec of [true, false]) {
+  test(`the CLI without --include-managed: a write of app-spec.json that fails after pages/ is published${hadSpec ? '' : ', where there was no app-spec.json'}, says that pages/ holds this download's pages and app-spec.json does not describe them, and the same download run again makes them match`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-late-'));
+    const specFile = path.join(out, 'app-spec.json');
+    try {
+      seedEditedPages(out);
+      if (hadSpec) fs.writeFileSync(specFile, MAKER_SPEC);
+      const failed = failFs(t, 'renameSync', specTemp(out), 'EIO');
+      const res = await cliDownload(t, out);
+      assert.strictEqual(failed.length, 1, 'the spec\'s rename into place was refused');
+      assert.deepStrictEqual(fs.readdirSync(path.join(out, 'pages')).sort(), [SWAP_A, SWAP_B].sort(), 'pages/ holds this download\'s pages');
+      assert.ok(fs.readFileSync(path.join(out, 'pages', SWAP_A, 'page.tsx'), 'utf8').includes('PAGEREF_'));
+      if (hadSpec) assert.strictEqual(fs.readFileSync(specFile, 'utf8'), MAKER_SPEC, 'app-spec.json is the previous spec');
+      else assert.ok(!fs.existsSync(specFile), 'there is still no app-spec.json');
+      assert.deepStrictEqual(leftovers(out), [], 'no staging or swap folder is left');
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && res.thrown.code === 'IO_ERROR', String(res.thrown && res.thrown.stack));
+      assert.match(res.thrown.message, /^failed to write .*app-spec\.json: EIO: injected/);
+      const state = hadSpec ? 'it is still the spec from before this download, which does not describe them' : 'there is none';
+      assert.ok(res.thrown.message.endsWith(`. ${path.join(out, 'pages')} now holds this download's pages (the previous pages are not kept), but ${specFile} was not written: ${state}. Run the same download again to make them match`), res.thrown.message);
+
+      const again = await cliDownload(t, out);
+      assert.strictEqual(again.thrown, null, String(again.thrown && again.thrown.stack));
+      assert.strictEqual(again.emitted.length, 1);
+      assert.strictEqual(again.emitted[0].ok, true, JSON.stringify(again.emitted));
+      const spec = JSON.parse(fs.readFileSync(specFile, 'utf8'));
+      assert.deepStrictEqual(spec.pages.map((p) => p.pageId).sort(), fs.readdirSync(path.join(out, 'pages')).sort(), 'the spec describes the pages in pages/');
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
 
 test('writePageTree on Windows: a moment\'s lock on the move into pages/ is waited out, but the move of the maker\'s pages/ aside is one attempt (#814)', (t) => {
   freshRenameWaitTotal(t);

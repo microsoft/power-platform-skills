@@ -244,6 +244,38 @@ function assertPlainFileTarget(filePath, opts) {
   return resolved;
 }
 
+// Inspect only, for a caller that must know BEFORE other work whether writeFileSafe(filePath) would be refused: it makes the same
+// refusals writeFileSafe makes before it writes (a folder that is a link, a target that is a link, a folder, a hard link or read-only),
+// and one more that writeFileSafe only meets as a failed write: a folder in which no new file can be made, so that its temporary
+// sibling cannot be created. That is found by creating, then removing, an empty sibling of the same shape: a look at the permission
+// bits cannot answer it (on Windows the folder's access list decides, and an access check for W_OK reads only the read-only attribute).
+// Like every look beforehand, it says nothing about the moment of the write: a full disk, a lock taken later or a crash still fail
+// the write itself.
+function assertFileReplaceable(filePath, opts) {
+  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
+  const fsImpl = (opts && opts.fs) || fs;
+  const resolved = path.resolve(filePath);
+  const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
+  const target = path.join(realDir, path.basename(resolved));
+  assertWritableTarget(target, fsImpl);
+  const probe = siblingTempName(realDir, path.basename(resolved));
+  let fd;
+  try {
+    fd = fsImpl.openSync(probe, 'wx');
+  } catch (err) {
+    const e = new Error(`refusing to write ${target}: a new file cannot be made in its folder ${realDir} (${(err && err.code) || err}), and the file is written by making a new one there`);
+    e.code = 'IO_ERROR';
+    e.reason = 'folder-not-writable';
+    throw e;
+  }
+  // The probe is empty and named for this process and call only, so removing it touches nothing of anyone else's. Its removal is
+  // best-effort: the folder answered the question already, and an empty hidden file left by a lock that outlasts the retries is
+  // not a reason to stop a download.
+  try { fsImpl.closeSync(fd); } catch { /* the descriptor is gone either way */ }
+  try { unlinkWithRetry(fsImpl, probe); } catch { /* see above */ }
+  return target;
+}
+
 function writeFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
   ({ data, opts } = checkedForTokens(data, opts));
@@ -540,6 +572,7 @@ module.exports = {
   sameFile,
   assertSafeOutputDir,
   assertPlainFileTarget,
+  assertFileReplaceable,
   writeFileSafe,
   appendFileSafe,
   removeFileSafe,
