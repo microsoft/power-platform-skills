@@ -1065,9 +1065,9 @@ function derived(value, pair) {
 
 function sameEffect(key, a, b) {
   if (key === 'flexGrow') return Number(a) > 0 === Number(b) > 0;
-  if (opaqueCss(String(a)) || opaqueCss(String(b))) return String(a) === String(b);
   // `overflowY: "var(--Scroll)"` and `overflow: "var(--scroll)"` read two custom properties, so they do not provably agree.
-  return foldCss(String(a).trim()) === foldCss(String(b).trim());
+  if (opaqueCss(String(a)) || opaqueCss(String(b))) return String(a) === String(b);
+  return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 }
 
 // `flex: 1` → 1; `flex: "1 1 0"` → 1; `flex: "auto"` → 1; `flex: "none"` / `"initial"` → 0. https://www.w3.org/TR/css-flexbox-1/#flex-common
@@ -1125,31 +1125,24 @@ function fixedLength(v) {
   return /^(?:\d+\.?\d*|\.\d+)(?:px|rem|em|pt|pc|cm|mm|in|q|ex|ch)$/i.test(String(v).trim());
 }
 
-// The same CSS text, whitespace and case aside: "calc(100% - 64px)" and "CALC(100%  -  64px)" are one value. Only the case of keywords,
-// units and function names is ignored: a custom property name is case-sensitive, so "var(--height)" and "var(--HEIGHT)" are two values.
+// The same CSS text, whitespace and case aside: "calc(100% - 64px)" and "CALC(100%  -  64px)" are one value, as keywords, units and function
+// names are ASCII case-insensitive. Text that may name a custom property is compared byte for byte instead (opaqueCss).
 function sameValue(a, b) {
   if (!a || !b || !a.known || !b.known) return false;
   if ([a.value, b.value].some((v) => typeof v === 'string' && opaqueCss(v))) return a.value === b.value;
-  const norm = (v) => (typeof v === 'number' ? `${v}px` : foldCss(String(v).trim().replace(/\s+/g, ' ')));
+  const norm = (v) => (typeof v === 'number' ? `${v}px` : String(v).trim().replace(/\s+/g, ' ').toLowerCase());
   return norm(a.value) === norm(b.value);
 }
 
-// Does CSS text that names a custom property hold an escape or a comment? Then foldCss cannot tell where the name ends: an escaped space,
-// comma or parenthesis is part of a name (`--x\ A` and `--x\ a` are two properties), so is the space that ends a hex escape (`--\41 B`), and
-// a comment beside a name is not (`--height/**UPPER*/` is `--height`). Rather than decode escapes and comments, such text equals only the
-// same text byte for byte, and any other comparison is not proven. That refuses two spellings of one name too (`--\4A` and `--\4a`), a
-// refusal the remedy always clears. https://www.w3.org/TR/css-syntax-3/#escaping
+// Is CSS text one the check does not normalize? A custom property name is case-sensitive (`var(--height)` and `var(--HEIGHT)` read two
+// properties that may hold different sizes), and escapes can spell any part of one — an escaped space, comma or parenthesis inside it
+// (`--x\ A`), the space that ends a hex escape (`--\41 B`), even its leading hyphens (`\2d \2d Height`, `\-\-Height`, `-\-Height` are all
+// `--Height`) — while a comment beside it is not part of it. So rather than find and decode names, any text with a var(), a backslash or a
+// comment equals only the same text byte for byte, and any other comparison is not proven. That refuses some spellings of one value too
+// (`CALC(VAR(--h))` beside `calc(var(--h))`, `calc( var(--h) )`, `--\4A` beside `--\4a`), a refusal the remedy always clears.
+// https://www.w3.org/TR/css-syntax-3/#escaping https://www.w3.org/TR/css-variables-1/#defining-variables
 function opaqueCss(text) {
-  return text.includes('--') && (text.includes('\\') || text.includes('/*'));
-}
-
-// CSS text in lower case but for its custom property names, for comparing two values: keywords, units and function names are ASCII
-// case-insensitive, while `--height` and `--HEIGHT` name two custom properties that may hold different sizes.
-//   "CALC(VAR(--Height) - 8PX)" → "calc(var(--Height) - 8px)"
-// A `--name` runs to the next space, comma or parenthesis — `var(--a,--B)`, `var(--a, 8px)` — which is all an unescaped name can end at in a
-// value; a lone `-` (`100% - 8px`) is not a name. https://www.w3.org/TR/css-variables-1/#defining-variables
-function foldCss(text) {
-  return text.split(/(--[^\s,()]*)/).map((part, i) => (i % 2 ? part : part.toLowerCase())).join('');
+  return /var\(|\\|\/\*/i.test(text);
 }
 
 // A `minHeight` that is not provably at most the height that bounds the box: CSS applies the minimum over the height and the maximum, so a

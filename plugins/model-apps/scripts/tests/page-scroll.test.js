@@ -158,9 +158,12 @@ const CASES = [
   ['a minHeight in rem larger than the height', page('', `  return (<div style={{ height: '30rem', minHeight: '40rem', overflowY: 'auto' }}>${TALL}</div>);`), 'fail'],
   ['a minHeight that is the same calc() as the height', page('', `  return (<div style={{ height: 'calc(100% - 64px)', minHeight: 'calc(100%  -  64px)', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   // Keywords, units and function names are not case-sensitive in CSS, but a custom property name is: `--height` and `--HEIGHT` are two
-  // properties, so a minHeight that names the other one may be any size.
+  // properties, so a minHeight that names the other one may be any size. A value with a var() is compared byte for byte, so the same var()
+  // in another case or spacing is refused (not proven) too; the remedy passes those.
   ['a minHeight whose var() names the height\'s custom property in another case', page('', `  return (<div style={{ height: 'calc(var(--height))', minHeight: 'calc(var(--HEIGHT))', overflowY: 'auto' }}>${TALL}</div>);`), 'unproven:min-height'],
-  ['a minHeight that is the same var() as the height', page('', `  return (<div style={{ height: 'calc(var(--Height))', minHeight: 'CALC(VAR(--Height))', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
+  ['a minHeight that is byte for byte the same var() as the height', page('', `  return (<div style={{ height: 'calc(var(--Height))', minHeight: 'calc(var(--Height))', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
+  ['a minHeight that is the same var() as the height but for the case of its functions (refused, not proven)', page('', `  return (<div style={{ height: 'calc(var(--Height))', minHeight: 'CALC(VAR(--Height))', overflowY: 'auto' }}>${TALL}</div>);`), 'unproven:min-height'],
+  ['a minHeight that is the same var() as the height but for its spacing (refused, not proven)', heightAndMin('calc(var(--h))', 'calc( var(--h) )'), 'unproven:min-height'],
   ['a minHeight that is the same calc() as the height in another case', page('', `  return (<div style={{ height: 'CALC(100% - 64PX)', minHeight: 'calc(100% - 64px)', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   ['a minHeight in PX not larger than a height in px', page('', `  return (<div style={{ height: '480px', minHeight: '300PX', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   ['a minHeight of Auto under height 100%', rooted(`${SCROLLS}, minHeight: 'Auto'`), 'pass'],
@@ -180,6 +183,17 @@ const CASES = [
   ['a minHeight that is byte for byte the height with an escaped custom property', heightAndMin(String.raw`calc(var(--x\ A))`, String.raw`calc(var(--x\ A))`), 'pass'],
   ['a minHeight that is byte for byte the height with a comment', heightAndMin('calc(var(--height/**UPPER*/))', 'calc(var(--height/**UPPER*/))'), 'pass'],
   ['overflowY and overflow on two classes naming escaped custom properties in another case', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: ${JSON.stringify(String.raw`var(--x\,A)`)} },\n  b: { overflow: ${JSON.stringify(String.raw`var(--x\,a)`)} },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
+  // Escapes can spell the `--` of a name too (`\2d \2d Height`, `\-\-Height`, `-\-Height` are `--Height`), so the comparison never looks for a
+  // name: any var(), backslash or comment makes it byte for byte.
+  ['a minHeight naming the height\'s custom property in another case, both hyphens hex-escaped', heightAndMin(String.raw`calc(var(\2d \2d Height))`, String.raw`calc(var(\2d \2d height))`), 'unproven:min-height'],
+  ['a minHeight naming the height\'s custom property in another case, both hyphens escaped', heightAndMin(String.raw`calc(var(\-\-Height))`, String.raw`calc(var(\-\-height))`), 'unproven:min-height'],
+  ['a minHeight naming the height\'s custom property in another case, the second hyphen escaped', heightAndMin(String.raw`calc(var(-\-Height))`, String.raw`calc(var(-\-height))`), 'unproven:min-height'],
+  ['a minHeight naming the height\'s custom property in another case, the first hyphen escaped', heightAndMin(String.raw`calc(var(\--Height))`, String.raw`calc(var(\--height))`), 'unproven:min-height'],
+  ['a minHeight that is byte for byte the height with escaped hyphens', heightAndMin(String.raw`calc(var(\-\-Height))`, String.raw`calc(var(\-\-Height))`), 'pass'],
+  ['a minHeight that is the same calc() as the height but for a comment in another case (refused, not proven)', heightAndMin('calc(100% /*A*/ - 64px)', 'calc(100% /*a*/ - 64px)'), 'unproven:min-height'],
+  ['overflowY and overflow on two classes naming custom properties in another case through escaped hyphens', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: ${JSON.stringify(String.raw`var(\-\-Scroll)`)} },\n  b: { overflow: ${JSON.stringify(String.raw`var(\-\-scroll)`)} },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
+  ['overflowY and overflow on two classes with the same var() but for the case of its function', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'VAR(--Scroll)' },\n  b: { overflow: 'var(--Scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
+  ['overflowY and overflow on two classes with byte for byte the same var()', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'var(--Scroll)' },\n  b: { overflow: 'var(--Scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:unread-value'],
   ['a minHeight in % smaller than the height', page('', `  return (<div style={{ height: '50%', minHeight: '25%', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   ['a minHeight in rem under a height in px', page('', `  return (<div style={{ height: '480px', minHeight: '10rem', overflowY: 'auto' }}>${TALL}</div>);`), 'unproven:min-height'],
   ['a minHeight given a token', rooted(`${SCROLLS}, minHeight: tokens.spacingVerticalXXXL`), 'unproven:unread-value'],
@@ -244,7 +258,8 @@ test('page-scroll: the padding message says the end may be cut off only where a 
 test('page-scroll: check-griffel-styles.js refuses a page whose minHeight names an escaped custom property in another case, and notes it with --existing', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-scroll-cli-'));
   try {
-    const pairs = [[String.raw`--x\ A`, String.raw`--x\ a`], [String.raw`--x\,A`, String.raw`--x\,a`], [String.raw`--x\(A`, String.raw`--x\(a`], [String.raw`--\41 B`, String.raw`--\41 b`]];
+    const pairs = [[String.raw`--x\ A`, String.raw`--x\ a`], [String.raw`--x\,A`, String.raw`--x\,a`], [String.raw`--x\(A`, String.raw`--x\(a`], [String.raw`--\41 B`, String.raw`--\41 b`],
+      [String.raw`\2d \2d Height`, String.raw`\2d \2d height`], [String.raw`\-\-Height`, String.raw`\-\-height`], [String.raw`-\-Height`, String.raw`-\-height`]];
     pairs.forEach(([h, m], i) => {
       const file = path.join(dir, `page${i}.tsx`);
       fs.writeFileSync(file, heightAndMin(`calc(var(${h}))`, `calc(var(${m}))`));
