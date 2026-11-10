@@ -153,6 +153,17 @@ const CASES = [
   ['a minHeight in rem smaller than the height', page('', `  return (<div style={{ height: '30rem', minHeight: '10rem', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   ['a minHeight in rem larger than the height', page('', `  return (<div style={{ height: '30rem', minHeight: '40rem', overflowY: 'auto' }}>${TALL}</div>);`), 'fail'],
   ['a minHeight that is the same calc() as the height', page('', `  return (<div style={{ height: 'calc(100% - 64px)', minHeight: 'calc(100%  -  64px)', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
+  // Keywords, units and function names are not case-sensitive in CSS, but a custom property name is: `--height` and `--HEIGHT` are two
+  // properties, so a minHeight that names the other one may be any size.
+  ['a minHeight whose var() names the height\'s custom property in another case', page('', `  return (<div style={{ height: 'calc(var(--height))', minHeight: 'calc(var(--HEIGHT))', overflowY: 'auto' }}>${TALL}</div>);`), 'unproven:min-height'],
+  ['a minHeight that is the same var() as the height', page('', `  return (<div style={{ height: 'calc(var(--Height))', minHeight: 'CALC(VAR(--Height))', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
+  ['a minHeight that is the same calc() as the height in another case', page('', `  return (<div style={{ height: 'CALC(100% - 64PX)', minHeight: 'calc(100% - 64px)', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
+  ['a minHeight in PX not larger than a height in px', page('', `  return (<div style={{ height: '480px', minHeight: '300PX', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
+  ['a minHeight of Auto under height 100%', rooted(`${SCROLLS}, minHeight: 'Auto'`), 'pass'],
+  ['BORDER-BOX keeps the padding inside', rooted("height: '100%', overflowY: 'auto', padding: '16px', boxSizing: 'BORDER-BOX'"), 'pass'],
+  // Of an overflowY and an overflow on two classes only an agreement is read, and two custom property names in another case do not agree.
+  ['overflowY and overflow on two classes naming one custom property in another case', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'var(--Scroll)' },\n  b: { overflow: 'var(--scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
+  ['overflowY and overflow on two classes that agree but for case', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'AUTO' },\n  b: { overflow: 'auto' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'pass'],
   ['a minHeight in % smaller than the height', page('', `  return (<div style={{ height: '50%', minHeight: '25%', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   ['a minHeight in rem under a height in px', page('', `  return (<div style={{ height: '480px', minHeight: '10rem', overflowY: 'auto' }}>${TALL}</div>);`), 'unproven:min-height'],
   ['a minHeight given a token', rooted(`${SCROLLS}, minHeight: tokens.spacingVerticalXXXL`), 'unproven:unread-value'],
@@ -182,6 +193,33 @@ for (const [name, source, expected] of CASES) {
     assert.equal(verdict(source), expected);
   });
 }
+
+// A padded box that fills its container is refused either way, but one whose other bound is a fixed length (height "100%" under maxHeight
+// "400px") is min(container, 400px) tall plus its padding: it overhangs only a container shorter than 400px plus that padding, so its
+// message says the end may be cut off, and when. Every other padding message is as it was.
+test('page-scroll: the padding message says the end may be cut off only where a fixed bound caps the box, and is unchanged elsewhere', () => {
+  const message = (style) => {
+    const problems = pageScrollProblems(page('', `  return (<div style={{ ${style}, overflowY: 'auto', padding: 16 }}>${TALL}</div>);`));
+    assert.deepEqual(problems.map((p) => p.code), ['scroll-context-padding'], style);
+    return problems[0].message;
+  };
+  const how = 'Write boxSizing: "border-box" as the last key of the inline style of that <div> and make style its last attribute (references/rules.md, "Page Layout").';
+  const may = (fills, key, cap) => `the page scrolls, but its <div> at line 8 fills its container (${fills}) up to its ${key} (${cap}) and has vertical padding in the default content-box model, so in a container shorter than ${cap} plus that padding it is taller than its container, and the end of the page may be cut off below the visible area. ${how}`;
+  const stays = (fills) => `the page scrolls, but its <div> at line 8 fills its container (${fills}) and has vertical padding in the default content-box model, so it is taller than its container by that padding and the end of the page stays cut off below the visible area. ${how}`;
+  assert.equal(message("height: '100%', maxHeight: '400px'"), may('100%', 'maxHeight', '400px'));
+  assert.equal(message("height: '100%', maxHeight: 400"), may('100%', 'maxHeight', '400px'));
+  assert.equal(message("height: '100%', maxHeight: '30rem', minHeight: 0"), may('100%', 'maxHeight', '30rem'));
+  assert.equal(message("height: '400px', maxHeight: '100%'"), may('100%', 'height', '400px'));
+  // Unchanged: nothing caps the box, the cap is not a fixed length (150%, 100vh, a token), or a minimum may hold it at the container's height.
+  assert.equal(message("height: '100%'"), stays('100%'));
+  assert.equal(message("maxHeight: '100%'"), stays('100%'));
+  assert.equal(message("height: 'calc(100% - 8px)'"), stays('calc(100% - 8px)'));
+  assert.equal(message("height: '100%', maxHeight: '100%'"), stays('100%'));
+  assert.equal(message("height: '100%', maxHeight: '150%'"), stays('100%'));
+  assert.equal(message("height: '100%', maxHeight: '100vh'"), stays('100%'));
+  assert.equal(message("height: '100%', maxHeight: tokens.spacingVerticalXXXL"), stays('100%'));
+  assert.equal(message("height: '100%', maxHeight: '400px', minHeight: '100%'"), stays('100%'));
+});
 
 test('page-scroll: the work item\'s dashboard — default export → error boundary class → body component → a flex column root — has no scroll context', () => {
   const source = `${HEAD}const useStyles = makeStyles({\n  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, padding: tokens.spacingHorizontalL },\n  card: { padding: '8px' },\n});\nclass PageErrorBoundary extends React.Component<{ children: React.ReactNode }> {\n  render() { return this.props.children; }\n}\nfunction PageBody() {\n  const styles = useStyles();\n  return (\n    <div className={styles.root}>\n      {[1, 2].map((n) => <Card key={n} className={styles.card}><Text>{n}</Text></Card>)}\n    </div>\n  );\n}\nexport default function GeneratedComponent() {\n  return <PageErrorBoundary><PageBody /></PageErrorBoundary>;\n}\n`;

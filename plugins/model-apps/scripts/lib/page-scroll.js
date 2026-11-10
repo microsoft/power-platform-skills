@@ -210,13 +210,13 @@ class PageReader {
       if (result.v === true) {
         for (const { box, parent } of result.path) {
           const at = box.node.getStart(sf);
-          const fills = paddedAt.has(at) ? null : this.overhangs(box, parent);
-          if (!fills) continue;
+          const over = paddedAt.has(at) ? null : this.overhangs(box, parent);
+          if (!over) continue;
           paddedAt.add(at);
           const where = this.place(box.node);
           const name = this.elementName(box);
           const fix = this.fixFor(box, 'padding');
-          problems.push({ code: 'scroll-context-padding', ...where, element: name, fix, message: paddingMessage(name, where, fix, fills) });
+          problems.push({ code: 'scroll-context-padding', ...where, element: name, fix, message: paddingMessage(name, where, fix, over) });
         }
         continue;
       }
@@ -908,7 +908,8 @@ class PageReader {
   // `calc(100% - 64px)` with 16px padding on each side, leave room for the padding and are not refused; nor is a calc() whose padding is a
   // token, whose overhang the check cannot prove. One sized by flex is laid out with its padding counted, and a fixed length is the size the
   // author chose. A scroll container in a flex column also shrinks to fit (its automatic minimum height is 0).
-  // Returns the value that fills the container ("100%", "calc(100% - 8px)"), or null.
+  // Returns the value that fills the container ("100%", "calc(100% - 8px)") and, when the other of height and maxHeight is a fixed length
+  // that caps the box, that bound (`cap`: { key, value }); or null.
   overhangs(box, parent) {
     const style = this.styleOf(box);
     const sizing = style.get('boxSizing');
@@ -939,19 +940,26 @@ class PageReader {
     };
     let fills = null;
     const bounds = [];
+    let fixed = null;
     for (const key of ['height', 'maxHeight']) {
       const v = style.get(key);
       if (v === undefined || !v.known || (typeof v.value === 'string' && /^(?:auto|none)$/i.test(v.value.trim()))) continue;
       const c = classOf(v);
       if (c === 'fill') fills = fills || v.value.trim();
+      if (c === 'maybe' && fixedLength(v.value)) fixed = { key, value: typeof v.value === 'number' ? `${v.value}px` : v.value.trim() };
       bounds.push(c);
     }
     if (!fills) return null;
     const used = bounds.includes('room') ? 'room' : bounds.includes('maybe') ? 'maybe' : 'fill';
-    if (used !== 'room') return fills;
+    // A box that fills its container and is capped by a fixed length (height "100%" under maxHeight "400px") is min(container, 400px) tall
+    // plus its padding: it overhangs only a container shorter than 400px plus that padding, and the message says so. It is still refused,
+    // as the host's height is not known here. A minHeight other than auto or 0 may hold it at the container's height, so then it is not
+    // said.
     const min = style.get('minHeight');
-    if (min === undefined || (min.known && (isAutoMin(min) || isZero(min).v === true))) return null;
-    return min.known && classOf(min) === 'room' ? null : fills;
+    const minFree = min === undefined || (min.known && (isAutoMin(min) || isZero(min).v === true));
+    if (used !== 'room') return { fills, cap: used === 'maybe' && fixed && minFree ? fixed : null };
+    if (minFree) return null;
+    return min.known && classOf(min) === 'room' ? null : { fills, cap: null };
   }
 
   place(node) {
@@ -1057,7 +1065,8 @@ function derived(value, pair) {
 
 function sameEffect(key, a, b) {
   if (key === 'flexGrow') return Number(a) > 0 === Number(b) > 0;
-  return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  // `overflowY: "var(--Scroll)"` and `overflow: "var(--scroll)"` read two custom properties, so they do not provably agree.
+  return foldCss(String(a).trim()) === foldCss(String(b).trim());
 }
 
 // `flex: 1` → 1; `flex: "1 1 0"` → 1; `flex: "auto"` → 1; `flex: "none"` / `"initial"` → 0. https://www.w3.org/TR/css-flexbox-1/#flex-common
@@ -1108,11 +1117,28 @@ function measure(value) {
   return m ? { n: Number(m[1]), unit: m[2] } : null;
 }
 
-// The same CSS text, whitespace and case aside: "calc(100% - 64px)" and "calc(100%  -  64px)" are one value.
+// Is a height or maxHeight a fixed length, independent of the container's height? 400, "400px", "30rem". A percentage, a viewport unit (the
+// host's container is shorter than the viewport, so "100vh" never caps a box that fills it), a calc() or a keyword is not.
+function fixedLength(v) {
+  if (typeof v === 'number') return Number.isFinite(v) && v >= 0;
+  return /^(?:\d+\.?\d*|\.\d+)(?:px|rem|em|pt|pc|cm|mm|in|q|ex|ch)$/i.test(String(v).trim());
+}
+
+// The same CSS text, whitespace and case aside: "calc(100% - 64px)" and "CALC(100%  -  64px)" are one value. Only the case of keywords,
+// units and function names is ignored: a custom property name is case-sensitive, so "var(--height)" and "var(--HEIGHT)" are two values.
 function sameValue(a, b) {
   if (!a || !b || !a.known || !b.known) return false;
-  const norm = (v) => (typeof v === 'number' ? `${v}px` : String(v).trim().toLowerCase().replace(/\s+/g, ' '));
+  const norm = (v) => (typeof v === 'number' ? `${v}px` : foldCss(String(v).trim().replace(/\s+/g, ' ')));
   return norm(a.value) === norm(b.value);
+}
+
+// CSS text in lower case but for its custom property names, for comparing two values: keywords, units and function names are ASCII
+// case-insensitive, while `--height` and `--HEIGHT` name two custom properties that may hold different sizes.
+//   "CALC(VAR(--Height) - 8PX)" → "calc(var(--Height) - 8px)"
+// A `--name` runs to the next space, comma or parenthesis — `var(--a,--B)`, `var(--a, 8px)` — which is all an unescaped name can end at in a
+// value; a lone `-` (`100% - 8px`) is not a name. https://www.w3.org/TR/css-variables-1/#defining-variables
+function foldCss(text) {
+  return text.split(/(--[^\s,()]*)/).map((part, i) => (i % 2 ? part : part.toLowerCase())).join('');
 }
 
 // A `minHeight` that is not provably at most the height that bounds the box: CSS applies the minimum over the height and the maximum, so a
@@ -1297,12 +1323,15 @@ function unprovenMessage(element, place, result, at, fix) {
   return `the check cannot prove the page scrolls: ${REASONS[result.reason] || result.reason}${where}. ${WHY} ${fixText(element, place, fix)}`;
 }
 
-function paddingMessage(element, place, fix, fills) {
+function paddingMessage(element, place, fix, { fills, cap }) {
   const add = 'boxSizing: "border-box"';
   const how = fix.kind === 'class'
     ? `Add ${add} to the "${fix.slot}" slot of ${fix.hook} (the class of that <${element}>)`
     : `Write ${add} as the last key of the inline style of that <${element}> and make style its last attribute`;
-  return `the page scrolls, but its <${element}> at line ${place.line} fills its container (${fills}) and has vertical padding in the default content-box model, so it is taller than its container by that padding and the end of the page stays cut off below the visible area. ${how} (${RULE_REFERENCE}).`;
+  const effect = cap
+    ? `fills its container (${fills}) up to its ${cap.key} (${cap.value}) and has vertical padding in the default content-box model, so in a container shorter than ${cap.value} plus that padding it is taller than its container, and the end of the page may be cut off below the visible area`
+    : `fills its container (${fills}) and has vertical padding in the default content-box model, so it is taller than its container by that padding and the end of the page stays cut off below the visible area`;
+  return `the page scrolls, but its <${element}> at line ${place.line} ${effect}. ${how} (${RULE_REFERENCE}).`;
 }
 
 // ─── Small TypeScript helpers ────────────────────────────────────────────────────────────────────────────────────────────────────────────
