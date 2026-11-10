@@ -44,7 +44,7 @@ This file records **shipped** behaviour only. Planned and unbuilt work is tracke
 
 ### Deploy — ✅ verified live
 - `pcf-push.js` wraps `pac pcf push --environment` after the skill records consent.
-- The production bundle registered in Dataverse matched the local build hash, and the SQL 1205 publish-deadlock hint exists.
+- The production bundle registered in Dataverse matched the local build hash, and the SQL 1205 publish-deadlock hint exists. A publish-all step lost to a deadlock is re-sent at most twice (unit-tested; not yet observed live).
 - Deploy publishes all customizations as part of the PAC operation.
 
 ### Binding verification — mixed evidence

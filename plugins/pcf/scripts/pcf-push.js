@@ -13,6 +13,7 @@ const { pcfprojBuildMode } = require('./lib/pcf-doctor.js');
 const { makePcfSdk, findCustomControl, solutionPrefix } = require('./lib/pcf-dataverse.js');
 const { parseManifest } = require('./lib/pcf-manifest.js');
 const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
+const { isPublishStepDeadlock, retryPublishAll } = require('./lib/pcf-publish-retry.js');
 const { emitSkillCompleted } = require('./lib/telemetry/skill-completed.js');
 
 const USAGE = `Usage:
@@ -157,13 +158,21 @@ async function main(argv = process.argv.slice(2)) {
     }, { stage: 'push', timedOut: true });
   }
 
-  if ((push.status || 0) !== 0) {
+  // A push that failed only because its final publish lost a SQL deadlock has already built and imported the control, so only that
+  // publish is sent again (lib/pcf-publish-retry.js). Every other failure, and a publish that still fails, is reported as before, with
+  // the number of publish attempts added when a re-send was tried.
+  let publishRetry = null;
+  if (isPublishStepDeadlock(push)) publishRetry = await resendDeadlockedPublish(envOrigin, projectDir);
+
+  if ((push.status || 0) !== 0 && !(publishRetry && publishRetry.published)) {
     return finish(false, {
       ok: false,
       stage: 'push',
       status: push.status,
       ...(push.error ? { error: scrubSecrets(errorReason(push.error)) } : {}),
       hints: pushHints(push),
+      ...(publishRetry ? { publishAttempts: 1 + publishRetry.retries } : {}),
+      ...(publishRetry && publishRetry.reason ? { publishRetryError: scrubSecrets(publishRetry.reason) } : {}),
       logTail: readBuildLogTail(projectDir),
       stdout: scrubbedTail(push.stdout, 60),
       stderr: scrubbedTail(push.stderr, 60),
@@ -208,7 +217,20 @@ async function main(argv = process.argv.slice(2)) {
     version: expectedVersion,
     registered: stripPrivateRegistration(registered),
     receipt,
+    ...(publishRetry ? { publishAttempts: 1 + publishRetry.retries } : {}),
   }, { stage: 'done', ok, registered: !!registered.ok });
+}
+
+// Re-sends the publish pac lost to a deadlock through the same SDK workspace the registration read-back uses. A client that cannot be
+// made (no token, for example) sent nothing, so it reports the reason with no re-send rather than throwing out of the push.
+async function resendDeadlockedPublish(envOrigin, projectDir) {
+  let sdk;
+  try {
+    sdk = await makePcfSdk(envOrigin, path.join(projectDir, '.maker-workspace', 'pcf-push'));
+  } catch (err) {
+    return { published: false, retries: 0, outcome: 'error', reason: errorReason(err) };
+  }
+  return retryPublishAll(sdk.dataverse);
 }
 
 // What a push's result says, in the closed vocabulary of lib/telemetry/skill-completed.js — never a control, solution or environment name.

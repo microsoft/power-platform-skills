@@ -296,12 +296,16 @@ test('a publish deadlock (SQL 1205) gets a wait-and-retry hint instead of the ge
       ].join('\n'),
       stderr: '',
     }),
+    // No Dataverse client can be made (no token), so the publish is not re-sent and pac's failure is reported with its hint.
+    makePcfSdk: () => { throw new Error('az token unavailable'); },
   });
 
   assert.equal(cli.exitCode, 1);
   const payload = JSON.parse(cli.stdoutText());
   assert.equal(payload.ok, false);
   assert.equal(payload.stage, 'push');
+  assert.equal(payload.publishAttempts, 1);
+  assert.match(payload.publishRetryError, /az token unavailable/);
   assert.equal(payload.hints.length, 1);
   assert.match(payload.hints[0], /deadlock victim \(SQL 1205\)/);
   // The inventory check needs --env: pcf-inventory.js rejects a call without it, so a hint that
@@ -310,6 +314,126 @@ test('a publish deadlock (SQL 1205) gets a wait-and-retry hint instead of the ge
   assert.match(payload.hints[0], /re-run the same push/);
   assert.doesNotMatch(payload.hints[0], /Review the pac pcf push output/);
 });
+
+// The pac output of a push whose import succeeded and whose publish-all step lost a SQL deadlock.
+const DEADLOCK_TEXT = 'Error:  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+const publishDeadlockPac = () => ({
+  status: 1,
+  stdout: ['Importing the temporary solution wrapper into the current org: done.', 'Publishing All Customizations...', DEADLOCK_TEXT].join('\n'),
+  stderr: '',
+});
+// The Web API answer to a PublishAllXml that SQL chose as a deadlock victim.
+const deadlockAnswer = () => ({ status: 500, headers: {}, body: { error: { code: '0x80044150', message: ` ${DEADLOCK_TEXT.replace('Error:  ', '')}` } } });
+
+// Runs a push with a Dataverse client whose PublishAllXml answers come from `answers` in order (a function answer is called, so it
+// can throw), and with the retry's waits recorded instead of slept.
+async function runPublishRetry(name, answers, overrides = {}) {
+  const projectDir = makeProject(name);
+  const posts = [];
+  const sleeps = [];
+  const realRetry = require('../lib/pcf-publish-retry.js');
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    runPac: publishDeadlockPac,
+    makePcfSdk: () => ({
+      dataverse: {
+        post: async (url, body) => {
+          posts.push([url, body]);
+          const next = answers[posts.length - 1];
+          return typeof next === 'function' ? next() : next;
+        },
+      },
+    }),
+    requires: {
+      './lib/pcf-publish-retry': {
+        ...realRetry,
+        retryPublishAll: (dataverse, opts) => realRetry.retryPublishAll(dataverse, { ...opts, sleep: async (ms) => { sleeps.push(ms); } }),
+      },
+    },
+    ...overrides,
+  });
+  return { cli, projectDir, posts, sleeps };
+}
+
+test('a publish deadlock is re-sent as PublishAllXml once and the push then succeeds without re-running pac', async () => {
+  const { cli, posts, sleeps } = await runPublishRetry('publish-retry-ok', [{ status: 204, headers: {}, body: undefined }]);
+
+  assert.equal(cli.exitCode, 0);
+  assert.equal(cli.calls.filter((call) => call[0] === 'runPac').length, 1);
+  assert.deepEqual(posts, [['/PublishAllXml', {}]]);
+  assert.deepEqual(sleeps, [5000]);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, true);
+  assert.equal(payload.stage, 'done');
+  assert.equal(payload.publishAttempts, 2);
+  assert.deepEqual(payload.registered, { ok: true, version: '1.2.3', expected: '1.2.3' });
+});
+
+test('a publish that keeps deadlocking is sent at most twice more, then fails as before with the attempt count', async () => {
+  const { cli, posts, sleeps } = await runPublishRetry('publish-retry-deadlock', [deadlockAnswer(), deadlockAnswer(), deadlockAnswer()]);
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(posts.length, 2);
+  assert.deepEqual(sleeps, [5000, 15000]);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.status, 1);
+  assert.equal(payload.publishAttempts, 3);
+  assert.equal(payload.publishRetryError, undefined);
+  assert.equal(payload.hints.length, 1);
+  assert.match(payload.hints[0], /deadlock victim \(SQL 1205\)/);
+  assert.equal(cli.calls.some((call) => call[0] === 'findCustomControl'), false);
+});
+
+test('a re-sent publish answered with another error is not sent again', async () => {
+  const uniqueKey = { status: 500, headers: {}, body: { error: { code: '0x80044150', message: 'Sql error: duplicate key (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627' } } };
+  const { cli, posts } = await runPublishRetry('publish-retry-other', [uniqueKey, { status: 204 }]);
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(posts.length, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.publishAttempts, 2);
+  assert.match(payload.publishRetryError, /^HTTP 500: .*Sql Number: 2627$/);
+});
+
+test('a re-sent publish whose answer was lost is not sent again', async () => {
+  const lost = () => { throw new Error('PublishAllXml: socket hang up'); };
+  const { cli, posts } = await runPublishRetry('publish-retry-lost', [lost, { status: 204 }]);
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(posts.length, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.publishAttempts, 2);
+  assert.match(payload.publishRetryError, /socket hang up/);
+});
+
+test('a SQL 1205 before the publish step, or any other push failure, is never re-sent', async () => {
+  for (const [label, stdout] of [
+    ['import deadlock', ['Importing the temporary solution wrapper into the current org...', DEADLOCK_TEXT].join('\n')],
+    ['other publish error', ['Publishing All Customizations...', 'Error:  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627'].join('\n')],
+    ['tool failure', 'Missing required tool dotnet'],
+  ]) {
+    const { cli, posts } = await runPublishRetry(`publish-no-retry-${slugOf(label)}`, [{ status: 204 }], {
+      runPac: () => ({ status: 1, stdout, stderr: '' }),
+    });
+    assert.equal(cli.exitCode, 1, label);
+    assert.equal(posts.length, 0, label);
+    assert.equal(cli.calls.some((call) => call[0] === 'makePcfSdk'), false, label);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.stage, 'push', label);
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'publishAttempts'), false, label);
+  }
+});
+
+function slugOf(label) {
+  return label.replace(/\W+/g, '-');
+}
 
 test('push refusal from process-runner emits one JSON error through the real pac adapter', async () => {
   const projectDir = makeProject('runner-refusal');
