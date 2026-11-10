@@ -9889,7 +9889,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const problems = griffelStyleProblems(code).problems;
           if (problems.length) {
             const standing = griffelStanding(p, sourceSha);
-            const words = { surface: 'build', subject: `page "${p.name}"`, command: 'node scripts/check-griffel-styles.js --file <page.tsx>' };
+            // A page that is not new is deployed already, possibly without a scroll context, so the suggested checker run passes `--existing`: its scroll findings are then
+            // notes, and the Griffel fix asked for here is not turned into a layout rewrite the maker did not ask for (references/rules.md, Styling gotchas 6).
+            const words = { surface: 'build', subject: `page "${p.name}"`, command: `node scripts/check-griffel-styles.js --file <page.tsx>${standing === 'new' ? '' : ' --existing'}` };
             const file = normalizePageSource(p).codeFile;
             if (standing === 'new' || standing === 'changed') {
               const note = standing === 'changed' ? 'Its source changed since the last build recorded for it, so it is held to the check as a new page is; left as it was, it would only be warned about.' : '';

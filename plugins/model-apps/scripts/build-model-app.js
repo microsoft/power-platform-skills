@@ -20,6 +20,8 @@
 //   create-identity-opt-in-required              the opt-in was removed while the binding store holds a declared item
 //   create-identity-unverified                   the binding store or a namesake lookup cannot be used
 //   create-identity-conflict                     a namesake or a row the binding does not hold stands where a row would go
+//                                                (a single namesake: the stop says whether it can be adopted, and prints the
+//                                                --authorize adopt:<kind>:<key>@<row id> approvals when it can)
 //   create-completion-required                   an earlier create is incomplete: complete it under the same ids
 //   create-ownership-required                    rows to bind: pass each printed --authorize adopt:<kind>:... after checking it
 //   configuration-row-not-found                  a bound row is gone (never replaced by a namesake)
@@ -1476,6 +1478,14 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //   adopt:<child kind>:<key>/<child>    created and whose answer was lost (child kind environmentVariableValue, customApiRequestParameter,
 //                                       customApiResponseProperty or duplicateRuleCondition; both parts percent-encoded), exactly as
 //                                       the stop printed it; one row each, a root's never covers its children (configurationApprovals)
+//   adopt:<kind>:<key>@<row id>[+<digest>]  binding a protected configuration item's namesake, a row a maker made before the
+//   adopt:<child kind>:<key>/<child>@<row id>  opt-in at an id the plugin did not derive, at its own id, sending nothing; exactly
+//                                       as the create-identity-conflict stop printed them, one per row (the digest pins the
+//                                       fields the build would then change; lib/configuration-protected.js adoptionOf). Kept as
+//                                       adopt-row:..., apart from every plain approval; a token whose two readings both name a
+//                                       declared item is refused (CONFIGURATION_ADOPT_AMBIGUOUS). Environment variables,
+//                                       connection references and Custom APIs only: a duplicate rule is never adopted, so its
+//                                       and its conditions' tokens keep only the plain reading above, as in 2.24.0
 // The family is part of the key because ids collide across families: a view and a chart may share <table>/<name>, and a view
 // may be named "quickFind". Each approval is stored under its family-typed id (reconcile-common.js approvalKey, the flag minus
 // its verb) and each guard asks only for its own family, so consent to one artifact never reaches another. The untyped form
@@ -1538,8 +1548,10 @@ function authorizationKeys(argv, spec) {
       : code === 'CONFIGURATION_ADOPT_UNPROTECTED'
         ? `'${token}' binds a row of a protected configuration item, and the spec does not set configurationIdentity "stable-v1", so there is no such row to bind`
         : code === 'CONFIGURATION_ADOPT_INVALID'
-          ? `'${token}' is not adopt:<kind>:<declared key> or adopt:<child kind>:<declared key>/<declared child>, as a configuration stop prints it`
-          : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
+          ? `'${token}' is not adopt:<kind>:<declared key> or adopt:<child kind>:<declared key>/<declared child>, as a configuration stop prints it (ending @<row id> when it adopts a namesake)`
+          : code === 'CONFIGURATION_ADOPT_AMBIGUOUS'
+            ? `'${token}' reads both as the approval of one declared configuration item and, ending @<row id>, as the adoption of another's namesake; it approves neither. Rename one of the two keys`
+            : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
   problems.push(...commandStates.problems);
   // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
   // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick

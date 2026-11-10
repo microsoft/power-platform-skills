@@ -519,7 +519,7 @@ Before Edit Phase 6, check the edited page for the Griffel shorthands that
 `makeStyles` drops at runtime:
 
 ```powershell
-node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx'
+node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<page-id>/page.tsx' --existing
 ```
 
 Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
@@ -548,6 +548,19 @@ until it exits 0. It reads the style objects written inline in the call,
 keys, and so is a key computed from an expression (`[key]: …`), whose name it cannot
 see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
 `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+
+`--existing` is there because this page was not generated in this run: the check
+also reads its scroll context (`references/rules.md`, **Page Layout**), and reports
+what it finds in `notes` without changing the exit code, so a maker's layout never
+blocks their edit.
+
+When the maker's requested edit itself rewrites the page's top-level layout, that
+layout is new code written in this run and must follow the scroll rule: apply the
+remedy as part of that edit, and tell the maker in one sentence that you did. Any
+other scroll note on a downloaded page is offer-only: tell the maker that content
+below the fold may be cut off, offer the edit its message gives, and apply it only
+if they agree. A note is never a reason to change a layout the maker did not ask
+to change.
 
 A page that was deployed before this check existed can already hold such a key, so the
 checker may report one that your edit did not add. The deployed page renders without it
@@ -698,6 +711,8 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
 ## Edit Phase 7: Verify (Optional)
 
 Offer browser verification via `AskUserQuestion` (same flow as Phase 7 in the create flow — see SKILL.md).
+The page is still an existing one: if 7.5 in `verify-flow.md` fixes it, check the fix with the
+`--existing` command that 7.5 gives for the edit flow, not the command for a generated page.
 
 ## Edit Phase 8: Summary
 

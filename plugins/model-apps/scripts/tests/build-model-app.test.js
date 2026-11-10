@@ -1605,6 +1605,61 @@ test('--authorize adopt:<configuration kind>:... approves binding exactly the on
   }
 });
 
+test('--authorize adopt:...@<row id>[+digest] approves the one namesake row the stop printed; the plain form, every problem and every rule token are read as before', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const ID = '0B7C6F5E-0000-4000-8000-00000000000A';
+  const id = ID.toLowerCase();
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'String' }] }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', value: 'x' }],
+    // A rule key may itself end in what reads like an id: the whole text names it first.
+    duplicateDetectionRules: [{ key: `odd@${id}`, name: 'Odd', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] },
+      { key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', `adopt:customApi:CONTOSO_CALC@${ID}+3F2A9C0D1E2B4A59`, '--authorize', `adopt:customApiRequestParameter:contoso_calc/request%3AA@${ID}`,
+    '--authorize', `adopt:environmentVariable:contoso_apibase@${ID}`,
+    '--authorize', `adopt:duplicateRule:odd@${id}`, '--authorize', 'adopt:customApi:contoso_calc'], spec());
+  assert.strictEqual(ok.error, null);
+  // The id and digest in lower case, after the key in the stop's own spelling. The two meanings are typed apart: an
+  // `@<row id>` approval as adopt-row:, which no plain approval reads as, and the plain form (`odd@<id>` is a declared
+  // rule's whole key) as adopt:, exactly as before.
+  assert.deepStrictEqual([...ok.configurationApprovals].sort(), [
+    `adopt-row:customApi:contoso_calc@${id}+3f2a9c0d1e2b4a59`, `adopt-row:customApiRequestParameter:contoso_calc/request%3Aa@${id}`,
+    `adopt-row:environmentVariable:contoso_apibase@${id}`,
+    'adopt:customApi:contoso_calc', `adopt:duplicateRule:odd@${id}`,
+  ]);
+  for (const [key, over, why] of [
+    [`adopt:customApi:contoso_Other@${id}`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApiRequestParameter:contoso_calc/request%3Ab@${id}`, {}, /names a configuration item the spec does not declare/],
+    // Not an id, or a digest on a child or of another length: the text is read whole, as before, and names nothing.
+    ['adopt:customApi:contoso_calc@not-an-id', {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApi:contoso_calc@${id}+3f2a`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApiRequestParameter:contoso_calc/request%3Aa@${id}+3f2a9c0d1e2b4a59`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApiRequestParameter:contoso_calc@${id}`, {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    [`adopt:customApi:contoso_Calc@${id}`, { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+    // A duplicate rule or condition is never adopted: an `@<id>` ending is part of its key, exactly as in 2.24.0.
+    [`adopt:duplicateRuleCondition:Email%20rule/e@${id}`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:duplicateRule:Email rule@${id}`, {}, /names a configuration item the spec does not declare/],
+    // Both readings name a declared item (`contoso_calc` as well as `contoso_calc@<id>`, a key no valid App Spec has but
+    // the parser does not assume so), or a declared child: refused, never read either way.
+    [`adopt:customApi:contoso_calc@${id}`, { customApis: [{ uniqueName: 'contoso_Calc' }, { uniqueName: `contoso_calc@${id}` }] }, /reads both as the approval of one declared configuration item and, ending @<row id>, as the adoption of another's namesake/],
+    [`adopt:customApiRequestParameter:contoso_calc/request%3AA@${id}`, { customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A' }, { uniqueName: `A@${id}` }] }] }, /reads both as the approval/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.configurationApprovals.size, 0, key);
+  }
+  // A rule or condition whose own key ends in what reads like `@<id>`, beside one named by the text before it: the token
+  // is the plain approval of the whole key, as in 2.24.0, never refused and never an adoption.
+  const rules = { duplicateDetectionRules: [{ key: 'odd', name: 'Odd 2', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }, { key: `e@${id}`, column: 'lastname', match: 'exact' }] },
+    { key: `odd@${id}`, name: 'Odd', entity: 'contact', conditions: [] }] };
+  const plain = authorizationKeys(['--authorize', `adopt:duplicateRule:odd@${id}`, '--authorize', `adopt:duplicateRuleCondition:odd/e@${id}`], spec(rules));
+  assert.strictEqual(plain.error, null);
+  assert.deepStrictEqual([...plain.configurationApprovals].sort(), [`adopt:duplicateRule:odd@${id}`, `adopt:duplicateRuleCondition:odd/e%40${id}`]);
+});
+
 test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets, under its family', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   const spec = {

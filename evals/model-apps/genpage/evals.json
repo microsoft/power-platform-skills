@@ -42,7 +42,8 @@
     "For Dataverse list/detail pages, the inline IIFE + window cache + cache-guard pattern from references/data-caching.md is used (Rule 15); no useCallback for data-fetching functions",
     "For multi-page builds, cross-page navigation uses quoted `\"PAGEREF_<filename>\"` placeholders that the orchestrator's Phase 6.5 resolves to real GUIDs",
     "For Dataverse pages that call dataApi.queryTable, the result is accessed via .rows (DataTable<T> = { rows: T[], hasMoreRows, loadMoreRows() }) — never used directly as an array (Rule 11)",
-    "Generated .tsx passes the production completeness gate (complete module, JSX, brackets, strings, comments and no prose fences)"
+    "Generated .tsx passes the production completeness gate (complete module, JSX, brackets, strings, comments and no prose fences)",
+    "Generated .tsx establishes a scroll context: its top element is bounded by the host (height 100%) and scrolls, or holds a bounded scrolling body, so content below the fold is reachable"
   ],
   "evals": [
     {

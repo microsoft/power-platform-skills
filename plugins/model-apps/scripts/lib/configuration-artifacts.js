@@ -2625,6 +2625,24 @@ const OVERWRITE_TOKEN = /^overwrite:(environmentVariable|connectionReference|cus
 //   adopt:duplicateRuleCondition:email/e
 // Read only under the opt-in, checked against the App Spec (the root and the child must be declared) and normalized back
 // to that spelling, so a key typed in another case still names the one row; a root's approval never covers its children.
+// The same tokens with `@<row id>` appended adopt a row a maker made BEFORE the opt-in, at an id the plugin did not derive
+// (configuration-protected.js adoptionOf), for an environment variable, a connection reference or a Custom API and their
+// children. The id ties the approval to that one row, so it never binds a row deleted and made again, and a root token
+// also carries `+<16 hex>` when the build would then change fields of that row, the first 16 hex of the SHA-256 of the
+// list of field pointers it printed, so the approval lapses when that list changes, e.g.
+//   adopt:customApi:contoso_calc@0b7c6f5e-0000-4000-8000-000000000001+3f2a9c0d1e2b4a59
+//   adopt:customApiRequestParameter:contoso_calc/request%3Aa@0b7c6f5e-0000-4000-8000-000000000002
+// The two meanings never meet: a plain approval lands in `rowApprovals` as `adopt:...` exactly as before, and an
+// `@<row id>` one as `adopt-row:...` (the same text after the verb), a spelling no plain approval normalizes to, so a
+// token read one way is never consumed the other way. A declared key may itself end in what reads like `@<id>`: when the
+// whole text names a declared item AND the text before `@<id>` names another, the token is refused as ambiguous
+// (CONFIGURATION_ADOPT_AMBIGUOUS) rather than read either way, and the stop never prints an `@<id>` approval that would
+// read so (adoptionOf refuses that adoption, saying why). A plugin before this form reads the root suffix as part of the
+// declared key, names no declared item and refuses the token before any write.
+// A duplicate rule and its conditions are never adopted (adoptionOf), so their tokens keep only the plain reading,
+// exactly as before this form: a rule or condition key may contain '@' (it is free text), and `odd@<id>` is just that key.
+const ADOPT_AT = /^([\s\S]*)@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\+([0-9a-f]{16}))?$/i;
+const ADOPT_CHILD_AT = /^([\s\S]*)@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const ADOPT_ROOT_TOKEN = /^adopt:(environmentVariable|connectionReference|customApi|duplicateRule):([\s\S]+)$/;
 const ADOPT_CHILD_TOKEN = /^adopt:(environmentVariableValue|customApiRequestParameter|customApiResponseProperty|duplicateRuleCondition):([\s\S]+)$/;
 const ADOPT_CHILD_PARENT = Object.freeze({
@@ -2673,26 +2691,43 @@ function configurationAuthorizationKeys(tokens, spec) {
     const adoptRoot = ADOPT_ROOT_TOKEN.exec(text);
     if (adoptRoot) {
       const [, kind, name] = adoptRoot;
-      const root = rootOf(kind, name);
-      if (!root) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
-      else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
-      else rowApprovals.add(`adopt:${kind}:${portKeyOf(kind, root)}`);
+      const plain = rootOf(kind, name);
+      const atRow = kind === 'duplicateRule' ? null : ADOPT_AT.exec(name);
+      const atRoot = atRow ? rootOf(kind, atRow[1]) : undefined;
+      if (plain && atRoot) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_AMBIGUOUS' }); continue; }
+      const root = plain || atRoot;
+      if (!root) { problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' }); continue; }
+      if (!protectedSpec) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' }); continue; }
+      rowApprovals.add(plain ? `adopt:${kind}:${portKeyOf(kind, root)}`
+        : `adopt-row:${kind}:${portKeyOf(kind, root)}@${atRow[2].toLowerCase()}${atRow[3] ? `+${atRow[3].toLowerCase()}` : ''}`);
       continue;
     }
     const adoptChild = ADOPT_CHILD_TOKEN.exec(text);
     if (adoptChild) {
-      const [, childKind, rest] = adoptChild;
+      const [, childKind, whole] = adoptChild;
       const parent = ADOPT_CHILD_PARENT[childKind];
       // Both parts are percent-encoded, so the one '/' is the separator; anything else is not a key the build printed.
-      const parts = rest.split('/');
-      const name = parts.length === 2 ? decode(parts[0]) : null;
-      const slot = parts.length === 2 ? decode(parts[1]) : null;
-      if (!nonEmptyString(name) || !nonEmptyString(slot)) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_INVALID' }); continue; }
-      const root = rootOf(parent, name);
-      const child = root ? slotOf(childKind, declaredEntry(parent, root), slot) : null;
+      const named = (rest) => {
+        const parts = rest.split('/');
+        const name = parts.length === 2 ? decode(parts[0]) : null;
+        const slot = parts.length === 2 ? decode(parts[1]) : null;
+        if (!nonEmptyString(name) || !nonEmptyString(slot)) return { invalid: true };
+        const root = rootOf(parent, name);
+        return { root, child: root ? slotOf(childKind, declaredEntry(parent, root), slot) : null };
+      };
+      // Both readings, as for a root: the whole text (exactly as before the `@<row id>` form), and the text before a
+      // trailing `@<id>` with that id (a printed slot is percent-encoded, '@' as %40, so a printed id is never part of it).
+      const plain = named(whole);
+      const atRow = childKind === 'duplicateRuleCondition' ? null : ADOPT_CHILD_AT.exec(whole);
+      const withId = atRow ? named(atRow[1]) : { child: null };
+      if (plain.child && withId.child) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_AMBIGUOUS' }); continue; }
+      const found = plain.child || !withId.child ? plain : withId;
+      if (found.invalid) { problems.push({ token: text, code: 'CONFIGURATION_ADOPT_INVALID' }); continue; }
+      const { root, child } = found;
+      const tail = `${childKind}:${encodeURIComponent(portKeyOf(parent, root))}/${encodeURIComponent(child)}`;
       if (!child) problems.push({ token: text, code: 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM' });
       else if (!protectedSpec) problems.push({ token: text, code: 'CONFIGURATION_ADOPT_UNPROTECTED' });
-      else rowApprovals.add(`adopt:${childKind}:${encodeURIComponent(portKeyOf(parent, root))}/${encodeURIComponent(child)}`);
+      else rowApprovals.add(found === plain ? `adopt:${tail}` : `adopt-row:${tail}@${atRow[2].toLowerCase()}`);
       continue;
     }
     const kind = text.slice(0, text.indexOf(':'));

@@ -132,7 +132,7 @@ function PageBody(props: Props) {
     };
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px", height: "100%", overflowY: "auto", boxSizing: "border-box" }}>
             <Text size={400} block>
                 Upload revocation documentation:
             </Text>

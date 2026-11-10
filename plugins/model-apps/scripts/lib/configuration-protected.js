@@ -21,10 +21,13 @@
 // checked change set the SDK sends (the root PATCH with new children, or two or more new children); a removal, a change
 // to a child's fixed fields or any other combination is refused.
 
+const crypto = require('node:crypto');
 const B = require('./configuration-create-bindings.js');
 const A = require('./configuration-artifacts.js');
-const { normalizeGuid, isAuthorized, approvalKey } = require('./reconcile-common.js');
+const { normalizeGuid, isAuthorized, approvalKey, canonicalJson } = require('./reconcile-common.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
+const { defaultApprovalToken } = require('./managed-create-context.js');
+const { attemptProvenUnsent } = require('./managed-bindings.js');
 
 const IDENTITY = 'stable-v1';
 const EDIT_CODE = 'configuration-edit-unsupported';
@@ -99,6 +102,24 @@ function declaredItems(spec) {
   return out;
 }
 
+// declaredItems with every data-source variable after the declared parent it names, the order the build itself makes
+// them in (configuration-artifacts.js planEnvironmentVariables), so the preflight forecasts a parent's adoption
+// (env.adopting) before it plans the child under it. A cycle or an undeclared parent keeps the declared order.
+function parentsFirst(spec, items) {
+  const parentOf = new Map();
+  for (const e of Array.isArray(spec && spec.environmentVariables) ? spec.environmentVariables : []) {
+    if (e && typeof e.schemaName === 'string' && e.type === 'dataSource' && typeof e.parentSchemaName === 'string') parentOf.set(A.portKeyOf('environmentVariable', e.schemaName), A.portKeyOf('environmentVariable', e.parentSchemaName));
+  }
+  const waiting = items.slice();
+  const out = [];
+  const pending = (pk) => waiting.some((x) => x.kind === 'environmentVariable' && A.portKeyOf(x.kind, x.key) === pk);
+  while (waiting.length) {
+    const i = waiting.findIndex((x) => x.kind !== 'environmentVariable' || !parentOf.has(A.portKeyOf(x.kind, x.key)) || !pending(parentOf.get(A.portKeyOf(x.kind, x.key))));
+    out.push(...waiting.splice(i < 0 ? 0 : i, 1));
+  }
+  return out;
+}
+
 // A child record's slot: the driver keys a child row `JSON.stringify([<root key>, <slot>])` (planOf).
 function slotOf(record) {
   try {
@@ -110,18 +131,46 @@ function slotOf(record) {
 }
 
 /**
+ * A plan's `boundIdOf` for the OTHER declared items it refers to: a data-source variable's declared parent, planned at
+ * the row it really is — its committed binding's root id (its derived id when it was created; a maker's row when it was
+ * adopted) or, while this build adopts it, the namesake its adoption names (env.adopting) — so a child is planned under
+ * that row rather than at the parent's derived id, where an adopted parent is not. Undefined (the derived id, as before)
+ * for anything else, for the item itself (locateItem plans its own binding) and for a parent nothing is bound or
+ * adopted at. Reads the local store only.
+ */
+function parentIdOf(env, kind, portKey) {
+  return (k, pk) => {
+    if (k !== 'environmentVariable' || (k === kind && pk === portKey)) return undefined;
+    let group = null;
+    try { group = env.store.readGroup(k, pk); } catch { group = null; }
+    const root = group && group.committed ? (group.committed.records || []).find((r) => r.kind === k && r.key === pk) : null;
+    if (root) return normalizeGuid(root.id);
+    return env.adopting instanceof Map ? env.adopting.get(pk) : undefined;
+  };
+}
+
+/**
  * Locate one declared item by its binding and plan it, reading only:
  *   { state: 'unbound', planned }   no committed binding: a create at the derived ids;
  *   { state: 'pending', planned, token, edit }   an attempt is pending (recoverPending decides it from its own expectation);
+ *                                   `adoption` marks an attempt over existing rows only with nothing committed: an
+ *                                   adoption that never sends (adoptNamesake), planned here as the unbound item it was;
  *   { state: 'bound', planned }     the committed binding, every bound row read fresh at its exact id.
  * A bound row read absent is `configuration-row-not-found` (never replaced by a namesake), an unreadable one or a binding
  * whose ids the declaration no longer derives is `create-identity-unverified`; both throw, typed.
  */
 async function locateItem(env, kind, key) {
   const { spec, store, dataverse, solution, bindings, componentTypes } = env;
-  const fresh = B.planOf(spec, { kind, key, bindings, solution, componentTypes });
+  const portKey = A.portKeyOf(kind, key);
+  const fresh = B.planOf(spec, { kind, key, bindings, solution, componentTypes, boundIdOf: parentIdOf(env, kind, portKey) });
   const group = store.readGroup(kind, fresh.key);
-  if (group.pending && !group.committed) return { state: 'pending', planned: fresh, token: group.pending.token, edit: false, attempt: group.pending, declaredKey: key };
+  if (group.pending && !group.committed) {
+    // An attempt over existing rows only, with nothing committed for the item, can only be an adoption of a row made
+    // before the opt-in (adoptNamesake): it never sends, so it is never recovered as a create (run refuses it).
+    const rows = group.pending.rowProtocol && Array.isArray(group.pending.rowProtocol.rows) ? group.pending.rowProtocol.rows : [];
+    const adoption = rows.length > 0 && rows.every((r) => r.mode === 'update');
+    return { state: 'pending', planned: fresh, token: group.pending.token, edit: false, adoption, attempt: group.pending, declaredKey: key };
+  }
   if (!group.committed) return { state: 'unbound', planned: fresh };
   const records = group.committed.records || [];
   const root = records.find((r) => r.kind === kind && r.key === fresh.key);
@@ -143,6 +192,9 @@ async function locateItem(env, kind, key) {
   const declaredSlots = new Set(fresh.rows.filter((r) => r.slot !== null).map((r) => r.slot));
   const boundSlots = [];
   const keptChildren = {};
+  // A child adopted at the id a maker's row already had (adoptNamesake) stays at that id; a created child is at the id
+  // the declaration derives, and the check below still holds it to that.
+  const childIdOf = {};
   for (const r of records) {
     if (r === root) continue;
     const slot = slotOf(r);
@@ -157,11 +209,13 @@ async function locateItem(env, kind, key) {
     }
     bases.set(normalizeGuid(r.id), await read(r));
     boundSlots.push(slot);
+    if (r.origin === 'adopted') childIdOf[slot] = normalizeGuid(r.id);
   }
   const planned = B.planOf(spec, {
-    kind, key, bindings, solution, componentTypes, bases, boundSlots, keptChildren, baseGeneration: group.committed.generation,
-    // Only this item is bound in its own plan: another item of the kind is planned (and judged) on its own.
-    boundIdOf: (k, pk) => (k === kind && pk === fresh.key ? rootId : undefined),
+    kind, key, bindings, solution, componentTypes, bases, boundSlots, keptChildren, childIdOf, baseGeneration: group.committed.generation,
+    // Only this item is bound in its own plan: another item of the kind is planned (and judged) on its own; a declared
+    // parent it refers to is planned at the row it is bound at (parentIdOf).
+    boundIdOf: (k, pk) => (k === kind && pk === fresh.key ? rootId : parentIdOf(env, kind, fresh.key)(k, pk)),
   });
   for (const r of records) {
     const row = planned.rows.find((x) => x.kind === r.kind && x.key === r.key);
@@ -255,12 +309,297 @@ async function firstCreateVerdict(dataverse, planned, { exactId }) {
   const conflicts = await B.readConfigurationConflicts(dataverse, planned);
   if (conflicts.state === 'clear') return null;
   const ids = conflicts.rows.flatMap((r) => r.ids || []);
-  return {
+  const verdict = {
     code: conflicts.code || UNVERIFIED_CODE,
     message: conflicts.state === 'conflict'
       ? `the ${planned.kind} "${planned.key}" has a namesake at another id (${ids.join(', ')}); a protected create never binds a namesake, and no service changes were sent by this build`
       : `the ${planned.kind} "${planned.key}" namesake query could not be completed; nothing is created on a read that may have missed a namesake, and no service changes were sent by this build`,
   };
+  // Whether this is the one case adoptionOf can take up (exactly one namesake of the root, and nothing else in the way).
+  // Kept off the halt itself (not enumerable, so `...verdict` never carries it into a stop): several namesakes skip the
+  // adoption reads altogether and keep today's stop and today's requests.
+  const own = conflicts.rows.find((r) => r.kind === planned.kind && r.key === planned.key);
+  const single = conflicts.state === 'conflict' && !!own && own.state === 'conflict' && own.ids.length === 1 && conflicts.rows.every((r) => r === own || r.state === 'clear');
+  Object.defineProperty(verdict, 'single', { value: single });
+  return verdict;
+}
+
+// Fields the protected path never changes on a row that exists: what the platform fixes on create (a type, a binding, a
+// connector) and the name the row is found by. A namesake whose App Spec differs in one of them is not
+// the item the App Spec declares, so it is never adopted (a different case of the name included: an adopted row keeps
+// the name it has, and the App Spec would then name it in another spelling).
+const IMMUTABLE = Object.freeze({
+  environmentVariable: ['schemaName', 'type', 'secretStore', 'parentDefinitionId'],
+  environmentVariableValue: [],
+  connectionReference: ['logicalName', 'connectorId', 'customConnectorId'],
+  customApi: ['uniqueName', 'binding', 'boundEntityLogicalName', 'isFunction', 'allowedProcessingSteps', 'enabledForWorkflow'],
+  customApiRequestParameter: ['uniqueName', 'type', 'entityLogicalName', 'isOptional'],
+  customApiResponseProperty: ['uniqueName', 'type', 'entityLogicalName'],
+});
+// The kinds a namesake made before the opt-in may be adopted for. A duplicate rule is not one of them: the build plans a
+// bound rule's later edit and publication outside the protected update path, where an adoption's printed field list could
+// not hold it, so a rule's namesake keeps the stop it had before adoption existed (no adoption reads, no approvals).
+const ADOPTABLE = new Set(['environmentVariable', 'connectionReference', 'customApi']);
+// One JSON Pointer reference token (RFC 6901): '~' is written '~0' and '/' is written '~1'.
+// See: https://www.rfc-editor.org/rfc/rfc6901#section-3
+const pointerToken = (s) => String(s).replace(/~/g, '~0').replace(/\//g, '~1');
+// The `+<16 hex>` an adoption's root approval carries when the build would then change the row: the first 16 hex of the
+// SHA-256 of the sorted pointer list it printed, so an approval given for one list never covers another.
+const pointerDigest = (pointers) => crypto.createHash('sha256').update(canonicalJson(pointers)).digest('hex').slice(0, 16);
+const rowKeyOf = (r) => `${r.kind}\u0000${r.key}`;
+
+/**
+ * Whether an unbound item's one namesake — a row a maker made before the opt-in, at an id this plugin did not derive —
+ * can be adopted at its own id, and on what terms. Reads only; sends nothing. Answers
+ *   null                                   not that case (the derived id is not free, the namesake query is not exactly
+ *                                          one root at another id and nothing else): the first-create verdict stands;
+ *   { adoptable: false, id, reason }       it is that case, and it cannot be adopted (why, in words);
+ *   { adoptable: true, id, overlay, asIs, observation, pointers, digest, tokens, printed, tokenOf }.
+ * The namesake and every row under it are read exactly, at their ids (bases), and every row under it is paired with the
+ * declaration: one value, an API child by its unique name. Two plans are made from those same reads:
+ *   overlay   the item as the build would then make it (bound at the namesake; a declared child with no pair is a create
+ *             at its derived id): judged exactly as a bound item's edit is (judgeBoundShape, editVerdict / childVerdict);
+ *   asIs      the same existing rows, each expected as it reads now (planOf asIs), with their members planned: what a read-only acceptance of the adoption proves (observation).
+ * `pointers` lists every field the overlay would change (`/<field>`, `/<slot>/<field>`, `/<slot>` for a new child; names
+ * only, a private value never), and `printed` are the exact approvals the stop prints: the root's `@<id>` (with `+<digest>`
+ * of the pointers when there are any) and each child's `@<id>`; `tokens` are the same approvals as the parser types them.
+ * It refuses whatever the protected path would not then make on its own
+ * terms: a row under the namesake that the App Spec does not declare (a removal), a first value or a value or connection
+ * that differs from the deployment settings (a private value is never written after an adoption), a changed fixed field,
+ * a row outside the solution, or any read that does not complete.
+ */
+async function adoptionOf(env, item, declaredKey) {
+  const { spec, dataverse, solution, bindings, componentTypes } = env;
+  const fresh = item.planned;
+  const { kind } = fresh;
+  if (!ADOPTABLE.has(kind)) return null;
+  const derived = await B.readConfigurationRow(dataverse, kind, fresh.plan.rows[0].id);
+  if (derived.state !== 'absent') return null;
+  const conflicts = await B.readConfigurationConflicts(dataverse, fresh);
+  if (conflicts.state !== 'conflict') return null;
+  const own = conflicts.rows.find((r) => r.kind === kind && r.key === fresh.key);
+  if (!own || own.state !== 'conflict' || own.ids.length !== 1 || conflicts.rows.some((r) => r !== own && r.state !== 'clear')) return null;
+  const id = normalizeGuid(own.ids[0]);
+  const refuse = (reason) => ({ adoptable: false, id, reason });
+  const root = await B.readConfigurationRow(dataverse, kind, id);
+  if (root.state !== 'present' || root.parentId !== null) return refuse('it could not be read exactly');
+  if (root.decoded.unmodelled.length) return refuse(`it holds columns the plugin does not manage (${root.decoded.unmodelled.join(', ')})`);
+
+  // Every row under it, listed completely and read exactly (the listing as observe's child graph reads it).
+  const listed = [];
+  for (const [childKind, k] of Object.entries(B.KINDS)) {
+    if (!k.parentSet || k.parentSet !== B.KINDS[kind].set) continue;
+    const page = await B.readAllPages(dataverse, `/${k.set}?$select=${k.pk},${k.parentColumn}&$filter=${k.parentColumn} eq ${id}`);
+    if (!page.complete) return refuse('the rows under it could not be listed completely');
+    for (const r of page.rows) {
+      const childId = r && typeof r[k.pk] === 'string' ? normalizeGuid(r[k.pk]) : '';
+      if (!childId || normalizeGuid(r[k.parentColumn]) !== id || listed.some((c) => c.id === childId)) return refuse('the rows under it could not be listed completely');
+      const got = await B.readConfigurationRow(dataverse, childKind, childId);
+      if (got.state !== 'present' || got.parentId !== id) return refuse(`the ${childKind} ${childId} under it could not be read exactly`);
+      if (got.decoded.unmodelled.length) return refuse(`the ${childKind} ${childId} under it holds columns the plugin does not manage`);
+      listed.push({ kind: childKind, id: childId, read: got });
+    }
+  }
+  const lower = (s) => (typeof s === 'string' ? s.toLowerCase() : s);
+  const bases = new Map([[id, root]]);
+  const childIdOf = {};
+  const boundSlots = [];
+  const keptChildren = {};
+  const taken = new Set();
+  for (const row of fresh.rows) {
+    if (row.slot === null) continue;
+    const pairs = listed.filter((c) => c.kind === row.kind && (row.kind === 'environmentVariableValue' || lower(c.read.decoded.fields.uniqueName) === lower(row.expected.uniqueName)));
+    if (pairs.length > 1 || pairs.some((c) => taken.has(c.id))) return refuse(`more than one row under it could be its ${row.slot}`);
+    if (!pairs.length) continue;
+    taken.add(pairs[0].id);
+    childIdOf[row.slot] = pairs[0].id;
+    boundSlots.push(row.slot);
+    bases.set(pairs[0].id, pairs[0].read);
+  }
+  // A value the deployment settings do not name stays as it is (held, never sent), as a bound variable's does; settings
+  // that clear it would delete it, a removal the protected path does not make.
+  const values = listed.filter((c) => c.kind === 'environmentVariableValue' && !taken.has(c.id));
+  if (values.length && clearsValue(bindings, fresh.key)) return refuse('its deployment settings clear the value it holds, which deletes a row');
+  if (values.length === 1 && !fresh.rows.some((r) => r.slot === 'value')) {
+    keptChildren.value = values[0].id;
+    taken.add(values[0].id);
+  }
+  const extra = listed.filter((c) => !taken.has(c.id));
+  if (extra.length) return refuse(`it has rows under it that the App Spec does not declare (${extra.map((c) => `${c.kind} ${c.id}`).join(', ')}); removals are not supported`);
+
+  const options = {
+    kind, key: declaredKey, bindings, solution, componentTypes, bases, boundSlots, keptChildren, childIdOf,
+    boundIdOf: (k, pk) => (k === kind && pk === fresh.key ? id : parentIdOf(env, kind, fresh.key)(k, pk)),
+  };
+  let overlay;
+  let asIs;
+  try {
+    overlay = B.planOf(spec, options);
+    asIs = B.planOf(spec, { ...options, asIs: true });
+  } catch (error) {
+    return refuse(`it cannot be planned from its reads (${error.message})`);
+  }
+  const judged = await judgeBoundShape(dataverse, kind, overlay);
+  if (judged.halt) return refuse(judged.halt.message);
+  const { shape } = judged;
+  if (shape.removals.length) return refuse(`it has rows under it that the App Spec does not declare (${shape.removals.join(', ')}); removals are not supported`);
+  if (shape.creates.includes('environmentVariableValue')) return refuse('the build would then write a first value to it; set its value outside the plugin to the one in the deployment settings first');
+  const verdict = kind === 'customApi' ? editVerdict(kind, shape) : await childVerdict(env, overlay, shape);
+  if (verdict) return refuse(`the change the build would then make to it is not one the protected path makes (${verdict.code})`);
+  if (shape.creates.length) {
+    const news = await B.readConfigurationConflicts(dataverse, overlay);
+    if (news.state !== 'clear') return refuse(`the namesake query of a row the build would then add under it answered ${news.state}`);
+  }
+
+  // What the build would then change, by name.
+  const changed = changedPointers(overlay, asIs);
+  if (changed.refusal) return refuse(changed.refusal);
+  const { pointers } = changed;
+
+  const observation = await B.observe(dataverse, asIs);
+  const reason = asIsReason(asIs, observation);
+  if (reason) return refuse(reason);
+  const digest = pointers.length ? pointerDigest(pointers) : '';
+  // Each row's approval in two spellings: the one the stop prints (adopt:...@<id>) and the typed one the parser makes of
+  // it (adopt-row:..., configuration-artifacts.js configurationAuthorizationKeys), the only spelling given approvals are
+  // matched in, so a plain `adopt:` approval is never consumed as an adoption. A printed spelling that the parser would
+  // not read back as exactly that row's approval (it also names another declared item) is never printed: not adoptable.
+  const rootToken = `adopt-row:${kind}:${fresh.key}@${id}${digest ? `+${digest}` : ''}`;
+  const tokenOf = (family, rootKey, row) => (row.parentId === null ? rootToken : `adopt-row:${defaultApprovalToken(family, rootKey, row).slice('adopt:'.length)}@${normalizeGuid(row.id)}`);
+  const tokens = asIs.plan.rows.map((r) => tokenOf(kind, fresh.key, r));
+  const printed = tokens.map((t) => `adopt:${t.slice('adopt-row:'.length)}`);
+  const readBack = A.configurationAuthorizationKeys(printed, spec);
+  if (readBack.problems.length || readBack.rowApprovals.size !== tokens.length || !tokens.every((t) => readBack.rowApprovals.has(t))) {
+    return refuse('an approval of it would also read as the approval of another declared item, so none is printed; rename the key of one of the two');
+  }
+  return { adoptable: true, id, overlay, asIs, observation, pointers, digest, tokens, printed, tokenOf };
+}
+
+// The field pointers a plan would change on the rows of an as-is plan, sorted (a row it adds is its slot's pointer), or
+// { refusal } when one is a field the build never changes on a row that exists. Rows are matched by plan key; a row of
+// the plan the as-is plan does not hold is a change of its whole slot. Both plans hold the same field set per row
+// (planOf asIs). The adoption's stop prints this list, and the build's edit of the row in that invocation is held to it
+// (update).
+function changedPointers(plan, asIs) {
+  const sameAsIs = new Map(asIs.rows.map((r) => [rowKeyOf(r), r]));
+  const pointers = [];
+  for (const r of plan.rows) {
+    const at = r.slot === null ? '' : `/${pointerToken(r.slot)}`;
+    const now = sameAsIs.get(rowKeyOf(r));
+    if (r.mode === 'create' || !now) { pointers.push(at); continue; }
+    if (r.kept) continue;
+    for (const f of Object.keys(r.expected)) {
+      if (canonicalJson(r.expected[f] === undefined ? null : r.expected[f]) === canonicalJson(now.expected[f] === undefined ? null : now.expected[f])) continue;
+      if (IMMUTABLE[r.kind].includes(f)) return { refusal: `its ${r.slot === null ? '' : `${r.slot} `}${f} differs from the App Spec's, and the build never changes it on a row that exists` };
+      pointers.push(`${at}/${pointerToken(f)}`);
+    }
+  }
+  return { pointers: pointers.sort() };
+}
+// Why an as-is plan's fresh observation does not prove the rows as they were read (null when it does): every row
+// present at its id and parent and exactly its expectation (which covers its fields, unmodelled and preserved columns
+// and, on the root, any row under it the plan does not hold), every private input readable and matching the deployment
+// settings, and every member in the solution.
+function asIsReason(asIs, observation) {
+  const seen = new Map(observation.rows.map((r) => [rowKeyOf(r), r]));
+  for (const row of asIs.rows) {
+    const s = seen.get(rowKeyOf(row));
+    if (!s || s.state !== 'present') return `its ${row.slot === null ? 'row' : row.slot} could not be read again exactly`;
+    if (normalizeGuid(s.id) !== row.id || (s.parentId ? normalizeGuid(s.parentId) : null) !== row.parentId || s.projectionSha256 !== row.expectedSha256) {
+      return 'it changed while it was read';
+    }
+    if (row.sensitiveInput && s.privateState !== 'match') {
+      return row.kind === 'connectionReference'
+        ? 'the connection it holds is not the one its deployment settings name (or cannot be read); the build never writes a connection after adopting'
+        : 'the value it holds is not the one its deployment settings name (or cannot be read); the build never writes a value after adopting';
+    }
+  }
+  if (observation.members.some((m) => m.state === 'absent')) return `it (or a row under it) is not in the solution ${asIs.solution}; add it there first`;
+  if (observation.members.some((m) => m.state !== 'present')) return 'its solution membership could not be read';
+  return null;
+}
+
+// The preflight stop of a namesake (firstCreateVerdict) with what adoptionOf found: today's sentence first, unchanged,
+// then how it can be adopted or why it cannot be. An adoptable one carries `adoption` — its id, the fields the build would
+// then change and its exact printed approvals — which configuration-build.js renders for EVERY such item of the stop, so
+// no approval is printed without the rows and the change it approves.
+function adoptionHalt(verdict, adoption) {
+  if (!adoption) return verdict;
+  if (!adoption.adoptable) return { ...verdict, id: adoption.id, message: `${verdict.message}. It cannot be adopted at its id ${adoption.id}: ${adoption.reason}.` };
+  const change = adoption.pointers.length ? `only these fields, ${adoption.pointers.join(', ')}` : 'nothing in it';
+  return {
+    ...verdict, id: adoption.id, adoption: { id: adoption.id, change, approvals: adoption.printed.slice() },
+    message: `${verdict.message}. It can instead be adopted at its id ${adoption.id}, after checking that row is yours; the build would then change ${change}.`,
+  };
+}
+
+// Whether the maker asked to adopt the item's namesake: an approval of its root in the typed `@<row id>` form.
+const adoptionAsked = (ctx, kind, portKey) => !!ctx && typeof ctx.approvals === 'function'
+  && ctx.approvals().some((t) => typeof t === 'string' && t.startsWith(`adopt-row:${kind}:${portKey}@`));
+
+/**
+ * Adopt an unbound item's namesake at its own id, sending nothing (resolve, under the exact approvals adoptionOf
+ * printed). The as-is plan is begun as an attempt (prepared and marked sending, with its expected proof), the store is
+ * captured, and adoptionOf runs again — every read, the verdicts over the same declaration, the membership, the private
+ * inputs and the as-is observation — after the capture and immediately before the acceptance, which must find the same
+ * rows, the same pointer list and the same approvals; the acceptance (acceptReadOnly with the adoption's own approval
+ * spellings) then commits the group read-only, or nothing. Any refusal, unreadable read or throw releases the attempt
+ * (epoch-checked, while it provably sent nothing) and throws, typed: nothing is written to the service or the store.
+ * Answers { state: 'present', id, adoption }: the item is bound at the namesake (`adoption` is what the acceptance proved,
+ * which the port holds this invocation's edit of it to: update), and the build sends the printed edit, if any,
+ * through update() like any bound item's; or null when there is no single namesake to adopt any more (approvals given for
+ * a row since deleted adopt nothing, and the item is created at its derived id as the preflight forecast).
+ */
+async function adoptNamesake(env, ctx, item, declaredKey) {
+  const { kind, key } = item.planned;
+  const given = new Set(ctx.approvals());
+  const fail = (reason, code = CONFLICT_CODE) => stop(code, `the ${kind} "${key}" namesake was not adopted: ${reason}; nothing was written`, { kind, key });
+  const first = await adoptionOf(env, item, declaredKey);
+  // No single namesake at another id any more (the row was deleted, or another appeared): there is nothing to adopt, and
+  // the item is planned exactly as the preflight forecast it (a create at its derived id, or today's stop).
+  if (!first) return null;
+  if (!first.adoptable) throw fail(first.reason);
+  if (!first.tokens.every((t) => given.has(t))) throw fail(`it is adopted only under these exact approvals: ${first.printed.join(', ')}`);
+  const [attempt] = ctx.begin([first.asIs.plan]);
+  let committed = false;
+  try {
+    const [capture] = ctx.captureReadOnly([attempt.token]);
+    const again = await adoptionOf(env, item, declaredKey);
+    if (!again || !again.adoptable) throw fail(again ? again.reason : 'it changed while it was read');
+    if (again.id !== first.id || again.digest !== first.digest || canonicalJson(again.pointers) !== canonicalJson(first.pointers)
+      || !sameRows(again.asIs.plan.rows, first.asIs.plan.rows) || !again.tokens.every((t) => given.has(t))) {
+      throw fail('it changed while it was read');
+    }
+    const [accepted] = ctx.acceptReadOnly([{ token: attempt.token, observation: again.observation, capture, declarationSha256: again.asIs.plan.declarationSha256, approvalTokenOf: again.tokenOf }]);
+    if (!accepted || accepted.verdict.action !== 'commit' || !accepted.group) {
+      const h = haltOf(kind, key, accepted ? accepted.verdict : { code: UNVERIFIED_CODE });
+      throw stop(h.code, h.message, h);
+    }
+    committed = true;
+    return { state: 'present', id: first.id, adoption: again };
+  } finally {
+    if (!committed) ctx.release(attempt);
+  }
+}
+
+// An adoption attempt (locateItem `adoption`) that provably sent nothing — only prepared, or marked sending with nothing
+// dispatched (managed-bindings.js attemptProvenUnsent) — can be retired and the adoption made again; anything else is
+// state this build cannot explain, never recovered as a create.
+const adoptionUnsent = (store, attempt) => attempt.phase === 'prepared' || (typeof store.snapshot === 'function' && attemptProvenUnsent(attempt, store.snapshot().envelope.workflowEffects));
+const adoptionStuck = (kind, key) => stop(UNVERIFIED_CODE, `the ${kind} "${key}" has a pending adoption this build cannot retire; nothing is sent for it`, { kind, key });
+
+// Retire an adoption attempt that provably sent nothing (resolve), under a fresh claim so the store's epoch check holds:
+// resume answers its new epoch, and release retires it only while its record still proves nothing was sent.
+function retireAdoption(env, ctx, item) {
+  const { kind, key } = item.planned;
+  if (!adoptionUnsent(env.store, item.attempt)) throw adoptionStuck(kind, key);
+  let resumed;
+  try {
+    [resumed] = ctx.resume([{ token: item.token, claim: item.attempt.phase === 'prepared' ? 'first' : 'continue' }]);
+  } catch {
+    throw adoptionStuck(kind, key);
+  }
+  if (!resumed || !ctx.release(resumed)) throw adoptionStuck(kind, key);
 }
 
 /**
@@ -432,10 +771,17 @@ const haltOf = (kind, key, verdict) => ({
 
 // What every protected read needs, read once per build: the solution's component types (membership is planned only
 // outside the restricted solutions, but the read is cheap and fail-closed).
+// A variable whose namesake can be adopted: its children are planned under that row (parentIdOf), as resolve binds it before
+// them, so one stop can print the approvals of both. Without every approval of the parent the parent itself stops the build
+// here, before anything is sent, so a child is never adopted under a parent this build does not adopt.
+function adopting(env, kind, portKey, id) {
+  if (kind === 'environmentVariable') env.adopting.set(portKey, normalizeGuid(id));
+}
+
 async function environmentOf({ spec, store, dataverse, solution, bindings }) {
   const types = await B.readComponentTypes(dataverse);
   if (!types || !types.complete) throw stop(UNVERIFIED_CODE, 'the solution component types could not be read');
-  return { spec, store, dataverse, solution, bindings, componentTypes: types.types };
+  return { spec, store, dataverse, solution, bindings, componentTypes: types.types, adopting: new Map() };
 }
 
 /**
@@ -471,13 +817,15 @@ async function replaceLocalCopy(dataverse, sdk, kind, id) {
 async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk = null, authorizedOverwrite = null }) {
   if (!configurationIdentityOf(spec)) return { halts: [] };
   const halts = [];
+  // The maker's approvals as given (exact spellings): an adoption is forecast as made only when every one it needs is here.
+  const given = new Set(ctx && typeof ctx.approvals === 'function' ? ctx.approvals() : []);
   let env;
   try {
     env = await environmentOf({ spec, store, dataverse, solution, bindings });
   } catch (error) {
     return { halts: [{ kind: 'configuration', key: '*', code: error.code || UNVERIFIED_CODE, message: error.message }] };
   }
-  for (const { kind, key } of declaredItems(spec)) {
+  for (const { kind, key } of parentsFirst(spec, declaredItems(spec))) {
     try {
       const item = await locateItem(env, kind, key);
       // Every later step of a bound or pending item reads its row into the workspace over the local copy (locate's
@@ -485,7 +833,7 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       // read the service directly (B.readConfigurationRow / B.observe), never the workspace copy.
       // The copy is replaced only under the maker's exact overwrite approval for this item, never by the build on its
       // own (a failed send included): a diff says that the copy differs, never whose the difference is.
-      if (item.state !== 'unbound' && sdk) {
+      if (item.state !== 'unbound' && !item.adoption && sdk) {
         const id = item.planned.plan.rows[0].id;
         if (await hasUnsyncedEdits(sdk, kind, id)) {
           if (!approvesOverwrite(authorizedOverwrite, overwriteKey(kind, item.planned.key))) {
@@ -497,6 +845,17 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
             continue;
           }
         }
+      }
+      if (item.state === 'pending' && item.adoption) {
+        // An adoption that never sent is retired by resolve and made again: forecast it as the unbound item it was.
+        if (!adoptionUnsent(store, item.attempt)) { const e = adoptionStuck(kind, item.planned.key); halts.push({ kind, key: item.planned.key, code: e.code, message: e.message }); continue; }
+        const verdict = await firstCreateVerdict(env.dataverse, item.planned, { exactId: true });
+        if (verdict) {
+          const adoption = verdict.code === CONFLICT_CODE && verdict.id === undefined && verdict.single ? await adoptionOf(env, item, key) : null;
+          if (adoption && adoption.adoptable) adopting(env, kind, item.planned.key, adoption.id);
+          if (!adoption || !adoption.adoptable || !adoption.tokens.every((t) => given.has(t))) halts.push({ kind, key: item.planned.key, ...adoptionHalt(verdict, adoption) });
+        }
+        continue;
       }
       if (item.state === 'pending') {
         const rec = await recoverPending(env, ctx, item);
@@ -528,6 +887,15 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
         // version PATCH included), so a create that cannot be made stops the build with nothing sent. resolve/run check
         // both again at dispatch, since a row can appear between this read and the create.
         const verdict = await firstCreateVerdict(env.dataverse, item.planned, { exactId: true });
+        // A single namesake at another id (a row made before the opt-in) may be adopted at that id instead, under the
+        // exact approvals adoptionOf prints; with all of them given, resolve adopts it and this is not a stop.
+        if (verdict && verdict.code === CONFLICT_CODE && verdict.id === undefined && verdict.single) {
+          const adoption = await adoptionOf(env, item, key);
+          if (adoption && adoption.adoptable) adopting(env, kind, item.planned.key, adoption.id);
+          if (adoption && adoption.adoptable && adoption.tokens.every((t) => given.has(t))) continue;
+          halts.push({ kind, key: item.planned.key, ...adoptionHalt(verdict, adoption) });
+          continue;
+        }
         if (verdict) halts.push({ kind, key: item.planned.key, ...verdict });
         continue;
       } else if (item.state !== 'bound') continue;
@@ -588,6 +956,15 @@ async function addMissingMembers(dataverse, planned, scope) {
 function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase = null, sdk = null }) {
   let envPromise = null;
   const env = () => (envPromise = envPromise || environmentOf({ spec, store, dataverse, solution, bindings }));
+  // The items this port adopted (resolve), by kind and port key: the as-is plan the acceptance proved and the field
+  // pointers its stop printed. This invocation's edit of such an item is held to exactly them (update); a later build has a
+  // new port, and the item is an ordinary bound one there.
+  const adoptedHere = new Map();
+  const adopted = (kind, answer) => {
+    if (!answer) return null;
+    adoptedHere.set(`${kind}\u0000${answer.adoption.asIs.key}`, { asIs: answer.adoption.asIs, pointers: answer.adoption.pointers });
+    return { state: answer.state, id: answer.id };
+  };
   // A send this port ran that did not settle (a throw, a refused push, an answer that never came) leaves the workspace copy
   // exactly as it is: the build's own change, and any edit a maker wrote meanwhile through the same workspace. The copy is
   // shared with the maker and the SDK has no operation that compares it and replaces it in one step, so no check made
@@ -613,7 +990,13 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         }
         return { state: 'present', id: rootId };
       }
-      if (item.state === 'pending') {
+      if (item.state === 'pending' && item.adoption) {
+        // An adoption attempt sends nothing: one that provably sent nothing is retired, then the item is the unbound one
+        // it was (adopted afresh under the approvals, or created); anything else stops, typed.
+        retireAdoption(await env(), ctx, item);
+        const answer = adoptionAsked(ctx, kind, item.planned.key) ? adopted(kind, await adoptNamesake(await env(), ctx, item, key)) : null;
+        if (answer) return answer;
+      } else if (item.state === 'pending') {
         const rec = await recoverPending(await env(), ctx, item);
         let { verdict } = rec;
         const { observation } = rec;
@@ -632,6 +1015,9 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         if (verdict.action === 'commit') return { state: 'present', id: rootId };
         const h = haltOf(kind, item.planned.key, verdict);
         throw stop(h.code, h.message, h);
+      } else if (adoptionAsked(ctx, kind, item.planned.key)) {
+        const answer = adopted(kind, await adoptNamesake(await env(), ctx, item, key));
+        if (answer) return answer;
       }
       const read = await B.readConfigurationRow(dataverse, kind, rootId);
       if (read.state === 'absent') return { state: 'absent', id: rootId };
@@ -641,6 +1027,8 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
     async run({ kind, key }, fn) {
       const item = await locateItem(await env(), kind, key);
       let resumed = null;
+      // An adoption attempt is never sent as a create: its rows are a maker's, at ids no create derives.
+      if (item.state === 'pending' && item.adoption) throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" has a pending adoption, which is never sent as a create`, { kind, key: item.planned.key });
       if (item.state === 'pending' && !item.edit) {
         const { verdict } = await recoverPending(await env(), ctx, item);
         if (verdict.action !== 'resume') throw stop(UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" pending attempt is not one to send again`, { kind, key: item.planned.key });
@@ -694,6 +1082,17 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         if (rec.verdict.action !== 'resume') { const h = haltOf(kind, planned.key, rec.verdict); throw stop(h.code, h.message, h); }
         if (!rec.sameRows) { const h = haltOf(kind, planned.key, pendingEditChanged(planned)); throw stop(h.code, h.message, h); }
         resumed = { token: item.token, claim: rec.verdict.claim, baseObservation: planned.plan.baseObservation || null };
+      }
+      const frozen = adoptedHere.get(`${kind}\u0000${planned.key}`);
+      if (frozen) {
+        // An item adopted in this invocation is edited only as its stop said: its rows still exactly as the acceptance
+        // proved them, and the fields this plan would change exactly the ones printed. A maker's edit made before this read
+        // fails the first check; one made after it changes the row version this plan's PATCH of the root is conditioned on
+        // (locateItem read it), so the service refuses that PATCH. Either way nothing else is sent.
+        const reason = asIsReason(frozen.asIs, await B.observe(dataverse, frozen.asIs));
+        const changed = reason ? null : changedPointers(planned, frozen.asIs);
+        const why = reason || (changed.refusal ? changed.refusal : canonicalJson(changed.pointers) !== canonicalJson(frozen.pointers) ? `the fields it would now change (${changed.pointers.join(', ') || 'none'}) are not the ones its adoption approved (${frozen.pointers.join(', ') || 'none'})` : null);
+        if (why) throw stop(CONFLICT_CODE, `the ${kind} "${planned.key}" adopted in this build was not edited: ${why}; nothing was sent for it. Run the build again to plan it from the row as it is now`, { kind, key: planned.key, id: planned.plan.rows[0].id });
       }
       if (planned.rows.some((r) => r.mode === 'create')) {
         const conflicts = await B.readConfigurationConflicts(dataverse, planned);

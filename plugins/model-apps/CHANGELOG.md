@@ -5,6 +5,22 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.25.0]
+
+- **Pages scroll:** the rules teach a bounded, scrolling page root; `check-griffel-styles.js` stops a generated page whose layout it can show would clip below the fold, or that it cannot read, with exit 3 and the fix (AB#6793599).
+- With `--existing` (downloaded pages) the same finding is a note and the exit code is unchanged.
+- **Failure-safe downloads:** the new `pages/` tree is staged and swapped in whole after the download's checks; a refusal or failure before then leaves `pages/` as it was, and a failed swap puts it back (#814).
+- If a swap cannot be undone, or a run stops mid-swap, the previous pages stay in the named `.pages-replace.*` folder to copy back; a later download reports it.
+- The download checks its own folders before each operation and refuses one a link has replaced.
+- **Adopt configuration made before opting in:** under `configurationIdentity: "stable-v1"`, an environment variable, connection reference or Custom API at another id can be adopted with the approvals the stop prints (#807).
+- The stop names each row and the fields a later edit would change; adopting sends nothing, that build changes only those fields, and a changed, unreadable or out-of-solution row is refused.
+- **Evals:** app-builder fixtures 22-24 now grade the declared dashboard tiles, rule shape and flow stages (#817).
+
+### Limits
+
+- The scroll check reads only the layouts it recognises (not `@media` or selector overrides, nor sibling heights) and refuses some valid layouts it cannot compare; its fix always passes. Upload and build do not run it.
+- Duplicate-detection rules made before opting in cannot be adopted yet (#807 stays open); a rule whose first publication is unproven is still published by hand (#808).
+- An adopted form whose layers read apart still needs the printed `publication-risk` approval (#797).
 ## [2.24.0]
 
 - **Command buttons, read-only:** `scripts/list-command-states.js` lists an app's modern command buttons by row id: each button's bar, scope, stored hidden and disabled flags, and the reasons a button is not a candidate. Nothing is written (#812).
