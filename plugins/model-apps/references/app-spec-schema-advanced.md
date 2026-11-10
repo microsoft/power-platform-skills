@@ -1343,12 +1343,37 @@ the field builds exactly as before.
   the build with `configuration-row-not-found` and is never replaced by a namesake.
 - **The binding store comes from the build.** Under the field, a build that cannot open the binding
   store for configuration stops before any request is sent (`create-identity-unverified`).
-- **Opting in does not migrate an existing app.** Setting `configurationIdentity: "stable-v1"` does not
-  migrate an existing app. A namesake created earlier at another id stops the first protected create
-  with `create-identity-conflict`, even if it is the only match; nothing is created or bound, and no
-  approval token selects a namesake. Keep the app without the field, or move it to the reserved ids
-  outside the plugin. An app that already has protected bindings cannot go back: see "Removing the
-  field" below.
+- **Opting in does not migrate an existing app by itself.** Setting `configurationIdentity: "stable-v1"`
+  does not move or rename anything. A namesake created earlier at another id stops the first protected
+  create with `create-identity-conflict`, even if it is the only match; nothing is created or bound. When
+  it is the only match and the item is an environment variable, a connection reference or a Custom API,
+  the stop then says whether the build can adopt that row at its own id. It can
+  when the row and every solution component under it are in the App Spec's solution (an environment
+  variable's value row is never a solution component, so it is not asked to be one); its fixed fields match the
+  declaration (the name's case, a variable's type, a reference's connector, a Custom API's binding,
+  bound table, function flag and processing steps, a child's type);
+  every row under it is one the App Spec declares; the change the build would then make is one it makes
+  on a bound row; and an environment variable's value or a connection reference's connection already is
+  the one the deployment settings name (the build never writes a first or different one after
+  adopting). The stop then lists the fields the build would change afterwards, by
+  name only, never a value, and one approval per row: `adopt:<kind>:<key>@<row id>`, with `+<16 hex>`
+  on the root when it lists fields, and `adopt:<child kind>:<key>/<child>@<row id>` for each row under
+  it. Check that each row is yours, then pass every token as printed with its own `--authorize`. The
+  build reads everything again just before it records the binding and sends nothing to adopt; in the
+  same build it then sends only the fields the stop listed, and stops that item with nothing sent if it
+  finds any other change. If a row is replaced, the field list changes or a membership is removed, the
+  tokens adopt nothing and the next build prints new ones; if the row is deleted, the tokens are not used
+  and the item is created at its own id. A duplicate rule made before the opt-in is never adopted: its
+  stop stays exactly as before, and `adopt:duplicateRule:<key>` keeps its one meaning (the rule at its
+  own reserved id, even when the key itself ends in what looks like `@<row id>`). Move that rule to its
+  reserved id outside the plugin, or keep the app without the field.
+  Otherwise the stop says why the row cannot be adopted. A stop that names several such items lists the
+  tokens of each with its own id and field list. Several namesakes of one item stop as before, and the
+  plain `adopt:<kind>:<key>` token never selects a namesake. Plugin versions before this form refuse
+  the `@<row id>` tokens before anything is sent; after an adoption they bind an adopted row that has
+  no rows under it, and stop on one that has with `create-identity-unverified`. You can also keep the
+  app without the field, or move it to the reserved ids outside the plugin. An app that already has
+  protected bindings cannot go back: see "Removing the field" below.
 - **An uncertain lookup is not absence.** If the namesake lookup a first create needs cannot be read
   completely (a failed read, a page that cannot be continued), the build stops with
   `create-identity-unverified` and creates or binds nothing for that item. Restore access or reliable

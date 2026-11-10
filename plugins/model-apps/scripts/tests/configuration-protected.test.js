@@ -16,7 +16,7 @@ const { createManagedCreateContext } = require('../lib/managed-create-context.js
 const { openManagedBindings, managedManifestView } = require('../lib/managed-bindings.js');
 const { readerFor } = require('../verify-model-app.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
-const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+const { readDeploymentBindings, configurationAuthorizationKeys } = require('../lib/configuration-artifacts.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
 const { RETRY } = require('../lib/retry-policy.js');
@@ -91,8 +91,16 @@ async function harness({ hookup = true, intercept } = {}) {
 }
 // A later process over the same binding store: a fresh managed create context (none of the earlier answers), with the
 // maker's exact approvals.
-function reopen(h, approvals = []) {
-  const ctx = createManagedCreateContext({ store: h.store, approvals, notFoundCode: B.NOT_FOUND_CODE });
+// An `@<row id>` approval reaches the context as the build's parser types it (build-model-app.js, through
+// configurationAuthorizationKeys, against `typedAs`); a token it refuses is passed as given, so a test can still offer one,
+// and `typedAs: null` passes every token as given.
+function reopen(h, approvals = [], typedAs = configSpec()) {
+  const typed = approvals.flatMap((t) => {
+    if (!typedAs || !/@[0-9a-f]{8}-/i.test(t)) return [t];
+    const read = configurationAuthorizationKeys([t], typedAs);
+    return read.problems.length ? [t] : [...read.rowApprovals];
+  });
+  const ctx = createManagedCreateContext({ store: h.store, approvals: typed, notFoundCode: B.NOT_FOUND_CODE });
   return { ...h, ctx, protectedConfiguration: P.createProtectedConfiguration({ store: h.store, gate: h.gate, ctx, apiBase: `${h.org.origin}/api/data/v9.0` }) };
 }
 // One configuration pass as the build runs it: the preflight, then the data-model step. Answers what it sent.
@@ -1371,4 +1379,803 @@ test('verify and the build preflight agree on every state of a bound protected r
     try { await agreeOn(state); } catch (error) { failures.push(String(error.message).split('\n').filter(Boolean).slice(0, 3).join(' | ').slice(0, 300)); }
   }
   assert.deepEqual(failures, [], 'every state agrees');
+});
+
+// ---------------------------------------------------------------------------------------------
+// A row a maker made BEFORE the opt-in (here by a build without it, so at an id the service picked) is a namesake to the
+// first protected create. It is adopted at its own id only under the exact `@<row id>` approvals the stop prints, and
+// read-only: nothing is sent to adopt it, and it is never bound while anything about it differs from what the stop said.
+
+const PK = { environmentvariabledefinitions: 'environmentvariabledefinitionid', customapis: 'customapiid', duplicaterules: 'duplicateruleid', customapirequestparameters: 'customapirequestparameterid' };
+const apiOnly = (over) => configSpec({ environmentVariables: [], duplicateDetectionRules: [], ...(over ? api(over) : {}) });
+const ADOPT_KINDS = [
+  { kind: 'environmentVariable', key: 'contoso_apibase', set: 'environmentvariabledefinitions', spec: () => variableOnly(), children: 0 },
+  { kind: 'customApi', key: 'contoso_calc', set: 'customapis', spec: () => apiOnly(), children: 2 },
+];
+const withoutOptIn = (spec) => { const { configurationIdentity, ...plain } = spec; return plain; };
+// The maker's rows, made by a build without the opt-in: the plain path creates them by name.
+async function madeBeforeOptIn(h, spec, opts = {}) {
+  const out = await pass(h, withoutOptIn(spec), opts);
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  return out;
+}
+const idIn = (h, set) => h.org.rows(set)[0][PK[set]];
+// The approvals a stop printed, of every item it names: configuration-build.js quotes each one.
+function printedApprovals(halt) {
+  const all = [...(halt ? halt.message : '').matchAll(/given after checking those rows are yours: ((?:"(?:[^"\\]|\\.)*"(?:, )?)+)\./g)];
+  return all.flatMap((m) => JSON.parse(`[${m[1]}]`));
+}
+// The stop a namesake gets today, before anything this change adds to it.
+const namesakeStop = (kind, key, ids) => `${kind} ${key}: the ${kind} "${key}" has a namesake at another id (${ids}); a protected create never binds a namesake, and no service changes were sent by this build`;
+function assertNothingHeld(h, kind, key, label) {
+  const group = h.store.readGroup(kind, key);
+  assert.equal(group.committed, null, `${label}: nothing is bound`);
+  assert.equal(group.pending, null, `${label}: no attempt is left`);
+}
+const settingsOf = (spec, Value) => readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value }] }, spec);
+async function removeMembership(h, objectId) {
+  const member = h.org.rows('solutioncomponents').find((c) => c.objectid === objectId);
+  const res = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/solutioncomponents(${member.solutioncomponentid})`, method: 'DELETE', headers: {} });
+  assert.ok(res.statusCode < 300, `DELETE solutioncomponents: ${res.statusCode}`);
+}
+async function joinSolution(h, id, componentType) {
+  const res = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/AddSolutionComponent`, method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ SolutionUniqueName: SOL, ComponentId: id, ComponentType: componentType, AddRequiredComponents: false }) });
+  assert.ok(res.statusCode < 300, `AddSolutionComponent: ${res.statusCode}`);
+}
+
+test('a protected row made before the opt-in is adopted at its own id only under the exact approvals its stop prints, and nothing is sent', async () => {
+  for (const { kind, key, set, spec, children } of ADOPT_KINDS) {
+    const h = await harness();
+    await madeBeforeOptIn(h, spec());
+    const id = idIn(h, set);
+    const stop = await pass(reopen(h), spec());
+    assert.equal(stop.halt && stop.halt.code, 'create-identity-conflict', stop.halt && stop.halt.message);
+    assert.equal(stop.halt.phase, 'preflight');
+    assert.ok(stop.halt.message.startsWith(`${namesakeStop(kind, key, id)}. It can instead be adopted at its id ${id}, after checking that row is yours; the build would then change nothing in it.`), stop.halt.message);
+    assert.deepEqual(stop.sent, [], kind);
+    const tokens = printedApprovals(stop.halt);
+    assert.equal(tokens[0], `adopt:${kind}:${key}@${id}`, kind);
+    assert.equal(tokens.length, 1 + children, tokens.join(' '));
+    for (const t of tokens.slice(1)) assert.match(t, /^adopt:[A-Za-z]+:[^@/]+\/[^@/]+@[0-9a-f-]{36}$/);
+    // Nothing short of every exact approval adopts: not the root's alone, not the children's, not the plain token
+    // (which still means the row at the derived id only).
+    for (const partial of [tokens.slice(0, 1), tokens.slice(1), [`adopt:${kind}:${key}`]]) {
+      if (!partial.length || (partial.length === tokens.length)) continue;
+      const out = await pass(reopen(h, partial), spec());
+      assert.equal(out.halt && out.halt.code, 'create-identity-conflict', `${kind} ${partial}`);
+      assert.deepEqual(out.sent, [], `${kind} ${partial}`);
+      assertNothingHeld(h, kind, key, `${kind} ${partial}`);
+    }
+    const done = await pass(reopen(h, tokens), spec());
+    assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+    assert.deepEqual(done.sent, [], `${kind}: adopting sends nothing`);
+    const group = committed(h, kind, key);
+    assert.equal(group.records.length, 1 + children, kind);
+    assert.ok(group.records.every((r) => r.origin === 'adopted'), kind);
+    assert.equal(group.records.find((r) => r.kind === kind).id, id, kind);
+    assert.equal(h.store.readGroup(kind, key).pending, null);
+    assert.equal(h.org.rows(set).length, 1, `${kind}: nothing is made beside it`);
+    const rerun = await pass(reopen(h), spec());
+    assert.equal(rerun.halt, null, rerun.halt && `${rerun.halt.code}: ${rerun.halt.message}`);
+    assert.deepEqual(rerun.sent, [], `${kind}: the next build sends nothing`);
+  }
+});
+
+test('a namesake the build would then change prints the fields it would send, and its root approval lapses when they change', async () => {
+  const h = await harness();
+  await madeBeforeOptIn(h, apiOnly());
+  const id = idIn(h, 'customapis');
+  // Another protected item, created at its derived id: the adoption leaves its binding byte for byte.
+  await created(h, variableOnly());
+  const other = JSON.stringify(h.store.readGroup('environmentVariable', 'contoso_apibase'));
+  const spec = configSpec({ duplicateDetectionRules: [], ...api({ description: 'Adds two numbers' }) });
+  const stop = await pass(reopen(h), spec);
+  assert.equal(stop.halt && stop.halt.code, 'create-identity-conflict', stop.halt && stop.halt.message);
+  assert.ok(stop.halt.message.includes(`It can instead be adopted at its id ${id}, after checking that row is yours; the build would then change only these fields, /description.`), stop.halt.message);
+  assert.deepEqual(stop.sent, []);
+  const tokens = printedApprovals(stop.halt);
+  const [root] = tokens;
+  assert.match(root, new RegExp(`^adopt:customApi:contoso_calc@${id}\\+[0-9a-f]{16}$`));
+  // The root approval without the digest of that list, or with another one, adopts nothing.
+  for (const wrong of [root.replace(/\+.*$/, ''), root.replace(/\+.*$/, '+0123456789abcdef')]) {
+    const out = await pass(reopen(h, [wrong, ...tokens.slice(1)]), spec);
+    assert.equal(out.halt && out.halt.code, 'create-identity-conflict', wrong);
+    assert.deepEqual(out.sent, [], wrong);
+    assertNothingHeld(h, 'customApi', 'contoso_calc', wrong);
+  }
+  // The App Spec changed again after the stop: the build would now send another list, so the approvals given lapse.
+  const more = configSpec({ duplicateDetectionRules: [], ...api({ description: 'Adds two numbers', displayName: 'Calculator' }) });
+  const lapsed = await pass(reopen(h, tokens), more);
+  assert.equal(lapsed.halt && lapsed.halt.code, 'create-identity-conflict', lapsed.halt && lapsed.halt.message);
+  assert.ok(lapsed.halt.message.includes('only these fields, /description, /displayName.'), lapsed.halt.message);
+  assert.notEqual(printedApprovals(lapsed.halt)[0], root);
+  assert.deepEqual(lapsed.sent, []);
+  assertNothingHeld(h, 'customApi', 'contoso_calc', 'lapsed');
+  // Under the exact approvals: adopted read-only, then the printed edit is sent once through the bound path.
+  const done = await pass(reopen(h, tokens), spec);
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent.map((r) => `${r.method} ${r.path.split('?')[0]}`), [`PATCH /customapis(${id})`]);
+  assert.equal(h.org.rows('customapis')[0].description, 'Adds two numbers');
+  assert.equal(JSON.stringify(h.store.readGroup('environmentVariable', 'contoso_apibase')), other, 'another item\'s binding is unchanged');
+  const rerun = await pass(reopen(h), spec);
+  assert.equal(rerun.halt, null);
+  assert.deepEqual(rerun.sent, []);
+});
+
+test('a namesake that cannot be adopted says why after today\'s stop, and is never bound, approvals given or not', async () => {
+  const CASES = [
+    { name: 'outside the solution', kind: 'environmentVariable', key: 'contoso_apibase', set: 'environmentvariabledefinitions', spec: variableOnly(),
+      make: async (h) => { await madeBeforeOptIn(h, variableOnly()); await removeMembership(h, idIn(h, 'environmentvariabledefinitions')); },
+      reason: /is not in the solution ContosoSol; add it there first\.$/ },
+    { name: 'a child the App Spec does not declare', kind: 'customApi', key: 'contoso_calc', set: 'customapis', spec: apiOnly(),
+      make: (h) => madeBeforeOptIn(h, apiOnly({ requestParameters: [...API.requestParameters, { uniqueName: 'B', type: 'integer' }] })), reason: /removals are not supported\.$/ },
+    { name: 'a name in another case', kind: 'environmentVariable', key: 'contoso_apibase', set: 'environmentvariabledefinitions',
+      spec: configSpec({ customApis: [], duplicateDetectionRules: [], environmentVariables: [{ schemaName: 'contoso_APIBase', type: 'string', defaultValue: 'https://api.contoso.com' }] }),
+      make: (h) => madeBeforeOptIn(h, variableOnly()), reason: /its schemaName differs from the App Spec's/ },
+    { name: 'a value that differs', kind: 'environmentVariable', key: 'contoso_apibase', set: 'environmentvariabledefinitions', spec: variableOnly(),
+      opts: { configurationBindings: settingsOf(variableOnly(), 'https://two.contoso.com') },
+      make: (h) => madeBeforeOptIn(h, variableOnly(), { configurationBindings: settingsOf(variableOnly(), 'https://one.contoso.com') }), reason: /never writes a value after adopting\.$/ },
+    { name: 'a first value', kind: 'environmentVariable', key: 'contoso_apibase', set: 'environmentvariabledefinitions', spec: variableOnly(),
+      opts: { configurationBindings: settingsOf(variableOnly(), 'https://one.contoso.com') },
+      make: (h) => madeBeforeOptIn(h, variableOnly()), reason: /would then write a first value to it/ },
+  ];
+  for (const c of CASES) {
+    const h = await harness();
+    await c.make(h);
+    const id = idIn(h, c.set);
+    const before = JSON.stringify(h.org.rows(c.set));
+    for (const approvals of [[], [`adopt:${c.kind}:${c.key}@${id}`]]) {
+      const out = await pass(reopen(h, approvals), c.spec, c.opts);
+      assert.equal(out.halt && out.halt.code, 'create-identity-conflict', `${c.name}: ${out.halt && out.halt.message}`);
+      assert.equal(out.halt.phase, 'preflight', c.name);
+      const [head, tail] = out.halt.message.split(`. It cannot be adopted at its id ${id}: `);
+      assert.equal(head, namesakeStop(c.kind, c.key, id), c.name);
+      assert.match(tail || '', c.reason, `${c.name}: ${out.halt.message}`);
+      assert.ok(!/exact approvals/.test(out.halt.message), `${c.name}: no approval is printed`);
+      assert.deepEqual(out.sent, [], c.name);
+      assertNothingHeld(h, c.kind, c.key, c.name);
+    }
+    assert.equal(JSON.stringify(h.org.rows(c.set)), before, `${c.name}: the row is untouched`);
+  }
+});
+
+test('several namesakes keep today\'s stop byte for byte, and no namesake keeps today\'s requests', async () => {
+  const h = await harness();
+  const ids = [];
+  for (let i = 0; i < 2; i += 1) {
+    const id = await insertRow(h.org, 'environmentvariabledefinitions', VARIABLE_ROW);
+    await joinSolution(h, id, 380);
+    ids.push(id);
+  }
+  const out = await pass(reopen(h, ids.map((id) => `adopt:environmentVariable:contoso_apibase@${id}`)), variableOnly());
+  assert.equal(out.halt && out.halt.code, 'create-identity-conflict');
+  const listed = /namesake at another id \(([^)]*)\)/.exec(out.halt.message)[1];
+  assert.deepEqual(listed.split(', ').sort(), ids.slice().sort());
+  assert.equal(out.halt.message, namesakeStop('environmentVariable', 'contoso_apibase', listed));
+  assert.deepEqual(out.sent, []);
+  assertNothingHeld(h, 'environmentVariable', 'contoso_apibase', 'several');
+  // No namesake: the first create is exactly today's, an approval of the derived id included.
+  const plain = await harness();
+  const first = await pass(reopen(plain, ['adopt:environmentVariable:contoso_apibase']), variableOnly());
+  assert.equal(first.halt, null, first.halt && first.halt.message);
+  assert.deepEqual(first.sent.map((r) => `${r.method} ${r.path.split('(')[0].split('?')[0]}`), ['POST /environmentvariabledefinitions']);
+  assert.equal(committed(plain, 'environmentVariable', 'contoso_apibase').records[0].origin, 'created');
+});
+
+test('a namesake that changes after its adoption began is not adopted: nothing is sent or bound, and the attempt is retired', async () => {
+  const CASES = [
+    // A declared field edited by hand: the build would now change it, a list the approvals were not given for.
+    { name: 'a maker edit', kind: 'customApi', key: 'contoso_calc', set: 'customapis', spec: apiOnly({ description: 'Adds two numbers' }), change: (h, id) => patchRow(h, 'customapis', id, { description: 'Changed by hand' }) },
+    { name: 'a membership removed', kind: 'customApi', key: 'contoso_calc', set: 'customapis', spec: apiOnly(), change: (h, id) => removeMembership(h, id) },
+    { name: 'a variable edited', kind: 'environmentVariable', key: 'contoso_apibase', set: 'environmentvariabledefinitions', spec: variableOnly(), change: (h, id) => patchRow(h, 'environmentvariabledefinitions', id, { defaultvalue: 'https://other.contoso.com' }) },
+  ];
+  for (const c of CASES) {
+    // The change lands in the riskiest window: after the attempt began and the store was captured, before the
+    // acceptance — on the first service read the build makes once begin has run.
+    let armed = false;
+    let id = null;
+    const own = new Set();
+    const h = await harness({ intercept: async () => {
+      if (!armed) return undefined;
+      armed = false;
+      const from = h.org.requests.length;
+      await c.change(h, id);
+      for (const r of h.org.requests.slice(from)) own.add(r);
+      return undefined;
+    } });
+    await madeBeforeOptIn(h, c.spec);
+    id = idIn(h, c.set);
+    const tokens = printedApprovals((await pass(reopen(h), c.spec)).halt);
+    const approved = reopen(h, tokens);
+    const runtime = createConfigurationRuntime({ spec: c.spec, sdk: approved.sdk, opts: { protectedConfiguration: approved.protectedConfiguration }, appUniqueName: 'contoso_configured' });
+    assert.deepEqual(await runtime.preflight(), { halts: [] }, `${c.name}: the preflight forecasts the adoption`);
+    const begin = approved.ctx.begin;
+    let began = 0;
+    approved.ctx.begin = (plans) => { const out = begin(plans); began += 1; armed = true; return out; };
+    const mark = h.org.requests.length;
+    const step = await runtime.apply('data-model');
+    assert.equal(began, 1, `${c.name}: the adoption began`);
+    assert.equal(armed, false, `${c.name}: the change landed`);
+    assert.deepEqual(step.halt && step.halt.items.map((i) => i.code), ['create-identity-conflict'], `${c.name}: ${JSON.stringify(step.halt && step.halt.items)}`);
+    assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET' && !own.has(r)), [], `${c.name}: nothing is sent`);
+    assertNothingHeld(h, c.kind, c.key, c.name);
+    assert.deepEqual(h.store.snapshot().envelope.attempts, [], `${c.name}: the attempt is retired`);
+    // The next build stops on what is there now: the approvals given for the earlier rows adopt nothing.
+    const next = await pass(reopen(h, tokens), c.spec);
+    assert.equal(next.halt && next.halt.code, 'create-identity-conflict', c.name);
+    assert.deepEqual(next.sent, [], c.name);
+    assertNothingHeld(h, c.kind, c.key, c.name);
+  }
+});
+
+test('an approval given for a row that was then replaced, or whose child was, adopts nothing: the stop names the new rows; one for a row since deleted lets the item be created', async () => {
+  // The root replaced: deleted and made again by name, at another id.
+  const h = await harness();
+  await madeBeforeOptIn(h, apiOnly());
+  const tokens = printedApprovals((await pass(reopen(h), apiOnly())).halt);
+  const old = idIn(h, 'customapis');
+  const del = await h.org.request({ url: `${h.org.origin}/api/data/v9.2/customapis(${old})`, method: 'DELETE', headers: {} });
+  assert.ok(del.statusCode < 300);
+  await madeBeforeOptIn(h, apiOnly());
+  const fresh = idIn(h, 'customapis');
+  assert.notEqual(fresh, old);
+  const out = await pass(reopen(h, tokens), apiOnly());
+  assert.equal(out.halt && out.halt.code, 'create-identity-conflict', out.halt && out.halt.message);
+  assert.equal(printedApprovals(out.halt)[0], `adopt:customApi:contoso_calc@${fresh}`);
+  assert.deepEqual(out.sent, []);
+  assertNothingHeld(h, 'customApi', 'contoso_calc', 'root replaced');
+
+  // A child replaced: the same parameter made again under the same API, at another id, and put in the solution.
+  const c = await harness();
+  await madeBeforeOptIn(c, apiOnly());
+  const childTokens = printedApprovals((await pass(reopen(c), apiOnly())).halt);
+  const [param] = c.org.rows('customapirequestparameters');
+  const member = c.org.rows('solutioncomponents').find((m) => m.objectid === param.customapirequestparameterid);
+  const gone = await c.org.request({ url: `${c.org.origin}/api/data/v9.2/customapirequestparameters(${param.customapirequestparameterid})`, method: 'DELETE', headers: {} });
+  assert.ok(gone.statusCode < 300);
+  const copy = Object.fromEntries(Object.entries(param).filter(([k]) => !['customapirequestparameterid', '_customapiid_value', 'versionnumber'].includes(k) && !k.startsWith('@')));
+  const made = await insertRow(c.org, 'customapirequestparameters', { ...copy, 'CustomAPIId@odata.bind': `/customapis(${param._customapiid_value})` });
+  await joinSolution(c, made, member.componenttype);
+  const again = await pass(reopen(c, childTokens), apiOnly());
+  assert.equal(again.halt && again.halt.code, 'create-identity-conflict', again.halt && again.halt.message);
+  assert.ok(printedApprovals(again.halt).some((t) => t.endsWith(`@${made}`)), again.halt.message);
+  assert.deepEqual(again.sent, []);
+  assertNothingHeld(c, 'customApi', 'contoso_calc', 'child replaced');
+
+  // The namesake deleted after the stop: its approvals adopt nothing, and the item is created at its derived id, as the
+  // preflight forecasts and as a build with no namesake does.
+  const d = await harness();
+  await madeBeforeOptIn(d, variableOnly());
+  const varTokens = printedApprovals((await pass(reopen(d), variableOnly())).halt);
+  const was = idIn(d, 'environmentvariabledefinitions');
+  const dropped = await d.org.request({ url: `${d.org.origin}/api/data/v9.2/environmentvariabledefinitions(${was})`, method: 'DELETE', headers: {} });
+  assert.ok(dropped.statusCode < 300);
+  const created = await pass(reopen(d, varTokens), variableOnly());
+  assert.equal(created.halt, null, created.halt && created.halt.message);
+  assert.deepEqual(created.sent.map((r) => `${r.method} ${r.path.split('(')[0].split('?')[0]}`), ['POST /environmentvariabledefinitions']);
+  const record = committed(d, 'environmentVariable', 'contoso_apibase').records[0];
+  assert.equal(record.origin, 'created');
+  assert.notEqual(record.id, was);
+});
+
+test('an adoption cut off after it began is retired and made again under its approvals, and is never sent as a create', async () => {
+  for (const at of ['prepared', 'sending']) {
+    const h = await harness();
+    await madeBeforeOptIn(h, apiOnly());
+    const id = idIn(h, 'customapis');
+    const tokens = printedApprovals((await pass(reopen(h), apiOnly())).halt);
+    // The process stops right after the attempt is written: before it is marked sending, or right after.
+    const cut = reopen(h, tokens);
+    if (at === 'prepared') {
+      const mark = h.store.markAttemptSetSending;
+      h.store.markAttemptSetSending = () => { h.store.markAttemptSetSending = mark; throw new Error('the process stopped'); };
+    } else {
+      const begin = cut.ctx.begin;
+      cut.ctx.begin = (plans) => { begin(plans); throw new Error('the process stopped'); };
+    }
+    const crashed = await pass(cut, apiOnly());
+    assert.ok(crashed.halt, at);
+    assert.deepEqual(crashed.sent, [], at);
+    const pending = h.store.readGroup('customApi', 'contoso_calc').pending;
+    assert.equal(pending && pending.phase, at, at);
+    assert.equal(committed(h, 'customApi', 'contoso_calc'), null, at);
+
+    // A later build without the approvals stops as before, and the create path refuses the attempt outright.
+    const asked = await pass(reopen(h), apiOnly());
+    assert.equal(asked.halt && asked.halt.code, 'create-identity-conflict', `${at}: ${asked.halt && asked.halt.message}`);
+    assert.deepEqual(asked.sent, [], at);
+    const port = reopen(h).protectedConfiguration.port({ spec: apiOnly(), dataverse: h.sdk.dataverse, solution: SOL, bindings: undefined, sdk: h.sdk });
+    const mark = h.org.requests.length;
+    let refused = null;
+    try { await port.run({ kind: 'customApi', key: 'contoso_Calc' }, async () => { throw new Error('never sent'); }); } catch (error) { refused = error; }
+    assert.equal(refused && refused.code, 'create-identity-unverified', refused && refused.message);
+    assert.match(refused.message, /pending adoption, which is never sent as a create/);
+    assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), [], `${at}: run sends nothing`);
+
+    // Under the approvals: the attempt is retired and the adoption made again, read-only.
+    const done = await pass(reopen(h, tokens), apiOnly());
+    assert.equal(done.halt, null, done.halt && `${at}: ${done.halt.code}: ${done.halt.message}`);
+    assert.deepEqual(done.sent, [], at);
+    const group = h.store.readGroup('customApi', 'contoso_calc');
+    assert.equal(group.pending, null, at);
+    assert.equal(group.committed.records.find((r) => r.kind === 'customApi').id, id, at);
+    assert.equal(h.org.rows('customapis').length, 1, `${at}: nothing is created`);
+  }
+});
+// ---------------------------------------------------------------------------------------------
+// Adoption edges: what an approved adoption may and may not do, every item a stop prints approvals for, and the reads it costs.
+
+const sentLines = (sent) => sent.map((r) => `${r.method} ${r.path}`);
+
+test('an adopted variable keeps its private value, given or not, and nothing is sent', async () => {
+  for (const withSettings of [true, false]) {
+    const h = await harness();
+    const spec = variableOnly();
+    const opts = { configurationBindings: settingsOf(spec, 'https://one.contoso.com') };
+    await madeBeforeOptIn(h, spec, opts);
+    const given = withSettings ? opts : {};
+    const stopped = await pass(reopen(h), spec, given);
+    const tokens = printedApprovals(stopped.halt);
+    assert.equal(tokens.length, 2, stopped.halt && stopped.halt.message);
+    const out = await pass(reopen(h, tokens, spec), spec, given);
+    assert.equal(out.halt, null, out.halt && out.halt.message);
+    assert.deepEqual(sentLines(out.sent), [], `settings given: ${withSettings}`);
+    assert.equal(committed(h, 'environmentVariable', 'contoso_apibase').records.length, 2);
+  }
+});
+
+const DATA_SOURCE = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';
+const dataSources = () => configSpec({
+  customApis: [], duplicateDetectionRules: [],
+  environmentVariables: [
+    { schemaName: 'contoso_Parent', type: 'dataSource', connectorId: DATA_SOURCE, parameterKey: 'dataset' },
+    { schemaName: 'contoso_Child', type: 'dataSource', connectorId: DATA_SOURCE, parameterKey: 'table', parentSchemaName: 'contoso_Parent' },
+  ],
+});
+
+test('a data-source variable and its parent, both made before the opt-in, are adopted together, or the parent first and then the child', async () => {
+  // Together: one stop prints both, and one build adopts both, the child against its parent's adopted row.
+  {
+    const h = await harness();
+    const spec = dataSources();
+    await madeBeforeOptIn(h, spec);
+    const stopped = await pass(reopen(h), spec);
+    const tokens = printedApprovals(stopped.halt);
+    assert.equal(tokens.length, 2, stopped.halt && stopped.halt.message);
+    const out = await pass(reopen(h, tokens, spec), spec);
+    assert.equal(out.halt, null, out.halt && out.halt.message);
+    assert.deepEqual(sentLines(out.sent), []);
+    assert.ok(committed(h, 'environmentVariable', 'contoso_parent') && committed(h, 'environmentVariable', 'contoso_child'));
+  }
+  // The parent first: a later stop offers the child alone, against the parent's binding (not its derived id).
+  {
+    const h = await harness();
+    const spec = dataSources();
+    await madeBeforeOptIn(h, spec);
+    const parentOnly = { ...spec, environmentVariables: spec.environmentVariables.slice(0, 1) };
+    const parentStop = await pass(reopen(h), parentOnly);
+    const parentAdopted = await pass(reopen(h, printedApprovals(parentStop.halt), spec), parentOnly);
+    assert.equal(parentAdopted.halt, null, parentAdopted.halt && parentAdopted.halt.message);
+    const childStop = await pass(reopen(h), spec);
+    const tokens = printedApprovals(childStop.halt);
+    assert.equal(tokens.length, 1, childStop.halt && childStop.halt.message);
+    assert.match(tokens[0], /^adopt:environmentVariable:contoso_child@/);
+    const out = await pass(reopen(h, tokens, spec), spec);
+    assert.equal(out.halt, null, out.halt && out.halt.message);
+    assert.deepEqual(sentLines(out.sent), []);
+    assert.ok(committed(h, 'environmentVariable', 'contoso_child'));
+  }
+});
+
+test('a request parameter added in the adoption build is created under its approvals', async () => {
+  const h = await harness();
+  await madeBeforeOptIn(h, apiOnly());
+  const spec = apiOnly({ requestParameters: [...API.requestParameters, { uniqueName: 'B', type: 'string' }] });
+  const stopped = await pass(reopen(h), spec);
+  const tokens = printedApprovals(stopped.halt);
+  assert.equal(tokens.length, 3, stopped.halt && stopped.halt.message);
+  const out = await pass(reopen(h, tokens, spec), spec);
+  assert.equal(out.halt, null, out.halt && out.halt.message);
+  assert.ok(out.sent.some((r) => r.method === 'POST'), sentLines(out.sent).join(' '));
+});
+
+test('a maker edit made after the adoption is accepted stops the same build: nothing but the printed fields is ever sent', async () => {
+  let armed = false;
+  const own = new Set();
+  let id;
+  const h = await harness({ intercept: async () => {
+    if (!armed) return undefined;
+    armed = false;
+    const mark = h.org.requests.length;
+    await patchRow(h, 'customapis', id, { displayname: 'Unseen maker edit' });
+    for (const r of h.org.requests.slice(mark)) own.add(r);
+    return undefined;
+  } });
+  await madeBeforeOptIn(h, apiOnly({ displayName: 'Calculator' }));
+  id = idIn(h, 'customapis');
+  const spec = apiOnly({ displayName: 'Calculator', description: 'Adds numbers' });
+  const stopped = await pass(reopen(h), spec);
+  assert.match(stopped.halt.message, /only these fields, \/description\./);
+  const approved = reopen(h, printedApprovals(stopped.halt), spec);
+  const accept = approved.ctx.acceptReadOnly;
+  approved.ctx.acceptReadOnly = (items) => { const out = accept(items); armed = true; return out; };
+  const out = await pass(approved, spec);
+  assert.equal(armed, false, 'the maker edit was made');
+  assert.equal(out.halt && out.halt.code, 'configuration-incomplete', out.halt && out.halt.message);
+  assert.match(out.halt.message, /customApi contoso_Calc \(create-identity-conflict\)/);
+  // Refused, not unknown: the item's stop says nothing was sent for it.
+  assert.deepEqual(out.step.outcome.refused.map((r) => `${r.kind}:${r.code}`), ['customApi:create-identity-conflict']);
+  assert.deepEqual(out.step.outcome.unknown, []);
+  assert.deepEqual(sentLines(out.sent.filter((r) => !own.has(r))), [], 'nothing is sent');
+  assert.equal(h.org.rows('customapis')[0].displayname, 'Unseen maker edit');
+  assert.notEqual(h.org.rows('customapis')[0].description, 'Adds numbers', 'the approved edit is not sent either');
+  // A later build plans the item from the row as it is now, as an ordinary bound one: the App Spec's values are sent.
+  const later = await pass(reopen(h), spec);
+  assert.equal(later.halt, null, later.halt && later.halt.message);
+  assert.deepEqual(later.sent.map((r) => `${r.method} ${r.path.split('?')[0]}`), [`PATCH /customapis(${id})`]);
+  assert.equal(h.org.rows('customapis')[0].description, 'Adds numbers');
+});
+
+// A duplicate rule and its conditions are never adopted: a rule's namesake keeps the stop it had before adoption existed,
+// byte for byte, after the same reads, and no approval, typed or raw, binds it or lets anything be sent. An adopted rule
+// would be reconciled by the ordinary rule path, which neither holds an edit to the fields its stop printed nor keeps
+// from publishing a rule a maker changed after the acceptance.
+const anyId = (text) => text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<id>');
+const RULE_STOP_READS = [
+  "GET /EntityDefinitions(LogicalName='connectionreference')?$select=ObjectTypeCode",
+  "GET /EntityDefinitions(LogicalName='customapi')?$select=ObjectTypeCode",
+  "GET /EntityDefinitions(LogicalName='duplicaterule')?$select=ObjectTypeCode",
+  "GET /EntityDefinitions(LogicalName='customapirequestparameter')?$select=ObjectTypeCode",
+  "GET /EntityDefinitions(LogicalName='customapiresponseproperty')?$select=ObjectTypeCode",
+  "GET /EntityDefinitions(LogicalName='duplicaterulecondition')?$select=ObjectTypeCode",
+  'GET /duplicaterules(<id>)?$select=duplicateruleid,name,description,baseentityname,matchingentityname,iscasesensitive,excludeinactiverecords,statecode,statuscode',
+  "GET /duplicaterules?$select=duplicateruleid,name&$filter=name eq 'Same email'",
+  'GET /duplicateruleconditions?$filter=_regardingobjectid_value eq <id>&$select=duplicateruleconditionid,baseattributename,matchingattributename,operatorcode,operatorparam,ignoreblankvalues,_regardingobjectid_value',
+];
+const onlyRule = (over = {}) => configSpec({ environmentVariables: [], customApis: [], ...rule(over) });
+
+test('a duplicate rule made before the opt-in keeps its stop byte for byte: no adoption is offered or taken, and nothing is sent', async () => {
+  const CASES = [
+    { name: 'published', spec: onlyRule() },
+    { name: 'unpublished', spec: onlyRule({ status: 'unpublished' }) },
+    { name: 'its description differs', before: onlyRule({ description: 'Original' }), spec: onlyRule({ description: 'Changed' }) },
+  ];
+  for (const c of CASES) {
+    const h = await harness();
+    await madeBeforeOptIn(h, c.before || c.spec);
+    const id = idIn(h, 'duplicaterules');
+    const condition = h.org.rows('duplicateruleconditions')[0].duplicateruleconditionid;
+    const rows = () => JSON.stringify([h.org.rows('duplicaterules'), h.org.rows('duplicateruleconditions')]);
+    const before = rows();
+    const mark = h.org.requests.length;
+    const stop = await pass(reopen(h), c.spec);
+    assert.equal(stop.halt && stop.halt.code, 'create-identity-conflict', c.name);
+    assert.equal(stop.halt.phase, 'preflight', c.name);
+    assert.equal(stop.halt.message, namesakeStop('duplicateRule', 'email', id), c.name);
+    assert.deepEqual(h.org.requests.slice(mark).map((r) => anyId(`${r.method} ${r.path}`)), RULE_STOP_READS, `${c.name}: the reads of 2.24.0`);
+    // The approvals a plugin that adopted rules would print: the parser reads them whole, as 2.24.0 does, so they name no
+    // declared item; given anyway, raw or in the typed spelling, they adopt nothing.
+    const wouldBe = [`adopt:duplicateRule:email@${id}`, `adopt:duplicateRuleCondition:email/e@${condition}`];
+    assert.deepEqual(configurationAuthorizationKeys(wouldBe, c.spec).problems.map((p) => p.code), ['CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM', 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM'], c.name);
+    for (const approvals of [wouldBe, wouldBe.map((a) => a.replace(/^adopt:/, 'adopt-row:')), ['adopt:duplicateRule:email', 'adopt:duplicateRuleCondition:email/e']]) {
+      const out = await pass(reopen(h, approvals, null), c.spec);
+      assert.equal(out.halt && out.halt.message, namesakeStop('duplicateRule', 'email', id), `${c.name}: ${approvals}`);
+      assert.deepEqual(out.sent, [], `${c.name}: ${approvals}`);
+      assertNothingHeld(h, 'duplicateRule', 'email', `${c.name}: ${approvals}`);
+    }
+    assert.equal(rows(), before, `${c.name}: the rule is untouched`);
+  }
+});
+
+test('a rule a maker edits during a build given the approvals a rule adoption would need is neither rewritten nor published', async () => {
+  // Two windows: right after an acceptance, which a rule never reaches, and the build's first request.
+  for (const status of ['published', 'unpublished']) for (const window of ['after acceptance', 'first request']) {
+    const label = `${status}, ${window}`;
+    let armed = false;
+    let id;
+    const own = new Set();
+    const h = await harness({ intercept: async () => {
+      if (!armed) return undefined;
+      armed = false;
+      const mark = h.org.requests.length;
+      await patchRow(h, 'duplicaterules', id, { description: 'Unseen maker edit' });
+      for (const r of h.org.requests.slice(mark)) own.add(r);
+      return undefined;
+    } });
+    const spec = onlyRule({ description: 'Original', status });
+    await madeBeforeOptIn(h, spec);
+    id = idIn(h, 'duplicaterules');
+    const condition = h.org.rows('duplicateruleconditions')[0].duplicateruleconditionid;
+    const stopped = await pass(reopen(h), spec);
+    const approvals = printedApprovals(stopped.halt);
+    // The typed spellings an adoption would be matched in, given even though the stop printed none.
+    const given = reopen(h, [...approvals, `adopt-row:duplicateRule:email@${id}`, `adopt-row:duplicateRuleCondition:email/e@${condition}`], approvals.length ? spec : null);
+    const accept = given.ctx.acceptReadOnly;
+    let accepted = 0;
+    given.ctx.acceptReadOnly = (items) => { const out = accept(items); accepted += 1; if (window === 'after acceptance') armed = true; return out; };
+    if (window === 'first request') armed = true;
+    const out = await pass(given, spec);
+    assert.deepEqual(sentLines(out.sent.filter((r) => !own.has(r))), [], `${label}: no PATCH and no PublishDuplicateRule`);
+    assert.equal(accepted, 0, `${label}: a rule is never accepted as adopted`);
+    assert.deepEqual(approvals, [], `${label}: the stop prints no approval`);
+    assert.equal(out.halt && out.halt.code, 'create-identity-conflict', label);
+    assert.equal(h.org.rows('duplicaterules')[0].description, window === 'first request' ? 'Unseen maker edit' : 'Original', label);
+    assertNothingHeld(h, 'duplicateRule', 'email', label);
+  }
+});
+
+test('a stop naming several adoptable namesakes shows each one\'s id and fields beside its approvals', async () => {
+  const h = await harness();
+  const before = apiOnly({ uniqueName: 'contoso_First', isFunction: false, requestParameters: [], responseProperties: [] });
+  before.customApis.push({ uniqueName: 'contoso_Second', description: 'Maker text', isFunction: false, requestParameters: [], responseProperties: [] });
+  await madeBeforeOptIn(h, before);
+  const idOf = (name) => h.org.rows('customapis').find((r) => r.uniquename === name).customapiid;
+  const spec = structuredClone(before);
+  spec.customApis[1].description = 'Replacement';
+  const stopped = await pass(reopen(h), spec);
+  const message = stopped.halt.message;
+  for (const [key, name, change] of [['contoso_first', 'contoso_First', 'nothing in it'], ['contoso_second', 'contoso_Second', 'only these fields, /description']]) {
+    const id = idOf(name);
+    assert.ok(message.includes(`Adopt customApi ${key} at its id ${id} (the build would then change ${change}) only under these exact approvals, given after checking those rows are yours: "adopt:customApi:${key}@${id}`), message);
+  }
+  assert.equal(printedApprovals(stopped.halt).length, 2);
+  const out = await pass(reopen(h, printedApprovals(stopped.halt), spec), spec);
+  assert.equal(out.halt, null, out.halt && out.halt.message);
+});
+
+test('the build\'s own error names every adoptable namesake with its id and fields, before anything is sent', async () => {
+  const h = await harness();
+  const before = apiOnly({ uniqueName: 'contoso_First', isFunction: false, requestParameters: [], responseProperties: [] });
+  before.customApis.push({ uniqueName: 'contoso_Second', description: 'Maker text', isFunction: false, requestParameters: [], responseProperties: [] });
+  await madeBeforeOptIn(h, before);
+  const idOf = (name) => h.org.rows('customapis').find((r) => r.uniquename === name).customapiid;
+  const spec = structuredClone(before);
+  spec.customApis[1].description = 'Replacement';
+  assert.deepEqual(validateAppSpec(spec).errors, []);
+  const mark = h.org.requests.length;
+  let caught;
+  try {
+    await runSdkBuild(spec, { sdk: h.sdk, apply: true, phases: STAGES.data, workspaceDir: makeTempDir('cfg-protected-ws-'), protectedConfiguration: reopen(h).protectedConfiguration, emit: () => {} });
+  } catch (error) {
+    caught = error;
+  }
+  assert.equal(caught && caught.code, 'create-identity-conflict', caught && caught.message);
+  for (const [key, name, change] of [['contoso_first', 'contoso_First', 'nothing in it'], ['contoso_second', 'contoso_Second', 'only these fields, /description']]) {
+    const id = idOf(name);
+    assert.ok(caught.message.includes(`Adopt customApi ${key} at its id ${id} (the build would then change ${change}) only under these exact approvals, given after checking those rows are yours: "adopt:customApi:${key}@${id}`), caught.message);
+  }
+  assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), [], 'zero service mutations');
+});
+
+test('a rule key that ends in what reads like a row id keeps its ordinary meaning, and a rule namesake is never offered', async () => {
+  const h = await harness();
+  const initial = onlyRule({ status: 'unpublished', conditions: [] });
+  await madeBeforeOptIn(h, initial);
+  const id = idIn(h, 'duplicaterules');
+  const spec = structuredClone(initial);
+  const secondKey = `email@${id}`;
+  spec.duplicateDetectionRules.push({ key: secondKey, name: 'Another rule', entity: 'contact', status: 'unpublished', conditions: [] });
+  const typed = `adopt:duplicateRule:${secondKey}`;
+  const parsed = configurationAuthorizationKeys([typed], spec);
+  assert.deepEqual(parsed.problems, []);
+  assert.deepEqual([...parsed.rowApprovals], [typed], 'the plain approval of the rule keyed email@<id>, as in 2.24.0');
+  const out = await pass(reopen(h, [...parsed.rowApprovals], null), spec);
+  assert.equal(out.halt && out.halt.code, 'create-identity-conflict');
+  assert.equal(out.halt.message, namesakeStop('duplicateRule', 'email', id));
+  assert.deepEqual(out.sent, []);
+  assert.equal(committed(h, 'duplicateRule', 'email'), null);
+});
+test('a failed continuation page of the membership or the children is never read as a complete adoption read', async () => {
+  for (const set of ['solutioncomponents', 'customapirequestparameters']) {
+    let active = false;
+    let root;
+    const h = await harness({ intercept: ({ method, path }) => {
+      if (!active || method !== 'GET' || !path.startsWith(`/${set}?`)) return undefined;
+      if (set !== 'solutioncomponents' && !path.includes(root) && !path.includes('$skiptoken=more')) return undefined;
+      if (/\$skiptoken=/.test(path)) return { statusCode: 503, body: { error: { code: '0x80040216', message: 'busy' } } };
+      return { statusCode: 200, body: { value: [], '@odata.nextLink': `${h.org.origin}/api/data/v9.0/${set}?$skiptoken=more` } };
+    } });
+    await madeBeforeOptIn(h, apiOnly());
+    root = idIn(h, 'customapis');
+    const tokens = printedApprovals((await pass(reopen(h), apiOnly())).halt);
+    active = true;
+    const out = await pass(reopen(h, tokens), apiOnly());
+    assert.ok(out.halt, set);
+    assert.deepEqual(sentLines(out.sent), [], set);
+    assert.ok(h.org.requests.some((r) => r.path.includes('$skiptoken=more')), set);
+    assertNothingHeld(h, 'customApi', 'contoso_calc', set);
+  }
+});
+
+test('complete continuation pages supply the children and the membership of an adoption', async () => {
+  let active = false;
+  let root;
+  let continued = 0;
+  const h = await harness({ intercept: ({ method, path }) => {
+    if (!active || method !== 'GET') return undefined;
+    const set = path.startsWith('/solutioncomponents?') ? 'solutioncomponents'
+      : path.startsWith('/customapirequestparameters?') && (path.includes(root) || path.includes('$skiptoken=more')) ? 'customapirequestparameters' : null;
+    if (!set) return undefined;
+    if (path.includes('$skiptoken=more')) { continued += 1; return { statusCode: 200, body: { value: h.org.rows(set) } }; }
+    return { statusCode: 200, body: { value: [], '@odata.nextLink': `${h.org.origin}/api/data/v9.0/${set}?$skiptoken=more` } };
+  } });
+  await madeBeforeOptIn(h, apiOnly());
+  root = idIn(h, 'customapis');
+  const tokens = printedApprovals((await pass(reopen(h), apiOnly())).halt);
+  active = true;
+  const out = await pass(reopen(h, tokens), apiOnly());
+  assert.equal(out.halt, null, out.halt && out.halt.message);
+  assert.ok(continued > 2, `continued ${continued}`);
+  assert.deepEqual(sentLines(out.sent), []);
+});
+
+test('a connection reference is adopted only with its matching private connection', async () => {
+  const spec = configSpec({ environmentVariables: [], customApis: [], duplicateDetectionRules: [],
+    connectionReferences: [{ logicalName: 'contoso_sp', connectorId: DATA_SOURCE }] });
+  const good = readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-one' }] }, spec);
+  const bad = readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-two' }] }, spec);
+  const h = await harness();
+  const opts = { configurationBindings: good, connections: async () => [{ connectionId: 'conn-one', connectorId: DATA_SOURCE }] };
+  await madeBeforeOptIn(h, spec, opts);
+  const stop = await pass(reopen(h), spec, opts);
+  const tokens = printedApprovals(stop.halt);
+  assert.equal(tokens.length, 1, stop.halt && stop.halt.message);
+  const refused = await pass(reopen(h, tokens, spec), spec, { ...opts, configurationBindings: bad });
+  assert.ok(refused.halt);
+  assert.deepEqual(sentLines(refused.sent), []);
+  assertNothingHeld(h, 'connectionReference', 'contoso_sp', 'private connection mismatch');
+  const accepted = await pass(reopen(h, tokens, spec), spec, opts);
+  assert.equal(accepted.halt, null, accepted.halt && accepted.halt.message);
+  assert.deepEqual(sentLines(accepted.sent), []);
+});
+
+test('a request parameter added while the adoption is captured is refused, and nothing is bound', async () => {
+  let armed = false;
+  let root;
+  const h = await harness({ intercept: async () => {
+    if (!armed) return undefined;
+    armed = false;
+    await insertRow(h.org, 'customapirequestparameters', { uniquename: 'MakerChild', name: 'MakerChild', type: 10, 'CustomAPIId@odata.bind': `/customapis(${root})` });
+    return undefined;
+  } });
+  await madeBeforeOptIn(h, apiOnly());
+  root = idIn(h, 'customapis');
+  const approved = reopen(h, printedApprovals((await pass(reopen(h), apiOnly())).halt));
+  const capture = approved.ctx.captureReadOnly;
+  approved.ctx.captureReadOnly = (items) => { const out = capture(items); armed = true; return out; };
+  const out = await pass(approved, apiOnly());
+  assert.ok(out.halt);
+  assertNothingHeld(h, 'customApi', 'contoso_calc', 'new child during adoption');
+});
+
+test('a read-only acceptance needs an attempt begun with its expected proof, never one only prepared', async () => {
+  const h = await harness();
+  const spec = apiOnly({ isFunction: false, requestParameters: [], responseProperties: [] });
+  await madeBeforeOptIn(h, spec);
+  const id = idIn(h, 'customapis');
+  const approved = reopen(h, [`adopt:customApi:contoso_calc@${id}`]);
+  const tokenOf = () => `adopt-row:customApi:contoso_calc@${id}`;
+  const base = await B.readConfigurationRow(h.sdk.dataverse, 'customApi', id);
+  const types = await B.readComponentTypes(h.sdk.dataverse);
+  const planned = B.planOf(spec, { kind: 'customApi', key: 'contoso_Calc', solution: SOL, componentTypes: types.types, bases: new Map([[id, base]]), boundIdOf: () => id, asIs: true });
+  const built = require('../lib/managed-create-context.js').buildRowPlan(planned.plan);
+  const [unbegun] = h.store.prepareAttemptSet([built.prepare]);
+  const [capture0] = approved.ctx.captureReadOnly([unbegun]);
+  const observation0 = await B.observe(h.sdk.dataverse, planned);
+  assert.throws(() => approved.ctx.acceptReadOnly([{ token: unbegun, capture: capture0, observation: observation0, declarationSha256: planned.plan.declarationSha256, approvalTokenOf: tokenOf }]),
+    /not a plan of existing rows with a base observation/);
+  h.store.retireUnsentAttempt({ token: unbegun, baseGeneration: null });
+  const [begun] = approved.ctx.begin([planned.plan]);
+  const [capture1] = approved.ctx.captureReadOnly([begun.token]);
+  const observation1 = await B.observe(h.sdk.dataverse, planned);
+  const [accepted] = approved.ctx.acceptReadOnly([{ token: begun.token, capture: capture1, observation: observation1, declarationSha256: planned.plan.declarationSha256, approvalTokenOf: tokenOf }]);
+  assert.equal(accepted.verdict.action, 'commit');
+  assert.equal(accepted.group.records[0].origin, 'adopted');
+});
+
+test('adoption analysis costs reads only for a single namesake under the opt-in', async () => {
+  const gets = {};
+  for (const roots of [0, 1, 2]) {
+    const h = await harness();
+    const spec = variableOnly();
+    if (roots > 0) await madeBeforeOptIn(h, spec);
+    if (roots === 2) await joinSolution(h, await insertRow(h.org, 'environmentvariabledefinitions', VARIABLE_ROW), 380);
+    for (const optIn of [false, true]) {
+      const runtime = createConfigurationRuntime({ spec: optIn ? spec : withoutOptIn(spec), sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration }, appUniqueName: 'contoso_configured' });
+      const mark = h.org.requests.length;
+      try { await runtime.preflight(); } catch { /* the namesake stops are judged elsewhere */ }
+      const since = h.org.requests.slice(mark);
+      assert.deepEqual(sentLines(since.filter((r) => r.method !== 'GET')), []);
+      gets[`${roots}:${optIn ? 'opt-in' : 'plain'}`] = since.length;
+    }
+  }
+  assert.deepEqual(gets, { '0:plain': 0, '0:opt-in': 8, '1:plain': 0, '1:opt-in': 18, '2:plain': 0, '2:opt-in': 8 });
+});
+
+// ---------------------------------------------------------------------------------------------
+// After an adoption is accepted, the same build sends at most the fields its stop printed, for every kind that adopts: a
+// maker edit made right after the acceptance, to a field outside that list, stops the item with nothing sent and the
+// maker's value kept. A later build plans the item from the row as it is now, as an ordinary bound one.
+
+async function editedAfterAcceptance({ before, spec, beforeOpts = {}, opts = {}, edit, expectList }) {
+  let armed = false;
+  const own = new Set();
+  const h = await harness({ intercept: async () => {
+    if (!armed) return undefined;
+    armed = false;
+    const mark = h.org.requests.length;
+    await edit(h);
+    for (const r of h.org.requests.slice(mark)) own.add(r);
+    return undefined;
+  } });
+  await madeBeforeOptIn(h, before, beforeOpts);
+  const stopped = await pass(reopen(h), spec, opts);
+  assert.equal(stopped.halt && stopped.halt.code, 'create-identity-conflict', stopped.halt && stopped.halt.message);
+  assert.ok(stopped.halt.message.includes(`the build would then change ${expectList}`), stopped.halt.message);
+  const approved = reopen(h, printedApprovals(stopped.halt), spec);
+  const accept = approved.ctx.acceptReadOnly;
+  let accepted = 0;
+  approved.ctx.acceptReadOnly = (items) => { const out = accept(items); accepted += 1; armed = true; return out; };
+  const out = await pass(approved, spec, opts);
+  assert.equal(accepted, 1, 'the adoption was accepted');
+  assert.equal(armed, false, 'the maker edit was made');
+  return { h, out, sent: out.sent.filter((r) => !own.has(r)) };
+}
+function assertItemStopped(out, sent, kind, code = 'create-identity-conflict') {
+  assert.equal(out.halt && out.halt.code, 'configuration-incomplete', out.halt && out.halt.message);
+  assert.deepEqual(out.step.outcome.refused.map((r) => `${r.kind}:${r.code}`), [`${kind}:${code}`]);
+  assert.deepEqual(out.step.outcome.unknown, []);
+  assert.deepEqual(sentLines(sent), [], 'nothing is sent');
+}
+
+test('an adopted environment variable edited by a maker right after the acceptance is not edited by the same build', async () => {
+  const VAR = { schemaName: 'contoso_ApiBase', type: 'string', name: 'API base', description: 'Original', defaultValue: 'https://api.contoso.com' };
+  const before = configSpec({ customApis: [], duplicateDetectionRules: [], environmentVariables: [VAR] });
+  const spec = configSpec({ customApis: [], duplicateDetectionRules: [], environmentVariables: [{ ...VAR, defaultValue: 'https://new.contoso.com' }] });
+  for (const [column, value] of [['description', 'Maker description'], ['displayname', 'Maker name']]) {
+    const edit = (h) => patchRow(h, 'environmentvariabledefinitions', idIn(h, 'environmentvariabledefinitions'), { [column]: value });
+    const { h, out, sent } = await editedAfterAcceptance({ before, spec, edit, expectList: 'only these fields, /defaultValue' });
+    assertItemStopped(out, sent, 'environmentVariable');
+    const [row] = h.org.rows('environmentvariabledefinitions');
+    assert.equal(row[column], value, `${column}: the maker value is kept`);
+    assert.equal(row.defaultvalue, 'https://api.contoso.com', `${column}: the approved edit is not sent either`);
+    const later = await pass(reopen(h), spec);
+    assert.equal(later.halt, null, later.halt && later.halt.message);
+    assert.equal(h.org.rows('environmentvariabledefinitions')[0].defaultvalue, 'https://new.contoso.com');
+  }
+});
+
+test('an adopted environment variable value changed by a maker right after the acceptance is not written back by the same build', async () => {
+  const spec = variableOnly();
+  const settings = { configurationBindings: settingsOf(spec, 'https://one.contoso.com') };
+  const edit = (h) => patchRow(h, 'environmentvariablevalues', h.org.rows('environmentvariablevalues')[0].environmentvariablevalueid, { value: 'https://maker.contoso.com' });
+  // Without the approval to replace a value, the build's own gate refuses writing the deployment settings' value back;
+  // with it, the adoption's hold does: nothing beyond the printed list (here nothing) is sent in the adopting build.
+  for (const [opts, code] of [[settings, 'DESTRUCTIVE_CHANGE_UNAUTHORIZED'], [{ ...settings, authorizedDestructive: new Set(['environmentVariableValue:contoso_apibase:value']) }, 'create-identity-conflict']]) {
+    const { h, out, sent } = await editedAfterAcceptance({ before: spec, spec, beforeOpts: settings, opts, edit, expectList: 'nothing in it' });
+    assertItemStopped(out, sent, 'environmentVariable', code);
+    assert.equal(h.org.rows('environmentvariablevalues')[0].value, 'https://maker.contoso.com', `${code}: the maker value is kept`);
+  }
+});
+
+test('an adopted connection reference edited by a maker right after the acceptance is not edited by the same build', async () => {
+  const REF = { logicalName: 'contoso_sp', connectorId: DATA_SOURCE, name: 'SharePoint', description: 'Original' };
+  const before = configSpec({ environmentVariables: [], customApis: [], duplicateDetectionRules: [], connectionReferences: [REF] });
+  const spec = configSpec({ environmentVariables: [], customApis: [], duplicateDetectionRules: [], connectionReferences: [{ ...REF, description: 'Approved' }] });
+  const settings = (s, more = {}) => ({ configurationBindings: readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-one' }] }, s),
+    connections: async () => [{ connectionId: 'conn-one', connectorId: DATA_SOURCE }, { connectionId: 'conn-two', connectorId: DATA_SOURCE }], ...more });
+  // A connection the maker changed is one the build would replace: refused by the build's own gate without the approval
+  // to replace it, and by the adoption's hold with it.
+  let replace = null;
+  for (const [column, value, code] of [['connectionreferencedisplayname', 'Maker name', 'create-identity-conflict'], ['connectionid', 'conn-two', 'DESTRUCTIVE_CHANGE_UNAUTHORIZED'], ['connectionid', 'conn-two', 'create-identity-conflict']]) {
+    const approved = column === 'connectionid' && code === 'create-identity-conflict';
+    const edit = (h) => patchRow(h, 'connectionreferences', h.org.rows('connectionreferences')[0].connectionreferenceid, { [column]: value });
+    const { h, out, sent } = await editedAfterAcceptance({ before, spec, beforeOpts: settings(before), opts: settings(spec, approved ? { authorizedDestructive: new Set(replace) } : {}), edit, expectList: 'only these fields, /description' });
+    assertItemStopped(out, sent, 'connectionReference', code);
+    if (code === 'DESTRUCTIVE_CHANGE_UNAUTHORIZED') replace = out.step.outcome.refused[0].authorize;
+    const [row] = h.org.rows('connectionreferences');
+    assert.equal(row[column], value, `${column} ${code}: the maker value is kept`);
+    assert.equal(row.description, 'Original', `${column} ${code}: the approved edit is not sent either`);
+  }
+  assert.ok(replace && replace.length, 'the replacement approval was named');
 });

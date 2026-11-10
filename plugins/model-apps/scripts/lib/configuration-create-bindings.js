@@ -563,14 +563,18 @@ function pinApiLabels(artifact, rootMode, slotModes, bases) {
  * id) holds the fresh readConfigurationRow answer of every row the plan updates with a PATCH: its row version is the only
  * If-Match the classifier admits for that row, and a Custom API row's labels the App Spec leaves out are kept from it.
  * `baseGeneration` is the committed group's generation (the binding store's readGroup) an update is planned from: the
- * store prepares the attempt only while the group is still at it.
+ * store prepares the attempt only while the group is still at it. `childIdOf` ({ <slot>: <id> }, a bound root only) places
+ * an existing child at an id the plugin did not derive (one adopted under its `@<id>` approval). `asIs: true` plans the
+ * same existing rows read-only: no create row, and each row expected exactly as its base read holds it.
  * Answers a frozen planned object { kind, key, solution, plan, rows } — `plan` is buildRowPlan's input (with the root's
  * `baseObservation` when it is an update read fresh); `rows` are its rows with what each must read back as
  * (`expected`), for a child its slot, and for a PATCHed row its held row version (`ifMatch`). No private input is in
  * either.
  */
-function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [], keptChildren, bases, baseGeneration } = {}) {
+function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntentFor, boundIdOf, componentTypes, boundSlots = [], keptChildren, bases, baseGeneration, childIdOf, asIs = false } = {}) {
   if (!ROOT_KINDS.has(kind)) throw new TypeError(`planOf: ${kind} is not a configuration root kind`);
+  if (asIs && typeof boundIdOf !== 'function') throw new TypeError('planOf: an as-is plan is a plan of a bound row');
+  if (asIs && kind === 'duplicateRule') throw new TypeError('planOf: a duplicate rule is never adopted, so never planned as-is');
   const entry = A.configurationIntentOf(spec, kind, key);
   const sol = nonEmpty(solution) ? solution : spec && isPlain(spec.solution) && nonEmpty(spec.solution.uniqueName) ? spec.solution.uniqueName : 'Default';
   const binds = bindings || { environmentVariables: new Map(), connectionReferences: new Map() };
@@ -584,12 +588,20 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     if (!parent) throw new TypeError(`planOf: the parent definition "${entry.parentSchemaName}" of "${portKey}" is not declared`);
     parentDefinitionId = parent.id;
   }
-  const artifact = A.buildArtifact({ kind, key: portKey, detail: { entry } }, got.id, got.childIds, { bindings: binds }, parentDefinitionId);
+  // A child the root already has at an id this plugin did not derive (a row a maker made before the opt-in, adopted under
+  // its own `@<id>` approval: configuration-protected.js adoptionOf) keeps that id; every other child takes its derived one.
+  const childIds = { ...got.childIds };
+  for (const [slot, rawId] of Object.entries(childIdOf || {})) {
+    const id = normalizeGuid(rawId);
+    if (!has(got.childIds, slot) || !id || got.intent.boundId === undefined) throw new TypeError(`planOf: ${kind} "${portKey}" has no bound ${slot} child to place at ${rawId}`);
+    childIds[slot] = id;
+  }
+  const artifact = A.buildArtifact({ kind, key: portKey, detail: { entry } }, got.id, childIds, { bindings: binds }, parentDefinitionId);
   const secrets = new Map();
   const rootId = normalizeGuid(got.id);
   const rootMode = got.intent.boundId !== undefined ? 'update' : 'create';
   const bound = new Set(boundSlots);
-  if (kind === 'customApi') pinApiLabels(artifact, rootMode, new Map(Object.keys(got.childIds).map((s) => [s, bound.has(s) ? 'update' : 'create'])), bases);
+  if (kind === 'customApi') pinApiLabels(artifact, rootMode, new Map(Object.keys(childIds).map((s) => [s, bound.has(s) ? 'update' : 'create'])), bases);
   const rootExpected = expectedOf(kind, artifact);
   const root = {
     kind, key: portKey, id: rootId, parentId: null, slot: null, mode: rootMode, sensitiveInput: false,
@@ -600,7 +612,7 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     secrets.set(rowKey(kind, portKey), artifact.connectionId);
   }
   const rows = [root];
-  for (const [slot, rawId] of Object.entries(got.childIds)) {
+  for (const [slot, rawId] of Object.entries(childIds)) {
     const childKind = childKindOf(kind, slot);
     const id = normalizeGuid(rawId);
     const children = kind === 'customApi' ? [...artifact.requestParameters, ...artifact.responseProperties] : kind === 'duplicateRule' ? artifact.conditions : [];
@@ -628,6 +640,19 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
     if (!id) throw new TypeError(`planOf: the kept ${slot} child of ${kind} "${portKey}" has no id`);
     rows.push({ kind: 'environmentVariableValue', key: JSON.stringify([portKey, slot]), id, parentId: rootId, slot, mode: 'update', kept: true, expected: {}, sensitiveInput: false });
   }
+  // An as-is plan (`asIs`): the rows of the same plan that already exist, each expected to read back exactly as its own base
+  // read holds it, over the same field set — no create row and nothing to send. It is what a read-only acceptance of rows
+  // made before the opt-in proves (configuration-protected.js adoptionOf): the build then plans the item as bound and
+  // sends only the edit it printed, through its ordinary protected path.
+  if (asIs) {
+    if (rootMode !== 'update') throw new TypeError(`planOf: ${kind} "${portKey}" is not bound; an as-is plan has nothing to keep`);
+    for (let i = rows.length - 1; i >= 0; i -= 1) if (rows[i].mode !== 'update') rows.splice(i, 1);
+    for (const r of rows) {
+      if (r.kept) continue;
+      const own = semanticOf(r.kind, baseOf(bases, r.kind, r.id, r.parentId).decoded);
+      r.expected = Object.fromEntries(Object.keys(r.expected).map((f) => [f, has(own, f) ? own[f] : null]));
+    }
+  }
   for (const r of rows) {
     // An updated row keeps what its base read held in the columns this build never writes (PRESERVED): the exact value, so
     // a row whose implementation was replaced or removed meanwhile is not the row this edit planned.
@@ -638,7 +663,10 @@ function planOf(spec, { kind, key, bindings, solution, intentFor = defaultIntent
   // An update of a bound root records the versions it was prepared from (the binding store's baseObservation); they stay
   // out of the declaration, which a later fresh read must not change.
   const versions = rows.filter((r) => r.ifMatch !== undefined).map((r) => ({ kind: r.kind, id: r.id, rowVersion: r.ifMatch }));
-  const baseObservation = root.ifMatch !== undefined ? { rowVersion: root.ifMatch, savedSha256: sha({ rows: versions }) } : null;
+  // A root read without a row version records a null one in its as-is plan: its base is then proved by the content
+  // projection alone (baseOf).
+  const baseObservation = root.ifMatch !== undefined ? { rowVersion: root.ifMatch, savedSha256: sha({ rows: versions }) }
+    : asIs ? { rowVersion: null, savedSha256: sha({ rows: versions }) } : null;
   const members = [];
   if (!isRestrictedSolution(sol)) {
     for (const r of rows) {
@@ -1445,6 +1473,7 @@ module.exports = {
   createSetClassifier,
   readConfigurationRow,
   readConfigurationConflicts,
+  readAllPages,
   readComponentTypes,
   observe,
   editShapeOf,

@@ -3364,7 +3364,36 @@ retry runs the same command again over the same store, so it finds the rows at t
 bound (a lost or uncertain create stops as `create-outcome-unknown`, never retried). The `adopt:` approvals a
 stop prints are read by `configurationAuthorizationKeys` (`adopt:<kind>:<port key>`,
 `adopt:<child kind>:<encoded port key>/<encoded slot>`; only under the opt-in, the root and child declared) into
-`opts.configurationApprovals`; a root's approval never covers its children. The build's configuration items
+`opts.configurationApprovals`; a root's approval never covers its children. A single namesake at another id (a row
+a maker made before the opt-in) of an environment variable, a connection reference or a Custom API (`ADOPTABLE`) is
+adopted at its own id only through `adoptionOf`/`adoptNamesake` (`configuration-protected.js`). A duplicate rule's
+namesake is never adopted and keeps the plain `create-identity-conflict` stop after the same reads: an adopted rule
+would be reconciled by the rule path, which neither holds the edit to the printed list nor keeps from publishing a rule
+edited after the acceptance (`planOf` refuses an as-is rule plan too). For the adoptable kinds: the row read exactly, every row under it listed completely and paired with the
+declaration (`planOf` `childIdOf`; an undeclared row is a removal and refuses), the fixed fields (`IMMUTABLE`) and
+the name's case equal, the change the build would then make judged with the bound-edit verdicts, a first value, a
+clear or a private value or connection other than the settings' refused, and every member in the solution
+(`asIsReason`). The preflight stop (`adoptionHalt`) keeps the
+`create-identity-conflict` sentence byte for byte and appends either why it cannot be adopted or the field pointers
+(names only) and one token per row, `adopt:<kind>:<port key>@<row id>[+<digest>]` /
+`adopt:<child kind>:<encoded port key>/<encoded slot>@<row id>` (the digest is the first 16 hex of SHA-256 over the
+sorted pointer list). `configurationAuthorizationKeys` types the two meanings apart: a plain approval stays `adopt:...`, an`
+`@<row id>` one becomes `adopt-row:...` (which no plain approval reads as), and a token whose two readings both name
+declared items is refused (`CONFIGURATION_ADOPT_AMBIGUOUS`); `adoptionOf` reads its printed tokens back the same way and
+refuses to offer a namesake whose approval would be ambiguous. Rule and condition tokens keep only their plain reading,
+as in 2.24.0 (a rule or condition key is free text, so `odd@<id>` is just that key). The build error (`configuration-build.js`) prints each
+adoptable item's tokens beside its own id and pointer list, so no token is printed without its details. Data-source
+variables are planned after their declared parent (`parentsFirst`), and a child is located against its parent's
+protected binding, committed or adopted in this build (`parentIdOf`), never its derived id. In `resolve`, under every token: `ctx.begin` the as-is plan (`planOf` `asIs`: update rows only, the row's own
+values as expected, no publish effect), `captureReadOnly`, `adoptionOf` again (the same id, rows, pointers and
+tokens), then `acceptReadOnly` with the adoption's token function; a refusal or an unreadable read releases
+the attempt and commits nothing, and nothing is sent. Records carry `origin: 'adopted'`, and `locateItem` takes the
+child ids from them. An item adopted in this build keeps its as-is rows and pointer list (`adoptedHere`): `update()` observes the row again
+and sends only if it is still as accepted and the change is exactly that list, else stops with nothing sent (a later
+build plans it as an ordinary bound item). A pending adoption attempt is retired only when proven unsent (`retireAdoption`) and never sent
+as a create (`run()` refuses it). Older plugins: the `@` token is an unknown item; an adopted group with no children
+is bound; one with children is `create-identity-unverified`; a cut-off adoption attempt is
+`managed-pending-intent-changed`. The build's configuration items
 work in a throwaway SDK workspace per command run (`makeSdk`), so a kept local copy lasts until that run ends.
 Edits: a duplicate rule is created with its conditions, completes its initial
 publication/state, and is then only verified (any later field, condition or state change, the
