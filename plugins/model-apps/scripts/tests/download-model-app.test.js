@@ -1699,6 +1699,24 @@ function outsideTree() {
   return outside;
 }
 
+// Runs one call that stands for another process moving, removing or replacing a folder the download (or its guard) has just made or
+// written. On Windows an antivirus or indexer handle on such a folder refuses that call for a moment (EPERM, EACCES or EBUSY; seen in
+// these tests on a loaded machine), and that other process would simply try again, so the test does too (up to about 2 s). Above all, a
+// refusal must not escape a hook that runs inside one of the download's own fs calls: the download would take it for a refusal of its
+// own call and try that call again after it had in fact happened (seen: a page's rename retried after it was done, ENOENT, IO_ERROR
+// instead of the refusal under test). Any other error, and every error on another platform, is thrown at once.
+const HOOK_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+function hookRetry(call) {
+  for (let i = 0; ; i += 1) {
+    try {
+      return call();
+    } catch (e) {
+      if (process.platform !== 'win32' || !HOOK_LOCK_CODES.has(e && e.code) || i >= 80) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+}
+
 // Makes the folder `<out>/<prefix>*` the download makes a junction to `outside` the moment it is made (on POSIX, 'junction' makes a plain
 // folder symlink): what another process that can write <out> could do between the mkdir and the first use. Answers the folders replaced.
 function plantAtMkdir(t, out, prefix, outside) {
@@ -1707,8 +1725,8 @@ function plantAtMkdir(t, out, prefix, outside) {
   t.mock.method(fs, 'mkdirSync', function (p, ...rest) {
     const result = real.call(this, p, ...rest);
     if (!planted.length && topFolder(out, p, prefix) === path.resolve(String(p))) {
-      fs.rmdirSync(p);
-      fs.symlinkSync(outside, p, 'junction');
+      hookRetry(() => fs.rmdirSync(p));
+      hookRetry(() => fs.symlinkSync(outside, p, 'junction'));
       planted.push(String(p));
     }
     return result;
@@ -1863,8 +1881,8 @@ for (const [caller, download, mode] of SWAP_CALLERS) {
         if (top && !swap && path.basename(path.dirname(String(p))) === SWAP_B) {
           // The first page is written; the swap folder is moved away and a junction put at its name, then the write fails.
           swap = top;
-          fs.renameSync(top, path.join(path.dirname(top), 'moved-away'));
-          fs.symlinkSync(outside, top, 'junction');
+          hookRetry(() => fs.renameSync(top, path.join(path.dirname(top), 'moved-away')));
+          hookRetry(() => fs.symlinkSync(outside, top, 'junction'));
           throw Object.assign(new Error('ENOSPC: injected'), { code: 'ENOSPC', syscall: 'open', path: String(p) });
         }
         return realOpen.call(this, p, ...rest);
@@ -1903,8 +1921,8 @@ for (const [caller, download, mode] of SWAP_CALLERS) {
         if (top && !swap && path.basename(String(to)) === 'page.tsx' && path.basename(path.dirname(String(to))) === SWAP_A) {
           // The first page's page.tsx is written whole; then the swap folder is moved away and a junction put at its name.
           swap = top;
-          realRename(top, path.join(out, 'moved-away'));
-          fs.symlinkSync(outside, top, 'junction');
+          hookRetry(() => realRename(top, path.join(out, 'moved-away')));
+          hookRetry(() => fs.symlinkSync(outside, top, 'junction'));
         }
         return result;
       });
@@ -1949,8 +1967,8 @@ for (const [caller, download, mode] of SWAP_CALLERS) {
             // A lock refuses the first move in (Windows waits and tries again); meanwhile the swap folder is moved away and a junction
             // put at its name.
             swap = top;
-            realRename(top, path.join(out, 'moved-away'));
-            fs.symlinkSync(outside, top, 'junction');
+            hookRetry(() => realRename(top, path.join(out, 'moved-away')));
+            hookRetry(() => fs.symlinkSync(outside, top, 'junction'));
             throw Object.assign(new Error('EBUSY: injected, rename'), { code: 'EBUSY', syscall: 'rename' });
           }
         }
@@ -2232,8 +2250,8 @@ test('writePageTree, a move into pages/ waited out: each attempt is checked firs
     const pause = () => {
       if (swap) return;
       swap = path.dirname(renames[0]);
-      fs.renameSync(swap, path.join(out, 'moved-away'));
-      fs.symlinkSync(outside, swap, 'junction');
+      hookRetry(() => fs.renameSync(swap, path.join(out, 'moved-away')));
+      hookRetry(() => fs.symlinkSync(outside, swap, 'junction'));
     };
     const warned = [];
     assert.throws(
@@ -2269,12 +2287,16 @@ for (const point of ['once written', 'between two reads', 'after the last read']
       }
       const before = treeBytes(path.join(out, 'pages'));
       const outsideBefore = treeBytes(outside);
-      const isStage = (p) => path.dirname(p) === out && path.basename(p).startsWith('.download-pages.');
+      // The download makes its staging folder in <out> named by its real path (assertSafeOutputDir answers realpath.native), which is not
+      // the path os.tmpdir() gave when a folder above it is a link or a short name: /var -> /private/var on macOS, C:\Users\RUNNER~1 on
+      // Windows CI. Match either name, or the hooks below never see the staging folder and nothing is planted.
+      const outNames = new Set([out, fs.realpathSync.native(out)]);
+      const isStage = (p) => outNames.has(path.dirname(p)) && path.basename(p).startsWith('.download-pages.');
       let planted = null;
       const plant = (stage) => {
         planted = stage;
-        fs.renameSync(stage, path.join(out, 'moved-away'));
-        fs.symlinkSync(outside, stage, 'junction');
+        hookRetry(() => fs.renameSync(stage, path.join(out, 'moved-away')));
+        hookRetry(() => fs.symlinkSync(outside, stage, 'junction'));
       };
       const lines = stderrLines(t);
       if (point === 'once written') {
@@ -2342,8 +2364,8 @@ test('generatedFolders: each guarded fs method is refused on a path in a folder 
     assert.strictEqual(fs.readFileSync(path.join(made, 'new', 'a.txt'), 'utf8'), 'a');
     const source = path.join(base, 'source.txt');
     fs.writeFileSync(source, 'source');
-    fs.renameSync(made, path.join(base, 'moved-away'));
-    fs.symlinkSync(outside, made, 'junction');
+    hookRetry(() => fs.renameSync(made, path.join(base, 'moved-away')));
+    hookRetry(() => fs.symlinkSync(outside, made, 'junction'));
     const outsideBefore = treeBytes(outside);
     // `new/keep.txt` is a file where the junction points: an unchecked call would write, move or remove it.
     const target = path.join(made, 'new', 'keep.txt');
@@ -2358,8 +2380,8 @@ test('generatedFolders: each guarded fs method is refused on a path in a folder 
     assert.deepStrictEqual(treeBytes(outside), outsideBefore, 'nothing written, moved or removed where the junction points');
     assert.deepStrictEqual(fs.readFileSync(source, 'utf8'), 'source');
     // A folder found replaced is not trusted again, even put back as it was.
-    fs.rmSync(made);
-    fs.renameSync(path.join(base, 'moved-away'), made);
+    hookRetry(() => fs.rmSync(made));
+    hookRetry(() => fs.renameSync(path.join(base, 'moved-away'), made));
     assert.throws(() => guard.fs.writeFileSync(path.join(made, 'new', 'b.txt'), 'b'), (e) => e.code === 'UNSAFE_OUTPUT');
     assert.throws(() => guard.fs.rmSync(base, { recursive: true }), (e) => e.code === 'UNSAFE_OUTPUT', 'nor is a folder that holds it removed');
     assert.ok(!fs.existsSync(path.join(made, 'new', 'b.txt')));
