@@ -34,8 +34,8 @@
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
 // a NEW file `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json` (`managedFragments.file` in the result;
 // lib/managed-fragments.js). It is created exclusively, so it never replaces, moves or removes a file, and with nothing to write
-// nothing is written. So that a failure to write it leaves the folder as it was, the managed download writes the page tree to a
-// staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
+// nothing is written. So that a failure to write it leaves the folder as it was, the download (every CLI download) writes the
+// page tree to a staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
 // Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
@@ -1140,7 +1140,7 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
         if (bad !== undefined) throw new Error('config.json dataSources must be an array of non-empty table logical names');
       }
     } catch (e) {
-      // A folder of the managed download's staging found replaced by a link is not a page's config that cannot be read: it stops the
+      // A folder of a staged download's staging found replaced by a link is not a page's config that cannot be read: it stops the
       // download (generatedFolders).
       if (e && e.code === 'UNSAFE_OUTPUT') throw e;
       config = {};
@@ -3006,7 +3006,8 @@ function assertNoPlantedPageLinks(pagesRoot, fsImpl = fs) {
 //   2. make a swap folder `<out>/.pages-replace.<pid>.<random>.tmp` (makeHiddenDir: a name nobody holds, checked to be the plain folder
 //      just made before anything is written under it) and write the new tree to its `new` subfolder. It sits in the same folder as
 //      pages/, so the moves below are renames on one volume, never copies;
-//   3. check pages/ again: writing took time, and the move below must act on the folder the checks saw;
+//   3. check the new tree (`new`, each page folder in it and each file written there are still what was made) and pages/ again:
+//      writing took time, and the move below must act on the folders the checks saw;
 //   4. move pages/ to the swap folder's `previous` (skipped when there is no pages/);
 //   5. move `new` to pages/;
 //   6. remove the swap folder, the previous tree in it.
@@ -3032,9 +3033,9 @@ function assertNoPlantedPageLinks(pagesRoot, fsImpl = fs) {
 //
 // The folders this run makes are held to being what they were made as, before EVERY fs operation on a path in them: each mkdir, each
 // file write (writeFileSafe's temp file, its rename into place and the removal of a temp file it gives up on), each rename attempt
-// (every retry of the move in and of the move back included), each removal, and each read (a listing, a stat, a file's bytes: the
-// managed download reads its staged tree back, and what it reads is what it states in the spec and publishes into pages/). All of them
-// go through ONE fs, generatedFolders' `fs`, which checks first that the folder made (the swap folder; the managed download's
+// (every retry of the move in and of the move back included), each removal, and each read (a listing, a stat, a file's bytes: a
+// staged download reads its staged tree back, and what it reads is what it states in the spec and publishes into pages/). All of them
+// go through ONE fs, generatedFolders' `fs`, which checks first that the folder made (the swap folder; a staged download's
 // `.download-pages.*` staging folder) and every folder between it and the path are still plain folders at the paths they were made at
 // (ownedDir), and that the path itself is not a link. Something that replaced one of them with a link or junction (or moved it away and
 // put one at its name) would otherwise have a page written, a tree moved into pages/, a clean-up delete recursively, or page bytes read,
@@ -3054,7 +3055,7 @@ function assertNoPlantedPageLinks(pagesRoot, fsImpl = fs) {
 // the maker's own folder, which an editor, a sync client or the maker can change while a wait goes on, so a wait would let the checks of
 // step 3 go stale, as rename-retry.js forbids. Its refusal leaves pages/ as it was and fails the download, which can simply be run again.
 //
-// `opts`: `fs` (every call goes through it: the managed download passes its staging folder's guarded fs, and tests a faulty one), and,
+// `opts`: `fs` (every call goes through it: a staged download passes its staging folder's guarded fs, and tests a faulty one), and,
 // for tests, `warn` (where the warnings go) and `rename` (renameWithRetry's own test options).
 function writePageTree(pagesRoot, pages, opts = {}) {
   const fsImpl = opts.fs || fs;
@@ -3094,8 +3095,14 @@ function writePageTree(pagesRoot, pages, opts = {}) {
       gfs.mkdirSync(destDir, { recursive: true });
       for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8', fs: gfs });
     }
-    // Step 3. `new` once more too, so a replacement found now costs no move of the maker's folder.
+    // Step 3. `new` once more too, and each page folder made in it and each file written there, so a replacement found now costs no
+    // move of the maker's folder and nothing in its place is moved into pages/.
     guard.verify(fresh);
+    for (const { pageId, files } of pages) {
+      const destDir = path.join(fresh, pageId);
+      guard.verify(destDir);
+      for (const name of Object.keys(files)) guard.verify(path.join(destDir, name));
+    }
     hadTree = assertPageTreeReplaceable(pagesPath, fsImpl);
   } catch (e) {
     discard();
@@ -3147,7 +3154,7 @@ const NOT_OWNED_LEFT = 'it, or a folder in it, is no longer the folder this down
 // to stop a download).
 function warnStrandedPageTrees(realRoot, pagesRoot, shown, warn, fsImpl = fs) {
   let names = [];
-  // A refusal of a guarded fs (the managed download's staging folder found replaced) is not a folder that cannot be read: it stops.
+  // A refusal of a guarded fs (a staged download's staging folder found replaced) is not a folder that cannot be read: it stops.
   try { names = fsImpl.readdirSync(realRoot); } catch (e) { if (e && e.code === 'UNSAFE_OUTPUT') throw e; return; }
   for (const name of names.filter((n) => n.startsWith('.pages-replace.')).sort()) {
     const held = path.join(realRoot, name, 'previous');
@@ -3179,7 +3186,7 @@ function notOwnedError(shownDir) {
 }
 
 // The fs methods that read, write, make, move or remove, and which of their arguments name a path they act on (a file descriptor is not
-// checked: it was opened by a checked call). Reads are held as writes are: what the managed download reads back from its staging folder
+// checked: it was opened by a checked call). Reads are held as writes are: what a staged download reads back from its staging folder
 // is what it publishes into pages/ and states in the spec, so a read through a folder replaced by a link would hand on bytes from
 // wherever that link points. realpathSync (and .native) is checked too: see generatedFolders. A method missing here would go through
 // unchecked: tests/download-model-app.test.js fails on a raw call of any such method in writePageTree, the staged readback and their
@@ -3192,12 +3199,12 @@ const GUARDED_FS_METHODS = {
   readlinkSync: [0], createReadStream: [0],
 };
 
-// The fs a guarded fs checks with: the plain one under any number of guards (the managed download's staging guard holds the swap guard
+// The fs a guarded fs checks with: the plain one under any number of guards (a staged download's staging guard holds the swap guard
 // writePageTree makes inside it). Each guard's checks (ownedDir) compare real paths, which cover every folder above, so they need not
 // themselves run through another guard; the operation still does.
 const UNGUARDED_FS = Symbol('unguarded fs');
 
-// The ONE way writePageTree, the managed download's staging and readback, and their helpers touch the folders they make. `adopt(dir)`
+// The ONE way writePageTree, a staged download's staging and readback, and their helpers touch the folders they make. `adopt(dir)`
 // takes a folder just made (refused, and not adopted, unless it is a plain folder at its own path); `fs` is `fsImpl` with every method of
 // GUARDED_FS_METHODS checked before it runs, on any path in an adopted folder: the adopted folder and every folder between it and the path
 // that exists must be owned (ownedDir), and the path itself, if it exists, must not be a link (nor, when a folder, other than owned).
@@ -3273,8 +3280,8 @@ function generatedFolders(fsImpl, shown) {
   };
 }
 
-// The checks writePageTree makes before it removes anything, made on their own: the managed download asks them before it settles its
-// fragments file, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written. Answers whether
+// The checks writePageTree makes before it removes anything, made on their own: main asks them before it settles the
+// managed fragments file and publishes, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written. Answers whether
 // there is a tree to replace.
 function assertPageTreeReplaceable(pagesRoot, fsImpl = fs) {
   try {
@@ -3306,7 +3313,7 @@ function makeHiddenDir(root, prefix, guard) {
   }
 }
 
-// A fresh staging folder for the managed download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
+// A fresh staging folder for a staged download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
 // under a hidden name unique to this process and call (makeHiddenDir, which also checks it), and the guarded fs (generatedFolders) every
 // read, write, move and removal in it goes through: { dir, fs, refused } (refused: whether any check of the folder has failed).
 function makePageStage(outDir) {
@@ -3327,11 +3334,12 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-// `stagePages` (the managed download, main): the page tree is written to a staging folder inside <out> (makePageStage) and read
+// `stagePages` (main, for every download it runs): the page tree is written to a staging folder inside <out> (makePageStage) and read
 // back from there exactly as a download writes it — the same files, the same reverse-resolved page.tsx — and the folder is removed.
 // The real pages/ folder is not touched: the result's `stagedPages` publishes it later (`check` makes writePageTree's checks without
 // writing, `publish` writes the tree with writePageTree). main publishes it only after everything that can still stop the download
-// has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option the download is exactly as before.
+// has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option (a library caller) the download
+// writes pages/ itself, as it always did.
 async function runDownload(options = {}) {
   if (!options.stagePages) return downloadApp(options);
   const stage = { dir: null, fs: null, refused: () => false, pages: null };
@@ -3532,7 +3540,7 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     const treeRoot = stage ? path.join(stage.dir, 'pages') : pagesRoot;
     const writeRoot = stage ? stage.dir : outDir;
     // Every read and write under the staging folder goes through its guarded fs (generatedFolders): what is read back from it is what
-    // is published and stated in the spec. A direct download reads and writes pages/ itself.
+    // is published and stated in the spec. Unstaged (a library caller), the download reads and writes pages/ itself.
     const pageTreeFs = stage ? stage.fs : fs;
     writePageTree(treeRoot, read.pages, { fs: pageTreeFs });
 
@@ -4183,8 +4191,9 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    // The managed download stages its page tree (runDownload `stagePages`): it is published below, after everything that can still stop it.
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, ...(includeManaged ? { stagePages: true } : {}) });
+    // Every download stages its page tree (runDownload `stagePages`): it is checked and published below, after everything that can still
+    // stop the download, so a refusal or a failure before then leaves the maker's pages/ exactly as it was.
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, stagePages: true });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
@@ -4272,12 +4281,13 @@ async function main(deps = {}) {
         + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
       );
     }
-    // The fragments file is settled before anything is published: the staged page tree, the spec and the baseline are written only
-    // after it, so a refusal or a failed write here leaves every one of them as it was. The page tree's own checks come first, so a
-    // tree that cannot be replaced stops the download before the fragments file is written.
+    // The staged page tree is published here, for every download, after validation and everything else that can stop the download: its
+    // checks first (writePageTree's own refusals, made without writing), then, for the managed download, the fragments file, then the
+    // tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves pages/, the spec and the
+    // baseline as they were, and a tree that cannot be replaced stops the managed download before its fragments file is written.
     let managedFragments = null;
+    if (result.stagedPages) result.stagedPages.check();
     if (includeManaged) {
-      if (result.stagedPages) result.stagedPages.check();
       try {
         managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
       } catch (e) {
@@ -4287,8 +4297,8 @@ async function main(deps = {}) {
       if (managedFragments) {
         io.stderr.write(`WARNING: ${managedFragments.keys.length} managed item(s) left out only for what the download could not bring are written ready to paste in ${managedFragments.file}: add each "paste" entry to app-spec.json together with what its "needs" lists (from the spec it was built from), then build.\n`);
       }
-      if (result.stagedPages) result.stagedPages.publish();
     }
+    if (result.stagedPages) result.stagedPages.publish();
     writeFileSafe(specPath, JSON.stringify(spec, null, 2));
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then

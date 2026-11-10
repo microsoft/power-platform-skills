@@ -1946,6 +1946,46 @@ for (const [caller, download, mode] of SWAP_CALLERS) {
     }
   });
 
+  test(`${caller}: a page folder of the new tree replaced by a junction once its files are written is refused before the maker's pages/ is moved: nothing published from where it points (#814)`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-swap-pagedir-'));
+    const outside = outsideTree();
+    try {
+      seedEditedPages(out);
+      const before = treeBytes(path.join(out, 'pages'));
+      const outsideBefore = treeBytes(outside);
+      const realMkdir = fs.mkdirSync;
+      let swap = null;
+      let pageDir = null;
+      t.mock.method(fs, 'mkdirSync', function (p, ...rest) {
+        const top = staged(p) ? null : topFolder(out, p, '.pages-replace.');
+        if (top && !pageDir && path.basename(String(p)) === SWAP_B && path.basename(path.dirname(String(p))) === 'new') {
+          // The first page is written whole; its folder in `new` is moved away and a junction put at its name, before the second page.
+          swap = top;
+          pageDir = path.join(path.dirname(String(p)), SWAP_A);
+          hookRetry(() => fs.renameSync(pageDir, path.join(out, 'moved-away')));
+          hookRetry(() => fs.symlinkSync(outside, pageDir, 'junction'));
+        }
+        return realMkdir.call(this, p, ...rest);
+      });
+      const lines = stderrLines(t);
+      let error;
+      await assert.rejects(download(out), (e) => { error = e; return true; });
+      t.mock.restoreAll();
+      assert.ok(pageDir, 'the page folder was replaced');
+      assert.strictEqual(error.code, 'UNSAFE_OUTPUT', error.stack);
+      assert.ok(error.message.includes(path.join(path.basename(swap), 'new', SWAP_A)), error.message);
+      assert.deepStrictEqual(treeBytes(path.join(out, 'pages')), before, 'the maker\'s pages/ as it was, not moved aside');
+      assert.deepStrictEqual(treeBytes(outside), outsideBefore, 'nothing written to, moved from or removed from where the junction points');
+      assert.ok(fs.lstatSync(pageDir).isSymbolicLink(), 'the junction is left where it was put');
+      const warnings = lines.filter((l) => l.includes(path.basename(swap)));
+      assert.strictEqual(warnings.length, 1, lines.join(''));
+      assert.match(warnings[0], /^WARNING: the folder .* the downloaded pages were written to was not removed: it, or a folder in it, is no longer the folder this download made there .*Look into it before you delete anything in it\.\n$/);
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   test(`${caller}: a swap folder replaced by a junction while the move into pages/ is refused for a moment moves no tree from where it points, and the error says where the previous pages were moved (#814)`, async (t) => {
     freshRenameWaitTotal(t);
     const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-swap-retry-'));
@@ -2176,6 +2216,160 @@ test('a download that replaces pages/ writes the same tree as before and leaves 
     assert.ok(result.ok, JSON.stringify(result));
     result.stagedPages.check();
     assert.deepStrictEqual(treeBytes(path.join(out, 'pages')), before);
+    assert.deepStrictEqual(leftovers(out), []);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+// ── the CLI: every download stages its page tree and publishes it only after everything that can still stop it (#814) ──────────────────
+
+const { main: downloadMain } = require('../download-model-app.js');
+
+// The first page navigates to the second, so the download rewrites its page.tsx (the navigation id becomes a PAGEREF_ token).
+const NAVIGATING_A = `export default function A() {\n  Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "${SWAP_B}", data: {} });\n  return null;\n}\n`;
+const navigatingGenpage = () => fakeGenpage({ pages: [{ pageId: SWAP_A, name: 'Alpha', source: NAVIGATING_A }, { pageId: SWAP_B, name: 'Beta' }] });
+
+// download-model-app.js main over the two-page app, with only its connections replaced: the real runDownload runs, as main asks it to
+// (`asked` keeps what it was asked), and `wrap` may change the result it answers. Answers what main emitted or threw, what it and the
+// download printed, and every SDK and page backend call the download made.
+async function cliDownload(t, out, { argv = [], wrap, validateAppSpec, ask = (args) => args } = {}) {
+  const app = pagesApp([SWAP_A, SWAP_B]);
+  const genpage = navigatingGenpage();
+  const requests = [];
+  let recording = false;
+  const sdk = new Proxy(app.sdk, {
+    get(target, prop) {
+      const value = target[prop];
+      if (typeof value !== 'function') return value;
+      return (...args) => { if (recording) requests.push(`${String(prop)} ${JSON.stringify(args)}`); return value.apply(target, args); };
+    },
+  });
+  const asked = [];
+  const emitted = [];
+  const said = [];
+  const printed = stderrLines(t);
+  let thrown = null;
+  try {
+    await downloadMain({
+      argv: ['--env', 'https://contoso.crm.dynamics.com', '--app', app.appUnique, '--out', out, ...argv],
+      stderr: { write: (text) => { said.push(String(text)); return true; } },
+      exit: () => {},
+      emitResult: (ok, payload) => emitted.push({ ok, payload }),
+      preflightAuth: async () => ({ ok: true }),
+      makeDownloadSdk: async () => ({ sdk, cleanup() {} }),
+      makeGenpageSdk: () => genpage,
+      runDownload: async (args) => {
+        asked.push(args);
+        recording = true;
+        try {
+          const result = await runDownload(ask(args));
+          return wrap ? wrap(result) : result;
+        } finally {
+          recording = false;
+        }
+      },
+      ...(validateAppSpec ? { validateAppSpec } : {}),
+    });
+  } catch (e) {
+    thrown = e;
+  }
+  t.mock.restoreAll();
+  return { asked, emitted, said: said.join(''), printed: printed.join(''), thrown, requests, pageCalls: genpage.calls.map((c) => `${c.method} ${JSON.stringify(c.args)}`) };
+}
+
+const MAKER_SPEC = '{\n  "note": "the maker\'s app-spec.json"\n}\n';
+
+// What a stop leaves to compare: pages/ byte for byte, the spec as it was, and no hidden folder of the download's.
+function assertNothingPublished(out, before, label) {
+  assert.deepStrictEqual(treeBytes(path.join(out, 'pages')), before, `${label}: the maker's edited page and their own page are as they were`);
+  assert.deepStrictEqual(leftovers(out), [], `${label}: no staging or swap folder is left`);
+  assert.strictEqual(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8'), MAKER_SPEC, `${label}: app-spec.json is unchanged`);
+}
+
+const CLI_STOPS = [
+  ['a lossy download without --allow-lossy-download', {
+    wrap: (r) => (r.ok ? { ...r, droppedSubareas: 1, droppedSubareaDetails: [{ type: 'Dashboard', id: 'd1', title: 'Board' }] } : r),
+  }, (res) => {
+    assert.strictEqual(res.emitted.length, 1);
+    assert.strictEqual(res.emitted[0].ok, false);
+    assert.match(res.emitted[0].payload.error, /1 sitemap subarea\(s\) could not be round-tripped/);
+  }],
+  ['a downloaded App Spec that fails validation', {
+    validateAppSpec: () => ({ ok: false, errors: ['injected'], warnings: [] }),
+  }, (res) => {
+    assert.strictEqual(res.emitted.length, 1);
+    assert.strictEqual(res.emitted[0].ok, false);
+    assert.strictEqual(res.emitted[0].payload.error, 'downloaded App Spec failed validation');
+  }],
+  ['a write of the navigation rewrite of a page.tsx that fails', {
+    fault: (t) => {
+      const realOpen = fs.openSync;
+      const failed = [];
+      // writeFileSafe's temporary file for <pages>/<A>/page.tsx, the rewrite's own write: under the staging folder now, under <out>
+      // itself before. writePageTree writes into its swap folder's `new` instead, so it is not hit.
+      t.mock.method(fs, 'openSync', function (p, flags, ...rest) {
+        const dir = path.dirname(String(p));
+        if (flags === 'wx' && path.basename(String(p)).startsWith('.page.tsx.') && path.basename(dir) === SWAP_A && path.basename(path.dirname(dir)) === 'pages') {
+          failed.push(String(p));
+          throw Object.assign(new Error(`ENOSPC: injected, open '${p}'`), { code: 'ENOSPC', syscall: 'open', path: String(p) });
+        }
+        return realOpen.call(this, p, flags, ...rest);
+      });
+      return failed;
+    },
+  }, (res, failed) => {
+    assert.strictEqual(failed.length, 1, 'the rewrite of the navigating page was the write that failed');
+    assert.ok(res.thrown && res.thrown.code === 'IO_ERROR' && /ENOSPC: injected/.test(res.thrown.message), String(res.thrown && res.thrown.stack));
+    assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+  }],
+];
+
+for (const [stop, { wrap, validateAppSpec, fault }, assertStopped] of CLI_STOPS) {
+  test(`the CLI without --include-managed: ${stop} stops the download with the maker's pages/ and app-spec.json as they were, and nothing left (#814)`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-stop-'));
+    try {
+      seedEditedPages(out);
+      fs.writeFileSync(path.join(out, 'app-spec.json'), MAKER_SPEC);
+      const before = treeBytes(path.join(out, 'pages'));
+      const failed = fault ? fault(t) : null;
+      const res = await cliDownload(t, out, { wrap, validateAppSpec });
+      assert.strictEqual(res.asked.length, 1);
+      assertStopped(res, failed);
+      assertNothingPublished(out, before, stop);
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
+
+test('the CLI without --include-managed: a successful download answers, asks, prints and writes exactly what it did when it wrote pages/ itself (#814)', async (t) => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-same-'));
+  const seed = () => {
+    for (const name of fs.readdirSync(out)) fs.rmSync(path.join(out, name), { recursive: true, force: true });
+    seedEditedPages(out);
+  };
+  try {
+    // As the CLI ran before: the same main, with runDownload asked to write pages/ itself.
+    seed();
+    const direct = await cliDownload(t, out, { ask: ({ stagePages, ...args }) => args });
+    const directTree = treeBytes(out);
+    seed();
+    const now = await cliDownload(t, out);
+    const nowTree = treeBytes(out);
+    assert.strictEqual(now.asked[0].stagePages, true, 'the CLI stages the page tree');
+    assert.strictEqual(direct.thrown, null, String(direct.thrown && direct.thrown.stack));
+    assert.strictEqual(now.thrown, null, String(now.thrown && now.thrown.stack));
+    assert.strictEqual(now.emitted.length, 1);
+    assert.strictEqual(now.emitted[0].ok, true, JSON.stringify(now.emitted));
+    assert.deepStrictEqual(now.emitted, direct.emitted, 'the same result');
+    assert.deepStrictEqual(now.requests, direct.requests, 'the same SDK requests');
+    assert.deepStrictEqual(now.pageCalls, direct.pageCalls, 'the same page backend calls');
+    assert.strictEqual(now.said, direct.said, 'the same lines from main');
+    assert.strictEqual(now.printed, direct.printed, 'the same lines from the download');
+    assert.deepStrictEqual(nowTree, directTree, 'the same spec, baseline and pages/, byte for byte');
+    assert.ok(fs.readFileSync(path.join(out, 'pages', SWAP_A, 'page.tsx'), 'utf8').includes('PAGEREF_'), 'the navigating page was rewritten');
+    assert.ok(fs.existsSync(path.join(out, 'app-spec.json')));
     assert.deepStrictEqual(leftovers(out), []);
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
