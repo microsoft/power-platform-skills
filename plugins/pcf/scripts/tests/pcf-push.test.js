@@ -11,7 +11,7 @@ const scriptPath = path.join(__dirname, '..', 'pcf-push.js');
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-push-workspace-'));
 
 function resetWorkspace() {
-  fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  fs.rmSync(workspaceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(workspaceRoot, { recursive: true });
 }
 
@@ -147,7 +147,7 @@ function withProcessRunnerStub(stub, fn) {
 }
 
 test.beforeEach(resetWorkspace);
-test.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
+test.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 test('happy path forwards exact pac argv, verifies registration, and writes a safe receipt', async () => {
   const projectDir = makeProject('happy');
