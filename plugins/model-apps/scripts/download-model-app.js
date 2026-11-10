@@ -62,6 +62,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
+const { renameWithRetry } = require('./lib/rename-retry.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -1102,22 +1103,22 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 //
 // `unkeptBindings` collects the pages whose config.json holds a list of connector or Custom API bindings the spec cannot state: { pageId, field, reason }. The list is not a list, or an entry is not an object
 // (`pageBindingsProblem`), or an entry holds anything a spec does not state (see the projection below). `reason` names the place and the vetted property, never a value or an unrecognized key.
-function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings) {
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings, fsImpl = fs) {
   const pages = [];
-  if (!fs.existsSync(pagesRoot)) return pages;
+  if (!fsImpl.existsSync(pagesRoot)) return pages;
   // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
   // not the same on every machine, and this loop decides the order of `pages[]` in the spec and of the unreadable-config and
   // unkept-model reports. It decides no page key: assignPageKeys mints in the order of the pages' ids, whatever order it is given.
   const nameOf = (entry) => (nameById && nameById.get(String(entry).toLowerCase())) || entry;
-  const entries = fs.readdirSync(pagesRoot)
+  const entries = fsImpl.readdirSync(pagesRoot)
     .map((entry) => ({ pageId: entry, name: nameOf(entry) }))
     .sort(comparePages)
     .map((page) => page.pageId);
   for (const entry of entries) {
     const dir = path.join(pagesRoot, entry);
-    if (!fs.statSync(dir).isDirectory()) continue;
+    if (!fsImpl.statSync(dir).isDirectory()) continue;
     const tsx = path.join(dir, 'page.tsx');
-    if (!fs.existsSync(tsx)) continue;
+    if (!fsImpl.existsSync(tsx)) continue;
     let config = {};
     const configPath = path.join(dir, 'config.json');
     // Read DIRECTLY and let ENOENT — and ONLY ENOENT — mean "absent, therefore optional".
@@ -1131,7 +1132,7 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
       // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
       // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
-      config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+      config = JSON.parse(fsImpl.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
       if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
       if (Object.prototype.hasOwnProperty.call(config, 'dataSources')) {
         if (!Array.isArray(config.dataSources)) throw new Error('config.json dataSources is present but is not an array');
@@ -1139,6 +1140,9 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
         if (bad !== undefined) throw new Error('config.json dataSources must be an array of non-empty table logical names');
       }
     } catch (e) {
+      // A folder of the managed download's staging found replaced by a link is not a page's config that cannot be read: it stops the
+      // download (generatedFolders).
+      if (e && e.code === 'UNSAFE_OUTPUT') throw e;
       config = {};
       // Present but unreadable — report it rather than inventing empty metadata. A genuinely absent
       // config is optional by contract and is NOT reported.
@@ -1152,8 +1156,9 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     // A file that EXISTS but is blank or unreadable stays explicit, so it still fails closed.
     let prompt;
     try {
-      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
+      prompt = fsImpl.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
     } catch (e) {
+      if (e && e.code === 'UNSAFE_OUTPUT') throw e;
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
     // The model that generated the page, as config.json records it. It has to come back with the page:
@@ -2961,26 +2966,27 @@ function downloadPublisherPrefix(recovered, appUnique) {
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 // A link already under pages/ must be refused before the tree is replaced. rm of a real
 // parent drops the link name; that is not the same as leaving the other name untouched.
-function assertNoPlantedPageLinks(pagesRoot) {
+// `fsImpl` is the fs every look goes through (a test seam; production passes none).
+function assertNoPlantedPageLinks(pagesRoot, fsImpl = fs) {
   let entries = [];
-  try { entries = fs.readdirSync(pagesRoot); } catch (e) {
+  try { entries = fsImpl.readdirSync(pagesRoot); } catch (e) {
     if (e && e.code === 'ENOENT') return;
     throw e;
   }
   for (const entry of entries) {
     const child = path.join(pagesRoot, entry);
     let st;
-    try { st = fs.lstatSync(child); } catch (e) {
+    try { st = fsImpl.lstatSync(child); } catch (e) {
       if (e && e.code === 'ENOENT') continue;
       throw e;
     }
     if (st.isSymbolicLink() || st.isDirectory()) {
-      assertSafeOutputDir(child);
+      assertSafeOutputDir(child, { fs: fsImpl });
       if (st.isDirectory() && !st.isSymbolicLink()) {
-        for (const name of fs.readdirSync(child)) assertPlainFileTarget(path.join(child, name));
+        for (const name of fsImpl.readdirSync(child)) assertPlainFileTarget(path.join(child, name), { fs: fsImpl });
       }
     } else {
-      assertPlainFileTarget(child);
+      assertPlainFileTarget(child, { fs: fsImpl });
     }
   }
 }
@@ -2992,45 +2998,320 @@ function assertNoPlantedPageLinks(pagesRoot) {
 // under pages/ is refused first (assertNoPlantedPageLinks), a folder is made only after the name is checked (assertSafeOutputDir), and
 // every file is written by writeFileSafe, which refuses a link at the file's own name. A page id reaches here only after the backend has
 // read it, and the backend reads a GUID and nothing else, so no id can hold a path separator.
-function writePageTree(pagesRoot, pages) {
-  assertSafeOutputDir(pagesRoot, { create: true });
-  assertNoPlantedPageLinks(pagesRoot);
-  fs.rmSync(pagesRoot, { recursive: true, force: true });
-  assertSafeOutputDir(pagesRoot, { create: true });
-  for (const { pageId, files } of pages) {
-    const destDir = path.join(pagesRoot, pageId);
-    assertSafeOutputDir(destDir, { create: true });
-    for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8' });
+//
+// The tree is SWAPPED, never rewritten in place (#814). The folder may hold a maker's page edits that were never uploaded, and the old
+// way (remove pages/, then write each file) lost them to any failure part-way: a full disk, a permission, a locked file, a crash. Now the
+// new tree is written whole beside it first, and the old one is deleted only once the new one has its name:
+//   1. check pages/ (the refusals above), so a planted link is refused before anything is made;
+//   2. make a swap folder `<out>/.pages-replace.<pid>.<random>.tmp` (makeHiddenDir: a name nobody holds, checked to be the plain folder
+//      just made before anything is written under it) and write the new tree to its `new` subfolder. It sits in the same folder as
+//      pages/, so the moves below are renames on one volume, never copies;
+//   3. check pages/ again: writing took time, and the move below must act on the folder the checks saw;
+//   4. move pages/ to the swap folder's `previous` (skipped when there is no pages/);
+//   5. move `new` to pages/;
+//   6. remove the swap folder, the previous tree in it.
+// What a stop between two steps (a crash, a kill, a power cut) leaves on disk:
+//   before 2:  nothing has changed;
+//   2 to 4:    pages/ as it was, and a swap folder holding all or part of the new tree;
+//   4 to 5:    no pages/; the previous tree whole in `<swap>/previous`, the new tree in `<swap>/new`;
+//   5 to 6:    the new pages/, and the previous tree in `<swap>/previous` (whole, or what is left of it once step 6 has begun);
+//   after 6:   the new pages/ and nothing else.
+// In no state is a page file deleted before the tree that replaces it is whole on disk. A swap folder left by a stopped run is never
+// reused, moved or deleted by a later download (each run makes its own, under a new name). One that holds a `previous` tree may hold the
+// maker's only copy of their edits (a stop between 4 and 5 leaves no pages/ at all), so a later download that replaces this pages/ names
+// it in one warning (warnStrandedPageTrees), and goes on: it is the maker's to look into and delete. One with no `previous` holds only
+// downloaded pages and is not named.
+//
+// A failure of a step is undone, and said:
+//   2 or 3 fails: the swap folder is removed and the error thrown as it came; pages/ is untouched;
+//   4 fails:      nothing moved (a refused rename moves nothing); the swap folder is removed; pages/ is untouched;
+//   5 fails:      the previous tree is moved back to pages/. If that fails too, nothing is removed and the error names both folders;
+//   6 fails:      the download succeeded; a warning names the swap folder, to delete.
+// A failure is cleaned up by removing `new` and then the EMPTY swap folder (rmdir, never recursive), so no clean-up can delete the
+// previous tree, even after a rename that reported a failure and moved it all the same.
+//
+// The folders this run makes are held to being what they were made as, before EVERY fs operation on a path in them: each mkdir, each
+// file write (writeFileSafe's temp file, its rename into place and the removal of a temp file it gives up on), each rename attempt
+// (every retry of the move in and of the move back included), each removal, and each read (a listing, a stat, a file's bytes: the
+// managed download reads its staged tree back, and what it reads is what it states in the spec and publishes into pages/). All of them
+// go through ONE fs, generatedFolders' `fs`, which checks first that the folder made (the swap folder; the managed download's
+// `.download-pages.*` staging folder) and every folder between it and the path are still plain folders at the paths they were made at
+// (ownedDir), and that the path itself is not a link. Something that replaced one of them with a link or junction (or moved it away and
+// put one at its name) would otherwise have a page written, a tree moved into pages/, a clean-up delete recursively, or page bytes read,
+// wherever that link points, outside <out>. Such a replacement is refused (UNSAFE_OUTPUT), and from then on nothing is read, written,
+// moved or removed under the folder replaced (nor a folder that holds it removed or moved): the step that met it fails, a clean-up
+// leaves it and names it, and the previous pages are moved back only while `previous` itself still passes the check. The managed
+// download's staging folder found replaced at any check, its removal after the last read included, refuses the download: nothing read
+// from it is published (runDownload). tests/download-model-app.test.js holds the raw fs calls of writePageTree, the staged readback and
+// their helpers to that one fs. What a check cannot close is the moment between it and the one syscall it guards, read or write (a path
+// is named again by that syscall): no wait sits there, as a retry's wait comes before the next attempt's own check.
+//
+// Windows: a folder rename is refused (EPERM, EACCES, EBUSY) while a scanner or the search indexer holds a file in it. Step 5 and the
+// move back use renameWithRetry (lib/rename-retry.js), which repeats the same rename for a few seconds: the folder moved is one this run
+// made or moved into its own swap folder, under a name nobody else knows, each attempt is checked as above before it is made, and the
+// target is the name pages/ this run has just vacated, so a repeat means what the first attempt meant (if a folder took that name
+// meanwhile, every attempt is refused and the move back or the error that names both folders follows). Step 4 is ONE attempt: it moves
+// the maker's own folder, which an editor, a sync client or the maker can change while a wait goes on, so a wait would let the checks of
+// step 3 go stale, as rename-retry.js forbids. Its refusal leaves pages/ as it was and fails the download, which can simply be run again.
+//
+// `opts`: `fs` (every call goes through it: the managed download passes its staging folder's guarded fs, and tests a faulty one), and,
+// for tests, `warn` (where the warnings go) and `rename` (renameWithRetry's own test options).
+function writePageTree(pagesRoot, pages, opts = {}) {
+  const fsImpl = opts.fs || fs;
+  const warn = opts.warn || ((line) => process.stderr.write(line));
+  // Step 1. The same refusals, made before anything is created, as they always were.
+  assertPageTreeReplaceable(pagesRoot, fsImpl);
+  // The moves go through the checked real folder (an 8.3 short name or a linked ancestor names the same one); messages name the folders
+  // as the caller named pages/.
+  const shownRoot = path.dirname(path.resolve(pagesRoot));
+  const realRoot = assertSafeOutputDir(shownRoot, { create: true, fs: fsImpl });
+  const pagesPath = path.join(realRoot, path.basename(pagesRoot));
+  const shown = (p) => path.join(shownRoot, path.relative(realRoot, p));
+  warnStrandedPageTrees(realRoot, pagesRoot, shown, warn, fsImpl);
+  const guard = generatedFolders(fsImpl, shown);
+  const gfs = guard.fs;
+  // Throws, with nothing to clean up, when the folder just made is not a plain folder at its own path: nothing is written or removed
+  // through a link planted there.
+  const swap = makeHiddenDir(realRoot, '.pages-replace', guard);
+  const fresh = path.join(swap, 'new');
+  const previous = path.join(swap, 'previous');
+  // Removes the new tree, then the swap folder if nothing else is in it. Best-effort: the caller has an error to throw already. Through
+  // the guarded fs, so a clean-up never descends through a link put in place of either.
+  const discard = () => {
+    let held = removeTreeWithRetry(fresh, { fs: gfs });
+    if (!held) {
+      try { gfs.rmdirSync(swap); } catch (e) { held = (e && e.code) || 'UNKNOWN'; }
+    }
+    if (held === 'UNSAFE_OUTPUT') warn(`WARNING: the folder ${shown(swap)} the downloaded pages were written to was not removed: ${NOT_OWNED_LEFT}\n`);
+    else if (held) warn(`WARNING: the folder ${shown(swap)} the downloaded pages were written to could not be removed (${held}): delete it.\n`);
+  };
+  let hadTree;
+  try {
+    // Step 2.
+    gfs.mkdirSync(fresh);
+    for (const { pageId, files } of pages) {
+      const destDir = path.join(fresh, pageId);
+      gfs.mkdirSync(destDir, { recursive: true });
+      for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8', fs: gfs });
+    }
+    // Step 3. `new` once more too, so a replacement found now costs no move of the maker's folder.
+    guard.verify(fresh);
+    hadTree = assertPageTreeReplaceable(pagesPath, fsImpl);
+  } catch (e) {
+    discard();
+    throw e;
   }
+  // Step 4.
+  if (hadTree) {
+    try {
+      gfs.renameSync(pagesPath, previous);
+    } catch (e) {
+      discard();
+      throw pageTreeError(`could not replace the page folder ${pagesRoot}: it could not be moved aside (${(e && e.code) || e}). It is as it was, and the downloaded pages were not written`, e);
+    }
+  }
+  // Step 5.
+  try {
+    renameWithRetry(gfs, fresh, pagesPath, opts.rename);
+  } catch (e) {
+    const code = (e && e.code) || e;
+    if (!hadTree) {
+      discard();
+      throw pageTreeError(`could not write the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code})`, e);
+    }
+    try {
+      renameWithRetry(gfs, previous, pagesPath, opts.rename);
+    } catch (back) {
+      // `previous`, or a folder above it, is not the folder made: where the previous pages now are is not known here, only where they
+      // were moved to. Nothing more is done through it.
+      if (back && back.code === 'UNSAFE_OUTPUT') {
+        throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}). The previous pages had been moved to ${shown(previous)}, and that folder or one above it is no longer the folder this download made there (a link or junction was put in its place), so they were not moved back, and nothing more was moved, written or removed through it. Find them where that folder was moved to, and move them back to ${pagesRoot}`, back);
+      }
+      throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}), and the previous pages could not be moved back (${(back && back.code) || back}). Nothing was deleted: the previous pages are in ${shown(previous)} and the downloaded pages in ${shown(fresh)}. Move the previous pages back to ${pagesRoot}`, e);
+    }
+    discard();
+    throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}). The previous pages were put back as they were`, e);
+  }
+  // Step 6.
+  const left = removeTreeWithRetry(swap, { fs: gfs });
+  if (left === 'UNSAFE_OUTPUT') warn(`WARNING: the page folder ${pagesRoot} was replaced, but the folder ${shown(swap)} that held the previous pages was not removed: ${NOT_OWNED_LEFT}\n`);
+  else if (left) warn(`WARNING: the page folder ${pagesRoot} was replaced, but the folder ${shown(swap)} that holds the previous pages could not be removed (${left}): delete it.\n`);
+}
+
+// Why a folder this run made is left behind when it is no longer that folder: the end of each warning that names one.
+const NOT_OWNED_LEFT = 'it, or a folder in it, is no longer the folder this download made there (a link or junction was put in its place, or it was moved), and nothing is removed through one. Look into it before you delete anything in it.';
+
+// Names, in one warning each, the swap folders an earlier download left in `realRoot` (it stopped before its step 6) that hold a
+// `previous` tree: the page folder as it was before that download, possibly with edits the maker has nowhere else. Looks, never touches:
+// such a folder is not moved, reused or deleted. A folder that cannot be read is passed over in silence (this is a hint, never a reason
+// to stop a download).
+function warnStrandedPageTrees(realRoot, pagesRoot, shown, warn, fsImpl = fs) {
+  let names = [];
+  // A refusal of a guarded fs (the managed download's staging folder found replaced) is not a folder that cannot be read: it stops.
+  try { names = fsImpl.readdirSync(realRoot); } catch (e) { if (e && e.code === 'UNSAFE_OUTPUT') throw e; return; }
+  for (const name of names.filter((n) => n.startsWith('.pages-replace.')).sort()) {
+    const held = path.join(realRoot, name, 'previous');
+    let st;
+    try { st = fsImpl.lstatSync(held); } catch (e) { if (e && e.code === 'UNSAFE_OUTPUT') throw e; continue; }
+    if (!st.isDirectory()) continue;
+    warn(`WARNING: ${shown(held)} holds the page folder as it was before an earlier download that stopped part-way: if it has page edits you need, copy them back into ${pagesRoot}, then delete ${shown(path.join(realRoot, name))}.\n`);
+  }
+}
+
+// A failure of the swap, with the code of the fs error that caused it, so a caller that tells failures apart by code still can.
+function pageTreeError(message, cause) {
+  const error = new Error(message);
+  if (cause && cause.code) error.code = cause.code;
+  error.cause = cause;
+  return error;
+}
+
+// Whether `dir`, a folder this run made under a real (resolved) parent, is still that folder: 'owned' when it is a plain folder whose
+// real path is the path it was made at, 'missing' when nothing is there, 'unsafe' otherwise. A link or junction put in its place fails
+// assertSafeOutputDir (it refuses a link as the last component); one put in place of a folder above it changes the real path. Never throws.
+function ownedDir(dir, fsImpl = fs) {
+  try { fsImpl.lstatSync(dir); } catch (e) { return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'missing' : 'unsafe'; }
+  try { return assertSafeOutputDir(dir, { fs: fsImpl }) === dir ? 'owned' : 'unsafe'; } catch { return 'unsafe'; }
+}
+
+function notOwnedError(shownDir) {
+  return Object.assign(new Error(`refusing to use ${shownDir} as an output directory: it is no longer the folder this download made there (a link or junction was put in its place, or above it, or it was moved), so nothing more is read, written, moved or removed through it`), { code: 'UNSAFE_OUTPUT', reason: 'link' });
+}
+
+// The fs methods that read, write, make, move or remove, and which of their arguments name a path they act on (a file descriptor is not
+// checked: it was opened by a checked call). Reads are held as writes are: what the managed download reads back from its staging folder
+// is what it publishes into pages/ and states in the spec, so a read through a folder replaced by a link would hand on bytes from
+// wherever that link points. realpathSync (and .native) is checked too: see generatedFolders. A method missing here would go through
+// unchecked: tests/download-model-app.test.js fails on a raw call of any such method in writePageTree, the staged readback and their
+// helpers, and checks each one listed is refused under a replaced folder.
+const GUARDED_FS_METHODS = {
+  mkdirSync: [0], mkdtempSync: [0], openSync: [0], writeFileSync: [0], appendFileSync: [0], truncateSync: [0], chmodSync: [0],
+  utimesSync: [0], unlinkSync: [0], rmSync: [0], rmdirSync: [0], renameSync: [0, 1], copyFileSync: [0, 1], cpSync: [0, 1], linkSync: [0, 1],
+  symlinkSync: [1], createWriteStream: [0],
+  readFileSync: [0], readdirSync: [0], opendirSync: [0], statSync: [0], lstatSync: [0], existsSync: [0], accessSync: [0],
+  readlinkSync: [0], createReadStream: [0],
+};
+
+// The fs a guarded fs checks with: the plain one under any number of guards (the managed download's staging guard holds the swap guard
+// writePageTree makes inside it). Each guard's checks (ownedDir) compare real paths, which cover every folder above, so they need not
+// themselves run through another guard; the operation still does.
+const UNGUARDED_FS = Symbol('unguarded fs');
+
+// The ONE way writePageTree, the managed download's staging and readback, and their helpers touch the folders they make. `adopt(dir)`
+// takes a folder just made (refused, and not adopted, unless it is a plain folder at its own path); `fs` is `fsImpl` with every method of
+// GUARDED_FS_METHODS checked before it runs, on any path in an adopted folder: the adopted folder and every folder between it and the path
+// that exists must be owned (ownedDir), and the path itself, if it exists, must not be a link (nor, when a folder, other than owned).
+// A failed check throws UNSAFE_OUTPUT and marks the folder that failed: no later operation runs on a path in it, nor moves or removes a
+// folder that holds it. `verify(path)` makes the same check alone; `refused()` answers whether any check has failed (sticky), so a caller
+// can refuse to use what it read even where a refusal was caught. Paths outside the adopted folders go through as they are.
+function generatedFolders(fsImpl, shown) {
+  const plain = fsImpl[UNGUARDED_FS] || fsImpl;
+  const roots = [];
+  const broken = [];
+  const within = (p, dir) => {
+    const rel = path.relative(dir, p);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
+  const refuse = (dir) => {
+    if (!broken.includes(dir)) broken.push(dir);
+    throw notOwnedError(shown(dir));
+  };
+  const verify = (target) => {
+    const p = path.resolve(String(target));
+    const hit = broken.find((b) => within(p, b) || within(b, p));
+    if (hit) throw notOwnedError(shown(hit));
+    const root = roots.find((r) => within(p, r));
+    if (!root) return;
+    // The adopted folder down to the path's own folder, top first, so the folder named is the one replaced. Below a missing folder
+    // there is nothing to act through: the syscall fails on its own.
+    const dirs = [];
+    if (p !== root) {
+      dirs.push(root);
+      for (const part of path.relative(root, path.dirname(p)).split(path.sep).filter(Boolean)) dirs.push(path.join(dirs[dirs.length - 1], part));
+    }
+    for (const dir of dirs) {
+      const state = ownedDir(dir, plain);
+      if (state === 'missing') return;
+      if (state !== 'owned') refuse(dir);
+    }
+    let st;
+    try { st = plain.lstatSync(p); } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return; refuse(p); }
+    if (st.isSymbolicLink() || (st.isDirectory() && ownedDir(p, plain) !== 'owned')) refuse(p);
+  };
+  const guarded = Object.create(fsImpl);
+  // Defined, not assigned: some of node's fs methods (opendirSync among them) are accessors with a setter, and an assignment through
+  // the prototype would call that setter and replace the method of node's own fs, for every caller, with this guard.
+  const own = (name, value) => Object.defineProperty(guarded, name, { value, writable: true, enumerable: true, configurable: true });
+  own(UNGUARDED_FS, plain);
+  for (const [name, at] of Object.entries(GUARDED_FS_METHODS)) {
+    own(name, function (...args) {
+      for (const i of at) if (typeof args[i] === 'string') verify(args[i]);
+      return fsImpl[name](...args);
+    });
+  }
+  // The read a write is aimed by: writeFileSafe and assertSafeOutputDir resolve a folder to its real path and then write under the
+  // answer, which, through a folder replaced by a link, is a path outside every adopted folder that no later check would see. So the
+  // folder is checked before it is resolved, and an owned folder resolves to itself.
+  const realpathSync = function (p, ...rest) {
+    if (typeof p === 'string') verify(p);
+    return fsImpl.realpathSync(p, ...rest);
+  };
+  realpathSync.native = function (p, ...rest) {
+    if (typeof p === 'string') verify(p);
+    return (fsImpl.realpathSync.native || fsImpl.realpathSync)(p, ...rest);
+  };
+  own('realpathSync', realpathSync);
+  return {
+    fs: guarded,
+    verify,
+    refused: () => broken.length > 0,
+    adopt(dir) {
+      if (ownedDir(dir, plain) !== 'owned') throw notOwnedError(shown(dir));
+      roots.push(dir);
+      return dir;
+    },
+  };
 }
 
 // The checks writePageTree makes before it removes anything, made on their own: the managed download asks them before it settles its
-// fragments file, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written.
-function assertPageTreeReplaceable(pagesRoot) {
+// fragments file, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written. Answers whether
+// there is a tree to replace.
+function assertPageTreeReplaceable(pagesRoot, fsImpl = fs) {
   try {
-    fs.lstatSync(pagesRoot);
+    fsImpl.lstatSync(pagesRoot);
   } catch (e) {
-    if (e && e.code === 'ENOENT') return;
+    if (e && e.code === 'ENOENT') return false;
     throw e;
   }
-  assertSafeOutputDir(pagesRoot);
-  assertNoPlantedPageLinks(pagesRoot);
+  assertSafeOutputDir(pagesRoot, { fs: fsImpl });
+  assertNoPlantedPageLinks(pagesRoot, fsImpl);
+  return true;
+}
+
+// A fresh folder `<root>/<prefix>.<pid>.<random>.tmp`, hidden, unique to this process and call, adopted by `guard` (generatedFolders).
+// `mkdir` without `recursive` fails on a name that exists, so a folder that is already there (another run's, or the maker's) is never
+// reused or removed: another name is tried. `root` is a real path (assertSafeOutputDir's answer), and the folder made is checked to be a
+// plain folder at its own path before it is answered: one replaced by a link or junction the moment it was made is refused
+// (UNSAFE_OUTPUT) and left alone, so nothing is written into, or removed from, where that link points.
+function makeHiddenDir(root, prefix, guard) {
+  for (let attempt = 0; ; attempt += 1) {
+    const dir = path.join(root, `${prefix}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+    try {
+      guard.fs.mkdirSync(dir);
+    } catch (e) {
+      if (!(e && e.code === 'EEXIST') || attempt >= 4) throw e;
+      continue;
+    }
+    return guard.adopt(dir);
+  }
 }
 
 // A fresh staging folder for the managed download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
-// under a hidden name unique to this process and call. `mkdir` without `recursive` fails on a name that exists, so a folder that is
-// already there (another run's, or the maker's) is never reused or removed: another name is tried.
+// under a hidden name unique to this process and call (makeHiddenDir, which also checks it), and the guarded fs (generatedFolders) every
+// read, write, move and removal in it goes through: { dir, fs, refused } (refused: whether any check of the folder has failed).
 function makePageStage(outDir) {
-  const root = assertSafeOutputDir(outDir, { create: true });
-  for (let attempt = 0; ; attempt += 1) {
-    const dir = path.join(root, `.download-pages.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
-    try {
-      fs.mkdirSync(dir);
-      return dir;
-    } catch (e) {
-      if (!(e && e.code === 'EEXIST') || attempt >= 4) throw e;
-    }
-  }
+  const guard = generatedFolders(fs, (p) => p);
+  return { dir: makeHiddenDir(assertSafeOutputDir(outDir, { create: true }), '.download-pages', guard), fs: guard.fs, refused: guard.refused };
 }
 
 // Reads every page the sitemap names, by id — so nothing outside this app is read — a few at a time, and answers
@@ -3053,18 +3334,26 @@ async function readSitemapPages(genpage, ids, concurrency) {
 // has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option the download is exactly as before.
 async function runDownload(options = {}) {
   if (!options.stagePages) return downloadApp(options);
-  const stage = { dir: null, pages: null };
+  const stage = { dir: null, fs: null, refused: () => false, pages: null };
+  let result;
+  let left = null;
   try {
-    const result = await downloadApp({ ...options, stage });
-    if (!result.ok || !stage.pages) return result;
-    const pagesRoot = path.join(path.resolve(options.outDir), 'pages');
-    const pages = stage.pages;
-    return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
+    result = await downloadApp({ ...options, stage });
   } finally {
     // Best-effort: the pages are in memory by now. A folder that stays is named, so the maker can delete it.
-    const left = stage.dir ? removeTreeWithRetry(stage.dir) : null;
-    if (left) process.stderr.write(`WARNING: the download's staging folder ${stage.dir} could not be removed (${left}): delete it.\n`);
+    left = stage.dir ? removeTreeWithRetry(stage.dir, { fs: stage.fs }) : null;
+    if (left === 'UNSAFE_OUTPUT') process.stderr.write(`WARNING: the download's staging folder ${stage.dir} was not removed: ${NOT_OWNED_LEFT}\n`);
+    else if (left) process.stderr.write(`WARNING: the download's staging folder ${stage.dir} could not be removed (${left}): delete it.\n`);
   }
+  if (!result.ok || !stage.pages) return result;
+  // The staging folder found replaced at any check, its removal included (after the last read): what was read from it cannot be told
+  // from what the link supplied, so none of it is published nor reported as the app's pages. Nothing has been written to pages/ yet.
+  if (left === 'UNSAFE_OUTPUT' || stage.refused()) {
+    throw Object.assign(new Error(`refusing to use the pages read back from the download's staging folder ${stage.dir}: it is no longer the folder this download made there (a link or junction was put in its place, or above it, or it was moved), so what was read from it is not used, and pages/ was not written`), { code: 'UNSAFE_OUTPUT', reason: 'link' });
+  }
+  const pagesRoot = path.join(path.resolve(options.outDir), 'pages');
+  const pages = stage.pages;
+  return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
 }
 
 async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null }) {
@@ -3239,15 +3528,18 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
     // Staged (see runDownload): the tree is written, read back and reverse-resolved under the staging folder, which stands in for
     // <out> so each page's codeFile (relative to it) is the one a direct download gives.
-    if (stage) stage.dir = makePageStage(outDir);
+    if (stage) Object.assign(stage, makePageStage(outDir));
     const treeRoot = stage ? path.join(stage.dir, 'pages') : pagesRoot;
     const writeRoot = stage ? stage.dir : outDir;
-    writePageTree(treeRoot, read.pages);
+    // Every read and write under the staging folder goes through its guarded fs (generatedFolders): what is read back from it is what
+    // is published and stated in the spec. A direct download reads and writes pages/ itself.
+    const pageTreeFs = stage ? stage.fs : fs;
+    writePageTree(treeRoot, read.pages, { fs: pageTreeFs });
 
     const unreadableConfigs = [];
     const unkeptModels = [];
     const unkeptBindings = [];
-    pages = parseDownloadedPages(treeRoot, writeRoot, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    pages = parseDownloadedPages(treeRoot, writeRoot, nameById, unreadableConfigs, unkeptModels, unkeptBindings, pageTreeFs);
     // A read error names the file it read; name the one the maker will find.
     if (stage) for (const u of unreadableConfigs) u.reason = String(u.reason).split(stage.dir).join(path.resolve(outDir));
     // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
@@ -3300,17 +3592,17 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     // reverseResolveNavIdsReport); the ids it leaves are reported below.
     for (const p of pages) {
       const abs = path.join(writeRoot, p.codeFile);
-      assertPlainFileTarget(abs);                         // FAIL on a planted link (no swallow, no write)
-      const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
+      assertPlainFileTarget(abs, { fs: pageTreeFs });     // FAIL on a planted link (no swallow, no write)
+      const src = pageTreeFs.readFileSync(abs, 'utf8');   // FAIL on a read error (no swallow)
       const rev = reverseResolveNavIdsReport(src, idToKey); // structural — nav pageId literals only
-      if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
+      if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8', fs: pageTreeFs }); // FAIL on a write error (no swallow)
       for (const left of rev.left) navIdsLeft.push({ page: p.name, ...left });
     }
     // The staged tree as it now is on disk, read back whole, for runDownload to publish: the bytes writePageTree will write again.
     if (stage) {
       stage.pages = read.pages.map(({ pageId, files }) => ({
         pageId,
-        files: Object.fromEntries(Object.keys(files).map((name) => [name, fs.readFileSync(path.join(treeRoot, pageId, name), 'utf8')])),
+        files: Object.fromEntries(Object.keys(files).map((name) => [name, pageTreeFs.readFileSync(path.join(treeRoot, pageId, name), 'utf8')])),
       }));
     }
     // Every page id of this app still in a downloaded page is reported, whether a call the checker recognised holds it or not (see
@@ -4085,4 +4377,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
