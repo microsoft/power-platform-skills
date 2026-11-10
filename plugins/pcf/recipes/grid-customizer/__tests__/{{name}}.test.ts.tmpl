@@ -76,6 +76,43 @@ test("text renderer is pure and never mutates grid data", () => {
     expect(props.value).toBe("Active");
 });
 
+test("choice renderer shows the formatted label, not the stored option number", () => {
+    const renderer = cellRendererOverrides.OptionSet;
+    const container = document.createElement("div");
+
+    TestUtils.act(() => {
+        ReactDOM.render(renderer?.({ value: 100000001, formattedValue: "Preferred", isRTLMode: true }, { colDefs: [], columnIndex: 0 }) as React.ReactElement, container);
+    });
+
+    const cell = container.querySelector(".{{nameLower}}-choice-renderer") as HTMLElement;
+    expect(cell.textContent).toBe("Preferred");
+    expect(cell.getAttribute("title")).toBe("Preferred");
+    expect(cell.getAttribute("dir")).toBe("rtl");
+    expect(container.textContent).not.toContain("100000001");
+});
+
+test("choice renderer falls back to the grid renderer without a value or a label", () => {
+    const renderer = cellRendererOverrides.OptionSet;
+
+    expect(renderer?.({ value: null, formattedValue: "Preferred" }, { colDefs: [], columnIndex: 0 })).toBeNull();
+    expect(renderer?.({ value: undefined }, { colDefs: [], columnIndex: 0 })).toBeNull();
+    expect(renderer?.({ value: 100000001 }, { colDefs: [], columnIndex: 0 })).toBeNull();
+    expect(renderer?.({ value: 100000001, formattedValue: "" }, { colDefs: [], columnIndex: 0 })).toBeNull();
+});
+
+test("choice renderer is pure and never mutates grid data", () => {
+    const renderer = cellRendererOverrides.OptionSet;
+    const rowData = Object.freeze({ __rec_id: "row-6" });
+    const props = Object.freeze({ value: 1, formattedValue: "Active" });
+    const params = Object.freeze({ colDefs: Object.freeze([]), columnIndex: 0, rowData });
+
+    const first = renderer?.(props, params) as React.ReactElement;
+    const second = renderer?.(props, params) as React.ReactElement;
+
+    expect(first.props).toEqual(second.props);
+    expect(rowData).toEqual({ __rec_id: "row-6" });
+    expect(props.value).toBe(1);
+});
 test("text editor calls the grid change callback without mutating params", () => {
     const editor = cellEditorOverrides.Text;
     const rowData = Object.freeze({ __rec_id: "row-2" });
