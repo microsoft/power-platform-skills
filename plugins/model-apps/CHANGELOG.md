@@ -9,7 +9,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 - **Pages scroll:** the rules teach a bounded, scrolling page root; `check-griffel-styles.js` stops a generated page whose layout it can show would clip below the fold, or that it cannot read, with exit 3 and the fix (AB#6793599).
 - With `--existing` (downloaded pages) the same finding is a note and the exit code is unchanged.
-- **Failure-safe downloads:** the new `pages/` tree is written beside the old one and swapped in whole; a failure while writing leaves `pages/` as it was, and a failed swap puts it back (#814).
+- **Failure-safe downloads:** the new `pages/` tree is staged and swapped in whole after the download's checks; a refusal or failure before then leaves `pages/` as it was, and a failed swap puts it back (#814).
 - If a swap cannot be undone, or a run stops mid-swap, the previous pages stay in the named `.pages-replace.*` folder to copy back; a later download reports it.
 - The download checks its own folders before each operation and refuses one a link has replaced.
 - **Adopt configuration made before opting in:** under `configurationIdentity: "stable-v1"`, an environment variable, connection reference or Custom API at another id can be adopted with the approvals the stop prints (#807).
