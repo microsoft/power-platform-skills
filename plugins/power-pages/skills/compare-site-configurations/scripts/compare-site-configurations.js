@@ -1753,8 +1753,56 @@ function escapeHtml(unsafe) {
         .replace(/'/g, "&#039;");
 }
 
-return { compareFiles, compareFileMaps, getAllFiles, getFilteredSourceFiles, getPowerPagesSiteFiles, readPowerPagesConfig, hasSourceCode, readFileContents, generateHtmlContent, getComponentTypeFromPath, getComponentTypeDisplayName, escapeHtml };
+return { compareFiles, compareFileMaps, getAllFiles, getFilteredSourceFiles, getPowerPagesSiteFiles, readPowerPagesConfig, hasSourceCode, readFileContents, generateHtmlContent, getComponentTypeFromPath, getComponentTypeDisplayName, escapeHtml, isBinaryFile };
 })();
+
+const GUID_RE = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+
+// Deviation from the extension, which compares every non-hidden file in a
+// non-SPA site folder: this skill compares Power Pages site configuration only.
+// PAC writes configuration as one folder per table plus aggregate YAML files at
+// the site root (website.yml, sitesetting.yml, webrole.yml, ...). Other files in
+// the folder, such as docs/ written by other tools or a README, never reach the
+// site, so their differences are reported as skipped rather than as changes.
+// Folder names follow the PAC portal schema as the extension maps it
+// (FOLDER_TO_ENTITIES_ADX in actions-hub/ActionsHubUtils.ts), including its
+// "website-accesss" spelling, plus the alternate names the extension's report
+// and this plugin's site validator recognize.
+const CONFIGURATION_FOLDERS = new Set([
+  'ad-placements', 'ads', 'advanced-forms', 'basic-forms', 'blogs', 'bot-consumers',
+  'cloud-flow-consumer', 'cloud-flow-definitions', 'column-permission-profiles',
+  'content-snippets', 'forums', 'lists', 'page-templates', 'poll-placements', 'polls',
+  'publishing-state-transition-rules', 'publishing-states', 'redirects', 'server-logics',
+  'shortcuts', 'site-languages', 'site-markers', 'site-settings', 'sitemarkers',
+  'source-files', 'table-permissions', 'ux-components', 'web-files', 'web-link-sets',
+  'web-pages', 'web-roles', 'web-templates', 'webpage-rules', 'website-accesss',
+  'website-languages', 'weblink-sets',
+]);
+
+// Relative paths use the host separator and, for SPA sites, start with
+// ".powerpages-site/", e.g. ".powerpages-site\web-pages\home\Home.webpage.yml".
+function splitSitePath(relativePath) {
+  const segments = relativePath.split(/[\\/]/).filter(Boolean);
+  const prefix = segments[0] === '.powerpages-site' ? `${segments.shift()}/` : '';
+  return { prefix, segments };
+}
+
+function isSiteConfiguration(relativePath) {
+  const { segments } = splitSitePath(relativePath);
+  if (segments.length === 1) return /\.yml$/i.test(segments[0]);
+  return CONFIGURATION_FOLDERS.has(segments[0].toLowerCase());
+}
+
+function summarizeSkipped(files) {
+  const groups = new Map();
+  for (const file of files) {
+    const { prefix, segments } = splitSitePath(file.relativePath);
+    const name = prefix + segments[0] + (segments.length > 1 ? '/' : '');
+    groups.set(name, (groups.get(name) || 0) + 1);
+  }
+  // Code-point order, so the summary is identical on every platform and locale.
+  return [...groups].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, count]) => ({ path: name, files: count }));
+}
 
 function projectRootOf(metadataRoot) {
   return path.basename(metadataRoot) === '.powerpages-site' ? path.dirname(metadataRoot) : metadataRoot;
@@ -1817,9 +1865,11 @@ function compareMetadata(source, target, options = {}) {
     );
   }
   const counts = { added: 0, modified: 0, deleted: 0 };
+  const skipped = files.filter(file => !isSiteConfiguration(file.relativePath));
+  files = files.filter(file => isSiteConfiguration(file.relativePath));
   for (const file of files) counts[file.status] += 1;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sourceRoot: local.metadataRoot,
     targetRoot: remote.metadataRoot,
     sourceProjectRoot: local.projectRoot,
@@ -1828,12 +1878,14 @@ function compareMetadata(source, target, options = {}) {
     targetWebsiteId: options.targetWebsiteId,
     counts,
     files,
+    skipped: summarizeSkipped(skipped),
     report: {
       localSiteName: options.sourceName || path.basename(local.projectRoot),
       siteName: options.targetName || path.basename(remote.projectRoot),
       // Only a downloaded site has an environment; a local folder leaves it
       // empty so the report hides the row instead of mislabeling a path.
       environmentName: options.targetEnvironment || '',
+      environmentId: options.targetEnvironmentId || '',
       // Explicit IDs were already checked against website.yml; otherwise read
       // each side's own website.yml so local folders show their IDs too.
       websiteId: options.targetWebsiteId || websiteIdFromFile(remote),
@@ -1844,7 +1896,59 @@ function compareMetadata(source, target, options = {}) {
 }
 
 function receiptPath(output) {
-  return `${output}.json`;
+  return output.replace(/\.html$/i, '.receipt.json');
+}
+
+function exportPath(output) {
+  return output.replace(/\.html$/i, '.json');
+}
+
+// Writes the JSON the extension produces with "Export as JSON" and reads with
+// "Import Comparison" (IMetadataDiffExport, format 1.0), so a teammate can open
+// this comparison in VS Code. See ExportMetadataDiffHandler.ts and
+// ImportMetadataDiffHandler.ts under src/client/power-pages/actions-hub/handlers/metadata-diff
+// in https://github.com/microsoft/powerplatform-vscode.
+// Import rejects a file whose extensionVersion is newer than the installed
+// extension, so record 2.0.115, the first release that imports this format.
+// It also requires GUID website and environment IDs; two local folders have no
+// environment, so they use the nil GUID, which import accepts as a key.
+const EXPORT_FORMAT_VERSION = '1.0';
+const MIN_IMPORT_EXTENSION_VERSION = '2.0.115';
+const MAX_FILE_SIZE_FOR_EXPORT = 20 * 1024 * 1024;
+const NIL_GUID = '00000000-0000-0000-0000-000000000000';
+
+function buildExport(comparison) {
+  const { report } = comparison;
+  if (!GUID_RE.test(report.localWebsiteId || '') || !GUID_RE.test(report.websiteId || '')) {
+    return { reason: 'VS Code import needs a website ID in both sites\' website.yml.' };
+  }
+  // Like the extension: raw bytes as base64, null for binary, oversized or absent sides.
+  const content = (file, side) => {
+    if (tools.isBinaryFile(file.relativePath, false)) return null;
+    if (side === 'local' ? file.status === 'deleted' : file.status === 'added') return null;
+    const filePath = side === 'local' ? file.localPath : file.remotePath;
+    return fs.statSync(filePath).size <= MAX_FILE_SIZE_FOR_EXPORT ? fs.readFileSync(filePath).toString('base64') : null;
+  };
+  return {
+    data: {
+      version: EXPORT_FORMAT_VERSION,
+      extensionVersion: MIN_IMPORT_EXTENSION_VERSION,
+      exportedAt: new Date().toISOString(),
+      localWebsiteId: report.localWebsiteId,
+      localWebsiteName: report.localSiteName,
+      remoteWebsiteId: report.websiteId,
+      remoteWebsiteName: report.siteName,
+      environmentId: report.environmentId || NIL_GUID,
+      environmentName: report.environmentName || 'Local folder',
+      ...(report.websiteUrl ? { websiteUrl: report.websiteUrl } : {}),
+      files: comparison.files.map(file => ({
+        relativePath: file.relativePath,
+        status: file.status,
+        localContent: content(file, 'local'),
+        remoteContent: content(file, 'remote'),
+      })),
+    },
+  };
 }
 
 async function writeReport(comparison, output) {
@@ -1853,8 +1957,8 @@ async function writeReport(comparison, output) {
   for (const root of [comparison.sourceRoot, comparison.targetRoot, comparison.sourceProjectRoot, comparison.targetProjectRoot]) {
     assertOutsideSite(root, absolute);
   }
-  if (fs.existsSync(absolute) || fs.existsSync(receiptPath(absolute))) {
-    throw new Error(`Report or verification receipt already exists; choose a new output path: ${output}`);
+  if (fs.existsSync(absolute) || fs.existsSync(receiptPath(absolute)) || fs.existsSync(exportPath(absolute))) {
+    throw new Error(`Report, verification receipt or export already exists; choose a new output path: ${output}`);
   }
   // Upstream catches read failures for its interactive viewer. A standalone
   // report must instead fail explicitly when an expected snapshot is unreadable.
@@ -1875,12 +1979,17 @@ async function writeReport(comparison, output) {
     fileContents, report.localSiteName, report.siteName, report.environmentName,
     report.websiteId, report.websiteUrl, undefined, undefined, undefined, report.localWebsiteId
   );
+  const exported = buildExport(comparison);
   const receipt = {
     ...comparison,
     htmlSha256: crypto.createHash('sha256').update(html).digest('hex'),
+    ...(exported.data ? { export: path.basename(exportPath(absolute)) } : { exportSkipped: exported.reason }),
   };
   fs.mkdirSync(path.dirname(absolute), { recursive: true, mode: 0o700 });
   fs.writeFileSync(absolute, html, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  if (exported.data) {
+    fs.writeFileSync(exportPath(absolute), JSON.stringify(exported.data, null, 2), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  }
   // Verification data is a sidecar, never injected into the upstream HTML.
   fs.writeFileSync(receiptPath(absolute), JSON.stringify(receipt, null, 2) + '\n', {
     encoding: 'utf8', flag: 'wx', mode: 0o600,
@@ -1888,11 +1997,30 @@ async function writeReport(comparison, output) {
   return absolute;
 }
 
+// The export must list exactly the verified files, in order, so a teammate who
+// imports it sees the same comparison as the report.
+function verifyExport(receipt, output) {
+  if (receipt.export === undefined) {
+    if (typeof receipt.exportSkipped !== 'string') throw new Error('Report receipt has no export record.');
+    return { exportSkipped: receipt.exportSkipped };
+  }
+  if (typeof receipt.export !== 'string' || path.basename(receipt.export) !== receipt.export) {
+    throw new Error('Report receipt names an invalid export file.');
+  }
+  const file = path.join(path.dirname(output), receipt.export);
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (data.version !== EXPORT_FORMAT_VERSION || !Array.isArray(data.files) || data.files.length !== receipt.files.length ||
+      data.files.some((entry, i) => entry.relativePath !== receipt.files[i].relativePath || entry.status !== receipt.files[i].status)) {
+    throw new Error('Export does not match the verified report.');
+  }
+  return { export: file };
+}
+
 function verifyReport(source, target, output) {
   const html = fs.readFileSync(output);
   const receipt = JSON.parse(fs.readFileSync(receiptPath(output), 'utf8'));
-  if (receipt.schemaVersion !== 2 || receipt.sourceRoot !== resolveMetadataRoot(source) ||
-      receipt.targetRoot !== resolveMetadataRoot(target) || !Array.isArray(receipt.files)) {
+  if (receipt.schemaVersion !== 3 || receipt.sourceRoot !== resolveMetadataRoot(source) ||
+      receipt.targetRoot !== resolveMetadataRoot(target) || !Array.isArray(receipt.files) || !Array.isArray(receipt.skipped)) {
     throw new Error('Report does not match the selected local and remote metadata roots.');
   }
   if (receipt.htmlSha256 !== crypto.createHash('sha256').update(html).digest('hex')) {
@@ -1921,14 +2049,21 @@ function verifyReport(source, target, output) {
       throw new Error(`Report has a file entry outside the verified report or selected sites: ${file?.relativePath}`);
     }
   }
-  return { output: path.resolve(output), receipt: receiptPath(path.resolve(output)), ...receipt.counts };
+  const absolute = path.resolve(output);
+  return {
+    output: absolute,
+    receipt: receiptPath(absolute),
+    ...verifyExport(receipt, absolute),
+    ...receipt.counts,
+    skipped: receipt.skipped,
+  };
 }
 
 
 async function main(argv = process.argv.slice(2), deps = {}) {
   const args = parseArgs(argv, [
     'source', 'target', 'output', 'open', 'verify', 'sourceWebsiteId', 'targetWebsiteId',
-    'sourceCodeSite', 'targetCodeSite', 'sourceName', 'targetName', 'targetEnvironment', 'targetUrl',
+    'sourceCodeSite', 'targetCodeSite', 'sourceName', 'targetName', 'targetEnvironment', 'targetEnvironmentId', 'targetUrl',
   ]);
   for (const name of ['open', 'verify', 'sourceCodeSite', 'targetCodeSite']) {
     if (args[name] !== undefined && !['true', 'false'].includes(args[name])) {
@@ -1936,7 +2071,10 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     }
   }
   if (!args.source || !args.target || !args.output) {
-    throw new Error('Usage: compare-site-metadata.js --source <site-folder> --target <site-folder> --output <report.html> [--open true] [--verify true]');
+    throw new Error('Usage: compare-site-configurations.js --source <site-folder> --target <site-folder> --output <report.html> [--open true] [--verify true]');
+  }
+  if (args.targetEnvironmentId !== undefined && !GUID_RE.test(args.targetEnvironmentId)) {
+    throw new Error('--targetEnvironmentId must be the Power Platform environment ID (a GUID).');
   }
   if (args.targetUrl !== undefined) {
     const url = new URL(args.targetUrl);
@@ -1947,14 +2085,14 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     if (expected !== undefined) {
       const root = resolveMetadataRoot(args[side]);
       const identity = readWebsiteIdentity(path.join(root, 'website.yml'));
-      if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(expected) ||
+      if (!GUID_RE.test(expected) ||
           identity.id?.toLowerCase() !== expected.toLowerCase()) {
         throw new Error(`${side} website.yml identity is missing, conflicting, or does not match the selected website record ID.`);
       }
     }
   }
   if (args.verify !== 'true') {
-    console.error('Comparing sites with the VS Code metadata comparison engine.');
+    console.error('Comparing Power Pages site configurations.');
     const comparison = compareMetadata(args.source, args.target, {
       ...args,
       sourceCodeSite: args.sourceCodeSite === undefined ? undefined : args.sourceCodeSite === 'true',

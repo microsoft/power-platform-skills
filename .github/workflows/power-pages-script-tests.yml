@@ -45,7 +45,7 @@ jobs:
               working-directory: plugins/power-pages/scripts/tests
               run: node --test
 
-            - name: run-site-metadata-comparison-tests
+            - name: run-site-configuration-comparison-tests
               shell: bash
-              working-directory: plugins/power-pages/skills/compare-site-metadata/scripts/tests
+              working-directory: plugins/power-pages/skills/compare-site-configurations/scripts/tests
               run: node --test
