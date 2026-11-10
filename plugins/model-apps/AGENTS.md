@@ -5459,6 +5459,18 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/sdk
   workflow itself, across ubuntu × windows × macos and Node 20 × 22.
   Keep `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` on any new job that could run a
   telemetry-emitting hook or script.
+- **A test that compares paths must accept the real name of a folder.** The product names an output folder
+  by its real path (`fs.realpathSync.native`), which is not always the path the test gave it: `os.tmpdir()` is
+  `/var/...` on macOS while its real path is `/private/var/...`, and on Windows CI it can be an 8.3 short name
+  (`C:\Users\RUNNER~1\...`). Canonicalize the expected path with `fs.realpathSync.native` first, or accept
+  either name (`download-model-app.test.js` checks both `out` and `fs.realpathSync.native(out)`); a plain
+  string compare passes on one runner and fails on another.
+- **Retry a test's own file moves on Windows.** When the test itself moves, removes or replaces a folder the
+  product has just written, an antivirus or indexer handle can refuse the call for a moment (EPERM, EACCES or
+  EBUSY). Wrap such test-own fs calls in the retry helper the download tests use (`hookRetry` in
+  `download-model-app.test.js`: Windows only, those three codes only, about 2 s), so the refusal does not
+  fail the test or escape into the product's own fs call. Never retry the product's call under test this way,
+  and keep every assertion as it is.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - Evals: `node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js
