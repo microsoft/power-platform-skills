@@ -96,7 +96,7 @@ if (flagError) { process.stderr.write(`✗ ${flagError}\n${USAGE}\n`); process.e
 
 `validateFlags` (`scripts/lib/dataverse-auth.js`) rejects unknown flags with a single-edit "did you mean" (via `scripts/lib/nearest-name.js`) and rejects a value-bearing flag passed bare or empty. It reads flag names from `argv` rather than the parsed object, because `--__proto__` goes through the inherited setter and never becomes an own property.
 
-Boolean switches are bare only. For example, use `--strict`, `--install`, `--no-clean`, `--allow-dev-bundle` and `--no-verify`; values such as `--strict=false` or `--no-verify=false` are usage errors, not false booleans.
+Boolean switches are bare only. For example, use `--strict`, `--install`, `--no-clean`, `--allow-dev-bundle` and `--no-verify`; values such as `--strict=false` or `--no-verify=false` are usage errors, not false booleans. Every CLI checks its switches with the one shared `scripts/lib/pcf-cli-flags.js` → `booleanFlagError(flags, names)`, which reports the first valued switch in `names` order; do not hand-write a per-CLI loop.
 
 When a CLI test harness maps `parseArgs` to a fixed result, use `scripts/tests/helpers/fake-auth.js` → `validateFlagsFromParsed` so the harness exercises the real validator instead of a hand-written copy that can drift from it. `scripts/tests/helpers/cli-harness.js` → `loadCli(scriptPath, { requires, argv })` loads an entry point with injectable module stubs and a shadowed `process`, so a test can drive `main()` and assert the wire calls it makes rather than regex-matching source.
 
