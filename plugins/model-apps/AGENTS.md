@@ -1704,7 +1704,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   it is published, and `pages/` is not written. A test holds `writePageTree`, the staged readback and their
   helpers to that fs (no raw read, write, mkdir, rename or removal). What a check cannot close is the interval
   between it and the one syscall it guards, a read or a write; no wait sits there, since a retry's wait comes
-  before the next attempt's own check. The managed download's `stagedPages.publish` goes through the same swap.
+  before the next attempt's own check. Before the maker's `pages/` is moved aside, `new`, each page folder in
+  it and each file written there are checked once more, so a page folder replaced by a junction after its
+  files were written is refused rather than moved into `pages/`. **Every CLI download stages its page tree**:
+  `main` passes `runDownload` `stagePages`, so the tree is written to a `.download-pages.*` staging folder,
+  read back and rewritten there, and `stagedPages.check`/`publish` (the same swap) run only after the
+  lossy-download gate, the App Spec validation and, for `--include-managed`, the fragments file — a refusal
+  or a failed write before then leaves `pages/`, `app-spec.json` and the baseline as they were. A library
+  caller that omits `stagePages` still has `runDownload` write `pages/` itself.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,
@@ -2968,10 +2975,11 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   and another name tried. Files from earlier downloads stay. With nothing due nothing is written or removed. A
   link, junction or file at `.maker-workspace`, or no name free after 8 tries, is `managed-fragments-unwritable`.
   It is settled after the restore and the validation and before anything is published: `main` passes
-  `runDownload` `stagePages`, which writes the page tree to a hidden staging folder inside `<out>`, reads it
-  back and answers `stagedPages` (`check`, `publish`); the tree, the spec and the baseline are written only
-  after the fragments file, so a failure there leaves every output as it was. The restored form is the group's
-  `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A plain download reads no form.
+  `runDownload` `stagePages` (as it does for every download), which writes the page tree to a hidden staging
+  folder inside `<out>`, reads it back and answers `stagedPages` (`check`, `publish`); the tree, the spec and
+  the baseline are written only after the fragments file, so a failure there leaves every output as it was. The
+  restored form is the group's `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A
+  plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
   downloaded folder needs `adopt:form:<key>`, and an identical unbound no-op may leave it unbound.
   **A removed form deleted in Maker** (`retireAbsentRemovedForms` in `sdk-build.js`, before the store's tables
