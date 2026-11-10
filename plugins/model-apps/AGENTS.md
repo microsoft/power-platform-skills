@@ -1705,8 +1705,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   helpers to that fs (no raw read, write, mkdir, rename or removal). What a check cannot close is the interval
   between it and the one syscall it guards, a read or a write; no wait sits there, since a retry's wait comes
   before the next attempt's own check. Before the maker's `pages/` is moved aside, `new`, each page folder in
-  it and each file written there are checked once more, so a page folder replaced by a junction after its
-  files were written is refused rather than moved into `pages/`. **Every CLI download stages its page tree**:
+  it and each file written there are checked once more and must still be there (a folder as a folder, a
+  file as a file), so a page folder replaced by a junction after its files were written is refused
+  (`UNSAFE_OUTPUT`) and a page folder or file removed from `new` fails the download (`IO_ERROR`) rather than
+  an incomplete tree being moved into `pages/`. **Every CLI download stages its page tree**:
   `main` passes `runDownload` `stagePages`, so the tree is written to a `.download-pages.*` staging folder,
   read back and rewritten there, and `stagedPages.check`/`publish` (the same swap) run only after the
   lossy-download gate, the App Spec validation and, for `--include-managed`, the fragments file — a refusal

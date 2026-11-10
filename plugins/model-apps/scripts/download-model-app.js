@@ -3006,7 +3006,7 @@ function assertNoPlantedPageLinks(pagesRoot, fsImpl = fs) {
 //   2. make a swap folder `<out>/.pages-replace.<pid>.<random>.tmp` (makeHiddenDir: a name nobody holds, checked to be the plain folder
 //      just made before anything is written under it) and write the new tree to its `new` subfolder. It sits in the same folder as
 //      pages/, so the moves below are renames on one volume, never copies;
-//   3. check the new tree (`new`, each page folder in it and each file written there are still what was made) and pages/ again:
+//   3. check the new tree (`new`, each page folder in it and each file written there are still there and still what was made) and pages/ again:
 //      writing took time, and the move below must act on the folders the checks saw;
 //   4. move pages/ to the swap folder's `previous` (skipped when there is no pages/);
 //   5. move `new` to pages/;
@@ -3096,12 +3096,29 @@ function writePageTree(pagesRoot, pages, opts = {}) {
       for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8', fs: gfs });
     }
     // Step 3. `new` once more too, and each page folder made in it and each file written there, so a replacement found now costs no
-    // move of the maker's folder and nothing in its place is moved into pages/.
-    guard.verify(fresh);
+    // move of the maker's folder and nothing in its place is moved into pages/. The guarded lstat checks each path as `verify` does
+    // (a link or a folder that is not the one made is refused), but the guard lets a missing path through (an operation that creates it
+    // must be able to run), so each is also required to be there, as what was made: a folder or a file that is gone (removed after it
+    // was written) leaves a tree that is not complete, and it is not published.
+    const present = (p, kind) => {
+      let stat = null;
+      let cause = null;
+      try {
+        stat = gfs.lstatSync(p);
+      } catch (e) {
+        if (e && e.code === 'UNSAFE_OUTPUT') throw e;
+        cause = e;
+      }
+      if (stat && (kind === 'folder' ? stat.isDirectory() : stat.isFile())) return;
+      const error = pageTreeError(`could not write the page folder ${pagesRoot}: the ${kind} ${shown(p)} this download wrote is ${stat ? `no longer a ${kind}` : `no longer there (${(cause && cause.code) || cause})`}. The page folder is as it was, and the downloaded pages were not moved into it`, cause);
+      error.code = 'IO_ERROR';
+      throw error;
+    };
+    present(fresh, 'folder');
     for (const { pageId, files } of pages) {
       const destDir = path.join(fresh, pageId);
-      guard.verify(destDir);
-      for (const name of Object.keys(files)) guard.verify(path.join(destDir, name));
+      present(destDir, 'folder');
+      for (const name of Object.keys(files)) present(path.join(destDir, name), 'file');
     }
     hadTree = assertPageTreeReplaceable(pagesPath, fsImpl);
   } catch (e) {

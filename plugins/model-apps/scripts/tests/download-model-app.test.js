@@ -2343,6 +2343,41 @@ for (const [stop, { wrap, validateAppSpec, fault }, assertStopped] of CLI_STOPS)
   });
 }
 
+// The staged tree was read back and validated; the tree the swap writes for publication is written again. An entry of that tree that
+// is gone before the swap (a page folder, or one file of it) is not a tree to publish: what the maker had is kept, byte for byte.
+for (const [missing, removed] of [['a page folder', []], ['the page.tsx of a page folder', ['page.tsx']]]) {
+  test(`the CLI without --include-managed: ${missing} of the tree written for publication, removed before the swap, stops the download with every output as it was (#814)`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-missing-'));
+    try {
+      seedEditedPages(out);
+      fs.writeFileSync(path.join(out, 'app-spec.json'), MAKER_SPEC);
+      fs.mkdirSync(path.join(out, '.maker-workspace'));
+      fs.writeFileSync(path.join(out, '.maker-workspace', 'last-applied.json'), 'the maker\'s baseline\r\n');
+      fs.writeFileSync(path.join(out, '.maker-workspace', 'managed-fragments-earlier.json'), 'the maker\'s fragments\r\n');
+      const before = treeBytes(out);
+      const mkdir = fs.mkdirSync;
+      let gone = null;
+      // The swap's own `new/<B>` (not the staging folder's): page A of the tree to publish is written in full by then.
+      t.mock.method(fs, 'mkdirSync', function (p, ...args) {
+        if (!gone && !staged(p) && path.basename(String(p)) === SWAP_B && path.basename(path.dirname(String(p))) === 'new') {
+          gone = path.join(path.dirname(String(p)), SWAP_A, ...removed);
+          fs.rmSync(gone, { recursive: true });
+        }
+        return mkdir.call(this, p, ...args);
+      });
+      const res = await cliDownload(t, out);
+      assert.ok(gone, 'page A of the tree to publish was removed before page B was written');
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], `no success: ${JSON.stringify(res.emitted)}`);
+      assert.ok(res.thrown && res.thrown.code === 'IO_ERROR', String(res.thrown && res.thrown.stack));
+      assert.ok(res.thrown.message.includes(path.join(SWAP_A, ...removed)) && /no longer there \(ENOENT\)/.test(res.thrown.message), res.thrown.message);
+      assert.deepStrictEqual(treeBytes(out), before, 'pages/, the spec, the baseline and the fragments file are as they were');
+      assert.deepStrictEqual(leftovers(out), [], 'no staging or swap folder is left');
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
+
 test('the CLI without --include-managed: a successful download answers, asks, prints and writes exactly what it did when it wrote pages/ itself (#814)', async (t) => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-same-'));
   const seed = () => {
