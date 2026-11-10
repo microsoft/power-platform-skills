@@ -56,7 +56,7 @@ Create a new private run folder outside both sites and their Git repositories: t
 Download each remote site into its own subfolder with the command from the remote-sites reference, telling the user which site is downloading before each long command.
 Read local folders in place.
 
-**Done:** Each download exited successfully, both site folders contain `website.yml`, directly or in `.powerpages-site`, and any PAC profile noted in phase 1 is active again.
+**Done:** Each download exited successfully and both site folders contain `website.yml`, directly or in `.powerpages-site`.
 A failed download is a blocker, not an empty site.
 
 ## 3. Compare and render

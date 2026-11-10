@@ -5,9 +5,8 @@ Read this for each site the user gave as a website URL or a website record ID.
 ## Verify the website
 
 - Check `pac --version` and `pac auth list`.
-  Reuse an authenticated profile for the environment; otherwise run the interactive `pac auth create --environment "<ENVIRONMENT_URL>"`.
-  `pac auth create` makes the new profile active, so before the first one, note the active profile's index (the row marked `*` in `pac auth list`).
-  After the last download, or when the comparison stops early, run `pac auth select --index <NOTED_INDEX>` to make it active again.
+  Use the active profile as it is: `--environment` on each command reaches another environment without switching or creating a profile.
+  When `pac auth list` shows no profile, ask the user to sign in to PAC and stop.
   Keep credentials and tokens out of files and chat.
 - Resolve the Dataverse environment URL from the user's answer or an unambiguous authenticated context (`pac env who`, `pac env list`).
   A public website URL is not a Dataverse environment URL.
@@ -40,7 +39,7 @@ SPA site (`Yes`); this command takes no model version:
 pac pages download-code-site --path "<RUN_DIR>/<source-or-target>" --webSiteId "<WEBSITE_RECORD_ID>" --environment "<ENVIRONMENT_URL>"
 ```
 
-Pass `--environment` on every PAC command rather than switching the active environment.
+Pass `--environment` on every `pac pages` command, so the active profile and environment stay as they were.
 Download the whole site, without `--includeEntities`, `--excludeEntities` or `--overwrite`.
 
 PAC creates one site-named folder under `--path`.
