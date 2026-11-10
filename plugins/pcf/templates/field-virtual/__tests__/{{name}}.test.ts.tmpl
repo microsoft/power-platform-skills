@@ -102,3 +102,19 @@ test("two instances keep independent state and DOM", () => {
     expect(second.control.getOutputs()).toEqual({ sampleProperty: "Second" });
     expect(first.container.querySelector(".{{cssClass}}") === second.container.querySelector(".{{cssClass}}")).toBe(false);
 });
+
+test("the field renders a Fluent v9 Input bound to the value", () => {
+    const { container, input } = render({ sampleProperty: mockProperty("Existing") as IInputs["sampleProperty"] });
+
+    // fui-Input is the stable class Fluent v9 puts on every Input root.
+    expect(container.querySelector(".fui-Input")?.contains(input())).toBe(true);
+    expect(input().value).toBe("Existing");
+});
+
+test("unreadable security hides the Fluent Input wrapper too", () => {
+    const { container } = render({
+        sampleProperty: mockProperty("Hidden", undefined, { readable: false }) as IInputs["sampleProperty"],
+    });
+
+    expect((container.querySelector(".fui-Input") as HTMLElement).hidden).toBe(true);
+});

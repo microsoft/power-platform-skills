@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Input, InputOnChangeData } from "@fluentui/react-components";
 
 export interface {{name}}ViewProps {
     cssClass: string;
@@ -17,15 +18,19 @@ export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
     return React.createElement(
         "div",
         { className: props.cssClass },
-        React.createElement("input", {
+        // Fluent v9 Input comes from the declared Fluent platform library, so it is not bundled
+        // and it follows the host theme. Native input props (aria-label, disabled, readOnly,
+        // hidden, value) land on the inner <input>; className and root props land on the wrapper.
+        React.createElement(Input, {
             "aria-label": props.label,
             className: props.inputClass,
+            root: { hidden: props.hidden },
             disabled: props.disabled,
             hidden: props.hidden,
             readOnly: props.readOnly,
             type: "text",
             value: props.value,
-            onChange: (event: React.ChangeEvent<HTMLInputElement>) => props.onChange(event.currentTarget.value),
+            onChange: (_event: React.ChangeEvent<HTMLInputElement>, data: InputOnChangeData) => props.onChange(data.value),
         }),
         React.createElement("div", { className: props.messageClass, hidden: !props.message }, props.message),
     );
