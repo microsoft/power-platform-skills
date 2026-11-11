@@ -1544,7 +1544,12 @@ the field builds exactly as before.
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
   This applies with or without the field and whatever phases run. Declare the item again, with the
-  field, to finish it.
+  field, to finish it. Or, if you no longer want it, stop tracking it: the stop prints the exact
+  approval, `--authorize retire:<kind>:<key>@<attempt token>`. Pass it as printed, with the item still
+  left out of the App Spec. Nothing is deleted: rows the create may have made stay in the environment,
+  unmanaged, and declaring the item again later stops with `create-identity-conflict` until you remove
+  them. An unfinished item that the binding store proves was never sent is let go without an approval,
+  with a warning.
   An item that finished before it was removed from the App Spec does not stop the build.
 - **`--changed-only` runs the whole build.** While the field is set, or the binding store holds
   configuration state, a `--changed-only` apply runs the full build and prints
@@ -1565,6 +1570,11 @@ the field builds exactly as before.
   environment with more than one language, `CUSTOM_API_LABELS_UNSUPPORTED`) stops that build and leaves
   nothing unfinished: the next build is judged on what the App Spec then declares, the earlier
   declaration, another edit or the same one.
+- **A create the service refused.** When the service refuses a protected create with an error code (for
+  example a secret environment variable whose Key Vault reference it rejects), nothing was created. The
+  item stops with `create-refused` and the code, the items after it still run, and nothing is left
+  unfinished: correct the declaration or its deployment settings value and build again, or remove it
+  from the App Spec. A refused edit of an existing row is different: it stays unfinished, as above.
 - **A create that did not finish.** The next build decides it from what the first one recorded before
   sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
   a create that is missing a row, its solution membership or the rule's initial state stops with

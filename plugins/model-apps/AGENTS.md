@@ -3572,12 +3572,27 @@ run's own epoch, `attemptProvenUnsent`, the group still at the attempt's base ge
 found made): an operation the SDK refused before its first request (`CUSTOM_API_LABELS_UNSUPPORTED` on an
 environment with more than one language) must not hold the group, or every later declaration — the earlier
 one, another edit, the same one — stops on a pending attempt prepared for another declaration. Anything that
-may have been sent keeps the attempt, and the run's own stop stands either way. Environment variable and connection reference updates (definition, first
+may have been sent keeps the attempt, and the run's own stop stands either way. A create REQUEST the service refused
+before carrying it out (#847: `managed-feature-contract.js` `notStartedAnswer`, a 400/403/404/412 with a Dataverse
+error code, never a `$batch`; only a POST whose every row is a create — a refused PATCH of an existing row keeps its
+owed recovery) is un-sealed by the transport while its scope is open (`managed-create-transport.js`
+`refusedUnstarted` -> `store.noteRowsNotStarted`: those rows back to undispatched, one count from `possible` to
+`notStarted`). One Dataverse operation is rolled back whole, so if it was the attempt's only send the port's
+`ctx.release` succeeds and the item stops as `create-refused` (`refusedStop`, `nothingCreated`, the service
+code), routed to the refused bucket so later items still run: nothing is pending, and the next build creates it
+again from what the App Spec then declares (a secret variable's value from the settings), or drops it. Environment variable and connection reference updates (definition, first
 value, own value replacement) go through the protected port as one checked set over the item's plan; a value
 row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
 store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`
 regardless of the opt-in, the declarations or the phases): an undeclared pending or unusable protected record
-stops it with `managed-settlement-pending`. Before an overwriting fetch of a protected item (preflight, port and
+stops it with `managed-settlement-pending`, except an attempt the store lets go by its own checked write (#847):
+one still `prepared` (`retireUnsentAttempt`), one `attemptProvenUnsent` (`retireProvenUnsentAttempt`), and
+one that may have been sent only under the maker's exact `--authorize retire:<kind>:<port key>@<attempt token>`
+(printed by the stop; read by `configurationAuthorizationKeys` into `opts.configurationRetirements`, refused for a
+declared item with `CONFIGURATION_RETIRE_DECLARED`; `store.abandonAttempt`). Abandoning deletes and sends
+nothing: rows the attempt may have created stay unmanaged, and a later declaration is an unbound create whose
+derived-id read stops on them (`create-identity-conflict`), so nothing is created twice. Each retired attempt is
+named through `opts.warn`. Before an overwriting fetch of a protected item (preflight, port and
 verify), a workspace copy with unsynced edits (`hasUnsyncedEdits`) stops it. The build never resets or deletes
 that copy on its own, a failed or uncertain send included: the copy is shared with the maker, the SDK diff is not
 locked and there is no conditional overwrite, so no check can prove a reset discards only the build's own change

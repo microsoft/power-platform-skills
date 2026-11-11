@@ -3587,7 +3587,7 @@ function protectedConfigurationInPlay(spec, { apply, env, workspaceDir, appDir }
 // an attempt needs it and kept by its gate: every attempt of a whole-build retry (build-model-app.js) shares the one managed create
 // context, so an answer one attempt received is still known to the next. Keyed by the gate, which the CLI makes once per invocation.
 const protectedHookups = new WeakMap();
-function protectedConfigurationFor(gate, store, { env, approvals } = {}) {
+function protectedConfigurationFor(gate, store, { env, approvals, retirements } = {}) {
   const made = protectedHookups.get(gate);
   if (made && made.store === store) return made;
   const { createManagedCreateContext } = require('./managed-create-context.js');
@@ -3596,7 +3596,8 @@ function protectedConfigurationFor(gate, store, { env, approvals } = {}) {
   // The maker's `--authorize adopt:<kind>:...` row approvals (build-model-app.js authorizationKeys), exactly as the preflight printed them.
   const ctx = createManagedCreateContext({ store, approvals: approvals ? [...approvals] : [], notFoundCode: NOT_FOUND_CODE });
   // The API root the SDK prefixes every request with (the bundle uses v9.0): a Custom API change set is admitted only under it.
-  const hookup = createProtectedConfiguration({ store, gate, ctx, apiBase: `${new URL(String(env)).origin}/api/data/v9.0` });
+  // `retirements` are the maker's `--authorize retire:...@<attempt token>` approvals, which only the debt sweep reads (pendingSweep).
+  const hookup = createProtectedConfiguration({ store, gate, ctx, apiBase: `${new URL(String(env)).origin}/api/data/v9.0`, retirements: retirements ? [...retirements] : [] });
   protectedHookups.set(gate, hookup);
   return hookup;
 }
@@ -4088,7 +4089,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   let configurationOpts = opts;
   if (opts.managedCreateGate && workflowStore && !opts.protectedConfiguration) {
     opts.managedCreateGate.bind(workflowStore);
-    configurationOpts = { ...opts, protectedConfiguration: protectedConfigurationFor(opts.managedCreateGate, workflowStore, { env: opts.env, approvals: opts.configurationApprovals }) };
+    configurationOpts = { ...opts, protectedConfiguration: protectedConfigurationFor(opts.managedCreateGate, workflowStore, { env: opts.env, approvals: opts.configurationApprovals, retirements: opts.configurationRetirements }) };
   }
   // A declared artifact that did not settle stops the build. Its result's own findings decide — never the SDK error
   // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a

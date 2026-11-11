@@ -36,6 +36,8 @@ const CONFLICT_CODE = 'create-identity-conflict';
 const COMPLETION_CODE = 'create-completion-required';
 const OWNERSHIP_CODE = 'create-ownership-required';
 const OPT_IN_CODE = 'create-identity-opt-in-required';
+// A create or edit the service refused unstarted and the run released (#847, refusedStop): nothing pending is left.
+const REFUSED_CODE = 'create-refused';
 // A local workspace copy that differs from the server's: the declared views' and charts' stop (sdk-build.js
 // refuseUnsentCopy), with the same way on — keep what you want in the App Spec, then approve replacing the copy.
 const DRAFT_CODE = 'workspace-copy-unsent-edits';
@@ -90,6 +92,25 @@ function stop(code, message, extra = {}) {
   error.code = code;
   Object.assign(error, extra);
   return error;
+}
+
+// #847: what the run's own answers say when the service refused its requests unstarted — the transport saw an answer
+// that says a request was never carried out (managed-create-transport.js refusedUnstarted) and the store took its rows
+// back to unsent (noteRowsNotStarted). Read BEFORE ctx.release, which drops the attempt's facts. Answers null, or
+// { serviceCode } (the Dataverse error code the answer carried, or null). Only a stop when the release then succeeds:
+// that is the store's own proof (attemptProvenUnsent) that nothing any request of the attempt carried can land.
+function refusedUnsent(ctx, attempt, pushed) {
+  if (pushed.checked || pushed.localError || typeof ctx.facts !== 'function') return null;
+  const refused = ctx.facts(attempt.token).find((f) => f.type === 'row' && f.notStarted === true);
+  return refused ? { serviceCode: typeof refused.serviceCode === 'string' ? refused.serviceCode : null } : null;
+}
+
+// The stop for a create or edit the service refused, released in the same run: nothing was created or changed and the
+// store holds nothing pending for it, so the next build plans it afresh (a create again under the same derived ids).
+// `nothingCreated` routes it as refused, not unknown (configuration-artifacts.js routeFailure), so later items still run.
+function refusedStop(kind, key, id, { serviceCode }, what) {
+  return stop(REFUSED_CODE, `the service refused the ${kind} "${key}" ${what}${serviceCode ? ` (${serviceCode})` : ''}; nothing was ${what === 'create' ? 'created' : 'changed'} and nothing is left pending`,
+    { kind, key, id, nothingCreated: true, serviceCode });
 }
 
 function declaredItems(spec) {
@@ -1046,9 +1067,12 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const id = planned.plan.rows[0].id;
       const childIds = Object.fromEntries(planned.rows.filter((r) => r.slot !== null).map((r) => [r.slot, r.id]));
       const pushed = await scope(() => fn({ id, childIds }), B.acceptResultFor(planned));
-      // An operation refused before its first request (nothing counted, nothing dispatched) leaves no attempt behind;
-      // one that may have sent anything keeps it for recovery (ctx.release refuses it). The stop below stands either way.
-      if (!pushed.checked) ctx.release(attempt);
+      // An operation refused before its first request (nothing counted, nothing dispatched) leaves no attempt behind, and
+      // so does one whose every request the service refused unstarted (#847, refusedUnsent); one that may have sent
+      // anything keeps it for recovery (ctx.release refuses it). The stop below stands either way.
+      const refused = refusedUnsent(ctx, attempt, pushed);
+      const released = !pushed.checked && ctx.release(attempt);
+      if (refused && released) throw refusedStop(kind, planned.key, id, refused, 'create');
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
@@ -1109,7 +1133,11 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       // As in run(): an edit the SDK refused before its first request — a Custom API label edit on an environment with
       // more than one language (CUSTOM_API_LABELS_UNSUPPORTED) — is released, so the next build plans from the committed
       // group whatever it declares; kept, it held the group for a declaration that is never sent.
-      if (!pushed.checked) ctx.release(attempt);
+      // And as in run(): an edit whose every request created a new child (a variable's first value) and was refused
+      // unstarted is released too (#847); a refused PATCH of a row that exists stays owed (managed-create-transport.js).
+      const refused = refusedUnsent(ctx, attempt, pushed);
+      const released = !pushed.checked && ctx.release(attempt);
+      if (refused && released) throw refusedStop(kind, planned.key, rootId, refused, 'edit');
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id: rootId });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" edit was not acknowledged`, { kind, key: planned.key, id: rootId });
@@ -1126,23 +1154,70 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
  * The binding store's own debt, read before ANY service change of a build — whatever the App Spec declares today, with or
  * without the opt-in, whichever phases run: every unfinished attempt (or unusable group) of a protected configuration kind
  * whose item the App Spec no longer declares. Omitting a declaration never lets a build go on past what an earlier one left
- * pending: its rows may exist and its effects may be owed, and only its own declaration can settle it. Nothing is retired,
- * deleted or reset here, and a committed group the App Spec dropped is not debt (its rows simply stay). A declared item is
- * judged by the protected preflight (or, without the opt-in, by optInObligations), so it is not listed twice.
- * A local store read only: nothing is sent. Answers { halts: [{ kind, key, code, message }] }.
+ * pending when its rows may exist or its effects may be owed. Three such attempts are let go here instead (#847), each by
+ * the store's own checked write under its lease, and none by deleting or sending anything:
+ *   - one the store proves never sent: still `prepared` (retireUnsentAttempt), or `sending` with every request it counted
+ *     answered as not started and nothing dispatched (attemptProvenUnsent, retireProvenUnsentAttempt) — a create the
+ *     service refused under an earlier plugin that did not release it in the same run;
+ *   - one that may have been sent, only under the maker's exact approval for that attempt,
+ *     `--authorize retire:<kind>:<key>@<attempt token>` (`retirements`, configuration-artifacts.js
+ *     configurationAuthorizationKeys): the store stops tracking it (abandonAttempt), and rows it may have created stay in
+ *     the environment, unmanaged. A later declaration of the item is then an unbound create, whose reads stop on a row
+ *     already at the derived id (create-identity-conflict), so nothing is created twice or bound unseen.
+ * Anything else — an attempt that may have been sent with no approval, a store write that is refused, or a group the store
+ * cannot use — still stops the build, and the stop for a possibly-sent attempt prints the exact approval. A committed group
+ * the App Spec dropped is not debt (its rows simply stay). A declared item is judged by the protected preflight (or,
+ * without the opt-in, by optInObligations), so it is not listed twice. Nothing is sent. Answers
+ * { halts: [{ kind, key, code, message, authorize? }], retired: [{ kind, key, how }] }.
  */
-function pendingSweep({ spec, store }) {
-  if (!store || typeof store.snapshot !== 'function') return { halts: [] };
+function pendingSweep({ spec, store, retirements = [] }) {
+  if (!store || typeof store.snapshot !== 'function') return { halts: [], retired: [] };
   if (typeof store.refresh === 'function') store.refresh();
   const declared = new Set(declaredItems(spec || {}).map(({ kind, key }) => `${kind}\u0000${A.portKeyOf(kind, key)}`));
+  const approved = new Set(retirements);
   const halts = [];
+  const retired = [];
   for (const unit of store.snapshot().units()) {
     if (!KINDS.has(unit.family) || !(unit.attempt || unit.invalid) || declared.has(`${unit.family}\u0000${unit.key}`)) continue;
-    const what = unit.attempt ? 'an unfinished attempt' : 'a record it cannot use';
-    halts.push({ kind: unit.family, key: unit.key, code: PENDING_CODE, message: `the binding store holds ${what} for ${unit.family} "${unit.key}", which this App Spec no longer declares. `
-      + 'Restore its declaration, with configurationIdentity "stable-v1", so a build can settle it, then run again. No service changes were sent by this build.' });
+    const name = `${unit.family} "${unit.key}"`;
+    if (unit.invalid || !unit.attempt) {
+      halts.push({ kind: unit.family, key: unit.key, code: PENDING_CODE, message: `the binding store holds a record it cannot use for ${name}, which this App Spec no longer declares. `
+        + 'Restore its declaration, with configurationIdentity "stable-v1", so a build can settle it, then run again. No service changes were sent by this build.' });
+      continue;
+    }
+    const a = unit.attempt;
+    const how = a.phase === 'prepared' ? 'unsent' : attemptProvenUnsent(a, unit.effects) ? 'not-started' : approved.has(retireKey(unit.family, unit.key, a.token)) ? 'approved' : null;
+    if (how && retireUndeclared(store, unit, a, how)) {
+      retired.push({ kind: unit.family, key: unit.key, how });
+      continue;
+    }
+    const token = retireToken(unit.family, unit.key, a.token);
+    halts.push({ kind: unit.family, key: unit.key, code: PENDING_CODE, authorize: [token], message: `the binding store holds an unfinished attempt for ${name}, which this App Spec no longer declares. `
+      + 'Restore its declaration, with configurationIdentity "stable-v1", so a build can settle it, then run again. '
+      + `It may have been sent, so it is not dropped silently: to stop tracking it, run again with ${A.authorizeFlags([token])}. Rows it may have created at its derived ids then stay in the environment, unmanaged; nothing is deleted. `
+      + 'No service changes were sent by this build.' });
   }
-  return { halts };
+  return { halts, retired };
+}
+
+// The approval of one undeclared attempt: `retire:<kind>:<key>@<attempt token>`, the key as the store keys it (portKeyOf)
+// and the attempt's own random token, so an approval never carries over to another attempt of the same item.
+const retireToken = (kind, key, token) => `retire:${kind}:${key}@${token}`;
+// The same approval as configuration-artifacts.js configurationAuthorizationKeys files it (`retire`): NUL-joined, so a
+// duplicate-rule key that holds ':' or '@' cannot run into the token.
+const retireKey = (kind, key, token) => `${kind}\u0000${key}\u0000${token}`;
+
+// One undeclared attempt let go by the store's own checked write (pendingSweep). Answers true when it was retired, false
+// when the store refused (another invocation changed it, or it is not what the snapshot showed): the stop then stands.
+function retireUndeclared(store, unit, a, how) {
+  try {
+    if (how === 'unsent') store.retireUnsentAttempt({ token: a.token, baseGeneration: a.baseGeneration });
+    else if (how === 'not-started') store.retireProvenUnsentAttempt({ token: a.token, epoch: a.sendWindow.epoch });
+    else store.abandonAttempt({ token: a.token, family: unit.family, key: unit.key });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1152,7 +1227,7 @@ function pendingSweep({ spec, store }) {
  * the local store read a build without the opt-in runs (optInObligations), and sweep is the store-driven debt read every
  * build runs before its first service change (pendingSweep). Nothing here creates a gate or a store: the build owns them.
  */
-function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {}) {
+function createProtectedConfiguration({ store, gate, ctx, apiBase = null, retirements = [] } = {}) {
   if (!store || typeof store.readGroup !== 'function') throw new TypeError('createProtectedConfiguration needs the managed binding store');
   if (!ctx || typeof ctx.begin !== 'function' || typeof ctx.run !== 'function' || typeof ctx.settle !== 'function') throw new TypeError('createProtectedConfiguration needs the managed create context');
   return {
@@ -1164,7 +1239,7 @@ function createProtectedConfiguration({ store, gate, ctx, apiBase = null } = {})
     // A build without the opt-in: what the store still holds for its declared items (optInObligations), read locally.
     obligations: ({ spec }) => optInObligations({ spec, store }),
     // Every build, before its first service change: what the store still owes for items the App Spec no longer declares.
-    sweep: ({ spec }) => pendingSweep({ spec, store }),
+    sweep: ({ spec }) => pendingSweep({ spec, store, retirements }),
   };
 }
 

@@ -4,6 +4,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { validateAppSpec, CONFIGURATION_IDENTITY_MIN_VERSION } = require('../lib/app-spec.js');
@@ -322,12 +323,12 @@ test('a rule whose initial publication failed keeps it owed: the rerun never sen
 test('a rule whose create answer was lost is never re-created or published by a rerun, and is bound only under its exact approvals', async () => {
   let org = null;
   let lose = true;
-  // The service applies the create, and its answer is lost on the way back.
+  // The service applies the create, and its answer is lost on the way back (a gateway's 503: no verdict on the request).
   const h = await harness({ intercept: async (req) => {
     if (!lose || req.method !== 'POST' || req.path.split('?')[0] !== '/duplicaterules') return undefined;
     lose = false;
     await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
-    return { statusCode: 400, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+    return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
   } });
   org = h.org;
   const first = await pass(h, configSpec());
@@ -1032,7 +1033,9 @@ test('a local edit made after a failed protected send, while a build compares th
 test('a failed protected send never removes its copy, and an approved replacement that cannot read the server\'s row keeps it and stops', async () => {
   let denyRead = false;
   const h = await harness({ intercept: ({ method, path }) => {
-    if (method === 'POST' && path.startsWith('/customapis')) return { statusCode: 400, body: { error: { code: '0x80040216', message: 'refused create' } } };
+    // A 503 says nothing about whether the create was taken, so the attempt stays pending (a 400 with a Dataverse code is
+    // a refusal that releases it: see the create-refused tests).
+    if (method === 'POST' && path.startsWith('/customapis')) return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
     if (denyRead && method === 'GET' && path.startsWith('/customapis(')) return { statusCode: 403, body: { error: { code: '0x80040220', message: 'read denied' } } };
     return undefined;
   } });
@@ -2178,4 +2181,195 @@ test('an adopted connection reference edited by a maker right after the acceptan
     assert.equal(row.description, 'Original', `${column} ${code}: the approved edit is not sent either`);
   }
   assert.ok(replace && replace.length, 'the replacement approval was named');
+});
+
+// ---------------------------------------------------------------------------------------------
+// #847: a protected create the service refused before carrying it out (a 400 with a Dataverse error code: one operation,
+// rolled back whole) leaves nothing behind, so it is released in the same run; one whose answer was lost (a 503) stays
+// pending as before, and an App Spec that drops it settles it only under the exact `retire:` approval the build prints.
+const KV = '/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/vault-sample/secrets/key-sample';
+const secretSpec = () => configSpec({ customApis: [], duplicateDetectionRules: [], environmentVariables: [{ schemaName: 'contoso_Key', type: 'secret' }] });
+const noConfig = () => configSpec({ customApis: [], duplicateDetectionRules: [], environmentVariables: [] });
+const secretValue = () => ({ configurationBindings: readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_Key', Value: KV }] }, secretSpec()) });
+const variableRows = (h) => [h.org.rows('environmentvariabledefinitions').length, h.org.rows('environmentvariablevalues').length];
+const isVariableCreate = (r) => r.method === 'POST' && /^\/environmentvariable/.test(r.path);
+// A later process with the maker's `--authorize retire:…` flags, read by the build's own parser against `spec`.
+function retiring(h, flags, spec) {
+  const read = configurationAuthorizationKeys(flags, spec);
+  assert.deepEqual(read.problems, []);
+  const ctx = createManagedCreateContext({ store: h.store, notFoundCode: B.NOT_FOUND_CODE });
+  return { ...h, ctx, protectedConfiguration: P.createProtectedConfiguration({ store: h.store, gate: h.gate, ctx, apiBase: `${h.org.origin}/api/data/v9.0`, retirements: read.retire }) };
+}
+const retireFlagOf = (halt) => {
+  const m = /--authorize '(retire:[^']+)'/.exec(halt.message);
+  assert.ok(m, halt.message);
+  return m[1];
+};
+async function refusedSecret() {
+  let refuse = true;
+  const h = await harness({ intercept: ({ method, path }) => (refuse && method === 'POST' && /^\/environmentvariable/.test(path)
+    ? { statusCode: 400, body: { error: { code: '0x80072040', message: 'the Key Vault reference was refused' } } } : undefined) });
+  const first = await pass(h, secretSpec(), secretValue());
+  return { h, first, allow: () => { refuse = false; } };
+}
+
+test('a secret variable whose create the service refused stops with create-refused and leaves nothing pending: the rebuild with a value completes it', async () => {
+  const { h, first, allow } = await refusedSecret();
+  assert.equal(first.halt && first.halt.code, 'configuration-incomplete', first.halt && first.halt.message);
+  assert.deepEqual(first.step.outcome.refused.map((r) => [r.kind, r.code, r.serviceCode]), [['environmentVariable', 'create-refused', '0x80072040']]);
+  assert.deepEqual(first.step.outcome.unknown, []);
+  assert.match(first.halt.message, /contoso_Key \(create-refused\) \(the service refused it \(0x80072040\): nothing was created or changed and nothing is left pending/);
+  const group = h.store.readGroup('environmentVariable', 'contoso_key');
+  assert.equal(group.pending, null, 'the attempt is released: no later build is held by it');
+  assert.equal(group.committed, null);
+  assert.deepEqual(variableRows(h), [0, 0]);
+  // No secret reference is written to the store or shown to the maker.
+  assert.ok(!fs.readFileSync(h.store.file, 'utf8').includes('vault-sample'), 'the store holds no Key Vault reference');
+  assert.ok(!first.halt.message.includes('vault-sample'));
+
+  allow();
+  const done = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.equal(done.sent.filter((r) => r.method === 'POST' && r.path.startsWith('/environmentvariabledefinitions')).length, 1, 'created once');
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.ok(committed(h, 'environmentVariable', 'contoso_key'));
+  const rerun = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(rerun.halt, null);
+  assert.deepEqual(rerun.sent, []);
+});
+
+test('a secret variable whose create the service refused no longer holds a build whose App Spec drops it', async () => {
+  const { h, first } = await refusedSecret();
+  assert.ok(first.halt);
+  const out = await pass(reopen(h), noConfig());
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent, []);
+  assert.deepEqual(variableRows(h), [0, 0]);
+});
+
+test('a secret variable whose create answer was lost stays pending: never sent again, and dropped only under its exact retire approval', async () => {
+  let org = null;
+  let lose = true;
+  const h = await harness({ intercept: async (req) => {
+    if (!lose || !isVariableCreate(req)) return undefined;
+    lose = false;
+    await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } });
+  org = h.org;
+  const first = await pass(h, secretSpec(), secretValue());
+  assert.ok(first.halt);
+  assert.deepEqual(first.step.outcome.refused, [], 'a lost answer is never read as a refusal');
+  assert.ok(h.store.readGroup('environmentVariable', 'contoso_key').pending, 'the outcome is unknown: the attempt stays');
+  const landed = variableRows(h);
+  assert.equal(landed[0], 1, 'the definition landed');
+  const again = await pass(reopen(h), secretSpec(), { ...secretValue(), ...overwriteCopy('environmentVariable', 'contoso_key') });
+  assert.ok(again.halt);
+  assert.deepEqual(again.sent.filter(isVariableCreate), [], 'the create is not sent again');
+
+  // Dropped from the App Spec: the build stops, names the exact approval, and sends nothing.
+  const dropped = await pass(reopen(h), noConfig());
+  assert.equal(dropped.halt && dropped.halt.code, 'managed-settlement-pending', dropped.halt && dropped.halt.message);
+  assert.deepEqual(dropped.sent, []);
+  const flag = retireFlagOf(dropped.halt);
+  assert.match(flag, /^retire:environmentVariable:contoso_key@[0-9a-f-]{36}$/);
+  // An approval for another attempt of the same item retires nothing.
+  const other = await pass(retiring(h, [flag.replace(/@.*$/, '@00000000-0000-4000-8000-000000000009')], noConfig()), noConfig());
+  assert.equal(other.halt && other.halt.code, 'managed-settlement-pending');
+  assert.ok(h.store.readGroup('environmentVariable', 'contoso_key').pending);
+
+  const warned = [];
+  const out = await pass(retiring(h, [flag], noConfig()), noConfig(), { warn: (m) => warned.push(m) });
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent, [], 'nothing is deleted or sent');
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending, null);
+  assert.deepEqual(variableRows(h), landed, 'the rows it may have created stay');
+  assert.ok(warned.some((m) => /no longer tracks the unfinished attempt for environmentVariable contoso_key.*as approved/.test(m)), warned.join('\n'));
+
+  // Declared again, the item is an unbound create whose derived id is taken: it stops, and nothing is created twice.
+  const back = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(back.halt && back.halt.code, 'create-identity-conflict', back.halt && back.halt.message);
+  assert.equal(back.halt.phase, 'preflight');
+  assert.deepEqual(back.sent, []);
+  assert.deepEqual(variableRows(h), landed);
+});
+
+test('the retire approval is read only for an item the App Spec no longer declares, and only in its exact shape', () => {
+  const flag = 'retire:environmentVariable:contoso_key@3dedb827-fb3f-4577-a6a2-ec73e634807e';
+  const ok = configurationAuthorizationKeys([flag], noConfig());
+  assert.deepEqual(ok.problems, []);
+  assert.deepEqual([...ok.retire], ['environmentVariable\u0000contoso_key\u00003dedb827-fb3f-4577-a6a2-ec73e634807e']);
+  const declared = configurationAuthorizationKeys([flag], secretSpec());
+  assert.deepEqual(declared.problems.map((p) => p.code), ['CONFIGURATION_RETIRE_DECLARED']);
+  assert.equal(declared.retire.size, 0);
+  for (const bad of ['retire:environmentVariable:contoso_key', 'retire:environmentVariable:contoso_key@not-a-token', 'retire:form:main@3dedb827-fb3f-4577-a6a2-ec73e634807e', 'retire::@3dedb827-fb3f-4577-a6a2-ec73e634807e']) {
+    const read = configurationAuthorizationKeys([bad], noConfig());
+    assert.deepEqual(read.problems.map((p) => p.code), ['CONFIGURATION_RETIRE_INVALID'], bad);
+    assert.equal(read.retire.size, 0, bad);
+  }
+});
+
+// The same refusal for every other protected kind: released in the same run, and the corrected App Spec creates it once.
+test('a plain variable, a connection reference, a Custom API and a rule whose create the service refused are released and created once by the rebuild', async () => {
+  const REF = { logicalName: 'contoso_sp', connectorId: DATA_SOURCE, name: 'SharePoint' };
+  const refSettings = (s) => ({ configurationBindings: readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-one' }] }, s),
+    connections: async () => [{ connectionId: 'conn-one', connectorId: DATA_SOURCE }] });
+  const only = (over) => configSpec({ environmentVariables: [], customApis: [], duplicateDetectionRules: [], ...over });
+  const cases = [
+    ['environmentVariable', 'contoso_apibase', 'environmentvariabledefinitions', only({ environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', defaultValue: 'https://api.contoso.com' }] }), () => ({})],
+    ['connectionReference', 'contoso_sp', 'connectionreferences', only({ connectionReferences: [REF] }), refSettings],
+    ['customApi', 'contoso_calc', 'customapis', only({ customApis: [API] }), () => ({})],
+    ['duplicateRule', 'email', 'duplicaterules', only({ duplicateDetectionRules: [RULE] }), () => ({})],
+  ];
+  for (const [kind, key, table, spec, settings] of cases) {
+    let refuse = true;
+    const h = await harness({ intercept: ({ method, path }) => (refuse && method === 'POST' && path.split('?')[0] === `/${table}`
+      ? { statusCode: 400, body: { error: { code: '0x80040265', message: 'refused' } } } : undefined) });
+    const first = await pass(h, spec, settings(spec));
+    assert.equal(first.halt && first.halt.code, 'configuration-incomplete', `${kind}: ${first.halt && first.halt.message}`);
+    assert.deepEqual(first.step.outcome.refused.map((r) => [r.kind, r.code]), [[kind, 'create-refused']], kind);
+    assert.equal(h.store.readGroup(kind, key).pending, null, `${kind}: released`);
+    assert.equal(h.org.rows(table).length, 0, kind);
+    // Dropped, it holds nothing; declared again, it is created once.
+    assert.equal((await pass(reopen(h), noConfig())).halt, null, `${kind}: dropping it is not held`);
+    refuse = false;
+    const done = await pass(reopen(h), spec, settings(spec));
+    assert.equal(done.halt, null, `${kind}: ${done.halt && `${done.halt.code}: ${done.halt.message}`}`);
+    assert.equal(h.org.rows(table).length, 1, `${kind}: created once`);
+    assert.ok(committed(h, kind, key), kind);
+  }
+});
+test('the sweep lets go of an undeclared attempt the store proves never sent, with no approval; one that may have been sent stays', () => {
+  const R = require('./helpers/managed-rows.js');
+  const sealed = [
+    { kind: 'customApi', key: R.API_KEY, id: R.API, sentFields: ['uniquename'], sentSha256: R.H('7') },
+    { kind: 'customApiRequestParameter', key: R.REQ_KEY, id: R.REQ, sentFields: ['uniquename'], sentSha256: R.H('8') },
+  ];
+  const held = (store) => {
+    const [token] = store.prepareAttemptSet([R.apiPlan()]);
+    return store.markAttemptSetSending([{ token, expected: R.apiExpected() }], { claim: 'first', observed: true })[0];
+  };
+  const prepared = R.open(makeTempDir('cfg-sweep-'));
+  prepared.prepareAttemptSet([R.apiPlan()]);
+  assert.deepEqual(P.pendingSweep({ spec: noConfig(), store: prepared }), { halts: [], retired: [{ kind: 'customApi', key: R.API_KEY, how: 'unsent' }] });
+  assert.equal(prepared.readGroup('customApi', R.API_KEY).pending, null);
+
+  // Its one request refused unstarted, and the run stopped before it released the attempt.
+  const refused = R.open(makeTempDir('cfg-sweep-'));
+  const r = held(refused);
+  refused.sealRowDispatch({ ...r, rows: sealed });
+  refused.noteRowsNotStarted({ ...r, rows: sealed });
+  assert.deepEqual(P.pendingSweep({ spec: noConfig(), store: refused }), { halts: [], retired: [{ kind: 'customApi', key: R.API_KEY, how: 'not-started' }] });
+  assert.equal(refused.readGroup('customApi', R.API_KEY).pending, null);
+
+  const sent = R.open(makeTempDir('cfg-sweep-'));
+  const s = held(sent);
+  sent.sealRowDispatch({ ...s, rows: sealed });
+  const { halts, retired } = P.pendingSweep({ spec: noConfig(), store: sent });
+  assert.deepEqual(retired, []);
+  assert.deepEqual(halts.map((x) => [x.code, x.authorize]), [['managed-settlement-pending', [`retire:customApi:${R.API_KEY}@${s.token}`]]]);
+  assert.ok(sent.readGroup('customApi', R.API_KEY).pending, 'kept until approved');
+  // The approval names that attempt; under it the store stops tracking it.
+  assert.deepEqual(P.pendingSweep({ spec: noConfig(), store: sent, retirements: [`customApi\u0000${R.API_KEY}\u0000${s.token}`] }), { halts: [], retired: [{ kind: 'customApi', key: R.API_KEY, how: 'approved' }] });
+  assert.equal(sent.readGroup('customApi', R.API_KEY).pending, null);
 });

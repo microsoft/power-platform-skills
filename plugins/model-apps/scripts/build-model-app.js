@@ -26,7 +26,8 @@
 //   create-ownership-required                    rows to bind: pass each printed --authorize adopt:<kind>:... after checking it
 //   configuration-row-not-found                  a bound row is gone (never replaced by a namesake)
 //   managed-pending-intent-changed               the declaration changed while its create was unfinished
-//   managed-settlement-pending                   an unfinished item the App Spec no longer declares
+//   managed-settlement-pending                   an unfinished item the App Spec no longer declares: restore it, or stop
+//                                                tracking it with the printed --authorize retire:<kind>:<key>@<attempt token>
 //   managed-binding-store-unreadable             the binding store cannot be read
 //   workspace-copy-unsent-edits                  a local copy differs from the server's: --authorize overwrite:<kind>:<key>
 const fs = require('node:fs');
@@ -857,7 +858,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
         // --authorize names one change it consents to and never approves a removal on this list, so a run that was given one is
         // told so: otherwise "without --allow-destructive" reads as if the key it was given had been ignored.
-        const authorizeGiven = [opts.authorizedDestructive, opts.authorizedAdoption, opts.authorizedOverwrite, opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite, opts.publicationRisk, opts.configurationApprovals,
+        const authorizeGiven = [opts.authorizedDestructive, opts.authorizedAdoption, opts.authorizedOverwrite, opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite, opts.publicationRisk, opts.configurationApprovals, opts.configurationRetirements,
           ...(opts.commandStateApprovals ? [opts.commandStateApprovals.rows, opts.commandStateApprovals.tables] : [])]
           .some((s) => s && s.size > 0);
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive${authorizeGiven ? ' (the --authorize keys given approve none of them)' : ''}:\n${lines.join('\n')}`;
@@ -1010,6 +1011,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         // to this store and builds the configuration hookup over, and the maker's adopt:<configuration kind>:... row approvals.
         ...(deps.managedCreateGate ? { managedCreateGate: deps.managedCreateGate } : {}),
         ...(opts.configurationApprovals ? { configurationApprovals: opts.configurationApprovals } : {}),
+    ...(opts.configurationRetirements ? { configurationRetirements: opts.configurationRetirements } : {}),
         // commandStates: the exact --authorize tokens of the feature, the raw client its rows are read and written through, and the invocation's observer.
         ...(opts.commandStateApprovals ? { commandStateApprovals: opts.commandStateApprovals } : {}),
         ...(deps.commandStateClient ? { commandStateClient: deps.commandStateClient } : {}),
@@ -1479,6 +1481,11 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //                                       declared item is refused (CONFIGURATION_ADOPT_AMBIGUOUS). Environment variables,
 //                                       connection references and Custom APIs only: a duplicate rule is never adopted, so its
 //                                       and its conditions' tokens keep only the plain reading above, as in 2.24.0
+//   retire:<kind>:<key>@<attempt token>  letting the binding store stop tracking ONE unfinished protected configuration attempt of an
+//                                       item the spec no longer declares, which may have been sent, exactly as the managed-settlement-
+//                                       pending stop printed it (lib/configuration-protected.js pendingSweep); rows it may have created
+//                                       stay in the environment, unmanaged, and nothing is deleted. Read with or without the opt-in;
+//                                       a key the spec declares is refused (CONFIGURATION_RETIRE_DECLARED) (configurationRetirements)
 // The family is part of the key because ids collide across families: a view and a chart may share <table>/<name>, and a view
 // may be named "quickFind". Each approval is stored under its family-typed id (reconcile-common.js approvalKey, the flag minus
 // its verb) and each guard asks only for its own family, so consent to one artifact never reaches another. The untyped form
@@ -1544,7 +1551,11 @@ function authorizationKeys(argv, spec) {
           ? `'${token}' is not adopt:<kind>:<declared key> or adopt:<child kind>:<declared key>/<declared child>, as a configuration stop prints it (ending @<row id> when it adopts a namesake)`
           : code === 'CONFIGURATION_ADOPT_AMBIGUOUS'
             ? `'${token}' reads both as the approval of one declared configuration item and, ending @<row id>, as the adoption of another's namesake; it approves neither. Rename one of the two keys`
-            : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
+            : code === 'CONFIGURATION_RETIRE_DECLARED'
+              ? `'${token}' stops tracking a configuration item the spec still declares; a build of its declaration settles it instead. Remove the declaration first, or drop the approval`
+              : code === 'CONFIGURATION_RETIRE_INVALID'
+                ? `'${token}' is not retire:<kind>:<key>@<attempt token>, as the managed-settlement-pending stop prints it`
+                : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`)));
   problems.push(...commandStates.problems);
   // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
   // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick
@@ -1789,7 +1800,7 @@ function authorizationKeys(argv, spec) {
     const i = problems.findIndex((p) => p.startsWith(`'${key}' `));
     if (i >= 0) problems[i] += ` — ${hint}`;
   }
-  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, publicationRisk, configurationApprovals: configuration.rowApprovals || new Set(), commandStateRows: commandStates.rows, commandStateTables: commandStates.tables, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
+  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, publicationRisk, configurationApprovals: configuration.rowApprovals || new Set(), configurationRetirements: configuration.retire || new Set(), commandStateRows: commandStates.rows, commandStateTables: commandStates.tables, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
 }
 
 function parseLanguageCode(value) {
@@ -2017,6 +2028,7 @@ async function main() {
     ...(authorization.webResourceOverwrite.size ? { authorizedWebResourceOverwrite: authorization.webResourceOverwrite } : {}),
     ...(authorization.publicationRisk.size ? { publicationRisk: authorization.publicationRisk } : {}),
     ...(authorization.configurationApprovals.size ? { configurationApprovals: authorization.configurationApprovals } : {}),
+    ...(authorization.configurationRetirements.size ? { configurationRetirements: authorization.configurationRetirements } : {}),
     ...(authorization.commandStateRows.size || authorization.commandStateTables.size ? { commandStateApprovals: { rows: authorization.commandStateRows, tables: authorization.commandStateTables } } : {}),
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     languageCode,
