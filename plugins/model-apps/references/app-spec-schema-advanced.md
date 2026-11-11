@@ -1320,7 +1320,8 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   A page edit makes that check under the app's build and pages leases, so it is refused with
   `build-locked` while a build of the app runs in the same workspace; run it again once the build ends.
 - **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
-  a file it cannot read, is reported as unverified, never as a pass.
+  a file it cannot read, is reported as unverified, never as a pass. A bound declared chart is checked at
+  its bound row only; a chart with the same name is never taken in its place.
 
 ## configurationIdentity (optional — exact ids for protected configuration)
 

@@ -123,7 +123,8 @@ apart deliberately.
   (the build warns). `--verify` fails on a missing spec column, filter condition or sort key (or
   authored sort keys out of order), but not on extra deployed ones, so it cannot confirm a removal. Remove or reorder view columns in Maker, or
   tear down and rebuild.
-- Choice-column charts.
+- Choice-column charts. `--verify` checks each chart's type, table, group-by column and measure (plus an
+  explicit description and a declared title), not only its name; a filter, join or second series fails.
 
 ### Custom grid rendering (preview) — ✅ SDK live-verified, environment-gated
 - `entities[].columns[].visualization` — render a column as a `RadialDial`, `LineChart`, `HeatMap`

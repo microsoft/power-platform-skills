@@ -37,6 +37,8 @@ const { verifyDeclaredDashboard } = require('./declared-dashboard-io.js');
 const { verifyDeclaredRule, declaredRulesByKey } = require('./declared-rule-io.js');
 const { verifyDeclaredBpf, declaredBpfsByKey } = require('./declared-bpf-io.js');
 const { declaredFeatureOn } = require('./declared-features.js');
+const { isDeclaredChart, declaredChartKey } = require('./chart-reconcile.js');
+const { chartContentChecks } = require('./chart-verify.js');
 const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
 const { formOrderSpecOf, isDeclaredFormOn, isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
@@ -419,10 +421,69 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
   });
-  plan.each(spec.charts || [], async ({ add }, charts) => {
+  // CHARTS — presence, then content. A chart is found, then held to what the spec says it is (lib/chart-verify.js chartContentChecks):
+  // its type, the query it draws (table, group-by column, measure), and the description and title the build owns. A chart that exists
+  // with another type, grouping, measure or an added filter used to pass on its name alone.
+  //
+  // Which row is the chart: a DECLARED chart (charts[].reconcile "declared") that the managed bindings of this workspace
+  // (`opts.managedManifest`) bind is the bound row, read by its id — the build resolves it so, and a namesake made since is not it. A
+  // bound row that is gone is missing; the name is not asked in its place. A group with an attempt still pending, or a stored record
+  // that is not usable, proves nothing about the chart: it is unverified (its managed listing says why). Every other chart is found by
+  // its name on its table, as before; two charts of that name are not told apart, so the chart is present but its content unverified.
+  //
+  // The content columns are read only for the comparison; a reader that answers without them (the eval's synthesized reader answers
+  // ids) has its charts checked for presence only, as a view's filters are checked only against a row that carries its fetchxml.
+  const chartGuid = (g) => String(g || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
+  const chartSelect = ['savedqueryvisualizationid', 'primaryentitytypecode', 'name', 'description', 'datadescription', 'presentationdescription'];
+  const chartBinding = (ch) => {
+    const m = opts.managedManifest;
+    if (!m || !Array.isArray(m.groups) || !isDeclaredChart(ch)) return null;
+    const key = declaredChartKey(ch);
+    const unsettled = (list) => (Array.isArray(list) ? list : []).find((x) => x && ((x.family === 'chart' && x.key === key) || x.family === 'store'));
+    const open = unsettled(m.pending) || unsettled(m.invalid);
+    if (open) return { key, open: `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct` };
+    const g = m.groups.find((x) => x && x.family === 'chart' && x.key === key);
+    if (!g) return null;
+    const id = chartGuid(g.root && g.root.id);
+    if (!id) return { key, open: `its managed binding (${key}) records no chart id — unverified, not proven correct` };
+    return { key, id };
+  };
+  plan.each(spec.charts || [], async ({ add, unverified }, charts) => {
   for (const ch of charts) {
-    const rows = await read.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid'], filter: `primaryentitytypecode eq '${String(ch.entity).toLowerCase()}' and name eq '${odataLit(ch.name)}'`, top: 1 });
-    add('chart', ch.name, rows && rows[0]);
+    const entity = String(ch.entity).toLowerCase();
+    const bound = chartBinding(ch);
+    if (bound && bound.open) { unverified.push(`chart:${ch.name} (${bound.open})`); continue; }
+    let row;
+    let ambiguous = false;
+    if (bound) {
+      const rows = await read.queryRecords('savedqueryvisualization', { select: chartSelect, filter: `savedqueryvisualizationid eq ${bound.id}`, top: 1 });
+      const got = rows && rows[0];
+      // Present only when the row answered IS the bound row, on the chart's table where the row says which.
+      const sameTable = !got || got.primaryentitytypecode == null || String(got.primaryentitytypecode).toLowerCase() === entity;
+      if (!got || chartGuid(got.savedqueryvisualizationid) !== bound.id || !sameTable) {
+        add('chart', ch.name, false, `the chart its managed binding (${bound.key}) is bound to (${bound.id}) was not found${got && !sameTable ? ' on its table' : ''}; a chart of the same name is not taken in its place`);
+        continue;
+      }
+      row = got;
+    } else {
+      const rows = await read.queryRecords('savedqueryvisualization', { select: chartSelect, filter: `primaryentitytypecode eq '${entity}' and name eq '${odataLit(ch.name)}'`, top: 2 });
+      const list = Array.isArray(rows) ? rows : [];
+      // A row that says it is on another table is not this chart (a reader that did not apply the table filter).
+      const onTable = list.filter((r) => r && (r.primaryentitytypecode == null || String(r.primaryentitytypecode).toLowerCase() === entity));
+      row = onTable[0];
+      ambiguous = new Set(onTable.map((r) => chartGuid(r.savedqueryvisualizationid)).filter(Boolean)).size > 1;
+    }
+    add('chart', ch.name, row);
+    if (!row) continue;
+    if (ambiguous) {
+      if (Object.prototype.hasOwnProperty.call(row, 'datadescription') || Object.prototype.hasOwnProperty.call(row, 'presentationdescription')) {
+        unverified.push(`chart-data:${ch.name} (several charts on ${entity} have this name, so which one the spec describes is not known)`);
+      }
+      continue;
+    }
+    const content = chartContentChecks(ch, row, ch.name);
+    for (const c of content.checks) add(c.kind, c.name, c.present, c.detail);
+    unverified.push(...content.unverified);
   }
   });
   // DASHBOARDS — existence, then that every deployed chart tile is internally consistent (#586 item 3).

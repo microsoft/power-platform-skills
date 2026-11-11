@@ -3880,3 +3880,154 @@ test('readManagedManifest: read-only; no store and a non-https target are empty,
   assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ "not": "a store"');
   assert.notStrictEqual(bytes, '');
 });
+// CHART CONTENT (lib/chart-verify.js). The deployed row a chart's checks read: the SDK's own scratch datadescription and presentation
+// (ChartAdapter in scripts/vendor/cds-maker-sdk.cjs), with the parts each test varies.
+const chartData = ({ entity = 'new_o', group = 'new_status', agg = 'count', measureOn, inner = '', extraAttrs = '', categories } = {}) => '<datadefinition><fetchcollection>'
+  + `<fetch mapping="logical" aggregate="true"><entity name="${entity}"><attribute alias="agg_0" name="${measureOn || `${entity}id`}" aggregate="${agg}" />`
+  + `<attribute alias="grp_0" name="${group}" groupby="true"${extraAttrs} />${inner}</entity></fetch></fetchcollection>`
+  + `<categorycollection>${categories || '<category alias="grp_0"><measurecollection><measure alias="agg_0" /></measurecollection></category>'}</categorycollection></datadefinition>`;
+const chartPres = ({ type = 'Column', title, series } = {}) => `<Chart Palette="BrightPastel">${title === undefined ? '' : `<Titles><Title>${title}</Title></Titles>`}`
+  + `<Series>${series || `<Series ChartType="${type}" ChartArea="Default" IsValueShownAsLabel="True" />`}</Series><ChartAreas><ChartArea Name="Default" /></ChartAreas><Legends><Legend Name="Default" /></Legends></Chart>`;
+const chartRow = (over = {}) => ({ savedqueryvisualizationid: 'c-1', primaryentitytypecode: 'new_o', name: 'C', description: null, datadescription: chartData(), presentationdescription: chartPres(), ...over });
+const chartSpec = (chart) => ({ entities: [], views: [], forms: [], appShell: { areas: [] }, charts: [{ entity: 'new_o', name: 'C', chartType: 'Column', groupBy: 'new_status', ...chart }] });
+// A reader holding the given chart rows; records every chart read so a test can say which row was asked for.
+const chartReader = (rows, reads = []) => ({
+  sitemapXml: async () => '<SiteMap/>',
+  queryRecords: async (set, q) => {
+    reads.push({ set, ...q });
+    if (set !== 'savedqueryvisualization') return [];
+    const byId = /savedqueryvisualizationid eq (\S+)/.exec(q.filter || '');
+    return byId ? rows.filter((r) => r.savedqueryvisualizationid === byId[1]) : rows;
+  },
+});
+const chartChecks = (r) => r.checks.filter((c) => c.kind.startsWith('chart'));
+
+test('verifySpec charts: a present chart of another type, grouping or aggregate fails; the one the spec describes passes', async () => {
+  for (const declared of [false, true]) {
+    const extra = declared ? { reconcile: 'declared' } : {};
+    const good = await verifySpec(chartSpec(extra), chartReader([chartRow()]));
+    assert.strictEqual(good.ok, true, JSON.stringify(good.missing));
+    assert.deepStrictEqual(chartChecks(good).map((c) => [c.kind, c.present]), [['chart', true], ['chart-type', true], ['chart-data', true]]);
+    const cases = [
+      [{ presentationdescription: chartPres({ type: 'Pie' }) }, 'chart-type', /it is a Pie chart, not Column/],
+      [{ datadescription: chartData({ group: 'new_priority' }) }, 'chart-data', /groups by new_priority, not new_status/],
+      [{ datadescription: chartData({ agg: 'countcolumn' }) }, 'chart-data', /aggregates with countcolumn, not count/],
+    ];
+    for (const [over, kind, detail] of cases) {
+      const r = await verifySpec(chartSpec(extra), chartReader([chartRow(over)]));
+      assert.strictEqual(r.ok, false, `${kind} ${declared}`);
+      const miss = r.missing.find((m) => m.kind === kind);
+      assert.ok(miss && detail.test(miss.detail), JSON.stringify(r.missing));
+      assert.strictEqual(/not reconcile: "declared"/.test(miss.detail), !declared, 'a legacy chart says why a rebuild leaves it');
+      assert.ok(r.checks.some((c) => c.kind === 'chart' && c.present), 'the chart itself is present');
+    }
+  }
+});
+
+test('verifySpec charts: a filter, a join, a date grouping, a second measure, series or category are failures; another table too', async () => {
+  const twoMeasures = chartData({ inner: '<attribute alias="agg_1" name="new_oid" aggregate="count" />' });
+  const cases = [
+    [chartData({ inner: '<filter><condition attribute="statecode" operator="eq" value="0" /></filter>' }), /a filter narrows/],
+    [chartData({ inner: '<link-entity name="account" from="accountid" to="new_account" link-type="inner" />' }), /joins account/],
+    [chartData({ extraAttrs: ' dategrouping="month"' }), /by month/],
+    [twoMeasures, /2 measures/],
+    [chartData({ categories: '<category alias="grp_0"><measurecollection><measure alias="agg_0" /><measure alias="agg_0" /></measurecollection></category>' }), /2 series/],
+    [chartData({ categories: '<category alias="grp_0"><measurecollection><measure alias="agg_0" /></measurecollection></category><category alias="grp_0"><measurecollection><measure alias="agg_0" /></measurecollection></category>' }), /2 categories/],
+    [chartData({ entity: 'new_p', measureOn: 'new_oid' }), /reads new_p, not new_o/],
+  ];
+  for (const [datadescription, detail] of cases) {
+    const r = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ datadescription })]));
+    const miss = r.missing.find((m) => m.kind === 'chart-data');
+    assert.ok(miss && detail.test(miss.detail), `${detail}: ${JSON.stringify(r.missing)} ${JSON.stringify(r.unverified)}`);
+  }
+});
+
+test('verifySpec charts: formatting, aliases and styling do not matter; what the verifier does not model is unverified, never a pass or a failure', async () => {
+  // An XML declaration, single quotes, another attribute order, an explicit end tag, white space, other aliases, a custom palette.
+  const reformatted = "<?xml version='1.0' encoding='utf-8'?>\n<datadefinition>\n  <fetchcollection>\n    <fetch aggregate='true' mapping='logical'>\n"
+    + "      <entity name='new_o'>\n        <attribute groupby='true' name='new_status' alias='g'></attribute>\n        <attribute aggregate='count' name='new_oid' alias='m'/>\n"
+    + "      </entity>\n    </fetch>\n  </fetchcollection>\n  <categorycollection><category alias='g'><measurecollection><measure alias='m'/></measurecollection></category></categorycollection>\n</datadefinition>";
+  const styled = "<Chart Palette='None' PaletteCustomColors='55,118,193'><Series><Series ChartArea='Default' ChartType='column' CustomProperties='PointWidth=0.75'></Series></Series><ChartAreas /></Chart>";
+  const ok = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ datadescription: reformatted, presentationdescription: styled })]));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+  assert.strictEqual(ok.unverified, undefined);
+  assert.deepStrictEqual(chartChecks(ok).map((c) => [c.kind, c.present]), [['chart', true], ['chart-type', true], ['chart-data', true]]);
+  const unknown = [
+    [{ datadescription: chartData({ inner: '<order alias="grp_0" descending="false" />' }) }, /chart-data:C \(.*an order on its groups/],
+    [{ datadescription: chartData({ inner: '<link-entity name="account" from="accountid" to="new_account" link-type="outer" />' }) }, /chart-data:C \(.*an outer join/],
+    [{ datadescription: chartData({ agg: 'Count' }) }, /chart-data:C \(.*the aggregate "Count"/],
+    [{ datadescription: chartData({ extraAttrs: ' distinct="true"' }) }, /chart-data:C \(.*the attribute distinct/],
+    [{ datadescription: '<!DOCTYPE d [<!ENTITY x "y">]><datadefinition/>' }, /chart-data:C \(its datadescription is not XML the verifier reads/],
+    [{ datadescription: '<datadefinition><fetchcollection>' }, /chart-data:C \(its datadescription is not XML/],
+    [{ datadescription: null }, /chart-data:C \(the chart has no datadescription/],
+    [{ presentationdescription: chartPres({ series: '<Series ChartArea="Default" />' }) }, /chart-type:C \(its series states no chart type/],
+  ];
+  for (const [over, line] of unknown) {
+    const r = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow(over)]));
+    assert.strictEqual(r.ok, true, `${line}: ${JSON.stringify(r.missing)}`);
+    assert.ok(r.unverified.some((u) => line.test(u)), `${line}: ${JSON.stringify(r.unverified)}`);
+  }
+  // A known contradiction is a failure whatever else the document holds.
+  const both = await verifySpec(chartSpec({}), chartReader([chartRow({ datadescription: chartData({ group: 'new_x', inner: '<order alias="grp_0" />' }) })]));
+  assert.ok(both.missing.some((m) => m.kind === 'chart-data' && /groups by new_x/.test(m.detail)));
+  // A legacy measure that is no FetchXML aggregate is not compared.
+  const odd = await verifySpec(chartSpec({ measure: 'Sum' }), chartReader([chartRow()]));
+  assert.strictEqual(odd.ok, true);
+  assert.ok(odd.unverified.some((u) => /^chart-data:C \(.*"Sum" is not an aggregate/.test(u)), JSON.stringify(odd.unverified));
+});
+
+test('verifySpec charts: a declared title and an explicit description are held; a legacy title is not', async () => {
+  const declared = { reconcile: 'declared', title: 'Open by status', description: 'Counts open rows' };
+  const right = await verifySpec(chartSpec(declared), chartReader([chartRow({ description: 'Counts open rows', presentationdescription: chartPres({ title: 'Open by status' }) })]));
+  assert.strictEqual(right.ok, true, JSON.stringify(right.missing));
+  assert.deepStrictEqual(chartChecks(right).map((c) => c.kind), ['chart', 'chart-type', 'chart-data', 'chart-description', 'chart-title']);
+  const noTitle = await verifySpec(chartSpec(declared), chartReader([chartRow({ description: 'Counts open rows' })]));
+  assert.ok(noTitle.missing.some((m) => m.kind === 'chart-title' && /no title element/.test(m.detail)), JSON.stringify(noTitle.missing));
+  const otherTitle = await verifySpec(chartSpec(declared), chartReader([chartRow({ description: 'Counts open rows', presentationdescription: chartPres({ title: 'Open &amp; closed' }) })]));
+  assert.ok(otherTitle.missing.some((m) => m.kind === 'chart-title' && /its title is "Open & closed"/.test(m.detail)));
+  const otherDescription = await verifySpec(chartSpec({ description: 'Counts open rows' }), chartReader([chartRow({ description: 'Something else' })]));
+  assert.ok(otherDescription.missing.some((m) => m.kind === 'chart-description'), JSON.stringify(otherDescription.missing));
+  const legacyTitle = await verifySpec(chartSpec({ title: 'Ignored by the legacy build' }), chartReader([chartRow()]));
+  assert.strictEqual(legacyTitle.ok, true);
+  assert.strictEqual(legacyTitle.checks.some((c) => c.kind === 'chart-title'), false);
+});
+
+test('verifySpec charts: an id-only reader checks presence only; a missing chart stays missing; a namesake pair is present but unverified', async () => {
+  const idOnly = await verifySpec(chartSpec({ reconcile: 'declared', title: 'T' }), { sitemapXml: async () => '<SiteMap/>', queryRecords: async () => [{ savedqueryvisualizationid: 'c-1' }] });
+  assert.deepStrictEqual(chartChecks(idOnly).map((c) => [c.kind, c.present]), [['chart', true]]);
+  assert.strictEqual(idOnly.unverified, undefined);
+  const gone = await verifySpec(chartSpec({}), chartReader([]));
+  assert.deepStrictEqual(gone.missing.map((m) => m.kind), ['chart']);
+  const two = await verifySpec(chartSpec({}), chartReader([chartRow(), chartRow({ savedqueryvisualizationid: 'c-2', presentationdescription: chartPres({ type: 'Pie' }) })]));
+  assert.strictEqual(two.ok, true);
+  assert.deepStrictEqual(chartChecks(two).map((c) => c.kind), ['chart']);
+  assert.ok(two.unverified.some((u) => /^chart-data:C \(several charts on new_o have this name/.test(u)));
+  // A row on another table (a reader that did not filter) is not the chart.
+  const elsewhere = await verifySpec(chartSpec({}), chartReader([chartRow({ primaryentitytypecode: 'new_p' })]));
+  assert.deepStrictEqual(elsewhere.missing.map((m) => m.kind), ['chart']);
+});
+
+test('verifySpec charts: a declared chart with a managed binding is its bound row; a namesake is not taken in its place; an open binding is unverified', async () => {
+  const bound = '11111111-2222-4333-8444-555555555555';
+  const manifest = (over = {}) => ({ revision: 1, groups: [{ family: 'chart', key: 'new_o/C', root: { kind: 'chart', key: 'new_o/C', id: bound } }], pending: [], invalid: [], ...over });
+  const reads = [];
+  const r = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ savedqueryvisualizationid: bound, name: 'Renamed by a maker' })], reads), { managedManifest: manifest() });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.ok(r.checks.some((c) => c.kind === 'chart-data' && c.present));
+  assert.ok(reads.some((q) => q.filter === `savedqueryvisualizationid eq ${bound}` && q.select.includes('datadescription')));
+  assert.strictEqual(reads.some((q) => /name eq/.test(q.filter || '')), false, 'the name is not asked');
+  const namesake = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow()]), { managedManifest: manifest() });
+  const miss = namesake.missing.find((m) => m.kind === 'chart');
+  assert.ok(miss && /bound to \(11111111-2222-4333-8444-555555555555\) was not found; a chart of the same name is not taken/.test(miss.detail), JSON.stringify(namesake.missing));
+  for (const open of [
+    { pending: [{ family: 'chart', key: 'new_o/C', code: 'managed-settlement-pending' }], groups: [] },
+    { invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }], groups: [] },
+  ]) {
+    const u = await verifySpec(chartSpec({ reconcile: 'declared' }), chartReader([chartRow({ presentationdescription: chartPres({ type: 'Pie' }) })]), { managedManifest: manifest(open) });
+    assert.strictEqual(u.checks.some((c) => c.kind.startsWith('chart')), false, JSON.stringify(u.checks));
+    assert.ok(u.unverified.some((x) => /^chart:C \(its managed binding \(new_o\/C\) is not settled/.test(x)), JSON.stringify(u.unverified));
+  }
+  // A legacy chart is found by its name, whatever the manifest holds.
+  const legacy = await verifySpec(chartSpec({}), chartReader([chartRow()]), { managedManifest: manifest() });
+  assert.ok(legacy.checks.some((c) => c.kind === 'chart' && c.present));
+});

@@ -2146,6 +2146,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the build's reuse line makes): a rebuild never writes the content of a web resource that exists, so an edit that was not
   recreated fails this check (`web-resource`), a spec content this machine cannot read (a missing `contentPath`, read relative to
   the spec's folder) is `unverified`, and a run whose build skipped the web-resources phase reports it as phase-skipped.
+  Each **chart** is held to its definition, read from the published row (`lib/chart-verify.js`): its type (`chart-type`, the one
+  Series item's `ChartType`), the query it draws (`chart-data`: its table, one group-by column with no date grouping, one measure of
+  the primary id with the spec's aggregate — `count` and `countcolumn` are distinct — one category, one series, no filter and no
+  join), an explicit `description` (`chart-description`) and a declared chart's `title` (`chart-title`). A contradiction fails, a
+  legacy chart's as a declared one's (its message says a rebuild leaves a legacy chart as it is). What the verifier does not model —
+  an order, an outer join with nothing in it, an unknown element or attribute, a document type declaration, a malformed or oversized
+  document — is `unverified`, never dropped to obtain a pass; styling (palette, colours, axes, legends) is not compared. A declared
+  chart its managed bindings bind is read by its bound id: a namesake is never taken in its place, and a binding that is pending or
+  unusable makes the chart `unverified`. Two charts with the spec's name on its table are present, their content `unverified`. A
+  reader whose rows carry no content columns (the eval's synthesized reader) checks presence only.
   A relationship is verified by its **identity**, not its name: the answer has to state its schema name, its
   type, both its tables and, for a 1:N, its lookup column — for an N:N, its intersect table and the column each
   table has in it — and all of them have to match (`compareRelationship`, `lib/relationship-metadata.js`; an N:N's

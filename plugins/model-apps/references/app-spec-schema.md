@@ -1077,6 +1077,11 @@ why they need naming here at all.
   "description": "Where the open workload is concentrated." }
 ```
 - `chartType`: `Column · Bar · Pie · Line`. **`groupBy` MUST be a Choice column** on `entity`.
+- `--verify` checks the deployed chart, not only its name: its type, its table, its group-by column and
+  its measure must match the spec, and it must have no filter, join or second series. An explicit
+  `description`, and the `title` of a declared chart, must match too. A mismatch fails. A rebuild does
+  not change an existing chart unless it has `reconcile: "declared"`, so declare it or recreate it.
+  Parts of a chart that verify cannot read are reported as unverified. Styling is not checked.
 
 ## forms[]
 ```jsonc
