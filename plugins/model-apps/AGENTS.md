@@ -7094,7 +7094,11 @@ cases are graded as a pass rate over N trials, on the first plugin skill the age
 asks for at any turn. The decision of its **first turn** is reported beside that
 grade and never in place of it: a skill it reaches for only after a first turn that
 chose none (a stand-in, perhaps, when its read-only menu has no way to do the work)
-still fails a negative case, and the case line says the first turn chose none. **Run it when you edit a skill
+still fails a negative case, and the case line says the first turn chose none. Because
+that menu cannot do any work, every prompt is sent after a short note (`TRIAL_NOTE` in
+`lib/agents.js`) that says so and tells the agent to answer in one sentence and stop when
+no skill fits; without it an agent that had already chosen none asked for `report-issue`
+as a stand-in. The note names no skill and no product. **Run it when you edit a skill
 `description:`.** It is not a per-PR gate (cost, non-determinism):
 `model-apps-agent-evals.yml` runs it on a same-repo PR labelled
 `run-agent-evals`, weekly, and on demand, using Copilot CLI authenticated by the

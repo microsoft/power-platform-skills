@@ -12,6 +12,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { parseArgs, runRouting, spawnTrial, DEFAULTS } = require('../run-routing.js');
+const { TRIAL_NOTE } = require('../lib/agents.js');
 
 const RUNNER = path.join(__dirname, '..', 'run-routing.js');
 const FAKE = path.join(__dirname, 'fake-agent.js');
@@ -151,6 +152,7 @@ test('CLI --dry-run prints the isolated invocation and launches nothing', () => 
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /# dry run — would launch \d+ case\(s\) × 3 trial\(s\)/);
   assert.match(r.stdout, /copilot .*--plugin-dir .*--available-tools skill view glob grep/);
+  assert.ok(r.stdout.includes(TRIAL_NOTE), 'the note every prompt follows is shown, so what the agent is sent can be reviewed');
 });
 
 // ---------- spawnTrial against a fake agent (real process plumbing) ----------

@@ -68,6 +68,21 @@ function buildInvocation(agent, { pluginDir, model = null, maxTurns = 4, copilot
   throw new Error(`unknown agent ${JSON.stringify(agent)}`);
 }
 
+// The menu above is read-only, so an agent that has decided no skill fits has no tool to do the work
+// with. Measured on Copilot CLI: it then says so ("I don't have any file-write, edit, or shell tool")
+// and, on its next turn, asks for the nearest skill whose description is generic (`report-issue`, whose
+// frontmatter lists Bash) as a stand-in. The grade counts that call, so a correct "none" failed on
+// requests no description pulls in. This note names the way out the menu lacks; it names no skill and does
+// not say which to prefer, so a description that really pulls a request in is still seen.
+const TRIAL_NOTE = 'This is a routing test. You can only call a skill or read files: nothing can be written or run here, '
+  + 'and you cannot ask me a question. If one of the available skills fits the request, call it. If none of them does, '
+  + 'reply in one short sentence naming what the request needs, and stop: do not try to build it.';
+
+/** The text sent to the agent for one case: the harness note, a blank line, then the user's prompt verbatim. */
+function trialPrompt(prompt) {
+  return `${TRIAL_NOTE}\n\n${prompt}`;
+}
+
 /**
  * Quote one argument for cmd.exe (used only on Windows, where `.cmd` shims require a shell).
  * Our arguments are flags, tool names and file-system paths — never the prompt (stdin) — so
@@ -78,4 +93,4 @@ function quoteForCmd(arg) {
   return /[\s"&|<>^()%!,;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-module.exports = { buildInvocation, quoteForCmd, TELEMETRY_OPTOUT };
+module.exports = { buildInvocation, quoteForCmd, trialPrompt, TRIAL_NOTE, TELEMETRY_OPTOUT };
