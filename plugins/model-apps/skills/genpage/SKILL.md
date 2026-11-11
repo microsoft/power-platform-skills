@@ -1542,7 +1542,8 @@ environment: it only reads pages and writes their files locally.
 
 1. **Mode and environment.** Resolve the interaction mode (`resolve-interaction-mode.js`, as in Phase 1) and capture
    the environment URL with `node "${PLUGIN_ROOT}/scripts/check-auth.js"` (add `--env '<envUrl>'` when the user named
-   the environment). Use that `envUrl` for every command below.
+   the environment). Use that `envUrl` for every command below. Read its result as Phase 2a does: on `ok: false`
+   show the `message` verbatim and stop (`blocker: "usage"` alone means fix the command line and rerun it).
 2. **Choose the pages.** List them, never guess them:
    - the pages of one app: `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'`, then
      `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>' --app-id '<app-id>'`;

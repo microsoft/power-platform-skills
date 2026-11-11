@@ -133,6 +133,7 @@ test('pulling pages into the project reads the environment and never writes to i
   assert.doesNotMatch(pull, /genpage-upload|add-to-app|remove-from-app|genpage\.js" delete|--overwrite-deployed/);
   assert.match(pull, /`<project-root>\/<page-id>\/`/);
   assert.match(pull, /--page-id '<page-id1>,<page-id2>' --output-directory '<project-root>'/);
+  assert.match(pull.replace(/\s+/g, ' '), /on `ok: false` show the `message` verbatim and stop/, 'a failed sign-in check stops the pull');
 });
 
 test('an unattended pull neither guesses a page nor replaces a local copy', () => {
