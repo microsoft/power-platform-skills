@@ -8,6 +8,8 @@
 // that guessed would be worse than none: a rebuild of a guessed declaration rewrites the view. So the inverse is accepted only when
 //   - the row is the one the store bound (exact id, the table it was built on), the build created it (origin "created"), its last
 //     publish settled, and it is still exactly what the build proved (projection baseline, and saved layer = published layer);
+//   - the app's solution holds the row NOW: a component row of its own, or its table held with all its subcomponents (the store
+//     shows it was added once, and a maker can take it out since); a membership the read cannot establish leaves it out too;
 //   - the view uses only what a declaration can say: a flat AND of conditions, `in`/`not-in` groups exactly as the compiler builds
 //     them, joins one level deep with their own flat filters, and nothing in the lossless fetch bag the typed tree does not show
 //     (an aggregate, a quick-find filter, a nested join, a multi-<value> condition, an order the sort list does not hold); and
@@ -24,11 +26,14 @@
 const { normalizeGuid, projectionBaseline, canonicalJson } = require('./reconcile-common.js');
 const { readManagedFormFile } = require('./declared-form-io.js');
 const { readSavedQueryLayers } = require('./savedquery-published.js');
-const { omission } = require('./managed-restore-report.js');
+const { omission, solutionMembershipCheck } = require('./managed-restore-report.js');
 const viewReconcile = require('./view-reconcile.js');
 const { compareVersions, isPluginVersion, CREATE_IDENTITY_MIN_VERSION } = require('./app-spec.js');
 
 const FAMILY = 'view';
+// A view's solution component type (Saved Query).
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/solutioncomponent
+const VIEW_COMPONENT = 26;
 const SETTLED = new Set(['confirmed', 'not-needed']);
 const lc = (v) => String(v == null ? '' : v).toLowerCase();
 const isNotFound = (err) => !!err && (err.statusCode === 404 || err.status === 404);
@@ -211,6 +216,7 @@ const floorOf = (current) => (isPluginVersion(current) && compareVersions(curren
  */
 async function restoreManagedViews({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
   const { groups, pending, invalid } = readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName }, FAMILY);
+  const inSolution = solutionMembershipCheck({ sdk, solutionUniqueName, componentTypes: [VIEW_COMPONENT] });
   const restored = [];
   const omitted = [
     ...pending.map((p) => omission({ kind: 'view', key: p.key, code: 'pending' })),
@@ -237,6 +243,9 @@ async function restoreManagedViews({ sdk, spec, file, environment, appUniqueName
     const name = typeof art.name === 'string' ? art.name : undefined;
     const table = lc(publication.scope && publication.scope.table);
     if (normalizeGuid(art.id) !== id || !table || lc(art.entityLogicalName) !== table) { left('wrong-table', name); continue; }
+    // The store proves the build put the row in the solution once; the solution must still hold it now (lib/managed-restore-report.js).
+    const membership = await inSolution(id, VIEW_COMPONENT, table);
+    if (membership) { left(membership, name); continue; }
     const live = viewReconcile.liveFull(art);
     const observed = projectionBaseline(live).intentSha256;
     const baseline = group.consumerState && group.consumerState.baseline;

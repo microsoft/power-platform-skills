@@ -19,6 +19,8 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { normalizeGuid } = require('./reconcile-common.js');
+const { createSolutionMembership } = require('./solution-membership.js');
+const { tableRefs } = require('./app-components.js');
 
 const codeError = (code, message) => Object.assign(new Error(message), { code });
 
@@ -39,6 +41,8 @@ const REASONS = Object.freeze({
   'would-change': 'a rebuild from the declaration would change it',
   'invalid-in-spec': 'the declaration rebuilt from it does not validate in the downloaded spec',
   'ownership-unproven': 'no binding store record proves this app authored it, so it is not declared',
+  'not-in-solution': 'the solution of the app does not hold it now (no component row of its own, and its table is not held with all its subcomponents)',
+  'membership-unknown': 'whether the solution of the app holds it now could not be read from the service',
 });
 
 const SAFE_TEXT = /^[^\u0000-\u001f\u007f]{1,400}$/;
@@ -112,4 +116,24 @@ function assertStoreUnchanged(file, revision, { fsImpl = fs } = {}) {
   }
 }
 
-module.exports = { REASONS, omission, subtractRestored, storeRevision, assertStoreUnchanged };
+/**
+ * The current-membership check a restore makes before it accepts a row: the store proves the build created the row in the app's
+ * solution once, not that the solution still holds it (a maker can remove it, or turn the table into a shell). Answers a function
+ * `(componentId, componentType, table) => null | 'not-in-solution' | 'membership-unknown'`: null when the solution is proven to hold
+ * the row now, by a component row of its own or by its table held with ALL its subcomponents (`rootcomponentbehavior` 0; a table held
+ * as a shell or without subcomponents does not carry its views and charts). It reuses the build's own reader (lib/solution-membership.js)
+ * so the restore accepts exactly what a build would count as a member, reads the solution once per family restore, and sends nothing:
+ * a restore never repairs membership. A read that fails, a solution that cannot prove membership, or a table whose MetadataId cannot
+ * be resolved answers 'membership-unknown', never 'not-in-solution', and never acceptance.
+ */
+function solutionMembershipCheck({ sdk, solutionUniqueName, componentTypes }) {
+  const resolveTableId = async (logical) => (await tableRefs(sdk.dataverse, [logical])).get(String(logical).toLowerCase()).metadataId;
+  const membership = createSolutionMembership({ read: sdk, solutionUniqueName, componentTypes, resolveTableId });
+  return async (componentId, componentType, table) => {
+    const status = await membership.status(componentId, componentType, { table });
+    if (status === 'held') return null;
+    return status === 'absent' ? 'not-in-solution' : 'membership-unknown';
+  };
+}
+
+module.exports = { REASONS, omission, subtractRestored, storeRevision, assertStoreUnchanged, solutionMembershipCheck };

@@ -21,12 +21,15 @@
 const { normalizeGuid, projectionBaseline, canonicalJson } = require('./reconcile-common.js');
 const { readManagedFormFile } = require('./declared-form-io.js');
 const { readSavedQueryLayerRows } = require('./savedquery-published.js');
-const { omission } = require('./managed-restore-report.js');
+const { omission, solutionMembershipCheck } = require('./managed-restore-report.js');
 const chartReconcile = require('./chart-reconcile.js');
 const { chartContentChecks } = require('./chart-verify.js');
 const { compareVersions, isPluginVersion, CREATE_IDENTITY_MIN_VERSION } = require('./app-spec.js');
 
 const FAMILY = 'chart';
+// A chart's solution component type (Saved Query Visualization).
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/solutioncomponent
+const CHART_COMPONENT = 59;
 const SETTLED = new Set(['confirmed', 'not-needed']);
 const lc = (v) => String(v == null ? '' : v).toLowerCase();
 const isNotFound = (err) => !!err && (err.statusCode === 404 || err.status === 404);
@@ -62,7 +65,8 @@ const floorOf = (current) => (isPluginVersion(current) && compareVersions(curren
  * column the spec declares on the chart's table); a restored chart also restores the spec's `createIdentity: "stable-v1"` (only a
  * stable build keeps chart groups) with its plugin floor. Every other group is answered as an omission with a fixed reason.
  * The checks, in order: the group is settled and valid; the build created the row; its publish is confirmed or not needed; the row
- * is read, by its id, on the table its publication names; its projection is the one the build proved; its saved layer equals its
+ * is read, by its id, on the table its publication names; the app's solution holds it now (a row of its own, or its table held with
+ * all its subcomponents); its projection is the one the build proved; its saved layer equals its
  * published layer (and the layer the build published); the typed chart inverts (chartDeclarationFromLive); the declaration's key is
  * the bound key; verify's content checks pass on the published row; the declaration compiles back to the row part for part; and the
  * build's own planner, given the store's binding, answers noChange for the same row.
@@ -70,6 +74,7 @@ const floorOf = (current) => (isPluginVersion(current) && compareVersions(curren
  */
 async function restoreManagedCharts({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
   const { groups, pending, invalid } = readManagedFormFile({ file, environment, appUniqueName, solutionUniqueName }, FAMILY);
+  const inSolution = solutionMembershipCheck({ sdk, solutionUniqueName, componentTypes: [CHART_COMPONENT] });
   const restored = [];
   const omitted = [
     ...pending.map((p) => omission({ kind: 'chart', key: p.key, code: 'pending' })),
@@ -96,6 +101,9 @@ async function restoreManagedCharts({ sdk, spec, file, environment, appUniqueNam
     const name = typeof art.name === 'string' ? art.name : undefined;
     const table = lc(publication.scope && publication.scope.table);
     if (normalizeGuid(art.id) !== id || !table || lc(art.entityLogicalName) !== table) { left('wrong-table', name); continue; }
+    // The store proves the build put the row in the solution once; the solution must still hold it now (lib/managed-restore-report.js).
+    const membership = await inSolution(id, CHART_COMPONENT, table);
+    if (membership) { left(membership, name); continue; }
     const live = chartReconcile.liveFull(art);
     if (!live) { left('unsupported', name); continue; }
     const observed = projectionBaseline(live).intentSha256;

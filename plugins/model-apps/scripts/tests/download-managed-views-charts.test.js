@@ -454,6 +454,50 @@ test('a managed chart the restore cannot prove is left out of charts[] with a fi
   }
 });
 
+// The solution of the app must hold a view or chart NOW for the restore to declare it: the store only shows the build added it once.
+// What counts is what a build counts (lib/solution-membership.js): a component row of its own, or the table held with ALL its
+// subcomponents (rootcomponentbehavior 0). A shell (2) carries none, and a membership that cannot be read is no proof either way.
+test('a managed view or chart is restored only while the solution of the app holds it, and the download never repairs membership', async (t) => {
+  const failRead = (org) => org.intercept((c) => c.method === 'GET' && /solutioncomponents/.test(c.path), () => ({ status: 500, headers: {}, body: { error: { code: '0x80040E14', message: 'Generic SQL error' } } }));
+  const drop = ({ org, built }) => { org.fake.removeMember(26, built.view); org.fake.removeMember(59, built.chart); };
+  const cases = [
+    ['each with a component row of its own', null, () => {}],
+    ['through their table held with all its subcomponents', null, (app) => { drop(app); app.org.fake.holdTable('contoso_item', 0); }],
+    ['with their table held as a shell only', 'not-in-solution', (app) => { drop(app); app.org.fake.holdTable('contoso_item', 2); }],
+    ['with their table held without its subcomponents', 'not-in-solution', (app) => { drop(app); app.org.fake.holdTable('contoso_item', 1); }],
+    ['no longer in the solution at all', 'not-in-solution', (app) => drop(app)],
+    ['whose membership cannot be read', 'membership-unknown', (app) => failRead(app.org)],
+    ['held through a table whose id cannot be resolved', 'membership-unknown', (app) => { drop(app); app.org.fake.holdTable('contoso_item', 0); app.org.fake.failTableIdReads(true); }],
+  ];
+  for (const [what, code, provoke] of cases) {
+    await t.test(what, async () => {
+      const app = await builtApp();
+      await provoke(app);
+      const downloaded = plainDownload(app.built);
+      const res = await download(app.org, newDir(), app.flags, { downloaded });
+      assert.equal(res.emitted[0].ok, true, JSON.stringify(res.emitted) + res.said);
+      assert.deepEqual(res.writes, [], 'the download writes nothing to the service, an AddSolutionComponent least of all');
+      const { managedViews, managedCharts } = res.emitted[0].payload;
+      if (!code) {
+        assert.deepEqual(managedViews, { restored: [VIEW_KEY], omitted: [] });
+        assert.deepEqual(managedCharts, { restored: [CHART_KEY], omitted: [] });
+        assert.equal(res.written.views.length, 1);
+        assert.equal(res.written.charts.length, 1);
+        return;
+      }
+      assert.deepEqual(managedViews.restored, []);
+      assert.deepEqual(managedCharts.restored, []);
+      assert.deepEqual(managedViews.omitted.map((o) => [o.key, o.id, o.code]), [[VIEW_KEY, app.built.view, code]]);
+      assert.deepEqual(managedCharts.omitted.map((o) => [o.key, o.id, o.code]), [[CHART_KEY, app.built.chart, code]]);
+      assert.doesNotMatch(JSON.stringify([managedViews, managedCharts]), /Generic SQL error/, 'a reason never carries what the service said');
+      assert.deepEqual(res.written.views, []);
+      assert.deepEqual(res.written.charts, []);
+      assert.equal(res.written.createIdentity, undefined, 'nothing restored, so the spec is not opted into stable ids');
+      assert.deepEqual(res.emitted[0].payload.notRoundTripped, notRoundTrippedSummary(downloaded.inventory));
+    });
+  }
+});
+
 test('chartDeclarationFromLive says only one count of the id by one column of the table, and refuses the rest', () => {
   const chart = (over = {}) => ({
     id: '00000000-0000-4000-8000-0000000000cc', name: 'By Kind', description: '', entityLogicalName: 'contoso_item', chartType: 'Column', isDefault: false,
