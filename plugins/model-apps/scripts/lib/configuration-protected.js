@@ -1268,6 +1268,80 @@ function protectedVerifyPort({ spec, manifest, dataverse, solution, bindings }) 
   };
 }
 
+/**
+ * The explicit managed download's proof that ONE declaration it rebuilt from the service (lib/declared-configuration-io.js) is the
+ * item its committed binding holds, unchanged, so a rebuild of the downloaded spec sends nothing for it. Read-only, over the same
+ * exact location and judgment the build's preflight uses (locateItem, judgeBoundShape), with no deployment settings (the download
+ * writes none, and a rebuild without them is the no-settings rebuild):
+ *   - `spec` holds the candidate declaration and `manifest` is the store's groups in the shape manifestStore reads; the item must be
+ *     bound there (committed, nothing pending) at exactly the ids the declaration derives;
+ *   - the plan of the candidate must change nothing: no root or child edit, no create, no rule-state change, and no row under the root
+ *     the binding does not hold — except, for an environment variable, one value set outside the plugin, which a rebuild without
+ *     settings leaves alone (childVerdict) and which is counted, never read;
+ *   - the solution must hold every member now (readMembers): a restore never repairs membership;
+ *   - every bound row must read back as its committed projection (`consumerRows`, the build's consumer state), computed over the same
+ *     fields: the plan of a bound row expects what the row has for every field the declaration omits, so without this a row changed
+ *     outside the plugin would be downloaded as if the build had made it so (its drift "refreshed away"). A connection reference's
+ *     connected flag is not part of its declaration (which connection is private, and is bound per environment), so either value
+ *     proves it.
+ * Answers { ok: true, values } (`values`: how many value rows a variable has: 0 or 1) or { ok: false, code } with a code of
+ * lib/managed-restore-report.js. It sends nothing and never throws for what it reads.
+ */
+async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, consumerRows }) {
+  const failed = (error) => ({ ok: false, code: error && error.code === B.NOT_FOUND_CODE ? 'missing' : error && error.code === UNVERIFIED_CODE ? 'unread' : 'not-equivalent' });
+  let item;
+  try {
+    const env = await environmentOf({ spec, store: manifestStore(manifest), dataverse, solution, bindings: undefined });
+    item = await locateItem(env, kind, key);
+  } catch (error) {
+    return failed(error);
+  }
+  if (item.state === 'pending') return { ok: false, code: 'pending' };
+  if (item.state !== 'bound') return { ok: false, code: 'invalid' };
+  const { planned } = item;
+  let judged;
+  try {
+    judged = await judgeBoundShape(dataverse, kind, planned);
+  } catch (error) {
+    return failed(error);
+  }
+  if (judged.halt) return { ok: false, code: judged.halt.code === B.NOT_FOUND_CODE ? 'missing' : 'unread' };
+  const { shape } = judged;
+  if (shape.rootChanged || shape.ruleStateChanged || shape.creates.length || shape.labelEdits.length || shape.fixedEdits.length) return { ok: false, code: 'would-change' };
+  const strayValues = kind === 'environmentVariable' ? shape.removals.filter((r) => r.startsWith('environmentVariableValue:')) : [];
+  if (shape.removals.length > strayValues.length) return { ok: false, code: 'changed' };
+  const values = planned.rows.filter((r) => r.kind === 'environmentVariableValue').length + strayValues.length;
+  if (values > 1) return { ok: false, code: 'multiple-values' };
+  let members;
+  try {
+    members = await B.readMembers(dataverse, planned);
+  } catch {
+    return { ok: false, code: 'membership-unknown' };
+  }
+  if (members.some((m) => m.state === 'unknown')) return { ok: false, code: 'membership-unknown' };
+  if (members.some((m) => m.state !== 'present')) return { ok: false, code: 'not-in-solution' };
+  const committed = Array.isArray(consumerRows) ? consumerRows : [];
+  const sameRow = (c, r) => !!c && c.kind === r.kind && c.key === r.key && normalizeGuid(c.id) === r.id;
+  for (const r of planned.rows) {
+    const c = committed.find((x) => sameRow(x, r));
+    if (!c) return { ok: false, code: 'changed' };
+    const read = await B.readConfigurationRow(dataverse, r.kind, r.id);
+    if (read.state === 'absent') return { ok: false, code: 'missing' };
+    if (read.state !== 'present') return { ok: false, code: 'unread' };
+    const semantic = B.semanticOf(r.kind, read.decoded);
+    const variants = r.kind === 'connectionReference' ? [{ ...semantic, connected: false }, { ...semantic, connected: true }] : [semantic];
+    const proved = variants.some((s) => B.projectionOf(r.kind, r.expected, s, read.decoded.unmodelled, [], read.decoded.preserved) === c.projectionSha256);
+    if (!proved) return { ok: false, code: 'changed' };
+  }
+  // A committed row the plan does not hold is a child the declaration no longer derives: the graph changed. A variable's committed
+  // value removed outside the plugin is the one exception — it held nothing a declaration says, and its absence is counted above.
+  for (const c of committed) {
+    if (c.kind === 'environmentVariableValue') continue;
+    if (!planned.rows.some((r) => sameRow(c, r))) return { ok: false, code: 'changed' };
+  }
+  return { ok: true, values };
+}
+
 module.exports = {
   EDIT_CODE,
   OPT_IN_CODE,
@@ -1280,5 +1354,7 @@ module.exports = {
   preflightProtectedConfiguration,
   protectedConfigurationPort,
   protectedVerifyPort,
+  restoreProofOf,
+  slotOf,
   createProtectedConfiguration,
 };

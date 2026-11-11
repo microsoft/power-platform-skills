@@ -1492,6 +1492,20 @@ the field builds exactly as before.
   it again. The build command keeps these items' copies in a working folder of its own and removes it
   when the command ends, so a copy kept after a failed send lasts until then: the stop applies within
   that command, and the next command reads the server's rows afresh.
+- **Download.** A plain download writes none of these items. With both `--include-managed` and
+  `--managed-manifest <store file>`, each item the store holds is read again at its bound id and written
+  back into its list only when a rebuild of it through that store would change nothing: every bound row
+  still reads as the build committed it, the app's solution still holds it, and the spec still validates.
+  The restored spec gets `configurationIdentity: "stable-v1"` and a floor of at least
+  `minimumPluginVersion: "2.25.0"`. Anything else is left out with a fixed reason (`changed`, `missing`,
+  `unread`, `not-in-solution`, `pending`, …), a WARNING, and an entry in the result's `omitted`; a
+  restored item that leaves parts out names them, never their values, in a NOTE and the result's `withheld`.
+  A rebuild without `--deployment-settings` leaves those parts as they are.
+  - *Environment variables* (`managedEnvironmentVariables`): the schema name, type, name, description,
+    required flag and, for a data source, its connector, parameter key and a parent the download also
+    restores. The current value, `defaultValue` and `valueSchema` are never written (`withheld` names
+    them). A `secret` variable is left out (`secret-withheld`), as is a data source whose parent is not
+    restored (`parent-unproven`) and a variable with more than one value row (`multiple-values`).
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.

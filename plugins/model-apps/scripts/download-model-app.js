@@ -83,6 +83,7 @@ const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
 const { restoreManagedViews } = require('./lib/declared-view-io.js');
 const { restoreManagedCharts } = require('./lib/declared-chart-io.js');
+const { restoreManagedConfiguration } = require('./lib/declared-configuration-io.js');
 const { subtractRestored, storeRevision, assertStoreUnchanged, omission } = require('./lib/managed-restore-report.js');
 const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
@@ -4381,6 +4382,7 @@ async function main(deps = {}) {
     let managedBpfs = null;
     let managedViews = null;
     let managedCharts = null;
+    let managedConfiguration = null;
     // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
     const fragments = [];
     // The store's bytes as the restore first reads them: every family below reads the file on its own, so a build that rewrote it
@@ -4409,6 +4411,7 @@ async function main(deps = {}) {
         managedBpfs = await restoreManagedBpfs(source);
         managedViews = await restoreManagedViews(source);
         managedCharts = await restoreManagedCharts(source);
+        managedConfiguration = await restoreManagedConfiguration(source);
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
         return;
@@ -4423,6 +4426,12 @@ async function main(deps = {}) {
       restoredIds.views = managedViews.restored.map((r) => r.id);
       for (const o of managedCharts.omitted) io.stderr.write(`WARNING: managed chart ${o.key || o.id} was not restored: ${o.reason}. It is left out of charts[], as every chart is without --include-managed.\n`);
       restoredIds.charts = managedCharts.restored.map((r) => r.id);
+      // Protected configuration (lib/declared-configuration-io.js): an item left out is named as every family's is; an item restored
+      // without some of its parts (a default, a value, a connection) names those parts, never their values.
+      for (const [list, r] of Object.entries(managedConfiguration)) {
+        for (const o of r.omitted) io.stderr.write(`WARNING: managed ${o.kind} ${o.key || o.id} was not restored: ${o.reason}. It is left out of ${list}[], as every ${o.kind} is without --include-managed.\n`);
+        for (const w of r.withheld) io.stderr.write(`NOTE: managed ${w.kind} ${w.key || w.id} was restored without ${w.fields.join(', ')}: ${w.reason}.\n`);
+      }
       // The report runDownload deferred (`deferReport`), less what was restored, printed once. A runDownload that hands back no
       // deferred parts printed its own report already (or had none), so nothing is printed twice.
       if (result.deferredReport) {
@@ -4513,9 +4522,17 @@ async function main(deps = {}) {
     const familyResult = (r) => (r && (r.restored.length || r.omitted.length) ? { restored: r.restored.map((x) => x.key), omitted: r.omitted } : null);
     const viewsResult = familyResult(managedViews);
     const chartsResult = familyResult(managedCharts);
+    // A configuration list says something only when it restored, left out or withheld part of an item, under its own key, so a store
+    // without protected configuration answers the result a managed download gave before it was restored, byte for byte.
+    const CONFIGURATION_RESULTS = { environmentVariables: 'managedEnvironmentVariables' };
+    const configurationResults = {};
+    for (const [list, r] of Object.entries(managedConfiguration || {})) {
+      if (!r.restored.length && !r.omitted.length && !r.withheld.length) continue;
+      configurationResults[CONFIGURATION_RESULTS[list]] = { restored: r.restored.map((x) => x.key), omitted: r.omitted, ...(r.withheld.length ? { withheld: r.withheld } : {}) };
+    }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(viewsResult ? { managedViews: viewsResult } : {}), ...(chartsResult ? { managedCharts: chartsResult } : {}), ...(managedFragments ? { managedFragments } : {}), ...(fieldSecurityProfiles ? { fieldSecurityProfiles } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(viewsResult ? { managedViews: viewsResult } : {}), ...(chartsResult ? { managedCharts: chartsResult } : {}), ...configurationResults, ...(managedFragments ? { managedFragments } : {}), ...(fieldSecurityProfiles ? { fieldSecurityProfiles } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

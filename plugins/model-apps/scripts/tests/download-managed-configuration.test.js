@@ -1,0 +1,249 @@
+'use strict';
+// The explicit managed download (download-model-app.js main, --include-managed --managed-manifest <store>) of protected configuration
+// (configurationIdentity "stable-v1"): the items are built into the strict configuration org by the real build command and the real
+// SDK bundle (helpers/configuration-command.js), downloaded through main with only its connections replaced, rebuilt from the
+// downloaded spec over the same app folder, and downloaded again. runDownload answers what the plain download of this app gives: a
+// spec with no configuration lists (a plain download never writes one).
+//
+// Privacy is proved with synthetic canaries: every current value, default, value schema and secret reference the build is given is a
+// unique marker, and every file and stream the download writes (the output folder, the download SDK's own workspace, stderr and the
+// result) is scanned for each, on a restore, a refusal and a failed read alike.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { runCommand } = require('./helpers/configuration-command.js');
+const { createConfigOrg } = require('./helpers/fake-config-org.js');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+const { main: downloadMain } = require('../download-model-app.js');
+
+const SOLUTION = 'ContosoSol';
+const APP = 'contoso_configprobe';
+const APP_ID = '00000000-0000-4000-8000-00000000c0f1';
+const SP = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';
+const CANARY = {
+  value: 'canary-value-4c1d',
+  siteValue: 'canary-site-3a9d',
+  default: 'canary-default-8e2f',
+  jsonDefault: 'canary-jsondefault-2b70',
+  schema: 'canary-schema-5e1b',
+  vault: 'canaryvault7d',
+};
+const KEY_VAULT = `/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/${CANARY.vault}/secrets/apikey`;
+
+// What the plain download of the app answers: no configuration lists.
+const PLAIN = {
+  solution: { uniqueName: SOLUTION, displayName: 'Contoso Sol', publisherPrefix: 'contoso', version: '1.2.0.0' },
+  app: { name: 'Config Probe', uniqueName: APP },
+  schemaVersion: 2,
+  entities: [],
+  appShell: { areas: [{ label: 'Main', groups: [{ label: 'Links', subAreas: [{ url: 'https://contoso.example/help', title: 'Help' }] }] }] },
+};
+const VARIABLES = [
+  { schemaName: 'contoso_ApiBase', type: 'string', name: 'API base', description: 'Base address', defaultValue: `https://${CANARY.default}.contoso.example`, isRequired: true },
+  { schemaName: 'contoso_Shape', type: 'json', defaultValue: `{"k":"${CANARY.jsonDefault}"}`, valueSchema: `{"type":"object","title":"${CANARY.schema}"}` },
+  { schemaName: 'contoso_ApiKey', type: 'secret' },
+  { schemaName: 'contoso_Site', type: 'dataSource', connectorId: SP, parameterKey: 'dataset' },
+  { schemaName: 'contoso_List', type: 'dataSource', connectorId: SP, parameterKey: 'table', parentSchemaName: 'contoso_Site' },
+];
+const SETTINGS = {
+  EnvironmentVariables: [
+    { SchemaName: 'contoso_ApiBase', Value: `https://${CANARY.value}.contoso.example` },
+    { SchemaName: 'contoso_ApiKey', Value: KEY_VAULT },
+    { SchemaName: 'contoso_Site', Value: `https://${CANARY.siteValue}.sharepoint.example/sites/a` },
+  ],
+};
+const protectedSpec = (extra) => ({ ...PLAIN, minimumPluginVersion: '2.25.0', configurationIdentity: 'stable-v1', ...extra });
+
+const walk = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)])) : []);
+const snapshot = (dir) => Object.fromEntries(walk(dir).map((f) => [path.relative(dir, f), fs.readFileSync(f).toString('base64')]));
+
+// The real build command over the strict org, with deployment settings carrying the canary values. Answers the org, the app folder
+// (whose .maker-workspace holds the binding store) and the store file.
+async function built({ variables = VARIABLES, settings = SETTINGS, intercept = {} } = {}) {
+  const org = createConfigOrg({ solution: { uniqueName: SOLUTION, version: '1.0.0.0', prefix: 'contoso' }, intercept: (req) => (intercept.fn ? intercept.fn(req) : undefined) });
+  const appDir = path.join(makeTempDir('dl-cfg-'), 'app');
+  const settingsFile = path.join(makeTempDir('dl-cfg-settings-'), 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+  const out = await runCommand(protectedSpec({ environmentVariables: variables }), { org, appDir, argv: ['--stage', 'data', '--allow-destructive', '--deployment-settings', settingsFile] });
+  assert.ok(!out.exitCode && !out.thrown && out.payload && out.payload.ok, JSON.stringify(out.payload || out.thrown));
+  const ws = path.join(appDir, '.maker-workspace');
+  const store = path.join(ws, fs.readdirSync(ws).find((f) => f.startsWith('managed-bindings.')));
+  return { org, appDir, store };
+}
+
+// download-model-app.js main with its connections replaced: the real SDK over the org's transport, a workspace of its own, and
+// runDownload answering the plain download (PLAIN).
+async function download(org, store, { out = makeTempDir('dl-cfg-out-'), managed = true } = {}) {
+  const workspace = makeTempDir('dl-cfg-ws-');
+  const sdk = createMakerSdk({
+    workspaceStorage: createNodeWorkspaceStorage(workspace),
+    instanceUrl: org.origin,
+    httpClient: createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: (r) => org.request(r), sleep: async () => {} }),
+  });
+  await sdk.initWorkspace();
+  const dl = Object.create(sdk);
+  dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
+  const said = [];
+  const emitted = [];
+  const mark = org.requests.length;
+  await downloadMain({
+    argv: ['--env', org.origin, '--app', APP_ID, '--out', out, ...(managed ? ['--include-managed', '--managed-manifest', store] : [])],
+    stderr: { write: (text) => { said.push(String(text)); return true; } },
+    exit: () => {},
+    emitResult: (ok, payload) => emitted.push({ ok, payload }),
+    preflightAuth: async () => ({ ok: true }),
+    makeDownloadSdk: async () => ({ sdk: dl, cleanup() {} }),
+    makeGenpageSdk: () => ({}),
+    runDownload: async () => ({ ok: true, spec: JSON.parse(JSON.stringify(PLAIN)), pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [], notRoundTripped: null }),
+  });
+  assert.equal(emitted.length, 1);
+  const specFile = path.join(out, 'app-spec.json');
+  return {
+    ...emitted[0],
+    said: said.join(''),
+    out,
+    workspace,
+    requests: org.requests.slice(mark),
+    writes: org.writes(mark),
+    specBytes: fs.existsSync(specFile) ? fs.readFileSync(specFile) : null,
+    spec: fs.existsSync(specFile) ? JSON.parse(fs.readFileSync(specFile, 'utf8')) : null,
+  };
+}
+
+// No canary in any file or stream the download wrote.
+function assertNoCanary(dl) {
+  const texts = [
+    ['stderr', dl.said],
+    ['result', JSON.stringify(dl.payload)],
+    ...[dl.out, dl.workspace].flatMap((dir) => walk(dir).map((f) => [f, fs.readFileSync(f, 'latin1')])),
+  ];
+  for (const [where, text] of texts) {
+    for (const canary of Object.values(CANARY)) assert.ok(!text.includes(canary), `${canary} written to ${where}`);
+  }
+}
+
+const configurationRows = (org) => JSON.stringify(['environmentvariabledefinitions', 'environmentvariablevalues', 'solutioncomponents'].map((s) => org.rows(s)));
+const reason = (code) => require('../lib/managed-restore-report.js').REASONS[code];
+
+test('environment variables: each proved definition is restored with its parent and labels, never a value, default, schema or secret; it rebuilds as no change and downloads again byte for byte', async () => {
+  const { org, appDir, store } = await built();
+  const storeBefore = fs.readFileSync(store);
+  const workspaceBefore = snapshot(appDir);
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.environmentVariables, [
+    { schemaName: 'contoso_ApiBase', type: 'string', name: 'API base', description: 'Base address', isRequired: true },
+    { schemaName: 'contoso_Site', type: 'dataSource', name: 'contoso_Site', isRequired: false, connectorId: SP, parameterKey: 'dataset' },
+    { schemaName: 'contoso_List', type: 'dataSource', name: 'contoso_List', isRequired: false, connectorId: SP, parameterKey: 'table', parentSchemaName: 'contoso_Site' },
+    { schemaName: 'contoso_Shape', type: 'json', name: 'contoso_Shape', isRequired: false },
+  ]);
+  assert.equal(dl.spec.configurationIdentity, 'stable-v1');
+  assert.equal(dl.spec.minimumPluginVersion, '2.25.0');
+  const report = dl.payload.managedEnvironmentVariables;
+  assert.deepEqual(report.restored, ['contoso_apibase', 'contoso_site', 'contoso_list', 'contoso_shape']);
+  assert.deepEqual(report.omitted.map((o) => [o.key, o.code, o.reason]), [['contoso_apikey', 'secret-withheld', reason('secret-withheld')]]);
+  assert.deepEqual(report.withheld.map((w) => [w.key, w.fields]), [
+    ['contoso_apibase', ['defaultValue', 'value']],
+    ['contoso_site', ['value']],
+    ['contoso_shape', ['defaultValue', 'valueSchema']],
+  ]);
+  assert.match(dl.said, /WARNING: managed environment variable contoso_apikey was not restored: it is a secret variable/);
+  assert.match(dl.said, /NOTE: managed environment variable contoso_apibase was restored without defaultValue, value: /);
+  // Read only, and only what the strict org models; the store and the build's own folder are untouched (the download wrote to --out).
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+  assert.deepEqual(fs.readFileSync(store), storeBefore);
+  assert.deepEqual(snapshot(appDir), workspaceBefore);
+  assertNoCanary(dl);
+
+  // The downloaded spec, rebuilt over the same app folder with no deployment settings, changes nothing: every value, default, parent
+  // and membership stays as it was.
+  const rows = configurationRows(org);
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual(rebuilt.payload.created.configuration.unchanged.map((u) => u.key).sort(), ['contoso_ApiBase', 'contoso_List', 'contoso_Shape', 'contoso_Site']);
+  assert.equal(configurationRows(org), rows);
+  assert.deepEqual(org.unexpected, []);
+
+  const again = await download(org, store);
+  assert.ok(again.specBytes.equals(dl.specBytes), 'a second download writes the same bytes');
+  assertNoCanary(again);
+});
+
+test('environment variables: a definition changed by hand is left out, and so is the data source naming it as parent; a second value row is never picked', async () => {
+  const { org, store } = await built();
+  const bump = (set, pick, patch) => {
+    const rows = org.sets.get(set);
+    const [id, row] = [...rows].find(([, r]) => pick(r));
+    rows.set(id, { ...row, ...patch, versionnumber: row.versionnumber + 1000 });
+    return id;
+  };
+  bump('environmentvariabledefinitions', (r) => r.schemaname === 'contoso_Site', { description: 'edited in the maker portal' });
+  const shape = bump('environmentvariabledefinitions', (r) => r.schemaname === 'contoso_Shape', {});
+  // A second current value under contoso_Shape, made outside the plugin: a download never chooses between them.
+  for (const n of [1, 2]) {
+    const id = `00000000-0000-4000-8000-0000000eb${n}00`;
+    org.sets.get('environmentvariablevalues').set(id, {
+      environmentvariablevalueid: id, schemaname: 'contoso_Shape', value: `{"k":"${CANARY.value}"}`, _environmentvariabledefinitionid_value: shape, versionnumber: 9000 + n,
+    });
+  }
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.environmentVariables.map((v) => v.schemaName), ['contoso_ApiBase']);
+  assert.deepEqual(dl.payload.managedEnvironmentVariables.omitted.map((o) => [o.key, o.code]).sort(), [
+    ['contoso_apikey', 'secret-withheld'],
+    ['contoso_list', 'parent-unproven'],
+    ['contoso_shape', 'multiple-values'],
+    ['contoso_site', 'changed'],
+  ]);
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+  assertNoCanary(dl);
+});
+
+test('environment variables: a read that fails leaves every item out as unread, and a store rewritten during the download stops it with the files already in --out kept as they were', async () => {
+  const intercept = {};
+  const { org, store } = await built({ intercept });
+  intercept.fn = (req) => (req.method === 'GET' && /^\/environmentvariable/.test(req.path) ? { statusCode: 500, body: { error: { code: '0x80040216', message: `failed near ${CANARY.default}` } } } : undefined);
+  const failed = await download(org, store);
+  assert.equal(failed.ok, true, JSON.stringify(failed.payload));
+  assert.equal(failed.spec.environmentVariables, undefined);
+  assert.equal(failed.spec.configurationIdentity, undefined);
+  assert.deepEqual([...new Set(failed.payload.managedEnvironmentVariables.omitted.map((o) => o.code))], ['unread']);
+  assert.equal(failed.payload.managedEnvironmentVariables.omitted.length, 5);
+  assertNoCanary(failed);
+
+  // A build that rewrites the store while this download reads it: refused before anything is written.
+  const out = makeTempDir('dl-cfg-kept-');
+  fs.writeFileSync(path.join(out, 'app-spec.json'), '{"kept":true}\n');
+  const kept = snapshot(out);
+  let rewritten = false;
+  intercept.fn = (req) => {
+    if (!rewritten && req.method === 'GET' && /^\/environmentvariabledefinitions\(/.test(req.path)) {
+      rewritten = true;
+      fs.appendFileSync(store, '\n');
+    }
+    return undefined;
+  };
+  const refused = await download(org, store, { out });
+  assert.equal(rewritten, true);
+  assert.equal(refused.ok, false);
+  assert.deepEqual(snapshot(out), kept);
+  assert.deepEqual(refused.writes, []);
+  assertNoCanary(refused);
+});
+
+test('a download without --include-managed reads no configuration and writes none, and its result names no configuration list', async () => {
+  const { org, store } = await built();
+  const dl = await download(org, store, { managed: false });
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec, PLAIN);
+  assert.deepEqual(Object.keys(dl.payload).filter((k) => /^managed/.test(k)), []);
+  assert.deepEqual(dl.requests.filter((r) => /environmentvariable|connectionreference|customapi|duplicaterule/i.test(r.path)), []);
+  assertNoCanary(dl);
+});

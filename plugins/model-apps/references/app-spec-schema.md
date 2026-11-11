@@ -1998,7 +1998,10 @@ custom control), but the spec validator emits a warning.
   before you run the build again.
 - **Not carried by teardown or download.** A teardown never deletes a configuration item (nothing proves this app
   owns it); it names each one as kept, by name only, and says when a Custom API bound to a table the spec makes will
-  block that table's delete. A download does not bring these items back into the spec yet.
+  block that table's delete. A plain download does not bring these items back into the spec. A managed download
+  (`--include-managed --managed-manifest <store file>`) of an app built with `configurationIdentity: "stable-v1"`
+  brings back each environment variable the store proves unchanged, without its value, default or value schema
+  (see `configurationIdentity` in app-spec-schema-advanced.md).
 
 ## appShell
 ```jsonc

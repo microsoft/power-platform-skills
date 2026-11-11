@@ -291,7 +291,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   reference is bound to a connection and the Custom API has an implementation (a plug-in type) — a declared
   Custom API alone is a scaffold; clearing a value, unbinding a reference or removing a parameter or condition
   needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
-  a download does not bring them back into the spec yet; and a whole-build retry after a lost answer can create
+  a plain download does not bring them back into the spec (a managed download of a `configurationIdentity:
+  "stable-v1"` app brings back the ones its store proves, never a value, default or connection); and a whole-build retry after a lost answer can create
   a second row, so check the environment before running a failed build again. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → *Configuration items*.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart

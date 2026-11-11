@@ -1786,6 +1786,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `reconcile: "declared"`, `chartType`, `groupBy`, the `measure` stated explicitly, and its description
   and title when they hold text. Styling (palette, colours, axes, legend) is not the spec's: a rebuild
   that writes nothing to the chart keeps it byte for byte. Omissions are `managedCharts.omitted`, each with a WARNING.
+  **It restores protected configuration** (`configurationIdentity: "stable-v1"`; `lib/declared-configuration-io.js`,
+  `restoreManagedConfiguration`). A configuration group keeps no declaration, so each one is rebuilt from the bound
+  rows as they are now, read IN MEMORY at their exact ids (`readConfigurationRow`), never through the SDK's cached
+  `fetchArtifact` (which writes current values, defaults and connection ids into workspace files). It is accepted
+  only when `restoreProofOf` (`lib/configuration-protected.js`) proves a rebuild of it changes nothing: the build's
+  own exact location, plan and judgment, every planned row matching a committed consumer row, and each such row's
+  current projection equal to the one the build committed (that comparison is what catches a row edited by hand,
+  since an omitted field plans as the row's own value), and the solution still holding it. Then the spec must
+  still validate. A declaration never carries a value, default, value schema, secret reference or connection: a
+  part left out is named in `withheld` (`fields`, never a value) and a NOTE, and is never written as a null (a
+  written null would clear it on a rebuild). Results: `managedEnvironmentVariables` (only when it says something,
+  so a store without configuration answers as before). A secret variable is `secret-withheld`; a data source whose
+  parent is not restored at exactly the row it names is `parent-unproven`; a second value row is
+  `multiple-values`. `tests/download-managed-configuration.test.js` builds through the real build command and
+  bundle, downloads through `main`, rebuilds over the same app folder with zero writes, downloads again byte for
+  byte, and scans every file and stream the download wrote for value, default, schema and secret canaries.
   **Every download, plain or managed, reports the custom field security profiles it does not declare**
   (`readFieldSecurityProfiles`). A profile is environment-wide security policy and no store family proves one is
   this app's, so no restore declares one: `fieldSecurityProfiles[]` stays out of the spec, and a rebuild neither

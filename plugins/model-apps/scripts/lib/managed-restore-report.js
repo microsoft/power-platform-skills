@@ -43,6 +43,10 @@ const REASONS = Object.freeze({
   'ownership-unproven': 'no binding store record proves this app authored it, so it is not declared',
   'not-in-solution': 'the solution of the app does not hold it now (no component row of its own, and its table is not held with all its subcomponents)',
   'membership-unknown': 'whether the solution of the app holds it now could not be read from the service',
+  'secret-withheld': 'it is a secret variable: its Key Vault reference is never downloaded, and a secret is not round-tripped',
+  'parent-unproven': 'the parent variable it names is not one this download restores at exactly that row',
+  'multiple-values': 'it has more than one current value row, and a download never picks one',
+  'fields-withheld': 'the named parts are never written by a download (they can hold a private or environment-specific value); a rebuild leaves them as they are in the service',
 });
 
 const SAFE_TEXT = /^[^\u0000-\u001f\u007f]{1,400}$/;
