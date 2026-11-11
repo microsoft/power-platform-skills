@@ -194,14 +194,14 @@ const CASES = [
   ['overflowY and overflow on two classes naming custom properties in another case through escaped hyphens', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: ${JSON.stringify(String.raw`var(\-\-Scroll)`)} },\n  b: { overflow: ${JSON.stringify(String.raw`var(\-\-scroll)`)} },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
   ['overflowY and overflow on two classes with the same var() but for the case of its function', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'VAR(--Scroll)' },\n  b: { overflow: 'var(--Scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
   ['overflowY and overflow on two classes with byte for byte the same var()', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'var(--Scroll)' },\n  b: { overflow: 'var(--Scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:unread-value'],
-  // An env() name and an attr() name are case-sensitive too, and an unknown env name takes its fallback, so `calc(100% - env(a, -2000px))`
-  // and the same with `A` are not one value: a text with an env() or attr() is compared byte for byte like one with a var(). That refuses
-  // another case or spacing of one value as well (not proven); the remedy passes those.
+  // An env() name is case-sensitive too (an attr() name may be), and an env name the host does not define takes its fallback, so
+  // `calc(100% - env(a, -2000px))` and the same with `A` are not proven to be one value: a text with an env() or attr() is compared byte
+  // for byte like one with a var(). That refuses another case or spacing of one value as well (not proven); the remedy passes those.
   ['a minHeight whose nested env() names another environment variable in another case', heightAndMin('calc(100% - env(safe-area-inset-bottom, -2000px))', 'calc(100% - env(SAFE-AREA-INSET-BOTTOM, -2000px))'), 'unproven:min-height'],
   ['a minHeight that is byte for byte the height with a nested env()', heightAndMin('calc(100% - env(safe-area-inset-bottom, 0px))', 'calc(100% - env(safe-area-inset-bottom, 0px))'), 'pass'],
   ['a minHeight that is the same env() as the height but for the case of its function (refused, not proven)', heightAndMin('calc(100% - env(safe-area-inset-bottom))', 'CALC(100% - ENV(safe-area-inset-bottom))'), 'unproven:min-height'],
   ['a minHeight that is the same env() as the height but for its spacing (refused, not proven)', heightAndMin('calc(100% - env(safe-area-inset-bottom))', 'calc(100% - env( safe-area-inset-bottom ))'), 'unproven:min-height'],
-  ['a minHeight whose attr() names another attribute in another case', heightAndMin('calc(attr(data-h px, 400px))', 'calc(attr(DATA-H px, 400px))'), 'unproven:min-height'],
+  ['a minHeight whose attr() argument differs in case (refused, not proven)', heightAndMin('calc(attr(data-h px, 400px))', 'calc(attr(DATA-H px, 400px))'), 'unproven:min-height'],
   ['a minHeight that is byte for byte the height with an attr()', heightAndMin('calc(attr(data-h px, 400px))', 'calc(attr(data-h px, 400px))'), 'pass'],
   ['a minHeight that is the same attr() as the height but for the case of its function (refused, not proven)', heightAndMin('calc(attr(data-h px, 400px))', 'calc(ATTR(data-h px, 400px))'), 'unproven:min-height'],
   ['a minHeight with an env() beside a height without one', heightAndMin('calc(100% - 64px)', 'calc(100% - env(safe-area-inset-bottom, 64px))'), 'unproven:min-height'],
