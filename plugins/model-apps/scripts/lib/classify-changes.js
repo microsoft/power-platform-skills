@@ -207,6 +207,24 @@ function classifyForms(cur, prior) {
   return out;
 }
 
+// commandStates[]: matched by row id. Every change is applied by a full build, which reads each declared row and asks for approval of what it
+// finds (lib/command-state-run.js), so none is debt. An entry no longer declared leaves its row's flags as they are: that is not a divergence
+// a later build could close either, so it is said and not recorded.
+function classifyCommandStates(cur, prior) {
+  const out = { fast: [], full: [], debt: [] };
+  const byRow = (list) => new Map((Array.isArray(list) ? list : []).map((e) => [String((e && e.rowId) || '').toLowerCase(), e]));
+  const now = byRow(cur.commandStates);
+  const before = byRow(prior.commandStates);
+  for (const [id, entry] of now) {
+    if (!before.has(id)) out.full.push(`commands: command state of row '${id}' added — applied by a full build`);
+    else if (stableStringify(entry) !== stableStringify(before.get(id))) out.full.push(`commands: command state of row '${id}' changed — applied by a full build`);
+  }
+  for (const id of before.keys()) {
+    if (!now.has(id)) out.full.push(`commands: command state of row '${id}' no longer declared — a build leaves the row's flags as they are`);
+  }
+  return out;
+}
+
 // THE classifier. `current` / `prior` are ANNOTATED specs. Returns:
 //   { verdict:'noop'|'fast'|'full', changedPhases, fastChanges, fullReasons, debt }
 // verdict 'fast' ⇒ every changed phase yielded a convergent shape (fastChanges) and there are no
@@ -234,7 +252,7 @@ function classifyChanges(current, prior) {
       case 'app-shell': merge(classifyAppShell(cur, prior)); break;
       case 'forms': merge(classifyForms(cur, prior)); break;
       case 'charts': merge(classifyAdditive(cur, prior, 'charts', 'chart', 'charts')); break;
-      case 'commands': merge(classifyAdditive(cur, prior, 'commands', 'command', 'commands')); break;
+      case 'commands': merge(classifyAdditive(cur, prior, 'commands', 'command', 'commands')); merge(classifyCommandStates(cur, prior)); break;
       case 'dashboards': merge(classifyAdditive(cur, prior, 'dashboards', 'dashboard', 'dashboards')); break;
       case 'web-resources': merge(classifyAdditive(cur, prior, 'web-resources', 'webResource', 'webResources')); break;
       // Both are additive discover-reconcile: the engine creates what is missing and does NOT reapply

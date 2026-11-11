@@ -417,6 +417,6 @@ test('parser check: the views of a text are kept for the next check of the same 
   } finally {
     setParserCheck(true);
   }
-  // A test seam for another compiler: given one, the views are built with it (and not kept).
+  // Another compiler: given one, the views are built with it, and kept apart from the vendored compiler's (prepare-genpage.js hands one in).
   assert.deepEqual(typescriptViews(code, { ts }).keep, first.keep);
 });

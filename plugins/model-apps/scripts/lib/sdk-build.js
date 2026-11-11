@@ -19,6 +19,7 @@ const { resolveAppSource } = require('./app-source-path.js');
 const { readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, creationIds } = require('./page-ownership-records.js');
 const { readPublishedPages, writePublishedPages, sameFileVersions } = require('./page-publish-records.js');
 const { leftOnDiskWarning } = require('./left-on-disk.js');
+const { authorizeFlag } = require('./cli-failure.js');
 // The pages lock: two files (one keyed without regard to case, one spelled as every earlier release spells it), each taken through the snapshot
 // lease's exclusive create-and-reclaim and reclaimed only from a build that is provably gone; and the build lease an apply holds outside it
 // (lib/app-operation-lease.js).
@@ -62,6 +63,9 @@ const { PHASES } = require('./stages.js');
 const { pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, unconfirmedDeployedText } = require('./page-binding-targets.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
+  isDeclaredFormOn,
+  formOrderForms,
+  formOrderSpecOf,
   isMainForm,
   isOwnCustomTable,
   declaredMainForms,
@@ -89,12 +93,13 @@ const {
   findExistingColumns,
   relationshipExists,
   localizedLabelLcidsInSpec,
+  checkLocalizedLabelLanguages,
   lookupsWithDefaultLabel,
   relationshipsInCreateOrder,
 } = require('./entity-provision.js');
 const { repairLookupCellLabels } = require('./lookup-cell-labels.js');
 const { diffBpfStages, deployedBpfStages, desiredBpfStages, describeBpfEdit, describeBpfRefusals } = require('./bpf-stages.js');
-const { hasLabelUses, makeChoiceReader, makeGlobalChoiceReader, resolveViewFilterLabels, checkViewFilterLabelsBeforeBuild, describeProblem, describeProblems } = require('./view-filter-labels.js');
+const { hasLabelUses, viewsForLabels, makeChoiceReader, makeGlobalChoiceReader, resolveViewFilterLabels, checkViewFilterLabelsBeforeBuild, describeProblem, describeProblems } = require('./view-filter-labels.js');
 // Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
 const {
   compileFormIntent,
@@ -118,6 +123,8 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageSdk, suppliedButBlank, unescapePacName, sourceText, holdsWhatWasSent, describeDivergence, entityTablesOfSiteMap } = require('./genpage-sdk.js');
+const { runFormPageEmbeds, hasFormPageEmbeds, pagesPhaseMissingForEmbeds, requirePagesPhaseForEmbeds } = require('./form-page-embeds.js');
+const { typescriptProviderOptions } = require('./typescript-provider.js');
 const { genPageSubArea } = require('./genpage-subarea.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
@@ -138,13 +145,19 @@ const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, rebucketNonEnablingSkips,
 const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes } = require('./sitemap-merge.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
+const { exactOne, distinctRows } = require('./query-completeness.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
-const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows } = require('./app-components.js');
+const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows,
+  declaredAppPins, pinDeclaredArtifacts } = require('./app-components.js');
+const { pinIntentOf, pinWarningOf, reconcileUnconfirmedPin } = require('./app-pin-recovery.js');
+const { createAppPublication } = require('./app-publication-policy.js');
 const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
+const { uniqueKeys } = require('./unique-keys.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { readPageComponentType, pageComponent } = require('./page-solution.js');
 const { openUnconfirmedWebResources } = require('./web-resource-records.js');
+const { isDeclaredWebResource, webResourceReads, readWebResourceDependents, planWebResourceUpdate, applyWebResourceUpdate, settleWebResourceReceipt } = require('./web-resource-reconcile.js');
 const { openDashboardCreations } = require('./dashboard-creation-records.js');
 const { ownValue } = require('./own-keys.js');
 const { navigationEntryKind, navigationHolds, navigationIsPagesOnly, navigationVerdict } = require('./app-navigation.js');
@@ -152,8 +165,50 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 // The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
 // raises itself is made by refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service), because the build's retry reads a failure's STRUCTURE and the
 // service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
-const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
+const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSecurity } = require('./field-security.js');
+const { declaredTableFlags } = require('./schema-feature-contract.js');
+const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause, markFreshTable, isFreshTableReadLag, freshTableLagAnswer, unsentDefaultView } = require('./retry-policy.js');
+const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
+const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approvalKey } = require('./reconcile-common.js');
+const { createPassthroughCreates } = require('./creates-passthrough.js');
+const { isDeclaredView, declaredViewKey, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
+const { isDeclaredChart, declaredChartKey, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
+const { openManagedContext, isStoreEnvironment, attemptProvenUnsent, discoverManagedStore, ROW_FAMILIES } = require('./managed-bindings.js');
+const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
+const { commandStateMode, commandStateSpecHalt, createCommandStateRun, createCommandStatePublicationObserver, CODES: COMMAND_STATE_CODES, REMEDY: COMMAND_STATE_REMEDY } = require('./command-state-run.js');
+const { createCommandStateTransport } = require('./command-state-transport.js');
+const { serviceAnswerText, withCheckedDisplay } = require('./command-state-contract.js');
+const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
+// The configuration kinds (environment variables, connection references, Custom APIs, duplicate rules) and the solution's version:
+// the helper plans, applies and reads them back; the runtime closes over what only the build has (its create port, BuildHalt and
+// retry policy, the --authorize keys) so this file calls three methods and keeps no configuration state of its own.
+const { usesConfiguration, hasConfigurationDefinitions, configurationPlanItems } = require('./configuration-artifacts.js');
+const { createConfigurationRuntime, sweepPendingConfiguration } = require('./configuration-build.js');
+// Declared forms (forms[].reconcile "declared", lib/form-layout-reconcile.js) are dispatched only while their enable flag is on
+// (lib/declared-features.js). With it off, no form is declared here — validation refuses `reconcile` on a form — so every form
+// takes the build's own path and every spec sends the requests it always sent.
+const { declaredFeatureOn } = require('./declared-features.js');
+// isDeclaredFormOn, and the forms the build's default-form promotion and Main Form Set order may write (formOrderForms and
+// formOrderSpecOf: the spec without its declared forms), come from lib/form-order.js: verify reads the same rule.
+const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent } = require('./form-layout-reconcile.js');
+// Declared dashboards (dashboards[].reconcile "declared", lib/dashboard-reconcile.js) the same way: only while their flag is on. With it
+// off, validation refuses `reconcile` on a dashboard, and every dashboard takes the build's own create-or-reuse path below.
+const isDeclaredDashboardOn = (d) => declaredFeatureOn('dashboards') && !!d && d.reconcile === 'declared';
+const { withDashboardWorkspaceScope } = require('./dashboard-recovery-workspace.js');
+const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey: declaredDashboardKey } = require('./dashboard-reconcile.js');
+// The create identity each retired declared key takes when it is declared again (managed-bindings.js incarnations()), handed to
+// every declared family's create catalog: a key whose root was proved gone and retired is created again under a fresh id, never
+// under the retired one. No store (a dry run, no app) has none.
+const storeIncarnations = (store) => (store && typeof store.incarnations === 'function' ? store.incarnations() : []);
+// Declared business rules (businessRules[].reconcile "declared", lib/rule-settlement.js) the same way: only while their flag is on.
+// The helper is required at first use, not here: it pulls in the stable-identity modules (creates-catalog.js), which a build with
+// no declared rule must not load (tests/creates-port.test.js).
+const isDeclaredRuleOn = (r) => declaredFeatureOn('rules') && !!r && r.reconcile === 'declared';
+// Declared business process flows (businessProcessFlows[].reconcile "declared", lib/bpf-settlement.js) likewise, and for the same
+// reason the helper is required at first use.
+const isDeclaredBpfOn = (f) => declaredFeatureOn('bpf') && !!f && f.reconcile === 'declared';
+const { readSystemFormRootPresence } = require('./systemform-published.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -280,6 +335,36 @@ async function readSavedSystemForm(provision, id) {
     return { state: 'present', id, name: typeof body.name === 'string' ? body.name : '', type: body.type };
   }
   return { state: 'unreadable', id, status, answered, why: `HTTP ${status}${answered && typeof answered.message === 'string' ? `: ${answered.message}` : ' with no row the build can read'}` };
+}
+
+// One workflow row read by its EXACT id, through the plugin's client (the one every state change of a declared workflow goes through):
+//   GET <envUrl>/api/data/v9.2/workflows(<id>)?$select=workflowid
+//   200 { "@odata.etag": "W/\"1234567\"", "workflowid": "11111111-1111-4111-8111-111111111111" }
+//   404 { "error": { "code": "0x80040217", "message": "workflow With Id = 11111111-… Does Not Exist" } }
+// A workflow has one layer (no saved and published pair, as a systemform has), so this answer is the whole word on whether the row
+// exists. The client answers a non-2xx as a response ({ status, headers, body }, the body text or parsed JSON) and throws only when
+// no answer came. Only the documented "Does Not Exist" proves the row absent; a 404 without that code, a 401 or 403, a throttle, a
+// body that names another row, or a thrown error proves nothing either way.
+// Answers { state: 'present', id } | { state: 'absent', id } | { state: 'unreadable', id, why, status? }.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/workflow
+async function readWorkflowRowPresence(provision, instanceUrl, id) {
+  const client = provision && provision.dataverse && provision.dataverse.httpClient;
+  if (!client || typeof client.get !== 'function' || !instanceUrl) return { state: 'unreadable', id, why: 'no client to read the workflow row by its id' };
+  let response;
+  try {
+    response = await client.get(`${String(instanceUrl).replace(/\/+$/, '')}/api/data/v9.2/workflows(${id})?$select=workflowid`);
+  } catch (error) {
+    return { state: 'unreadable', id, why: (error && error.message) || String(error) };
+  }
+  const status = response && response.status;
+  let body = response && response.body;
+  if (typeof body === 'string') {
+    try { body = body ? JSON.parse(body) : null; } catch { body = null; }
+  }
+  const answered = body && typeof body === 'object' && body.error && typeof body.error === 'object' ? body.error : undefined;
+  if (status === 404 && answered && answered.code === '0x80040217') return { state: 'absent', id };
+  if (status >= 200 && status < 300 && body && typeof body === 'object' && String(body.workflowid || '').replace(/[{}]/g, '').toLowerCase() === id) return { state: 'present', id };
+  return { state: 'unreadable', id, status, why: `HTTP ${status}${answered && typeof answered.message === 'string' ? `: ${answered.message}` : ' with no row the build can read'}` };
 }
 
 // A systemform `type` as the integer it is, strictly (the platform answers a number; a text of digits is read as one). Anything else is NaN, never 0 —
@@ -685,6 +770,8 @@ function planFor(spec, opts) {
   const items = [];
   const sol = spec.solution;
   if (has('solution')) items.push({ phase: 'solution', label: `solution ${sol.uniqueName} (publisher ${sol.publisherPrefix})` });
+  // ONE item for the solution's version when the spec states one; its label is the step's (runSdkBuildPhases, the version step).
+  if (has('solution')) items.push(...configurationPlanItems(spec).filter((item) => item.phase === 'solution'));
   if (has('data-model')) {
     // The relationship probe identity must match the one the APPLY path uses, or an existing
     // relationship reads as `create`. `provisionDataModel` queries the REFERENCED (parent) entity's
@@ -770,14 +857,24 @@ function planFor(spec, opts) {
         if (keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
       }
     }
+    // The table flags last (provisionDataModel's step 2d): exactly one step for a table that declares one — run, or skipped as already
+    // declared — so it is countable from the spec. Then each field security profile, after its columns are secured and before any sample
+    // data; the preview names who the profile will be given to, or says that no one is named.
+    for (const e of spec.entities) if (Object.keys(declaredTableFlags(e)).length) items.push({ phase: 'data-model', label: `table flags ${e.schemaName}` });
+    for (const p of spec.fieldSecurityProfiles || []) items.push({ phase: 'data-model', label: fieldSecurityProfileLabel(p) });
+    if (!has('security')) for (const p of profilesWithAssignments(spec)) items.push({ phase: 'data-model', label: deferredAssignmentsLabel(p) });
+    // ONE item for every configuration declaration together, whatever their number: the step runs them as one unit, in dependency order.
+    items.push(...configurationPlanItems(spec).filter((item) => item.phase === 'data-model'));
   }
   if (has('sample-data') && opts.sampleData) {
+    if (!has('data-model') && seededSecuredTables(spec).size) items.push({ phase: 'sample-data', label: SEED_SECURITY_STEP });
     for (const e of spec.entities) { const n = sampleRecordsFor(spec, e).length; if (n) items.push({ phase: 'sample-data', label: `${n} sample record(s) -> ${e.schemaName}` }); }
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
   if (has('web-resources')) for (const e of spec.entities || []) if (e.icon || e.vectorIcon) items.push({ phase: 'web-resources', label: `table icon for ${e.schemaName.toLowerCase()}` });
   if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}`, key: { kind: 'view', entity: v.entity, name: v.name, declared: v } });
   if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
+  if (has('views')) for (const e of spec.entities || []) if (e && e.quickFind) items.push({ phase: 'views', label: `Quick Find for ${e.schemaName.toLowerCase()}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}`, key: { kind: 'chart', entity: c.entity, name: c.name } });
   if (has('forms')) for (const f of spec.forms || []) {
     const ft = f.formType || 'Main';
@@ -792,6 +889,8 @@ function planFor(spec, opts) {
       formKey = { kind: 'form', entity: def.entityLogicalName, name: def.name, formType: ft, formId: f.formId };
     } catch { formKey = undefined; }
     items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}`, ...(formKey ? { key: formKey } : {}) });
+    // A declared form's handlers and quick views are part of its one managed write (lib/form-layout-reconcile.js), not steps of their own.
+    if (isDeclaredFormOn(f)) continue;
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
@@ -800,7 +899,7 @@ function planFor(spec, opts) {
   // None where the author orders the forms by hand (`securityRoles.order`).
   if (has('forms')) {
     const orderSteps = new Set();
-    for (const f of (spec.forms || []).filter(isMainForm)) {
+    for (const f of formOrderForms(spec).filter(isMainForm)) {
       const key = String(f.entity || '').toLowerCase();
       if (!key || orderSteps.has(key)) continue;
       orderSteps.add(key);
@@ -816,6 +915,8 @@ function planFor(spec, opts) {
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap`, key: { kind: 'app', uniqueName: appUniqueName(spec) } });
   if (has('app-shell') && !(spec.app && spec.app.icon)) items.push({ phase: 'app-shell', label: `app icon (generated) ${appUniqueName(spec)}_icon` });
+  // app.theme (Preview): one step, only when the spec declares a theme (ensureThemeApplied in runSdkBuildPhases).
+  if (has('app-shell') && spec.app && spec.app.theme !== undefined) items.push({ phase: 'app-shell', label: 'app theme (Preview)' });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
   if (has('pages') && (spec.pages || []).length && appHasCrossPageNav(spec)) items.push({ phase: 'pages', label: 'resolve cross-page navigation' });
   if (has('pages') && (spec.pages || []).length) items.push({ phase: 'pages', label: `page manifest ${appUniqueName(spec)}_pagemanifest` });
@@ -827,6 +928,8 @@ function planFor(spec, opts) {
   // stay in step is to budget the step and have the runtime emit an explicit `skip` when it does not
   // fire — the same shape as the existing-column "applied on create" skips.
   if (has('pages')) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
+  // Budgeted only for a spec that embeds a page on a form; the runtime then runs it, or emits an explicit skip (a content-only re-upload).
+  if (has('pages') && hasFormPageEmbeds(spec)) items.push({ phase: 'pages', label: 'embed generative pages on forms' });
   if (has('ai-features') && specOptsIntoAi(spec)) {
     items.push({ phase: 'ai-features', label: 'enable app AI features' });
     // Do NOT short-circuit on `summaries.default === 'off'`. `selectSummaryTables` already implements
@@ -857,8 +960,35 @@ function planFor(spec, opts) {
   if (has('security')) for (const f of spec.businessProcessFlows || []) {
     if (f && f.securityRoles) items.push({ phase: 'security', label: `flow roles for ${f.name} (backing table ${bpfUniqueName(f.name)})` });
   }
+  // Field security profiles are given to the users and teams the spec names last, once every role exists. Each line names them.
+  if (has('security')) for (const p of profilesWithAssignments(spec)) items.push({ phase: 'security', label: fieldSecurityAssignmentsLabel(p) });
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
+}
+
+// What the plan, the dry run and the progress call the field security work, by the name the spec gives each profile. The design asks the
+// preview to name who will actually gain access to the secured columns, or to say that no one is named: a profile with no `assignTo`
+// is created and bound to no one (who already holds it is left as it is), so it says so rather than imply access. The ids are the spec's
+// own (users are systemuser ids, teams are team ids); a System Administrator reads every secured column whatever this says.
+function fieldSecurityPrincipals(p) {
+  const assignTo = (p && p.assignTo) || {};
+  return [...(assignTo.users || []).map((id) => `user ${String(id).toLowerCase()}`), ...(assignTo.teams || []).map((id) => `team ${String(id).toLowerCase()}`)];
+}
+function profilesWithAssignments(spec) {
+  return ((spec && spec.fieldSecurityProfiles) || []).filter((p) => fieldSecurityPrincipals(p).length);
+}
+function fieldSecurityProfileLabel(p) {
+  const n = (p.permissions || []).length;
+  const who = fieldSecurityPrincipals(p);
+  return `field security profile "${p.name}" (${n} permission${n === 1 ? '' : 's'}; ${who.length ? `to be given to ${who.join(', ')}` : 'no assignment requested'})`;
+}
+function fieldSecurityAssignmentsLabel(p) {
+  return `give field security profile "${p.name}" to ${fieldSecurityPrincipals(p).join(', ')}`;
+}
+// A run without the security phase (`--stage data`, `--phases data-model`) creates the profile and gives it to no one: the step says the
+// assignment is still to do, and the result lists it under `skipped.fieldSecurityAssignments`, so it never reads as finished security.
+function deferredAssignmentsLabel(p) {
+  return `${fieldSecurityAssignmentsLabel(p)} (deferred: this run does not include the security phase)`;
 }
 
 // --- phase builders (pure: spec -> SDK payloads) ---------------------------------------
@@ -908,6 +1038,33 @@ function viewDef(spec, v, resolution) {
   return { name: v.name, description: String(v.description || '').trim(), entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
     filters: { type: 'and', conditions, groups },
     sort: (v.sort || []).map((s) => ({ attribute: String(s.attr).toLowerCase(), descending: s.dir === 'desc' })) };
+}
+
+// The edits the build makes to a view that already exists (reconcileView), as typed pointer edits over the copy it
+// fetched: the fetched columns verbatim plus every spec column they lack, and the description. One function for the
+// apply and for `--preview-push` (previewTargetOf), so the preview shows the change the apply would send, not the live
+// view as it stands. Only columns and the description converge; an existing view's filters and sort are not reapplied.
+//
+// The description has two guards, both load-bearing (#496):
+//   * only when the spec EXPLICITLY sets one (`viewDef` emits `description: v.description || ''`, so an unset
+//     description is `''` — writing that would blank text a maker typed in the UI);
+//   * only when it DIFFERS, so an ordinary rebuild issues no extra write.
+// The `/columns` edit is always made; when it adds nothing, the copy still equals its snapshot (the SDK's diff is
+// structural — lib/unsynced-edits.js), so the build pushes nothing and the preview says noChange.
+function viewReconcileEdits(current, def) {
+  const cur = current || {};
+  const have = new Set((cur.columns || []).map((c) => String(c.name).toLowerCase()));
+  const merged = (cur.columns || []).slice();
+  for (const col of def.columns || []) {
+    const n = String(col.name).toLowerCase();
+    if (have.has(n)) continue;
+    have.add(n);
+    merged.push({ name: n, width: col.width || 100, order: merged.length });
+  }
+  const edits = [{ op: 'update', pointer: '/columns', value: merged }];
+  const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
+  if (wantDescription && wantDescription !== String(cur.description || '')) edits.push({ op: 'update', pointer: '/description', value: wantDescription });
+  return edits;
 }
 
 // The raw-client readers every view-label check shares. `read` is null with no client to ask (a test double), and
@@ -992,7 +1149,7 @@ function viewLabelHalt(blocking, { beforeAnyWrite }) {
 // it is still before any view is written; what is lost is only the guarantee that NOTHING was written yet.
 // The dry run is unaffected: it creates nothing, so no create follows its reads.
 async function preflightViewLabels(spec, provision, say) {
-  const labelViews = (spec.views || []).filter((v) => hasLabelUses(spec, v));
+  const labelViews = viewsForLabels(spec).filter((v) => hasLabelUses(spec, v));
   if (!labelViews.length) return undefined;
   if (localizedLabelLcidsInSpec(spec).length) return undefined;
   const { problems, resolved } = await checkViewFilterLabelsBeforeBuild(spec, labelViews, viewLabelReaders(spec, provision));
@@ -1014,7 +1171,7 @@ async function preflightViewLabels(spec, provision, say) {
 //
 // Returns what `viewDef` resolves values with, or null when no view names a label (nothing was read).
 async function resolveViewLabelsOrHalt(spec, provision, say, prior) {
-  const labelViews = (spec.views || []).filter((v) => hasLabelUses(spec, v));
+  const labelViews = viewsForLabels(spec).filter((v) => hasLabelUses(spec, v));
   if (!labelViews.length) return null;
   const { read, readGlobalChoice } = viewLabelReaders(spec, provision);
   const resolution = await resolveViewFilterLabels(spec, labelViews, { read, prior, readGlobalChoice });
@@ -1102,6 +1259,99 @@ function enrichesDefaultViews(spec, entity) {
   return entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
 }
 
+// The SDK's `enrichDefaultViews(table, columns)` saves each default view of `table` that the server lists
+// (`savedqueries?$filter=returnedtypecode eq '<table>' and querytype eq 0`) by fetchArtifact → updateElement('/columns') →
+// pushArtifact, and the save names the table from the workspace copy: the view adapter records
+//   entityLogicalName: <the row's returnedtypecode> ?? <the fetchxml's <entity name>>
+// and the update PATCH sends `returnedtypecode: <that>` back. Live-captured: a view of a table created moments before, read
+// while the table is not yet in the metadata cache of the server that answers, comes back from RetrieveUnpublished as
+//   { "savedqueryid": "<id>", "returnedtypecode": "none", "fetchxml": "<fetch …><entity name=\"<table>\">…", … }
+// "none" is not null, so the copy records `entityLogicalName: "none"`, and a save of it is refused:
+//   400 { "error": { "code": "0x80040203", "message": "Saved Query cannot have returnedTypeCode of 0 and a non null fetchXml" } }
+// Once the step had written its columns into such a copy it was dirty, and a plain fetchArtifact KEEPS a dirty copy while the
+// server's etag has not moved (the SDK's applyFetchedArtifactUnlocked; the etag does not move, because nothing was saved): every
+// later attempt and every later run read the view again, got the right table back, and still sent the copy that names none.
+//
+// This returns `provision` seen through a guard for one call of enrichDefaultViews on `table` (the SDK calls its own
+// fetchArtifact, updateElement and pushArtifact through `this`, so the guard sees exactly the views the call edits and saves).
+// The rule is that a copy that names another table (or none) is never edited and never sent, so the build itself never makes
+// such a copy dirty, and whatever an earlier attempt or run of it left is a clean copy:
+//   - before the SDK fetches a default view whose copy names another table, the copy is compared with the SDK's snapshot of the
+//     server's (diffArtifact, a local read). When nothing differs, or nothing but the table the copy names (an invalid name that
+//     no save can carry), the copy is fetched with { overwrite: true }, the SDK's own way to replace a copy with the server's:
+//     the copy then holds nothing the server does not, so nothing is lost. Any other difference — a column, its width or
+//     order, the description, anything — is an edit nobody sent, and a diff cannot say whose (an earlier build's, or a
+//     maker's), so it is never replaced: the step stops before it writes anything, with the copy kept byte for byte
+//     (`workspace-copy-unsent-edits`). A diff that cannot be read proves nothing and stops the same way.
+//   - right after the fetch, and again before an edit or a save, a copy that still names another table is not touched: the
+//     server has not answered the table yet. The step stops with DEFAULT_VIEW_NO_TABLE_CODE (retry-policy.js,
+//     unsentDefaultView), nothing edited and nothing sent; for a table this invocation created that is the lag the build runs
+//     again for, within the CLI's retries, and the next attempt's fetch replaces the (clean) copy (above). For any other table
+//     it is final, and the next run does the same.
+// A copy that names this table — every copy of a healthy build — goes through untouched: the guard reads only the workspace's
+// own manifest (listArtifacts: no request), so a healthy build sends exactly what it sent before. An SDK without the
+// workspace calls the guard needs (a test double) is returned as it is.
+function guardDefaultViewCopies(provision, table) {
+  if (!provision || ['listArtifacts', 'diffArtifact', 'fetchArtifact', 'updateElement', 'pushArtifact'].some((m) => typeof provision[m] !== 'function')) return provision;
+  const want = String(table).toLowerCase();
+  const sameId = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+  // The manifest entry of the view's copy ({ type, id, name, entityLogicalName, isDirty }, kept current by every fetch and
+  // edit), or undefined when there is none. This table's own entries are read first, so a healthy copy costs one filtered read
+  // of the manifest.
+  const copyOf = async (id) => {
+    const own = await provision.listArtifacts('view', { entityLogicalName: want });
+    const found = (own || []).find((a) => a && sameId(a.id, id));
+    if (found) return found;
+    return ((await provision.listArtifacts('view')) || []).find((a) => a && sameId(a.id, id));
+  };
+  const namesTable = (entry) => typeof entry.entityLogicalName === 'string' && entry.entityLogicalName.toLowerCase() === want;
+  // diffArtifact compares the copy with the SDK's snapshot of the server's: { changes: [{ pointer: '/columns/0/width', type, … }] }.
+  // The copy holds nothing of its own when the list is empty or names only `/entityLogicalName`, the table the copy names. An
+  // answer without a list of changes, or a diff that throws, proves nothing.
+  const holdsNothingOfItsOwn = async (id) => {
+    let diff;
+    try {
+      diff = await provision.diffArtifact('view', id);
+    } catch {
+      return false;
+    }
+    const changes = diff && Array.isArray(diff.changes) ? diff.changes : null;
+    return Boolean(changes) && changes.every((c) => c && c.pointer === '/entityLogicalName');
+  };
+  const notTouched = (id, entry, what) => {
+    const named = typeof entry.entityLogicalName === 'string' && entry.entityLogicalName ? `"${entry.entityLogicalName}"` : 'no table';
+    return unsentDefaultView(`the server answered the default view ${id} of ${want} with returnedtypecode ${named}, so it was ${what} and nothing was sent: a save of it would carry returnedTypeCode 0, which Dataverse refuses (0x80040203). The next attempt or run reads the view again`, want);
+  };
+  // Before an edit or a save: a copy that names another table is neither edited nor sent.
+  const requireTable = async (type, id, what) => {
+    if (type !== 'view') return;
+    const entry = await copyOf(id);
+    if (entry && !namesTable(entry)) throw notTouched(id, entry, what);
+  };
+  const guardedFetch = async (type, id, options) => {
+    if (type !== 'view' || (options && options.overwrite)) return provision.fetchArtifact(type, id, options);
+    const before = await copyOf(id);
+    let fetched;
+    if (!before || namesTable(before)) {
+      fetched = await provision.fetchArtifact(type, id, options);
+    } else if (await holdsNothingOfItsOwn(id)) {
+      fetched = await provision.fetchArtifact(type, id, { ...(options || {}), overwrite: true });
+    } else {
+      throw refusal(`the local copy of the default view ${id} of ${want} in the workspace names no table of its own and holds a change that was never sent (an earlier run's or one made by hand — nothing can tell whose), so it was not replaced and nothing was written; the local copy was kept as it is. A copy that names no table can never be saved, so the change cannot reach the server from it. To keep the change, make it in the spec (the table's default-view columns) or on the server — a layout kept on the server survives the next build only with that table's enrichDefaultViews: false, since the build otherwise writes its own columns; to discard it, refresh the local copy: ${RESET_WORKSPACE}`, { code: 'workspace-copy-unsent-edits' });
+    }
+    await requireTable(type, id, 'not edited');
+    return fetched;
+  };
+  return new Proxy(provision, {
+    get(target, prop, receiver) {
+      if (prop === 'fetchArtifact') return guardedFetch;
+      if (prop === 'updateElement') return async (type, id, ...rest) => { await requireTable(type, id, 'not edited'); return await provision.updateElement(type, id, ...rest); };
+      if (prop === 'pushArtifact') return async (type, id, ...rest) => { await requireTable(type, id, 'not saved'); return await provision.pushArtifact(type, id, ...rest); };
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
 // Resolve the id of an EXISTING deployed form to reconcile, disambiguating by TYPE (form names are unique
 // only per (entity, type)). Returns the formid, or null when the form isn't deployed yet (→ a fresh create).
 // Shared by the build's form phase AND the preflight op-diff discovery so both agree on the target.
@@ -1113,7 +1363,7 @@ function enrichesDefaultViews(spec, entity) {
 //     matches ONLY the Main form; same-named Quick View / Card siblings never block it. >1 match (two forms
 //     share entity+type+name) throws an ACTIONABLE error telling the author to pin forms[].formId — we
 //     refuse to guess rather than reconcile an arbitrary form (fail-closed).
-async function resolveExistingFormId(provision, def) {
+async function resolveExistingFormId(provision, def, { tableNotInCache = 'absent' } = {}) {
   if (def.formId) {
     if (!FORM_GUID_RE.test(String(def.formId))) throw refusal(`form "${def.name}": formId '${def.formId}' is not a valid GUID`);
     const rows = await provision.queryRecords('systemform', { select: ['formid', 'objecttypecode', 'type', 'name'], filter: `formid eq ${def.formId}`, top: 1 });
@@ -1158,7 +1408,18 @@ async function resolveExistingFormId(provision, def) {
     // which swallowed it. This must NOT swallow a transient/real failure: re-throw anything else so the
     // fail-closed preflight still refuses to write when it truly can't verify safety.
     // Dataverse error shape: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/compose-http-requests-handle-errors#parse-errors-from-the-response
-    if (err && /not found in the MetadataCache/i.test(String(err.message || ''))) return null;
+    // But the same answer (code 0x80041102) is also the platform's metadata-cache LAG on a table that exists and was created moments
+    // ago (#796), so the answer alone never proves the table, and with it the form, absent. `tableNotInCache` says what the caller makes
+    // of it:
+    //   'absent' (the default): null, as above — for a caller that only reads and writes nothing on a miss (verify, teardown);
+    //   'fail': the failure as it came — the build's form step, where a null would create a second form of the same name;
+    //   a function: the caller's own proof that the table is absent (`await tableNotInCache(err)` answers true) — the preflight,
+    //     which must not skip its removal gate for a form that is there; anything but a proof of absence keeps the failure.
+    if (err && /not found in the MetadataCache/i.test(String(err.message || ''))) {
+      if (tableNotInCache === 'absent') return null;
+      if (typeof tableNotInCache === 'function' && (await tableNotInCache(err)) === true) return null;
+      throw err;
+    }
     throw err;
   }
   if (!rows || !rows.length) return null;
@@ -1210,18 +1471,9 @@ function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
 // The ordered field logical names a form places -> moved to ./artifact-intent.js `formFieldLogicals`
 // (walks the new tabs[].columns[].sections[] topology).
 
-// The app module's uniquename. A DOWNLOADED/edit spec carries the app's REAL, immutable uniquename in
-// `spec.app.uniqueName` — return it VERBATIM so the build's existing-app lookup (findArtifact) AND teardown
-// resolve the SAME deployed app even after a display-name RENAME. A Dataverse appmodule uniquename never
-// changes once created, so deriving it from the MUTABLE display name would miss the existing app on a
-// rebuild and CREATE A DUPLICATE. An AUTHORED create-fresh spec has no `app.uniqueName`, so
-// derive it deterministically from the publisher prefix + display name — the exact rule the builder creates
-// with. Shared with the teardown engine so both agree on the identity.
-function appUniqueName(spec) {
-  if (spec.app && spec.app.uniqueName) return String(spec.app.uniqueName);
-  const sol = spec.solution;
-  return `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
-}
+// The app module's uniquename (lib/app-unique-name.js: the spec's own, else derived from the publisher prefix and display name). Shared
+// with the teardown engine and the standalone managed fence so all three agree on the identity.
+const { appUniqueName } = require('./app-unique-name.js');
 
 // A simple, self-contained default app-tile icon (SVG) — a rounded square with the app's initial.
 // Generated INTO the app's solution so the app never depends on an arbitrary external/managed icon
@@ -1550,6 +1802,16 @@ function checkNavigationInPlan(plan, spec, { phases, changedOnly, warn }) {
   }
 }
 
+// The dry run's share of the pages-phase rule for form embeds (form-page-embeds.js pagesPhaseMissingForEmbeds): a line after the last forms line,
+// `? unknown` with the reason and `wouldHalt`, for a phase set the apply refuses. Any other plan is left as it is.
+function checkEmbedsPhaseInPlan(plan, spec, phases) {
+  const missing = pagesPhaseMissingForEmbeds(spec, phases);
+  if (!missing) return;
+  const at = plan.map((p) => p.phase).lastIndexOf('forms') + 1;
+  plan.splice(at, 0, { phase: 'forms', label: 'embed generative pages on forms', state: 'unknown', wouldHalt: true,
+    stateWhy: `the build would stop before writing anything: ${missing.why}; run it with the pages phase (a full build)` });
+}
+
 // The apply's share: before the first write, refuse a navigation Dataverse will refuse. Left to the app step it stopped the
 // build there, after the solution, tables, columns, views and forms were written. The verdict comes from the spec alone,
 // except for a navigation that depends on whether the app exists — pages only, or no entry at all: fine for an app that
@@ -1611,8 +1873,23 @@ async function judgePageBindings(provision, pages, seen) {
   return judgeBindingTargets(pages, await readBindingTargets(provision, pages, seen));
 }
 
+// The page-binding findings a run's own configuration step answers for: a DECLARED connection reference or Custom API that is absent,
+// or a declared reference with no connection, BEFORE the data-model phase writes it. Warning "create it" about an item the same run is
+// about to create misleads, so such a finding is not said; the pages gate (configurationRun.beforePages) then decides on what the run
+// observed after its step. Only when the run has the data-model phase and the spec declares items; a finding that also names an
+// undeclared item is still said; a connector conflict (a refusal) is never deferred.
+function scheduledByConfiguration(spec, phases) {
+  if (!phases.includes('data-model') || !hasConfigurationDefinitions(spec)) return () => false;
+  const declared = (list, field) => new Set((Array.isArray(list) ? list : []).filter((e) => e && typeof e[field] === 'string').map((e) => e[field].trim().toLowerCase()));
+  const references = declared(spec.connectionReferences, 'logicalName');
+  const apis = declared(spec.customApis, 'uniqueName');
+  const allIn = (finding, names) => Array.isArray(finding.names) && finding.names.length > 0 && finding.names.every((name) => names.has(String(name).trim().toLowerCase()));
+  return (finding) => ((finding.kind === 'reference-missing' || finding.kind === 'connection-missing') && allIn(finding, references))
+    || (finding.kind === 'api-missing' && allIn(finding, apis));
+}
+
 // The apply's answer to a verdict: a conflict stops the build, and all else is said.
-function haltOnPageBindingConflicts(verdict, warn) {
+function haltOnPageBindingConflicts(verdict, warn, deferred = () => false) {
   if (!verdict) return;
   const refused = verdict.findings.filter((finding) => finding.severity === 'refuse');
   if (refused.length) {
@@ -1624,11 +1901,11 @@ function haltOnPageBindingConflicts(verdict, warn) {
       { phase: 'preflight', code: 'pages-binding-reference-conflict', recoverable: false, retry: RETRY.NEVER },
     );
   }
-  if (typeof warn === 'function') for (const text of [...verdict.unchecked.map((u) => u.text), ...verdict.findings.map((finding) => finding.text)]) warn(text);
+  if (typeof warn === 'function') for (const text of [...verdict.unchecked.map((u) => u.text), ...verdict.findings.filter((finding) => !deferred(finding)).map((finding) => finding.text)]) warn(text);
 }
 
 async function checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly, warn, seen }) {
-  haltOnPageBindingConflicts(await readPageBindingVerdict(spec, { provision, phases, changedOnly, seen }), warn);
+  haltOnPageBindingConflicts(await readPageBindingVerdict(spec, { provision, phases, changedOnly, seen }), warn, scheduledByConfiguration(spec, phases));
 }
 
 // A dry run has no pages phase, which is what finds a navigation target absent (reconcilePageIds: the spec's page id, or the manifest's, that the environment still lists). So for each target a
@@ -1758,7 +2035,7 @@ function appDef(spec, result, opts = {}) {
     // #583: the routing description, only when the spec sets one (see applyAppAiDescription).
     ...(spec.app.aiDescription ? { aiDescription: spec.app.aiDescription } : {}),
     ...(opts.iconWebResourceId ? { iconWebResourceId: opts.iconWebResourceId } : {}),
-    components: appComponentsFor(result, opts.mainFormsByTable) };
+    components: appComponentsFor(result, opts.mainFormsByTable, { declared: Boolean(spec.app && spec.app.pinDeclaredArtifacts === true) }) };
 }
 
 // #583: set the routing description (`app.aiDescription` → `appmodule.aiappdescription`) on the FETCHED
@@ -1972,17 +2249,33 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
 // backend's push of the app, say. It is thrown before the header or the navigation is written, so the generic path below is the right one: the copy, which that push never recorded, is
 // reset to the server's, and the typed error is thrown as it is. Its message says a re-run normally succeeds, and `transient: false` keeps the build from running the phase again on its own:
 // whether the read answers next time is for that re-run to find out, and a retry of the same push here would hide the one thing the message tells.
-async function pushAppHeader(provision, appId, name, header, mainFormsByTable, warn) {
+async function pushAppHeader(provision, appId, name, header, mainFormsByTable, warn, { mainFormsOnUpdate, declared, onIntent } = {}) {
   const { routing, replaced, held } = header !== null && typeof header === 'object' ? header : { routing: header === true, replaced: {}, held: [] };
   const textKeys = Object.keys(replaced || {});
   const carriesHeader = routing || textKeys.length > 0;
   const attempt = async (first) => {
     try {
       if (first) {
-        await applyAppMainForms(provision, appId, mainFormsByTable);
+        await applyAppMainForms(provision, appId, mainFormsByTable, { mainFormsOnUpdate });
+        if (declared) await pinDeclaredArtifacts(provision, appId, declared);
         await takeNonPlainTextOffCopy(provision, appId, held);
       }
-      return { pushed: await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', appId), name) };
+      const pushed = await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', appId), name);
+      // What this push asked the server to hold, recorded apart from the header and navigation: the recovery's re-fetch
+      // carries neither the Main-form directives nor any explicit pin (lib/app-pin-recovery.js). It is read only when the
+      // pin's answer was lost (APP_PIN_OUTCOME_UNKNOWN), so every other push makes exactly the calls it always made. The
+      // copy read here is still the one just pushed: the SDK re-sends nothing and leaves the workspace copy as it was
+      // (pinned against the real bundle in tests/app-pin-recovery-build.test.js); a reset of the copy happens only after a
+      // FAILED push (discardUnrecordedEdits, below), which this precedes. A read that fails records nothing, and the
+      // recovery then stops the build incomplete rather than compare against a guess.
+      if (typeof onIntent === 'function' && pinWarningOf(pushed, appId)) {
+        try {
+          onIntent(pinIntentOf(await provision.getArtifact('app', appId)));
+        } catch {
+          onIntent(undefined);
+        }
+      }
+      return { pushed };
     } catch (thrown) {
       return { thrown };
     }
@@ -2402,6 +2695,10 @@ function isBenignAssociationError(err, mode) {
   }
   // dissociate: a link that is already gone is a 404 / "does not exist" — the desired end state.
   if (status === 404) return true;
+  // Only a 400 or a status-less SDK error may be read by its words (Dataverse answers some missing-link
+  // dissociates with a 400 carrying 0x80040217): a refusal (401/403), a conflict or throttle (409/412/429)
+  // or a server failure (5xx) is never "already gone", whatever it says.
+  if (status != null && status !== 400) return false;
   return /does not exist|not found|cannot be found/.test(msg) || /0x80040217/.test(dvCode);
 }
 
@@ -2513,12 +2810,71 @@ async function resolveRoleGrantTarget(provision, grant, buCache) {
     filter: `name eq '${String(name).replace(/'/g, "''")}'${roleBuClause(bu)}`,
     top: 5,
   });
-  const matches = (rows || []).filter((r) => r && r.roleid);
+  // Count DISTINCT role ids (a paginating server can repeat a row, which is still one role), and refuse a
+  // lookup the server said is incomplete — "exactly one" is not proven by a page that says more exist.
+  // `rows` is read before any copy: the SDK's `hasMore` is non-enumerable (lib/query-completeness.js).
+  const judged = exactOne(rows || [], 'roleid');
+  if (judged.outcome === 'incomplete') throw refusal(`roleGrant "${name}": the role lookup was incomplete — pin the role with 'roleId'`);
+  const matches = judged.outcome === 'none' ? [] : distinctRows(rows, 'roleid').rows;
   if (!matches.length) throw refusal(`roleGrant "${name}": no security role with that name exists in business unit ${bu} — check the spelling (the name must match EXACTLY), or pin the role with 'roleId'`);
   if (matches.length > 1) throw refusal(`roleGrant "${name}": ${matches.length} roles share that name in business unit ${bu} — pin the one you mean with 'roleId'`);
   return { roleId: String(matches[0].roleid), name: matches[0].name || name, managed: matches[0].ismanaged === true };
 }
 
+
+// --- push preview (build-model-app.js --preview-push) ---------------------------------------
+//
+// The id a dry run's probe found for a REUSED artifact, kept on the plan item as `liveId` so the push
+// preview can name it. Only a canonical GUID, and only on `reuse`: an unknown or a create has no live
+// row to name, and a hand-made reader's row may carry no id at all. Costs no read.
+function keepLiveId(item, present) {
+  if (item.state !== 'reuse' || !present || typeof present !== 'object') return;
+  const id = present.id == null ? '' : String(present.id);
+  if (FORM_GUID_RE.test(id)) item.liveId = id.toLowerCase();
+}
+
+// The SDK artifact a plan item's push would touch, WITH the change the build would make to it, or null
+// when the build cannot state that change without running (the preview then lists the item as
+// `noTypedTarget`). Never the live artifact alone for an item the build may edit: an unedited fetch
+// previews as noChange/ready, which would answer for a different push from the one the apply sends.
+//   - a REUSED view: its live id and the build's own reconcile edits (viewReconcileEdits — the spec
+//     columns it lacks and the description), computed over the copy the preview fetches. Its columns
+//     and description come from the spec alone; the live label resolution `viewDef` takes is for
+//     filters, which an existing view does not reapply;
+//   - a chart the build would CREATE: chartDef is the definition the build sends, built from the spec
+//     alone.
+// Null for the rest: an existing form or app is reconciled through reads and edits made only while the
+// build runs (form intent, header, sitemap, components); an existing chart is never pushed by the build
+// (its description is a direct column write); a command bar's edits are made only while it runs; a
+// view the build would create needs the live label resolution, and a form is created through its shell.
+// A DECLARED view or chart (`reconcile: "declared"`) is null too, reused or new: the build plans it with its
+// own reconciler (lib/view-reconcile.js, lib/chart-reconcile.js), which replaces the filter and sort, sets
+// the column widths and the title, and may refuse it. viewReconcileEdits and chartDef state none of that, so
+// a declared filter edit would preview as noChange while the apply writes it.
+function previewTargetOf(item, spec) {
+  const k = item && item.key;
+  if (!k) return null;
+  if (item.state === 'reuse' && k.kind === 'view' && item.liveId) {
+    const entity = String(k.entity || '').toLowerCase();
+    const view = k.declared || ((spec && spec.views) || []).find((v) => v && v.name === k.name && String(v.entity || '').toLowerCase() === entity);
+    if (!view || isDeclaredView(view)) return null;
+    const def = viewDef(spec, view);
+    return { type: 'view', id: item.liveId, liveEdits: (current) => viewReconcileEdits(current, def) };
+  }
+  if (item.state === 'create' && k.kind === 'chart') {
+    const entity = String(k.entity || '').toLowerCase();
+    const chart = ((spec && spec.charts) || []).find((c) => c && c.name === k.name && String(c.entity || '').toLowerCase() === entity);
+    return chart && !isDeclaredChart(chart) ? { type: 'chart', create: chartDef(spec, chart) } : null;
+  }
+  return null;
+}
+
+// The preview items of a plan, with unique keys (lib/unique-keys.js): two plan steps can share a kind,
+// table and name (a main and a quick-create form of one name), and the preview refuses a repeated key for
+// the whole run.
+function previewItemsForPlan(plan, spec, previewItemsFromPlan) {
+  return uniqueKeys(previewItemsFromPlan(plan, (item) => previewTargetOf(item, spec)));
+}
 
 // Decide, against the LIVE environment, whether each planned item would be created or reused. #559.
 //
@@ -2658,15 +3014,26 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
   //   - views/charts go through `provision.findArtifact`, which raises on an ambiguous identity;
   //   - the app is keyed by its deterministic unique name.
   // Anything thrown becomes `unknown` with the resolver's own message, which is the actionable one.
+  //
+  // Answers `{ id }` when present (the id the probe already read: a form's formid, a view's or chart's
+  // id, the app's appmoduleid — absent from a hand-made reader's row), `false` when absent, and `null`
+  // when the kind has no identity query. The id is kept as the item's `liveId` (keepLiveId) for
+  // `--preview-push`, at no extra read.
   const artifactPresent = async (kind, def) => {
-    if (kind === 'form') return !!(await resolveExistingFormId(provision, def));
+    if (kind === 'form') {
+      // The table was read present before this is asked, so a MetadataCache answer here is the table's lag, not its absence (#796):
+      // it is thrown, and the item is `unknown` with the service's words rather than a confident `create`.
+      const id = await resolveExistingFormId(provision, def, { tableNotInCache: 'fail' });
+      return id ? { id } : false;
+    }
     if ((kind === 'view' || kind === 'chart') && typeof provision.findArtifact === 'function') {
-      return !!(await provision.findArtifact(kind, { name: def.name, entity: def.entityLogicalName }));
+      const id = await provision.findArtifact(kind, { name: def.name, entity: def.entityLogicalName });
+      return id ? { id } : false;
     }
     const q = artifactIdentityQuery(kind, def);
     if (!q) return null;
     const rows = await provision.queryRecords(q.set, { select: [q.idField], filter: q.filter, top: 1 });
-    return !!(rows && rows.length);
+    return rows && rows.length ? { id: rows[0] && rows[0][q.idField] } : false;
   };
 
   for (const item of plan) {
@@ -2746,6 +3113,7 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
       } else if (k.kind === 'app') {
         const present = await artifactPresent('app', { uniqueName: k.uniqueName });
         item.state = present ? 'reuse' : 'create';
+        keepLiveId(item, present);
       } else if (k.kind === 'view' || k.kind === 'chart' || k.kind === 'form') {
         // A form/view/chart on a table that does not exist yet cannot exist either, and the filter
         // would 400 on the metadata cache — so answer from the table, as the build's own lookup does.
@@ -2756,12 +3124,13 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         // a confident `+ create` for every view and form on it — and the apply never gets that far:
         // findExistingTable raises BuildHalt for exactly this state, outside any runner.run, so the
         // build aborts in `data-model`. The form arm is the worst of the three, because
-        // resolveExistingFormId deliberately swallows the MetadataCache 400 and returns null, which
-        // `!!` then flattens into a confident "absent".
+        // resolveExistingFormId by default swallows the MetadataCache 400 and returns null, which
+        // would then flatten into a confident "absent" (artifactPresent asks it not to).
         if (t.found === null) { item.state = 'unknown'; item.stateWhy = t.why; continue; }
         const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
         item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
         await judgeViewLabels(item, k);
+        keepLiveId(item, present);
       }
     } catch (err) {
       item.state = 'unknown';
@@ -2867,15 +3236,26 @@ function partialEnrichment(error) {
 // in force once the app is published, and the publish phase is what does that. `failed`: `{ target, error }` for each
 // TABLE target whose last publish the SDK refused by value (`publish.kind === 'failed'`, after the retry below), so its
 // saved changes are not live. This function only reports one (a warning); publishReconciledTables, which must not let
-// the app be published ahead of such a table, halts on it.
-async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false } = {}) {
+// the app be published ahead of such a table, halts on it. `publishedTargets`: each TABLE target (the same array) whose last
+// publish answered with positive proof that it was sent and succeeded (`proves` below, after the retry) — what publishReconciledTables
+// tells the commandStates observer was published; a caller that does not read it sees nothing new. `answers`: each target (the same
+// array) -> the answer its last publish gave (the envelope's, or its retry's), which createTablePublication reads for the table the
+// publish named (publishScope).
+//
+// `checked` is for a build with commandStates (createTablePublication passes it): every line it prints about a failed publish says only
+// the checked facts of the answer (reportTablePush), never its text. Without it every line is the one 2.23.0 printed. `onProven(target,
+// answer)`: told of each table target as soon as its answer proves its publication (createTablePublication's observer), so a later throw
+// cannot take back what was proven; it is only told, and never changes a request, an answer or what is thrown.
+async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false, checked = false, onProven = null } = {}) {
   const labelOf = targetLabel;
+  const report = (result, label) => reportTablePush(result, label, warn, checked);
   const publishOne = async ([type, id], label) => {
-    if (!keepGoing) return reportPartialPush(await provision.publishArtifact(type, id), label, warn);
+    if (!keepGoing) return report(await provision.publishArtifact(type, id), label);
     try {
-      return reportPartialPush(await provision.publishArtifact(type, id), label, warn);
+      return report(await provision.publishArtifact(type, id), label);
     } catch (e) {
-      if (typeof warn === 'function') warn(`publish ${label} FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
+      const why = checked ? serviceAnswerText(publishFailureFacts(e)) : (e && e.message) || e;
+      if (typeof warn === 'function') warn(`publish ${label} FAILED: ${why} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
       return undefined;
     }
   };
@@ -2883,9 +3263,22 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
   // would confirm it was not possible. An outcome that says nothing about publishing proves nothing.
   const published = (result) => !!(result && result.publish && result.publish.kind && result.publish.kind !== 'failed' && result.publish.kind !== 'notRequested');
   const refused = (result) => !!(result && result.publish && result.publish.kind === 'failed');
+  // The proof publishedTargets collects, which is NOT `published` above: only a kind that says the request was sent and answered success
+  // (managed-feature-contract.js publishAnswerProvesPublication: submitted, verified, unverifiable). `published` also passes `none`,
+  // `notApplicable` (a result the real SDK gives with no request sent) and any unknown kind (which proves nothing either way), and stays
+  // as it is for appPublished.
+  const { publishAnswerProvesPublication: proves } = require('./managed-feature-contract.js');
   const failed = [];
+  const publishedTargets = [];
   const all = appTarget ? [...entityTargets, appTarget] : entityTargets;
   const isApp = (target) => !!appTarget && target[0] === 'app' && target[1] === appTarget[1];
+  const answers = new Map();
+  // Each table target whose answer proves its publication, told as it is received: a later target (or the retry of one) that THROWS ends
+  // this call before it returns anything, and must not take back what was already proven (createTablePublication). Told once per target,
+  // only when it proves (a refused, a notApplicable or a missing answer is never told), and the app never.
+  const prove = (target, outcome) => {
+    if (typeof onProven === 'function' && !isApp(target) && !refused(outcome) && proves(outcome)) onProven(target, outcome);
+  };
   if (all.length > 1 && typeof provision.publishArtifacts === 'function') {
     let results = null;
     try {
@@ -2899,25 +3292,37 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
       results.forEach((outcome, i) => {
         if (refused(outcome)) retry.push(all[i]);
         else {
-          reportPartialPush(outcome, labelOf(all[i]), warn);
+          report(outcome, labelOf(all[i]));
+          answers.set(all[i], outcome);
+          prove(all[i], outcome);
           if (isApp(all[i])) appResult = outcome;
+          else if (proves(outcome)) publishedTargets.push(all[i]);
         }
       });
       for (const target of retry) {
         const retried = await publishOne(target, labelOf(target));
+        answers.set(target, retried);
+        prove(target, retried);
         if (isApp(target)) appResult = retried;
         else if (refused(retried)) failed.push({ target, error: retried.publish.error });
+        else if (proves(retried)) publishedTargets.push(target);
       }
-      return { appPublished: published(appResult), failed };
+      return { appPublished: published(appResult), appResult, failed, publishedTargets, answers };
     }
   }
-  const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, labelOf(target))));
+  const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => {
+    const outcome = await publishOne(target, labelOf(target));
+    prove(target, outcome);
+    return outcome;
+  }));
   entityTargets.forEach((target, i) => {
     const outcome = (outcomes || [])[i];
+    answers.set(target, outcome);
     if (refused(outcome)) failed.push({ target, error: outcome.publish.error });
+    else if (proves(outcome)) publishedTargets.push(target);
   });
   const appResult = appTarget ? await publishOne(['app', appTarget[1]], appTarget[2]) : undefined;
-  return { appPublished: published(appResult), failed };
+  return { appPublished: published(appResult), appResult, failed, publishedTargets, answers };
 }
 
 // What a publish target is FOR, in the words a warning or a halt prints: the names the target carries (a table's
@@ -2926,14 +3331,126 @@ function targetLabel([type, id, label]) {
   return (Array.isArray(label) ? label.join(', ') : label) || `${type} ${id}`;
 }
 
+// The checked facts of a publication the SDK refused, for a build with commandStates (lib/command-state-contract.js serviceAnswerText). The
+// SDK answers a refused PublishXml BY VALUE ({ kind: 'failed', error }), its error made by the vendored SDK as, e.g.:
+//   { name: 'ConnectionError', code: 'CONNECTION_ERROR', statusCode: 503, url: 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml',
+//     message: 'HTTP 503 from https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml: <the service's text>',
+//     cause: { error: { code: '0x80040220', message: '<the service's text>' } } }
+// and a transport that got no answer as { code: 'CONNECTION_ERROR', statusCode: 0, message: 'Transport failure reaching …: <text>' }.
+// Only the status (an HTTP status, 100-599), the Dataverse code and the error's own code are taken, and serviceAnswerText checks each again
+// (a 0x code, an upper-case system code); no message is, since every one of them can carry the service's text.
+function publishFailureFacts(error) {
+  const e = error && typeof error === 'object' ? error : {};
+  const status = [e.statusCode, e.status].find((s) => Number.isInteger(s) && s >= 100 && s <= 599);
+  const body = e.cause && typeof e.cause === 'object' && e.cause.error && typeof e.cause.error === 'object' ? e.cause.error : {};
+  return {
+    problem: 'publish-refused',
+    ...(status ? { status } : {}),
+    ...(typeof body.code === 'string' ? { dataverseCode: body.code } : {}),
+    ...(typeof e.code === 'string' ? { systemCode: e.code } : {}),
+  };
+}
+
+// reportPartialPush for a publication, worded for the build it runs in. `checked` (a build with commandStates): a failed publish is said by
+// its checked facts (publishFailureFacts), and one whose read-back could not confirm it by a fixed reason, since the SDK's reason can quote
+// the service (e.g. `the publish step failed: <its message>`). The answer handed back is the SDK's own, untouched: what decides a retry, an
+// app's proof or a halt reads its structured error. Without `checked` this IS reportPartialPush, so a build without commandStates prints
+// what 2.23.0 printed.
+function reportTablePush(result, label, warn, checked) {
+  if (!checked || !result || !result.publish || (result.publish.kind !== 'failed' && result.publish.kind !== 'unverifiable')) return reportPartialPush(result, label, warn);
+  const publish = result.publish.kind === 'failed'
+    ? { kind: 'failed', error: { message: serviceAnswerText(publishFailureFacts(result.publish.error)) } }
+    : { kind: 'unverifiable', reason: 'the published layer was not read back' };
+  reportPartialPush({ ...result, publish }, label, warn);
+  return result;
+}
+
+// ONE way the build publishes a table, and tells commandStates' observer (lib/command-state-run.js createCommandStatePublicationObserver)
+// what it published, so a table publication can no longer be added that the observer never hears about: every PublishXml of
+// sdk-build.js that can name a table goes through a member of this (the contract test in command-state-publication-build.test.js reads
+// this file and fails on one that does not; only the app's own publish, whose request names no table, is outside it).
+//   plain    a PublishXml that names the tables (table-publish.js publishTablesXml): the envelope before the app
+//   managed  the managed publisher's flush (managed-scope-publisher.js): one table's PublishXml each, `published` named; on a halt, what it
+//            settled before it (`onHalt`)
+//   sdk      publishTargets: one artifact per table, in one envelope when the SDK offers it, and the app
+//   one      the SDK's publish of one artifact (a reconcile, the app publication's table scope, when no publish phase follows)
+// Only a publication whose request named the table confirms it (the design: a real publication of the table after its latest row write).
+// For the SDK that is an answer of a kind that proves the request was sent and answered (managed-feature-contract.js
+// publishAnswerProvesPublication) whose `publishScope` is the table's own entity envelope. The vendored SDK, run over a fake transport,
+// sends a view's, a chart's, a form's and a table-bound dashboard's publish as `<entities><entity>t</entity></entities>` and answers
+// `publishScope: { envelope: 'entity', entityLogicalName: 't' }`, also for each artifact of one batch; an unbound dashboard's as
+// `<dashboards>` (envelope 'dashboard') and the app's as `<appmodules>` (envelope 'appmodule'), which name no table and confirm none.
+//
+// `observer` is null for a build without commandStates (and for a dry run): then nothing is told, and every request and every line is the
+// one 2.23.0 made. With it (or with `checked`, which settleOwedPublishes passes after the build's proof is over), every line about a failed
+// publication is said by its checked facts (lib/command-state-contract.js
+// serviceAnswerText), never the service's text. `observed` names the call site in the observer's snapshot (`path`). The observer only
+// records; what it does or throws never changes a publication or a halt.
+function createTablePublication({ observer = null, checked = !!observer, provision, runner, concurrency = 1, managedTables = null, warn } = {}) {
+  const tell = (fn) => {
+    if (!observer) return;
+    try { fn(observer); } catch { /* told only */ }
+  };
+  const lc = (value) => String(value || '').toLowerCase();
+  const names = (answer, table) => {
+    if (!table || !answer || !answer.publishScope) return false;
+    const { publishAnswerProvesPublication: proves } = require('./managed-feature-contract.js');
+    return proves(answer) && answer.publishScope.envelope === 'entity' && lc(answer.publishScope.entityLogicalName) === lc(table);
+  };
+  const sayRefusal = (outcome) => serviceAnswerText({ problem: 'publish-refused', ...((outcome && outcome.facts) || {}) });
+  // An error a publication THROWS (the SDK's preflight of an artifact its workspace does not hold, a provider, a callback) is thrown on as
+  // it is; with `checked` it carries, beside it, the checked words the halt says of it instead of its message (command-state-contract.js
+  // withCheckedDisplay). A BuildHalt is the build's own words already (a throttle budget's stop), and is left as it is.
+  const thrown = async (fn) => {
+    if (!checked) return fn();
+    try {
+      return await fn();
+    } catch (e) {
+      if (!(e && e.name === 'BuildHalt')) withCheckedDisplay(e, serviceAnswerText(publishFailureFacts(e)));
+      throw e;
+    }
+  };
+  return {
+    checked,
+    async plain(client, tables, { observed = 'plain-before-app' } = {}) {
+      const outcome = await publishTablesXml(client, tables, checked ? { facts: true } : undefined);
+      tell((o) => o.observePlain(tables, outcome, observed));
+      return outcome;
+    },
+    async managed(tables, { phase, path, observed = 'managed-before-app' } = {}) {
+      const flushed = await managedTables.flush(tables, {
+        phase, path, ...(checked ? { onHalt: (partial) => tell((o) => o.observeManaged(partial, observed)), sayRefusal } : {}),
+      });
+      tell((o) => o.observeManaged(flushed, observed));
+      return flushed;
+    },
+    async sdk(targets, appTarget, { tableOf = () => null, observed = 'sdk-before-app', keepGoing = false } = {}) {
+      // Each table is told as its answer proves it (publishTargets' onProven), not once the call returns: a later target that throws
+      // ends the call, and the tables already proven stay told.
+      const onProven = (target, answer) => {
+        const table = tableOf(target);
+        if (names(answer, table)) tell((o) => o.observeSdk([table], observed));
+      };
+      return thrown(() => publishTargets(provision, runner, concurrency, targets, appTarget, warn, { keepGoing, checked, onProven }));
+    },
+    async one(type, id, table, label, { observed } = {}) {
+      const answer = reportTablePush(await thrown(() => provision.publishArtifact(type, id)), label, warn, checked);
+      if (names(answer, table)) tell((o) => o.observeSdk([table], observed));
+      return answer;
+    },
+  };
+}
+
 // The halt for tables whose publish was refused before the app was written. `failed` is publishTargets' `{ target, error }` per table. The message names the saved artifacts, which are the maker's (a
 // view called "SQL Timeout Reader"), and the service's answer to each. What decides whether a run again can help is each refusal's own structure — its status, its type, whether it says it must not be run
 // again — never the names: it is run again for a 429 or a 503 (the build re-runs a throttled publish as it did before this publish moved ahead of the app), and NEVER when any one table's refusal is final,
 // since the run would stop at that table again. The words that may decide are the answers' own (`retryText`, cut of the url each carries), never the names. The runner wraps this halt once more
-// (makeRunner); the policy, the status and the words are read through that wrapper.
-function reconciledPublishHalt(failed) {
+// (makeRunner); the policy, the status and the words are read through that wrapper. `checked` (a build with commandStates): the message
+// says each refusal by its checked facts (publishFailureFacts), never the service's text; the cause, the policy, the status and the words
+// that decide a retry are the same.
+function reconciledPublishHalt(failed, { checked = false } = {}) {
   const names = failed.map(({ target }) => targetLabel(target)).join('; ');
-  const detail = failed.map(({ error }) => (error && error.message) || 'refused').join('; ');
+  const detail = failed.map(({ error }) => (checked ? serviceAnswerText(publishFailureFacts(error)) : (error && error.message) || 'refused')).join('; ');
   const errors = failed.map(({ error }) => error);
   const final = errors.some((error) => retryPolicyFor(error) === RETRY.NEVER);
   const status = errors.map((error) => error && (error.statusCode || error.status)).find(isTransientStatus);
@@ -2974,21 +3491,27 @@ function reconciledPublishHalt(failed) {
 // could not be read, and which tables to publish. It is read AFTER the publishes, so what they made live is not claimed, and only for
 // forms, views and charts (table-publish.js): a column or command saved and not published is not covered, and the line says so. Without
 // `tables`, as the CLI passes none for a dry run or a build with no publish phase, nothing is read.
-async function settleOwedPublishes(provision, owed, warn, { tables } = {}) {
+// `checked`: the halted build declared commandStates (build-model-app.js passes it when the run made the feature's observer), so a failed
+// publish here is said by its checked facts too (createTablePublication), and so is a failed read of what is still saved and not published
+// (describeSavedNotPublished `checked`); nothing is observed, since the build's proof is over.
+async function settleOwedPublishes(provision, owed, warn, { tables, checked = false } = {}) {
   const targets = Array.isArray(owed) ? owed.filter((target) => Array.isArray(target) && target[0] && target[1]) : [];
   const say = (message) => { if (typeof warn === 'function') warn(`the build stopped before its publish phase; ${message}`); };
   if (provision && targets.length) {
     try {
-      await publishTargets(provision, makeRunner({ emit: () => undefined, total: 0 }), 1, targets, null, say, { keepGoing: true });
+      const settle = createTablePublication({ observer: null, provision, runner: makeRunner({ emit: () => undefined, total: 0 }), concurrency: 1, warn: say, checked });
+      await settle.sdk(targets, null, { keepGoing: true });
     } catch (e) {
-      say(`publishing the views and forms it had already saved FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
+      say(`publishing the views and forms it had already saved FAILED: ${checked ? serviceAnswerText(publishFailureFacts(e)) : (e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
     }
   }
   // An SDK with no raw client to read with is a test double: the real one always has it, so there is nothing to say about its absence.
   const client = provision && provision.dataverse;
   if (typeof warn !== 'function' || !Array.isArray(tables) || !tables.length || !client || typeof client.get !== 'function') return;
   try {
-    const text = describeSavedNotPublished(await readSavedNotPublished(client, tables), tables);
+    const text = checked
+      ? describeSavedNotPublished(await readSavedNotPublished(client, tables, { facts: true }), tables, { checked: true })
+      : describeSavedNotPublished(await readSavedNotPublished(client, tables), tables);
     if (text) say(text);
   } catch { /* the halt is what the operator must see; a report on what else is not live never hides it */ }
 }
@@ -3020,11 +3543,73 @@ function genpageCommand(verb, { env, pageId, app, flags = '' }) {
 // everything that app has saved, so the user is asked first), or detach it in Maker, or give this app a page of its own. `commands` are the lines `genpageCommand` made, one per app that holds the page.
 const detachAdvice = (commands) => `Detach it from the other app — ask the user first, since this changes another app: ${commands.join('; ')} (each takes the page out of that app's navigation and publishes that app, which publishes everything that app has saved; the page itself stays) — or detach it in Maker, or give this app its own page.`;
 
+// The managed binding store of one apply (lib/managed-bindings.js), through its one opener, openManagedContext. The CLI calls this once
+// per invocation and hands the handle to every attempt as `opts.bindingGroups`; a direct runSdkBuild that was handed none calls it
+// itself. Opening is the read-only discovery: a workspace with no store file stays inert — nothing is created, nothing is installed
+// on the barrier and no request changes — while an existing one installs its debt on `barrier` (a pending attempt's hold; a block for
+// an uncertain or corrupt group), whatever the spec declares, so a fresh barrier never erases on-disk debt. A file the build cannot
+// trust stops it before any write: it is not an empty store and must not be published past. Only an apply against a target a store
+// can be kept for (an https origin; isStoreEnvironment), with an app and a solution to name it by, opens one; a dry run reads and
+// validates only. Answers { store, debt, absent } or null.
+function openBuildBindingGroups(spec, { apply, env, workspaceDir, appDir, barrier } = {}) {
+  const sol = spec && spec.solution;
+  if (!apply || !spec.app || !sol || !sol.uniqueName || !isStoreEnvironment(env)) return null;
+  try {
+    return openManagedContext({ workspaceDir: applyWorkspaceOf({ workspaceDir, appDir }), environment: env, appUniqueName: appUniqueName(spec), solutionUniqueName: sol.uniqueName, barrier: barrier || null });
+  } catch (err) {
+    throw new BuildHalt(`the managed binding store of this app could not be read (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}); the build stopped before writing anything. Keep this file as it is: it is the record of changes not yet proved and of publishes sent and not confirmed, and a build without it could publish them unproved. Never put back an older copy of it — a backup or a version-control copy, the build's own included, can miss a change or a publish sent after it was made. Only a copy known to hold this file's latest content may take its place (a link, for one, is replaced by the file it points to); when that cannot be known, keep the file and the workspace as they are and do not build, edit or tear down this app from them.`, { phase: 'preflight', code: 'managed-binding-store-unreadable', recoverable: false, retry: RETRY.NEVER, cause: err });
+  }
+}
+
+// Is protected configuration (`configurationIdentity: "stable-v1"`, lib/configuration-protected.js) in play for this apply? Yes when the
+// App Spec opts in, and also when the opt-in is gone but the workspace's binding store still holds state for a configuration family
+// (ROW_FAMILIES: a committed group, a pending attempt, or a group it cannot use): removing the opt-in keeps what the store owes, so the
+// build must still run the store's debt sweep and its opt-in-removed stop (create-identity-opt-in-required). build-model-app.js asks this
+// before it makes the SDK, to decide whether to make the deferred managed-create gate at all.
+// The store read is discoverManagedStore: the same read-only, local-only discovery openBuildBindingGroups runs, in a module the build
+// has already loaded. It sends no request, creates no file and loads no protected module, so an App Spec without the opt-in whose
+// store holds no configuration row (or that has no store) builds exactly as before. A store it cannot read answers yes (fail closed):
+// the build then stops on that store before any write anyway (openBuildBindingGroups, managed-binding-store-unreadable).
+function protectedConfigurationInPlay(spec, { apply, env, workspaceDir, appDir } = {}) {
+  if (!apply || !spec) return false;
+  if (spec.configurationIdentity === 'stable-v1') return true;
+  const sol = spec.solution;
+  if (!spec.app || !sol || !sol.uniqueName || !isStoreEnvironment(env)) return false;
+  try {
+    const found = discoverManagedStore({ workspaceDir: applyWorkspaceOf({ workspaceDir, appDir }), environment: env, appUniqueName: appUniqueName(spec), solutionUniqueName: sol.uniqueName });
+    return !found.absent && found.loaded.units().some((u) => ROW_FAMILIES.includes(u.family));
+  } catch {
+    return true;
+  }
+}
+
+// The protected configuration hookup of one invocation (lib/configuration-protected.js createProtectedConfiguration), made the first time
+// an attempt needs it and kept by its gate: every attempt of a whole-build retry (build-model-app.js) shares the one managed create
+// context, so an answer one attempt received is still known to the next. Keyed by the gate, which the CLI makes once per invocation.
+const protectedHookups = new WeakMap();
+function protectedConfigurationFor(gate, store, { env, approvals } = {}) {
+  const made = protectedHookups.get(gate);
+  if (made && made.store === store) return made;
+  const { createManagedCreateContext } = require('./managed-create-context.js');
+  const { NOT_FOUND_CODE } = require('./configuration-create-bindings.js');
+  const { createProtectedConfiguration } = require('./configuration-protected.js');
+  // The maker's `--authorize adopt:<kind>:...` row approvals (build-model-app.js authorizationKeys), exactly as the preflight printed them.
+  const ctx = createManagedCreateContext({ store, approvals: approvals ? [...approvals] : [], notFoundCode: NOT_FOUND_CODE });
+  // The API root the SDK prefixes every request with (the bundle uses v9.0): a Custom API change set is admitted only under it.
+  const hookup = createProtectedConfiguration({ store, gate, ctx, apiBase: `${new URL(String(env)).origin}/api/data/v9.0` });
+  protectedHookups.set(gate, hookup);
+  return hookup;
+}
+
 // The entry every caller enters by. An APPLY holds the app's build lease for the whole of it (lib/app-operation-lease.js): one taken here when the
 // caller holds none, or the caller's own (`opts.buildLease`, which buildModelApp hands to each attempt), borrowed and left to the caller to let go. A
 // second apply of the same app in the same workspace is refused before anything is read or written, so two builds cannot both find the app's icon,
 // the app or a page missing and both create it. A dry run reads only, and takes no lease.
 async function runSdkBuild(spec, opts = {}) {
+  // commandStates (lib/command-state-run.js commandStateSpecHalt): checked here, at the engine's public entry, before the lease, the mode
+  // choice or any request, so a direct caller gets the same refusal as the CLI and a bad value is never read as absent.
+  const commandStateSpecError = commandStateSpecHalt(spec);
+  if (commandStateSpecError) throw commandStateSpecError;
   if (!opts.apply) return runSdkBuildAttempt(spec, opts);
   return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: opts.warn }, () => runSdkBuildAttempt(spec, opts));
 }
@@ -3045,7 +3630,10 @@ async function runSdkBuildAttempt(spec, opts = {}) {
   // what is deferred onto that table: its reconciled views and forms, and its enriched default views
   // (oweTablePublish). lengths: table logical -> { table, column, asked, tried, tableId, columnId? } of a name column whose
   // length is owed.
-  const owed = { tables: new Map(), paid: false, lengths: new Map() };
+  const owed = { tables: new Map(), paid: false, lengths: new Map(), barrier: opts.publicationBarrier || createPublicationBarrier() };
+  // commandStates (lib/command-state-run.js): whether this invocation's table publication covered each table a command row was written on is
+  // recorded by one observer for the whole invocation — build-model-app.js hands every attempt the same one; a direct caller's attempt makes its own.
+  owed.commandStateObserver = commandStateModeOf(spec, opts).mode === 'apply' ? (opts.commandStateObserver || createCommandStatePublicationObserver()) : null;
   // A record this attempt was handed is a debt it has not tried to pay yet, whatever an earlier attempt did with it.
   let carriedIn = 0;
   for (const debt of Array.isArray(opts.owedLengths) ? opts.owedLengths : []) {
@@ -3059,7 +3647,7 @@ async function runSdkBuildAttempt(spec, opts = {}) {
     if ((owed.tables.size > 0 || owed.paid) && err && typeof err === 'object') {
       try {
         // Not enumerable: they ride along for the caller, never into a serialized error or the journal.
-        Object.defineProperty(err, 'owedPublishes', { value: [...owed.tables.values()], enumerable: false, configurable: true, writable: true });
+        Object.defineProperty(err, 'owedPublishes', { value: [...owed.tables].filter(([logical]) => owed.barrier.allow(logical, 'settle after a halt')).map(([, target]) => target), enumerable: false, configurable: true, writable: true });
         Object.defineProperty(err, 'owedPaid', { value: owed.paid, enumerable: false, configurable: true, writable: true });
       } catch { /* a frozen error carries nothing; the re-run saves the views again and owes their publish */ }
     }
@@ -3069,7 +3657,133 @@ async function runSdkBuildAttempt(spec, opts = {}) {
         Object.defineProperty(err, 'owedLengths', { value: [...owed.lengths.values()], enumerable: false, configurable: true, writable: true });
       } catch { /* a frozen error carries nothing; a run that finds the table leaves its name column as it is, which the warning said */ }
     }
+    // What the halt leaves of the command states: the rows' results and, while a declared table is not seen published, why (not enumerable).
+    if (owed.commandStateObserver) owed.commandStateObserver.attachFailure(err);
     throw err;
+  }
+}
+
+// How this run treats the spec's commandStates (lib/command-state-run.js commandStateMode): the changed-only fast path is never a full apply.
+function commandStateModeOf(spec, opts) {
+  return commandStateMode(spec, { apply: !!opts.apply, publish: !!opts.publish, phases: opts.phases || PHASES, changedOnlyFast: !!(opts.changedOnly && opts.changedOnly.fastApply) });
+}
+
+// The command rows' reader and writer: the caller's own (a test), or one over the raw client build-model-app.js made for command rows alone (its
+// row PATCH is never resent: commandStateSendOnce), rooted at the SDK's API root. Null when there is none: the run then stops before it reads.
+function commandStateTransportFor(opts, sdk) {
+  if (opts.commandStateTransport) return opts.commandStateTransport;
+  if (!opts.commandStateClient) return null;
+  try {
+    return createCommandStateTransport({ client: opts.commandStateClient, apiUrl: (path) => sdk.dataverse.apiUrl(path) });
+  } catch {
+    return null;
+  }
+}
+
+// A dry run's command states: read-only, and only with the commands phase. A live plan reads every row and prints the exact approvals an apply
+// would need; a plan asked not to read the environment (or with no reader) says the rows are unverified and prints no token. A row the live plan
+// cannot plan stops the dry run (exit 1): an approval printed for a row that cannot be written would be a token for nothing.
+async function planCommandStatesForDryRun(spec, opts, sdk, has) {
+  if (commandStateModeOf(spec, opts).mode === 'off') return undefined;
+  if (!has('commands')) return { status: 'skipped', reason: 'the commands phase is not selected: command states are neither read nor applied' };
+  const transport = opts.livePlan === false ? null : commandStateTransportFor(opts, sdk);
+  if (!transport) return { status: 'unverified', reason: 'the rows were not read (offline plan), so no approval token is printed; run a live dry run for them' };
+  const run = createCommandStateRun({ spec, transport, origin: opts.env, approvals: opts.commandStateApprovals, publish: true });
+  return { status: 'planned', ...(await run.plan()) };
+}
+
+// A run with sample data and without the data-model phase (`--phases sample-data`) never secures a column: the data-model phase does that,
+// before any row is written. So before such a run seeds a table with a column the spec declares `isSecured: true`, it reads, once per
+// seeded table, whether that column is secured now, and stops before the first row when it is not, or when the read cannot say. Without
+// that check a value would be written into a column every user can read. Nothing is read for a spec that secures no column.
+const SEED_SECURITY_STEP = 'secured columns before sample data';
+function seededSecuredTables(spec) {
+  const tables = new Set();
+  for (const e of spec.entities || []) {
+    if (!(e.columns || []).some((c) => c && c.isSecured === true && c.type !== 'Customer')) continue;
+    if (sampleRecordsFor(spec, e).length) tables.add(e.schemaName.toLowerCase());
+  }
+  return tables;
+}
+async function refuseSeedIntoUnsecuredColumns({ runner, spec, provision }) {
+  const tables = seededSecuredTables(spec);
+  if (!tables.size) return;
+  await runner.run('sample-data', SEED_SECURITY_STEP, async () => {
+    const check = await securedBeforeSeed(spec, provision, { tables });
+    const listed = (xs) => xs.map((x) => x.target).join(', ');
+    if (check.unsecured.length) {
+      throw refusal(`${listed(check.unsecured)} ${check.unsecured.length === 1 ? 'is' : 'are'} declared isSecured: true but not secured in the environment, so no sample record was written. Run the data-model phase first, which secures ${check.unsecured.length === 1 ? 'it' : 'them'}.`, { code: 'COLUMN_NOT_SECURED' });
+    }
+    if (check.unknown.length) {
+      throw refusal(`could not read whether ${listed(check.unknown)} ${check.unknown.length === 1 ? 'is' : 'are'} secured (${check.unknown[0].reason}), so no sample record was written.`, { code: 'COLUMN_SECURITY_UNREAD' });
+    }
+  });
+}
+
+// Field security profiles (lib/field-security.js), one step per declared profile, in the data-model phase after its columns are secured
+// and before any sample row is written. Each step finds the profile by name and reads what the environment holds (planFieldSecurity),
+// then creates it through the create port (`creates`, lib/creates-passthrough.js: it mints the profile's id and its permissions' ids before
+// anything is sent) or finds it already as declared. A profile that exists and differs, one whose create did not confirm, or one whose
+// content is not proven after the create stops the build with its code: nothing is changed on a profile the build did not create as
+// declared, and no row is seeded while a declared profile is not as declared. Only a profile reported saved or unchanged gets an id in
+// `ids`, so an assignment never targets a profile whose permissions are not proven. Profiles need no publish.
+// The binding is recorded in `result.created.fieldSecurityProfiles[key] = { id, origin }` ('created' or 'adopted' — an exact match is
+// managed, never owned), and only a profile this run created is added to the app's solution (component type 70, Field Security Profile:
+// https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent).
+const FIELD_SECURITY_PROFILE_COMPONENT = 70;
+async function provisionFieldSecurityProfiles({ runner, spec, provision, creates, result, ids, deferAssignments }) {
+  const profiles = spec.fieldSecurityProfiles || [];
+  if (!profiles.length) return;
+  result.created.fieldSecurityProfiles = result.created.fieldSecurityProfiles || {};
+  const ctx = { sdk: provision, provision, creates };
+  for (const p of profiles) {
+    await runner.run('data-model', fieldSecurityProfileLabel(p), async () => {
+      const plan = await planFieldSecurity({ fieldSecurityProfiles: [p] }, ctx);
+      if (plan.operations.length && !(creates && typeof creates.run === 'function')) {
+        throw refusal(`field security profile "${p.name}" was not created: this build has no create port to create it through`, { code: 'FIELD_SECURITY_PROFILE_UNKNOWN' });
+      }
+      const applied = await applyFieldSecurity(plan, ctx);
+      const key = `fieldSecurityProfile:${p.key}`;
+      const binding = applied.managedBindings.find((b) => b.key === p.key);
+      if (binding) result.created.fieldSecurityProfiles[p.key] = { id: binding.id, origin: binding.origin };
+      if (binding && binding.origin === 'created') {
+        await provision.addSolutionComponent({ componentId: binding.id, componentType: FIELD_SECURITY_PROFILE_COMPONENT, solutionUniqueName: spec.solution.uniqueName });
+      }
+      const bad = applied.refused[0] || applied.unknown[0];
+      if (bad) throw refusal(`field security profile "${p.name}": ${bad.reason}`, { code: bad.code });
+      if (binding && (applied.saved.includes(key) || applied.unchanged.includes(key))) ids.set(p.key, binding.id);
+      return applied.saved.length ? 'created' : 'already as declared';
+    });
+  }
+  for (const p of deferAssignments ? profilesWithAssignments(spec) : []) {
+    runner.skip('data-model', deferredAssignmentsLabel(p));
+    (result.skipped.fieldSecurityAssignments = result.skipped.fieldSecurityAssignments || []).push({ profile: p.key, principals: fieldSecurityPrincipals(p), deferredTo: 'security' });
+  }
+}
+
+// Give each profile to the users and teams the spec names (assignFieldSecurity: additive only, a holder the spec does not name is left as
+// it is), one step per profile that names any, at the end of the security phase. The profile's id comes from this run's data-model step
+// when it ran; a run without that phase (`--phases security`) finds the profile read-only by the same plan, and gives it only when the
+// environment already holds it as declared — a profile missing, different or unreadable is refused, never created or changed here.
+async function assignFieldSecurityProfiles({ runner, spec, provision, ids }) {
+  const ctx = { sdk: provision, provision };
+  for (const p of profilesWithAssignments(spec)) {
+    await runner.run('security', fieldSecurityAssignmentsLabel(p), async () => {
+      let id = ids.get(p.key);
+      if (!id) {
+        const plan = await planFieldSecurity({ fieldSecurityProfiles: [p] }, ctx);
+        const found = plan.unchanged[0];
+        if (!found) {
+          const why = plan.refused[0] || plan.unknown[0];
+          throw refusal(`field security profile "${p.name}" was not given to anyone: ${why ? why.reason : 'it does not exist yet — run the data-model phase first, which creates it'}`, { code: why ? why.code : 'FIELD_SECURITY_PROFILE_UNRESOLVED' });
+        }
+        id = found.id;
+      }
+      const r = await assignFieldSecurity({ fieldSecurityProfiles: [p] }, ctx, { profileIds: new Map([[p.key, id]]) });
+      const bad = r.refused[0] || r.unknown[0];
+      if (bad) throw refusal(`field security profile "${p.name}": ${bad.reason}`, { code: bad.code });
+      return `${r.saved.length} given, ${r.unchanged.length} already held`;
+    });
   }
 }
 
@@ -3101,6 +3815,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
     }
     if (has('app-shell')) checkNavigationInPlan(plan, spec, { phases, changedOnly: opts.changedOnly, warn: opts.warn });
+    // A spec that embeds pages on forms, run with the forms phase but not the pages phase, is refused by the apply before anything is written
+    // (requirePagesPhaseForEmbeds). The dry run says so on a line of its own after the forms, marked as checkNavigationInPlan marks a refused app.
+    checkEmbedsPhaseInPlan(plan, spec, phases);
     // What the environment has for the names the pages' bindings state (checkPageBindingsInPlan): it reads, so it is a part of the live plan and is left out of one that is asked not to read the environment.
     if (canProbe && has('pages')) {
       try {
@@ -3109,25 +3826,84 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (typeof opts.warn === 'function') opts.warn(`could not check the bindings of the pages against this environment (${(err && err.message) || err})`);
       }
     }
+    // "exact" takes the other Main forms of each listed table out of an app that exists (op-diff.js 'app-main-forms-removal'), which an apply
+    // refuses without --allow-destructive; the dry run lists it per table first, with the app publication that makes it live. Whether the app
+    // exists is what the live plan read for the app step: an app it found absent is new and loses nothing; one it found, or did not probe, is listed as a removal.
+    if (has('app-shell')) {
+      const appItem = plan.find((p) => p.key && p.key.kind === 'app');
+      const appIsNew = !!appItem && appItem.state === 'create';
+      for (const op of require('./op-diff.js').exactMainFormsRemovals(spec)) {
+        plan.push({
+          phase: 'app-shell',
+          label: appIsNew
+            ? `${op.label} (exact): the app is new, so no Main form is taken out`
+            : `${op.label} (exact): ${op.detail}${appItem && appItem.state === 'reuse' ? '' : ', if the app exists'} — needs --allow-destructive`,
+          op: op.kind,
+          destructive: !appIsNew,
+          description: op.detail,
+          publication: { kind: 'app', app: appUniqueName(spec) },
+        });
+      }
+    }
     plan.forEach((p, i) => emit({ phase: p.phase, status: p.state === 'reuse' ? 'skip' : 'skip', label: p.label, state: p.state, stateWhy: p.stateWhy, n: i + 1, total: plan.length }));
+    // --preview-push: what a push of each planned artifact would do, read-only (lib/push-preview.js). Only on a
+    // live plan — it names the artifacts the probe found — and only when asked: a dry run without it loads
+    // neither module and sends nothing more.
+    let preview;
+    if (opts.previewPush === true && canProbe) {
+      const { runPushPreview, previewItemsFromPlan } = require('./push-preview.js');
+      const { findingOf } = require('./readonly-operations.js');
+      // A preview failure never fails the dry run: it is reported, and the plan stands. It is reported by its code,
+      // HTTP status and fixed words only — a service's or the SDK's own text can quote a record value.
+      try {
+        const items = previewItemsForPlan(plan, spec, previewItemsFromPlan);
+        preview = await runPushPreview({ env: opts.env, httpClient: opts.httpClient, items,
+          solutionUniqueName: spec.solution && spec.solution.uniqueName, languageCode: opts.preResolvedLanguageCode || opts.languageCode });
+      } catch (err) {
+        preview = { ok: false, allEvaluated: false, error: findingOf(err, 'PREVIEW_FAILED') };
+      }
+    }
+    const commandStatePlan = await planCommandStatesForDryRun(spec, opts, provision, has);
     return {
       ok: true,
       dryRun: true,
       livePlan: canProbe,
       plan: plan.map((p) => (p.state ? `${p.label} [${p.state}]` : p.label)),
-      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}) })),
+      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}),
+        ...(p.op ? { op: p.op, destructive: p.destructive, description: p.description, publication: p.publication } : {}) })),
+      ...(preview ? { pushPreview: preview } : {}),
+      ...(commandStatePlan ? { commandStatePlan } : {}),
     };
+  }
+
+  // commandStates: a partial apply, an apply without --publish, or one with keyed commands[] is refused here, before anything is read or written.
+  // Exactly --stage data leaves the rows alone (no read, no approval) and says so.
+  const commandStateModeOfRun = commandStateModeOf(spec, opts);
+  if (commandStateModeOfRun.mode === 'error') {
+    throw new BuildHalt(`${commandStateModeOfRun.code}: ${commandStateModeOfRun.message}`, { phase: 'preflight', code: commandStateModeOfRun.code, recoverable: false, retry: RETRY.NEVER });
+  }
+  if (commandStateModeOfRun.mode === 'data-stage' && typeof opts.warn === 'function') {
+    opts.warn('commandStates: not applied by --stage data (no command row is read or written); a full build with --publish applies them');
   }
 
   // Capture the attempt's checkpoint before best-effort preflight reads can swallow a refused throttle wait as unchecked metadata. The same runner then stops before any mutation, without counting refusals from earlier attempts.
   const runner = makeRunner({ emit, total: plan.length, throttle: opts.throttle });
   // A navigation Dataverse will refuse stops the build here, before anything is written, rather than at the app step
   // after the solution, tables, columns, views and forms have been (app-navigation.js). Only a run that has the app step.
+  // A spec that embeds pages on forms, run with the forms phase but not the pages phase, would save every form and end without one embed it asks for
+  // (the embed step runs in the pages phase): refused here, before anything is written (form-page-embeds.js requirePagesPhaseForEmbeds).
+  requirePagesPhaseForEmbeds(spec, phases);
   if (has('app-shell')) await checkNavigationBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
   // A binding whose connection reference is another connector's stops the build here too, before anything is written, for the same reason (checkPageBindingsBeforeWriting). What it reads is kept for
   // the attempt (bindingReads): the pages phase judges a navigation target it finds it has to make by the same reads, and reads only a name this check did not.
   const bindingReadsOfAttempt = bindingReads();
   await checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn, seen: bindingReadsOfAttempt });
+  // A localized label in a language the organization has not provisioned stops the build here too, before the solution phase can create
+  // the publisher and the solution, rather than at the data-model phase after them. Same check, halt and fail-soft policy as there
+  // (entity-provision.js checkLocalizedLabelLanguages); the data-model phase is told it ran (localizedLabelsChecked), so the list is read once.
+  // Only a run with the data-model phase: the labels are its to write.
+  const checkLabelLanguagesEarly = has('data-model');
+  if (checkLabelLanguagesEarly) await checkLocalizedLabelLanguages(spec, opts.provisionedLanguages);
   runner.stopIfRefused('preflight');
 
   const createdFormsThisRun = new Set();
@@ -3138,12 +3914,524 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // are keyed by Dataverse logical names (a table's, a web resource's: the publisher prefix and `_`, or a system component's), by GUIDs or by
   // `entity|name` pairs, none of which can be such a member.
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: Object.create(null), pages: Object.create(null), pageDeployedShas: Object.create(null), pageSourceShas: Object.create(null), ai: { appFeatures: null, summaries: {} }, roles: Object.create(null), roleGrants: {}, bpfRoleGrants: Object.create(null), app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
+  // A declared view, chart, command bar or Quick Find that ended refused or unknown is required work this run did not finish. It joins
+  // the run's incomplete list (markIncomplete, below: called only once the phases run, after it is initialised) with its code and
+  // what unlocks it, so every later artifact and phase still runs and the run then ends with the one halt that list makes.
+  // The settlement reports a refusal as `${artifactLabel}: ${code} — ${message}`, and the declared view and chart call sites below
+  // label their artifact `view <key>` / `chart <key>`. The remedy names the approval in general; the CLI flag that gives it is
+  // named too, so the maker can act on the line as printed: --authorize adopt:/overwrite:view:<key> (or chart:<key>) for an adoption
+  // or a drift — typed by family, because a view and a chart may share a <key> (build-model-app.js authorizationKeys,
+  // reconcile-common.js approvalKey); adopt:/overwrite:webresource:<name> for a declared web resource, labelled `web resource <name>`;
+  // and --allow-destructive (featureCtx.authorizedDestructive) for a removal, an emptied Quick Find or an emptied web resource.
+  const cliApproval = (label, code) => {
+    if (/-(?:removal|empty|clear)-not-authorized$/.test(code)) return '--allow-destructive';
+    // A declared form's halt is labelled `declared form "<table>/<type>/<name>"` (form-layout-reconcile.js), and its approvals
+    // are typed by family (form:<key>): a first binding of a form this run did not create needs the adoption one
+    // (managed-adoption-required, form-layout-adoption-not-authorized), a saved layout that drifted the overwrite one.
+    // A declared dashboard's the same way: `declared dashboard "<key>"` for the dashboard (dashboard-adoption-not-authorized,
+    // dashboard-drift) and `declared dashboard "<key>/<tile>"` for one tile's drift (dashboard-tile-drift), whose overwrite
+    // approval is that tile's own (lib/dashboard-reconcile.js asks for dashboard:<key>/<tile>).
+    // A declared business rule's or process flow's halt carries a finding labelled `declared rule "<table>/<name>"` /
+    // `declared bpf "<table>/<name>"` (declaredWorkflowStop). Those families are managed whole and have no overwrite: every
+    // stop an approval settles is a complete read-only adoption (adopt:rule:<table>/<name>, adopt:bpf:<table>/<name>) — a
+    // match this build did not create (managed-adoption-required, create-ownership-required) or one changed outside the spec
+    // (rule-drift, bpf-drift), which only a re-adoption whose declaration names the whole current body records again.
+    const formAt = label.indexOf(`: ${code} — `);
+    const form = formAt > 0 ? /^declared (form|dashboard|rule|bpf) "(.+)"$/.exec(label.slice(0, formAt)) : null;
+    if (form) {
+      const wholeWorkflow = form[1] === 'rule' || form[1] === 'bpf';
+      const formVerb = wholeWorkflow
+        ? (code === 'managed-adoption-required' || code === 'create-ownership-required' || /-drift$/.test(code) ? 'adopt' : '')
+        : code === 'managed-adoption-required' || /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
+      // A form name may hold spaces (`contoso_item/main/declared item`), so authorizeFlag quotes the printed key for the shell then.
+      return formVerb ? authorizeFlag(`${formVerb}:${approvalKey(form[1], form[2])}`) : '';
+    }
+    const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
+    const at = verb ? label.indexOf(`: ${code} — `) : -1;
+    const m = at > 0 ? /^(view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;
+    if (!m) return '';
+    return authorizeFlag(m[1] === 'web resource' ? `${verb}:webresource:${m[2]}` : `${verb}:${approvalKey(m[1], m[2])}`);
+  };
+  const featureIncomplete = (phase, label, detail = {}) => {
+    const flag = cliApproval(label, String(detail.code || ''));
+    const remedy = detail.remedy && flag ? `${detail.remedy}: ${flag}` : detail.remedy;
+    markIncomplete({ ...detail, phase, code: detail.code || 'feature-incomplete', message: remedy ? `${label} (${remedy})` : label });
+    runner.emit({ phase, status: 'error', label, n: 0, total: runner.total, detail: detail.remedy || (detail.unknownOutcome ? 'outcome unknown' : '') });
+  };
+  // What settlement scheduled for publication, drained by commitSettledPublishes.
+  const settledPublishes = [];
+  // The managed-artifacts store (bindings of declared artifacts), when the build has one.
+  const managedArtifacts = opts.managedArtifacts || null;
+  // The creation port: the build's own create port (opts.creates; the plain pass-through of lib/creates-passthrough.js when the
+  // caller brings none): fresh ids for this call, execute exactly once, nothing kept between calls. That port answers 'created'
+  // whenever execute returned, but a declared artifact's execute answers the checked push ({ outcome: 'saved'|'refused'|'unknown',
+  // code }, pushChecked), so a 'created' is read through that answer: only a saved push made the row.
+  const basePort = opts.creates || createPassthroughCreates();
+  const createPort = {
+    async run(request, execute) {
+      let checked;
+      const out = await basePort.run(request, async (ids) => {
+        checked = await execute(ids);
+        return checked;
+      });
+      if (!out || out.outcome !== 'created') return out;
+      const outcome = checked && checked.outcome === 'saved' ? 'created' : checked && checked.outcome === 'refused' ? 'refused' : 'unknown';
+      return { ...out, outcome };
+    },
+  };
+  const featureCtx = {
+    sdk: provision,
+    appUniqueName: appUniqueName(spec),
+    environmentFingerprint: opts.environmentFingerprint,
+    managed: managedArtifacts ? { lookup: (kind, key) => managedArtifacts.lookup(kind, key) } : undefined,
+    creates: createPort,
+    authorizedAdoption: opts.authorizedAdoption,
+    authorizedOverwrite: opts.authorizedOverwrite,
+    authorizedDestructive: opts.allowDestructive === true,
+    warn: opts.warn,
+  };
+  // Blocks the barrier first, then reports, then records bindings even if reporting threw, then schedules a clean
+  // result's publication (createFeatureSettlement, lib/reconcile-common.js).
+  // A declared edit the apply step made but could not settle (a push the SDK refused, or one whose outcome is unknown) stays in the
+  // workspace copy, and the CLI's workspace is durable. Reset that copy to the server's (as discardUnrecordedEdits does for the app) so
+  // the next run does not find it there. This discards nothing but this run's own edit: the apply step ran only because
+  // refuseUnsentCopy (below) proved the copy equal to the server's just before it, or the maker approved replacing it. Only when the
+  // apply step added the failure — a refusal at plan time made no edit — and best-effort: a reset that fails leaves the edit in the
+  // copy, and the next run's refuseUnsentCopy refuses the item for it rather than plan over it.
+  const resetUnsettledCopy = async (kind, id, plan, r) => {
+    if (!id || typeof provision.fetchArtifact !== 'function') return;
+    const planned = (plan.refused || []).length + (plan.unknown || []).length;
+    if ((r.refused || []).length + (r.unknown || []).length <= planned) return;
+    try {
+      await provision.fetchArtifact(kind, id, { overwrite: true });
+    } catch { /* see above */ }
+  };
+  // A declared view, chart or Quick Find view is planned over the SDK's workspace copy, and a plain fetch keeps a local edit while the
+  // server has not moved (lib/unsynced-edits.js). A copy that differs from the SDK's snapshot of the server's would therefore be
+  // planned as if the server held it: an earlier run's unsent Quick Find list reads as "already stored", "no change", success with
+  // nothing written. And the build cannot tell whose the difference is — an earlier run's edit that was never sent, or a maker's own
+  // (a description the spec does not declare): a diff says that something changed, never who changed it. So the build does not repair
+  // it. It refuses the item before any write, keeps the copy exactly as it is, and names the two ways on: put what should stay into
+  // the spec and refresh the copy, or approve replacing the local copy with the server's (--authorize overwrite:<approval>, the same
+  // approval that lets the spec replace a change made on the server). A comparison that cannot be made — an SDK without diffArtifact,
+  // a diff that throws, an answer with no list of changes — is no proof of a clean copy, so it is refused the same way. A clean copy
+  // proceeds exactly as before, at the cost of one local diff and no request.
+  // The refusal goes first among the plan's reasons: a plan made over a copy that is not the server's may refuse for what the copy holds.
+  // what names the artifact in the refusal: 'view', 'chart' or 'Quick Find view'. approval is the artifact's own family-typed key
+  // (reconcile-common.js approvalKey: view:<table>/<name>, chart:<table>/<name>, quickfind:<table>), the only overwrite approval
+  // that may replace this copy: a view named "quickFind" and its table's Quick Find view share a plan key, never an approval.
+  const refuseUnsentCopy = async (kind, what, approval, id, plan, replan) => {
+    if (!id) return plan;
+    let state = 'unproven';
+    if (typeof provision.diffArtifact === 'function') {
+      try {
+        const diff = await provision.diffArtifact(kind, id);
+        if (diff && Array.isArray(diff.changes)) state = diff.changes.length === 0 ? 'clean' : 'changed';
+      } catch { /* unproven: see above */ }
+    }
+    if (state === 'clean') return plan;
+    if (isAuthorized(featureCtx.authorizedOverwrite, approval)) {
+      try {
+        await provision.fetchArtifact(kind, id, { overwrite: true });
+      } catch {
+        plan.unknown.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `the local copy of the ${what} ${id} could not be replaced with the server's as approved, because the server's copy could not be read; the local copy was kept and nothing was written. Re-run`));
+        return plan;
+      }
+      return replan();
+    }
+    const found = state === 'changed'
+      ? `the local copy of the ${what} ${id} in the workspace differs from the server's (an edit an earlier run did not send, or one made by hand)`
+      : `the local copy of the ${what} ${id} in the workspace could not be compared with the server's`;
+    plan.refused.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `${found}, so it was not planned over and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}. Or approve replacing the local copy with the server's (this also lets the spec replace any change made on the server): ${authorizeFlag(`overwrite:${approval}`)}`));
+    return plan;
+  };
+  // A stable view or chart (createIdentity, settled through the binding store: `stable.settle`) whose row already holds exactly what
+  // the spec declares, with no binding, no pin and no adoption approval (the planner's noChange without bindUnchanged,
+  // reconcile-common.js bindsUnchanged): nothing is written and the row is NOT bound, because a row found is never taken over
+  // silently. That is a clean result, so the build would end without a word — and the maker would read a success for a row this spec
+  // does not manage, whose next declared change stops for adoption. So it is said, as a warning that names the row and the one
+  // approval that binds it; the result itself is unchanged (no write, no binding, no stop). Only where a store can record the
+  // binding: a declared view without createIdentity has no binding store in the CLI, so the approval would bind nothing there.
+  // `id` is the row the plan read; plan.key is the family's key (reconcile-common.js approvalKey types it: view:<table>/<name>).
+  const warnUnadopted = (kind, id, plan, r) => {
+    if (typeof opts.warn !== 'function' || !plan || plan.action !== 'noChange' || plan.bindUnchanged || !id) return;
+    if ((r.refused || []).length || (r.unknown || []).length || (r.managedBindings || []).length) return;
+    opts.warn(`${kind} ${plan.key}: ${kind}-not-adopted — the ${kind} ${id} already holds what the spec declares, so nothing was written, but it is not managed by this spec: it was not bound, and a later change to its declaration stops until it is adopted. To manage it, run the build again with ${authorizeFlag(`adopt:${approvalKey(kind, plan.key)}`)}`);
+  };
+  const settleFeatureResult = createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: managedArtifacts ? (b) => managedArtifacts.recordApplied(b) : undefined });
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
   // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
   const sol = spec.solution;
+  // The managed binding store: the handle the CLI opened (opts.bindingGroups) is reused, never a second writer; a direct call opens
+  // its own (openBuildBindingGroups).
+  const bindingGroups = opts.bindingGroups || openBuildBindingGroups(spec, { ...opts, barrier: owed.barrier });
+  // The client's workflow effect gate (lib/deferred-workflow-gate.js, made by build-model-app.js while declared rules or process
+  // flows are on) is bound to this store when the spec declares one, or the store already holds a workflow effect: an earlier run's
+  // write whose outcome is still being proved keeps its row screened even after its declaration left the spec. Otherwise it stays
+  // unbound and passes every request, so a build with neither sends what it always sent.
+  const workflowStore = bindingGroups && bindingGroups.store;
+  if (opts.workflowEffectGate && workflowStore
+    && ((spec.businessRules || []).some(isDeclaredRuleOn) || (spec.businessProcessFlows || []).some(isDeclaredBpfOn)
+      || (workflowStore.snapshot().envelope.workflowEffects || []).length > 0)) {
+    opts.workflowEffectGate.bind(workflowStore);
+  }
+  // Protected configuration's deferred managed-create gate (lib/managed-create-transport.js), which build-model-app.js makes only while
+  // protected configuration is in play (protectedConfigurationInPlay) and installs on the shared HTTP client with the workflow gate.
+  // It is bound here, once, to the store every attempt shares, and the configuration hookup is made over both before the build's first
+  // service change below: its debt sweep, its whole-plan preflight and its opt-in-removed stop all run ahead of every write, whatever
+  // phases or changed-only selection this run has. Without a store (no solution, or a target no store is kept for) nothing is bound and
+  // no hookup is made: under the opt-in the configuration preflight then stops the build before any write (create-identity-unverified).
+  // A hookup the caller handed over (opts.protectedConfiguration) is used as it is.
+  let configurationOpts = opts;
+  if (opts.managedCreateGate && workflowStore && !opts.protectedConfiguration) {
+    opts.managedCreateGate.bind(workflowStore);
+    configurationOpts = { ...opts, protectedConfiguration: protectedConfigurationFor(opts.managedCreateGate, workflowStore, { env: opts.env, approvals: opts.configurationApprovals }) };
+  }
+  // A declared artifact that did not settle stops the build. Its result's own findings decide — never the SDK error
+  // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a
+  // create that may have stored a row must be inspected first. RETRY.NEVER marks the halt `transient: false`, which
+  // retryPolicyFor reads through the runner's wrapping halt. The halt says each finding and, for one an approval
+  // settles, the exact flag (cliApproval), so the maker reads what to do from the halt itself. A stop with no findings (one the managed
+  // settlement raised itself, e.g. create-completion-required at a local draft or a pending attempt) says its cause's own message, which
+  // is where what to do is written. The halt points to an approval only when it named one: most such stops have none. A finding may carry
+  // its own `label` (a declared dashboard's tile, `declared dashboard "<key>/<tile>"`), which names the approval it needs.
+  const managedStop = (phase, label, stopCode, { cause, findings = [] } = {}) => {
+    const items = findings.filter((x) => x && x.code).map((x) => {
+      const flag = cliApproval(`${x.label || label}: ${x.code} — `, x.code);
+      return { text: `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`, ordered: x.orderedSteps === true };
+    });
+    if (!items.length && cause && typeof cause.message === 'string' && cause.message) items.push({ text: `${stopCode} — ${cause.message}`, ordered: cause.orderedSteps === true });
+    const said = items.map((i) => i.text);
+    // An item flagged `orderedSteps` (a pending create's advice, lib/creates-stable-build.js pendingAdvice) lists steps in an order, and
+    // its last step mentions an approval only for a later run that "asks for it": giving that approval now does not clear the stop
+    // (create-completion-required). So its prose never counts as an approval to give, whatever flags it names, and the footer sends the
+    // maker through the steps. The flag is data on the finding or cause, not a pattern in its text, so rewording the advice cannot flip it.
+    const approvalNamed = items.some((i) => !i.ordered && /--authorize \S|--allow-destructive/.test(i.text));
+    // The one stop a run again may clear by itself: an identity read of a table this invocation created that met the
+    // table's metadata-cache lag (retry-policy.js isFreshTableReadLag, #796; the settlement marks it, nothing was sent).
+    // The settlement has already read it again in place for as long as the build's one retry allowance lasted, so the stop
+    // quotes the service's answer (freshTableLagAnswer): wrapped in the settlement's own words it would otherwise reach the
+    // maker only through the cause chain, which the CLI does not print. Every other stop stays RETRY.NEVER.
+    const freshLag = isFreshTableReadLag(cause);
+    const next = approvalNamed ? 'Fix the cause (or give the approval named above) and run the build again'
+      : items.some((i) => i.ordered) ? 'Follow the steps above, then run the build again'
+        : 'Do what the message above says, then run the build again';
+    const lagAnswer = freshLag ? freshTableLagAnswer(cause) : null;
+    const tail = freshLag
+      ? `The table was created moments ago and is still not readable${lagAnswer ? ` (the service answered ${lagAnswer})` : ''}; run the build again in a minute.`
+      : `${next}; it is not retried automatically.`;
+    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${tail}`, { phase, code: stopCode, recoverable: false, retry: freshLag ? RETRY.SERVICE : RETRY.NEVER, cause });
+    Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
+    return err;
+  };
+  // A stored dashboard group whose last change is saved and whose publish is owed (state 'owed', no dispatch token: definitely
+  // not sent) is ordinary debt to the store (managed-bindings.js classifyPersisted: eligible), and holds nothing, because the
+  // run that settles that dashboard pays it, through its managed coverage and proof (publishDeclaredDashboard). A run that
+  // does NOT settle it (the spec no longer declares it, declares it with the build path off, or the dashboards phase is not
+  // run) has no such payer, and nothing else would stop an app write or app publish that adds or holds that dashboard, or a
+  // plain publish naming it, from going ahead past a saved layer nothing proved (a later maker draft included). So this run
+  // blocks its scope for the whole run: checkAppWrite refuses an app that adds or holds it, a publish naming it is not sent,
+  // and the run ends incomplete naming it. Nothing is paid, discarded or marked: the store keeps the debt exactly as it was,
+  // and the run that declares the dashboard again and runs its phase pays it through its proof, as it always did.
+  // The one way out other than paying: a REMOVED declaration (the spec does not declare it with the build path on) whose
+  // dashboard the maker deleted. Declaring it again cannot help there (its bound row is gone: dashboard-bound-row-missing),
+  // so without this the fence would hold every later run for good. Before the fence, such a group with an owed,
+  // definitely-unsent publish (or no publish to settle) has its root read fresh in BOTH layers by its id
+  // (readSystemFormRootPresence). Only 'absent', the missing-row 404 (0x80040217) in both layers, is evidence: a row in
+  // either layer, a 403, a timeout, a malformed answer or any read that fails keeps the fence (and keeps the group). On
+  // that evidence the store retires the group in one change checked against what it observed before the reads
+  // (retireAbsentGroup: the same observation, generation and root, no attempt, no publish that may have been sent; it
+  // refuses with nothing written otherwise), which records that the root was proved gone and the group retired, NOT that
+  // its content was published or its debt paid. A retirement that cannot be confirmed (a refusal, a failed store write, a
+  // group that moved after this run read the store) stops this invocation before its first service write, incomplete and
+  // naming the dashboard; the next invocation rereads the file. A retired group installs no fence; a block this
+  // invocation already holds on the scope (a caller's barrier) is never cleared, so that invocation stays stopped and the
+  // next proceeds from the file. A group with a pending attempt, or a publish that may have been sent, is not read here:
+  // the store holds those (openManagedContext).
+  // The keys of the dashboard and form retirements this invocation could not confirm (haltOnUnconfirmedRetirements).
+  const unconfirmedRetirements = [];
+  if (bindingGroups && bindingGroups.store) {
+    const store = bindingGroups.store;
+    const declaredOn = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
+    const settledHere = has('dashboards') ? declaredOn : new Set();
+    const client = provision && provision.dataverse;
+    // A removed declaration's group that may be retired: no attempt (journal empty or not, it is never retired here), bound
+    // to a root, and with an owed, definitely-unsent dashboard publish or none to settle.
+    const retirable = (unit) => {
+      if (!unit || unit.invalid || unit.attempt || unit.family !== 'dashboard' || declaredOn.has(unit.key)) return false;
+      const group = unit.group;
+      if (!group || !group.root || !group.root.id) return false;
+      const pub = group.publication;
+      return !pub || pub.state === 'not-needed' || pub.state === 'confirmed'
+        || (pub.state === 'owed' && pub.dispatchToken === null && !!pub.scope && pub.scope.type === 'dashboard');
+    };
+    // The order is the proof's, and every step is here and nowhere else: (1) observeRetirement, which rereads the store
+    // file and fingerprints the group as it is now; (2) the fresh reads of both layers; (3) retireAbsentGroup with that
+    // observation. A managed write that lands on the group between (1) and (3) (another invocation that settled its
+    // publish against a live layer, prepared a change, committed) makes the store refuse the retirement instead of
+    // retiring on a proof about an older state. An observation taken after the reads proves nothing (the row may have come
+    // back between the read and it), so a refusal is never retried here with a new one: the next build observes and
+    // reads again. The generation and root retired are the ones the observation saw, taken from the reread store.
+    //
+    // A retirement this invocation cannot confirm ends the invocation, whatever state the group had before: the store
+    // could not be observed, the observed group is no longer one this sweep may retire, or the store refused or failed the
+    // retirement. Each of those can mean another invocation moved the key after this one read the store (a new owed
+    // generation, a pending attempt, a carried publish marked dispatching, a fresh create under another root), and a store
+    // error after the file was replaced leaves the durable result unknown. This invocation cannot know which, and every
+    // later step reads the store as it cached it, so no later step can be trusted to hold that key: a plain dashboard of
+    // its name could create or reuse one beside the other invocation's, and an app write or publish could admit it. So
+    // the dashboard is quarantined (a block this invocation already holds is never cleared), the key is noted in
+    // `unconfirmedRetirements`, and once the form sweep below has run the build stops before its first service write
+    // (haltOnUnconfirmedRetirements). Nothing is retried with a new observation: the next invocation observes, reads and
+    // retires (or proceeds) from the store file as it is then.
+    const unconfirmed = (key, ids, why) => {
+      const roots = [...new Set(ids.filter(Boolean).map((id) => String(id).toLowerCase()))];
+      owed.barrier.quarantine(roots.map((id) => ({ type: 'dashboard', id })), roots, `managed dashboard "${key}" (its retirement could not be confirmed: ${why}; this invocation stops before any write, and the next invocation rereads the durable result)`);
+      unconfirmedRetirements.push({ family: 'dashboard', key, why });
+      if (typeof opts.warn === 'function') {
+        opts.warn(`declared dashboard "${key}": its retirement could not be confirmed (${why}); this build stops before writing anything, and the next build reads it again.`);
+      }
+      return false;
+    };
+    const failure = (err) => `${(err && err.code) || 'error'}: ${String((err && err.message) || err)}`;
+    const retireIfAbsent = async (selected) => {
+      const { key } = selected;
+      const selectedRoot = selected.group.root.id;
+      let observation;
+      try {
+        ({ observation } = store.observeRetirement({ family: 'dashboard', key }));
+      } catch (err) {
+        return unconfirmed(key, [selectedRoot], `the binding store could not be observed (${failure(err)})`);
+      }
+      const unit = store.snapshot().units().find((u) => u.family === 'dashboard' && u.key === key);
+      if (!retirable(unit)) {
+        return unconfirmed(key, [selectedRoot, unit && unit.group && unit.group.root && unit.group.root.id], 'the binding store changed before its dashboard was read');
+      }
+      const { generation, publication } = unit.group;
+      const rootId = unit.group.root.id;
+      let presence;
+      try {
+        presence = await readSystemFormRootPresence(client, rootId);
+      } catch {
+        return false; // not proved absent: the group and its fence stay
+      }
+      if (presence !== 'absent') return false;
+      try {
+        store.retireAbsentGroup({ family: 'dashboard', key, generation, rootId, observation, evidence: { kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' } });
+      } catch (err) {
+        // The store refused (it changed since the observation, another generation or root, a publish that may have been
+        // sent) or its write failed: whether the group is retired is not confirmed here, and the store as cached is not
+        // what the file holds now.
+        return unconfirmed(key, [selectedRoot, rootId], `its dashboard ${rootId} read as gone from both layers, but the binding store did not confirm the retirement (${failure(err)})`);
+      }
+      if (typeof opts.warn === 'function') {
+        opts.warn(`declared dashboard "${key}": managed-dashboard-retired — its dashboard ${rootId} is gone from both the saved and the published layer, and the spec no longer declares it, so its managed record was retired${publication && publication.state === 'owed' ? ' with its unpublished change, which was never published' : ''}. Nothing was sent for it; a dashboard declared under this key again is a new one.`);
+      }
+      return true;
+    };
+    // Nothing is read when the store holds no retirable group, so every other build sends what it always sent.
+    if (client) {
+      for (const unit of store.snapshot().units().filter(retirable)) await retireIfAbsent(unit);
+    }
+    for (const unit of store.snapshot().units()) {
+      const pub = unit.group && unit.group.publication;
+      if (unit.invalid || unit.attempt || unit.family !== 'dashboard' || settledHere.has(unit.key)) continue;
+      if (!pub || pub.state !== 'owed' || !pub.scope || pub.scope.type !== 'dashboard') continue;
+      const why = has('dashboards') ? 'this spec does not declare it' : 'this run does not run the dashboards phase';
+      owed.barrier.quarantine([pub.scope], [pub.scope.id], `managed dashboard "${unit.key}" (its last change is saved and its publish is owed, and ${why}; declare it with reconcile: "declared" and run the dashboards phase to publish it through its proof, or, if it was deleted, remove its declaration: a build that reads it gone from both layers retires it)`);
+    }
+  }
+  // Stable create identities (createIdentity: "stable-v1"; lib/creates-stable-build.js), for declared views and charts only: their
+  // two call sites below are handed `stableCtx` — the composite create port, a binding lookup by id, and a settlement that records
+  // each settled view or chart in the store. A spec without the field loads none of it, and every other create keeps the build's
+  // own port. The composite port's answer is not passed through `createPort`'s reading of the checked push: it already is one
+  // (creates-port.js interpretCompositePush), and that reading would turn its 'matched' into 'unknown'.
+  let stable = null;
+  if (spec.createIdentity !== undefined) {
+    const { createStableCreates } = require('./creates-stable-build.js');
+    try {
+      stable = createStableCreates({ spec, sdk: provision, store: bindingGroups ? bindingGroups.store : null, barrier: owed.barrier, basePort: createPort, fallback: managedArtifacts });
+    } catch (err) {
+      const code = typeof (err && err.code) === 'string' && /^create-identity-[a-z-]+$/.test(err.code) ? err.code : 'create-identity-invalid';
+      throw refusal(`createIdentity: ${String((err && err.message) || err)}; the build stopped before writing anything`, { code });
+    }
+  }
+  const stableCtx = stable ? { ...featureCtx, managed: stable.managed, creates: stable.port } : featureCtx;
+  // A declared form the spec no longer declares, whose form a maker then deleted. Its committed group stays in the store,
+  // so without this every run ends on it: an owed publish of its table reads the layers of every form on the table first,
+  // a deleted one cannot be read, and the publish of the table (a sibling form's included) stops each time; and verify
+  // checks the bound form by its id each time and fails. Declaring it again cannot help (its bound form is gone).
+  // So, before the store's tables are routed, each such group whose form a FRESH read by its id shows gone from BOTH
+  // layers (readSystemFormRootPresence: the missing-row 404, 0x80040217, in the saved and the published read) is retired
+  // (managed-bindings.js retireAbsentGroup, at its committed generation and root), with a notice naming it. Only that
+  // answer retires: a form present in either layer, a 403, a timeout or any other answer keeps the group, and the run
+  // goes on as it would have. A group still declared (its bound form missing is form-layout-bound-row-missing, repaired
+  // explicitly), one with a pending attempt, or one whose publish may have been sent (dispatching, unconfirmed, or owed
+  // under a dispatch token) is never read here: such a publish could still land, so it is settled or accepted as a risk
+  // (publication-risk:<scopeKey>/<dispatch>), never retired. Nothing is read when the store holds no such group, so every other
+  // build sends what it always sent. With the forms flag off nothing is declared and nothing runs here: a kill switch
+  // must not retire a group the spec still declares.
+  //
+  // The order is fixed: observe the group in the store (managed-bindings.js observeRetirement, which rereads the file and
+  // fingerprints the group, its attempt and its effects as they are now), THEN read the service fresh, THEN retire
+  // against that observation, so a managed write that lands on the group between the observation and the retirement
+  // (another run's commit, a new attempt, a publish settled against a live layer) makes the store refuse the retirement
+  // instead of retiring on a proof about an older state. An observation taken after the read proves nothing (the form
+  // may have come back between the read and it), so a refusal is never retried here with a new one: the next build
+  // observes and reads again. The observation and the store call live only in `observeRemovedForm` and
+  // `retireObservedForm`. A pending attempt is never retired here (whatever its effect journal or send window shows):
+  // the filter leaves out every group that has one.
+  //
+  // A retirement this run cannot confirm (the store could not be observed, the observed group is no longer one this
+  // sweep may retire, or the store refused or failed the retirement) ends this invocation before its first service
+  // write, whatever the group owed before: another run may have moved the group after this one read the store (a new
+  // owed generation, a pending attempt, a carried publish marked dispatching, a create under another form), and a store
+  // error after the file was replaced leaves the durable result unknown. This run's cached store shows none of that (a
+  // refusal updates nothing), so no later step (the plain-form path, the routed table publisher, the app writer) can be
+  // trusted to hold the form. Its table is quarantined, the key is noted in `unconfirmedRetirements`, and the build
+  // stops right after this sweep (haltOnUnconfirmedRetirements); the next invocation rereads the store file.
+  const retirableForm = (u, declared) => {
+    if (u.family !== 'form' || u.invalid || u.attempt || !u.group || declared.has(u.key)) return false;
+    const p = u.group.publication;
+    return !p || p.state === 'not-needed' || p.state === 'confirmed' || (p.state === 'owed' && p.dispatchToken === null);
+  };
+  // The table a form group publishes in: its publication's scope, else the table its key names (`<table>/<type>/<name>`,
+  // formLayoutKey).
+  const formScopeOf = (u) => {
+    const p = u && u.group && u.group.publication;
+    return p && p.scope && p.scope.type === 'table' ? p.scope : { type: 'table', table: String(u.key).split('/')[0] };
+  };
+  const unconfirmedForm = (u, why) => {
+    const scope = formScopeOf(u);
+    const rootId = u.group && u.group.root && u.group.root.id;
+    owed.barrier.quarantine([scope], rootId ? [rootId] : [], `managed form "${u.key}" (its retirement could not be confirmed: ${why}; this invocation stops before any write, and the next invocation rereads the durable result)`);
+    unconfirmedRetirements.push({ family: 'form', key: u.key, why });
+    if (typeof opts.warn === 'function') opts.warn(`declared form "${u.key}": its retirement could not be confirmed (${why}); this build stops before writing anything, and the next build reads it again.`);
+  };
+  // Step 1, taken just before the group's fresh read: the store's observation, and the generation and root it saw (from
+  // the store as reread by observeRetirement). `{ unconfirmed }` when there is no longer a retirable group to observe.
+  const observeRemovedForm = (key, declared) => {
+    let observation;
+    try {
+      ({ observation } = bindingGroups.store.observeRetirement({ family: 'form', key }));
+    } catch (err) {
+      return { unconfirmed: `the binding store could not be observed (${(err && err.code) || 'error'}: ${String((err && err.message) || err)})` };
+    }
+    const u = bindingGroups.store.snapshot().units().find((x) => x.family === 'form' && x.key === key);
+    return u && retirableForm(u, declared) ? { key, observation, generation: u.group.generation, rootId: u.group.root.id } : { unconfirmed: 'the binding store changed before its form was read' };
+  };
+  // Step 3: retire the observed group on its two-layer absence proof. The store rereads under its lease and refuses when
+  // the group changed since the observation, is no longer at the observed generation and root, or now has an attempt or
+  // a publish that could land.
+  const retireObservedForm = (observed) => bindingGroups.store.retireAbsentGroup({
+    family: 'form',
+    key: observed.key,
+    generation: observed.generation,
+    rootId: observed.rootId,
+    observation: observed.observation,
+    evidence: { kind: 'root-absent', rootId: observed.rootId, saved: 'not-found', published: 'not-found' },
+  });
+  const retireAbsentRemovedForms = async () => {
+    if (!declaredFeatureOn('forms') || !provision.dataverse) return;
+    const declared = new Set((spec.forms || []).filter(isDeclaredFormOn).map((f) => formLayoutKey(f)));
+    const units = bindingGroups.store.snapshot().units().filter((u) => retirableForm(u, declared));
+    for (const selected of units) {
+      const { key } = selected;
+      const observed = observeRemovedForm(key, declared);
+      if (observed.unconfirmed) {
+        unconfirmedForm(selected, observed.unconfirmed);
+        continue;
+      }
+      const { rootId } = observed;
+      let presence;
+      try {
+        presence = await readSystemFormRootPresence(provision.dataverse, rootId);
+      } catch {
+        continue; // not proved absent: kept, as before
+      }
+      if (presence !== 'absent') continue;
+      try {
+        retireObservedForm(observed);
+      } catch (err) {
+        // The store changed since the observation (another run's commit, a new attempt, a settled publish), refused the
+        // write, or failed it after the replace: whether the group is retired is not confirmed in this run.
+        unconfirmedForm(selected, `its form ${rootId} is gone, but the binding store did not confirm the retirement (${(err && err.code) || 'error'}: ${String((err && err.message) || err)})`);
+        continue;
+      }
+      if (typeof opts.warn === 'function') opts.warn(`declared form "${key}": managed-root-retired — the spec no longer declares it and its form ${rootId} is gone (not found in the saved or the published layer), so its managed group was retired: it no longer holds or publishes its table, and verify no longer checks it. Nothing was written to the environment.`);
+    }
+  };
+  // The publishes of every table a committed managed group publishes in (lib/managed-scope-publisher.js): the store's tables
+  // are routed now, a declared view's or chart's when it commits, and each is paid through the managed coverage protocol at
+  // the points below where the build would have published it. With no store file nothing is routed, and every request is the
+  // one the build always sent.
+  const managedTables = bindingGroups && bindingGroups.store && provision.dataverse
+    ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: managedStop, settle: opts.publicationSettle })
+    : null;
+  // Every table publication of the build below goes through this (createTablePublication), so the commandStates observer hears of each.
+  const tablePublication = createTablePublication({ observer: owed.commandStateObserver, provision, runner, concurrency, managedTables, warn: opts.warn });
+  if (managedTables) await retireAbsentRemovedForms();
+  // haltOnUnconfirmedRetirements: a dashboard or form retirement the sweeps above could not confirm ends this invocation
+  // here. Both sweeps run before the first service write of the attempt (everything above only reads), so this attempt
+  // has sent nothing: no plain dashboard or form, no app shell, no publish, no page. One finding per key, incomplete
+  // (managed-not-settled, never retried automatically); the next invocation observes the store file afresh and retires
+  // the group or proceeds as it then shows.
+  //
+  // `stopsServiceWrites` (not enumerable, like `findings`) tells the CLI that nothing may be sent after this halt either.
+  // Its final cleanup would otherwise publish what an EARLIER attempt of the same run saved and deferred, and set a name
+  // column length that attempt owed (build-model-app.js: settleOwedPublishes, settleOwedLengths): the store this run read
+  // can no longer be trusted, so the invocation ends here and the CLI says what that earlier attempt left instead.
+  if (unconfirmedRetirements.length) {
+    const keys = unconfirmedRetirements.map(({ family, key }) => `${family} "${key}"`).join(', ');
+    const halt = managedStop('preflight', `retirement of ${keys}`, 'managed-not-settled', {
+      cause: refusal(`the retirement of ${keys} could not be confirmed; the build stopped before writing anything, and the next build reads it again`, { code: 'managed-not-settled' }),
+      findings: unconfirmedRetirements.map(({ family, key, why }) => ({
+        key,
+        label: `declared ${family} "${key}"`,
+        code: 'managed-not-settled',
+        message: `managed ${family} "${key}" (its retirement could not be confirmed: ${why}); the build stopped before writing anything, and the next build reads it again`,
+      })),
+    });
+    Object.defineProperty(halt, 'stopsServiceWrites', { value: true, enumerable: false, configurable: true });
+    throw halt;
+  }
+  if (managedTables) managedTables.routeStored();
+  const isRouted = (logical) => !!managedTables && managedTables.routed(logical);
+  const settleStableResult = stable
+    ? createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: stable.recordBinding })
+    : settleFeatureResult;
+  // A stable lookup stops (create-completion-required, create-identity-*) before any read when the workspace copy at the id holds an
+  // edit the server has not seen, or an earlier attempt must be completed first (lib/creates-local.js assertCleanContinuation). That
+  // stop is the item's refusal, reported under its code like every other plan refusal: nothing was fetched over, written or sent.
+  const planStable = async (key, plan) => {
+    try {
+      return await plan();
+    } catch (err) {
+      // Only a stop certified as made before anything was written or sent (creates-port.js markPreSend) is the item's refusal;
+      // anything else propagates. Never inferred from the code: a code says what went wrong, not when.
+      const code = stable && err && err.preSend === true ? (typeof err.code === 'string' && err.code ? err.code : 'creation-refused') : null;
+      if (!code) throw err;
+      return { key, intent: null, viewId: null, chartId: null, action: null, changed: [], operations: [], refused: [featureRefusal(key, code, String(err.message || code))], unknown: [] };
+    }
+  };
+  // The configuration kinds' runtime (lib/configuration-build.js), or null for a spec that uses none of them: then no step below runs and
+  // nothing is read for them. Built before the first write so a spec that declares an item twice stops here, having written nothing.
+  const configurationRun = usesConfiguration(spec) ? createConfigurationRuntime({ spec, sdk, provision, opts: configurationOpts, appUniqueName: appUniqueName(spec) }) : null;
+  // Protected configuration (configurationIdentity "stable-v1") is checked whole and read-only here, before the first write below: an edit
+  // the protected path cannot make stops the build with nothing sent (lib/configuration-build.js preflight; a no-op without the opt-in).
+  // The binding store's configuration debt is read first either way: an App Spec that dropped every configuration item (no runtime)
+  // still stops on an attempt an earlier build left unfinished (sweepPendingConfiguration), whatever phases this run selects.
+  if (configurationRun) await configurationRun.preflight();
+  else sweepPendingConfiguration(spec, configurationOpts);
+  // commandStates (lib/command-state-run.js), before the first write too: every declared row read and judged and every approval present, or
+  // the build stops having written nothing. Only a full apply with --publish gets here with a run (commandStateModeOf, above).
+  const commandStateRun = commandStateModeOfRun.mode === 'apply'
+    ? createCommandStateRun({ spec, transport: commandStateTransportFor(opts, provision), origin: opts.env, approvals: opts.commandStateApprovals, publish: true, observer: owed.commandStateObserver })
+    : null;
+  if (commandStateRun) await commandStateRun.preflight();
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
   // spec's web resources and the generated app icon are written again by id when they are in it, and the page manifest is written again by its id where
   // its published copy is not what the run wants (kept where it is: persistPageManifest). One per run of the phases, so the
@@ -3179,6 +4467,52 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const resolveTableId = async (logical) => (await tableRefs(provision.dataverse, [logical])).get(String(logical).toLowerCase()).metadataId;
   const solutionMembers = createSolutionMembership({ read: provision, solutionUniqueName: sol && sol.uniqueName, componentTypes: Object.values(COMPONENT_TYPE), resolveTableId });
   const ensureInSolution = (componentId, componentType, table) => ensureSolutionComponent(provision, solutionMembers, { componentId, componentType, solutionUniqueName: sol.uniqueName }, { table });
+  // The halt factory handed to the declared business-rule and process-flow helpers (lib/rule-settlement.js, lib/bpf-settlement.js),
+  // which call it with { cause } only. Such a workflow is managed whole, so its stop is one finding labelled with its family and the
+  // approval id the helper names (`<table>/<name>`): cliApproval reads that label to print the adoption flag.
+  const declaredWorkflowStop = (family, approvalId) => (phase, label, code, { cause } = {}) => managedStop(phase, label, code, {
+    cause,
+    findings: [{ key: approvalId, label: `declared ${family} "${approvalId}"`, code, message: String((cause && cause.message) || code).replace(/\s+/g, ' ') }],
+  });
+  // Settle one declared artifact's result, in order:
+  //   1. every publication target it carries is noted on the barrier (a web resource carries none);
+  //   2. a clean result's rows join the app's solution: `memberIds` when the caller names them (a declared web resource
+  //      claims every row its result holds, adopted rows included), else the rows THIS key created (saved `created`,
+  //      unchanged `continued`). A failed add is an unknown (`managed-membership-failed`): the row is saved and possibly
+  //      outside the solution, so its bindings are NOT recorded and the next run treats it as unbound;
+  //   3. settleFeatureResult: blocks a failed result's scopes, reports each finding, records bindings;
+  //   4. a result that is not ok halts (managedStop), as does a binding that could not be recorded.
+  // Nothing that depends on the artifact (its output map, a later phase) runs unless this returns.
+  const settleManagedResult = async (phase, label, r, { componentType, memberIds } = {}) => {
+    for (const p of r.pendingPublish || []) {
+      if (p && p.scope && p.scope.id) owed.barrier.noteTarget(p.scope.table, [p.scope.type, p.scope.id]);
+    }
+    let membershipError;
+    if (!r.refused.length && !r.unknown.length) {
+      const ids = Array.isArray(memberIds) ? memberIds : [...r.saved.filter((s) => s.created), ...r.unchanged.filter((s) => s.continued)].map((s) => s.id);
+      for (const id of new Set(ids.filter(Boolean))) {
+        try {
+          await ensureInSolution(id, componentType);
+        } catch (err) {
+          membershipError = err;
+          r.unknown.push({ key: label, code: 'managed-membership-failed', message: `${id} is saved but could not be added to solution '${sol.uniqueName}' (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 200)})` });
+          r.managedBindings = [];
+          break;
+        }
+      }
+    }
+    let settled;
+    try {
+      settled = settleFeatureResult(phase, label, r);
+    } catch (err) {
+      throw managedStop(phase, label, 'managed-binding-write-failed', { cause: err, findings: [...r.refused, ...r.unknown] });
+    }
+    if (!settled.ok) {
+      const findings = [...r.refused, ...r.unknown];
+      throw managedStop(phase, label, (findings[0] && findings[0].code) || 'managed-not-settled', { cause: membershipError, findings });
+    }
+    return settled;
+  };
 
   // With --publish, phase 8 publishes the table of every view and form the reconcile paths touch (an entity
   // PublishXml ships every pending customization on that table), so a reconcile's own publish would only
@@ -3200,6 +4534,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // published (hasUnsyncedEdits).
   const publishInPhase8 = has('publish') && publish;
   const oweTablePublish = (logical, type, id, name) => {
+    if (!owed.barrier.allow(logical, name)) return;
+    owed.barrier.noteTarget(logical, [type, id]);
     const target = owed.tables.get(logical);
     if (!target) owed.tables.set(logical, [type, id, [name]]);
     else if (!(target[2] || []).includes(name)) target[2] = [...(target[2] || []), name];
@@ -3208,13 +4544,31 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const reconciledTables = new Set();
   const publishReconciled = async (type, id, entityLogical, label) => {
     const logical = String(entityLogical || '').toLowerCase();
+    // A routed table: the managed publisher pays it — now, as this publish would have been, or with phase 8 (the plain
+    // refusal below remembers it as wanted).
+    if (logical && isRouted(logical)) {
+      owed.barrier.allow(logical, label);
+      if (!publishInPhase8) await tablePublication.managed([logical], { phase: 'publish', path: label, observed: 'managed-reconcile' });
+      return;
+    }
+    if (logical && !owed.barrier.allow(logical, label)) return;
     if (publishInPhase8 && logical) {
       oweTablePublish(logical, type, id, label);
       reconciledTables.add(logical);
       return;
     }
-    reportPartialPush(await provision.publishArtifact(type, id), label, opts.warn);
+    await tablePublication.one(type, id, logical, label, { observed: 'sdk-reconcile' });
   };
+  // Drain what settlement scheduled onto the build's own queues. `charts` is the charts phase's chartsToPublish;
+  // the views phase passes nothing (a chart scope cannot be settled there).
+  async function commitSettledPublishes({ charts } = {}) {
+    for (const { scope, label } of settledPublishes.splice(0)) {
+      const table = String(scope.table || '').toLowerCase();
+      if (!isRouted(table) && !owed.barrier.allow(table, label)) continue;
+      if (scope.type === 'chart') charts.set(table, scope.id);
+      else if (scope.type === 'view') await publishReconciled('view', scope.id, table, label);
+    }
+  }
 
   // ...but not past the app's own publish. Live-measured: when a table's EXISTING form is saved, a PublishXml that
   // names only the app (`<appmodules>`), sent before the table's own publish, leaves the form's LABEL changes
@@ -3238,16 +4592,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // This is the SDK's publish of the reconciled tables: publishTablesBeforeApp sends them by name, with the other tables it publishes before the
   // app, when it can, and comes here when that request is refused and when there is no raw client.
   const publishReconciledTables = async () => {
-    const targets = [...reconciledTables].map((logical) => owed.tables.get(logical)).filter(Boolean);
+    const logicals = [...reconciledTables].filter((l) => owed.barrier.allow(l, 'tables published before the app'));
+    const targets = logicals.map((logical) => owed.tables.get(logical)).filter(Boolean);
     reconciledTables.clear();
     if (!targets.length) return;
-    const { failed } = await publishTargets(provision, runner, concurrency, targets, null, opts.warn);
+    // commandStates (lib/command-state-run.js): a table this SDK publication proved published, by a request that named it, is a publication
+    // of the table after its command-row writes (the commands phase sends them all before any app write, and a later write would undo the
+    // confirmation: noteRowWrite), so createTablePublication tells the observer — the refused envelope that sent the table here recorded only
+    // `failed`, and the table is not named again before the app (namedBeforeApp). A table it reports refused, or answered with a no-request
+    // kind (`notApplicable`, `none`, `notRequested`), an unknown kind, nothing, or a publishScope that is not the table's, stays as it was.
+    const tableOf = (target) => logicals.find((logical) => owed.tables.get(logical) === target) || null;
+    const { failed } = await tablePublication.sdk(targets, null, { tableOf, observed: 'sdk-before-app' });
     if (!failed.length) return;
     // A table whose publish the SDK refused (by value: it never throws for one) still holds its saved labels
     // unpublished, and the app's publish below would strand them for good — so the build stops before it writes the
     // app. Nothing is lost: the halt carries every table this run owes (runSdkBuild), the CLI re-runs a transient
     // refusal at once, and once no retry follows it publishes them without the app (settleOwedPublishes).
-    throw reconciledPublishHalt(failed);
+    throw reconciledPublishHalt(failed, { checked: tablePublication.checked });
   };
 
   // ...and the tables the app is PROVEN to hold a form or chart of, and the charts this run wrote. The measured strand follows from the order of the
@@ -3300,23 +4661,66 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const namedBeforeApp = new Set();
   let appHolds; // what the app holds, read by the first writer that finds the app on the server: { tables, forms }, or {} when it could not be read or there was nothing to read
   let beforeApp = Promise.resolve();
+  // The tables whose Main forms this run's writes of the app added: the app holds them from then on.
+  const appAdded = new Set();
   const publishTablesBeforeApp = (existingAppId, { addedTables } = {}) => {
     const run = beforeApp.then(async () => {
       const reconciled = new Set(reconciledTables);
       const client = provision.dataverse;
-      if (!publish || !client || typeof client.post !== 'function') return publishReconciledTables();
-      const added = (typeof addedTables === 'function' && await addedTables()) || [];
-      if (!appHolds) {
-        appHolds = {};
-        if (existingAppId) {
-          const read = await readAppFormChartTables(provision, existingAppId);
-          if (read.ok) appHolds = { tables: read.tables, forms: read.forms };
-          else if (typeof opts.warn === 'function') opts.warn(describeUnreadAppComponents({ reason: read.reason, added }));
+      let added;
+      const readHoldings = async () => {
+        if (added === undefined) added = (typeof addedTables === 'function' && await addedTables()) || [];
+        if (!appHolds) {
+          appHolds = {};
+          if (existingAppId) {
+            const read = await readAppFormChartTables(provision, existingAppId);
+            if (read.ok) appHolds = { tables: read.tables, forms: read.forms };
+            else {
+              appHolds = { unread: true };
+              if (typeof opts.warn === 'function') opts.warn(describeUnreadAppComponents({ reason: read.reason, added }));
+            }
+          }
         }
+      };
+      // An app write or publish puts live the saved forms the app holds, ahead of their table's publish — which, for a
+      // table whose publish is withheld in this run (owed.barrier), would leave the forms' saved labels unpublished for
+      // good. So while a table is withheld, an app that holds, or whose write adds, a form of it is not written.
+      // A declared dashboard that did not settle or publish in this run is withheld the same way (lib/dashboard-reconcile.js): a new
+      // app pins every dashboard the build resolved (and names the ones its navigation shows), and its publish would put that
+      // dashboard's saved layer live. Only a withheld id counts, so a build with no declared dashboard is checked as before; an
+      // existing app whose holdings are not read is held while any dashboard is withheld (checkAppWrite's unknown holdings).
+      if (owed.barrier.active) {
+        await readHoldings();
+        const verdict = owed.barrier.checkAppWrite({ added, held: appHolds.unread ? undefined : [...(appHolds.tables || []), ...appAdded], existingApp: !!existingAppId, addedDashboards: Object.values(result.created.dashboards || {}).filter(Boolean) });
+        if (!verdict.ok) throw new BuildHalt(describeWithheldApp(verdict), { phase: 'app-shell', code: 'publication-withheld', recoverable: true, retry: RETRY.NEVER });
       }
-      const wanted = preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables });
+      // commandStates (lib/command-state-run.js): the observer only records what this path answers; it sends nothing and never throws.
+      const commandStateObserver = owed.commandStateObserver;
+      // The managed publisher's share of this envelope. It publishes one routed table at a time and throws on the first it cannot, so
+      // the tables it published before that halt reach the observer through `onHalt` (managed-scope-publisher.js flush, which
+      // createTablePublication hands it): a table it confirmed is reported confirmed and the failing one `failed`, never
+      // `halted-before-send`. The halt itself is thrown as it was.
+      const flushManaged = async () => {
+        await tablePublication.managed(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app', observed: 'managed-before-app' });
+      };
+      if (!publish || !client || typeof client.post !== 'function') {
+        for (const logical of added || []) appAdded.add(logical);
+        await publishReconciledTables();
+        if (managedTables) await flushManaged();
+        return undefined;
+      }
+      await readHoldings();
+      for (const logical of added) appAdded.add(logical);
+      const preApp = preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables });
+      // A table whose command row the build edits is published in the same envelope, before the app: its rows are served once it is.
+      const askedBeforeApp = commandStateObserver ? [...new Set([...preApp, ...commandStateObserver.declaredTables()])].sort() : preApp;
+      const wanted = owed.barrier.allowTables(askedBeforeApp, 'tables published before the app');
+      // A routed table is left out of the request above and remembered as wanted: the managed publisher sends it first.
+      if (managedTables) await flushManaged();
       const tables = wanted.filter((logical) => !namedBeforeApp.has(logical));
-      const outcome = await publishTablesXml(client, tables);
+      // With commandStates the failure is asked for its checked facts too (createTablePublication): its warning below must not quote the
+      // platform's text. Only a non-empty list answered ok confirms, and only the names it carried (an empty list answers ok without a request).
+      const outcome = await tablePublication.plain(client, tables, { observed: 'plain-before-app' });
       for (const logical of tables) namedBeforeApp.add(logical);
       if (outcome.ok) {
         reconciledTables.clear();
@@ -3325,7 +4729,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       await publishReconciledTables();
       const unprotected = tables.filter((logical) => !reconciled.has(logical));
       if (unprotected.length && typeof opts.warn === 'function') {
-        opts.warn(describePreAppRefusal({ reason: outcome.reason, tables: unprotected, saved: savedOnTable, described: describedCharts, forms: appHolds.forms, added }));
+        // A build with commandStates says the refusal by its checked facts only (lib/command-state-contract.js serviceAnswerText): the
+        // platform's text can carry a row version or anything else, and this feature lets none of it into what the build prints.
+        // Without commandStates the warning quotes the reason as it always did.
+        const reason = commandStateObserver ? serviceAnswerText({ problem: 'publish-refused', ...(outcome.facts || {}) }) : outcome.reason;
+        opts.warn(describePreAppRefusal({ reason, tables: unprotected, saved: savedOnTable, described: describedCharts, forms: appHolds.forms, added }));
       }
       return undefined;
     });
@@ -3345,19 +4753,51 @@ async function runSdkBuildPhases(spec, opts, owed) {
     async create(def) {
       await publishTablesBeforeApp(undefined, { addedTables: async () => appWriteTables(spec, await resolvedMainForms()) });
       const art = await provision.createArtifact('app', def);
+      if (art && art.id) appsCreatedByThisRun.add(String(art.id).toLowerCase());
       return provision.pushArtifact('app', art.id);
     },
     // A push of an existing app: the SDK adds the Main forms of the tables of the navigation it sends on every one, whatever it changes. The app step's and the finalizer's write the spec's
     // navigation into the workspace copy before they push it. The push that only carries the routing description writes none (`resendsCopy`): it re-sends the workspace copy's, which is the
     // server's, so the tables are those that navigation names, read when the push is about to be made. The spec's Main-form list is applied to either (pushAppHeader).
-    async push(appId, name, headerChanged, { resendsCopy = false } = {}) {
+    // `mainFormsOnUpdate: "exact"` and `pinDeclaredArtifacts` ride every such push (the app step's and the finalizer's). A push whose component pin answered
+    // APP_PIN_OUTCOME_UNKNOWN is reconciled once from a read of the app (lib/app-pin-recovery.js): confirmed with no write, repaired by ONE more push of
+    // this writer (`repair`, which never reconciles again), or recorded as incomplete work; a pin that answered is never re-read.
+    async push(appId, name, headerChanged, { resendsCopy = false, repair = false } = {}) {
+      const mainFormsOnUpdate = spec.app && spec.app.mainFormsOnUpdate;
+      // "exact" takes the other Main forms of each listed table OUT of an app that existed before this run: a removal from its membership (no form is
+      // deleted), so it needs the same authority as the build's other removals. The CLI's preflight lists it (op-diff.js 'app-main-forms-removal') and
+      // refuses it without --allow-destructive; this stops a caller that skipped that gate before the push writes anything of the app.
+      if (mainFormsOnUpdate === 'exact' && opts.allowDestructive !== true && !appsCreatedByThisRun.has(String(appId).toLowerCase())) {
+        const tables = Object.keys((spec.app && spec.app.mainForms) || {}).map((table) => table.toLowerCase()).join(', ');
+        throw new BuildHalt(`app ${name}: "mainFormsOnUpdate": "exact" takes the other Main forms of ${tables} out of the existing app's membership (no form is deleted) — refusing without --allow-destructive`,
+          { phase: 'app-shell', code: 'APP_MAIN_FORMS_EXACT_UNAUTHORIZED', retry: RETRY.NEVER });
+      }
       const mainFormsByTable = await resolvedMainForms();
       await publishTablesBeforeApp(appId, {
         addedTables: async () => (resendsCopy
           ? appPushTables(entityTablesOfSiteMap(((await provision.getArtifact('app', appId)) || {}).siteMap), mainFormsByTable)
           : appWriteTables(spec, mainFormsByTable)),
       });
-      return pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable, opts.warn);
+      const declared = spec.app && spec.app.pinDeclaredArtifacts === true ? declaredAppPins(result.created) : undefined;
+      let intent;
+      const pushed = await pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable, opts.warn,
+        { mainFormsOnUpdate, declared, onIntent: (recorded) => { intent = recorded; } });
+      // The saved exact list is owed a publication until one is accepted (the caller's publishApp, or the final flush once
+      // more when that one was withheld); recordExact pays it at once when the push itself published the proven layer.
+      if (mainFormsOnUpdate === 'exact' && pushed && pushed.saved !== false) {
+        appPublication.queue({ kind: 'app', id: appId, reason: 'exact Main forms' });
+        appPublication.recordExact(appId, pushed, { name, mainFormsByTable });
+      }
+      // The repair push itself never reconciles again: one more push at most (no recursion, no whole-build retry).
+      if (repair) return pushed;
+      const settled = await reconcileUnconfirmedPin({
+        provision, appId, intent, pushed,
+        // The fresh copy is the server's: nothing of the spec's navigation is written into it, so it re-sends the copy's
+        // own navigation (resendsCopy) and carries no header change.
+        push: () => appWriters.push(appId, name, false, { resendsCopy: true, repair: true }),
+      });
+      if (settled.outcome === 'incomplete') markIncomplete({ phase: 'app-shell', code: settled.error.code, message: `app ${name}: ${settled.error.message}` });
+      return settled.pushed;
     },
     // The publish of an app: it ships the forms the app holds, whoever last saved them. It adds none.
     async publish(appId) {
@@ -3366,6 +4806,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     },
     // The publish of the app that makes the table components pinned after its create live.
     async publishPinned(appId) {
+      // A raw PublishXml skips the SDK's exact-membership guard: refused for an app that holds an exact obligation.
+      appPublication.assertRawPublishAllowed(appId);
       await publishTablesBeforeApp(appId);
       return publishAppComponents(provision.dataverse, appId);
     },
@@ -3373,12 +4815,114 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // right before its first write, and a placement that finds nothing to pin sends nothing and asks for nothing. It pushes the app as the server holds it, not the spec's navigation,
     // so it tells the request what it sends (`write`: whether it pushes, the tables whose Main forms that push adds and the Main-form list it carries), and a backend that
     // tells nothing is taken to add no form. The page backend's own push is limited to the views it pins (lib/app-component-scope.js), so it adds no Main form and names no table.
-    placeViews(genpage, appId, options) {
-      return genpage.placeInApp(appId, {
-        ...options,
-        beforeAppWrite: async (write) => publishTablesBeforeApp(appId, { addedTables: () => (write && write.pushes ? appPushTables(write.entityTables, write.mainFormsByTable) : []) }),
-      });
+    // The backend publishes the app with its own SDK, outside publishApp, so what that publish answered (`appPublish`, on its answer or its failure) is reported to the app's
+    // publication like any other app publish: an accepted one must prove an exact Main-form list again, and a failed one leaves it unproven. A placement that sent no publish
+    // reports nothing, and an app with no exact list has nothing the report changes.
+    // An app that holds an exact Main-form obligation is not published by the backend's SDK at all: that SDK does not hold the obligation, so it would send the PublishXml this
+    // build's SDK withholds. Its publish is handed back (`publishApp`) to appPublication.publishApp, which asks the build's SDK — sending nothing while it withholds — and reports the
+    // answer itself, so it is not reported a second time. An app without one is published by the backend exactly as before.
+    async placeViews(genpage, appId, options) {
+      const guarded = appPublication.holdsExact(appId);
+      const report = async (published) => {
+        if (published && !guarded) await appPublication.noteAppPublication(appId, { answer: { publish: { kind: published.kind, error: published.cause } } });
+      };
+      let placed;
+      try {
+        placed = await genpage.placeInApp(appId, {
+          ...options,
+          beforeAppWrite: async (write) => publishTablesBeforeApp(appId, { addedTables: () => (write && write.pushes ? appPushTables(write.entityTables, write.mainFormsByTable) : []) }),
+          ...(guarded ? { publishApp: () => appPublication.publishApp(appId) } : {}),
+        });
+      } catch (error) {
+        await report(error && error.appPublish);
+        throw error;
+      }
+      await report(placed && placed.appPublish);
+      return placed;
     },
+  };
+  // The apps this run made (appWriters.create): "exact" on an app this run created removes nothing it did not just add, so it needs no authority.
+  const appsCreatedByThisRun = new Set();
+
+  // The ONE place an app's publication is owed and made (lib/app-publication-policy.js). Every app publish of the build
+  // goes through appPublication.publishApp -> appWriters.publish: the SAME SDK instance that enforces an exact Main-form
+  // obligation; `client` is that instance's DataverseClient, for the published-layer proof that settles the obligation.
+  // A queued table (a feature's view/form change) is handed to the build's own table publication: owed to phase 8 when
+  // phase 8 will publish and has not yet paid (the same rule as publishReconciled), otherwise published at the flush.
+  // Handed to phase 8 it stays owed here until phase 8 reports its answer (noteScopePublished, below); `publish` must
+  // return the SDK's PublishResult, which the port reads to decide whether the table was published.
+  // With nothing queued and no exact list asked for, the port is a pass-through of appWriters.publish and its flush
+  // sends nothing, so a build that uses neither makes exactly the requests it made before.
+  const appPublication = createAppPublication({
+    appWrite: appWriters,
+    client: provision.dataverse,
+    scopes: {
+      table: {
+        owe: (target) => {
+          if (!publishInPhase8 || owed.paid || owed.barrier.blocks(target.id)) return false;
+          oweTablePublish(String(target.id).toLowerCase(), target.artifact.type, target.artifact.id, target.reason);
+          reconciledTables.add(String(target.id).toLowerCase());
+          return true;
+        },
+        publish: async (target) => {
+          const label = target.reasons.join(', ') || `table ${target.id}`;
+          const logical = String(target.id).toLowerCase();
+          // A routed table is published by the managed publisher; its answer is typed the same way.
+          if (isRouted(logical)) {
+            owed.barrier.allow(logical, label);
+            const failed = (error) => ({ type: target.artifact.type, id: target.artifact.id, shipped: false, publish: { kind: 'failed', error } });
+            try {
+              const out = await tablePublication.managed([logical], { phase: 'publish', path: label, observed: 'managed-app-publication' });
+              if (out.withheld.includes(logical)) return failed({ code: 'publication-withheld', message: `the publish of table ${target.id} is withheld in this run` });
+              return { type: target.artifact.type, id: target.artifact.id, shipped: true, publish: { kind: 'submitted' } };
+            } catch (err) {
+              return failed({ code: (err && err.code) || 'managed-not-settled', message: String((err && err.message) || err) });
+            }
+          }
+          // Withheld (owed.barrier): answered as a failed publish, which keeps it owed; the run reports the table once (below).
+          if (!owed.barrier.allow(String(target.id).toLowerCase(), label)) {
+            return { type: target.artifact.type, id: target.artifact.id, shipped: false, publish: { kind: 'failed', error: { code: 'publication-withheld', message: `the publish of table ${target.id} is withheld in this run` } } };
+          }
+          return tablePublication.one(target.artifact.type, target.artifact.id, logical, label, { observed: 'sdk-app-publication' });
+        },
+      },
+    },
+  });
+  // Work the maker asked for that the build could not finish or prove (a pin whose outcome stays unknown, an exact
+  // Main-form list Dataverse did not read back, a publication still owed). Collected while the phases run, so one such
+  // entry never cuts the rest of the build short, and turned into ONE halt after the last phase (below): never a
+  // warning only. The change is saved; the halt is RETRY.NEVER because running the same attempt again cannot prove it —
+  // the maker re-runs once the cause is cleared.
+  const incomplete = [];
+  const markIncomplete = (entry) => { incomplete.push(entry); };
+
+  // app.theme (Preview): the app's theme, set once per build on the header-less `provision` SDK (made with `themeReads` by
+  // build-model-app.js), through lib/app-theme.js — required only here, so a spec without a theme never loads it. The theme's
+  // app publication is QUEUED on appPublication, never made here, so it must run BEFORE the app publication that is to pay it:
+  //   existing app       in the app step, before either of its publishes and before the pages finalizer's;
+  //   new app            after its create, whose own publication came first and cannot pay a later edit: the theme is paid by
+  //                      the next app publication (the pages finalizer, phase 8's) or, failing those, by the flush at the end;
+  //   pages-first app    inside createAppWithPages, once the app exists (the same payers as a new app);
+  //   pages finalizer    before its publish, as a fallback that finds the theme already applied.
+  // Done once (`themeDone`), and only after a real app id and a finished operation. A refused or unknown theme ends the build
+  // (APP_THEME_INCOMPLETE, never retried: lib/app-theme.js appThemeIncomplete); what was saved is kept in result.created.appTheme.
+  const declaresTheme = Boolean(spec.app) && spec.app.theme !== undefined && has('app-shell');
+  let themeDone = false;
+  let themeAppId = null;
+  const ensureThemeApplied = async (appId) => {
+    if (!declaresTheme || themeDone || !appId) return;
+    await runner.run('app-shell', 'app theme (Preview)', async () => {
+      const { applyDeclaredAppTheme, isComplete, appThemeIncomplete } = require('./app-theme.js');
+      const applied = await applyDeclaredAppTheme(spec, {
+        sdk: provision, appId, publication: appPublication, creates: opts.creates,
+        publisherPrefix: spec.solution && spec.solution.publisherPrefix, solution: spec.solution && spec.solution.uniqueName,
+      });
+      result.created.appTheme = applied;
+      if (!isComplete(applied)) throw appThemeIncomplete(applied);
+      return applied;
+    });
+    themeDone = true;
+    themeAppId = appId;
   };
 
   // The names of what this run CREATED on each table (`view Open Tickets`, `form Ticket`, `chart By Area`), and of a
@@ -3408,14 +4952,96 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
   // 1. Solution (idempotent; header-less provisioning client).
   if (has('solution')) await provisionSolution({ sdk, provision, runner, solution: sol });
+  // The solution's version (solution.version), set after the solution exists and only when it differs: an equal version is one read.
+  if (configurationRun && has('solution') && sol && sol.version !== undefined) {
+    await runner.run('solution', `solution version ${sol.uniqueName}`, async () => {
+      const step = await configurationRun.apply('solution');
+      result.configurationVersion = step.outcome;
+      configurationRun.throwIfIncomplete(step);
+    });
+  }
 
   // 2. Data model — idempotent. Discover existing tables/columns/relationships via the SDK
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
+  // The tables this BUILD created: the caller's set when it retries the whole build (build-model-app.js), so an attempt that finds a table an earlier one created still knows it is that build's; else this run's own.
+  const createdTables = opts.createdTables instanceof Set ? opts.createdTables : new Set();
+  // #796: a READ of a table this invocation created can meet the table's metadata-cache lag for a while after the create, e.g.
+  //   HTTP 400 {"error":{"code":"0x80041102","message":"The entity with a name = 'contoso_task' with namemapping = 'Logical' was not found in the MetadataCache.LazyDynamicMetadataCache with version 9495075 and timestamp 9495075"}}
+  // Such a read's failure is marked with its table (markFreshTable) and the read is made again WHERE IT FAILED, through the caller's
+  // `retryFreshRead(err, table)` (build-model-app.js), which waits and answers true while the invocation's one retry allowance lasts
+  // (the same count, and backoff, as the whole-build retry), and false once it is spent. Only the read is repeated: re-running the whole
+  // build instead would resend every save and publish this attempt had already made. A table the build did not create keeps the failure
+  // final (its answer is not lag), and so does an answer naming another table, or any other code (retry-policy.js isFreshTableLag
+  // decides, by table). With no `retryFreshRead` (a caller that runs one attempt) the marked failure is thrown as it is.
+  const retryFreshRead = typeof opts.retryFreshRead === 'function' ? opts.retryFreshRead : null;
+  const freshMark = (err, table) => {
+    const logical = typeof table === 'string' ? table.toLowerCase() : '';
+    return logical && createdTables.has(logical) ? markFreshTable(err, logical) : err;
+  };
+  const readAgain = async (err, table) => Boolean(retryFreshRead) && isFreshTableReadLag(err) && (await retryFreshRead(err, String(table).toLowerCase())) === true;
+  const readFresh = async (table, read) => {
+    for (;;) {
+      try {
+        return await read();
+      } catch (err) {
+        const marked = freshMark(err, table);
+        if (!(await readAgain(marked, table))) throw marked;
+      }
+    }
+  };
+  // A planner keeps a failed read by value, as an `unknown` finding whose (non-enumerable) cause is the read's own failure
+  // (reconcile-common.js readFailure); a plan holding one sends nothing when applied. `planFresh` plans again, in place, while that
+  // failure is the lag of a table this invocation created and the allowance lasts; once it is spent the plan is returned as it is, and
+  // `throwFreshLag` throws that failure after the (empty) apply instead of settling the finding — settled, it would be a final stop
+  // that hides the service's answer. Any other unknown settles exactly as before.
+  const freshLagOf = (table, r) => {
+    for (const u of (r && r.unknown) || []) {
+      if (u && u.cause && isFreshTableReadLag(freshMark(u.cause, table))) return u.cause;
+    }
+    return null;
+  };
+  const planFresh = async (table, plan) => {
+    for (;;) {
+      const p = await plan();
+      const lag = freshLagOf(table, p);
+      if (!lag || !(await readAgain(lag, table))) return p;
+    }
+  };
+  const throwFreshLag = (table, r) => {
+    const lag = freshLagOf(table, r);
+    if (lag) throw lag;
+  };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, createdTables, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive, publicationBarrier: owed.barrier, localizedLabelsChecked: checkLabelLanguagesEarly });
     Object.assign(result.created.entities, dataModel.entities);
+  }
+  // The field security profiles, after the columns are secured and before any sample data (provisionFieldSecurityProfiles). A spec
+  // that declares none takes no step and sends nothing.
+  const fieldSecurityIds = new Map();
+  if (has('data-model')) await provisionFieldSecurityProfiles({ runner, spec, provision, creates: opts.creates, result, ids: fieldSecurityIds, deferAssignments: !has('security') });
+  // The configuration kinds, after the tables they name exist: environment variable definitions then values (parents first), connection
+  // references, Custom APIs, duplicate rules. What the step confirmed is recorded BEFORE it can halt; an unknown outcome stops it, never retried.
+  if (configurationRun && has('data-model') && hasConfigurationDefinitions(spec)) {
+    await runner.run('data-model', 'configuration', async () => {
+      const step = await configurationRun.apply('data-model');
+      result.created.configuration = step.outcome;
+      result.configurationBlocking = step.blocking;
+      configurationRun.throwIfIncomplete(step);
+    });
+    // The binding check before writing (checkPageBindingsBeforeWriting) read the declared references and Custom APIs as they were BEFORE this
+    // step made or changed them, and kept the answers for the attempt (bindingReadsOfAttempt, keyed by lower-cased name). Forget them, so a
+    // navigation target the pages phase judges later reads them as they are now and a just-made reference is not "missing".
+    const forgetDeclared = (answers, list, field) => {
+      for (const entry of Array.isArray(list) ? list : []) {
+        if (!entry || typeof entry[field] !== 'string') continue;
+        answers.delete(entry[field].toLowerCase());
+        answers.delete(entry[field].trim().toLowerCase());
+      }
+    };
+    forgetDeclared(bindingReadsOfAttempt.references, spec.connectionReferences, 'logicalName');
+    forgetDeclared(bindingReadsOfAttempt.apis, spec.customApis, 'uniqueName');
   }
 
   // entity-set resolver: fresh tables cached above; existing ones via fetchEntityMetadata.
@@ -3423,6 +5049,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
   // 3. Sample data (opt-in): topological, $parent -> @odata.bind on the lookup nav prop.
   if (has('sample-data') && sampleData) {
+    if (!has('data-model')) await refuseSeedIntoUnsecuredColumns({ runner, spec, provision });
     const sd = await provisionSampleData({ sdk, provision, runner, spec, dataModel });
     Object.assign(result.created.records, sd.records);
   }
@@ -3438,6 +5065,46 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //     An `external` web resource is a shared one the build reuses as it finds it, so its content is not the spec's to compare.
   if (has('web-resources')) {
     for (const wr of spec.webResources || []) {
+      if (isDeclaredWebResource(wr)) {
+        // `web resource <name>` is the label cliApproval reads to print the approval flag (--authorize adopt:webresource:<name>).
+        const wrLabel = `web resource ${wr.name}`;
+        await runner.run('web-resources', `${wrLabel} (${wr.type || 'js'}) (declared)`, async () => {
+          // The receipt store rides on a copy: featureCtx itself carries no `unconfirmed`. So do the web resource's own approvals
+          // (--authorize adopt:/overwrite:webresource:<name>), in place of the view and chart ones: a view keyed contoso_case/script
+          // and a web resource named contoso_case/script are different artifacts, and the approval of one must never write the other.
+          const wrCtx = { ...featureCtx, unconfirmed: unconfirmedWebResources, authorizedAdoption: opts.authorizedWebResourceAdoption, authorizedOverwrite: opts.authorizedWebResourceOverwrite };
+          // webResourceOpts throws when the spec's content cannot be read (a contentPath that is not there); the helper
+          // answers a null options as unknown 'web-resource-source-unreadable' and writes nothing.
+          let options = null;
+          try { options = webResourceOpts(wr, opts.appDir); } catch { options = null; }
+          const reads = webResourceReads(provision.dataverse);
+          const plan = await planWebResourceUpdate({
+            webResource: wr,
+            options,
+            reads,
+            readDependents: readWebResourceDependents(provision.dataverse),
+            recordedId: unconfirmedWebResources.idOf(wr.name),
+          }, wrCtx);
+          // The same reads confirm a write the SDK could not, once its publish completed (an emptied row reads back as `content: null`).
+          const r = await applyWebResourceUpdate(plan, { sdk: provision, reads }, wrCtx);
+          // An adoption is asked with what it would take over: the row's id and the components the platform reports as
+          // depending on it (plan.approvalFacts). Only direct, platform-tracked dependents exist there; the note says so.
+          const facts = plan.approvalFacts;
+          if (facts && facts.dependents) {
+            const types = Object.entries(facts.dependents.byComponentType).map(([t, n]) => `${n} of component type ${t}`).join(', ');
+            const said = `row ${facts.id}; ${facts.dependents.count} dependent component(s)${types ? ` (${types})` : ''}; ${facts.dependents.note}`;
+            r.refused = r.refused.map((x) => (x.code === 'web-resource-adoption-not-authorized' ? { ...x, message: `${x.message} [${said}]` } : x));
+          }
+          // Membership, then the binding, then the halt (settleManagedResult): every row the result holds joins the solution before
+          // anything is recorded; a failed add records nothing, and a result that is not clean stops the build.
+          const memberIds = r.saved.concat(r.unchanged).map((s) => s.id).filter(Boolean);
+          await settleManagedResult('web-resources', wrLabel, r, { componentType: COMPONENT_TYPE.webResource, memberIds });
+          // Only after a clean settlement: the receipt of an unconfirmed publication is cleared, and the id is handed on.
+          settleWebResourceReceipt(wrCtx, plan, r);
+          for (const s of r.saved.concat(r.unchanged)) if (s.id) result.created.webResources[wr.name] = s.id;
+        });
+        continue;
+      }
       const recordedId = unconfirmedWebResources.idOf(wr.name);
       if (recordedId) {
         await runner.run('web-resources', `web resource ${wr.name} (${wr.type || 'js'}) (written again: its publication was not confirmed)`, async () => {
@@ -5245,30 +6912,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const reconcileView = async (viewId, def, authoredQuery) => {
     await provision.fetchArtifact('view', viewId);
     const current = await provision.getArtifact('view', viewId) || {};
-    const have = new Set((current.columns || []).map((c) => String(c.name).toLowerCase()));
-    const merged = (current.columns || []).slice();
-    for (const col of def.columns || []) {
-      const n = String(col.name).toLowerCase();
-      if (have.has(n)) continue;
-      have.add(n);
-      merged.push({ name: n, width: col.width || 100, order: merged.length });
-    }
-    await provision.updateElement('view', viewId, '/columns', merged);
-    // Reconcile the maker-facing description too (#496). Without this, a view's description reached
+    // The columns, then the maker-facing description (#496: without it, a view's description reached
     // Dataverse only on CREATE — and the most-read view on a table is the platform's auto-generated
     // "Active <Plural>", which already exists, so the build reconciles onto it and the authored
-    // description was never written.
-    //
-    // Two guards, both load-bearing:
-    //   * only when the spec EXPLICITLY sets one (`viewDef` emits `description: v.description || ''`,
-    //     so an unset description is `''` — writing that would blank text a maker typed in the UI);
-    //   * only when it DIFFERS, so an ordinary rebuild issues no extra write.
-    // This rides the push below rather than a separate PATCH: the push rewrites `description` from
-    // the artifact, so a standalone PATCH would be immediately overwritten by the stale fetched value.
-    const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
-    if (wantDescription && wantDescription !== String(current.description || '')) {
-      await provision.updateElement('view', viewId, '/description', wantDescription);
-    }
+    // description was never written). viewReconcileEdits holds both rules and their guards.
+    // The description rides the push below rather than a separate PATCH: the push rewrites `description`
+    // from the artifact, so a standalone PATCH would be immediately overwritten by the stale fetched value.
+    for (const edit of viewReconcileEdits(current, def)) await provision.updateElement('view', viewId, edit.pointer, edit.value);
     // An EXISTING view's FetchXML (filters + sort) is not reapplied here — only columns and the
     // description converge. Silence made an authored filter edit look applied when it was not, so
     // the no-op is reported instead. It is a warning rather than a failure because the common way to
@@ -5392,6 +7042,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //
   // Best-effort like the promotion above: a failed read or write is reported (✗ and a warning) and
   // `--verify` fails on the order it reads back, but the build goes on.
+  // The forms phase's default-form promotion and Main Form Set order read the spec without its declared forms (formOrderSpecOf).
+  const orderSpec = formOrderSpecOf(spec);
   const canOrderForms = () => typeof provision.getFormSecurityRoles === 'function'
     && typeof provision.setFormSecurityRoles === 'function' && typeof provision.queryRecords === 'function';
   const writeFormOrder = async (formId, order, stored) => {
@@ -5418,12 +7070,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     return out;
   };
   const applyMainFormOrder = async (entityLogical, idOfForm) => {
-    const mains = declaredMainForms(spec, entityLogical);
-    if (!mains.length || ordersByHand(spec, entityLogical)) return;
+    const mains = declaredMainForms(orderSpec, entityLogical);
+    if (!mains.length || ordersByHand(orderSpec, entityLogical)) return;
     const entityName = mains[0].entity;
     const q = (f) => `'${f.name || `${entityName} form`}'`;
     const warn = (m) => { if (typeof opts.warn === 'function') opts.warn(m); };
-    const planned = plannedMainFormSequence(spec, entityLogical);
+    const planned = plannedMainFormSequence(orderSpec, entityLogical);
     if (!canOrderForms()) {
       runner.skip('forms', `form order for ${entityName} (this SDK cannot read or write a form's order)`);
       return;
@@ -5434,14 +7086,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
         runner.skip('forms', `form order for ${entityName} (${notBuilt.map(q).join(', ')} not built in this run)`);
         return;
       }
-      const listed = listedMainForms(spec, entityLogical);
+      const listed = listedMainForms(orderSpec, entityLogical);
       const head = listed && listed.length ? listed : planned.slice(0, 1);
       const more = mains.length - head.length;
       await runBestEffort(runner, 'forms', `form order for ${entityName}: ${head.map(q).join(' > ')}${more ? `, then ${more} more` : ''}`, async () => {
         const stored = new Map();
         for (const f of mains) stored.set(f, await provision.getFormSecurityRoles(idOfForm.get(f)));
         const current = new Map(mains.map((f) => [f, stored.get(f) ? stored.get(f).order : undefined]));
-        const sequence = plannedMainFormSequence(spec, entityLogical, current);
+        const sequence = plannedMainFormSequence(orderSpec, entityLogical, current);
         for (let i = 0; i < sequence.length; i += 1) {
           if (current.get(sequence[i]) === i) continue;
           await writeFormOrder(idOfForm.get(sequence[i]), i, stored.get(sequence[i]));
@@ -5524,9 +7176,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const createInPlace = async (formId, specForm) => {
     if (!specForm || !isMainForm(specForm) || !canOrderForms()) return;
     const entityLogical = String(specForm.entity || '').toLowerCase();
-    if (plannedMainFormSequence(spec, entityLogical) || ordersByHand(spec, entityLogical)) return;
+    if (plannedMainFormSequence(orderSpec, entityLogical) || ordersByHand(orderSpec, entityLogical)) return;
     const snapshot = await appendSnapshotFor(entityLogical);
-    const idx = Math.max(0, declaredMainForms(spec, entityLogical).indexOf(specForm));
+    const idx = Math.max(0, declaredMainForms(orderSpec, entityLogical).indexOf(specForm));
     // Unreadable neighbours: put it past any order Maker assigns (the step says so).
     const order = snapshot.error ? APPEND_FALLBACK_ORDER + idx : snapshot.base + 1 + idx;
     // The root bag of a new form, as the SDK builds it (abridged):
@@ -5558,10 +7210,62 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // table must keep one main form), so reconciling onto it would attach the spec's subgrids +
       // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
       // instead handled by making our form the entity's default (see promoteDefaultForm below).
-      const existingId = await resolveExistingFormId(provision, def);
+      // #796: a lookup that FAILED is never "no form": only an answer with no row is. The stock Main form the platform makes with
+      // every table is named "Information", and an earlier attempt may have made the spec's form, so taking a failure for a miss
+      // creates a second form of the same name. On a table this invocation created, the metadata-cache lag is read again in place
+      // (readFresh); any other failure — the same answer for a table that was there before, another table's, another code — stops
+      // the step with the service's answer, and nothing is created.
+      const existingId = await readFresh(def.entityLogicalName, () => resolveExistingFormId(provision, def, { tableNotInCache: 'fail' }));
       if (existingId) return await reconcileForm(existingId, def);
     } else if (type === 'view') {
-      const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
+      if (meta && meta.declared) {
+        // A declared view (views[].reconcile "declared", lib/view-reconcile.js) is resolved, created through the creation port and
+        // edited by its helper; it never falls through to the create below, which would bypass the port.
+        const planArgs = { view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName };
+        const stableKey = declaredViewKey(meta.specView);
+        const planView = () => planStable(stableKey, () => planFresh(def.entityLogicalName, () => planViewReconcile(planArgs, stableCtx)));
+        if (stable && stable.settle && stable.protects('view', stableKey)) {
+          // With a store: settled as one managed group (lib/creates-stable-build.js settle), whose membership is made before
+          // the commit, and whose table publish is paid through the managed coverage protocol.
+          const out = await stable.settle({
+            kind: 'view', key: stableKey, phase: 'views', label: `view ${stableKey}`, halt: managedStop, client: provision.dataverse,
+            sendObserver: opts.sendObserver || null, authorizedAdoption: featureCtx.authorizedAdoption, pinned: !!(meta.specView && meta.specView.viewId),
+            planOnce: async () => {
+              const first = await planView();
+              return refuseUnsentCopy('view', 'view', approvalKey('view', first.key), first.viewId, first, planView);
+            },
+            applyPlan: (p) => applyViewReconcile(p, { sdk: provision }, stableCtx),
+            onUnsettled: (p, res) => resetUnsettledCopy('view', p.viewId, p, res),
+            ensureMember: (id, createdNow) => (createdNow
+              ? provision.addSolutionComponent({ componentId: id, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName })
+              : ensureInSolution(id, COMPONENT_TYPE.view, def.entityLogicalName)),
+          });
+          throwFreshLag(def.entityLogicalName, out.r);
+          const { ok } = settleStableResult('views', `view ${out.plan.key}`, out.r);
+          if (!out.managed) await resetUnsettledCopy('view', out.plan.viewId, out.plan, out.r);
+          if (!ok) return null;
+          if (!out.managed) warnUnadopted('view', out.plan.viewId, out.plan, out.r);
+          const made = out.r.saved.find((s) => s.created);
+          if (made) noteSaved(def.entityLogicalName, `view ${def.name}`);
+          await commitSettledPublishes();
+          return made ? made.id : out.plan.viewId;
+        }
+        const firstPlan = await planView();
+        const plan = await refuseUnsentCopy('view', 'view', approvalKey('view', firstPlan.key), firstPlan.viewId, firstPlan, planView);
+        const r = await applyViewReconcile(plan, { sdk: provision }, stableCtx);
+        throwFreshLag(def.entityLogicalName, r);
+        const { ok } = settleStableResult('views', `view ${plan.key}`, r);
+        await resetUnsettledCopy('view', plan.viewId, plan, r);
+        const created = r.saved.find((s) => s.created);
+        // Before the !ok check: a created row exists even when its read-back failed, so it joins the solution. That is not a
+        // publication: only a clean settlement schedules one.
+        if (created) await provision.addSolutionComponent({ componentId: created.id, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
+        if (!ok) return null;
+        if (created) noteSaved(def.entityLogicalName, `view ${def.name}`);
+        await commitSettledPublishes();
+        return created ? created.id : plan.viewId;
+      }
+      const existingId = await readFresh(def.entityLogicalName, () => provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName }));
       if (existingId) return await reconcileView(existingId, def, !!(meta && meta.authoredQuery));
     }
     // A form cannot be created from a full authored definition (the adapter's createDefault
@@ -5584,14 +7288,49 @@ async function runSdkBuildPhases(spec, opts, owed) {
     return pushed.id;
   });
 
+  // 3z. The store's view and chart attempts whose declaration this spec no longer carries (creates-stable-build.js recoverUndeclared):
+  // each is recovered against the expectation it recorded, never planned from this spec, before any view or chart of it is planned.
+  // One that proves is committed and its table's owed publish paid here; any other keeps its hold, with a warning.
+  if (stable && stable.recoverUndeclared && (has('views') || has('charts'))) {
+    const tables = await stable.recoverUndeclared({
+      phase: 'views', client: provision.dataverse, halt: managedStop, warn: opts.warn, authorizedAdoption: featureCtx.authorizedAdoption,
+      ensureMember: (kind, id, table) => ensureInSolution(id, COMPONENT_TYPE[kind], table),
+    });
+    if (tables.length && managedTables) await tablePublication.managed(tables, { phase: 'views', path: 'recovered change of an undeclared view or chart', observed: 'managed-views-phase' });
+  }
+
   // 4. Views (independent -> parallel).
   if (has('views')) {
     const labelResolution = await resolveViewLabelsOrHalt(spec, provision, sayViewLabel, preflightResolved);
-    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v, labelResolution), { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
+    // A declared view's filter values resolve through the same labels (a joined filter's on its joined table).
+    const resolveValue = (table, attr, value) => resolveFilterValue(spec, table, attr, value, labelResolution);
+    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v, labelResolution), isDeclaredView(v)
+      ? { declared: true, specView: v, resolveValue, primaryName: primaryNameOf(spec, String(v.entity).toLowerCase()) }
+      : { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
     // Key by `entity|name` (matching identityOf.view + the snapshot canonical id). View names are unique
     // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
     (spec.views || []).forEach((v, i) => { result.created.views[`${v.entity.toLowerCase()}|${v.name}`] = ids[i]; });
+  }
+
+  // 4a. Quick Find (entities[].quickFind, lib/quick-find.js): the columns the search box matches on are the table's Quick Find
+  // view's find columns. A spec without quickFind sends nothing here.
+  if (has('views')) {
+    for (const e of spec.entities || []) {
+      if (!e || !e.quickFind) continue;
+      const name = e.schemaName.toLowerCase();
+      await runner.run('views', `Quick Find for ${name}`, async () => {
+        const planArgs = { entity: name, quickFind: e.quickFind, sdk: provision };
+        const planQf = () => planFresh(name, () => planQuickFind(planArgs, featureCtx));
+        const firstPlan = await planQf();
+        const plan = await refuseUnsentCopy('view', 'Quick Find view', approvalKey('quickfind', name), firstPlan.viewId, firstPlan, planQf);
+        const r = await applyQuickFind(plan, { sdk: provision }, featureCtx);
+        throwFreshLag(name, r);
+        settleFeatureResult('views', `Quick Find on ${name}`, r);
+        await resetUnsettledCopy('view', plan.viewId, plan, r);
+        await commitSettledPublishes();
+      });
+    }
   }
 
   // 4b. Enrich the auto-generated default "Active/Inactive <Entity>" system views (Dataverse ships
@@ -5625,13 +7364,30 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (!enrichesDefaultViews(spec, e)) continue;
       const logical = e.schemaName.toLowerCase();
       const cols = defaultViewColumns(spec, e);
+      // Only a table this BUILD created — by an acknowledged create, in this attempt or an earlier one of the same invocation (`createdTables`); a table found, or found after a create whose answer was lost, is not — is
+      // marked: a view saved moments after the table was created can be refused because the server that validates it does not have the table yet, which a run again rides out (retry-policy.js, markFreshTable). For
+      // any other table the same answer is a real refusal. The views are saved through guardDefaultViewCopies (above): measured live, the
+      // lag also reaches the READ of the view, whose copy then names no table, and the guard keeps that copy from being edited or sent
+      // and replaces it on the next fetch — a resend of such a copy would be refused however long the build waited.
+      const createdHere = createdTables.has(logical);
+      const marked = (err) => (createdHere ? markFreshTable(err, logical) : err);
+      const viewSdk = guardDefaultViewCopies(provision, logical);
       await runner.run('views', `enrich default views for ${logical}`, async () => {
         if (!deferDefaultViewPublish) {
-          const { updated } = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds });
+          const held = !owed.barrier.allow(logical, `default views of ${logical}`);
+          const enrichOpts = held ? { excludeViewIds: authorViewIds, publish: false } : { excludeViewIds: authorViewIds };
+          let updated;
+          try {
+            ({ updated } = await viewSdk.enrichDefaultViews(logical, cols, enrichOpts));
+          } catch (err) {
+            throw marked(err);
+          }
+          // A routed table is held above; the managed publisher publishes it in place of the SDK.
+          if (isRouted(logical)) await tablePublication.managed([logical], { phase: 'views', path: `default views of ${logical}`, observed: 'managed-views-phase' });
           return updated;
         }
         try {
-          const record = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds, publish: false });
+          const record = await viewSdk.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds, publish: false });
           recordOwed(logical, record);
           // A view whose push was REFUSED — the SDK answers a concurrent edit's 412 by value, not with a
           // throw — saved nothing, so it fails the step as any other refused push does, rather than leave
@@ -5644,7 +7400,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return record.updated;
         } catch (err) {
           recordOwed(logical, partialEnrichment(err));
-          throw err;
+          throw marked(err);
         }
       });
     }
@@ -5668,7 +7424,53 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const charts = spec.charts || [];
     const ids = await runner.mapLimit(charts, concurrency, async (c) => {
       const def = chartDef(spec, c);
-      const existingId = await provision.findArtifact('chart', { name: def.name, entity: def.entityLogicalName });
+      if (isDeclaredChart(c)) {
+        return runner.run('charts', `chart "${def.name}"`, async () => {
+          const planArgs = { chart: c, sdk: provision, chartArtifact: def };
+          const stableKey = declaredChartKey(c);
+          const planChart = () => planStable(stableKey, () => planFresh(def.entityLogicalName, () => planChartReconcile(planArgs, stableCtx)));
+          if (stable && stable.settle && stable.protects('chart', stableKey)) {
+            // As for a declared view: one managed group, membership before the commit.
+            const out = await stable.settle({
+              kind: 'chart', key: stableKey, phase: 'charts', label: `chart ${stableKey}`, halt: managedStop, client: provision.dataverse,
+              sendObserver: opts.sendObserver || null, authorizedAdoption: featureCtx.authorizedAdoption,
+              planOnce: async () => {
+                const first = await planChart();
+                return refuseUnsentCopy('chart', 'chart', approvalKey('chart', first.key), first.chartId, first, planChart);
+              },
+              applyPlan: (p) => applyChartReconcile(p, { sdk: provision }, stableCtx),
+              onUnsettled: (p, res) => resetUnsettledCopy('chart', p.chartId, p, res),
+              ensureMember: (id, createdNow) => (createdNow
+                ? provision.addSolutionComponent({ componentId: id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName })
+                : ensureInSolution(id, COMPONENT_TYPE.chart, def.entityLogicalName)),
+            });
+            throwFreshLag(def.entityLogicalName, out.r);
+            const { ok } = settleStableResult('charts', `chart ${out.plan.key}`, out.r);
+            if (!out.managed) await resetUnsettledCopy('chart', out.plan.chartId, out.plan, out.r);
+            if (!ok) return null;
+            if (!out.managed) warnUnadopted('chart', out.plan.chartId, out.plan, out.r);
+            const made = out.r.saved.find((s) => s.created);
+            if (made) noteSaved(def.entityLogicalName, `chart ${def.name}`);
+            await commitSettledPublishes({ charts: chartsToPublish });
+            return made ? made.id : out.plan.chartId;
+          }
+          const firstPlan = await planChart();
+          const plan = await refuseUnsentCopy('chart', 'chart', approvalKey('chart', firstPlan.key), firstPlan.chartId, firstPlan, planChart);
+          const r = await applyChartReconcile(plan, { sdk: provision }, stableCtx);
+          throwFreshLag(def.entityLogicalName, r);
+          const { ok } = settleStableResult('charts', `chart ${plan.key}`, r);
+          await resetUnsettledCopy('chart', plan.chartId, plan, r);
+          const created = r.saved.find((s) => s.created);
+          // As for a declared view: a created row joins the solution even when the result is not clean.
+          if (created) await provision.addSolutionComponent({ componentId: created.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
+          if (!ok) return null;
+          if (created) noteSaved(def.entityLogicalName, `chart ${def.name}`);
+          await commitSettledPublishes({ charts: chartsToPublish });
+          return created ? created.id : plan.chartId;
+        });
+      }
+      // Read through readFresh: this lookup runs outside runner.run, so its failure reaches the build's retry check as it is.
+      const existingId = await readFresh(def.entityLogicalName, () => provision.findArtifact('chart', { name: def.name, entity: def.entityLogicalName }));
       if (existingId) {
         // The chart DEFINITION is still not reconciled — but its description is (#496), because a
         // description is the one thing an AI agent inspecting this app later reads, and it reached
@@ -5750,7 +7552,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    A form with `events[]` then gets its JS handlers wired: fetch the pushed form (to
   //    retain its formxml), inject onload/onsave/onchange handlers, push + publish.
   if (has('forms')) {
-    const defs = await Promise.all((spec.forms || []).map(async (f) => {
+    const allDefs = await Promise.all((spec.forms || []).map(async (f) => {
       const def = compileFormIntent(spec, f, { notesClassId: NOTES_CLASS_ID });
       const subs = [];
       // The tabs, form-columns and sections this form declares — what a sub-grid's placement is resolved against.
@@ -5770,7 +7572,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const relationshipName = subgridRelationshipName(spec, f.entity, sg.childEntity);
         if (!relationshipName) continue;
         const childLogical = sg.childEntity.toLowerCase();
-        const viewId = await subgridViewId(provision, result.created.views, spec, sg, childLogical);
+        const viewId = await readFresh(childLogical, () => subgridViewId(provision, result.created.views, spec, sg, childLogical));
         // Every sub-grid needs a concrete view id (the SDK embeds it in the control XML). If the
         // child entity has neither an explicit nor a built view AND no default public view can be
         // found, skip the sub-grid rather than crash the whole forms phase.
@@ -5793,7 +7595,125 @@ async function runSdkBuildPhases(spec, opts, owed) {
       def.__subgridLayout = layoutNames;
       return { f, def };
     }));
+    // Declared forms (forms[].reconcile "declared", flag on) are settled one at a time by the managed form helper
+    // (lib/form-layout-reconcile.js reconcileDeclaredForm): resolve, plan, one push, a fresh read proved against the
+    // expected layout, solution membership and one commit of the whole group. None of the build's own form steps runs
+    // for them — the push, the event wiring, the quick-view placement, the default-form promotion and the Main Form Set
+    // order — because each would write onto a form the helper just proved (its handlers and quick views are in the
+    // helper's layout). Their compiled defs are the same as a legacy form's. With the flag off `declaredDefs` is empty and
+    // `defs` is every form, in spec order, exactly as before.
+    const declaredDefs = allDefs.filter((d) => isDeclaredFormOn(d.f));
+    const defs = declaredDefs.length ? allDefs.filter((d) => !isDeclaredFormOn(d.f)) : allDefs;
+    const declaredIdOf = new Map(); // raw spec form -> the id its committed group binds
+    const declaredTables = []; // the tables of the declared forms that settled, in settle order
+    // `${entity}|${name}` -> id of every QuickView form this run built or settled: a quick view on a legacy host or a declared
+    // one names its form by (target table, name). The declared QuickView forms settle first, then the legacy forms are built
+    // and their QuickView ids are added beside them, and only then do the declared hosts settle, so a declared host can embed
+    // a QuickView form of either kind built in the same run.
+    const quickViewIds = {};
+    const keyQuickView = (d, id, { keep = false } = {}) => {
+      if (!id || !d.f.name || (d.f.formType || 'Main') !== 'QuickView') return;
+      const k = `${String(d.f.entity).toLowerCase()}|${d.f.name}`;
+      if (!(keep && quickViewIds[k])) quickViewIds[k] = id;
+    };
+    let formCatalog = null;
+    // The helper calls the halt factory with { cause } only; the build's halt names the finding the cause carries, so the
+    // printed line says the code, the message and the approval that settles it (cliApproval: `declared form "<key>"`).
+    const declaredFormStop = (phase, label, code, { cause } = {}) => managedStop(phase, label, code, {
+      cause,
+      findings: [{ key: label, code, message: String((cause && cause.message) || code).replace(/\s+/g, ' ') }],
+    });
+    const settleDeclaredForm = (d) => {
+      const { f, def } = d;
+      const table = String(f.entity).toLowerCase();
+      const key = formLayoutKey(f);
+      return runner.run('forms', `declared form "${key}"`, async () => {
+        // One catalog for the run's declared forms: each new form takes its id from it, so the id is the same on every plan.
+        // Required here, not at the top: the catalog pulls in the stable-identity modules, which a build with no declared
+        // form must not load (tests/creates-port.test.js walks the require graph of a default build).
+        if (!formCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          formCatalog = createIntentCatalog(declaredDefs.map((x) => formCatalogIntent(x.f, { solution: sol && sol.uniqueName })), { incarnations: storeIncarnations(bindingGroups && bindingGroups.store) });
+        }
+        const out = await reconcileDeclaredForm({
+          form: f,
+          spec,
+          def,
+          sdk: provision,
+          hosts: declaredHostsOf(f, def, { quickViewFormIdOf: (target, name) => quickViewIds[`${String(target).toLowerCase()}|${name}`] || '' }),
+          events: f.events || [],
+          // A failed lookup is never "no form" (#796, as for the build's own form step): the lag of a table this invocation
+          // created is read again in place, and any other failure refuses the form with the service's answer, creating nothing.
+          resolveExisting: () => readFresh(table, () => resolveExistingFormId(provision, def, { tableNotInCache: 'fail' })),
+        }, {
+          store: bindingGroups && bindingGroups.store,
+          barrier: owed.barrier,
+          catalog: formCatalog,
+          halt: declaredFormStop,
+          // Solution membership of the bound form, a reused one included: read once per run (solutionMembers) and added unless proved.
+          ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.form, table); },
+          // The run's typed approvals; only `form:<key>` in them approves this form (isApproved(…, 'form', key)).
+          authorizedAdoption: featureCtx.authorizedAdoption,
+          authorizedOverwrite: featureCtx.authorizedOverwrite,
+          sendObserver: opts.sendObserver || null,
+          phase: 'forms',
+        });
+        // The committed group owes its table's publish; from now on only the managed publisher puts that table live
+        // (lib/managed-scope-publisher.js), and the helper does not route it itself.
+        owed.barrier.route(table, `managed form "${key}"`);
+        if (!declaredTables.includes(table)) declaredTables.push(table);
+        declaredIdOf.set(f, out.formId);
+        keyQuickView(d, out.formId);
+        return out.formId;
+      });
+    };
+    // Stored form groups the spec no longer declares (with the build path on) whose managed state is not settled: an attempt
+    // an earlier build started (a create whose answer was lost included), or a publish still owed, or one that may have been
+    // sent and is not confirmed ('dispatching', 'unconfirmed'). The plain path knows nothing of them: it finds a form by its
+    // formId or its name, so it would PATCH the saved layer that change owes or is still changing, or, where the bound form
+    // is gone or never answered, create a second form of that name beside the one that may still land. So a plain form that
+    // is one of them, by its key (`<table>/<type>/<name>`, formLayoutKey), or by its formId naming a root the group or its
+    // attempt holds, is refused before any request for it, coded managed-form-unsettled; every other plain form builds as
+    // before. The key is taken with the name the plain path finds the form by, which is the COMPILED name: a plain form with
+    // no `name` is compiled as `<entity> form` (artifact-intent.js), so `{ entity: "contoso_item" }` is looked up as the
+    // form "contoso_item form" and must be held as `contoso_item/main/contoso_item form`, not as `contoso_item/main/`. The
+    // raw spec key is kept beside it. Both stay scoped to the table and the form type, so a form of the same name and
+    // another type (a Quick Create beside a held Main form) still builds. A settled group (no attempt, its publish confirmed
+    // or not needed) is not held: switching a settled declared form back to the plain path stays allowed. Nothing is read
+    // when the store holds no such group.
+    const unsettledForms = [];
+    const formStore = bindingGroups && bindingGroups.store;
+    if (formStore && defs.length) {
+      const declaredKeys = new Set(declaredDefs.map((d) => formLayoutKey(d.f)));
+      const bareFormId = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
+      for (const unit of formStore.snapshot().units()) {
+        if (unit.invalid || unit.family !== 'form' || declaredKeys.has(unit.key)) continue;
+        const { group, attempt } = unit;
+        const pub = group && group.publication;
+        const why = attempt ? 'a change an earlier build started on it is not finished'
+          : pub && pub.state === 'owed' ? 'its last change is saved and its publish is still owed'
+            : pub && (pub.state === 'dispatching' || pub.state === 'unconfirmed') ? 'a publish of it may have been sent and is not confirmed'
+              : null;
+        if (!why) continue;
+        const ids = new Set([group && group.root && group.root.id, attempt && attempt.root && attempt.root.id, attempt && attempt.expected && attempt.expected.rootId].filter(Boolean).map(bareFormId));
+        unsettledForms.push({ key: unit.key, ids, why });
+      }
+    }
+    const unsettledFormOf = ({ f, def }) => {
+      const keys = new Set([formLayoutKey(f), formLayoutKey({ ...f, name: (def && def.name) || f.name })]);
+      const pinned = f.formId ? String(f.formId).replace(/[{}]/g, '').toLowerCase() : null;
+      return unsettledForms.find((u) => keys.has(u.key) || (pinned && u.ids.has(pinned))) || null;
+    };
+    for (const d of declaredDefs) if ((d.f.formType || 'Main') === 'QuickView') await settleDeclaredForm(d);
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
+      const held = unsettledForms.length ? unsettledFormOf(d) : null;
+      if (held) {
+        const label = `declared form "${held.key}"`;
+        await runner.run('forms', `form ${d.f.name || d.f.entity}`, async () => {
+          const message = `form "${(d.def && d.def.name) || d.f.name || d.f.entity}" of ${String(d.f.entity).toLowerCase()} is the form the removed managed declaration "${held.key}" holds, and ${held.why}; it is not built as a plain form, which could change a saved layer that change owes or make a second form in its place. Declare it again with reconcile: "declared" and its key so the build settles it, or run the build again once that change has settled; nothing was sent for it`;
+          throw managedStop('forms', label, 'managed-form-unsettled', { cause: refusal(message, { code: 'managed-form-unsettled' }), findings: [{ key: held.key, code: 'managed-form-unsettled', message }] });
+        });
+      }
       const id = await buildArtifact('form', d.def, { specForm: d.f });
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
@@ -5809,6 +7729,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       return id;
     });
+    // The legacy QuickView ids, before any declared host resolves its quick views (they settle further down). A declared
+    // QuickView of the same (table, name) keeps its entry for the declared hosts; the legacy placement below re-keys the
+    // legacy ids over it for the legacy hosts, as it always did.
+    defs.forEach((d, i) => keyQuickView(d, ids[i], { keep: true }));
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
     //
@@ -5838,7 +7762,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (ids[i]) mainIdsByEntity.get(key).push(ids[i]);
     });
     for (const entityLogical of mainIdsByEntity.keys()) {
-      const chosen = selectDefaultForm(spec, entityLogical);
+      const chosen = selectDefaultForm(orderSpec, entityLogical);
       const chosenId = chosen && idOfForm.get(chosen.form);
       if (!chosenId) continue;
       mainByEntity.set(entityLogical, { id: chosenId, f: chosen.form });
@@ -5860,6 +7784,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     for (const entityLogical of mainIdsByEntity.keys()) {
       await applyMainFormOrder(entityLogical, idOfForm);
     }
+    // The declared Main and QuickCreate forms, after the legacy forms (whose QuickView ids a declared host may name; they are
+    // keyed above).
+    for (const d of declaredDefs) if ((d.f.formType || 'Main') !== 'QuickView') await settleDeclaredForm(d);
+    // The id of every form, legacy or declared, in spec order: what the output maps below report.
+    const legacyIdOf = new Map(defs.map((d, i) => [d, ids[i]]));
+    const formIdOfDef = (d) => (declaredIdOf.has(d.f) ? declaredIdOf.get(d.f) : legacyIdOf.get(d));
 
     // overwrites the first. That is correct for what the map is for — the app shell wires one form
     // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably
@@ -5871,7 +7801,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // name. Two such pinned forms collide in `formIds` as well, and claiming otherwise would send
     // the reader to a map that cannot answer them either.
     const mainFormSeen = new Map(); // entity -> { shownName, identityKey } for the first Main form, in spec order
-    defs.forEach((d, i) => {
+    allDefs.forEach((d) => {
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
       // `name` is optional on a form and is compiled to "<entity> form"; using the raw spec value
@@ -5893,26 +7823,26 @@ async function runSdkBuildPhases(spec, opts, owed) {
             ? 'The other ids are in created.formIds, keyed "entity|formType|name" — read that map rather than re-querying systemform.'
             : 'These two share an entity, type and name, so created.formIds cannot separate them either — give them distinct names.'));
       }
-      result.created.forms[key] = ids[i];
+      result.created.forms[key] = formIdOfDef(d);
     });
     // Every form, addressable individually. `created.forms` is keyed by ENTITY and holds only the
     // Main form, which is all the app shell needs — but `forms[].securityRoles` is applied in the
     // SECURITY phase (roles do not exist until then), by which time the forms phase is long over and
     // a non-Main form would be unreachable. Keyed on the same (entity, formType, name) triple the
     // spec uses to identify a form, so the lookup cannot silently bind to a same-named sibling.
-    defs.forEach((d, i) => {
-      result.created.formIds[formIdentityKey(d.f)] = ids[i];
+    allDefs.forEach((d) => {
+      result.created.formIds[formIdentityKey(d.f)] = formIdOfDef(d);
     });
     // Quick-view placement: embed a built QuickView form onto a host form via a lookup column,
     // added as a canonical quick-view control cell (semantic identity = the lookup field, so a
     // rebuild doesn't duplicate it). Runs after ALL forms are built so a host can reference a
     // QuickView form created concurrently. Placed in the host's first FIELD section: a sub-grid placed ahead of the
     // form's own sections, or the Notes section, is a section the engine owns and holds nothing else.
-    const formIdByEntityName = {};
+    const formIdByEntityName = quickViewIds;
     // Only QuickView forms are quick-view targets. Keying ALL forms by (entity, name) let a same-named
     // Main form on the SAME entity OVERWRITE the QuickView entry (order-dependent), embedding the wrong
-    // form id — so key QuickView forms only.
-    defs.forEach((d, i) => { if (d.f.name && (d.f.formType || 'Main') === 'QuickView') formIdByEntityName[`${String(d.f.entity).toLowerCase()}|${d.f.name}`] = ids[i]; });
+    // form id — so key QuickView forms only. The declared QuickView forms are already in it (keyQuickView).
+    defs.forEach((d, i) => keyQuickView(d, ids[i]));
     for (let i = 0; i < defs.length; i++) {
       const f = defs[i].f;
       const qvs = (f.quickViews || []).filter((q) => q && q.lookup && q.targetEntity && q.form);
@@ -5939,7 +7869,209 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
       });
     }
+    // One publish per table a declared form owes, after all of the table's form work above (a legacy form's events or
+    // quick views on the same table included), through the managed publisher: publishReconciled hands a routed table to
+    // it, now, or with phase 8 under --publish (whose ask includes every owed routed table). A table a committed form of
+    // the spec still owes from an earlier run is paid here too, a no-op re-run's included. The publisher reads every
+    // managed group on the table with its family's layer reader first and withholds the publish when one is not safe.
+    // A table that holds a publish whose answer was lost (its publication 'dispatching' or 'unconfirmed') goes to the publisher too, though
+    // nothing is owed on it: an unchanged form never reaches the settlement that would confirm it, so without this no run
+    // would. The publisher confirms it read-only first (publishManagedScope -> confirmUncertainPublication), never sends it
+    // again, and the scope stays quarantined for this run (openManagedContext's block is never cleared), so the next run
+    // is the clean one. One it cannot confirm stops here with the dispatch as data, which the CLI offers to the maker as
+    // the typed publication-risk:<scopeKey>/<dispatch> approval (build-model-app.js offerPublicationRisk).
+    // The form tables are those of the declared forms AND those of every stored form group, so a table whose declared form
+    // the spec no longer declares (or a spec that declares no form at all) still has its earlier owed or uncertain publish
+    // settled here: omitting a declaration never skips that check.
+    if (managedTables) {
+      const stored = bindingGroups.store.snapshot().units();
+      const formTables = new Set([...declaredTables, ...declaredDefs.map((d) => String(d.f.entity).toLowerCase())]);
+      for (const unit of stored) {
+        const scope = unit.family === 'form' && !unit.invalid && unit.group && unit.group.publication && unit.group.publication.scope;
+        if (scope && scope.type === 'table' && scope.table) formTables.add(String(scope.table).toLowerCase());
+      }
+      const due = managedTables.owedTables().filter((t) => formTables.has(t));
+      for (const unit of stored) {
+        const pub = !unit.invalid && unit.group && unit.group.publication;
+        if (!pub || (pub.state !== 'dispatching' && pub.state !== 'unconfirmed') || !pub.scope || pub.scope.type !== 'table') continue;
+        const t = String(pub.scope.table || '').toLowerCase();
+        if (t && formTables.has(t) && !due.includes(t)) due.push(t);
+      }
+      // A routed table's publishReconciled never reads the id: the table stands for it.
+      for (const t of due) await publishReconciled('form', t, t, `declared forms of ${t}`);
+    }
   }
+
+  // A declared workflow's attempt (a business rule's, family 'rule', or a process flow's, 'bpf') that is still waiting to be proved
+  // when its declaration has left the spec (the entry was removed, or no longer says reconcile "declared"). Nothing in this run will
+  // finish it, so it is not dropped silently: the run ends incomplete (managed-not-settled) with what to do, and the legacy path of
+  // the same phase writes nothing it could collide with. Every write of a declared workflow is recorded as an effect before it is
+  // sent, so an attempt whose effects all still say definitely-unsent changed nothing and holds nothing: it is only noted, and it
+  // finishes if the declaration comes back.
+  //
+  // The fence is the row the attempt holds AND the table and name it declared. The row id alone is not enough: a create whose
+  // answer was lost may not be visible yet (or may arrive after this run reads), so a legacy entry of the same name would find no
+  // row and create a second one beside it. The name is compared without case, as the service's `name eq` filter compares it. The
+  // attempt keeps the declaration it was prepared from (managed-bindings.js prepareAttempt `declaration`); one that names no
+  // readable table and name fences every legacy entry of its family, never none.
+  //   heldName(table, name)  the key of the attempt fencing that table and name, before any legacy read or create
+  //   heldRow(ids)           the key of the attempt holding one of those row ids (a held row renamed to another entry's name)
+  //
+  // A removed declaration whose row is GONE has a way out, since putting the entry back cannot settle a row that no longer exists:
+  // the group is retired (managed-bindings.js retireAbsentGroup), with a notice, when a fresh read by the row's exact id, made in
+  // this run, answers not found (readWorkflowRowPresence). Two shapes reach it:
+  //   - a removed attempt whose every effect is settled (confirmed, fulfilled, or definitely-unsent with no dispatch token), for
+  //     example a confirmed create whose activation was never sent: retired with its attempt (attemptToken), at the generation of
+  //     the committed group it is based on, or null when nothing was ever committed. The store also needs a record that nothing
+  //     the attempt sent outside its journal can still land (its own create confirmed by a read, or a send window that counted no
+  //     possible send), and refuses it otherwise: such an attempt stays on its recovery path;
+  //   - a committed group with no attempt and no effect, whose declaration was removed: retired at its generation. A present row
+  //     keeps it as it is (verify still checks it); one that cannot be read keeps it too, with a warning;
+  //   - an attempt on a committed group whose own record says nothing was sent (prepared with nothing planned, or a send window
+  //     that counted no possible send, managed-bindings.js attemptProvenUnsent), such as a change of the security roles alone
+  //     that failed before it committed: retired with its attempt even with an empty journal, the store making the same checks.
+  //     A fresh create that sent nothing has no row to read and is only noted.
+  // An attempt with an effect that may have been sent and is not proved (dispatching, unconfirmed) is held without a read: no
+  // answer about the row now can say what that send will do. A row that is present, and a read that is unreadable, refused or
+  // malformed, keep the hold above, unchanged. A retirement the store refuses, or that fails or cannot be observed, could not be
+  // confirmed: the key is held for the rest of this invocation (its row, its declared table and name, and those of any attempt
+  // the store file now holds for it), the run ends incomplete, and the next invocation rereads the durable result. Workflows
+  // have one layer (no saved and published pair), so the one exact read is the whole proof. The store is observed BEFORE that
+  // read and the retirement is made against that observation (retire, below), so a managed write that lands during the read
+  // keeps the group. The retirement says the row was proved gone and the group dropped, never that an activation or any other
+  // change was made.
+  const settledEffect = (e) => e && (e.state === 'confirmed' || e.state === 'fulfilled' || (e.state === 'definitely-unsent' && (e.dispatchToken === null || e.dispatchToken === undefined)));
+  const holdRemovedWorkflowAttempts = async (family, declaredKeys, { phase, noun, short, entries }) => {
+    const rows = new Map();
+    const names = new Map();
+    let all = null;
+    // The one place a removed declared workflow is retired. The order is the store's contract (managed-bindings.js
+    // observeRetirement, then retireAbsentGroup): observe the group, THEN read its row fresh by its exact id, THEN retire against
+    // that observation. The proof that the row is gone holds only for the group as it was when the read began: another run that
+    // settles, re-sends or re-creates it while the read is on the wire (an effect dispatched or confirmed, a send counted) may put
+    // the row back after the 404, so the store rereads its file under its lease and refuses (managed-binding-generation-conflict,
+    // nothing written) any group, attempt or effect that moved since the observation. An observation taken after the read would
+    // prove nothing, so a refusal is never retried here with a fresh one: the key is held for the rest of this run (holdUnconfirmed)
+    // and a later run observes and reads again. The generation is the one this sweep decided on (`unit`), so a group committed
+    // again since is refused as well.
+    const retire = async (unit, rootId, attemptToken) => {
+      let observation;
+      try {
+        ({ observation } = bindingGroups.store.observeRetirement({ family, key: unit.key }));
+      } catch (err) {
+        return { kept: `the binding store could not be observed before its row was read (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})`, unconfirmed: true };
+      }
+      const read = await readWorkflowRowPresence(provision, opts.env, rootId);
+      if (read.state !== 'absent') return { kept: read.state === 'present' ? 'its row is still there' : `its row could not be read (${read.why})` };
+      try {
+        bindingGroups.store.retireAbsentGroup({
+          family, key: unit.key, generation: unit.group ? unit.group.generation : null, rootId,
+          evidence: { kind: 'root-absent', rootId, row: 'not-found' },
+          observation,
+          ...(attemptToken ? { attemptToken } : {}),
+        });
+      } catch (err) {
+        // Refused (the group moved since the observation) or failed after the file was replaced: either way this run does not
+        // know the durable result, so the caller holds the key (`unconfirmed`) instead of reading the cached store again.
+        return { kept: `the binding store did not confirm the retirement (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})`, unconfirmed: true };
+      }
+      if (typeof opts.warn === 'function') {
+        opts.warn(`managed-root-retired: declared ${noun} "${unit.key}": its row ${rootId} is gone (a read by its exact id answered not found) and the spec no longer declares it, so the build no longer manages it. This run sent nothing for it; the notice says only that the row is gone, not that any change of it was made.`);
+      }
+      return { retired: true };
+    };
+    // Hold a key's row and its declared table and name for the rest of this run (heldRow / heldName below).
+    const hold = (key, rootId, d) => {
+      if (rootId) rows.set(String(rootId).toLowerCase(), key);
+      if (d && typeof d.entity === 'string' && d.entity && typeof d.name === 'string' && d.name) names.set(`${d.entity.toLowerCase()}|${d.name.toLowerCase()}`, key);
+      else if (!all) all = key;
+    };
+    const rootIdOf = (x) => (x && x.root && typeof x.root.id === 'string' ? x.root.id.toLowerCase() : null);
+    // A retirement this run could not confirm: another run may have moved the group after this one observed it (retired it,
+    // prepared a new attempt for the key, re-created its row), or the store failed after the file was replaced, and this run's
+    // cached store shows none of it. So the key stays held for the rest of this invocation, with every attempt the store file
+    // now holds for it (a fresh create of the same name included; a file that cannot be reread fences every legacy entry of the
+    // family), the run ends incomplete, and the next invocation rereads the durable result.
+    const holdUnconfirmed = (key, rootId, declaration, why) => {
+      hold(key, rootId, declaration);
+      try {
+        for (const a of bindingGroups.store.refresh().envelope.attempts || []) if (a && a.family === family && a.key === key) hold(key, rootIdOf(a), a.declaration);
+      } catch {
+        if (!all) all = key;
+      }
+      markIncomplete({
+        phase,
+        code: 'managed-not-settled',
+        message: `declared ${noun} "${key}": the spec no longer declares it, and its retirement could not be confirmed (${why}); this run wrote nothing to it and keeps its row, table and name held, and the next invocation rereads the durable result.`,
+      });
+    };
+    if (bindingGroups && bindingGroups.store) {
+      const snap = bindingGroups.store.snapshot();
+      const envelope = snap.envelope;
+      const unitOf = new Map(snap.units().filter((u) => u.family === family).map((u) => [u.key, u]));
+      for (const a of envelope.attempts || []) {
+        if (!a || a.family !== family || declaredKeys.has(a.key)) continue;
+        const owned = (envelope.workflowEffects || []).filter((e) => e && e.attemptToken === a.token);
+        const sent = owned.some((e) => e.state !== 'definitely-unsent');
+        const unit = unitOf.get(a.key);
+        const rootId = rootIdOf(a);
+        if (!sent) {
+          // An attempt on a committed group whose record says nothing was sent (prepared with nothing planned, or a send window
+          // that counted no possible send with every effect unsent), for example a change of the security roles alone that
+          // failed before it committed, holds the committed row: once that row is gone it is retired here, with its attempt,
+          // even with an empty journal. The store makes the affirmative-record, generation, token and observation checks; an
+          // empty journal is not taken as permission. A fresh create that sent nothing has no committed group and no row to
+          // read, so it is only noted, as before.
+          if (unit && !unit.invalid && unit.group && rootId && ((a.phase === 'prepared' && a.expected === null) || attemptProvenUnsent(a, envelope.workflowEffects || []))) {
+            const outcome = await retire(unit, rootId, a.token);
+            if (outcome.retired) continue;
+            if (outcome.unconfirmed) {
+              holdUnconfirmed(a.key, rootId, a.declaration, outcome.kept);
+              continue;
+            }
+          }
+          if (typeof opts.warn === 'function') opts.warn(`declared ${noun} "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
+          continue;
+        }
+        let why = null;
+        // Only an attempt with a journal is retired: one whose journal is empty has no recorded effect to show what it sent, and
+        // its send window (absent, or counting a possible send) cannot say nothing landed, so it is never retired here.
+        if (unit && !unit.invalid && rootId && owned.length && owned.every(settledEffect)) {
+          const outcome = await retire(unit, rootId, a.token);
+          if (outcome.retired) continue;
+          if (outcome.unconfirmed) {
+            holdUnconfirmed(a.key, rootId, a.declaration, outcome.kept);
+            continue;
+          }
+          why = outcome.kept;
+        }
+        hold(a.key, rootId, a.declaration);
+        markIncomplete({
+          phase,
+          code: 'managed-not-settled',
+          message: `declared ${noun} "${a.key}": an earlier run's change of this ${short} is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it${why ? ` (it is not retired: ${why})` : ''}. Put its ${entries} entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
+        });
+      }
+      for (const unit of unitOf.values()) {
+        if (declaredKeys.has(unit.key) || unit.invalid || unit.attempt || unit.effects.length || !unit.group) continue;
+        const rootId = rootIdOf(unit.group);
+        if (!rootId) continue;
+        const outcome = await retire(unit, rootId);
+        if (outcome.retired) continue;
+        if (outcome.unconfirmed) {
+          holdUnconfirmed(unit.key, rootId, unit.group.originalDeclaration, outcome.kept);
+          continue;
+        }
+        if (outcome.kept !== 'its row is still there' && typeof opts.warn === 'function') {
+          opts.warn(`declared ${noun} "${unit.key}": the spec no longer declares it, and it stays in the binding store: ${outcome.kept}. A later run reads it again.`);
+        }
+      }
+    }
+    return {
+      heldName: (table, name) => all || names.get(`${String(table).toLowerCase()}|${String(name).toLowerCase()}`),
+      heldRow: (ids) => (ids || []).map((id) => rows.get(String(id).toLowerCase())).find(Boolean),
+    };
+  };
 
   // 6b. Commands (modern command-bar buttons). One command artifact per entity; a button with a
   //     library+function gets a functional JS on-click action bound to the created web resource.
@@ -5970,7 +8102,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // The two ways a rule is refused "for this environment", and what they allow. `created` counts the rules THIS build created: the
     // switched-off answer (isConfirmedBusinessRuleRefusal) is read as "this environment does not host rules" only while it is the
     // answer to the first create. After a rule was created the environment plainly hosts them, and the same answer is a failure to halt on.
-    // A rule that already existed is not a create — it proves nothing about what the member does now.
+    // A rule that already existed is not a create — it proves nothing about what the member does now. Nor is a declared rule this run
+    // adopted, or one an earlier run created that this run only proved: only a create this invocation sent and saw answered counts.
     let businessRulesCreated = 0;
     let businessRulesSwitchedOff = false;
     // A rule is skipped only for this ONE reason; anything else still halts. Matching is on the
@@ -6023,9 +8156,159 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       return { nothing: true };
     };
-    for (const rule of spec.businessRules || []) {
+    // A declared rule (businessRules[].reconcile "declared", its flag on) is one managed workflow, settled whole by
+    // lib/rule-settlement.js settleDeclaredRule: created Draft under a stable id, proved by a fresh read, then activated by a
+    // conditional state write; an existing rule is never edited unless conditional writes are switched on (they are off in the
+    // build). One create catalog for the run's declared rules, so a new one takes the same id on every plan; built at first use,
+    // with the helper, so a build with no declared rule loads neither (tests/creates-port.test.js).
+    let ruleCatalog = null;
+    // Whether a declared rule's stored attempt still has a write an earlier run may have sent and nobody has committed: any of the
+    // attempt's own effects past definitely-unsent (dispatching, unconfirmed, confirmed, or fulfilled by a read but not committed).
+    const outstandingRuleWrite = (store, key) => {
+      const { pending, effects } = store.readGroup('rule', key);
+      return !!pending && (effects || []).some((e) => e && e.attemptToken === pending.token && e.state !== 'definitely-unsent');
+    };
+    // Whether this invocation created the rule's row (see businessRulesCreated): the group was not committed before the call, its
+    // root record now says `created`, and the result is not only the proof of an earlier run's attempt.
+    const createdThisRun = (store, key, before, out) => {
+      if (before.committed || (out.recovered && !out.resumed && !out.continued)) return false;
+      const { committed } = store.readGroup('rule', key);
+      const root = committed && (committed.records || []).find((r) => r && r.kind === 'business-rule');
+      return !!root && root.origin === 'created';
+    };
+    const settleDeclaredRuleOf = async (rule) => {
+      const { settleDeclaredRule, ruleKey } = require('./rule-settlement.js');
       const entityLogical = String(rule.entity).toLowerCase();
-      const existing = await provision.queryRecords('workflow', {
+      const approvalId = `${entityLogical}/${rule.name}`;
+      const label = `declared business rule "${rule.name}" on ${entityLogical}`;
+      const halt = declaredWorkflowStop('rule', approvalId);
+      const key = ruleKey(rule);
+      if (businessRulesSwitchedOff) {
+        // The first create of this build showed that this environment does not host rules: nothing more is sent for one. That
+        // answer came from ANOTHER rule's create, so it says nothing about a write this rule's earlier run may have sent: a rule
+        // whose stored attempt still has such a write outstanding is never skipped as a capability gap. Proving it could send its
+        // own activation, so it is not settled here either: the run stops incomplete with nothing sent, and the attempt is kept.
+        const store = bindingGroups && bindingGroups.store;
+        if (store && outstandingRuleWrite(store, key)) {
+          await runner.run('business-rules', label, async () => {
+            throw halt('business-rules', label, 'managed-not-settled', {
+              cause: refusal(`${label}: an earlier run sent a change of this rule that is still waiting to be proved, and this run did not prove it: this build's first business-rule create was refused as if this environment could not host rules, and that answer, about another rule, does not settle this rule's earlier write. Nothing was sent for it. Run the build again where business-rule creation is available, or with the new declared rules left out until this one settles.`, { code: 'managed-not-settled' }),
+            });
+          });
+          return;
+        }
+        result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
+        runner.skip('business-rules', `${label} (unsupported in this environment)`);
+        return;
+      }
+      let unavailable = null;
+      await runner.run('business-rules', label, async () => {
+        const store = bindingGroups && bindingGroups.store;
+        // Every write of the rule is screened by the gate of THIS store (its effect record is what makes the write send-once).
+        // A build whose client has no gate bound to it — no store (a dry run, no app), or a caller that wired none — stops
+        // here, before any request for the rule.
+        if (!store || !opts.workflowEffectGate || !opts.workflowEffectGate.boundTo(store)) {
+          throw halt('business-rules', label, 'workflow-state-path-unavailable', {
+            cause: refusal(`${label}: the build's client has no workflow effect gate bound to its managed binding store, so the rule's writes cannot be held to their persisted effects; nothing was sent for it`, { code: 'workflow-state-path-unavailable' }),
+          });
+        }
+        if (!ruleCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          ruleCatalog = createIntentCatalog((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => ({
+            catalogKind: 'businessRule',
+            key: ruleKey(r),
+            scope: { kind: 'table', solution: sol && sol.uniqueName, table: String(r.entity).toLowerCase() },
+            declaration: r,
+          })), { incarnations: storeIncarnations(store) });
+        }
+        let out;
+        // The rule's stored group before this run touches it: a create counts only when no committed group was there.
+        const before = store.readGroup('rule', key);
+        try {
+          out = await settleDeclaredRule({
+            rule,
+            sdk: provision,
+            store,
+            catalog: ruleCatalog,
+            // The run's typed approvals: only `rule:<table>/<name>` (adopt) approves binding a rule this build did not create.
+            approvals: featureCtx.authorizedAdoption,
+            // The edit switch stays off: an existing rule's body or state is never changed by the build.
+            opts: {},
+            halt,
+            ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.workflow); },
+            phase: 'business-rules',
+            label,
+            barrier: owed.barrier,
+            // The raw conditional state write (If-Match) goes through the same gated client the SDK sends through.
+            httpClient: provision.dataverse && provision.dataverse.httpClient,
+            instanceUrl: opts.env,
+            sendObserver: opts.sendObserver || null,
+            // #796: the rule's table when this invocation created it, so an identity read that meets the table's metadata-cache lag
+            // is read again in place within the build's one retry allowance (`retryFreshRead`) rather than stopping it.
+            freshTable: createdTables.has(String(rule.entity).toLowerCase()) ? String(rule.entity).toLowerCase() : null,
+            retryFreshRead,
+          });
+        } catch (err) {
+          // Every stop of a declared rule is final for this run — a refusal (workflow-edit-refused, rule-drift, …) or a held
+          // attempt is never retried by the runner and never read as a match — save the identity read that met the metadata-cache
+          // lag of a table this invocation created (managedStop: RETRY.SERVICE). The helper's own halts already are.
+          if (err instanceof BuildHalt) throw err;
+          throw halt('business-rules', label, (err && typeof err.code === 'string' && err.code) || 'managed-not-settled', { cause: err });
+        }
+        if (out && out.skipped === 'unavailable') {
+          // The documented "this environment cannot host rules" answer to a create that wrote nothing. It means that only for the
+          // first create of this build: once a rule was created here, the environment plainly hosts them and the answer is a failure.
+          if (businessRulesCreated > 0) {
+            throw halt('business-rules', label, 'business-rule-unavailable-after-create', {
+              cause: refusal(`${label}: the create was refused as if this environment could not host business rules, but this build already created ${businessRulesCreated === 1 ? 'a rule' : `${businessRulesCreated} rules`} here, so the refusal is a failure, not a platform limit: ${String((out.cause && out.cause.message) || out.cause || '').replace(/\s+/g, ' ').slice(0, 300)}`, { code: 'business-rule-unavailable-after-create' }),
+            });
+          }
+          unavailable = out.cause || refusal('business rules are unavailable in this environment');
+          throw unavailable;
+        }
+        // Counted only when THIS invocation sent the rule's create and saw it answered: no committed group was there before, the
+        // group now holds the row as created (an adoption, or a create no answer acknowledged, holds it as adopted), and the result
+        // is not a proof of an earlier run's attempt (`recovered` without `resumed` or `continued`, which re-send under its token).
+        if (out && out.committed && !out.noop && createdThisRun(store, key, before, out)) businessRulesCreated += 1;
+        if (out && out.id) result.created.businessRules[`${entityLogical}|${rule.name}`] = out.id;
+      }, {
+        skipIf: (err) => {
+          if (!unavailable || err !== unavailable) return false;
+          businessRulesSwitchedOff = true;
+          result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
+          if (!businessRuleApiWarned && typeof opts.warn === 'function') {
+            businessRuleApiWarned = true;
+            opts.warn(`business rules were NOT created: this environment refused the first rule's create with the answer that means business-rule creation is not available on it, and a fresh read showed nothing was created. Everything else in the app was built normally. Use an environment where business-rule creation is available, or drop businessRules[] from the spec. Detail: ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}`);
+          }
+          return 'unsupported in this environment';
+        },
+      });
+    };
+    // A declared rule's attempt that is still waiting to be proved when its declaration has left the spec (the entry was removed,
+    // or no longer says reconcile "declared"): holdRemovedWorkflowAttempts. Nothing in this run will finish it, so it is not
+    // dropped silently: the run ends incomplete with what to do, and the legacy path below neither reads nor creates a rule of
+    // the table and name it declared (its create may not be visible yet, or may still arrive), nor writes the row it holds (an
+    // uncertain write's row is refused by the client's gate as well). A committed group with no attempt stays as it is while its row is
+    // there (verify still checks it), and is retired once a read by its id proves the row gone. Loaded only when the feature is on, so a build with no declared
+    // rule does not load the rule helper (tests/creates-port.test.js).
+    const ruleHold = declaredFeatureOn('rules')
+      ? await holdRemovedWorkflowAttempts('rule', new Set((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => require('./rule-settlement.js').ruleKey(r))), {
+        phase: 'business-rules', noun: 'business rule', short: 'rule', entries: 'businessRules[]',
+      })
+      : { heldName: () => undefined, heldRow: () => undefined };
+    for (const rule of spec.businessRules || []) {
+      if (isDeclaredRuleOn(rule)) {
+        await settleDeclaredRuleOf(rule);
+        continue;
+      }
+      const entityLogical = String(rule.entity).toLowerCase();
+      const fencedBy = ruleHold.heldName(entityLogical, rule.name);
+      if (fencedBy) {
+        runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (not read, created or changed: declared rule "${fencedBy}" still has a change waiting to be proved under this table and name, and its row may not be visible yet)`);
+        continue;
+      }
+      // Through readFresh (#796): on a table this invocation created the read can meet its metadata-cache lag.
+      const existing = await readFresh(entityLogical, () => provision.queryRecords('workflow', {
         select: ['workflowid', 'statecode', 'createdon'],
         // Definition rows only — see businessRuleFilter. Scoped to the entity as well as the name so
         // a same-named rule on a DIFFERENT table is not mistaken for this one.
@@ -6034,8 +8317,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // names all pre-existing same-name rows; their names do not make them disposable.
         orderBy: 'createdon asc',
         paginate: true,
-      });
+      }));
       const existingId = existing && existing[0] && existing[0].workflowid;
+      const heldBy = existingId ? ruleHold.heldRow((existing || []).map((w) => w.workflowid)) : undefined;
+      if (heldBy) {
+        runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (not changed: declared rule "${heldBy}" still has a change waiting to be proved on it)`);
+        continue;
+      }
       if (existingId) {
         for (const extra of (existing || []).slice(1)) {
           if (typeof opts.warn === 'function') {
@@ -6213,10 +8501,115 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // leaves every deployed stage where it is in the process is applied in place, and one that would
   // remove or move a stage or a step is refused (see lib/bpf-stages.js for which, and why).
   if (has('business-process-flows')) {
-    for (const flow of spec.businessProcessFlows || []) {
+    // A declared flow (businessProcessFlows[].reconcile "declared", its flag on) is one managed workflow, settled whole by
+    // lib/bpf-settlement.js settleDeclaredBpf: its workflow, stage and step ids come from one create catalog before anything is
+    // sent, so a retry in a fresh workspace derives the same ids; a new flow is created Draft, proved by a fresh read, then
+    // activated by its own conditional state write; an existing flow's body or state is never edited while conditional writes are
+    // off (they are off in the build). Built at first use, with the helper, so a build with no declared flow loads neither
+    // (tests/creates-port.test.js).
+    let bpfCatalog = null;
+    const settleDeclaredBpfOf = async (flow) => {
+      const { settleDeclaredBpf, bpfKey } = require('./bpf-settlement.js');
       const entityLogical = String(flow.entity).toLowerCase();
       const key = `${entityLogical}|${flow.name}`;
-      const existing = await provision.queryRecords('workflow', {
+      const approvalId = `${entityLogical}/${flow.name}`;
+      const label = `declared business process flow "${flow.name}" on ${entityLogical}`;
+      const halt = declaredWorkflowStop('bpf', approvalId);
+      await runner.run('business-process-flows', label, async () => {
+        const store = bindingGroups && bindingGroups.store;
+        // As for a declared rule: every write of the flow is screened by the gate of THIS store, so a build whose client has no
+        // gate bound to it stops here, before any request for the flow.
+        if (!store || !opts.workflowEffectGate || !opts.workflowEffectGate.boundTo(store)) {
+          throw halt('business-process-flows', label, 'workflow-state-path-unavailable', {
+            cause: refusal(`${label}: the build's client has no workflow effect gate bound to its managed binding store, so the flow's writes cannot be held to their persisted effects; nothing was sent for it`, { code: 'workflow-state-path-unavailable' }),
+          });
+        }
+        if (!bpfCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          bpfCatalog = createIntentCatalog((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => ({
+            catalogKind: 'bpf',
+            key: bpfKey(f),
+            scope: { kind: 'table', solution: sol && sol.uniqueName, table: String(f.entity).toLowerCase() },
+            declaration: f,
+          })), { incarnations: storeIncarnations(store) });
+        }
+        let out;
+        try {
+          out = await settleDeclaredBpf({
+            flow,
+            sdk: provision,
+            store,
+            catalog: bpfCatalog,
+            // The run's typed approvals: only `bpf:<table>/<name>` (adopt) approves binding a flow this build did not create.
+            approvals: featureCtx.authorizedAdoption,
+            // The edit switch stays off: an existing flow's body or state is never changed by the build.
+            opts: {},
+            halt,
+            ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.workflow); },
+            phase: 'business-process-flows',
+            label,
+            barrier: owed.barrier,
+            // The raw conditional state write (If-Match) goes through the same gated client the SDK sends through.
+            httpClient: provision.dataverse && provision.dataverse.httpClient,
+            instanceUrl: opts.env,
+            sendObserver: opts.sendObserver || null,
+            // #796: as for a declared rule, the flow's table when this invocation created it (an identity read that meets its
+            // metadata-cache lag is read again in place within the build's one retry allowance).
+            freshTable: createdTables.has(String(flow.entity).toLowerCase()) ? String(flow.entity).toLowerCase() : null,
+            retryFreshRead,
+          });
+        } catch (err) {
+          // Every stop of a declared flow is final for this run (bpf-structure-refused, workflow-edit-refused, bpf-drift, a held
+          // attempt, …): never retried by the runner and never read as a match — save the identity read that met the metadata-cache
+          // lag of a table this invocation created (managedStop: RETRY.SERVICE). The helper's own halts already are.
+          if (err instanceof BuildHalt) throw err;
+          throw halt('business-process-flows', label, (err && typeof err.code === 'string' && err.code) || 'managed-not-settled', { cause: err });
+        }
+        if (!out || typeof out.id !== 'string') {
+          throw halt('business-process-flows', label, 'managed-not-settled', { cause: refusal(`${label}: the settlement answered no workflow id, so nothing is granted or mapped for it`, { code: 'managed-not-settled' }) });
+        }
+        // The backing table is the name the platform STORED for the flow, which the helper proved and kept; it is never derived from
+        // the display name (a flow adopted from Maker, or renamed, keeps another). Should the helper answer none (or anything that is
+        // not a table's logical name), it is read here by the flow's id, and a flow whose stored name cannot be read stops the run
+        // before any grant is made on a guessed table.
+        const TABLE_NAME = /^[a-z][a-z0-9_]{0,127}$/;
+        let backing = out.uniqueName && TABLE_NAME.test(String(out.uniqueName).toLowerCase()) ? String(out.uniqueName).toLowerCase() : null;
+        if (!backing) {
+          const rows = await provision.queryRecords('workflow', { select: ['workflowid', 'uniquename'], filter: `workflowid eq ${out.id}`, top: 1 });
+          const row = (rows || []).find((w) => w && String(w.workflowid).toLowerCase() === out.id.toLowerCase());
+          if (row && typeof row.uniquename === 'string' && TABLE_NAME.test(row.uniquename.toLowerCase())) backing = row.uniquename.toLowerCase();
+          else {
+            throw halt('business-process-flows', label, 'bpf-backing-unproved', {
+              cause: refusal(`${label}: the flow ${out.id} is settled, but the name of its backing table could not be read, so no role is granted on it and nothing refers to it; run the build again`, { code: 'bpf-backing-unproved' }),
+            });
+          }
+        }
+        result.created.businessProcessFlows[key] = out.id;
+        result.created.bpfBackingTables[key] = backing;
+      });
+    };
+    // A declared flow's attempt still waiting to be proved after its declaration left the spec: the same hold as a declared rule's
+    // (holdRemovedWorkflowAttempts). The legacy path below neither reads nor creates a flow of the table and name it declared, and
+    // does not write the row it holds.
+    const bpfHold = declaredFeatureOn('bpf')
+      ? await holdRemovedWorkflowAttempts('bpf', new Set((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => require('./bpf-settlement.js').bpfKey(f))), {
+        phase: 'business-process-flows', noun: 'business process flow', short: 'flow', entries: 'businessProcessFlows[]',
+      })
+      : { heldName: () => undefined, heldRow: () => undefined };
+    for (const flow of spec.businessProcessFlows || []) {
+      if (isDeclaredBpfOn(flow)) {
+        await settleDeclaredBpfOf(flow);
+        continue;
+      }
+      const entityLogical = String(flow.entity).toLowerCase();
+      const key = `${entityLogical}|${flow.name}`;
+      const fencedBy = bpfHold.heldName(entityLogical, flow.name);
+      if (fencedBy) {
+        runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (not read, created or changed: declared flow "${fencedBy}" still has a change waiting to be proved under this table and name, and its row may not be visible yet)`);
+        continue;
+      }
+      // Through readFresh (#796): on a table this invocation created the read can meet its metadata-cache lag.
+      const existing = await readFresh(entityLogical, () => provision.queryRecords('workflow', {
         // `uniquename` is selected, not derived. Activation creates the flow's backing TABLE with
         // exactly this name, and the security phase grants privileges on that table. For a flow this
         // build created, `bpfUniqueName(flow.name)` IS the deployed value — but a REUSED flow may
@@ -6231,8 +8624,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // ARBITRARY row, and seeing more than one is the only way to report a pre-existing duplicate.
         orderBy: 'createdon asc',
         top: 50,
-      });
+      }));
       const existingId = existing && existing[0] && existing[0].workflowid;
+      const heldBpfBy = existingId ? bpfHold.heldRow((existing || []).map((w) => w.workflowid)) : undefined;
+      if (heldBpfBy) {
+        runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (not changed: declared flow "${heldBpfBy}" still has a change waiting to be proved on it)`);
+        continue;
+      }
       if (existingId) {
         if ((existing || []).length > 1 && typeof opts.warn === 'function') {
           opts.warn(`business process flow "${flow.name}" on ${flow.entity}: ${existing.length} definitions exist with this name — the oldest is being reused. Remove the extras in Maker so users are not offered the same process twice.`);
@@ -6394,7 +8792,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
   }
 
   if (has('commands')) {
+    // commandStates: everything read again before the first row write; a row that changed since its approval stops the build here.
+    if (commandStateRun) await commandStateRun.recheckAll();
+    const commandStateTables = new Set(commandStateRun ? commandStateRun.requiredTables() : []);
     for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
+      if (isManagedEntity(cmds)) {
+        // A keyed command bar (commands[].key, lib/command-reconcile.js): one fetch, a push only when something changed.
+        await runner.run('commands', `managed command bar for ${entityLogical}`, async () => {
+          const plan = await planCommandReconcile({ entity: entityLogical, commands: cmds, sdk: provision, webResources: result.created.webResources, defaultParameters: COMMAND_DEFAULT_PARAMETERS }, featureCtx);
+          const r = await applyCommandReconcile(plan, { sdk: provision }, featureCtx);
+          const { ok } = settleFeatureResult('commands', `command bar ${entityLogical}`, r);
+          if (ok && plan.live) result.created.commands[entityLogical] = plan.live.id;
+        });
+        continue;
+      }
       // Additive discover-reconcile (design §14): one command artifact per entity (identity = entity).
       // Re-pushing the appaction on every rebuild risks a duplicate command bar on the entity, so
       // discover-then-skip like charts/dashboards. Discovery is `resolveArtifact('command', { entity })`
@@ -6408,6 +8819,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
         result.created.commands[entityLogical] = existingId;
         continue;
       }
+      // A new command bar on a table whose existing buttons commandStates edits in the same build: refused before it is created, so one build
+      // never both creates buttons on a table and edits that table's rows (the state rows were judged before the bar existed).
+      if (commandStateTables.has(String(entityLogical).toLowerCase())) {
+        throw new BuildHalt(`${COMMAND_STATE_CODES.legacyCreateConflict}: commands[] for ${entityLogical}: ${COMMAND_STATE_REMEDY[COMMAND_STATE_CODES.legacyCreateConflict]}`,
+          { phase: 'commands', code: COMMAND_STATE_CODES.legacyCreateConflict, recoverable: false, retry: RETRY.NEVER });
+      }
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
         const art = await provision.createArtifact('command', def);
@@ -6415,6 +8832,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         result.created.commands[entityLogical] = pushed.id;
       });
     }
+    // Then the rows, one at a time, before the commands phase ends: the before-app table publication that follows covers them.
+    if (commandStateRun) await commandStateRun.applyRows();
   }
 
   // 6c. Dashboards. createArtifact('dashboard') seeds a dashboard; each chart/list/iframe/webresource
@@ -6426,7 +8845,205 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // per run of the phases, so the build's own re-run of a halt reads what the attempt before it recorded. Bound to this app and solution as the spec
     // names them: a new app has no id yet, and its unique name is the spec's.
     const creations = openDashboardCreations({ workspaceDir: opts.workspaceDir, environment: opts.env, appUniqueName: spec.app ? appUniqueName(spec) : '', solutionUniqueName: sol && sol.uniqueName, warn: opts.warn });
+    // A declared dashboard (dashboards[].reconcile "declared", its flag on) is one managed group, settled and then published through
+    // its own scope (lib/dashboard-reconcile.js) on every run, a run that changes nothing included: the publish step is also where
+    // an earlier run's owed or uncertain publication of it is paid or confirmed. One create catalog for the run's declared
+    // dashboards, so a new one takes the same id on every plan; required at first use, not at the top: the catalog pulls in the
+    // stable-identity modules, which a build with no declared dashboard must not load (tests/creates-port.test.js).
+    let dashboardCatalog = null;
+    // The helper calls the halt factory with { cause } only. Its refusals name the dashboard (`<key>`) or one tile
+    // (`<key>/<tile>`), each with its own approval, so each is a finding labelled for cliApproval.
+    const declaredDashboardStop = (phase, label, code, { cause } = {}) => {
+      const refusals = cause && Array.isArray(cause.refusals) ? cause.refusals.filter((r) => r && r.code) : [];
+      return managedStop(phase, label, code, {
+        cause,
+        findings: refusals.length
+          ? refusals.map((r) => ({ key: r.key, label: `declared dashboard "${r.key}"`, code: r.code, message: String(r.message || r.code).replace(/\s+/g, ' ') }))
+          : [{ key: label, code, message: String((cause && cause.message) || code).replace(/\s+/g, ' ') }],
+      });
+    };
+    const settleDeclaredDashboardOf = (dash) => {
+      const key = declaredDashboardKey(dash);
+      const label = `declared dashboard "${key}"`;
+      return runner.run('dashboards', label, async () => {
+        if (!dashboardCatalog) {
+          const { createIntentCatalog } = require('./creates-catalog.js');
+          dashboardCatalog = createIntentCatalog((spec.dashboards || []).filter(isDeclaredDashboardOn).map((d) => ({
+            catalogKind: 'dashboard',
+            key: declaredDashboardKey(d),
+            scope: { kind: 'solution', solution: sol && sol.uniqueName },
+            declaration: { scopeType: 'Standard', name: d.name, ...(d.key !== undefined ? { key: d.key } : {}) },
+          })), { incarnations: storeIncarnations(bindingGroups && bindingGroups.store) });
+        }
+        // Which row the dashboard is, in this order: the committed binding, then the pending attempt's root (a create or an
+        // adoption an earlier run started and did not settle), then the spec's explicit `dashboardId`, and only then its name.
+        // The first three are identities the helper resolves itself (a pin that differs from the binding is refused there,
+        // dashboard-binding-mismatch), so the name is not looked up for them: a maker rename, or a namesake made since,
+        // neither stops nor redirects them. Only a declaration with none of the three is looked for by name: the one match,
+        // narrowed to this app's solution when the name answers several (the same rule, and the same refusal, as the
+        // build's own dashboards below). A match is never consent to manage it: only `dashboard:<key>` adoption approval
+        // binds a dashboard this build did not create.
+        const store = bindingGroups && bindingGroups.store;
+        let bound = null;
+        try { bound = store ? store.readGroup('dashboard', key) : null; } catch { bound = null; /* the helper reads it again, and refuses an unreadable group */ }
+        let resolvedId = null;
+        if (!(bound && (bound.committed || bound.pending)) && !dash.dashboardId) {
+          const existing = await findDashboardsByName(provision, dash.name);
+          if (existing.length === 1) resolvedId = existing[0].id;
+          if (existing.length > 1) {
+            let ours = null;
+            let unreadable = '';
+            try {
+              const members = await dashboardsInSolution(provision, sol.uniqueName, existing.map((e) => e.id));
+              ours = members ? existing.filter((e) => members.has(String(e.id).replace(/[{}]/g, '').toLowerCase())) : null;
+            } catch (err) {
+              unreadable = ` (${(err && err.message) || err})`;
+            }
+            if (ours && ours.length === 1) resolvedId = ours[0].id;
+            else {
+              // Stopped before the helper runs, so its own belt never sees these ids: every row this dashboard may be (each
+              // namesake) is withheld from any publish of this run, the app's included. A group with an attempt never gets here.
+              const ids = existing.map((e) => e.id).filter(Boolean).map((x) => String(x).replace(/[{}]/g, '').toLowerCase());
+              const unique = [...new Set(ids)];
+              try { owed.barrier.quarantine(unique.map((x) => ({ type: 'dashboard', id: x })), unique, `${label} (its name matches several dashboards)`); } catch { /* the halt below still stops the build */ }
+              const reason = ours === null
+                ? `and this app's solution cannot say which is its own${unreadable}`
+                : `and ${ours.length ? `${ours.length} of them are` : 'none of them is'} in this app's solution '${sol.uniqueName}'`;
+              throw refusal(`${existing.length} dashboards in this environment match the name '${dash.name}' (Dataverse compares names ignoring case, most accents and trailing spaces) ${reason}, so the build cannot tell which one to manage. Rename or delete the extra ones in Maker, or give this dashboard a different name.`);
+            }
+          }
+        }
+        // The settle and its publish share one dashboard workspace scope (dashboard-recovery-workspace.js): when the
+        // workspace copy is exactly this build's own acknowledged create draft, both work in an isolated workspace over the
+        // same connection and the copy is left as it is. Otherwise `scope.currentSdk` is `provision` itself.
+        await withDashboardWorkspaceScope({ sourceSdk: provision }, async (workspaceScope) => {
+          const out = await settleDeclaredDashboard({
+            dashboard: dash,
+            catalog: dashboardCatalog,
+            sdk: provision,
+            workspaceScope,
+            store,
+            barrier: owed.barrier,
+            halt: declaredDashboardStop,
+            resolveTile: (tile) => dashboardTileOpts(spec, tile, result),
+            toComponent: dashboardComponent,
+            // A tile the settle creates is sent with its caption in every language of the organization, read with this
+            // (readProvisionedLanguages); without it such a send stops before it is made.
+            provisionedLanguages: opts.provisionedLanguages,
+            retainedCreationIds: creations.idsOf(dash.name) || [],
+            resolvedId,
+            // The run's typed approvals: only `dashboard:<key>` (and `dashboard:<key>/<tile>` for one tile's overwrite) approve
+            // this dashboard; --allow-destructive is what clears its description.
+            approvals: { adopt: featureCtx.authorizedAdoption, overwrite: featureCtx.authorizedOverwrite, destructive: featureCtx.authorizedDestructive },
+            // Solution membership of the bound dashboard, an adopted one included: read once per run (solutionMembers) and added unless proved.
+            ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.dashboard); },
+            sendObserver: opts.sendObserver || null,
+            // The records are written for the app and environment the store is bound to (as the forms helper writes them), so
+            // the identity the store checks each record against is the one it holds, never a caller's copy.
+            ctx: (() => {
+              const envelope = store && typeof store.snapshot === 'function' ? store.snapshot().envelope : null;
+              return envelope ? { appUniqueName: envelope.appUniqueName, environmentFingerprint: envelope.environmentFingerprint } : {};
+            })(),
+          });
+          // A read-only inspection (a match nobody approved adopting, already as declared) binds nothing and owes nothing; the
+          // publish below then has no group to pay. The app still names the row it found.
+          const id = out.id || resolvedId;
+          let pub;
+          try {
+                      // opts.publicationSettle paces the read-back after the publish (publishManagedScope `settle`); only a test sets it.
+            pub = await publishDeclaredDashboard({ store, barrier: owed.barrier, sdk: workspaceScope.currentSdk, key, id, settle: opts.publicationSettle });
+          } catch (err) {
+            // The refusal keeps its cause: a blocked uncertain publication carries its dispatch as data there (build-model-app.js
+            // blockedPublicationOf reads err.cause), never in the message.
+            const code = (err && err.code) || 'managed-publication-failed';
+            throw managedStop('dashboards', label, code, { cause: err, findings: [{ key, code, message: String((err && err.message) || err).replace(/\s+/g, ' ') }] });
+          }
+          if (pub && pub.withheld) {
+            markIncomplete({
+              phase: 'dashboards',
+              code: pub.held ? 'managed-publication-unverified' : 'managed-publication-owed',
+              message: pub.held
+                ? `${label}: its saved and published layers could not be read, so it was not published in this run; the change is saved, re-run the build to publish it`
+                : `${label}: its publish is owed to the managed binding store and was not sent in this run; the change is saved, re-run the build to publish it`,
+            });
+          }
+          if (id) result.created.dashboards[dash.name] = id;
+        });
+      });
+    };
+    // Stored dashboard groups this run does not settle (the spec no longer declares them, or declares them with the build path
+    // off) and whose last change is not settled: a publish that may have been sent and is not confirmed ('dispatching' or
+    // 'unconfirmed'), a publish still owed ('owed': saved and definitely not sent), or an attempt an earlier run started. Read
+    // here, BEFORE any plain dashboard below is built, because the plain path knows nothing of them: it looks a dashboard up by
+    // its dashboardId and its name in the PUBLISHED layer, so a root that was created and never published is found by neither,
+    // and it would create a second dashboard in its place under a new id, which the original's quarantine cannot stop.
+    //  - An uncertain publish is confirmed read-only by the registered layer readers when a fresh read proves what the send
+    //    shipped is live (confirmUncertainPublication). Nothing is replayed, nothing is bound, and the scope stays quarantined
+    //    for this run (openManagedContext's block is never cleared), so the next run is the clean one. One it cannot confirm
+    //    stops the build at the end of this phase, after this run's own declared dashboards (each its own scope), with its
+    //    dispatch as data on the cause ({ dispatchToken, approval, remedy }, managed-bindings.js blockedPublication), which
+    //    build-model-app.js offerPublicationRisk reads; never from the message.
+    //  - An owed publish is not paid here (no declaration of this run authorizes that content), and it is not left open: the
+    //    run-long block installed when the store was opened (above, after openBuildBindingGroups) withholds its scope from every
+    //    app write and publish of this run.
+    //  - Each stays the identity it was: a plain dashboard naming its id (dashboardId) or its declared name is refused before
+    //    any request (retainedDashboards), so a mode change or a missing published row never loses it or replaces it.
+    const removedDashboardStops = [];
+    const retainedDashboards = [];
+    const dashboardStore = bindingGroups && bindingGroups.store;
+    if (dashboardStore) {
+      const declaredKeys = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
+      const uncertain = (pub) => !!pub && (pub.state === 'dispatching' || pub.state === 'unconfirmed') && !!pub.scope && pub.scope.type === 'dashboard';
+      const bareId = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
+      for (const unit of dashboardStore.snapshot().units()) {
+        if (unit.invalid || unit.family !== 'dashboard' || declaredKeys.has(unit.key)) continue;
+        const group = unit.group;
+        const attempt = unit.attempt;
+        const publication = group && group.publication;
+        const state = attempt ? 'pending' : publication && publication.state === 'owed' ? 'owed' : uncertain(publication) ? 'uncertain' : null;
+        if (!state) continue;
+        const label = `declared dashboard "${unit.key}"`;
+        let stop;
+        if (state === 'uncertain') {
+          let unconfirmed = [publication];
+          if (provision.dataverse) {
+            const { confirmUncertainPublication } = require('./managed-feature-contract.js');
+            unconfirmed = await runner.run('dashboards', `${label} (its last publish, by a fresh read)`, async () => (await confirmUncertainPublication({ store: dashboardStore, barrier: owed.barrier, scope: publication.scope, client: provision.dataverse })).unconfirmed);
+            if (!unconfirmed.length) continue;
+          }
+          const { blockedPublication } = require('./managed-bindings.js');
+          const now = dashboardStore.readGroup('dashboard', unit.key).committed;
+          const pub = (now && now.publication) || publication;
+          const message = `${label} is no longer declared, and a publish of it may have been sent and is not confirmed by a fresh read; it is not sent again, no dashboard is built in its place, and the build stopped before any app write`;
+          stop = () => {
+            const cause = refusal(message, { code: 'managed-publication-unconfirmed', ...(uncertain(pub) && typeof pub.dispatchToken === 'string' ? blockedPublication(pub.scope, pub.dispatchToken) : {}) });
+            return managedStop('dashboards', label, cause.code, { cause, findings: [{ key: unit.key, code: cause.code, message }] });
+          };
+          if (provision.dataverse) removedDashboardStops.push({ label, stop });
+        } else {
+          const why = state === 'owed' ? 'its last change is saved and its publish is still owed' : 'a change an earlier build started on it is not finished';
+          stop = (dash) => {
+            const message = `dashboard "${dash.name}" is the dashboard the managed declaration "${unit.key}" holds, and ${why}; it is not built as a plain dashboard, which could make a second one in its place or publish that change unproved. Declare it again with reconcile: "declared" and its key "${unit.key}" so the build settles it; nothing was sent`;
+            return managedStop('dashboards', label, 'managed-dashboard-unsettled', { cause: refusal(message, { code: 'managed-dashboard-unsettled' }), findings: [{ key: unit.key, code: 'managed-dashboard-unsettled', message }] });
+          };
+        }
+        const decl = (group && group.originalDeclaration) || (attempt && attempt.declaration) || null;
+        retainedDashboards.push({
+          ids: new Set([group && group.root && group.root.id, attempt && attempt.root && attempt.root.id, attempt && attempt.expected && attempt.expected.rootId].filter(Boolean).map(bareId)),
+          names: new Set([decl && decl.name, attempt && attempt.declaration && attempt.declaration.name].filter((n) => typeof n === 'string' && n).map(dashboardNameKey)),
+          stop,
+        });
+      }
+    }
     for (const dash of spec.dashboards || []) {
+      if (isDeclaredDashboardOn(dash)) {
+        await settleDeclaredDashboardOf(dash);
+        continue;
+      }
+      const retained = retainedDashboards.find((r) => (dash.dashboardId && r.ids.has(String(dash.dashboardId).replace(/[{}]/g, '').toLowerCase())) || (dash.name && r.names.has(dashboardNameKey(dash.name))));
+      if (retained) {
+        await runner.run('dashboards', `dashboard "${dash.name}"`, async () => { throw retained.stop(dash); });
+      }
       // AB#6726727: a DOWNLOADED dashboard is bound by the id it was read from before anything is tried
       // by name. Renamed in the designer since, its spec name finds nothing — and the name path below
       // would then create a second dashboard under the old name and point the nav entry at that.
@@ -6575,6 +9192,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
         result.created.dashboards[dash.name] = pushed.id;
       });
     }
+    // The halts the pre-pass above deferred: a stored publish a fresh read could not confirm, of a dashboard this run does not
+    // declare. Raised only now, so the dashboards this run declares are settled first, each in its own scope, exactly as when
+    // nothing was stored; nothing in between could have made a replacement for it (the legacy guard above refused that).
+    for (const { label, stop } of removedDashboardStops) {
+      await runner.run('dashboards', label, async () => { throw stop(); });
+    }
   }
 
   // Tracks whether the app-shell phase REUSED an already-deployed app (edit flow / retry) vs created a
@@ -6607,7 +9230,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const pinTables = async (appId, alreadyPublished) => {
       if (!refs) return;
       const pinned = await pinAppTables(provision.dataverse, appId, appTables, { refs });
-      if (pinned.added.length && alreadyPublished) await appWriters.publishPinned(appId);
+      if (pinned.added.length && alreadyPublished) {
+        // An app with an exact Main-form list is published only through the SDK's guarded publish (the push that follows
+        // in this step pays the queued entry); a raw publish here would skip that guard.
+        if (spec.app && spec.app.mainFormsOnUpdate === 'exact') appPublication.queue({ kind: 'app', id: appId, reason: 'app.tables' });
+        else await appWriters.publishPinned(appId);
+      }
     };
     // Self-contained app-tile icon: a web resource IN this solution (default generated, or the
     // author's spec.app.icon). Resolved BEFORE appDef so the id is embedded at create time — the
@@ -6676,6 +9304,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // Existing-app app-shell often makes NO SDK push: its sitemap commit is in the pages finalizer.
         // Pin now, independently, and let that normal publish make the proven current layer live.
         await pinTables(existingId, false);
+        // app.theme: before every publication of the app that follows (this step's, the pages finalizer's), so the first pays it.
+        await ensureThemeApplied(existingId);
         // #583: the routing description rides an app push this run ALREADY makes — never a second push from
         // the same fetch (the push is If-Match). With the pages phase in the run — every CLI apply, since
         // --apply refuses a partial range that includes app-shell — the finalizer is the sole existing-app
@@ -6719,7 +9349,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // The header — its text (name, description) and its routing description — rides this one push, as the sitemap does.
           const header = await applyAppHeader(provision, spec, existingId, { warn: opts.warn });
           requireSuccessfulPush(await appWriters.push(existingId, def.name, header), `app ${def.name}`, opts.warn);
-          reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
+          reportPartialPush(await appPublication.publishApp(existingId), `app ${def.name}`, opts.warn);
         } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
           // --apply): a page-backed app's sitemap is not written on this run, so the routing description
@@ -6737,7 +9367,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (header.changed) {
             // Nothing wrote the spec's navigation into the copy, so the push sends the copy's own (`resendsCopy`): the tables whose Main forms it adds are that navigation's.
             requireSuccessfulPush(await appWriters.push(existingId, def.name, header, { resendsCopy: true }), `app ${def.name} routing description`, opts.warn);
-            reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
+            reportPartialPush(await appPublication.publishApp(existingId), `app ${def.name}`, opts.warn);
           }
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName, solutionMembers);
@@ -6754,12 +9384,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // (it writes pages and the manifest, no table, view or form).
         createAppWithPages = async () => {
           result.created.app = await createApp(appDef(spec, result.created, { iconWebResourceId, mainFormsByTable }));
+          await ensureThemeApplied(result.created.app);
           return result.created.app;
         };
         throw createdAfterItsPages;
       }
       return createApp(def);
     }, { skipIf: (err) => err === createdAfterItsPages && 'created after its pages: its navigation holds only page entries' });
+    // A NEW app created by the step above (an existing one had its theme applied inside it; a pages-first one has no id yet).
+    if (result.created.app) await ensureThemeApplied(result.created.app);
   }
 
   // 7b. Pages (generative pages). The app now exists — or, for a NEW app whose navigation holds only page entries, it is created at the
@@ -6778,7 +9411,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // page would be stale the moment anyone saved it). `opts.genpage` is a seam for the tests, and is the caller's to dispose. The run's throttle budget
     // (`opts.throttle`) is handed to it, so the HTTP client it makes draws its waits for a throttled read or publish from the same five minutes as the page writes do.
     const ownGenpage = !opts.genpage;
-    const genpage = opts.genpage || makeGenpageSdk(opts.env, { throttle: opts.throttle });
+    // `opts.typescript` is the caller's TypeScript provider (lib/typescript-provider.js): the backend takes it as `typescript` — the namespace or the SDK's
+    // provider function, as given — and compiles every page with it. Absent, the backend loads the vendored compiler lazily, as before.
+    const genpage = opts.genpage || makeGenpageSdk(opts.env, { throttle: opts.throttle, ...typescriptProviderOptions(opts.typescript).backend });
     const appUnique = appUniqueName(spec);
     // Recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun. An app the app step left to this
@@ -7254,7 +9889,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const problems = griffelStyleProblems(code).problems;
           if (problems.length) {
             const standing = griffelStanding(p, sourceSha);
-            const words = { surface: 'build', subject: `page "${p.name}"`, command: 'node scripts/check-griffel-styles.js --file <page.tsx>' };
+            // A page that is not new is deployed already, possibly without a scroll context, so the suggested checker run passes `--existing`: its scroll findings are then
+            // notes, and the Griffel fix asked for here is not turned into a layout rewrite the maker did not ask for (references/rules.md, Styling gotchas 6).
+            const words = { surface: 'build', subject: `page "${p.name}"`, command: `node scripts/check-griffel-styles.js --file <page.tsx>${standing === 'new' ? '' : ' --existing'}` };
             const file = normalizePageSource(p).codeFile;
             if (standing === 'new' || standing === 'changed') {
               const note = standing === 'changed' ? 'Its source changed since the last build recorded for it, so it is held to the check as a new page is; left as it was, it would only be warned about.' : '';
@@ -7274,9 +9911,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // refused throttle wait stops the run here, as it does after that check. A run that was told nothing has none: every target was checked before it wrote anything.
       const madeUnchecked = pagesMadeUnchecked(spec, { changedOnly: bindingCheckScope(phases, opts.changedOnly), made: new Set(implemented.filter((p) => navTargets.has(keyOf(p)) && !keyToId.has(keyOf(p))).map(keyOf)) });
       if (madeUnchecked.length) {
-        haltOnPageBindingConflicts(await judgePageBindings(provision, madeUnchecked, bindingReadsOfAttempt), opts.warn);
+        haltOnPageBindingConflicts(await judgePageBindings(provision, madeUnchecked, bindingReadsOfAttempt), opts.warn, scheduledByConfiguration(spec, phases));
         runner.stopIfRefused('preflight');
       }
+      // The configuration gate (lib/configuration-build.js beforePages): a page that names a DECLARED connection reference or Custom API is written
+      // only when this run observed the item usable (a reference with a proven connection, a Custom API with an implementation). What the data-model
+      // step read back decides; an item it did not read is read now (GET only). The same pages the binding check judges, plus the targets this phase
+      // makes (madeUnchecked). Nothing has been written in this phase yet. A page naming only undeclared items is untouched (warned about as before).
+      if (configurationRun) await configurationRun.beforePages([...pagesStatingBindings(spec, { changedOnly: bindingCheckScope(phases, opts.changedOnly) }), ...madeUnchecked]);
       // After the whole scan, so a build that halts on a later page says only why it halted. Nothing has been written yet, and the pages that are warned about are sent as they are.
       if (typeof opts.warn === 'function') for (const warning of griffelWarnings) opts.warn(warning);
 
@@ -7624,13 +10266,48 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const header = await applyAppHeader(provision, spec, result.created.app, { text: appWasExisting, warn: opts.warn });
           const appName = (spec.app && spec.app.name) || result.created.app;
           requireSuccessfulPush(await appWriters.push(result.created.app, appName, header), 'app sitemap finalize', opts.warn);
-          reportPartialPush(await appWriters.publish(result.created.app), `app ${appName}`, opts.warn);
+          await ensureThemeApplied(result.created.app);
+          reportPartialPush(await appPublication.publishApp(result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });
       } else {
         // planFor budgets this step for every pages-phase run, so consume the slot even when there is
         // nothing to write — otherwise the remaining steps renumber past the advertised total.
         runner.skip('pages', `finalize sitemap (genpage subareas) (${skipSitemapFinalize ? 'content-only re-upload — sitemap unchanged' : 'no sitemap change'})`);
+      }
+
+      // Generative pages on forms (forms[].genPages): once the pages exist (their ids are keyToId's) and inside this phase's lease. One call does the
+      // whole step (lib/form-page-embeds.js runFormPageEmbeds): it reads each form fresh, adds or updates only the cells the spec names (by their stable
+      // key), sends each add through the build's create port, and owes the form's publish to the run's publication — a
+      // form is published with the table it belongs to (publishReconciled), never on its own ahead of it. What it saved is kept in
+      // `result.formPageEmbeds` before anything stops. A requested embed that was refused or whose outcome is unknown halts the phase
+      // (`form-page-embeds-incomplete`): the maker asked for it, so a build without it is not a success.
+      // A content-only re-upload (changed-only fast apply) runs only when every change is a page's content — a form or an embed that changed makes it
+      // a full build — so the embeds there are the ones the last full build applied, and the step is skipped, said as such.
+      if (hasFormPageEmbeds(spec)) {
+        if (skipSitemapFinalize) {
+          runner.skip('pages', 'embed generative pages on forms (content-only re-upload — forms unchanged)');
+        } else {
+          await runner.run('pages', 'embed generative pages on forms', () => runFormPageEmbeds(spec, {
+            provision,
+            formIdOf: (f) => result.created.formIds[formIdentityKey(f)] || null,
+            keyToId,
+            // The build's create port (it allocates each add's ids and runs the write once) and the managed-artifacts store the declared views,
+            // charts and command bars use (`opts.managedArtifacts`, featureCtx.managed): an embed is found again by its key's binding. Without a
+            // create port every add is refused (`create-port-unavailable`); without a store every embed is unknown (`managed-bindings-unavailable`,
+            // nothing read or written) — the CLI build has no store in this release — and either halts the phase.
+            creates: opts.creates,
+            managed: featureCtx.managed,
+            publication: { queue: ({ id, table, label }) => publishReconciled('form', id, table, label) },
+            // Called before any halt or rethrown failure too, so a partial save's bindings are recorded with the store before the build stops.
+            report: (embeds) => {
+              result.formPageEmbeds = embeds;
+              if (managedArtifacts) for (const b of (embeds && embeds.managedBindings) || []) managedArtifacts.recordApplied(b);
+            },
+            warn: opts.warn,
+            phase: 'pages',
+          }));
+        }
       }
 
       // Pin the default public view of each table the pages written in this run read. The maker's "/" picker lists a page's tables from the app's components,
@@ -8263,6 +10940,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         return sr.everyone === true ? 'every role' : `${opts2.roleIds.length} role(s)`;
       });
     }
+    await assignFieldSecurityProfiles({ runner, spec, provision, ids: fieldSecurityIds });
   }
 
   // 8. Publish (opt-in). Publish ONE artifact per entity (covers that entity's customizations)
@@ -8270,15 +10948,31 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    publish deferred to this phase (`publishInPhase8`) names its table in `owed.tables`, read below.
   if (publishInPhase8) {
     await runner.run('publish', 'publish customizations', async () => {
-      const seen = new Set();
+      const seen = new Set(owed.barrier.blockedTables());
+      // Routed tables: what the plain path asked for, and every table a committed group still owes, are published by the
+      // managed publisher before the app; none of them is in the envelope below.
+      let managedOut = { published: [], withheld: [] };
+      if (managedTables) {
+        const ask = [...owed.barrier.routedWanted(), ...managedTables.owedTables()];
+        for (const k of owed.barrier.routedTables()) {
+          if (seen.has(k)) continue;
+          seen.add(k);
+          const asked = (spec.forms || []).some((f) => f.entity.toLowerCase() === k) || (spec.views || []).some((v) => v.entity.toLowerCase() === k) || chartsToPublish.has(k) || owed.tables.has(k);
+          if (asked) ask.push(k);
+        }
+        managedOut = await tablePublication.managed(ask, { phase: 'publish', path: 'publish customizations', observed: 'managed-publish-phase' });
+      }
       const perEntity = []; // [type, id, names?] — first artifact found per entity
       // The table's target carries the names of what its one publish ships: what was deferred onto it (its reconciled views
       // and forms, its enriched default views — oweTablePublish), then what this run created or wrote there (savedOnTable,
       // sorted because artifacts are created concurrently), each name once. A failure of THIS publish then says which saved
       // changes are not live — a first build's included — instead of naming only the artifact that carries the request.
+      const tableOfTarget = new Map(); // a phase-8 target array -> its table's logical name
       const forTable = (k, [type, id]) => {
         const names = [...new Set([...((owed.tables.get(k) || [])[2] || []), ...[...(savedOnTable.get(k) || [])].sort()])];
-        return names.length ? [type, id, names] : [type, id];
+        const target = names.length ? [type, id, names] : [type, id];
+        tableOfTarget.set(target, k);
+        return target;
       };
       for (const f of spec.forms || []) {
         const k = f.entity.toLowerCase();
@@ -8306,9 +11000,38 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const appTarget = result.created.app ? ['app', result.created.app, `app ${(spec.app && spec.app.name) || result.created.app}`] : null;
       // The app is published in the same envelope as the tables the build has artifacts of, so it is not ahead of them. It also ships the forms of tables the build did not touch, which the
       // request before the app publishes — and a run can reach this phase without the app step having made it (a run that does not write the app but publishes it): a publish alone adds no form.
-      if (appTarget) await publishTablesBeforeApp(result.created.app);
-      const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn);
+      // An app that holds, or whose write adds, a form of a table whose publish is withheld (owed.barrier) is not published: it is
+      // reported as incomplete and the phase publishes the rest without it.
+      let appWithheld = false;
+      if (appTarget) {
+        try {
+          await publishTablesBeforeApp(result.created.app);
+        } catch (err) {
+          if (!(err && err.code === 'publication-withheld')) throw err;
+          appWithheld = true;
+          markIncomplete({ phase: 'publish', code: err.code, message: err.message });
+        }
+      }
+      // A throw may come after the app's PublishXml reached the server (a lost answer): the app's exact proof is void.
+      // A throw from a table publish before the app's was sent un-proves it too — conservative: the re-run proves it again.
+      // commandStates: each table this publish proved published, by a request that named it, is told to the observer (createTablePublication).
+      const publishedTargets = await tablePublication.sdk(perEntity, appWithheld ? null : appTarget, { tableOf: (target) => tableOfTarget.get(target) || null, observed: 'sdk-publish-phase' }).catch(async (error) => {
+        if (appTarget && !appWithheld) await appPublication.noteAppPublication(result.created.app, { error });
+        throw error;
+      });
       appPublishedByPublishPhase = publishedTargets.appPublished;
+      // publishTargets answers { appPublished, appResult, failed: [{ target, error }] }, `target` being the same array forTable
+      // made, listed only when the table's publish (and its one retry) was refused. Every table the port deferred is in perEntity
+      // (oweTablePublish put it in owed.tables), so a deferred table not in `failed` was published.
+      const refusedTables = new Map(publishedTargets.failed.map(({ target, error }) => [tableOfTarget.get(target), error]));
+      for (const logical of appPublication.deferred('table')) {
+        // A table whose publish is withheld (owed.barrier) was left out of perEntity: it was not published.
+        const withheld = owed.barrier.blocks(logical) || managedOut.withheld.includes(logical) ? { code: 'publication-withheld', message: `the publish of table ${logical} is withheld in this run` } : null;
+        appPublication.noteScopePublished('table', logical, withheld ? { error: withheld } : refusedTables.has(logical) ? { error: refusedTables.get(logical) } : {});
+      }
+      // Every answer, not only a confirmed one: a failed-by-value publish (e.g. CONNECTION_ERROR after the server ran it)
+      // un-proves an exact app; only a WITHHELD / CONFLICT refusal keeps its proof (lib/app-publication-policy.js).
+      if (appTarget && !appWithheld) await appPublication.noteAppPublication(result.created.app, { answer: publishedTargets.appResult });
     });
     // Paid. A target that failed to publish was reported above, and the build is idempotent, so its
     // re-run publishes it; a halt from here on owes nothing more, nor does an earlier attempt's.
@@ -8370,7 +11093,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (rewrite || owesPublish) {
         try {
           await provision.fetchArtifact('app', result.created.app);
-          reportPartialPush(await appWriters.publish(result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
+          reportPartialPush(await appPublication.publishApp(result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           if (rewrite) {
             // Filed like the first write: after a publish that failed or could not be confirmed, the SDK proves
             // this write only in the unpublished layer and answers `applied` + `pendingPublish`.
@@ -8453,7 +11176,61 @@ async function runSdkBuildPhases(spec, opts, owed) {
     for (const [label, info] of byLabel) runner.skip('ai-features', `${label}: ${info.names.join(', ')} \u2014 ${info.why}`);
   }
 
+  // A declared theme the run never reached (no app id this run: the app step did not make or find the app) is not done: the
+  // plan's step is taken up as a skip, and the build ends incomplete rather than reading as if the theme were applied.
+  if (declaresTheme && !themeDone) {
+    runner.skip('app-shell', 'app theme (Preview) (no app in this run)');
+    markIncomplete({ phase: 'app-shell', code: 'APP_THEME_PREREQUISITE_UNRESOLVED', message: 'app.theme: the app was not built in this run, so its theme was not applied; run a build that includes the app step' });
+  }
+  // Everything still owed (an exact app's publish that was withheld, a table whose phase-8 publication had already run)
+  // is published once. A withheld/conflicting exact publish stays owed; the change is saved; the build is incomplete.
+  const flushed = await appPublication.flush();
+  // A routed table some plain publish of this run asked for and nothing paid yet is published now, once; one that cannot be
+  // (no client to publish with) leaves the build incomplete, its debt kept in the store.
+  if (managedTables && owed.barrier.routedWanted().length) await tablePublication.managed(owed.barrier.routedWanted(), { phase: 'publish', path: 'managed publication', observed: 'managed-end-of-build' });
+  for (const logical of owed.barrier.routedWanted()) markIncomplete({ phase: 'publish', code: 'managed-publication-owed', message: `table ${logical}: its publish is owed to the managed binding store and was not sent in this run; the change is saved, re-run the build to publish it` });
+  // An app row is { id, code }; a scope row (a table) is { kind, id, code, reasons }.
+  for (const { kind = 'app', id, code } of [...flushed.withheld, ...flushed.failed]) if (!(kind === 'table' && code === 'publication-withheld')) markIncomplete({ phase: 'publish', code, message: `${kind} ${id}: its publication is owed (${code}); the change is saved, re-run once the cause is cleared` });
+  // A theme applied this run is read back once, with the theme's own SDK, after the app publication that paid it was
+  // accepted: an accepted publish is not proof that the app resolves the theme. An unresolved, unreadable or mismatching
+  // theme leaves the build incomplete (APP_THEME_UNVERIFIED), and the publish is never sent again. While the app's
+  // publication is still owed (withheld, failed or unconfirmed: reported above) nothing is read. A dry run applied nothing
+  // (no result.created.appTheme), and a spec without a theme never gets here, so neither makes a read.
+  if (themeAppId && result.created.appTheme && !appPublication.owed().some((entry) => entry.kind === 'app' && String(entry.id).toLowerCase() === String(themeAppId).toLowerCase())) {
+    const { verifyAppTheme } = require('./app-theme.js');
+    let proof;
+    try {
+      [proof] = await verifyAppTheme(spec, {
+        sdk: provision, appId: themeAppId, publisherPrefix: spec.solution && spec.solution.publisherPrefix, solution: spec.solution && spec.solution.uniqueName,
+      });
+    } catch (error) {
+      proof = { key: 'app.theme', ok: false, state: 'unknown', code: (error && error.code) || 'APP_THEME_FAILED' };
+    }
+    if (!proof || !proof.ok) {
+      const state = proof ? `${proof.state}${proof.code ? ` (${proof.code})` : ''}${proof.reasons && proof.reasons.length ? ` [${proof.reasons.join(', ')}]` : ''}` : 'no answer';
+      markIncomplete({ phase: 'app-shell', code: 'APP_THEME_UNVERIFIED', message: `app.theme: the theme was saved and the app was published, but the app did not read back with the declared theme (${state}); what was saved is kept — check it with --verify, and re-run the build if it still differs` });
+    }
+  }
+  // Exact obligations not proven from the published layer (APP_MAIN_FORMS_NOT_EXACT) and queued scopes nothing can
+  // publish (PUBLICATION_SCOPE_UNBRIDGED).
+  for (const entry of appPublication.unsettled()) markIncomplete({ phase: 'publish', code: entry.code, message: entry.reason });
+  // Tables whose publication was withheld (owed.barrier), each named once with what blocked it.
+  for (const w of owed.barrier.withheld()) markIncomplete({ phase: 'publish', code: 'publication-withheld', message: describeWithheld(w), table: w.table, blockedBy: w.blockedBy, skipped: w.skipped });
+  if (incomplete.length) {
+    result.incomplete = incomplete;
+    const halt = new BuildHalt(`the build ran every phase but did not finish what the spec asks for: ${incomplete.map((entry) => entry.message).join('; ')}`,
+      { phase: incomplete[0].phase, code: incomplete[0].code, recoverable: true, retry: RETRY.NEVER });
+    // Not enumerable, like owedPublishes: it rides along for the caller, never into a serialized error or the journal.
+    Object.defineProperty(halt, 'incomplete', { value: incomplete, enumerable: false, configurable: true, writable: true });
+    throw halt;
+  }
+  // commandStates, after all the shared work: every declared table's publication confirmed for its latest row write, or exit 1
+  // (command-state-publish-unconfirmed). Its rows' results are on the result either way (the halt carries them: runSdkBuildAttempt).
+  if (commandStateRun) {
+    await commandStateRun.assertComplete();
+    result.commandStates = commandStateRun.result();
+  }
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt };
+module.exports = { runSdkBuild, openBuildBindingGroups, protectedConfigurationInPlay, publishTargets, createTablePublication, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };

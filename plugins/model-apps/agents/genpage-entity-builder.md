@@ -281,11 +281,11 @@ App Spec types:
 | `picklist` | `Choice` | `options`: the option labels in the plan's order, e.g. `["Low", "Medium", "High"]` |
 
 For Choice columns, each option is its **label**: a string, or — for a label in several languages — a
-map of LCID to label such as `{"1033": "Low", "1036": "Bas"}`. Never write an option as a
-`{"label", "value"}` object: `provision-entities.js` refuses that shape before anything is written
-(`'label' is not an LCID`). The values are not written either: the options are numbered
-`100000000 + index` (0-based) in the order given — the values the plan's `Choice Columns` lists — so keep
-the plan's order.
+map of LCID to label such as `{"1033": "Low", "1036": "Bas"}`. Do not write the values: the options are
+numbered `100000000 + index` (0-based) in the order given — the values the plan's `Choice Columns` lists — so
+keep the plan's order. (`provision-entities.js` also takes an explicit `{"value", "label"}` option, for
+keeping numbers an option set already has; a new table built from the plan does not need it, and a value
+other than the plan's would renumber the column.)
 
 ### Relationship Mapping
 

@@ -429,6 +429,12 @@ class FakeGenPageServer {
         const wanted = new Set((path.match(/agentconversationmessageid eq ([0-9a-fA-F-]{36})/g) || []).map((m) => m.slice(-36).toLowerCase()));
         return json(200, { value: [...state.messages.values()].filter((x) => wanted.has(x.id)).map((x) => ({ agentconversationmessageid: x.id, message: x.message, messagesender: x.sender, _regardingobjectid_value: x.regarding })) });
       }
+      // Every form of every table, in the published layer (a plain read) or the saved one (RetrieveUnpublishedMultiple) — what a page delete reads first, to find a form that
+      // embeds the page (lib/page-reference-guard.js). `this.forms` is [{ formid, objecttypecode, name, type, formxml, layer?: 'published' | 'saved' }]; a form with no layer is in both.
+      if (/^\/systemforms(?:\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\))?\?/.test(path)) {
+        const layer = path.startsWith('/systemforms/') ? 'saved' : 'published';
+        return json(200, { value: (this.forms || []).filter((f) => !f.layer || f.layer === layer).map(({ layer: _, ...row }) => row) });
+      }
       return json(404, { error: { message: `no route for GET ${path}` } });
     }
 
@@ -591,14 +597,16 @@ const APP_VIEW_ID = '66666666-6666-4666-8666-666666666666';
 function appTransport(server, { publishFailures = 0, appId = APP_ID, existingPageId = APP_EXISTING_PAGE_ID } = {}) {
   const pageHttp = server.http();
   const initial = `<SiteMap><Area Id="a"><Titles><Title LCID="1033" Title="Main"/></Titles><Group Id="g"><Titles><Title LCID="1033" Title="Pages"/></Titles><SubArea Id="old" GenPageId="${existingPageId}"><Titles><Title LCID="1033" Title="Existing"/></Titles></SubArea></Group></Area></SiteMap>`;
-  const state = { xml: initial, publishedXml: initial, version: 1, publishAttempts: 0, failures: publishFailures, views: new Set(), writes: [] };
-  const reply = (body, status = 200) => ({ status, headers: { ETag: `W/"${state.version}"` }, body });
+  // The app row and the sitemap row are two rows, with a version each: a sitemap write does not move the app row's token. MEASURED: a push that wrote the app row (its
+  // echo kept as the token held) and then the sitemap read the app row under that same token after the sitemap write, and a change set guarded by it committed.
+  const state = { xml: initial, publishedXml: initial, version: 1, appVersion: 1, publishAttempts: 0, failures: publishFailures, views: new Set(), writes: [] };
+  const reply = (body, status = 200, version = state.version) => ({ status, headers: { ETag: `W/"${version}"` }, body });
   const mapRow = (xml) => ({ sitemapid: APP_SITEMAP_ID, sitemapname: 'Review', sitemapnameunique: 'contoso_review', sitemapxml: xml, '@odata.etag': `W/"${state.version}"` });
   const appRow = () => ({
     appmoduleid: appId, appmoduleidunique: APP_LAYER_ID, name: 'Review', uniquename: 'contoso_review', description: '',
     // 0 = published, 1 = a saved layer that is not: the signal the SDK reads to know an unpublished edit exists.
     componentstate: state.xml === state.publishedXml ? 0 : 1,
-    '@odata.etag': `W/"${state.version}"`,
+    '@odata.etag': `W/"${state.appVersion}"`,
   });
   const http = {
     ...pageHttp,
@@ -618,7 +626,7 @@ function appTransport(server, { publishFailures = 0, appId = APP_ID, existingPag
           : filter.includes('componenttype eq 1') ? [] : [{ objectid: APP_SITEMAP_ID, componenttype: 62 }];
         return reply({ value: rows });
       }
-      if (/^\/appmodules\b/.test(route)) return reply(route === `/appmodules(${appId})` ? appRow() : { value: [appRow()] });
+      if (/^\/appmodules\b/.test(route)) return reply(route === `/appmodules(${appId})` ? appRow() : { value: [appRow()] }, 200, state.appVersion);
       if (/^\/sitemaps\b/.test(route)) {
         // The saved layer is read through RetrieveUnpublished…; without it the PUBLISHED one.
         const row = mapRow(/RetrieveUnpublished/.test(route) ? state.xml : state.publishedXml);
@@ -655,7 +663,8 @@ function appTransport(server, { publishFailures = 0, appId = APP_ID, existingPag
       }
       if (/\/appmodules\(/.test(url)) {
         state.writes.push({ kind: 'app', body });
-        return reply({}, 204);
+        state.appVersion += 1;
+        return reply({}, 204, state.appVersion);
       }
       return pageHttp.patch(url, body, options);
     },

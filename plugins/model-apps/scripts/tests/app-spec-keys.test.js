@@ -906,3 +906,107 @@ test('minimumPluginVersion refuses a spec that needs a newer plugin than the one
     delete require.cache[require.resolve('../lib/app-spec.js')];
   }
 });
+
+// #799, #827: a `views[]` key the build does not read used to validate clean and be dropped, so a view written with `filter` was built without
+// its filter. It is now an error under every profile that builds or plans a build (and a warning in the same words where a spec is only read).
+const withViews = (views) => Object.assign(base(), { views });
+const viewKeyErrors = (views, opts = { profile: 'plan' }) => validateAppSpec(withViews(views), opts).errors.filter((e) => /unknown key/.test(e));
+
+test('#827: a view written with `filter` is refused, naming `filters`, and is no warning as well', () => {
+  const r = validateAppSpec(withViews([{ entity: 'contoso_order', name: 'High Priority', filter: [{ attr: 'contoso_priority', op: 'eq', value: 5 }] }]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false, 'a view that would be built without its filter must fail validation');
+  const e = r.errors.filter((x) => /unknown key 'filter'/.test(x));
+  assert.strictEqual(e.length, 1, `expected one error for 'filter'; got ${JSON.stringify(r.errors)}`);
+  assert.match(e[0], /view 'High Priority'/);
+  assert.match(e[0], /did you mean 'filters'\?/);
+  assert.match(e[0], /refused rather than built without it/);
+  assert.match(e[0], /allowed: entity, name, description, columns, sort, filters,/);
+  assert.deepStrictEqual(r.warnings.filter((x) => /unknown key/.test(x)), []);
+});
+
+test('#827: a filter item written with `column` and `operator` is refused once, naming `attr` and `op`', () => {
+  const errors = viewKeyErrors([{ entity: 'contoso_order', name: 'High Priority', filters: [{ column: 'contoso_priority', operator: 'eq', value: 5 }] }]);
+  const column = errors.find((x) => /unknown key 'column'/.test(x));
+  const operator = errors.find((x) => /unknown key 'operator'/.test(x));
+  assert.ok(column && /filters\[0\]/.test(column) && /did you mean 'attr'\?/.test(column), `got ${JSON.stringify(errors)}`);
+  assert.ok(operator && /did you mean 'op'\?/.test(operator), `got ${JSON.stringify(errors)}`);
+  const all = validateAppSpec(withViews([{ entity: 'contoso_order', name: 'High Priority', filters: [{ column: 'contoso_priority', operator: 'eq', value: 5 }] }]), { profile: 'plan' }).errors;
+  assert.strictEqual(all.filter((x) => /filters\[0\]\.attr must be a non-empty column name/.test(x)).length, 1, `the missing-attr error is reported once, as before: ${JSON.stringify(all)}`);
+});
+
+test('#827: an unknown key on a filter of a declared join is refused too', () => {
+  const errors = viewKeyErrors([{ entity: 'contoso_order', name: 'Joined', reconcile: 'declared', columns: ['contoso_name'],
+    linkEntities: [{ name: 'contact', from: 'contactid', to: 'primarycontactid', alias: 'c', filters: [{ attr: 'lastname', operator: 'eq', value: 'Smith' }] }] }]);
+  assert.strictEqual(errors.length, 1, JSON.stringify(errors));
+  assert.match(errors[0], /linkEntities\[0\]\.filters\[0\]: unknown key 'operator' — did you mean 'op'\?/);
+});
+
+test('#827: the structural profile and `viewKeys: "warn"` keep an app built from such a spec readable: the same words, as a warning, and nothing else moves', () => {
+  const views = [{ entity: 'contoso_order', name: 'Red orders', filter: [{ attr: 'contoso_priority', op: 'eq', value: 5 }] }];
+  const strict = validateAppSpec(withViews(views), { profile: 'deploy' });
+  assert.strictEqual(strict.errors.filter((x) => /unknown key 'filter'/.test(x)).length, 1, JSON.stringify(strict.errors));
+  for (const options of [{ profile: 'structural' }, { profile: 'deploy', viewKeys: 'warn' }]) {
+    const r = validateAppSpec(withViews(views), options);
+    const label = JSON.stringify(options);
+    assert.deepStrictEqual(r.errors.filter((x) => /unknown key/.test(x)), [], label);
+    assert.deepStrictEqual(r.warnings.filter((x) => /unknown key 'filter'/.test(x)), strict.errors.filter((x) => /unknown key 'filter'/.test(x)), label);
+  }
+  for (const options of [{ viewKeys: true }, { viewKeys: 'WARN' }, { viewKeys: 'error' }, { fieldOptionKeys: 'warn' }, { columnValues: 'warn' }]) {
+    const r = validateAppSpec(withViews(views), { profile: 'deploy', ...options });
+    assert.strictEqual(r.errors.filter((x) => /unknown key 'filter'/.test(x)).length, 1, JSON.stringify(options));
+  }
+});
+
+test('#827: other unknown keys stay the warnings they were; a key of a form entry or a table is not touched', () => {
+  const r = validateAppSpec(withViews([{ entity: 'contoso_order', name: 'Mine', viewId: '11111111-1111-1111-1111-111111111111', linkEntities: [] }]), { profile: 'plan' });
+  assert.deepStrictEqual(r.errors.filter((x) => /view 'Mine'/.test(x)), [], 'viewId on a view that is not declared is still only advice');
+  assert.ok(r.warnings.some((x) => /view 'Mine': viewId and linkEntities are read only on a view with reconcile: "declared"/.test(x)), JSON.stringify(r.warnings));
+});
+
+test('#827: a view key that is one edit from a supported one is matched; `type`, which older docs showed, is still accepted silently', () => {
+  const errors = viewKeyErrors([{ entity: 'contoso_order', name: 'Mine', column: ['contoso_name'], activeonly: false, type: 'main' }]);
+  assert.ok(errors.some((x) => /unknown key 'column'.*did you mean 'columns'\?/.test(x)), JSON.stringify(errors));
+  assert.ok(errors.some((x) => /unknown key 'activeonly'.*did you mean 'activeOnly'\?/.test(x)), JSON.stringify(errors));
+  assert.deepStrictEqual(errors.filter((x) => /'type'/.test(x)), [], 'a spec written from the older docs must not start to fail');
+  const typeOnly = validateAppSpec(withViews([{ entity: 'contoso_order', name: 'Mine', type: 'main' }]), { profile: 'plan' });
+  assert.strictEqual(typeOnly.ok, true, JSON.stringify(typeOnly.errors));
+  assert.deepStrictEqual(typeOnly.warnings.filter((x) => /unknown key/.test(x)), []);
+});
+
+test('#827: a view written with `where`, `conditions`, `orderBy` or `table` is refused, with the key to write instead', () => {
+  const expected = { where: 'filters', conditions: 'filters', orderBy: 'sort', table: 'entity' };
+  for (const [key, meant] of Object.entries(expected)) {
+    const errors = viewKeyErrors([{ entity: 'contoso_order', name: 'Mine', [key]: [] }]);
+    assert.strictEqual(errors.length, 1, `${key}: ${JSON.stringify(errors)}`);
+    assert.ok(errors[0].includes(`unknown key '${key}' — did you mean '${meant}'?`), errors[0]);
+  }
+});
+
+test('#827: no script but the verify CLI passes the view key downgrade', () => {
+  const { scriptsMatching } = require('./helpers/production-scripts.js');
+  assert.deepStrictEqual(scriptsMatching(/viewKeys\s*:\s*['"]warn['"]/), ['verify-model-app.js']);
+});
+
+test('#799: every key the build reads on a view and its filters stays error- and warning-free', () => {
+  const views = [
+    { entity: 'contoso_order', name: 'Plain', description: 'd', columns: ['contoso_name'], sort: [{ attr: 'contoso_name', dir: 'asc' }], activeOnly: false,
+      filters: [{ attr: 'contoso_priority', op: 'eq', value: 5 }, { attr: 'contoso_priority', op: 'not-in', values: [1, 2] }, { attr: 'ownerid', op: 'eq-userid' }] },
+    { entity: 'contoso_order', name: 'Joined', reconcile: 'declared', key: 'joined', viewId: '11111111-1111-1111-1111-111111111111', columns: ['contoso_name'],
+      linkEntities: [{ name: 'contact', from: 'contactid', to: 'primarycontactid', alias: 'c', linkType: 'outer', filters: [{ attr: 'lastname', op: 'eq', value: 'Smith' }] }],
+      filters: [{ attr: 'lastname', relatedEntity: 'c', op: 'eq', value: 'Smith' }] },
+  ];
+  for (const profile of ['plan', 'deploy', 'structural']) {
+    const r = validateAppSpec(withViews(views), { profile });
+    assert.deepStrictEqual(r.warnings.filter((x) => /unknown key/.test(x)), [], `profile ${profile}`);
+    assert.deepStrictEqual(r.errors.filter((x) => /view '/.test(x)), [], `profile ${profile}`);
+  }
+});
+
+test('#799: an unknown key on a join filter is reported; a hint key that collides with Object.prototype leaks nothing; non-object filters do not crash or report twice', () => {
+  const errors = viewKeyErrors([{ entity: 'contoso_order', name: 'Joined', reconcile: 'declared', columns: ['contoso_name'], constructor: 1, toString: 2,
+    linkEntities: [{ name: 'contact', from: 'contactid', to: 'primarycontactid', alias: 'c', filters: [{ column: 'lastname', op: 'eq', value: 'Smith' }] }] }]);
+  assert.ok(errors.some((x) => /linkEntities\[0\]\.filters\[0\]: unknown key 'column'/.test(x)), JSON.stringify(errors));
+  assert.ok(errors.every((x) => !/native code/.test(x)), JSON.stringify(errors));
+  assert.doesNotThrow(() => validateAppSpec(withViews([{ entity: 'contoso_order', name: 'Odd', filters: ['x', null, 3] }]), { profile: 'plan' }));
+  assert.deepStrictEqual(viewKeyErrors([{ entity: 'contoso_order', name: 'Odd', filters: ['x', null, 3] }]), [], 'a non-object filter is the shape checks\' to report');
+});

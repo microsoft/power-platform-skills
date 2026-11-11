@@ -209,6 +209,45 @@ test('CLI --strict turns warnings into a failure', () => {
   assert.match(strict.stdout, /failed by --strict/);
 });
 
+// #799: `type` on a view entry was shown by older docs and shipped samples and never had an effect, so a spec carrying it must keep passing
+// --strict; a genuine typo (`filter` for `filters`) drops the filter silently, so it is an error (#827), not advice.
+// The base spec carries other advice (no navigation, personas or pages), so these start from one that lints clean.
+const strictClean = (viewExtra) => {
+  const s = good();
+  s.views = [{ entity: 'c_order', name: 'Open Orders', columns: ['c_name'], ...viewExtra }];
+  s.appShell = { areas: [{ label: 'Sales', groups: [{ label: 'Orders', subAreas: [{ entity: 'c_order', title: 'Orders' }, { title: 'Overview', page: 'ov' }] }] }] };
+  s.personas = [{ persona: 'Clerk', jobs: [{ name: 'Enter orders', surfaces: ['Orders'], privileges: [{ entity: 'c_order', access: ['read', 'write', 'create'] }] }] }];
+  s.pages = [{ key: 'ov', name: 'Overview', purpose: 'overview', source: { kind: 'intent' } }];
+  return s;
+};
+
+test('CLI --strict still passes a view that carries the old `type` key, with no warning', () => {
+  const control = runCli(strictClean(), ['--strict', '--json']);
+  assert.strictEqual(control.code, 0, `the control spec must itself lint clean: ${control.stdout}`);
+  const strict = runCli(strictClean({ type: 'main' }), ['--strict', '--json']);
+  assert.strictEqual(strict.code, 0, strict.stderr);
+  const payload = JSON.parse(strict.stdout);
+  assert.deepStrictEqual(payload.warnings, []);
+  assert.strictEqual(payload.ok, true);
+});
+
+test('CLI refuses a misspelled view key that the build would drop, with or without --strict', () => {
+  const s = strictClean({ filter: [{ attr: 'c_name', op: 'eq', value: 'x' }] });
+  for (const args of [['--json'], ['--strict', '--json']]) {
+    const run = runCli(s, args);
+    assert.strictEqual(run.code, 1, `${args.join(' ')}: ${run.stdout}`);
+    const payload = JSON.parse(run.stdout);
+    assert.strictEqual(payload.ok, false);
+    assert.ok(payload.errors.some((e) => /unknown key 'filter'.*did you mean 'filters'\?/.test(e)), JSON.stringify(payload.errors));
+    assert.deepStrictEqual(payload.warnings, [], 'it is an error only, not also a warning');
+  }
+});
+
+test('CLI still passes a view with filters and sort without --strict or with it', () => {
+  const s = strictClean({ filters: [{ attr: 'c_name', op: 'eq', value: 'x' }], sort: [{ attr: 'c_name', dir: 'asc' }] });
+  for (const args of [[], ['--strict']]) assert.strictEqual(runCli(s, args).code, 0, args.join(' '));
+});
+
 test('CLI reports an unreadable spec by name rather than a generic gate error', () => {
   let out;
   try {

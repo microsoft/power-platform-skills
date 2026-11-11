@@ -870,12 +870,15 @@ test('ADO 6691114 pre-flight: a status reason the build inserts is resolved by t
 });
 
 test('ADO 6691114 pre-flight: what the environment already held is final and not asked again; what the build creates is asked about after it', async () => {
-  const castReads = (e) => e.client.paths.filter((p) => /AttributeMetadata\?/.test(p)).length;
+  // The resolver's casts. The data model's one read of the Date and Time behaviours of a table it adds a column to is counted apart (dateReads).
+  const castReads = (e) => e.client.paths.filter((p) => /AttributeMetadata\?/.test(p) && !/DateTimeAttributeMetadata\?/.test(p)).length;
+  const dateReads = (e) => e.client.paths.filter((p) => /DateTimeAttributeMetadata\?/.test(p)).length;
   // The column exists, so the pre-flight's answer stands: four cast reads in all, and the view carries that value.
   const spec = specOf([customer([GLOBAL_TIER_COLUMN])], [view('new_customer', [eq('new_tier', 'Gold')])]);
   const had = viewsEngine({ byTable: { new_customer: { Picklist: { new_tier: TIER } } } });
   assert.ifError((await had.run(spec, { phases: FULL })).error);
   assert.strictEqual(castReads(had), 4, 'read once, before the build; the views phase took that answer');
+  assert.strictEqual(dateReads(had), 1, 'the existing table that takes the column has its Date and Time behaviours read once');
   assert.deepStrictEqual(viewCondition(had.defs, 'Gold customers', 'new_tier'), ['227350001']);
   // A status reason the build inserts is not there to read until it has run, so the views phase
   // asks again: eight resolver casts, plus the data model's one deferred no-op status proof.

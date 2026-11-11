@@ -34070,7 +34070,7 @@ var package_default = {
   private: true,
   type: "module",
   license: "MIT",
-  engines: { node: "^22.0.0 || ^24.0.0" },
+  engines: { node: ">=22" },
   scripts: {
     build: "node scripts/build.mjs",
     test: "node scripts/test.mjs"
@@ -34884,7 +34884,7 @@ var ConnectionSession = class {
 
 // src/cli.mjs
 var invalid2 = (message) => invalid(message, "INVALID_ARGUMENTS");
-var usage = `Process Intelligence Azure CLI bridge (Node.js 22/24). Diagnostics go to stderr; serve reserves stdout for MCP.
+var usage = `Process Intelligence Azure CLI bridge (Node.js 22+). Diagnostics go to stderr; serve reserves stdout for MCP.
 resolve-environment --cloud Public --environment ENVIRONMENT-ID
 config --profile NAME --cloud CLOUD --tenant GUID --environment ENVIRONMENT-ID
        [--audience HTTPS-RESOURCE]
@@ -35130,9 +35130,9 @@ function launch(args = process.argv.slice(2), dependencies = {}) {
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
     try {
-      if (![22, 24].includes(Number(process.versions.node.split(".")[0]))) {
+      if (!(Number(process.versions.node.split(".")[0]) >= 22)) {
         console.error(
-          "Process Intelligence requires supported Node.js 22 or 24 LTS. Install it explicitly."
+          "Process Intelligence requires Node.js 22 or later. Install a maintained LTS release explicitly."
         );
         process.exitCode = 1;
         return 1;

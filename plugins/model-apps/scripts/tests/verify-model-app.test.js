@@ -1005,6 +1005,22 @@ test('verify CLI still verifies the deployment of a table whose primaryAttribute
   assert.deepStrictEqual(result.warnings, [PRIMARY_ATTRIBUTE_TYPO]);
 });
 
+// --- a view that carries a key it does not take ---------------------------------------------------------------------------------------
+// The build and the lint refuse a key a `views[]` entry does not take (#827); a release before that check accepted one and built the view without
+// that part. Verification passes viewKeys: 'warn': a warning that names the key and the key it most likely meant, and the verdict is the deployment's.
+const VIEW_KEY_TYPO = "view 'Red tickets': unknown key 'filter' — did you mean 'filters'?; the build does not read it, so it is refused rather than built without it (allowed: entity, name, description, columns, sort, filters, activeOnly, reconcile, key, viewId, linkEntities)";
+
+test('verify CLI still verifies the deployment of a view that carries a key it does not take — and warns, naming the key', async () => {
+  const spec = { ...appSpec({ columns: [column({ type: 'Text' })] }), views: [{ entity: 'new_ticket', name: 'Red tickets', columns: ['new_name'], filter: [{ attr: 'new_ref', op: 'eq', value: 'red' }] }] };
+  const { reads, emitted, stderr } = await verifyOlderSpec(spec);
+  const result = JSON.parse(JSON.stringify(emitted.payload));
+  assert.ok(Number.isInteger(result.total) && result.total > 0 && Array.isArray(result.missing), `a verdict, not a refusal: ${JSON.stringify(result)}`);
+  assert.ok(reads.includes('columns new_ticket'), `the deployed columns were read: ${JSON.stringify(reads)}`);
+  assert.ok(stderr.includes(`WARNING: ${VIEW_KEY_TYPO}\n`), stderr);
+  assert.ok(result.warnings.includes(VIEW_KEY_TYPO), JSON.stringify(result.warnings));
+  assert.ok(!result.errors.some((e) => /unknown key/.test(e)), JSON.stringify(result.errors));
+});
+
 // --- the result JSON carries what stderr warns -----------------------------------------------------------------------------------------
 // A person reads the `WARNING:` lines verify prints, but a caller that reads only the JSON result — a skill, a pipeline — lost them. The result's optional
 // `warnings` array holds the same messages, without the prefix and in the order they were printed, and is left out when there is none, as `unverified` is.
@@ -2167,4 +2183,130 @@ test('readerFor + verifySpec names the 1:N that holds an N:N schema name', async
   assert.ok(rc, 'the real reader must check the relationship');
   assert.strictEqual(rc.present, false);
   assert.match(rc.detail, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
+});
+
+// --inspect-components (lib/feature-verify.js through the run's SDK). The build records no row id for a command control, so
+// each is looked up by its caption on the surface its location deploys to: a caption match is discovery and never a pass,
+// and a control served elsewhere fails. Without the flag nothing is inspected and the result is what it was.
+const { componentTargetsFor } = require('../verify-model-app.js');
+const commandBarOrg = require('./helpers/command-bar-org.js');
+
+const inspectSpec = {
+  app: { name: 'Support Desk' },
+  solution: { publisherPrefix: 'new' },
+  commands: [
+    { entity: 'Contoso_Ticket', label: 'Approve', location: 'HomeTab', library: 'new_lib', function: 'approve' },
+    { entity: 'contoso_ticket', label: 'Print', location: 'HomeTab', library: 'new_lib', function: 'print' },
+    { entity: 'contoso_ticket', label: 'More', type: 'FlyoutAnchor', location: 'HomeTab', children: [{ label: 'Export', library: 'new_lib', function: 'exp' }] },
+  ],
+};
+
+function inspectingCli(flags, client) {
+  const real = client ? commandBarOrg.sdkOver(client) : null;
+  const inspected = [];
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json', ...flags } },
+    specObject: inspectSpec,
+    verifyResult: { ok: true, checks: [{ kind: 'command', name: 'contoso_ticket', present: true }], missing: [] },
+    sdkFactory: () => ({
+      initWorkspace: () => {},
+      findTables: async () => [],
+      findColumns: async () => [],
+      queryRecords: async () => [],
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+      inspectArtifact: async (...args) => {
+        inspected.push(args);
+        harness.events.push({ type: 'inspectArtifact' });
+        if (!real) throw new Error('no inspection was expected');
+        return real.inspectArtifact(...args);
+      },
+    }),
+  });
+  return { harness, inspected };
+}
+
+test('verify CLI without --inspect-components inspects nothing: the result, its lines and its fields are what they were', async () => {
+  const { harness, inspected } = inspectingCli({});
+  await harness.main();
+  assert.deepStrictEqual(inspected, [], 'no component inspection read');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(emitted.payload)), { ok: true, present: 1, total: 1, missing: [], errors: [] });
+  assert.strictEqual(emitted.payload.errors, emitted.payload.missing, 'errors is still the alias of missing');
+  assert.doesNotMatch(harness.stderr.join(''), /component/);
+  assert.match(harness.stderr.join(''), /\n✓ verify PASS \(1\/1 present\)\n/);
+});
+
+test('verify CLI --inspect-components: a control served on another surface fails, and one found by caption alone is unverified — neither passes', async () => {
+  const client = commandBarOrg.barClient(commandBarOrg.BAR);
+  const { harness, inspected } = inspectingCli({ 'inspect-components': true }, client);
+  await harness.main();
+  assert.strictEqual(inspected.length, 1, 'one inspection per table');
+  assert.deepStrictEqual(inspected[0][0], 'command');
+  assert.deepStrictEqual(inspected[0][1], 'contoso_ticket');
+  assert.deepStrictEqual(client.requests.filter((r) => !r.startsWith('GET')), [], 'GETs only');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, false, 'the requested inspection did not pass, so verify fails');
+  const c = JSON.parse(JSON.stringify(emitted.payload.components));
+  assert.deepStrictEqual(c.summary, { pass: 0, fail: 1, unverified: 3 });
+  assert.deepStrictEqual(c.problems, [
+    "UNVERIFIED command 'contoso_ticket:Approve' on contoso_ticket: a served control has this caption, but it was found by caption only: the build recorded no row id to verify it by",
+    "FAIL command 'contoso_ticket:Print' on contoso_ticket: it exists, but on another surface, menu or app",
+    "UNVERIFIED command 'contoso_ticket:More' on contoso_ticket: a served control has this caption, but it was found by caption only: the build recorded no row id to verify it by",
+    "UNVERIFIED command 'contoso_ticket:More > Export' on contoso_ticket: a served control has this caption, but it was found by caption only: the build recorded no row id to verify it by",
+  ]);
+  assert.deepStrictEqual([...emitted.payload.errors], c.problems, 'the failure note counts them');
+  assert.match(harness.stderr.join(''), /✗ verify FAIL — 0 missing, 4 component checks not passed \(1\/1 present\)/);
+  // Read before the run's SDK workspace is removed.
+  const sdkRoot = harness.events.find((e) => e.type === 'createMakerSdk').cfg.workspaceStorage.__mockWorkspaceRoot;
+  const at = (type, match = () => true) => harness.events.findIndex((e) => e.type === type && match(e));
+  assert.ok(at('inspectArtifact') > -1 && at('inspectArtifact') < at('rmSync', (e) => e.dir === sdkRoot));
+});
+
+test('componentTargetsFor: each control on the surface its location deploys to, a menu child under its caption, a repeated caption keyed apart', () => {
+  assert.deepStrictEqual(componentTargetsFor({
+    commands: [
+      { entity: 'Contoso_Ticket', label: 'Go' },
+      { entity: 'contoso_ticket', label: 'Go', location: 'ContextualTab' },
+      { entity: 'contoso_case', label: 'Tools', type: 'SplitButton', location: 'HomeTab', children: [{ label: 'Run' }] },
+    ],
+  }), [
+    { entity: 'contoso_ticket', controls: [{ key: 'contoso_ticket:Go', surface: 'form', label: 'Go', kind: 'button' }, { key: 'contoso_ticket:Go#2', surface: 'subGrid', label: 'Go', kind: 'button' }] },
+    { entity: 'contoso_case', controls: [{ key: 'contoso_case:Tools', surface: 'homeGrid', label: 'Tools', kind: 'split' }, { key: 'contoso_case:Tools > Run', surface: 'homeGrid', label: 'Run', menuPath: ['Tools'], kind: 'button' }] },
+  ]);
+  assert.deepStrictEqual(componentTargetsFor({}), []);
+});
+
+test('componentTargetsFor: a repeated caption never takes the key of a control the maker captioned "Go#2" or "Tools > Run", in any order', () => {
+  const { validateCommandTargets } = require('../lib/feature-verify.js');
+  const keysOf = (commands) => {
+    const targets = componentTargetsFor({ commands });
+    assert.deepStrictEqual(validateCommandTargets(targets), [], 'the inspection accepts its own input');
+    return targets.flatMap((t) => t.controls.map((c) => `${c.key}|${c.label}`));
+  };
+  const go = { entity: 'contoso_ticket', label: 'Go' };
+  const goHome = { entity: 'contoso_ticket', label: 'Go', location: 'HomeTab' };
+  const go2 = { entity: 'contoso_ticket', label: 'Go#2' };
+  assert.deepStrictEqual(keysOf([go, goHome, go2]), ['contoso_ticket:Go|Go', 'contoso_ticket:Go#3|Go', 'contoso_ticket:Go#2|Go#2']);
+  assert.deepStrictEqual(keysOf([go2, go, goHome]), ['contoso_ticket:Go#2|Go#2', 'contoso_ticket:Go|Go', 'contoso_ticket:Go#3|Go']);
+  // A caption written like a menu path, beside the menu child it reads like.
+  const tools = { entity: 'contoso_ticket', label: 'Tools', type: 'FlyoutAnchor', children: [{ label: 'Run' }] };
+  const literal = { entity: 'contoso_ticket', label: 'Tools > Run' };
+  assert.deepStrictEqual(keysOf([tools, literal]), ['contoso_ticket:Tools|Tools', 'contoso_ticket:Tools > Run|Run', 'contoso_ticket:Tools > Run#2|Tools > Run']);
+  // The same caption on two tables is two keys already: nothing is renamed.
+  assert.deepStrictEqual(keysOf([go, { entity: 'contoso_case', label: 'Go' }]), ['contoso_ticket:Go|Go', 'contoso_case:Go|Go']);
+});
+
+test('verify CLI --inspect-components on a spec with no commands inspects nothing and leaves the verdict alone', async () => {
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json', 'inspect-components': true } },
+    verifyResult: { ok: true, checks: [{ kind: 'entity', name: 'new_ticket', present: true }], missing: [] },
+  });
+  await harness.main();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, true);
+  assert.strictEqual(emitted.payload.components.ok, true);
+  assert.match(emitted.payload.components.note, /declares no command controls/);
 });

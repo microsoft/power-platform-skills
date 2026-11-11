@@ -26,8 +26,9 @@ const { navReferencedKeys, navMalformedRefs, navTargetParity, strayPageRefs, des
 // The structural gate (empty, truncated, prose, elided) is shared with genpage-worker-output.js, so a
 // page one gate refuses the other refuses too. See lib/page-structure.js for each check and why.
 const { pageStructure, pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
+const { typescriptProviderOptions } = require('./lib/typescript-provider.js');
 
-function validatePage(page, absWorkingDir) {
+function validatePage(page, absWorkingDir, { typescript } = {}) {
   const key = pageKey(page);
   const file = pageFile(page);
 
@@ -43,7 +44,8 @@ function validatePage(page, absWorkingDir) {
   if (!fs.existsSync(abs)) return { key, file, problems: ['file was never written'] };
 
   const code = fs.readFileSync(abs, 'utf8');
-  const { problems, code: refusalCode } = pageStructure(code);
+  // `typescript`: a caller's provider (lib/typescript-provider.js) — the parser is handed the resolved namespace, never the provider as given.
+  const { problems, code: refusalCode } = pageStructure(code, typescriptProviderOptions(typescript).parse);
   // A valid page nested too deeply for the parser is refused with the compile's own code and the page's name, and nothing else is said of it: what the navigation
   // checks below would find is read from the lexer's wrong view of it.
   if (refusalCode) return { key, file, code: refusalCode, problems: problems.map((p) => `page "${page.name || key}" (${file}): ${p}`) };

@@ -27,7 +27,6 @@
   "views": [
     {
       "entity": "new_project",
-      "type": "main",
       "name": "Active Projects",
       "columns": ["new_name", "new_budget", "new_status"],
       "sort": [{ "attr": "new_name", "dir": "asc" }],

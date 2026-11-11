@@ -152,7 +152,13 @@ function editedSpec() {
 const EDITED_PAGE_SOURCE = "import * as React from 'react';\nexport default function KitchenPage() { return <div>Kitchen, edited</div>; }\n";
 
 let lifecycleP;
-const lifecycle = () => lifecycleP || (lifecycleP = runLifecycle());
+// Refuses first, before any work: every test that needs the lifecycle goes through here, so a CI run that asks to regenerate does none of it, whichever test
+// asks. The phase tests check again themselves only to fail before they reach this.
+const lifecycle = () => {
+  const refused = regenerationRefusal(process.env);
+  if (refused) assert.fail(refused);
+  return lifecycleP || (lifecycleP = runLifecycle());
+};
 async function runLifecycle() {
   const org = createLifecycleOrg();
   const harness = createLifecycleHarness(org, makeTempDir('lifecycle-trail-'));
@@ -267,9 +273,7 @@ function settleGolden(phase, file, actual, env = process.env) {
 
 for (const phase of PHASES) {
   test(`lifecycle trail: the ${phase} phase sends exactly the requests, bodies and publishes it sent before`, async (t) => {
-    // Refused before the lifecycle runs: a CI run that asks to regenerate does no work and fails.
-    const refused = regenerationRefusal(process.env);
-    if (refused) assert.fail(refused);
+    // A CI run that asks to regenerate is refused by lifecycle() before any work, and fails here.
     const run = await lifecycle();
     const step = run.steps[phase];
     if (step.error) throw step.error;
@@ -345,14 +349,40 @@ test('lifecycle trail (meta): one more read, one more body member and a write mo
 // in a child process with CI's variables set (the child's own copy of this test returns at once).
 test('lifecycle trail: UPDATE_GOLDENS=1 under CI is refused before anything is written, and the run fails', () => {
   if (process.env.LIFECYCLE_TRAIL_CHILD === '1') return;
+  // The recorded-build test and every other that needs the lifecycle refuse too, so the child runs the WHOLE file; a preload counts every offline org the file
+  // makes (the lifecycle's first act), and none may be made. The preload is proven to count by making one itself.
+  const dir = makeTempDir('lifecycle-trail-refusal-');
+  const marker = path.join(dir, 'orgs-made.txt');
+  const preload = path.join(dir, 'count-orgs.js');
+  fs.writeFileSync(preload, [
+    "const Module = require('node:module');",
+    "const fs = require('node:fs');",
+    'const load = Module._load;',
+    'Module._load = function (request, ...rest) {',
+    '  const loaded = load.call(this, request, ...rest);',
+    "  if (/fake-lifecycle-org\\.js$/.test(request) && !loaded.counted) {",
+    '    const make = loaded.createLifecycleOrg;',
+    "    loaded.createLifecycleOrg = (...args) => { fs.appendFileSync(process.env.LIFECYCLE_TRAIL_ORG_MARKER, 'x'); return make(...args); };",
+    '    loaded.counted = true;',
+    '  }',
+    '  return loaded;',
+    '};',
+    '',
+  ].join('\n'));
+  const preloadOption = `--require "${preload.replace(/\\/g, '/')}"`;
   const before = PHASES.map((phase) => fs.readFileSync(goldenFile(phase)));
-  const env = { ...process.env, CI: 'true', GITHUB_ACTIONS: 'true', UPDATE_GOLDENS: '1', LIFECYCLE_TRAIL_CHILD: '1' };
+  const env = { ...process.env, CI: 'true', GITHUB_ACTIONS: 'true', UPDATE_GOLDENS: '1', LIFECYCLE_TRAIL_CHILD: '1', LIFECYCLE_TRAIL_ORG_MARKER: marker, NODE_OPTIONS: preloadOption };
   // A child of `node --test` that inherits NODE_TEST_CONTEXT reports to its parent's runner instead of running as a run of its own.
   delete env.NODE_TEST_CONTEXT;
-  const child = spawnSync(process.execPath, ['--test', '--test-name-pattern', 'phase sends exactly', __filename], { env, encoding: 'utf8', timeout: 180000 });
+  const control = spawnSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(__dirname, 'helpers', 'fake-lifecycle-org.js'))}).createLifecycleOrg()`], { env, encoding: 'utf8', timeout: 60000 });
+  assert.equal(control.status, 0, `the counting preload runs: ${control.stderr}`);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'x', 'and counts an org made');
+  fs.rmSync(marker);
+  const child = spawnSync(process.execPath, ['--test', __filename], { env, encoding: 'utf8', timeout: 180000 });
   const output = `${child.stdout}${child.stderr}`;
   assert.notEqual(child.status, 0, `the regenerating run under CI must fail:\n${output.slice(-2000)}`);
   assert.match(output, /UPDATE_GOLDENS=1 is refused under CI/);
+  assert.equal(fs.existsSync(marker), false, 'and ran no lifecycle: no offline org was made');
   assert.deepEqual(PHASES.map((phase) => fs.readFileSync(goldenFile(phase))), before, 'and no golden was written');
 });
 

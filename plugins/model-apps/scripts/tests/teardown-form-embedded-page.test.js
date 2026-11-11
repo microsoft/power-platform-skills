@@ -1,15 +1,13 @@
 'use strict';
 
-// KNOWN LIMIT, pinned: teardown deletes a generative page it proved this app's even when a form still embeds it.
+// Teardown refuses to delete a generative page a form still embeds.
 // A form embeds a page through the MscrmControls.UxAgentControl control, whose static `RefId` parameter holds the page's id:
 //   <customControl formFactor="0" name="MscrmControls.UxAgentControl"><parameters>
 //     <RefId type="SingleLine.Text" static="true">11111111-1111-4111-8111-111111111111</RefId></parameters></customControl>
 // Dataverse records no dependency for that value (measured: the page reported zero dependents and its delete answered 204), so the
-// platform never refuses the delete, and teardown reads no form: the page goes, and the form is left showing a page that is gone.
-// AGENTS.md (the teardown entry), references/app-spec-schema.md ("Teardown page scope") and the app-builder skill tell the maker to take
-// the page off such forms before tearing the app down. Teardown does not look for those forms itself: a forms read alone cannot prove that
-// no form names the page. This test holds the delete set to exactly what teardown has always deleted for such an app, and fails if
-// teardown starts reading forms or keeping the page — so the documents of the limit change with it.
+// platform never refuses the delete. Before the page step deletes anything, teardown reads every form of every table in both layers
+// (page-reference-guard.js) and refuses the step when one embeds a page: the page, its manifest and the solution are kept for a re-run,
+// and the error names the form so the maker can take the page off it first.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -86,7 +84,7 @@ function environment() {
         if (url.startsWith('/systemforms')) {
           state.formReads.push(url);
           const table = (/objecttypecode eq '([^']+)'/.exec(decodeURIComponent(url)) || [])[1];
-          return { status: 200, body: { value: state.forms.filter((f) => !table || f.table === table).map((f) => ({ formid: f.formid, name: f.name, formxml: f.formxml })) } };
+          return { status: 200, body: { value: state.forms.filter((f) => !table || f.table === table).map((f) => ({ formid: f.formid, name: f.name, formxml: f.formxml, objecttypecode: f.table })) } };
         }
         throw new Error(`unexpected read ${url}`);
       },
@@ -110,22 +108,108 @@ function environment() {
   return { spec, sdk, state };
 }
 
-test('a page a form of the app\'s tables still embeds is deleted like any proven page — no form is read, and the delete set is what teardown has always deleted (a known limit)', async () => {
+test('a page a form still embeds is kept: teardown reads the forms before it deletes anything, and keeps the app, the page, the manifest and the solution for a re-run', async () => {
   const env = environment();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-form-embedded-page-'));
   try {
-    const dry = await runTeardown(env.spec, { env: ENV, apply: false }, { sdk: env.sdk });
-    assert.ok(dry.plan.includes(`generative pages proven for this app: ${PAGE} "Overview" (would delete)`), JSON.stringify(dry.plan));
-
     const result = await runTeardown(env.spec, { env: ENV, apply: true, workspaceDir: dir }, { sdk: env.sdk });
-    assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
-    assert.deepStrictEqual(result.deleted.genpage, [PAGE]);
-    assert.deepStrictEqual(env.state.deletes, ['app', `page:${PAGE}`, 'table:new_ticket', 'wr-icon', 'wr-manifest', 'solution']);
-    assert.deepStrictEqual(env.state.formReads, [], 'teardown reads no form before it deletes a page');
-    // The form of the table teardown keeps still names a page that is gone: the dangling reference the documents tell the maker to remove first.
+    assert.strictEqual(result.ok, false);
+    const pageError = result.errors.find((e) => e.step === 'generative pages proven for this app');
+    assert.ok(pageError && pageError.message.includes(`page ${PAGE} is embedded in "Account Main" (form ${FORM}`), JSON.stringify(result.errors));
+    assert.strictEqual(result.deleted.genpage, undefined);
+    assert.deepStrictEqual(env.state.deletes, [], 'nothing is deleted: not the app (its navigation is the page\'s proof), the page, the manifest or the solution');
+    assert.ok(result.skipped.some((s) => s.includes('not attempted - a form embeds a page of this app')), JSON.stringify(result.skipped));
+    // Both layers of every form, once for the whole teardown: the published one, then the saved one.
+    assert.deepStrictEqual(env.state.formReads.map((url) => url.split('?')[0]), ['/systemforms', '/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()']);
+    assert.ok(env.state.pages.has(PAGE));
+
+    // Once the page is off the form, a re-run deletes the app, the page, then the manifest and the solution it kept.
+    env.state.forms = [];
+    const again = await runTeardown(env.spec, { env: ENV, apply: true, workspaceDir: dir }, { sdk: env.sdk });
+    assert.strictEqual(again.ok, true, JSON.stringify(again.errors));
+    assert.deepStrictEqual(again.deleted.genpage, [PAGE]);
     assert.ok(!env.state.pages.has(PAGE));
-    assert.ok(env.state.forms.some((f) => f.table === 'account' && f.formxml.includes(PAGE)));
+    // (The table step is not what this test pins: this fake answers a table read by substring, so a re-run sends its delete again.)
+    assert.deepStrictEqual(env.state.deletes.filter((d) => !d.startsWith('table:')), ['app', `page:${PAGE}`, 'wr-icon', 'wr-manifest', 'solution']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// The dry run names what would stop the apply. It runs the apply's form scan on the pages it would delete, so it never says it
+// would delete a page the apply then keeps; it reads only when there is such a page; and it is a preview — the apply scans again.
+const dryRun = (env) => runTeardown(env.spec, { env: ENV, apply: false }, { sdk: env.sdk });
+const pageLines = (result) => result.plan.filter((l) => l.startsWith('generative pages proven for this app'));
+const formLayers = (env) => env.state.formReads.map((url) => url.split('?')[0]);
+const BOTH_LAYERS = ['/systemforms', '/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()'];
+
+test('dry run: a page a form embeds is said to be kept, with the form named, and the dry run is not ok — reading both form layers once, deleting nothing', async () => {
+  const env = environment();
+  const result = await dryRun(env);
+  assert.strictEqual(result.ok, false, JSON.stringify(result));
+  assert.deepStrictEqual(pageLines(result), [`generative pages proven for this app: ${PAGE} "Overview" (kept — embedded in "Account Main" (form ${FORM} of table account, published layer), "Account Main" (form ${FORM} of table account, saved layer))`]);
+  const blocker = result.errors.find((e) => e.step === 'generative pages proven for this app');
+  assert.ok(blocker && blocker.message.includes(`page ${PAGE} is embedded in "Account Main"`) && blocker.message.includes('the apply would keep every page, and the app'), JSON.stringify(result.errors));
+  assert.deepStrictEqual(formLayers(env), BOTH_LAYERS);
+  assert.deepStrictEqual(env.state.deletes, []);
+});
+
+test('dry run: with no form embedding the page it says it would delete it — and the apply scans again, so a form that embeds it since then still stops the apply', async () => {
+  const env = environment();
+  const forms = env.state.forms;
+  env.state.forms = [];
+  const result = await dryRun(env);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
+  assert.deepStrictEqual(pageLines(result), [`generative pages proven for this app: ${PAGE} "Overview" (would delete)`]);
+  assert.deepStrictEqual(formLayers(env), BOTH_LAYERS);
+  env.state.forms = forms;
+  env.state.formReads = [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-form-embedded-page-'));
+  try {
+    const applied = await runTeardown(env.spec, { env: ENV, apply: true, workspaceDir: dir }, { sdk: env.sdk });
+    assert.strictEqual(applied.ok, false);
+    assert.deepStrictEqual(env.state.deletes, []);
+    assert.deepStrictEqual(formLayers(env), BOTH_LAYERS, 'the apply read the forms itself');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dry run: forms that cannot all be read keep the page — said as such, not "would delete"', async () => {
+  const env = environment();
+  const get = env.sdk.dataverse.get;
+  env.sdk.dataverse.get = async (url) => (url.startsWith('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') ? { status: 503, body: null } : get(url));
+  const result = await dryRun(env);
+  assert.strictEqual(result.ok, false);
+  const [line] = pageLines(result);
+  assert.match(line, /\(kept — the forms could not all be read: /);
+  assert.ok(result.errors.some((e) => /the forms could not all be read, so the pages would be kept/.test(e.message)), JSON.stringify(result.errors));
+});
+
+test('dry run: a continuation page of a form layer is read to the end, one read per page — a form on the second page still stops it', async () => {
+  const env = environment();
+  const get = env.sdk.dataverse.get;
+  const forms = env.state.forms;
+  env.sdk.dataverse.get = async (url) => {
+    if (url.endsWith('/systemforms?page=2')) { env.state.formReads.push(url); return { status: 200, body: { value: forms.map((f) => ({ formid: f.formid, name: f.name, formxml: f.formxml })) } }; }
+    if (url.startsWith('/systemforms?')) { env.state.formReads.push(url); return { status: 200, body: { value: [], '@odata.nextLink': `${ENV}/api/data/v9.2/systemforms?page=2` } }; }
+    if (url.startsWith('/systemforms/')) { env.state.formReads.push(url); return { status: 200, body: { value: [] } }; }
+    return get(url);
+  };
+  const result = await dryRun(env);
+  assert.strictEqual(result.ok, false, JSON.stringify(result));
+  assert.match(pageLines(result)[0], /kept — embedded in "Account Main" \(form [^)]+, published layer\)/);
+  assert.deepStrictEqual(env.state.formReads.map((url) => url.replace(ENV, '').split('?')[0]), ['/systemforms', '/api/data/v9.2/systemforms', '/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()']);
+});
+
+test('dry run: no page to delete, no form read — a plan without pages, or whose pages are all gone, reads no form', async () => {
+  const gone = environment();
+  gone.state.pages.clear();
+  const result = await dryRun(gone);
+  assert.ok(pageLines(result).every((l) => !l.includes('would delete')), JSON.stringify(result.plan));
+  assert.deepStrictEqual(gone.state.formReads, []);
+  const noManifest = environment();
+  noManifest.state.resources.clear();
+  await dryRun(noManifest);
+  assert.deepStrictEqual(noManifest.state.formReads, []);
 });

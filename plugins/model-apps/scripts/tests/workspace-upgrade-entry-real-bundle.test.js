@@ -2,7 +2,9 @@
 // REAL BUNDLES: a `.maker-workspace` the PREVIOUS release wrote, and a download or a teardown as the FIRST thing this release does
 // with it — no build of this release has re-read a copy first. Each path starts from the state the previous release's bundle left
 // (helpers/workspace-upgrade.js) and is compared with the same step on a workspace this release's bundle wrote. See
-// workspace-upgrade-real-bundle.test.js for why every copy is "old" after the upgrade, and for the rebuilds.
+// workspace-upgrade-real-bundle.test.js for how an old copy is read, and for the rebuilds. Each path runs on the workspace the previous
+// release left, and, as its own case, with every copy stamped one projection version older (the previous release can project at this
+// bundle's own version, so its workspace alone is not a stale one).
 //   DOWNLOAD  reads the environment through a throwaway workspace and writes the spec and its baseline into the app folder that holds
 //             the old workspace: it writes nothing to the environment and gives the spec a current workspace gives
 //   TEARDOWN  fences the old workspace while it deletes: it deletes what it deletes after a current build, and leaves the environment
@@ -16,21 +18,22 @@ const { skipWithoutPrevious } = require('./helpers/previous-bundle.js');
 const { startFrom, stage, withoutIds, appUniqueName, kitchenSinkSpec } = require('./helpers/workspace-upgrade.js');
 
 const SKIP = skipWithoutPrevious();
+const WORKSPACES = [[false, 'the previous release\'s workspace'], [true, 'a workspace whose copies are all one projection version older']];
 
-let downloadP;
-const downloadPaths = () => downloadP || (downloadP = (async () => {
-  const run = async (which) => {
-    const s = await startFrom(which);
+const downloadCache = {};
+const downloadPaths = (staleProjection) => downloadCache[staleProjection] || (downloadCache[staleProjection] = (async () => {
+  const run = async (which, options) => {
+    const s = await startFrom(which, options);
     // Into the app folder itself, beside the old workspace: the download's baseline goes into that workspace.
     s.download = await s.next.measure(() => s.next.download(appUniqueName(kitchenSinkSpec()), s.next.appDir));
     s.afterDownload = s.org.inventory();
     return s;
   };
-  return { upgrade: await run('previous'), control: await run('current') };
+  return { upgrade: await run('previous', { staleProjection }), control: await run('current') };
 })());
 
-test('upgrade: a first download beside the old workspace writes nothing to the environment and gives the spec a current workspace gives', { skip: SKIP }, async () => {
-  const { upgrade, control } = await downloadPaths();
+for (const [staleProjection, workspace] of WORKSPACES) test(`upgrade: a first download beside ${workspace} writes nothing to the environment and gives the spec a current workspace gives`, { skip: SKIP }, async () => {
+  const { upgrade, control } = await downloadPaths(staleProjection);
   stage(upgrade.build, 'previous release\'s build');
   const download = stage(upgrade.download, 'download').value;
   const current = stage(control.download, 'control download').value;
@@ -42,20 +45,20 @@ test('upgrade: a first download beside the old workspace writes nothing to the e
   assert.ok(fs.existsSync(path.join(upgrade.next.workspaceDir, 'last-applied.json')), 'its baseline is written into the old workspace');
 });
 
-let teardownP;
-const teardownPaths = () => teardownP || (teardownP = (async () => {
-  const run = async (which) => {
-    const s = await startFrom(which);
+const teardownCache = {};
+const teardownPaths = (staleProjection) => teardownCache[staleProjection] || (teardownCache[staleProjection] = (async () => {
+  const run = async (which, options) => {
+    const s = await startFrom(which, options);
     s.teardown = await s.next.measure(() => s.next.teardown(kitchenSinkSpec()));
     s.afterTeardown = s.org.inventory();
     s.afterTeardownContents = s.org.contents();
     return s;
   };
-  return { upgrade: await run('previous'), control: await run('current') };
+  return { upgrade: await run('previous', { staleProjection }), control: await run('current') };
 })());
 
-test('upgrade: a first teardown over the old workspace deletes what it deletes after a current build, and leaves the environment as it was', { skip: SKIP }, async () => {
-  const { upgrade, control } = await teardownPaths();
+for (const [staleProjection, workspace] of WORKSPACES) test(`upgrade: a first teardown over ${workspace} deletes what it deletes after a current build, and leaves the environment as it was`, { skip: SKIP }, async () => {
+  const { upgrade, control } = await teardownPaths(staleProjection);
   stage(upgrade.build, 'previous release\'s build');
   const { value: { result } } = stage(upgrade.teardown, 'teardown');
   assert.equal(result.ok, true, JSON.stringify(result));

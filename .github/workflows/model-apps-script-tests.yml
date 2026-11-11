@@ -66,9 +66,10 @@ jobs:
     test-model-apps-scripts:
         name: test-model-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
         runs-on: ${{ matrix.os }}
-        # The suite takes about a minute on every runner. A test that hangs (a child process waiting on
-        # stdin, say) would otherwise hold the job for the six-hour default.
-        timeout-minutes: 20
+        # The suite takes 8-15 minutes on Linux and macOS and up to about 20 on Windows, where Node 20 is the
+        # slowest and has been cancelled at a 20-minute limit while passing. A test that hangs (a child
+        # process waiting on stdin, say) would otherwise hold the job for the six-hour default.
+        timeout-minutes: 30
         # Defense-in-depth: opt this CI job out of telemetry transmission so a test
         # that forgets to isolate emission can never POST to a real collector. The
         # plugin's committed ikey.json ships live (`disabled: false`) with real
@@ -96,14 +97,14 @@ jobs:
               with:
                   node-version: ${{ matrix.node }}
 
-            # The previous release's SDK bundle (model-apps 2.20.4; 2.20.5 ships the same bytes), for the upgrade tests: a workspace it wrote must be read by
+            # The previous release's SDK bundle (model-apps 2.20.6), for the upgrade tests: a workspace it wrote must be read by
             # this release's (scripts/tests/workspace-upgrade-*-real-bundle.test.js, helpers/previous-bundle.js, which checks its
             # SHA-256). The checkout is shallow, so the release commit is fetched by its hash and only the bundle is extracted. In CI
             # the tests FAIL without it rather than skip.
             - name: fetch-previous-sdk-bundle
               shell: bash
               run: |
-                  git fetch --no-tags --depth=1 origin c159268b994b218729ff69ccdd74be3c83c56f86
+                  git fetch --no-tags --depth=1 origin 5b6866cfe02c716f729728becc76f312d1204527
                   git cat-file blob FETCH_HEAD:plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"
                   echo "MODEL_APPS_PREVIOUS_BUNDLE=$RUNNER_TEMP/previous-cds-maker-sdk.cjs" >> "$GITHUB_ENV"
 
@@ -231,14 +232,14 @@ jobs:
                   echo "BASE_LIB_PATH=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts/lib" >> "$GITHUB_ENV"
                   echo "MODEL_APPS_RELEASED_SCRIPTS=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts" >> "$GITHUB_ENV"
 
-            # The previous release's SDK bundle (model-apps 2.20.4; 2.20.5 ships the same bytes), for the upgrade tests: a workspace it wrote must be read by
+            # The previous release's SDK bundle (model-apps 2.20.6), for the upgrade tests: a workspace it wrote must be read by
             # this release's (scripts/tests/workspace-upgrade-*-real-bundle.test.js, helpers/previous-bundle.js, which checks its
             # SHA-256). The checkout is shallow, so the release commit is fetched by its hash and only the bundle is extracted. In CI
             # the tests FAIL without it rather than skip.
             - name: fetch-previous-sdk-bundle
               shell: bash
               run: |
-                  git fetch --no-tags --depth=1 origin c159268b994b218729ff69ccdd74be3c83c56f86
+                  git fetch --no-tags --depth=1 origin 5b6866cfe02c716f729728becc76f312d1204527
                   git cat-file blob FETCH_HEAD:plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"
                   echo "MODEL_APPS_PREVIOUS_BUNDLE=$RUNNER_TEMP/previous-cds-maker-sdk.cjs" >> "$GITHUB_ENV"
 

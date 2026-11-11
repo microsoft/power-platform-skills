@@ -1,0 +1,9 @@
+{
+  "EnvironmentVariables": [
+    { "SchemaName": "contoso_DispatchApiBase", "Value": "https://dispatch.contoso.com/api" },
+    { "SchemaName": "contoso_DispatchApiKey", "Value": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/contoso-rg/providers/Microsoft.KeyVault/vaults/contoso-kv/secrets/dispatch-api-key" }
+  ],
+  "ConnectionReferences": [
+    { "LogicalName": "contoso_sharepoint", "ConnectionId": "00000000000000000000000000000000", "ConnectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline" }
+  ]
+}

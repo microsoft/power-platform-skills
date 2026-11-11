@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoServiceDesk", "displayName": "Contoso Service Desk", "publisherPrefix": "cnt" },
+  "app": { "name": "Service Desk", "description": "Service requests whose business rules follow the spec on every rebuild" },
+  "entities": [
+    { "schemaName": "cnt_request", "displayName": "Service Request", "pluralName": "Service Requests",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Request" },
+      "columns": [
+        { "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["New", "In Progress", "Closed"] },
+        { "schemaName": "cnt_notes", "displayName": "Notes", "type": "Memo" },
+        { "schemaName": "cnt_resolution", "displayName": "Resolution", "type": "Memo" },
+        { "schemaName": "cnt_assignee", "displayName": "Assignee", "type": "Text" }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_request", "name": "Information", "layout": "auto" }],
+  "views": [
+    { "entity": "cnt_request", "name": "Open Requests", "columns": ["cnt_name", "cnt_status", "cnt_assignee"], "activeOnly": true }
+  ],
+  "businessRules": [
+    { "entity": "cnt_request", "name": "Close out a request", "key": "close-out", "reconcile": "declared",
+      "description": "A closed request needs a resolution, and its notes are history.",
+      "scope": "Entity", "status": "Active",
+      "conditions": [
+        { "key": "closed", "field": "cnt_status", "operator": "Equals", "value": "100000002", "dataType": "Picklist" }
+      ],
+      "actions": [
+        { "key": "need-resolution", "type": "SetBusinessRequired", "field": "cnt_resolution", "required": true },
+        { "key": "lock-notes", "type": "LockUnlock", "field": "cnt_notes", "lock": true }
+      ] },
+    { "entity": "cnt_request", "name": "Ask for an assignee", "key": "ask-assignee", "reconcile": "declared",
+      "scope": "AllForms", "status": "Active",
+      "conditions": [
+        { "key": "in-progress", "field": "cnt_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" },
+        { "key": "no-assignee", "field": "cnt_assignee", "operator": "DoesNotContainData" }
+      ],
+      "actions": [
+        { "key": "say", "type": "ShowErrorMessage", "field": "cnt_assignee", "errorMessage": "A request in progress needs an assignee." }
+      ] }
+  ],
+  "appShell": { "areas": [{ "label": "Service", "groups": [{ "label": "Requests", "subAreas": [
+    { "entity": "cnt_request", "title": "Service Requests" }
+  ] }] }] }
+}

@@ -447,7 +447,7 @@ const CONTRACT = {
   },
   'genpage-upload.js': {
     flags: ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file', 'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message',
-      'agent-message-file', 'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed', 'solution'],
+      'agent-message-file', 'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed', 'solution', 'app-dir'],
   },
   // The page verbs the skills ran through `pac model genpage`; the table is the script's own VERBS (checked below).
   'genpage.js': {
@@ -455,9 +455,10 @@ const CONTRACT = {
       list: ['env', 'app-id', 'include-unpublished'],
       download: ['env', 'page-id', 'output-directory', 'app-id'],
       types: ['env', 'data-sources', 'output-file', 'detail'],
-      'add-to-app': ['env', 'app-id', 'page-id', 'title'],
-      'remove-from-app': ['env', 'app-id', 'page-id', 'allow-empty-navigation'],
+      'add-to-app': ['env', 'app-id', 'page-id', 'title', 'draft', 'app-dir'],
+      'remove-from-app': ['env', 'app-id', 'page-id', 'allow-empty-navigation', 'draft', 'app-dir'],
       delete: ['env', 'page-id', 'allow-destructive'],
+      'prepare-compiler-refresh': ['env', 'page-id', 'file', 'expected-base-sha256', 'output-file'],
     },
   },
 };

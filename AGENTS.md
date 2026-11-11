@@ -30,8 +30,9 @@ Write for a reader outside Microsoft who cannot see any internal system.
 - **Pointers to files that are not in the repo** — a citation nobody can resolve is noise at best.
 
 **Fine to commit:** ADO / `AB#` work-item ids (opaque, and `AB#` is the standard Azure Boards ↔
-GitHub link syntax), and the location of a first-party source repo a maintainer needs in order to
-rebuild a vendored bundle. Both carry real "why" context and disclose no content.
+GitHub link syntax): they carry real "why" context and disclose no content. A vendored bundle built
+from an internal repository is cited by its source commit (`SDK commit <sha>`), with a placeholder
+such as `<sdk-repo>` for the repository — never by the internal repository's name or a path in it.
 
 **When you must record internal context**, put it in the PR conversation or an internal doc — not in
 a committed file. When editing an existing doc, keep this rule in mind for the lines around your
@@ -59,6 +60,8 @@ power-platform-skills/
 ├── marketplace.json          # Open Plugins marketplace manifest (lists all available plugins)
 ├── .claude-plugin/           # Legacy manifest mirrors for existing subscriptions
 │   └── marketplace.json
+├── .agents/plugins/
+│   └── marketplace.json      # Codex catalog for the adapted Code Apps package only
 ├── plugins/                  # Directory containing individual plugins
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
 │       ├── .plugin/
@@ -73,9 +76,25 @@ power-platform-skills/
 ├── shared/                   # Cross-plugin shared resources
 │   └── skills/               # Shared skill definitions
 │       └── <skill-name>/     # SKILL.template.md + workflow .md files
+├── site/                     # Plugin showcase site for GitHub Pages (see site/README.md)
+│   └── catalog.json          # Plain-language content for each marketplace plugin
+├── docs/                     # Developer docs moved out of the README (repository layout, installer notes)
 ├── AGENTS.md                 # Generic development guidelines (this file)
-└── README.md                 # Repository overview
+└── README.md                 # Repository overview, written for makers as well as developers
 ```
+
+The README is for people who use the plugins, and its first half is for people who are not
+developers: plain words, outcomes before technology, and install steps before internals. Material
+for people who work on the plugins (local loading, repository layout) goes in
+`docs/development.md`, which the README links from Contributing. The README's Telemetry section is
+the short user-facing summary; field-level detail belongs in `shared/telemetry/README.md` and each
+plugin's README. The README's install links are checked against `site/lib/install-links.js`, so a new
+marketplace plugin also needs a `site/catalog.json` entry and README install links.
+
+**Keep large binaries off `main`.** Every marketplace install clones `main`, and every update
+downloads each new version of a file again. The site's video and poster live on the never-merged
+`site-media` branch, pinned by hash in `site/media.json` (see `site/README.md`, "Site media"). A
+site test rejects audio, video, or any file over 256 KB under `site/`.
 
 ## Local Development
 
@@ -93,10 +112,15 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Both are repo-wide and enforce metadata/marketplace rules. `validate-repository-metadata` also
 runs standalone installer regression tests on Linux and Windows.
 
+`code-apps-validation` checks the portable Code Apps package on Windows and Ubuntu.
+Its path filter covers Code Apps, its Codex catalog, and the compatibility validators.
+
 **Every test workflow is path-filtered** — to a single plugin (`power-pages` → `plugins/power-pages/**`;
 `model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles;
 `pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles), or,
-for code no plugin owns, to that code (`shared-telemetry-tests` → `shared/telemetry/**`).
+for code no plugin owns, to that code (`shared-telemetry-tests` → `shared/telemetry/**`;
+`showcase-site` → `site/**` plus every input the site reads: `marketplace.json`, plugin manifests and
+skills, `README.md` and `scripts/install.js`). `showcase-site` also deploys the site to GitHub Pages from `main`.
 This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
 *a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
 copies of `shared/` sources may list those sources too, so a change to one runs that plugin's drift
@@ -122,7 +146,7 @@ Each plugin follows this structure:
 - `.claude-plugin/plugin.json` — legacy mirror of `.plugin/plugin.json` kept for existing subscriptions
 - `.mcp.json` — MCP server configuration (optional)
 - `plugin.json` and `mcp.json` — optional additive Agent Plugins 1.0.0 files at the
-  individual plugin root (currently `process-intelligence`); retain the legacy files above
+  individual plugin root (currently `process-intelligence` and `code-apps` use `plugin.json`); retain the legacy files above
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
 - `scripts/` — Shared utility scripts referenced by skills and agents

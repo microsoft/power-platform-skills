@@ -66,10 +66,15 @@ const POLICY = {
   // Running the phases again releases neither, and the refusal quotes the lock's path, which holds the maker's folder.
   'build-locked': { kinds: ['never'] },
   'build-lease-invalid': { kinds: ['never'] },
+  // The managed binding store (lib/managed-bindings.js) exists and cannot be trusted: a run again reads the same file. Held through the real engine and CLI openers.
+  'managed-binding-store-unreadable': { kinds: ['never'], via: 'create-stable-identities.test.js' },
+  'publication-risk-accepted': { kinds: ['never'], via: 'sdk-build-declared-forms.test.js' },
+  'publication-risk-record-unconfirmed': { kinds: ['never'], via: 'sdk-build-declared-forms.test.js' },
   'app-header-unpublished': { kinds: ['never'] },
   'app-copy-unpushed-edits': { kinds: ['never'] },
   'sitemap-removal-unapproved': { kinds: ['never'] },
   'reconciled-publish-failed': { kinds: ['by-failure'] },
+  'publication-withheld': { kinds: ['never'], via: 'publication-barrier-real-bundle.test.js' },
   'bpf-unique-name-conflict': { kinds: ['never'] },
   'pages-sitemap-read-failed': { kinds: ['by-failure'], via: 'sdk-build.test.js' },
   'pages-removed': { kinds: ['never'], via: 'sdk-build.test.js' },
@@ -81,6 +86,9 @@ const POLICY = {
   'pages-identity-conflict': { kinds: ['never'], via: PAGES },
   'pages-creation-receipt-failed': { kinds: ['never'], via: PAGES },
   'pages-duplicate-name-create': { kinds: ['never'], via: PAGES },
+  // A generative page requested on a form that was refused, or whose outcome is unknown: a refusal (a section that is not there, a page embedded
+  // elsewhere) is the spec's to change, and an unknown (a form or page not built) waits on what the maker builds first. Held with the embed doubles there.
+  'form-page-embeds-incomplete': { kinds: ['never'], via: 'form-page-embeds.test.js' },
   'pages-shared-check-failed': { kinds: ['by-failure', 'never'], via: 'sdk-build.test.js' },
   'pages-shared-across-apps': { kinds: ['never'], via: PAGES },
   'pages-blank-provenance': { kinds: ['never'], via: PAGES },
@@ -108,12 +116,27 @@ const POLICY = {
   // The build's own loop stops with it when the next wait a throttle costs does not fit the run's budget (build-model-app.js), and the engine's runner when a step would start after the budget refused a wait (entity-provision.js,
   // makeRunner; throttle-engine-stop.test.js): held beside the loop's doubles.
   'throttle-budget-exhausted': { kinds: ['by-failure'], via: 'build-model-app.test.js' },
+  // "exact" Main forms on an app that existed before the run, without --allow-destructive (sdk-build.js appWriters.push): a removal from the app's membership that needs
+  // the maker's authority. Raised before the push writes anything, and a run again has no more authority than this one, so it is never run again. Held with the real app SDK.
+  'APP_MAIN_FORMS_EXACT_UNAUTHORIZED': { kinds: ['never'], via: 'app-pin-recovery-build.test.js' },
+  // The configuration kinds (lib/configuration-build.js): a spec that declares an item twice stops at preflight, before any write; a page that names a connection
+  // reference or a Custom API the configuration step did not leave usable stops before the first page write. A run again reads the same spec and the same items.
+  'configuration-intent-invalid': { kinds: ['never'], via: 'configuration-artifacts-real-bundle.test.js' },
+  'configuration-prerequisite-not-applied': { kinds: ['never'], via: 'configuration-artifacts-real-bundle.test.js' },
 };
 // The sites whose code is an expression, on purpose: the code is decided at run time, so the policy cannot be read off a literal.
 const DYNAMIC = [
-  { file: 'lib/entity-provision.js', expr: "(err && err.code) || 'sdk-error'", kind: 'by-failure', what: 'the runner wraps every failed step with the code of what failed' },
+  { file: 'lib/sdk-build.js', expr: 'stopCode', kind: 'by-failure', what: 'a declared artifact that did not settle (managedStop): the code of its own first finding; never retried, save an identity read that met the metadata-cache lag of a table this invocation created (isFreshTableReadLag, #796), which the build\'s bounded retry rides out' },
+  { file: 'lib/entity-provision.js', expr: 'shown.code', kind: 'by-failure', what: 'the runner wraps every failed step with the code of what failed (command-state-contract.js checkedDisplay: the error\'s own, or `sdk-error`; a table publication\'s error in a build with commandStates keeps its own only when it has a system code\'s shape)' },
   { file: 'lib/entity-provision.js', expr: 'sdkCode', kind: 'by-failure', what: 'a push the SDK refused by value, with the code the SDK gave' },
   { file: 'lib/sdk-build.js', expr: 'verdict.code', kind: 'never', what: 'the navigation verdict (app-navigation-empty): a re-run reads the same spec' },
+  { file: 'lib/sdk-build.js', expr: 'incomplete[0].code', kind: 'never', what: 'the end of a build that ran every phase and saved its changes, but left a publication owed or an exact Main-form list unproven (error.incomplete): running the phases again would push the saved change again and cannot settle what is withheld or unknown; the maker re-runs once the cause is cleared' },
+  { file: 'build-model-app.js', expr: 'err.code', kind: 'never', what: 'a halt that stops service writes (the retirement the build could not confirm, managed-not-settled), said again on a later attempt of the run (stoppedAfterEarlierAttempts): the code of the halt it says again; never retried, as that halt is not' },
+  { file: 'lib/configuration-build.js', expr: 'haltCode', kind: 'never', what: 'the configuration step left work undone (configuration-incomplete, a refusal or an unknown outcome): an unknown write is inspected, never replayed' },
+  { file: 'lib/command-state-run.js', expr: 'error.code', kind: 'never', what: 'a commandStates refusal or unknown outcome (commandStateHalt, a CommandStateError: approval required or stale, version conflict, not confirmed, publish unconfirmed, …): an unknown write is read back, never sent again, and a refusal reads the same rows again (command-state-build.test.js)' },
+  { file: 'lib/sdk-build.js', expr: 'commandStateModeOfRun.code', kind: 'never', what: 'a run that cannot apply commandStates (command-state-phase-unsupported, -publish-required, -keyed-unsupported), refused before anything is read or written: the same options stop again' },
+  { file: 'lib/sdk-build.js', expr: 'COMMAND_STATE_CODES.legacyCreateConflict', kind: 'never', what: 'commands[] would create a bar on a table whose rows commandStates edits (command-state-legacy-create-conflict), refused before the create: the same spec stops again' },
+  { file: 'lib/configuration-build.js', expr: 'preflightCode', kind: 'never', what: 'the protected configuration preflight, before any write (configuration-edit-unsupported, create-identity-unverified, create-identity-opt-in-required, managed-settlement-pending for an attempt the binding store holds for an item the App Spec no longer declares, and the other codes of the first item it stops): the same plan stops again' },
 ];
 // Object literals that carry `phase`, `code` and `recoverable` and are not halts.
 const NOT_HALTS = [{ file: 'build-model-app.js', what: 'the journal record of a halt, written after the retry decision' }];

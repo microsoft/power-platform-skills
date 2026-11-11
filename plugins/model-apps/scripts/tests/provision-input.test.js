@@ -348,3 +348,32 @@ test('malformed provisioning inputs return errors before writes', async () => {
   assert.strictEqual(applied.ok, true, JSON.stringify(applied.errors || applied));
   assert.ok(writes.includes('createTable'), 'the valid control must be able to observe an SDK write');
 });
+
+// The 2.21.0 schema fields reach provision-entities.js too (ENTITY_KEYS is shared), so its gate must refuse what validateAppSpec
+// refuses, before any write — not pass a malformed option or a one-way flag to the SDK.
+test('refuses malformed 2.21.0 schema fields as the App Spec gate does, and accepts the well-formed ones', async () => {
+  const input = (column, entity = {}, extra = {}) => ({ solution: { uniqueName: 'Default', publisherPrefix: 'cr' }, ...extra,
+    entities: [{ schemaName: 'cr_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'cr_name' }, ...entity, columns: [column] }], relationships: [] });
+  const choice = (options) => ({ schemaName: 'cr_priority', displayName: 'Priority', type: 'Choice', options });
+  const refused = (r, re) => { assert.strictEqual(r.ok, false, 'expected a refusal'); assert.ok(r.errors.some((e) => re.test(e)), JSON.stringify(r.errors)); };
+
+  refused(validateProvisionInput(input(choice([{ label: 'Low', value: 100000000, color: 'red' }, 'High']))), /options\[0\] must have exactly 'value' and 'label' \(unknown color\)/);
+  refused(validateProvisionInput(input(choice([{ label: 'Low' }, 'High']))), /options\[0\] must have exactly 'value' and 'label' \(missing value\)/);
+  refused(validateProvisionInput(input(choice([{ value: 'x', label: 'Low' }, 'High']))), /options\[0\]\.value must be a whole number/);
+  refused(validateProvisionInput(input(choice([{ value: 100000001, label: 'Low' }, 'High']))), /options\[1\] has value 100000001, which option 0 already uses/);
+  refused(validateProvisionInput(input({ schemaName: 'cr_due', displayName: 'Due', type: 'DateTime', dateTimeBehavior: 'Bogus' })), /dateTimeBehavior must be one of/);
+  refused(validateProvisionInput(input({ schemaName: 'cr_code', displayName: 'Code', type: 'Text', isSecured: 'yes' })), /isSecured must be a boolean/);
+  refused(validateProvisionInput(input({ schemaName: 'cr_code', displayName: 'Code', type: 'Text' }, { searchEnabled: true })), /searchEnabled true also turns on change tracking/);
+  refused(validateProvisionInput(input({ schemaName: 'cr_code', displayName: 'Code', type: 'Text' }, {}, {
+    globalChoices: [{ name: 'cr_level', displayName: 'Level', options: [{ value: 1, label: 'A' }, { value: 1, label: 'B' }] }] })), /globalChoices\[0\] \(cr_level\)\.options\[1\] has value 1/);
+
+  const good = input(choice([{ value: 100000000, label: 'Low' }, { value: 100000005, label: { 1033: 'High', 1036: 'Haut' } }]),
+    { searchEnabled: true, changeTrackingEnabled: true, duplicateDetectionEnabled: false });
+  good.entities[0].columns.push({ schemaName: 'cr_due', displayName: 'Due', type: 'DateTime', dateTimeBehavior: 'DateOnly', dateFormat: 'DateOnly' },
+    { schemaName: 'cr_code', displayName: 'Code', type: 'Text', isSecured: true });
+  const accepted = validateProvisionInput(good);
+  assert.deepStrictEqual(accepted.errors, []);
+  // The gate runs before any write: a refused input reaches no SDK call.
+  const blocked = await provisionEntities(input(choice([{ label: 'Low' }, 'High'])), { apply: true }, { sdk: null, provision: null });
+  assert.strictEqual(blocked.ok, false);
+});

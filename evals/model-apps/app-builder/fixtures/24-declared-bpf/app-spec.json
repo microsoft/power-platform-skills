@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 2,
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoClaims", "displayName": "Contoso Claims", "publisherPrefix": "cnt" },
+  "app": { "name": "Claims Desk", "description": "Insurance claims whose process flow follows the spec on every rebuild" },
+  "entities": [
+    { "schemaName": "cnt_claim", "displayName": "Claim", "pluralName": "Claims",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Claim" },
+      "columns": [
+        { "schemaName": "cnt_policynumber", "displayName": "Policy Number", "type": "Text" },
+        { "schemaName": "cnt_amount", "displayName": "Claimed Amount", "type": "Money" },
+        { "schemaName": "cnt_assessor", "displayName": "Assessor", "type": "Text" },
+        { "schemaName": "cnt_assessment", "displayName": "Assessment", "type": "Memo" },
+        { "schemaName": "cnt_decision", "displayName": "Decision", "type": "Choice", "options": ["Approved", "Declined"] }
+      ] }
+  ],
+  "forms": [{ "entity": "cnt_claim", "name": "Information", "layout": "auto" }],
+  "views": [
+    { "entity": "cnt_claim", "name": "Open Claims", "columns": ["cnt_name", "cnt_policynumber", "cnt_amount", "cnt_assessor"], "activeOnly": true }
+  ],
+  "businessProcessFlows": [
+    { "entity": "cnt_claim", "name": "Claim handling", "reconcile": "declared",
+      "description": "How a claim moves from intake to a decision.",
+      "status": "Active", "order": 1,
+      "stages": [
+        { "key": "intake", "name": "Intake", "steps": [
+          { "key": "policy", "name": "Policy number", "field": "cnt_policynumber", "required": true },
+          { "key": "amount", "name": "Claimed amount", "field": "cnt_amount" } ] },
+        { "key": "assess", "name": "Assess", "steps": [
+          { "key": "assessor", "name": "Assessor", "field": "cnt_assessor", "required": true },
+          { "key": "assessment", "name": "Assessment", "field": "cnt_assessment" } ] },
+        { "key": "decide", "name": "Decide", "steps": [
+          { "key": "decision", "name": "Decision", "field": "cnt_decision", "required": true } ] }
+      ] }
+  ],
+  "appShell": { "areas": [{ "label": "Claims", "groups": [{ "label": "Work", "subAreas": [
+    { "entity": "cnt_claim", "title": "Claims" }
+  ] }] }] }
+}

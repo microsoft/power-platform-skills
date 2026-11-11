@@ -730,9 +730,15 @@ test('eval 15: the choice options of the input JSON are labels in the plan\'s or
   assertPass(grade(TICKET_CHOICES, withInput(ticketInput())));
   // A label in several languages is a label too.
   assertPass(grade(TICKET_CHOICES, withInput(ticketInput([{ 1033: 'Low', 1036: 'Bas' }, 'Medium', 'High', 'Critical']))));
-  // The shape the entity-builder page used to show: refused by the plugin's own gate, before anything is written.
+  // The explicit form (2.21.0): each option states the number the plan gives its label, so the column is the same.
   const labelValue = ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: 100000000 + i })));
-  assertFail(grade(TICKET_CHOICES, withInput(labelValue)), /provision-entities\.js refuses the captured input: .*options\[0\]: 'label' is not an LCID/);
+  assertPass(grade(TICKET_CHOICES, withInput(labelValue)));
+  assertPass(grade(TICKET_CHOICES, withInput(ticketInput([{ value: 100000000, label: { 1033: 'Low', 1036: 'Bas' } }, 'Medium', 'High', 'Critical']))));
+  // ... but a number the plan does not give that label renumbers the column, and a malformed option is refused by the plugin's gate.
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: i + 1 }))))),
+    /ticket priority options are .*, but the plan numbers Low, Medium, High, Critical from 100000000/);
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput([{ label: 'Low', value: 100000000, color: 'red' }, 'Medium', 'High', 'Critical']))),
+    /provision-entities\.js refuses the captured input: .*options\[0\] must have exactly 'value' and 'label' \(unknown color\)/);
   assertFail(grade(TICKET_CHOICES, withInput(ticketInput(['Medium', 'Low', 'High', 'Critical']))), /ticket priority options are "Medium", "Low", "High", "Critical", but the plan numbers Low, Medium, High, Critical from 100000000/);
   assertFail(grade(TICKET_CHOICES, withInput(ticketInput(undefined, ['Open', 'Resolved', 'Closed']))), /ticket status options are .*, but the plan numbers Open, In Progress, Resolved, Closed/);
   const noStatus = ticketInput();
@@ -760,7 +766,7 @@ const provisionRun = (id, input, flags, result) => ({ id, command: `node scripts
 
 test('eval 15: a dry run of provision-entities.js provisions nothing, and the input graded is the applying run\'s', () => {
   const good = JSON.stringify(ticketInput());
-  const labelValue = JSON.stringify(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: 100000000 + i }))));
+  const labelValue = JSON.stringify(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: i + 1 }))));
   const applied = { ok: true, entities: [{ schemaName: 'cr_Ticket', logicalName: 'cr_ticket', entitySetName: 'cr_tickets' }] };
   const planned = { ok: true, dryRun: true, plan: [{ step: 'createTable', schemaName: 'cr_Ticket' }] };
   assertPass(grade(TICKET_CHOICES, provisionedBy([provisionRun('apply', 'provision-input.json', ' --apply', applied)], { 'provision-input.json': good })));
@@ -774,7 +780,7 @@ test('eval 15: a dry run of provision-entities.js provisions nothing, and the in
   const previewThenApply = [provisionRun('plan', 'preview-input.json', '', planned), provisionRun('apply', 'provision-input.json', ' --apply', applied)];
   assertPass(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': labelValue, 'provision-input.json': good })));
   assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good, 'provision-input.json': labelValue })),
-    /provision-entities\.js refuses the captured input: .*options\[0\]: 'label' is not an LCID/);
+    /ticket priority options are .*, but the plan numbers Low, Medium, High, Critical from 100000000/);
   // The applying run's input was not kept: a current fixture fails, though the preview's was.
   assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good })), /provision-input\.json was not captured/);
 });

@@ -7,7 +7,36 @@
 // pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities] [--include-managed --managed-manifest <file>]
+//
+// `--include-capabilities` also reads, per downloaded table, the Date and Time behaviours of its columns and its search, change tracking
+// and duplicate detection flags (one read each, and the date read only for a table with a Date and Time column), and writes the
+// non-default ones into the spec (downloadedColumnFeatures, downloadedTableFlags). Off by default, so a download makes the reads it
+// always made.
+//
+// `--include-managed --managed-manifest <file>` (both, or neither) restores the declared forms (forms[].reconcile "declared") a build
+// settled: <file> is that build's managed binding store, `<app folder>/.maker-workspace/managed-bindings.<hash>.json`, read only and
+// refused unless it is the store of this app and solution on this environment. Each committed form group is restored as the
+// declaration it was built from only when a fresh read of its form still shows exactly what its last proof saw; any other is named
+// on stderr and in the result's `managedForms.stale`, and left out of forms[] as every form is without the flags. The declared
+// dashboards (dashboards[].reconcile "declared") the store holds are restored the same way, each in place of the plain dashboards[]
+// entry the download reconstructs for its id, only when a fresh read of it still certifies its last proof; any other is named in
+// `managedDashboards.stale` and kept as that plain entry. The declared business rules (businessRules[].reconcile "declared"), which
+// a plain download leaves out, are restored the same way into businessRules[] (`managedRules`), and the declared business process
+// flows (businessProcessFlows[].reconcile "declared"), which it leaves out too, into businessProcessFlows[] (`managedBpfs`). The download writes
+// no binding store, so the downloaded folder holds no bindings: a rebuild from it finds each form by name and needs adopt:form:<key>
+// (each dashboard: adopt:dashboard:<key>; each business rule: adopt:rule:<table>/<name>; each flow: adopt:bpf:<table>/<name>).
+// A declared form's handler library the spec does not declare is downloaded with the form, as an `external` web resource, when it is
+// this publisher's own unmanaged script (lib/declared-form-io.js libraryEntry; `managedForms.libraries`).
+// A persona a declared flow's securityRoles name that the downloaded spec lacks is read from its role and written into personas[] only
+// when a rebuild provably leaves that role exactly as it is (lib/persona-restore.js; `managedBpfs.personas`).
+// A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
+// calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
+// a NEW file `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json` (`managedFragments.file` in the result;
+// lib/managed-fragments.js). It is created exclusively, so it never replaces, moves or removes a file, and with nothing to write
+// nothing is written. So that a failure to write it leaves the folder as it was, the download (every CLI download) writes the
+// page tree to a staging folder inside <out> and publishes it only after the restore, the validation and the fragments file have succeeded.
+// Off by default, so a download without them makes the reads it always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
 // earlier download of the SAME app gave it (the app-spec.json already in --out, when its app.uniqueName is this app's). If that earlier spec gives a page keys that
@@ -31,7 +60,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
+const crypto = require('node:crypto');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
+const { renameWithRetry } = require('./lib/rename-retry.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -39,6 +70,11 @@ const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./li
 const { makeGenpageSdk, unescapePacName, pageFolderFiles } = require('./lib/genpage-sdk.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR } = require('./lib/page-manifest.js');
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
+const { restoreManagedForms } = require('./lib/declared-form-io.js');
+const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
+const { restoreManagedRules } = require('./lib/declared-rule-io.js');
+const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
+const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
@@ -46,8 +82,10 @@ const { PAGE_BINDINGS, pageBindingsProblem, statableBindings, bindingProblemText
 const { getReviewedDataverseOperation } = require('./lib/dataverse-operations.js');
 const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
-const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
+const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
+const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor } = require('./lib/schema-feature-contract.js');
+const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
 const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
 const { readColumnOptions, columnOptionFields, primaryColumnOptionFields } = require('./lib/download-column-options.js');
@@ -55,6 +93,7 @@ const { readStatusOptions, statusReasonsFromOptions, alternateKeysFromMetadata }
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { exactOne, distinctRows } = require('./lib/query-completeness.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -634,6 +673,8 @@ async function makeDownloadSdk(env, deps = {}) {
       httpClient,
       // The App, Form and Dashboard adapters bake the language in at construction, as the build gives its own SDK (build-model-app.js).
       ...(language.languageCode ? { languageCode: language.languageCode } : {}),
+      // --include-capabilities reads the app's theme (Preview), which needs the strict theme read policy (lib/app-theme-reads.js).
+      ...(deps.themeReads ? { themeReads: true } : {}),
     });
     await sdk.initWorkspace();
     return {
@@ -668,11 +709,16 @@ async function resolveAppId(sdk, appArg) {
   if (byUnique && byUnique[0] && byUnique[0].appmoduleid) return { appId: byUnique[0].appmoduleid, matchedBy: 'uniqueName' };
 
   const byName = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'uniquename', 'name'], filter: `name eq '${esc}'`, top: 50 });
-  const matches = (byName || []).filter((r) => r && r.appmoduleid);
-  if (matches.length === 1) return { appId: matches[0].appmoduleid, matchedBy: 'displayName', uniqueName: matches[0].uniquename };
-  if (matches.length > 1) {
+  // Count DISTINCT apps (a paginating server can repeat a row), and refuse an answer the server said is
+  // incomplete exactly like an ambiguous one: one row of a cut-short answer does not prove the name is unique.
+  // `byName` is judged before any copy — the SDK's `hasMore` is non-enumerable (lib/query-completeness.js).
+  const judged = exactOne(byName || [], 'appmoduleid');
+  if (judged.outcome === 'one') return { appId: judged.row.appmoduleid, matchedBy: 'displayName', uniqueName: judged.row.uniquename };
+  if (judged.outcome === 'ambiguous' || judged.outcome === 'incomplete') {
+    const matches = distinctRows(byName, 'appmoduleid').rows;
     const names = matches.map((m) => m.uniquename).filter(Boolean).join(', ');
-    return { error: `'${appArg}' is a DISPLAY name shared by ${matches.length} apps — display names are not unique, so re-run --app with one of these unique names: ${names}` };
+    const shared = judged.outcome === 'ambiguous' ? `shared by ${matches.length} apps` : `the lookup could not prove unique (the answer said more apps carry it than it returned)`;
+    return { error: `'${appArg}' is a DISPLAY name ${shared} — display names are not unique, so re-run --app with ${names ? `one of these unique names: ${names}` : `the app's unique name`}` };
   }
   return { error: `app '${appArg}' not found — --app takes the app's id (GUID), its unique name (e.g. new_myapp), or an unambiguous display name` };
 }
@@ -1057,22 +1103,22 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 //
 // `unkeptBindings` collects the pages whose config.json holds a list of connector or Custom API bindings the spec cannot state: { pageId, field, reason }. The list is not a list, or an entry is not an object
 // (`pageBindingsProblem`), or an entry holds anything a spec does not state (see the projection below). `reason` names the place and the vetted property, never a value or an unrecognized key.
-function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings) {
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings, fsImpl = fs) {
   const pages = [];
-  if (!fs.existsSync(pagesRoot)) return pages;
+  if (!fsImpl.existsSync(pagesRoot)) return pages;
   // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
   // not the same on every machine, and this loop decides the order of `pages[]` in the spec and of the unreadable-config and
   // unkept-model reports. It decides no page key: assignPageKeys mints in the order of the pages' ids, whatever order it is given.
   const nameOf = (entry) => (nameById && nameById.get(String(entry).toLowerCase())) || entry;
-  const entries = fs.readdirSync(pagesRoot)
+  const entries = fsImpl.readdirSync(pagesRoot)
     .map((entry) => ({ pageId: entry, name: nameOf(entry) }))
     .sort(comparePages)
     .map((page) => page.pageId);
   for (const entry of entries) {
     const dir = path.join(pagesRoot, entry);
-    if (!fs.statSync(dir).isDirectory()) continue;
+    if (!fsImpl.statSync(dir).isDirectory()) continue;
     const tsx = path.join(dir, 'page.tsx');
-    if (!fs.existsSync(tsx)) continue;
+    if (!fsImpl.existsSync(tsx)) continue;
     let config = {};
     const configPath = path.join(dir, 'config.json');
     // Read DIRECTLY and let ENOENT — and ONLY ENOENT — mean "absent, therefore optional".
@@ -1086,7 +1132,7 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
       // 'utf8' decode keeps that BOM as U+FEFF, and JSON.parse REJECTS a leading U+FEFF — so a
       // perfectly valid downloaded config threw, the old catch substituted `{}`, and the page's
       // table bindings vanished from the emitted spec. A BOM is an encoding marker, not content.
-      config = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+      config = JSON.parse(fsImpl.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
       if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object');
       if (Object.prototype.hasOwnProperty.call(config, 'dataSources')) {
         if (!Array.isArray(config.dataSources)) throw new Error('config.json dataSources is present but is not an array');
@@ -1094,6 +1140,9 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
         if (bad !== undefined) throw new Error('config.json dataSources must be an array of non-empty table logical names');
       }
     } catch (e) {
+      // A folder of a staged download's staging found replaced by a link is not a page's config that cannot be read: it stops the
+      // download (generatedFolders).
+      if (e && e.code === 'UNSAFE_OUTPUT') throw e;
       config = {};
       // Present but unreadable — report it rather than inventing empty metadata. A genuinely absent
       // config is optional by contract and is NOT reported.
@@ -1107,8 +1156,9 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     // A file that EXISTS but is blank or unreadable stays explicit, so it still fails closed.
     let prompt;
     try {
-      prompt = fs.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
+      prompt = fsImpl.readFileSync(path.join(dir, 'prompt.txt'), 'utf8').replace(/^\uFEFF/, '');
     } catch (e) {
+      if (e && e.code === 'UNSAFE_OUTPUT') throw e;
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
     // The model that generated the page, as config.json records it. It has to come back with the page:
@@ -1660,7 +1710,9 @@ function optionSetFromRow(row) {
   // falls through to the untyped warning that already exists for exactly this case.
   if (labels.some((l) => descriptionFromDataverse(l) === undefined)) return null;
   const displayName = descriptionFromDataverse(os.DisplayName);
-  return { ...(name ? { name } : {}), ...(displayName !== undefined ? { displayName } : {}), isGlobal: os.IsGlobal === true, options: labels };
+  // `values` keeps each option's number beside its label (downloadedChoiceOptions): a set numbered other than 100000000 + index
+  // is written as explicit `{ value, label }` options, so a rebuild keeps the numbers its data and filters use.
+  return { ...(name ? { name } : {}), ...(displayName !== undefined ? { displayName } : {}), isGlobal: os.IsGlobal === true, options: labels, values: os.Options.map((o) => o && o.Value) };
 }
 
 // Inline Choice options and alternate-key display names can preserve LCID maps, unlike a
@@ -1728,7 +1780,8 @@ function collectGlobalChoices(meta, into) {
     into.set(key, {
       name: os.name,
       ...(os.displayName !== undefined ? { displayName: os.displayName } : {}),
-      options: os.options.map((l) => descriptionFromDataverse(l)), existing: true,
+      // A set whose numbers cannot be read (downloadedChoiceOptions null) keeps the plain labels it was always written with.
+      options: downloadedChoiceOptions(os.options.map((l) => descriptionFromDataverse(l)), os.values) || os.options.map((l) => descriptionFromDataverse(l)), existing: true,
     });
   }
   return into;
@@ -1977,6 +2030,38 @@ function untypedColumnWarnings(untyped, clashes = new Map()) {
 // (`{ table, column, option, label, languageCode }`, see the option screen below), so the caller can name them.
 // `labelClashes`, when given, is filled with the Choice columns left untyped because one text names two of their options in a way
 // the App Spec refuses (`{ table, column, clashes: [{ alias, first, second }] }`, the same screen), so the caller names the clash.
+// --include-capabilities, for one downloaded table: the behaviour of each Date and Time column (one typed read, only when the table has
+// one) and the table's flags (one read), written into `entity` where they differ from what a build creates by default. Returns the
+// reasons a read gave no answer; each such fact is left out of the spec, so a rebuild uses the default rather than a guess.
+async function downloadCapabilities(sdk, logical, entity) {
+  const failed = [];
+  const dateColumns = (entity.columns || []).filter((c) => c && c.type === 'DateTime');
+  if (dateColumns.length) {
+    const evidence = await readExistingDateBehaviors(sdk, logical);
+    if (!evidence.complete) failed.push(`Date and Time behaviours: ${evidence.reason}`);
+    else {
+      // A complete answer can still leave a known column unstated: the typed list can omit it, or list it with
+      // `DateTimeBehavior: null`. Either is unknown, not the UserLocal default, so it is named rather than silently omitted.
+      const unstated = [];
+      for (const c of dateColumns) {
+        const row = evidence.columns.get(String(c.schemaName).toLowerCase());
+        if (!row || !row.behavior) unstated.push(c.schemaName);
+        Object.assign(c, downloadedColumnFeatures({}, row));
+      }
+      if (unstated.length) failed.push(`Date and Time behaviours: the answer does not state ${unstated.join(', ')}`);
+    }
+  }
+  const flags = await readTableFlags(sdk, logical);
+  if (!flags) failed.push('table flags: the read gave no answer');
+  else {
+    // readTableFlags answers `undefined` for a flag the 200 body does not state as a boolean (e.g. `{}`); that is unknown, not off.
+    const unstated = ['duplicateDetectionEnabled', 'changeTrackingEnabled', 'searchEnabled'].filter((k) => typeof flags[k] !== 'boolean');
+    if (unstated.length) failed.push(`table flags: the answer does not state ${unstated.join(', ')}`);
+    Object.assign(entity, downloadedTableFlags(flags));
+  }
+  return failed;
+}
+
 function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOmissions = [], languageCode, languageLost, labelClashes } = {}) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
   const attrs = Array.isArray(meta && meta.attributes) ? meta.attributes : (Array.isArray(meta && meta.Attributes) ? meta.Attributes : []);
@@ -2181,12 +2266,17 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOm
       }
     }
     const inlineIsAmbiguous = inlineOptions ? hiddenCollision(inlineOptions) : false;
-    const usableOptionSet = inlineIsAmbiguous ? null : optionSet;
+    // The options as the spec writes them: plain labels when every number is its place's default, else `{ value, label }`. A set whose
+    // numbers were read but cannot be written (null) is left untyped, as an ambiguous one is, rather than renumbered by a rebuild. A set\r
+    // given with no numbers (an option set attached by a caller) keeps its plain labels, as before.
+    const valuedOptions = inlineOptions && !inlineIsAmbiguous
+      ? (Array.isArray(optionSet.values) ? downloadedChoiceOptions(inlineOptions, optionSet.values) : inlineOptions) : null;
+    const usableOptionSet = inlineIsAmbiguous || (inlineOptions && !valuedOptions) ? null : optionSet;
     const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) && !usableOptionSet ? undefined : mapped;
     const choice = !usableOptionSet ? {}
       : (usableOptionSet.isGlobal && usableOptionSet.name
         ? { globalChoice: usableOptionSet.name }
-        : { options: inlineOptions });
+        : { options: valuedOptions });
     if (schemaName && Array.isArray(languageLost)) for (const l of lostLanguages) languageLost.push({ table: logical, column: schemaName, ...l });
     if (inlineIsAmbiguous && schemaName && Array.isArray(labelClashes)) {
       labelClashes.push({ table: logical, column: schemaName, clashes: ambiguousChoiceAliases(inlineOptions).filter((c) => c.hidden).map(({ alias, first, second }) => ({ alias, first, second })) });
@@ -2215,6 +2305,9 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOm
       ...(specType ? { type: specType } : {}),
       ...choice,
       ...columnOptionFields(a, specType),
+      // isSecured: true where the column is secured (the attribute row's IsSecured); a Customer column cannot declare it. The date
+      // behaviour needs the typed per-table read, so it is not written here (dateEvidence null).
+      ...(specType && specType !== 'Customer' ? downloadedColumnFeatures(a, null) : {}),
       // The size (and, for an image, the primary-image flag) the column was made with, where a rebuild needs it (mediaColumnFields).
       ...(specType === 'File' || specType === 'Image' ? mediaColumnFields(a, specType) : {}),
     }, a && (a.description !== undefined ? a.description : a.Description));
@@ -2645,7 +2738,11 @@ const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
 //   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
 //   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
 //   ref is a system icon present in every env, so it stays silent (no false alarm).
-async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved, navRefs, tableRefs) {
+//
+// `onRead(name, row, failed)` — optional; told what each PASS-1 read returned (`row` undefined when no row came back,
+//   `failed` true when the read threw), so a caller that needs a stricter answer than `unresolved` (the theme logo's
+//   classifyThemeLogo) can have it without reading the resource twice. It changes nothing this helper returns.
+async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved, navRefs, tableRefs, onRead) {
   const out = [];
   const seen = new Set();                 // lowercased names actually re-declared into `out`
   const prefixLc = ownPrefix ? String(ownPrefix).toLowerCase() + '_' : null;
@@ -2675,8 +2772,11 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
     // TRUSTED prefix: only an OWN-prefix ref is a candidate; a foreign/OOB ref is left as a bare reference
     // (never queried). UNTRUSTED prefix: fall through and probe EVERY ref to classify it (see below).
     if (prefixResolved && !ownScoped) continue;
+    let read = false;
     try {
       const wr = await queryWr(name);
+      read = true;
+      if (onRead) onRead(name, wr, false);
       if (!prefixResolved) {
         // Unverified prefix — classify only, NEVER re-declare (an unknown non-'new' prefix would BuildHalt).
         // Flag a genuine custom icon as a candidate so a transient recovery failure degrades to a warning,
@@ -2692,7 +2792,7 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
       if (wr.ismanaged === true || (allowed && !allowed.has(wr.webresourcetype))) continue;   // managed / wrong type → leave as a bare reference
       seen.add(key);
       out.push({ name, ...(wr.displayname ? { displayName: wr.displayname } : {}), type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content, external: true });
-    } catch { candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
+    } catch { if (onRead && !read) onRead(name, undefined, true); candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
   }
 
   // PASS 2 — author-declared BARE names. A bare name MUST be re-declared (validation requires a bare icon
@@ -2718,6 +2818,30 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
   // overlapping name — that resolves it, so it must not also warn). Dedup preserved by the Map key.
   const unresolved = [...candidateUnresolved].filter(([key]) => !seen.has(key)).map(([, name]) => name);
   return { webResources: out, unresolved };
+}
+
+// The theme's header logo, as a strict download must classify it — three ways, each one established, never inferred:
+//   exported     — this publisher's own unmanaged image with content: iconWebResources re-declared it `external: true`;
+//   reference    — POSITIVELY another publisher's (the app's publisher prefix is known and the name is outside it) or
+//                  managed (read, with content, `ismanaged: true`): left as a bare reference, as such a navigation icon is;
+//   unexportable — anything else: unread, gone, empty, or a resource not known to be another publisher's or managed.
+// Absence from iconWebResources' `unresolved` list is NOT evidence of "reference": with an unverified publisher prefix
+// that helper deliberately stays silent about a missing row, an empty image or an unstated management flag (for a
+// navigation icon that state is most likely a system icon, and a warning would be a false alarm). A theme logo the spec
+// names but does not carry has no such benign reading: a rebuild into a fresh environment refuses the theme for it.
+// `read` is what the helper's single read returned ({ row, failed }), or undefined when it made none.
+function classifyThemeLogo(themeLogo, trustedPrefix, logoExport, read) {
+  const key = String(themeLogo).toLowerCase();
+  if (logoExport.webResources.some((wr) => wr.name.toLowerCase() === key)) return { kind: 'exported' };
+  if (trustedPrefix && !key.startsWith(`${String(trustedPrefix).toLowerCase()}_`)) return { kind: 'reference', what: "another publisher's" };
+  if (!read || read.failed) return { kind: 'unexportable', why: 'it could not be read' };
+  const row = read.row;
+  if (!row) return { kind: 'unexportable', why: 'it was not found' };
+  if (!row.content) return { kind: 'unexportable', why: 'it has no content' };
+  if (row.ismanaged === true) return { kind: 'reference', what: 'managed' };
+  return { kind: 'unexportable', why: trustedPrefix
+    ? 'it is not an image this publisher can export'
+    : "the app's publisher could not be verified, so it is neither known to be this publisher's (to export) nor another publisher's or managed (to reference)" };
 }
 
 // Count sitemap subareas hydrateSpec could not round-trip (present in the deployed sitemap but not in
@@ -2808,6 +2932,25 @@ async function recoverAppSolution(sdk, appId) {
   return out;
 }
 
+// The publisher prefix a download may trust, from recoverAppSolution's answer and the app's real uniquename. Pure: the
+// warnings that name each case stay in runDownload, which explains the precedence. Shared by runDownload's solution
+// block and the app theme's logo preflight, which must judge "this publisher's own logo" exactly as the export does.
+//   solutionPrefix   the recovered solution's owning publisher (authoritative)
+//   appDerivedPrefix the leading segment of a '<prefix>_<name>' uniquename (fallback only)
+//   prefixUnknown    several solutions, an unread membership or an unread publisher, and no solution prefix
+//   trustedPrefix    solutionPrefix, else appDerivedPrefix unless the prefix is unknown, else null
+function downloadPublisherPrefix(recovered, appUnique) {
+  const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
+  const appDerivedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+  const solutionCandidates = recovered && Array.isArray(recovered.ambiguous) ? recovered.ambiguous : null;
+  const solutionUnreadable = recovered && recovered.unreadable ? recovered.unreadable : null;
+  const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
+  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
+  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
+  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
+  return { appDerivedPrefix, solutionCandidates, solutionUnreadable, solutionPrefix, publisherUnreadable, prefixUnknown, trustedPrefix };
+}
+
 // Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
 // `sdk`        — the MakerSDK (fetchArtifact, queryRecords, fetchEntityMetadata)
 // `genpage`    — the page backend (lib/genpage-sdk.js: enumerateEnv, read)
@@ -2823,26 +2966,27 @@ async function recoverAppSolution(sdk, appId) {
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
 // A link already under pages/ must be refused before the tree is replaced. rm of a real
 // parent drops the link name; that is not the same as leaving the other name untouched.
-function assertNoPlantedPageLinks(pagesRoot) {
+// `fsImpl` is the fs every look goes through (a test seam; production passes none).
+function assertNoPlantedPageLinks(pagesRoot, fsImpl = fs) {
   let entries = [];
-  try { entries = fs.readdirSync(pagesRoot); } catch (e) {
+  try { entries = fsImpl.readdirSync(pagesRoot); } catch (e) {
     if (e && e.code === 'ENOENT') return;
     throw e;
   }
   for (const entry of entries) {
     const child = path.join(pagesRoot, entry);
     let st;
-    try { st = fs.lstatSync(child); } catch (e) {
+    try { st = fsImpl.lstatSync(child); } catch (e) {
       if (e && e.code === 'ENOENT') continue;
       throw e;
     }
     if (st.isSymbolicLink() || st.isDirectory()) {
-      assertSafeOutputDir(child);
+      assertSafeOutputDir(child, { fs: fsImpl });
       if (st.isDirectory() && !st.isSymbolicLink()) {
-        for (const name of fs.readdirSync(child)) assertPlainFileTarget(path.join(child, name));
+        for (const name of fsImpl.readdirSync(child)) assertPlainFileTarget(path.join(child, name), { fs: fsImpl });
       }
     } else {
-      assertPlainFileTarget(child);
+      assertPlainFileTarget(child, { fs: fsImpl });
     }
   }
 }
@@ -2854,16 +2998,348 @@ function assertNoPlantedPageLinks(pagesRoot) {
 // under pages/ is refused first (assertNoPlantedPageLinks), a folder is made only after the name is checked (assertSafeOutputDir), and
 // every file is written by writeFileSafe, which refuses a link at the file's own name. A page id reaches here only after the backend has
 // read it, and the backend reads a GUID and nothing else, so no id can hold a path separator.
-function writePageTree(pagesRoot, pages) {
-  assertSafeOutputDir(pagesRoot, { create: true });
-  assertNoPlantedPageLinks(pagesRoot);
-  fs.rmSync(pagesRoot, { recursive: true, force: true });
-  assertSafeOutputDir(pagesRoot, { create: true });
-  for (const { pageId, files } of pages) {
-    const destDir = path.join(pagesRoot, pageId);
-    assertSafeOutputDir(destDir, { create: true });
-    for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8' });
+//
+// The tree is SWAPPED, never rewritten in place (#814). The folder may hold a maker's page edits that were never uploaded, and the old
+// way (remove pages/, then write each file) lost them to any failure part-way: a full disk, a permission, a locked file, a crash. Now the
+// new tree is written whole beside it first, and the old one is deleted only once the new one has its name:
+//   1. check pages/ (the refusals above), so a planted link is refused before anything is made;
+//   2. make a swap folder `<out>/.pages-replace.<pid>.<random>.tmp` (makeHiddenDir: a name nobody holds, checked to be the plain folder
+//      just made before anything is written under it) and write the new tree to its `new` subfolder. It sits in the same folder as
+//      pages/, so the moves below are renames on one volume, never copies;
+//   3. check the new tree (`new`, each page folder in it and each file written there are still there and still what was made) and pages/ again:
+//      writing took time, and the move below must act on the folders the checks saw;
+//   4. move pages/ to the swap folder's `previous` (skipped when there is no pages/);
+//   5. move `new` to pages/;
+//   6. remove the swap folder, the previous tree in it.
+// What a stop between two steps (a crash, a kill, a power cut) leaves on disk:
+//   before 2:  nothing has changed;
+//   2 to 4:    pages/ as it was, and a swap folder holding all or part of the new tree;
+//   4 to 5:    no pages/; the previous tree whole in `<swap>/previous`, the new tree in `<swap>/new`;
+//   5 to 6:    the new pages/, and the previous tree in `<swap>/previous` (whole, or what is left of it once step 6 has begun);
+//   after 6:   the new pages/ and nothing else.
+// In no state is a page file deleted before the tree that replaces it is whole on disk. A swap folder left by a stopped run is never
+// reused, moved or deleted by a later download (each run makes its own, under a new name). One that holds a `previous` tree may hold the
+// maker's only copy of their edits (a stop between 4 and 5 leaves no pages/ at all), so a later download that replaces this pages/ names
+// it in one warning (warnStrandedPageTrees), and goes on: it is the maker's to look into and delete. One with no `previous` holds only
+// downloaded pages and is not named.
+//
+// A failure of a step is undone, and said:
+//   2 or 3 fails: the swap folder is removed and the error thrown as it came; pages/ is untouched;
+//   4 fails:      nothing moved (a refused rename moves nothing); the swap folder is removed; pages/ is untouched;
+//   5 fails:      the previous tree is moved back to pages/. If that fails too, nothing is removed and the error names both folders;
+//   6 fails:      the download succeeded; a warning names the swap folder, to delete.
+// A failure is cleaned up by removing `new` and then the EMPTY swap folder (rmdir, never recursive), so no clean-up can delete the
+// previous tree, even after a rename that reported a failure and moved it all the same.
+//
+// The folders this run makes are held to being what they were made as, before EVERY fs operation on a path in them: each mkdir, each
+// file write (writeFileSafe's temp file, its rename into place and the removal of a temp file it gives up on), each rename attempt
+// (every retry of the move in and of the move back included), each removal, and each read (a listing, a stat, a file's bytes: a
+// staged download reads its staged tree back, and what it reads is what it states in the spec and publishes into pages/). All of them
+// go through ONE fs, generatedFolders' `fs`, which checks first that the folder made (the swap folder; a staged download's
+// `.download-pages.*` staging folder) and every folder between it and the path are still plain folders at the paths they were made at
+// (ownedDir), and that the path itself is not a link. Something that replaced one of them with a link or junction (or moved it away and
+// put one at its name) would otherwise have a page written, a tree moved into pages/, a clean-up delete recursively, or page bytes read,
+// wherever that link points, outside <out>. Such a replacement is refused (UNSAFE_OUTPUT), and from then on nothing is read, written,
+// moved or removed under the folder replaced (nor a folder that holds it removed or moved): the step that met it fails, a clean-up
+// leaves it and names it, and the previous pages are moved back only while `previous` itself still passes the check. The managed
+// download's staging folder found replaced at any check, its removal after the last read included, refuses the download: nothing read
+// from it is published (runDownload). tests/download-model-app.test.js holds the raw fs calls of writePageTree, the staged readback and
+// their helpers to that one fs. What a check cannot close is the moment between it and the one syscall it guards, read or write (a path
+// is named again by that syscall): no wait sits there, as a retry's wait comes before the next attempt's own check.
+//
+// Windows: a folder rename is refused (EPERM, EACCES, EBUSY) while a scanner or the search indexer holds a file in it. Step 5 and the
+// move back use renameWithRetry (lib/rename-retry.js), which repeats the same rename for a few seconds: the folder moved is one this run
+// made or moved into its own swap folder, under a name nobody else knows, each attempt is checked as above before it is made, and the
+// target is the name pages/ this run has just vacated, so a repeat means what the first attempt meant (if a folder took that name
+// meanwhile, every attempt is refused and the move back or the error that names both folders follows). Step 4 is ONE attempt: it moves
+// the maker's own folder, which an editor, a sync client or the maker can change while a wait goes on, so a wait would let the checks of
+// step 3 go stale, as rename-retry.js forbids. Its refusal leaves pages/ as it was and fails the download, which can simply be run again.
+//
+// `opts`: `fs` (every call goes through it: a staged download passes its staging folder's guarded fs, and tests a faulty one), and,
+// for tests, `warn` (where the warnings go) and `rename` (renameWithRetry's own test options).
+function writePageTree(pagesRoot, pages, opts = {}) {
+  const fsImpl = opts.fs || fs;
+  const warn = opts.warn || ((line) => process.stderr.write(line));
+  // Step 1. The same refusals, made before anything is created, as they always were.
+  assertPageTreeReplaceable(pagesRoot, fsImpl);
+  // The moves go through the checked real folder (an 8.3 short name or a linked ancestor names the same one); messages name the folders
+  // as the caller named pages/.
+  const shownRoot = path.dirname(path.resolve(pagesRoot));
+  const realRoot = assertSafeOutputDir(shownRoot, { create: true, fs: fsImpl });
+  const pagesPath = path.join(realRoot, path.basename(pagesRoot));
+  const shown = (p) => path.join(shownRoot, path.relative(realRoot, p));
+  warnStrandedPageTrees(realRoot, pagesRoot, shown, warn, fsImpl);
+  const guard = generatedFolders(fsImpl, shown);
+  const gfs = guard.fs;
+  // Throws, with nothing to clean up, when the folder just made is not a plain folder at its own path: nothing is written or removed
+  // through a link planted there.
+  const swap = makeHiddenDir(realRoot, '.pages-replace', guard);
+  const fresh = path.join(swap, 'new');
+  const previous = path.join(swap, 'previous');
+  // Removes the new tree, then the swap folder if nothing else is in it. Best-effort: the caller has an error to throw already. Through
+  // the guarded fs, so a clean-up never descends through a link put in place of either.
+  const discard = () => {
+    let held = removeTreeWithRetry(fresh, { fs: gfs });
+    if (!held) {
+      try { gfs.rmdirSync(swap); } catch (e) { held = (e && e.code) || 'UNKNOWN'; }
+    }
+    if (held === 'UNSAFE_OUTPUT') warn(`WARNING: the folder ${shown(swap)} the downloaded pages were written to was not removed: ${NOT_OWNED_LEFT}\n`);
+    else if (held) warn(`WARNING: the folder ${shown(swap)} the downloaded pages were written to could not be removed (${held}): delete it.\n`);
+  };
+  let hadTree;
+  try {
+    // Step 2.
+    gfs.mkdirSync(fresh);
+    for (const { pageId, files } of pages) {
+      const destDir = path.join(fresh, pageId);
+      gfs.mkdirSync(destDir, { recursive: true });
+      for (const [name, text] of Object.entries(files)) writeFileSafe(path.join(destDir, name), text, { encoding: 'utf8', fs: gfs });
+    }
+    // Step 3. `new` once more too, and each page folder made in it and each file written there, so a replacement found now costs no
+    // move of the maker's folder and nothing in its place is moved into pages/. The guarded lstat checks each path as `verify` does
+    // (a link or a folder that is not the one made is refused), but the guard lets a missing path through (an operation that creates it
+    // must be able to run), so each is also required to be there, as what was made: a folder or a file that is gone (removed after it
+    // was written) leaves a tree that is not complete, and it is not published.
+    const present = (p, kind) => {
+      let stat = null;
+      let cause = null;
+      try {
+        stat = gfs.lstatSync(p);
+      } catch (e) {
+        if (e && e.code === 'UNSAFE_OUTPUT') throw e;
+        cause = e;
+      }
+      if (stat && (kind === 'folder' ? stat.isDirectory() : stat.isFile())) return;
+      // Only a missing path shows the entry is gone; any other error (EIO, EACCES, ...) leaves it unknown, and says so.
+      const code = (cause && cause.code) || cause;
+      const gone = cause && (cause.code === 'ENOENT' || cause.code === 'ENOTDIR');
+      const what = stat ? `is no longer a ${kind}` : gone ? `is no longer there (${code})` : `could not be inspected (${code})`;
+      const error = pageTreeError(`could not write the page folder ${pagesRoot}: the ${kind} ${shown(p)} this download wrote ${what}. The page folder is as it was, and the downloaded pages were not moved into it`, cause);
+      error.code = 'IO_ERROR';
+      throw error;
+    };
+    present(fresh, 'folder');
+    for (const { pageId, files } of pages) {
+      const destDir = path.join(fresh, pageId);
+      present(destDir, 'folder');
+      for (const name of Object.keys(files)) present(path.join(destDir, name), 'file');
+    }
+    hadTree = assertPageTreeReplaceable(pagesPath, fsImpl);
+  } catch (e) {
+    discard();
+    throw e;
   }
+  // Step 4.
+  if (hadTree) {
+    try {
+      gfs.renameSync(pagesPath, previous);
+    } catch (e) {
+      discard();
+      throw pageTreeError(`could not replace the page folder ${pagesRoot}: it could not be moved aside (${(e && e.code) || e}). It is as it was, and the downloaded pages were not written`, e);
+    }
+  }
+  // Step 5.
+  try {
+    renameWithRetry(gfs, fresh, pagesPath, opts.rename);
+  } catch (e) {
+    const code = (e && e.code) || e;
+    if (!hadTree) {
+      discard();
+      throw pageTreeError(`could not write the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code})`, e);
+    }
+    try {
+      renameWithRetry(gfs, previous, pagesPath, opts.rename);
+    } catch (back) {
+      // `previous`, or a folder above it, is not the folder made: where the previous pages now are is not known here, only where they
+      // were moved to. Nothing more is done through it.
+      if (back && back.code === 'UNSAFE_OUTPUT') {
+        throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}). The previous pages had been moved to ${shown(previous)}, and that folder or one above it is no longer the folder this download made there (a link or junction was put in its place), so they were not moved back, and nothing more was moved, written or removed through it. Find them where that folder was moved to, and move them back to ${pagesRoot}`, back);
+      }
+      throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}), and the previous pages could not be moved back (${(back && back.code) || back}). Nothing was deleted: the previous pages are in ${shown(previous)} and the downloaded pages in ${shown(fresh)}. Move the previous pages back to ${pagesRoot}`, e);
+    }
+    discard();
+    throw pageTreeError(`could not replace the page folder ${pagesRoot}: the downloaded pages could not be moved into it (${code}). The previous pages were put back as they were`, e);
+  }
+  // Step 6.
+  const left = removeTreeWithRetry(swap, { fs: gfs });
+  if (left === 'UNSAFE_OUTPUT') warn(`WARNING: the page folder ${pagesRoot} was replaced, but the folder ${shown(swap)} that held the previous pages was not removed: ${NOT_OWNED_LEFT}\n`);
+  else if (left) warn(`WARNING: the page folder ${pagesRoot} was replaced, but the folder ${shown(swap)} that holds the previous pages could not be removed (${left}): delete it.\n`);
+}
+
+// Why a folder this run made is left behind when it is no longer that folder: the end of each warning that names one.
+const NOT_OWNED_LEFT = 'it, or a folder in it, is no longer the folder this download made there (a link or junction was put in its place, or it was moved), and nothing is removed through one. Look into it before you delete anything in it.';
+
+// Names, in one warning each, the swap folders an earlier download left in `realRoot` (it stopped before its step 6) that hold a
+// `previous` tree: the page folder as it was before that download, possibly with edits the maker has nowhere else. Looks, never touches:
+// such a folder is not moved, reused or deleted. A folder that cannot be read is passed over in silence (this is a hint, never a reason
+// to stop a download).
+function warnStrandedPageTrees(realRoot, pagesRoot, shown, warn, fsImpl = fs) {
+  let names = [];
+  // A refusal of a guarded fs (a staged download's staging folder found replaced) is not a folder that cannot be read: it stops.
+  try { names = fsImpl.readdirSync(realRoot); } catch (e) { if (e && e.code === 'UNSAFE_OUTPUT') throw e; return; }
+  for (const name of names.filter((n) => n.startsWith('.pages-replace.')).sort()) {
+    const held = path.join(realRoot, name, 'previous');
+    let st;
+    try { st = fsImpl.lstatSync(held); } catch (e) { if (e && e.code === 'UNSAFE_OUTPUT') throw e; continue; }
+    if (!st.isDirectory()) continue;
+    warn(`WARNING: ${shown(held)} holds the page folder as it was before an earlier download that stopped part-way: if it has page edits you need, copy them back into ${pagesRoot}, then delete ${shown(path.join(realRoot, name))}.\n`);
+  }
+}
+
+// A failure of the swap, with the code of the fs error that caused it, so a caller that tells failures apart by code still can.
+function pageTreeError(message, cause) {
+  const error = new Error(message);
+  if (cause && cause.code) error.code = cause.code;
+  error.cause = cause;
+  return error;
+}
+
+// Whether `dir`, a folder this run made under a real (resolved) parent, is still that folder: 'owned' when it is a plain folder whose
+// real path is the path it was made at, 'missing' when nothing is there, 'unsafe' otherwise. A link or junction put in its place fails
+// assertSafeOutputDir (it refuses a link as the last component); one put in place of a folder above it changes the real path. Never throws.
+function ownedDir(dir, fsImpl = fs) {
+  try { fsImpl.lstatSync(dir); } catch (e) { return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'missing' : 'unsafe'; }
+  try { return assertSafeOutputDir(dir, { fs: fsImpl }) === dir ? 'owned' : 'unsafe'; } catch { return 'unsafe'; }
+}
+
+function notOwnedError(shownDir) {
+  return Object.assign(new Error(`refusing to use ${shownDir} as an output directory: it is no longer the folder this download made there (a link or junction was put in its place, or above it, or it was moved), so nothing more is read, written, moved or removed through it`), { code: 'UNSAFE_OUTPUT', reason: 'link' });
+}
+
+// The fs methods that read, write, make, move or remove, and which of their arguments name a path they act on (a file descriptor is not
+// checked: it was opened by a checked call). Reads are held as writes are: what a staged download reads back from its staging folder
+// is what it publishes into pages/ and states in the spec, so a read through a folder replaced by a link would hand on bytes from
+// wherever that link points. realpathSync (and .native) is checked too: see generatedFolders. A method missing here would go through
+// unchecked: tests/download-model-app.test.js fails on a raw call of any such method in writePageTree, the staged readback and their
+// helpers, and checks each one listed is refused under a replaced folder.
+const GUARDED_FS_METHODS = {
+  mkdirSync: [0], mkdtempSync: [0], openSync: [0], writeFileSync: [0], appendFileSync: [0], truncateSync: [0], chmodSync: [0],
+  utimesSync: [0], unlinkSync: [0], rmSync: [0], rmdirSync: [0], renameSync: [0, 1], copyFileSync: [0, 1], cpSync: [0, 1], linkSync: [0, 1],
+  symlinkSync: [1], createWriteStream: [0],
+  readFileSync: [0], readdirSync: [0], opendirSync: [0], statSync: [0], lstatSync: [0], existsSync: [0], accessSync: [0],
+  readlinkSync: [0], createReadStream: [0],
+};
+
+// The fs a guarded fs checks with: the plain one under any number of guards (a staged download's staging guard holds the swap guard
+// writePageTree makes inside it). Each guard's checks (ownedDir) compare real paths, which cover every folder above, so they need not
+// themselves run through another guard; the operation still does.
+const UNGUARDED_FS = Symbol('unguarded fs');
+
+// The ONE way writePageTree, a staged download's staging and readback, and their helpers touch the folders they make. `adopt(dir)`
+// takes a folder just made (refused, and not adopted, unless it is a plain folder at its own path); `fs` is `fsImpl` with every method of
+// GUARDED_FS_METHODS checked before it runs, on any path in an adopted folder: the adopted folder and every folder between it and the path
+// that exists must be owned (ownedDir), and the path itself, if it exists, must not be a link (nor, when a folder, other than owned).
+// A failed check throws UNSAFE_OUTPUT and marks the folder that failed: no later operation runs on a path in it, nor moves or removes a
+// folder that holds it. `verify(path)` makes the same check alone; `refused()` answers whether any check has failed (sticky), so a caller
+// can refuse to use what it read even where a refusal was caught. Paths outside the adopted folders go through as they are.
+function generatedFolders(fsImpl, shown) {
+  const plain = fsImpl[UNGUARDED_FS] || fsImpl;
+  const roots = [];
+  const broken = [];
+  const within = (p, dir) => {
+    const rel = path.relative(dir, p);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
+  const refuse = (dir) => {
+    if (!broken.includes(dir)) broken.push(dir);
+    throw notOwnedError(shown(dir));
+  };
+  const verify = (target) => {
+    const p = path.resolve(String(target));
+    const hit = broken.find((b) => within(p, b) || within(b, p));
+    if (hit) throw notOwnedError(shown(hit));
+    const root = roots.find((r) => within(p, r));
+    if (!root) return;
+    // The adopted folder down to the path's own folder, top first, so the folder named is the one replaced. Below a missing folder
+    // there is nothing to act through: the syscall fails on its own.
+    const dirs = [];
+    if (p !== root) {
+      dirs.push(root);
+      for (const part of path.relative(root, path.dirname(p)).split(path.sep).filter(Boolean)) dirs.push(path.join(dirs[dirs.length - 1], part));
+    }
+    for (const dir of dirs) {
+      const state = ownedDir(dir, plain);
+      if (state === 'missing') return;
+      if (state !== 'owned') refuse(dir);
+    }
+    let st;
+    try { st = plain.lstatSync(p); } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return; refuse(p); }
+    if (st.isSymbolicLink() || (st.isDirectory() && ownedDir(p, plain) !== 'owned')) refuse(p);
+  };
+  const guarded = Object.create(fsImpl);
+  // Defined, not assigned: some of node's fs methods (opendirSync among them) are accessors with a setter, and an assignment through
+  // the prototype would call that setter and replace the method of node's own fs, for every caller, with this guard.
+  const own = (name, value) => Object.defineProperty(guarded, name, { value, writable: true, enumerable: true, configurable: true });
+  own(UNGUARDED_FS, plain);
+  for (const [name, at] of Object.entries(GUARDED_FS_METHODS)) {
+    own(name, function (...args) {
+      for (const i of at) if (typeof args[i] === 'string') verify(args[i]);
+      return fsImpl[name](...args);
+    });
+  }
+  // The read a write is aimed by: writeFileSafe and assertSafeOutputDir resolve a folder to its real path and then write under the
+  // answer, which, through a folder replaced by a link, is a path outside every adopted folder that no later check would see. So the
+  // folder is checked before it is resolved, and an owned folder resolves to itself.
+  const realpathSync = function (p, ...rest) {
+    if (typeof p === 'string') verify(p);
+    return fsImpl.realpathSync(p, ...rest);
+  };
+  realpathSync.native = function (p, ...rest) {
+    if (typeof p === 'string') verify(p);
+    return (fsImpl.realpathSync.native || fsImpl.realpathSync)(p, ...rest);
+  };
+  own('realpathSync', realpathSync);
+  return {
+    fs: guarded,
+    verify,
+    refused: () => broken.length > 0,
+    adopt(dir) {
+      if (ownedDir(dir, plain) !== 'owned') throw notOwnedError(shown(dir));
+      roots.push(dir);
+      return dir;
+    },
+  };
+}
+
+// The checks writePageTree makes before it removes anything, made on their own: main asks them before it settles the
+// managed fragments file and publishes, so a page tree that cannot be replaced stops it before that file, the pages or the spec are written. Answers whether
+// there is a tree to replace.
+function assertPageTreeReplaceable(pagesRoot, fsImpl = fs) {
+  try {
+    fsImpl.lstatSync(pagesRoot);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return false;
+    throw e;
+  }
+  assertSafeOutputDir(pagesRoot, { fs: fsImpl });
+  assertNoPlantedPageLinks(pagesRoot, fsImpl);
+  return true;
+}
+
+// A fresh folder `<root>/<prefix>.<pid>.<random>.tmp`, hidden, unique to this process and call, adopted by `guard` (generatedFolders).
+// `mkdir` without `recursive` fails on a name that exists, so a folder that is already there (another run's, or the maker's) is never
+// reused or removed: another name is tried. `root` is a real path (assertSafeOutputDir's answer), and the folder made is checked to be a
+// plain folder at its own path before it is answered: one replaced by a link or junction the moment it was made is refused
+// (UNSAFE_OUTPUT) and left alone, so nothing is written into, or removed from, where that link points.
+function makeHiddenDir(root, prefix, guard) {
+  for (let attempt = 0; ; attempt += 1) {
+    const dir = path.join(root, `${prefix}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+    try {
+      guard.fs.mkdirSync(dir);
+    } catch (e) {
+      if (!(e && e.code === 'EEXIST') || attempt >= 4) throw e;
+      continue;
+    }
+    return guard.adopt(dir);
+  }
+}
+
+// A fresh staging folder for a staged download's page tree, made INSIDE <out> (nothing outside the folder the maker named is written)
+// under a hidden name unique to this process and call (makeHiddenDir, which also checks it), and the guarded fs (generatedFolders) every
+// read, write, move and removal in it goes through: { dir, fs, refused } (refused: whether any check of the folder has failed).
+function makePageStage(outDir) {
+  const guard = generatedFolders(fs, (p) => p);
+  return { dir: makeHiddenDir(assertSafeOutputDir(outDir, { create: true }), '.download-pages', guard), fs: guard.fs, refused: guard.refused };
 }
 
 // Reads every page the sitemap names, by id — so nothing outside this app is read — a few at a time, and answers
@@ -2879,7 +3355,37 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode }) {
+// `stagePages` (main, for every download it runs): the page tree is written to a staging folder inside <out> (makePageStage) and read
+// back from there exactly as a download writes it — the same files, the same reverse-resolved page.tsx — and the folder is removed.
+// The real pages/ folder is not touched: the result's `stagedPages` publishes it later (`check` makes writePageTree's checks without
+// writing, `publish` writes the tree with writePageTree). main publishes it only after everything that can still stop the download
+// has succeeded, so a refusal there leaves a maker's page edits as they were. Without the option (a library caller) the download
+// writes pages/ itself, as it always did.
+async function runDownload(options = {}) {
+  if (!options.stagePages) return downloadApp(options);
+  const stage = { dir: null, fs: null, refused: () => false, pages: null };
+  let result;
+  let left = null;
+  try {
+    result = await downloadApp({ ...options, stage });
+  } finally {
+    // Best-effort: the pages are in memory by now. A folder that stays is named, so the maker can delete it.
+    left = stage.dir ? removeTreeWithRetry(stage.dir, { fs: stage.fs }) : null;
+    if (left === 'UNSAFE_OUTPUT') process.stderr.write(`WARNING: the download's staging folder ${stage.dir} was not removed: ${NOT_OWNED_LEFT}\n`);
+    else if (left) process.stderr.write(`WARNING: the download's staging folder ${stage.dir} could not be removed (${left}): delete it.\n`);
+  }
+  if (!result.ok || !stage.pages) return result;
+  // The staging folder found replaced at any check, its removal included (after the last read): what was read from it cannot be told
+  // from what the link supplied, so none of it is published nor reported as the app's pages. Nothing has been written to pages/ yet.
+  if (left === 'UNSAFE_OUTPUT' || stage.refused()) {
+    throw Object.assign(new Error(`refusing to use the pages read back from the download's staging folder ${stage.dir}: it is no longer the folder this download made there (a link or junction was put in its place, or above it, or it was moved), so what was read from it is not used, and pages/ was not written`), { code: 'UNSAFE_OUTPUT', reason: 'link' });
+  }
+  const pagesRoot = path.join(path.resolve(options.outDir), 'pages');
+  const pages = stage.pages;
+  return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
+}
+
+async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -2921,6 +3427,45 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // snapshot instead of turning a missed draft subarea into a hidden table or lost restriction.
   if (!appNavigationMatchesSitemap(app, smResult.xml)) {
     return { ok: false, error: "the app's sitemap has an unpublished change the SDK could not read consistently — publish the app, then download again" };
+  }
+  // app.theme (Preview), read with the other capabilities (--include-capabilities; `captureTheme` defaults to it). Read here,
+  // before the pages or anything else is written, so a strict download that cannot state the theme exactly — the "no theme"
+  // sentinel, attributes outside the schema, an unreadable row, a missing or non-image logo — refuses with nothing written
+  // (lib/app-theme.js appThemeDownloadOutcome). --allow-lossy-download leaves the field out instead, and says so.
+  let appTheme = null;
+  if (captureTheme) {
+    const { downloadAppTheme, appThemeDownloadOutcome } = require('./lib/app-theme.js');
+    appTheme = appThemeDownloadOutcome(await downloadAppTheme({ sdk, appId }), { allowLossy });
+    if (appTheme.error) return { ok: false, code: appTheme.code, error: appTheme.error };
+    if (appTheme.warning) process.stderr.write(`WARNING: ${appTheme.warning}\n`);
+  }
+  let themeLogo = appTheme && appTheme.write && appTheme.logo ? appTheme.logo.webResourceName : null;
+  // The theme's header logo is preflighted here as well, before anything is written: whether it can be exported decides
+  // whether a strict download refuses (APP_THEME_LOGO_UNEXPORTABLE), and that refusal must leave the output folder as it
+  // was. It is exported as an icon referenced by path is — re-declared `external: true` (a build creates it when missing,
+  // and teardown never deletes it) only when it is this publisher's own unmanaged image with content — so it needs the
+  // publisher prefix: the app's solution is read here, once, and both answers are reused below (no second read). Only a
+  // captured theme that names a logo does this; every other download keeps its order of reads.
+  let themePreflight = null;
+  if (themeLogo) {
+    const recovered = await recoverAppSolution(sdk, appId);
+    const { trustedPrefix } = downloadPublisherPrefix(recovered, appUnique);
+    let logoRead;
+    const logoExport = await iconWebResources(sdk, [], [themeLogo], trustedPrefix || 'new', !!trustedPrefix, [], [], (name, row, failed) => { logoRead = { row, failed }; });
+    themePreflight = { recovered, logoExport };
+    const logoClass = classifyThemeLogo(themeLogo, trustedPrefix, logoExport, logoRead);
+    if (logoClass.kind === 'unexportable') {
+      // A rebuild into a fresh environment would refuse the theme for its missing logo, so the theme is not portable as written.
+      const why = `app.theme: its header logo '${themeLogo}' could not be exported (${logoClass.why})`;
+      if (!allowLossy) return { ok: false, code: 'APP_THEME_LOGO_UNEXPORTABLE', error: `${why} — refusing to write a spec whose theme names an image it does not carry. Pass --allow-lossy-download to write the spec without app.theme.` };
+      process.stderr.write(`WARNING: app.theme was LEFT OUT (APP_THEME_LOGO_UNEXPORTABLE): ${why.replace(/^app\.theme: /, '')}. A build from this spec leaves the app's theme as it is.\n`);
+      appTheme = { write: false };
+      themeLogo = null;
+    } else if (logoClass.kind === 'reference') {
+      // Another publisher's, or managed: left as a bare reference, as such a navigation icon is (re-declaring it would make a
+      // build create a resource under a prefix it does not own). The image must exist where the spec is built.
+      process.stderr.write(`NOTE: app.theme's header logo '${themeLogo}' is ${logoClass.what}, so it is referenced, not exported — it must exist in the environment you build into.\n`);
+    }
   }
   const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);
   // [{ pageId, title? }] — deduped by id; membership-only (title is the XML-decoded subarea label,
@@ -3010,12 +3555,22 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
 
     const read = await readSitemapPages(genpage, sitemapIds, concurrency);
     if (!read.ok) return { ok: false, error: `page download failed: ${read.errors.join('; ')}` };
-    writePageTree(pagesRoot, read.pages);
+    // Staged (see runDownload): the tree is written, read back and reverse-resolved under the staging folder, which stands in for
+    // <out> so each page's codeFile (relative to it) is the one a direct download gives.
+    if (stage) Object.assign(stage, makePageStage(outDir));
+    const treeRoot = stage ? path.join(stage.dir, 'pages') : pagesRoot;
+    const writeRoot = stage ? stage.dir : outDir;
+    // Every read and write under the staging folder goes through its guarded fs (generatedFolders): what is read back from it is what
+    // is published and stated in the spec. Unstaged (a library caller), the download reads and writes pages/ itself.
+    const pageTreeFs = stage ? stage.fs : fs;
+    writePageTree(treeRoot, read.pages, { fs: pageTreeFs });
 
     const unreadableConfigs = [];
     const unkeptModels = [];
     const unkeptBindings = [];
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    pages = parseDownloadedPages(treeRoot, writeRoot, nameById, unreadableConfigs, unkeptModels, unkeptBindings, pageTreeFs);
+    // A read error names the file it read; name the one the maker will find.
+    if (stage) for (const u of unreadableConfigs) u.reason = String(u.reason).split(stage.dir).join(path.resolve(outDir));
     // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
     // update leaves the model the page already has as it is (the SDK writes only what a spec names), and a page the rebuild creates
     // gets none.
@@ -3065,12 +3620,19 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     // place the lexer reads by guess is turned back, and only if the build would take the page written that way (see
     // reverseResolveNavIdsReport); the ids it leaves are reported below.
     for (const p of pages) {
-      const abs = path.join(outDir, p.codeFile);
-      assertPlainFileTarget(abs);                         // FAIL on a planted link (no swallow, no write)
-      const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
+      const abs = path.join(writeRoot, p.codeFile);
+      assertPlainFileTarget(abs, { fs: pageTreeFs });     // FAIL on a planted link (no swallow, no write)
+      const src = pageTreeFs.readFileSync(abs, 'utf8');   // FAIL on a read error (no swallow)
       const rev = reverseResolveNavIdsReport(src, idToKey); // structural — nav pageId literals only
-      if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
+      if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8', fs: pageTreeFs }); // FAIL on a write error (no swallow)
       for (const left of rev.left) navIdsLeft.push({ page: p.name, ...left });
+    }
+    // The staged tree as it now is on disk, read back whole, for runDownload to publish: the bytes writePageTree will write again.
+    if (stage) {
+      stage.pages = read.pages.map(({ pageId, files }) => ({
+        pageId,
+        files: Object.fromEntries(Object.keys(files).map((name) => [name, pageTreeFs.readFileSync(path.join(treeRoot, pageId, name), 'utf8')])),
+      }));
     }
     // Every page id of this app still in a downloaded page is reported, whether a call the checker recognised holds it or not (see
     // knownIdsLeft in pageref-resolver.js). One in a navigation call is a hardcoded page id to the build, which refuses one, so say so now
@@ -3154,6 +3716,8 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   const globalChoiceDecls = new Map();
   const tableVectorIcons = new Map();
   const schemaReadFailures = new Map();
+  // --include-capabilities: the tables whose date behaviours or flags could not be read, with the reason.
+  const capabilityReadFailures = new Map();
   for (const logical of allLogicals) {
     let e;
     const leftOut = [];
@@ -3197,6 +3761,10 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       continue;
     }
     entities.push(e);
+    if (includeCapabilities) {
+      const failed = await downloadCapabilities(sdk, logical, e);
+      if (failed.length) capabilityReadFailures.set(logical, failed.join('; '));
+    }
     for (const c of leftOut) unexpressibleColumns.push(`${e.schemaName}.${c.column} (${c.typeName})`);
     for (const c of shortOf) incompleteMediaColumns.push({ name: `${e.schemaName}.${c.column}`, missing: c.missing });
     for (const l of lostLabels) optionLanguageLosses.push(`${e.schemaName}.${l.column} options[${l.option}] '${l.label}' (${l.languageCode})`);
@@ -3227,6 +3795,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   const failureDetail = (failures) => [...failures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
   if (schemaReadFailures.size) {
     process.stderr.write(`WARNING: some portable schema detail could not be captured (${failureDetail(schemaReadFailures)}). The table and its typed columns are kept, but rebuilding into a FRESH environment uses the build defaults for missing column options and cannot recreate missing status reasons, alternate keys or table icons. Re-run the download to recover unreadable detail, and resolve the stated build limits before a cross-environment rebuild.\n`);
+  }
+  if (capabilityReadFailures.size) {
+    process.stderr.write(`WARNING: --include-capabilities could not read every Date and Time behaviour or table flag (${failureDetail(capabilityReadFailures)}). Those are left out of the spec, so a rebuild into a FRESH environment uses the defaults for them (User local dates; search, change tracking and duplicate detection off). Re-run the download to recover them.\n`);
   }
   if (tableLabelReadFailures.size) {
     // The table's plural is carried by this read alone (download keeps one a rebuild would not derive), so it goes with it.
@@ -3299,20 +3870,18 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   //
   // This app-derived value is only a fallback: the app's name does not reliably encode the publisher of
   // the solution that owns it (ADO 6603390). The authoritative prefix is the recovered solution's owning
-  // publisher, read below.
-  const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
-  const appDerivedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+  // publisher, read below (downloadPublisherPrefix parses both).
 
   // Solution container (best-effort): the real unmanaged solution the appmodule belongs to, for a clean
   // teardown, plus its owning publisher's customization prefix. Falls back to the restricted 'Default'
   // when recovery finds nothing — that fallback cannot be torn down, but teardown skips it safely (see
   // system-solutions.js) rather than erroring.
-  const recovered = await recoverAppSolution(sdk, appId);
+  // The theme's logo preflight (above) already read it, before anything was written: that answer is reused.
+  const recovered = themePreflight ? themePreflight.recovered : await recoverAppSolution(sdk, appId);
+  const { solutionCandidates, solutionUnreadable, publisherUnreadable, prefixUnknown, trustedPrefix } = downloadPublisherPrefix(recovered, appUnique);
   // Several real solutions (#587 item 9), or a membership that could not be read: the spec keeps
   // 'Default' rather than a guess — the one solution a teardown never deletes — and says so. The
   // candidates are returned as well as printed, so the JSON result carries them.
-  const solutionCandidates = recovered && Array.isArray(recovered.ambiguous) ? recovered.ambiguous : null;
-  const solutionUnreadable = recovered && recovered.unreadable ? recovered.unreadable : null;
   if (solutionCandidates) {
     process.stderr.write(`WARNING: this app belongs to ${solutionCandidates.length} unmanaged solutions (${solutionCandidates.join(', ')}) and a download cannot tell which one you manage it in, so the spec's solution is left as 'Default', which a teardown never deletes. Set solution.uniqueName in app-spec.json to that solution before a rebuild or teardown.\n`);
   }
@@ -3324,15 +3893,12 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // `prefixResolved` means "this prefix is trustworthy", which gates the icon own-vs-foreign
   // classification below; it must be true for BOTH trusted sources, or a genuine own-publisher custom
   // nav icon stops round-tripping. It stays false only for the unverified 'new' default.
-  const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
-  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
   // Several candidate solutions whose publishers do not share one prefix, none that could be read, or a
   // publisher whose read FAILED — the one solution's included: the prefix is UNKNOWN. The app-name guess is
   // exactly the heuristic that ambiguity refuses to use (see recoverAppSolution), and a wrong prefix renames
   // every relationship not carrying it, so a same-environment rebuild creates each a second time. So it is
   // not used: the prefix stays the unverified default, and relationships keep their deployed names. (A failed
   // read of the one solution's publisher used to read as "no prefix", which fell back to the guess.)
-  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
   if (prefixUnknown) {
     let why = solutionCandidates ? 'the publishers of those solutions do not share one customization prefix' : 'with the solutions unread, the publisher is unknown';
     if (publisherUnreadable) {
@@ -3342,7 +3908,6 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     }
     process.stderr.write(`WARNING: ${why}, so solution.publisherPrefix is left as the unverified 'new' and every relationship keeps its deployed name. Set solution.publisherPrefix in app-spec.json to your solution publisher's prefix before a rebuild.\n`);
   }
-  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
   if (recovered && recovered.displayName) solution.displayName = recovered.displayName;
@@ -3363,6 +3928,12 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // own-prefix/unmanaged gates of path-referenced navigation icons and their teardown protection.
   const tableIconNames = entities.map((e) => tableVectorIcons.get(e.schemaName.toLowerCase())).filter(Boolean);
   const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs, tableIconNames);
+  // The theme's header logo, as its preflight exported it (unless the navigation already carries the same resource).
+  if (themeLogo && themePreflight) {
+    for (const wr of themePreflight.logoExport.webResources) {
+      if (!webResources.some((own) => own.name.toLowerCase() === wr.name.toLowerCase())) webResources.push(wr);
+    }
+  }
   const svgByName = new Map(webResources.filter((wr) => wr.type === 'svg').map((wr) => [wr.name.toLowerCase(), wr.name]));
   for (const entity of entities) {
     const name = tableVectorIcons.get(entity.schemaName.toLowerCase());
@@ -3468,7 +4039,15 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     : { mainForms: {}, notes: [] };
   if (Object.keys(mainFormMembership.mainForms).length) spec.app.mainForms = mainFormMembership.mainForms;
   setAppMembershipFloor(spec);
-  if (spec.app.tables !== undefined || spec.app.mainForms !== undefined) {
+  if (appTheme && appTheme.write) {
+    spec.app.theme = appTheme.theme;
+    setAppThemeFloor(spec);
+    if (appTheme.pendingPublish) process.stderr.write(`NOTE: app.theme was read from the app's SAVED theme, which is not published yet: ${appTheme.theme === null ? 'the removal of its own theme' : 'a theme'} the app does not show until it is published.\n`);
+  }
+  // A spec that carries a 2.21.0 schema field (a valued option, a secured column, a date behaviour, a table flag) asks for 2.21.0:
+  // an older build would renumber the options or leave the column open.
+  setSchemaFeaturesFloor(spec);
+  if (spec.app.tables !== undefined || spec.app.mainForms !== undefined || spec.app.theme !== undefined) {
     preserveAuthoredLanguageCode(spec, path.join(outDir, 'app-spec.json'));
   }
 
@@ -3500,7 +4079,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
+  // `publisher` is internal (main hands it to the managed restore, which downloads a form's handler library only under this
+  // publisher's verified prefix); it is not part of the printed result.
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
 async function main(deps = {}) {
@@ -3519,12 +4100,12 @@ async function main(deps = {}) {
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]';
-  // `--allow-lossy-download` and `--reset-page-keys` are real boolean switches, so they stay out of needValue; everything else
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities] [--include-managed --managed-manifest <managed binding store file>]';
+  // `--allow-lossy-download`, `--reset-page-keys`, `--include-capabilities` and `--include-managed` are real boolean switches, so they stay out of needValue; everything else
   // feeds a URL, an app id, a path or an LCID and must not receive `true`.
   const flagError = validateFlags(argv, {
-    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode'],
-    needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode'],
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode', 'include-capabilities', 'include-managed', 'managed-manifest'],
+    needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode', 'managed-manifest'],
   });
   if (flagError) {
     makeWritesBlocking(io.stderr);
@@ -3538,6 +4119,18 @@ async function main(deps = {}) {
   const allowLossyDownload = flags['allow-lossy-download'] === true;
   // Off unless it is given: it is a decision about every environment that holds a copy of the earlier spec (see the header), never a default.
   const resetPageKeys = flags['reset-page-keys'] === true;
+  const includeCapabilities = flags['include-capabilities'] === true;
+  // The explicit managed download (declared forms and dashboards, reconcile "declared"): both flags or neither. `--include-managed` alone would
+  // have to guess which binding store to trust, and `--managed-manifest` alone would be a store read for nothing, so either alone is a
+  // usage error, before anything is opened. Without them the download is exactly what it always was.
+  const includeManaged = flags['include-managed'] === true;
+  const managedManifestFile = typeof flags['managed-manifest'] === 'string' ? flags['managed-manifest'] : '';
+  if (includeManaged !== !!managedManifestFile) {
+    makeWritesBlocking(io.stderr);
+    io.stderr.write(`✗ --include-managed and --managed-manifest <file> are given together: --include-managed names what to restore, --managed-manifest the binding store it is restored from\n${USAGE}\n`);
+    io.exit(1);
+    return;
+  }
   if (!env || !appArg) {
     io.stderr.write(USAGE + '\n');
     io.exit(1);
@@ -3596,7 +4189,7 @@ async function main(deps = {}) {
   let outcome = null;
   const finish = (ok, payload) => { outcome = [ok, payload]; };
   try {
-    session = await io.makeDownloadSdk(env, { ...deps, languageCode: languageFlag, authoredLanguageCode: pinnedLanguage });
+    session = await io.makeDownloadSdk(env, { ...deps, languageCode: languageFlag, authoredLanguageCode: pinnedLanguage, themeReads: includeCapabilities });
     // No language known — the flag, the spec on disk and the environment all gave none — means nothing has been read with a guess yet, and nothing is: the refusal is the result, before the app is
     // resolved, and the spec and baseline on disk are as they were (navigationLanguageRefusal says how to go on).
     if (typeof session.languageUnresolved === 'string') {
@@ -3619,7 +4212,9 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode });
+    // Every download stages its page tree (runDownload `stagePages`): it is checked and published below, after everything that can still
+    // stop the download, so a refusal or a failure before then leaves the maker's pages/ exactly as it was.
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, stagePages: true });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
@@ -3649,6 +4244,47 @@ async function main(deps = {}) {
     const specPath = path.join(outDir, 'app-spec.json');
     // Preserve the author's higher capability floor BEFORE validation, never after the version gate.
     preserveAuthoredLanguageCode(spec, specPath);
+    // The explicit managed download: each declared form a committed group of the named binding store proves is restored into forms[]
+    // as the declaration it was built from (lib/declared-form-io.js restoreManagedForms), and each declared dashboard likewise into
+    // dashboards[], in place of the plain entry the download reconstructed for it (lib/declared-dashboard-io.js restoreManagedDashboards),
+    // and each declared business rule into businessRules[] (lib/declared-rule-io.js restoreManagedRules), which the plain download leaves out;
+    // and each declared business process flow into businessProcessFlows[] (lib/declared-bpf-io.js restoreManagedBpfs), which it leaves out too;
+    // every other is named, never silently dropped. A store file that is not this app's on this environment stops the download before
+    // anything is written.
+    let managedForms = null;
+    let managedDashboards = null;
+    let managedRules = null;
+    let managedBpfs = null;
+    // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
+    const fragments = [];
+    if (includeManaged) {
+      const source = {
+        sdk,
+        spec,
+        file: managedManifestFile,
+        environment: dataverseOrigin(env),
+        appUniqueName: appUnique,
+        solutionUniqueName: spec.solution && spec.solution.uniqueName,
+        validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
+        fragments,
+        publisher: result.publisher,
+      };
+      try {
+        managedForms = await restoreManagedForms(source);
+        managedDashboards = await restoreManagedDashboards(source);
+        managedRules = await restoreManagedRules(source);
+        managedBpfs = await restoreManagedBpfs(source);
+      } catch (e) {
+        finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
+        return;
+      }
+      for (const s of managedForms.stale) io.stderr.write(`WARNING: managed form ${s.key} was not restored: ${s.reason}. It is left out of forms[], as every form is without --include-managed.\n`);
+      for (const l of managedForms.libraries || []) io.stderr.write(`NOTE: handler library '${l.name}' of managed form ${l.forms.join(', ')} was downloaded into webResources[] as external: a build reuses it where it exists without writing its content, creates it where it is missing, and a teardown never deletes it.\n`);
+      for (const s of managedDashboards.stale) io.stderr.write(`WARNING: managed dashboard ${s.key} was not restored: ${s.reason}. Its dashboard is downloaded as every dashboard is without --include-managed.\n`);
+      for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
+      for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
+      for (const p of managedBpfs.personas || []) io.stderr.write(`NOTE: persona '${p.name}' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build.\n`);
+    }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
       finish(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
@@ -3666,6 +4302,24 @@ async function main(deps = {}) {
         + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
       );
     }
+    // The staged page tree is published here, for every download, after validation and everything else that can stop the download: its
+    // checks first (writePageTree's own refusals, made without writing), then, for the managed download, the fragments file, then the
+    // tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves pages/, the spec and the
+    // baseline as they were, and a tree that cannot be replaced stops the managed download before its fragments file is written.
+    let managedFragments = null;
+    if (result.stagedPages) result.stagedPages.check();
+    if (includeManaged) {
+      try {
+        managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
+      } catch (e) {
+        finish(false, { ok: false, code: (e && e.code) || 'managed-fragments-unwritable', error: (e && e.message) || String(e) });
+        return;
+      }
+      if (managedFragments) {
+        io.stderr.write(`WARNING: ${managedFragments.keys.length} managed item(s) left out only for what the download could not bring are written ready to paste in ${managedFragments.file}: add each "paste" entry to app-spec.json together with what its "needs" lists (from the spec it was built from), then build.\n`);
+      }
+    }
+    if (result.stagedPages) result.stagedPages.publish();
     writeFileSafe(specPath, JSON.stringify(spec, null, 2));
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
@@ -3683,7 +4337,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedFragments ? { managedFragments } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
@@ -3724,7 +4378,7 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
   const readFileSync = deps.readFileSync || fs.readFileSync;
   const existsSync = deps.existsSync || fs.existsSync;
   if (!spec) return spec;
-  const membership = spec.app && (spec.app.tables !== undefined || spec.app.mainForms !== undefined);
+  const membership = spec.app && (spec.app.tables !== undefined || spec.app.mainForms !== undefined || spec.app.theme !== undefined);
   if (spec.languageCode !== undefined && !membership) return spec;
   try {
     if (!existsSync(specPath)) return spec;
@@ -3737,7 +4391,10 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
     if (spec.languageCode === undefined && lcid !== null) spec.languageCode = lcid;
     // Retain the established API name, but read both authored options once. A lower generated floor
     // must not weaken a newer capability requirement the author already wrote.
-    if (membership) setAppMembershipFloor(spec, prior && prior.minimumPluginVersion);
+    if (membership) {
+      setAppMembershipFloor(spec, prior && prior.minimumPluginVersion);
+      setAppThemeFloor(spec, prior && prior.minimumPluginVersion);
+    }
   } catch (error) {
     if (membership && error.code !== 'ENOENT') {
       const warn = deps.warn || ((message) => process.stderr.write(`WARNING: ${message}\n`));
@@ -3751,4 +4408,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

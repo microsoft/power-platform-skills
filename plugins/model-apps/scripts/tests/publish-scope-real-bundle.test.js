@@ -733,7 +733,11 @@ function pageScenario(t) {
   server.serveTable({ ...ACCOUNT_TABLE, logicalName: 'contoso_page_only', schemaName: 'contoso_PageOnly', entitySetName: 'contoso_page_onlys' });
   s.org.fake.seedDefaultViews('contoso_page_only', 'Page Data');
   const pages = makeGenpageSdk(s.org.origin, { httpClient: server.http() });
-  const placement = makeGenpageSdk(s.org.origin, { httpClient: s.org.httpClient });
+  // The placement's transport is the plugin's own client in a run (lib/sdk-http-client.js), which can send a change set (`postRaw`), so the bundle's pin may take its guarded
+  // form (lib/app-component-scope.js, THE SDK'S GUARDED PIN). The page backend does not send that change set for an app it is editing; one that reaches the app's fake was sent.
+  const placement = makeGenpageSdk(s.org.origin, {
+    httpClient: { ...s.org.httpClient, postRaw: async (url) => assert.fail(`the placement sent a change set the page backend does not send: POST ${url}`) },
+  });
   t.after(async () => { await pages.dispose(); await placement.dispose(); });
   const updates = [];
   const backend = {
@@ -1164,7 +1168,8 @@ for (const [what, damaged] of [
 // edit that calls the SDK for the app directly — a new path, say — cannot skip it. This reads the engine's source, because that is where a new path would be written.
 // (The request is made once for what it names, so a run in which the app step has made it cannot show that a LATER writer forgot to ask: this is what shows it.)
 test('sdk-build.js reaches the SDK for the app only through appWriters, and each writer sends the request before its first write of the app', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8');
+  // A checkout may give the file CRLF line endings; every pattern below is written for LF.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8').replace(/\r\n/g, '\n');
   // Code only: a comment may name what it explains.
   const code = source.split('\n').map((line) => line.replace(/^\s*\/\/.*$/, '').replace(/\s\/\/\s.*$/, '')).join('\n');
   const begin = code.indexOf('const appWriters = {');
@@ -1200,7 +1205,8 @@ test('sdk-build.js reaches the SDK for the app only through appWriters, and each
   // The SDK's own push of an app is the create's, or the one inside pushAppHeader (which only a writer calls): no other line pushes an app.
   assert.ok(/\.pushArtifact\(\s*'app'/.test(methodOf('create')) && !/\.pushArtifact\(\s*'app'/.test(outside), 'the SDK\u2019s push of an app is made nowhere else');
   // The publish phase publishes the app in the envelope of the tables the build has artifacts of, and asks for the request too: a run can reach it without the app step. It adds no form, and applies no Main-form list.
-  assert.ok(/await publishTablesBeforeApp\(result\.created\.app\);\s*const publishedTargets = await publishTargets\(provision, runner, concurrency, perEntity, appTarget/.test(code), 'the publish phase sends the request before it publishes the app');
+  // A publish of the app the barrier refuses (an app that holds or adds a form of a withheld table) is reported and the tables are published without it.
+  assert.ok(/let appWithheld = false;\s*if \(appTarget\) \{\s*try \{\s*await publishTablesBeforeApp\(result\.created\.app\);\s*\} catch \(err\) \{\s*if \(!\(err && err\.code === 'publication-withheld'\)\) throw err;[\s\S]*?\}\s*\}\s*const publishedTargets = await tablePublication\.sdk\(perEntity, appWithheld \? null : appTarget/.test(code), 'the publish phase sends the request before it publishes the app');
   // Only the writers that APPLY the spec's Main-form list — the create and the push, which write the spec's app — look its names up. The others (a publish, the placement, the publish phase) apply none, so a name that
   // went stale on the server is no reason for them to fail, and the placement sends the Main forms of the navigation it pushes, which it reads from the app it fetched.
   for (const name of ['publish', 'publishPinned', 'placeViews']) assert.ok(!/resolvedMainForms/.test(methodOf(name)), `${name} resolves no Main-form list`);
@@ -1208,5 +1214,9 @@ test('sdk-build.js reaches the SDK for the app only through appWriters, and each
   // The request is gated by --publish before it prepares anything: what the write adds is asked for only once the request is going to be made.
   const request = /const publishTablesBeforeApp = [\s\S]*?\n  };\n/.exec(code);
   assert.ok(request, 'the request is one function');
-  assert.ok(request[0].indexOf('if (!publish') >= 0 && request[0].indexOf('if (!publish') < request[0].indexOf('addedTables()'), 'the flag is checked before the tables the write adds are worked out');
+  // Before the flag, what the write adds and what the app holds are read only while a table's publication is withheld (the app check): a run with nothing withheld checks the flag first.
+  const beforeFlag = request[0].slice(0, request[0].indexOf('if (!publish'));
+  assert.ok(request[0].indexOf('if (!publish') >= 0, 'the request checks the flag');
+  assert.deepEqual(beforeFlag.match(/readHoldings\(\);/g), ['readHoldings();'], 'the tables the write adds are worked out once before the flag');
+  assert.ok(/if \(owed\.barrier\.active\) \{\s*await readHoldings\(\);/.test(beforeFlag), 'and only while a table is withheld: otherwise the flag is checked before the tables the write adds are worked out');
 });

@@ -6,6 +6,7 @@
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
 const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage, primaryNameLengthProblem, autoNumberFormatProblem, requiredValueProblem, primaryAttributeKeyProblems } = require('./app-spec.js');
+const { validateSchemaFeatures } = require('./schema-feature-contract.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -88,9 +89,9 @@ function validateProvisionInput(input) {
     // rule alone. This input is documented as "App Spec format", so entities copied out of an
     // app-spec.json must keep validating.
     //
-    // That means the 5 keys this narrower path does not consume — vectorIcon, iconDescription, icon,
-    // existing, enrichDefaultViews — are ACCEPTED and ignored here (it provisions the data model
-    // only; it writes no icons and enriches no views). That is a known subset boundary, not the
+    // That means the 6 keys this narrower path does not consume — vectorIcon, iconDescription, icon,
+    // existing, enrichDefaultViews, quickFind — are ACCEPTED and ignored here (it provisions the data
+    // model only; it writes no icons, enriches no views and sets no Quick Find view). That is a known subset boundary, not the
     // unknown-key hole #537 is about, and rejecting them would break the copy-paste compatibility
     // the format promises.
     // Enumeration is guarded for the same reason as validateAppSpec's: the object comes from the
@@ -309,6 +310,15 @@ function validateProvisionInput(input) {
         }
       }
     }
+  }
+
+  // The 2.21.0 schema fields this path provisions — explicit `{ value, label }` options, dateTimeBehavior, isSecured and the
+  // table flags — are checked by the SAME validator validateAppSpec uses, for the reason the labels and ENTITY_KEYS are shared:
+  // without it a malformed `{ value, label }` option, a non-boolean flag, or `searchEnabled: true` with no confirmed (one-way)
+  // change tracking returned ok:true here and reached the SDK, while the App Spec path refused it. `fieldSecurityProfiles` is not
+  // passed: this path does not provision profiles. The minimumPluginVersion advisory is App Spec only (this input has no floor).
+  if (Array.isArray(input.entities)) {
+    errors.push(...validateSchemaFeatures({ entities: input.entities, globalChoices: input.globalChoices }).errors);
   }
 
   return { ok: errors.length === 0, errors };

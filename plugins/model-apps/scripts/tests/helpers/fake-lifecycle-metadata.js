@@ -80,7 +80,7 @@ const TABLE_PROPS = ['MetadataId', 'LogicalName', 'SchemaName', 'EntitySetName',
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributemetadata
 const ATTRIBUTE_BASE = ['MetadataId', 'LogicalName', 'SchemaName', 'EntityLogicalName', 'AttributeType', 'AttributeTypeName', 'DisplayName',
   'Description', 'RequiredLevel', 'IsCustomAttribute', 'IsCustomizable', 'IsManaged', 'IsPrimaryId', 'IsPrimaryName', 'IsLogical',
-  'IsValidForCreate', 'IsValidForRead', 'IsValidForUpdate', 'AttributeOf', 'SourceType'];
+  'IsValidForCreate', 'IsValidForRead', 'IsValidForUpdate', 'AttributeOf', 'SourceType', 'IsSecured'];
 // What each derived column type adds; the enum-valued ones (a choice, a Boolean, a state or status) also navigate to their option set.
 const ATTRIBUTE_PROPS = {
   AttributeMetadata: [],
@@ -92,7 +92,7 @@ const ATTRIBUTE_PROPS = {
   DoubleAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
   MoneyAttributeMetadata: ['MinValue', 'MaxValue', 'Precision', 'PrecisionSource', 'IsBaseCurrency'],
   BooleanAttributeMetadata: ['DefaultValue'],
-  DateTimeAttributeMetadata: ['Format', 'DateTimeBehavior'],
+  DateTimeAttributeMetadata: ['Format', 'DateTimeBehavior', 'CanChangeDateTimeBehavior'],
   PicklistAttributeMetadata: ['DefaultFormValue'],
   MultiSelectPicklistAttributeMetadata: ['DefaultFormValue'],
   LookupAttributeMetadata: ['Targets'],
@@ -254,6 +254,10 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
       IsValidForCreate: sent.IsValidForCreate !== undefined ? sent.IsValidForCreate : true,
       IsValidForRead: sent.IsValidForRead !== undefined ? sent.IsValidForRead : true,
       IsValidForUpdate: sent.IsValidForUpdate !== undefined ? sent.IsValidForUpdate : true,
+      // Column security is a plain Boolean on every column — false unless a create or an update secured it. An update that omits it
+      // keeps the stored value (updateColumn merges), as the platform does.
+      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributemetadata
+      IsSecured: sent.IsSecured === true,
       AttributeOf: null,
       SourceType: sent.SourceType !== undefined ? sent.SourceType : 0,
       ...extra,
@@ -262,6 +266,16 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     if (cls === 'StringAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 100;
     if (cls === 'StringAttributeMetadata' && !attribute.FormatName) attribute.FormatName = { Value: (sent.FormatName && sent.FormatName.Value) || 'Text' };
     if (cls === 'MemoAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 2000;
+    // A Date and Time column created on its own (a column POST, as the build sends it) holds a behaviour: the one sent, else UserLocal,
+    // the platform's default. Whether it may change is a managed property: true on a custom column, false on the platform's own
+    // (createdon, modifiedon …). The build's typed date read (lib/date-behavior.js) reads both before it adds a column to a table.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/behavior-format-date-time-attribute
+    if (cls === 'DateTimeAttributeMetadata') {
+      if (!attribute.DateTimeBehavior) attribute.DateTimeBehavior = { Value: 'UserLocal' };
+      if (!attribute.CanChangeDateTimeBehavior) {
+        attribute.CanChangeDateTimeBehavior = { Value: attribute.IsCustomAttribute !== false, CanBeChanged: false, ManagedPropertyLogicalName: 'canchangedatetimebehavior' };
+      }
+    }
     // The column a Money column converts is not its base-currency twin (companionsOf makes that one).
     if (cls === 'MoneyAttributeMetadata' && attribute.IsBaseCurrency === undefined) attribute.IsBaseCurrency = false;
     if (attribute.OptionSet) attribute.OptionSet = storedOptionSet(attribute.OptionSet, { local: true });
@@ -304,7 +318,7 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
   function companionsOf(attribute) {
     const name = attribute.LogicalName;
     const cls = classOf(attribute);
-    const virtual = (logical, type = 'Virtual', typeName = 'VirtualType', of = name) => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: of, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
+    const virtual = (logical, type = 'Virtual', typeName = 'VirtualType', of = name) => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: of, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, IsSecured: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
     if (['PicklistAttributeMetadata', 'MultiSelectPicklistAttributeMetadata', 'BooleanAttributeMetadata', 'StateAttributeMetadata', 'StatusAttributeMetadata'].includes(cls)) return [virtual(`${name}name`)];
     // A Money column's base-currency twin is a PHYSICAL column, not a shadow: it carries no AttributeOf, is not logical and reports
     // IsCustomAttribute like the column it converts — only `IsBaseCurrency: true` tells it apart (measured on stock

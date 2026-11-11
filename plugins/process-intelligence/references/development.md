@@ -56,7 +56,7 @@ contains the selected environment and tenant for setup, unlike general diagnosti
 
 ## Build and checks
 
-From this plugin directory in a repository checkout, with Node.js 22 or 24 LTS
+From this plugin directory in a repository checkout, with Node.js 22+ (maintained LTS recommended)
 (tests use fake Azure CLI processes):
 
 ```powershell
@@ -67,7 +67,11 @@ npm test
 
 The same commands work on macOS/Linux. The plugin's path-filtered
 `process-intelligence-script-tests` CI workflow runs them on Windows, Linux and macOS with
-Node.js 22 and 24. It runs for plugin changes, its own workflow, the root `LICENSE` embedded
+Node.js 22, 24 and 26. Version-override regressions exercise rejection below 22 and acceptance
+at the minimum, on odd majors and on future majors in both source and the shipped bundle.
+Those overrides test only startup policy, not compatibility with the simulated runtimes.
+Keep the esbuild target at `node22`; accepting newer versions does not prove future compatibility.
+The workflow runs for plugin changes, its own workflow, the root `LICENSE` embedded
 by the build, and repository inputs asserted by tests: both marketplaces, root `README.md`,
 bug/feature issue templates and `shared/telemetry/README.md`. Repository-wide metadata checks
 remain separate. CI has read-only repository permissions and needs no secrets, Azure login or

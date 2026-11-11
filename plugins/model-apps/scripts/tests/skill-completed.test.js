@@ -49,6 +49,18 @@ function waitForFile(file, timeoutMs) {
   return fs.existsSync(file);
 }
 
+// The fake HTTPS probe is written by the detached dispatcher, so the file can exist before its JSON is complete: a read right after
+// it appears saw an empty file under load ("Unexpected end of JSON input", on Node 20 and Node 22 in one run). A positive check
+// therefore waits until the whole file parses; a negative check (nothing sent) keeps using waitForFile.
+function readProbe(file, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* absent, or still being written */ }
+    if (Date.now() >= deadline) return null;
+    sleep(25);
+  }
+}
+
 // A JWT-shaped token whose payload is `claims` (unsigned: tenantIdFromToken reads, never verifies).
 function token(claims) {
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -340,9 +352,10 @@ test('end to end with the shipped config: the Power Apps client event carries th
   };
   const { res, probe } = emitInChild({ input, configDir });
   assert.equal(res.stdout, 'true', res.stderr);
-  assert.ok(waitForFile(probe, 5000), 'the dispatcher wrote the probe');
+  const sent = readProbe(probe, 5000);
+  assert.ok(sent, 'the dispatcher wrote the probe');
   const shipped = JSON.parse(fs.readFileSync(SHIPPED_IKEY, 'utf8'));
-  const { headers, body } = JSON.parse(fs.readFileSync(probe, 'utf8'));
+  const { headers, body } = sent;
   assert.equal(headers['x-apikey'], shipped.regions.eu.instrumentation_key, 'a public-cloud org is routed by its geo');
   const wire = JSON.parse(body);
   assert.equal(wire.name, 'event');
@@ -379,7 +392,8 @@ test('a recognized public host with no organization ID (the lookup was skipped) 
   const configDir = mkTemp();
   const { res, probe } = emitInChild({ input: OK_INPUT, configDir, identity: {} });
   assert.equal(res.stdout, 'true', res.stderr);
-  assert.ok(waitForFile(probe, 5000), 'the dispatcher wrote the probe');
+  const sent = readProbe(probe, 5000);
+  assert.ok(sent, 'the dispatcher wrote the probe');
   const shipped = JSON.parse(fs.readFileSync(SHIPPED_IKEY, 'utf8'));
-  assert.equal(JSON.parse(fs.readFileSync(probe, 'utf8')).headers['x-apikey'], shipped.regions[shipped.default_region].instrumentation_key);
+  assert.equal(sent.headers['x-apikey'], shipped.regions[shipped.default_region].instrumentation_key);
 });

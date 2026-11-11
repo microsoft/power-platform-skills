@@ -111,6 +111,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - `<DataGrid>` usage imports `createTableColumn` + configures `columnSizingOptions` or `resizableColumns`
 - Every effective navigation target is checked with the production resolver; current before/after snapshots must differ by exact substitutions only, and only affected pages reupload
 - The production `pageStructureProblems` gate rejects truncated modules, including unfinished statements after valid exports
+- A scroll context, with the plugin's own rule (`scripts/lib/page-scroll.js`, the one `check-griffel-styles.js` runs at the /genpage gate): the page's top element is bounded by the host's fixed-height container and scrolls, or holds a bounded scrolling body, with no padded content-box box overhanging the host. The pages captured before the rule (`lib/scroll-context.js`) report a skip that names the verdict the rule gives them, so the report still shows which captures clip (AB#6793599)
 - The Custom API lifecycle grades actual saved TSX, method/parameter/bound-record parity, sanitized result handling and preservation versus explicit clear. For a clear of a page that binds `WhoAmI` or `RetrieveVersion`, the grader reads the maker's `Clear choice:` line recorded right before each upload the clear covers; it does not check that the choice was made before the edit plan was approved, which the skill requires (`edit-flow.md`, Edit Phase 3).
 
 Whether a page applies a style the maker asked for (a plan whose `Styling:` line starts with `Maker-requested:`) is not graded yet.
@@ -154,7 +155,7 @@ still refuse lookup provenance.
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
 - `common_workflow_assertions`: **18** registered workflow checks, each passed or explicitly skipped when inapplicable.
-- `common_code_assertions`: **21** registered code checks.
+- `common_code_assertions`: **22** registered code checks.
 - `evals`: **27** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
 The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **35 fixture directories / 39 top-level TSX files**, representing 27 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
@@ -357,6 +358,24 @@ For a side-by-side comparison or trial run:
 ```bash
 node run-layer-1.js --fixtures /path/to/alternate/fixtures
 ```
+
+### Selected by name: a host's retry under `--turn-id`
+
+`genpage-upload.js --turn-id` is for a host or script that retries one complete edit after losing its
+answer, not for the skill's ordinary flow, so its evidence is outside the default runs and their counts:
+
+```bash
+node evals/model-apps/genpage/run-stable-turn-retry.js                       # fixtures/stable-turn-retry
+node evals/model-apps/genpage/run-stable-turn-retry.js --fixtures <folder>   # another evidence folder
+```
+
+It grades one folder (`lib/turn-retry-contract.js`): the turn id is kept before the first send and never
+added after a lost answer; the retry is the same command with the same bytes from another process,
+under the same turn; the turn leaves one page and one history turn; a reuse of the turn for another
+request (another binding list) is refused `GENPAGE_TURN_ID_REUSED` with nothing written and the
+page's connection kept; and an ordinary edit passes no `--turn-id` — in the folder and in every upload
+the default corpus records. `--eval` and `--tier` are refused (exit 2). The evidence is constructed,
+not captured, and nothing is sent to a service.
 
 ### CI-style summary
 

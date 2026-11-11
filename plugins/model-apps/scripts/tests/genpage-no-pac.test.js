@@ -51,7 +51,7 @@ test('scripts/genpage.js has the page verbs pac used to run, asks the page backe
   assert.strictEqual(fs.existsSync(script), true);
   assert.ok(productionScripts().includes(script), 'the scans above read it');
   const { VERBS } = require('../genpage.js');
-  assert.deepStrictEqual(Object.keys(VERBS), ['list', 'download', 'types', 'add-to-app', 'remove-from-app', 'delete']);
+  assert.deepStrictEqual(Object.keys(VERBS), ['list', 'download', 'types', 'add-to-app', 'remove-from-app', 'delete', 'prepare-compiler-refresh']);
   const code = withoutComments(fs.readFileSync(script, 'utf8'));
   assert.match(code, /require\('\.\/lib\/genpage-sdk\.js'\)/, 'it goes through the page backend');
   assert.doesNotMatch(code, /child_process|\bspawn(?:Sync)?\b|\bexec(?:File)?(?:Sync)?\b|\bpac\b/, 'no process, and no pac, in its code');
