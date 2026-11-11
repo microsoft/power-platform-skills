@@ -722,7 +722,8 @@ targeted artifact so the change takes effect (see *Notes & limits*).
 
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
-`<working-dir>/.maker-workspace/` (override with `--workspace`). There is no apply-safe
+`<working-dir>/.maker-workspace/` (override with `--workspace`); environment-variable and connection-reference values,
+secret references and connection ids are never written there. There is no apply-safe
 `--from <phase>` shortcut; a full rerun is the correct and safe recovery path — after a `WEB_RESOURCE_UNVERIFIED`
 halt too: a web resource was written but its publication could not be confirmed (often because another customization
 held the environment's lock), the build recorded it, and a rerun using the **same writable workspace** writes it
