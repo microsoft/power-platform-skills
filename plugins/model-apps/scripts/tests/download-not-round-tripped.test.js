@@ -333,3 +333,29 @@ test('a failed command read is reported as UNKNOWN, not as an app with no comman
     assert.deepStrictEqual(sdk.queries.filter((q) => q.set === 'appaction'), [], JSON.stringify(opts));
   }
 });
+// --- the managed download's report seam (lib/managed-restore-report.js) ---------------------------------------------------------
+const { subtractRestored, omission, REASONS } = require('../lib/managed-restore-report.js');
+
+test('subtractRestored drops the restored rows by normalized id only, drops a class it empties, and leaves everything else as it was', () => {
+  const V1 = '0a0a0a0a-0000-4000-8000-000000000001';
+  const V2 = '0a0a0a0a-0000-4000-8000-000000000002';
+  const C1 = '0c0c0c0c-0000-4000-8000-000000000001';
+  // Two views share a name; only the id restored goes.
+  const inv = inventory({ views: [{ id: V1, name: 'Active', entity: 'contoso_project' }, { id: V2, name: 'Active', entity: 'contoso_project' }], charts: [{ id: C1, name: 'By Status', entity: 'contoso_project' }] });
+  const frozen = JSON.stringify(inv);
+  const out = subtractRestored(inv, { views: [`{${V2.toUpperCase()}}`], charts: [C1] });
+  assert.deepStrictEqual(out.views, [{ id: V1, name: 'Active', entity: 'contoso_project' }]);
+  assert.strictEqual('charts' in out, false, 'an emptied class loses its key, as "the read found none" would otherwise read');
+  assert.deepStrictEqual(out.forms, inv.forms);
+  assert.strictEqual(JSON.stringify(inv), frozen, 'the inventory handed in is not changed');
+  assert.strictEqual(notRoundTrippedSummary(out).total, 3);
+  // Nothing restored, or a name instead of an id: the very same inventory.
+  for (const restored of [{}, { views: [] }, { views: ['Active'] }, undefined]) assert.strictEqual(subtractRestored(inv, restored), inv, JSON.stringify(restored));
+});
+
+test('omission carries safe identity and the fixed reason of its code, never text a service gave', () => {
+  const o = omission({ kind: 'view', id: '{0A0A0A0A-0000-4000-8000-000000000001}', key: 'contoso_item/Active', name: 'Active', code: 'changed', fields: ['layout', 'x\u0000y'] });
+  assert.deepStrictEqual(o, { kind: 'view', id: '0a0a0a0a-0000-4000-8000-000000000001', key: 'contoso_item/Active', name: 'Active', fields: ['layout'], code: 'changed', reason: REASONS.changed });
+  assert.deepStrictEqual(omission({ kind: 'chart', id: 'not a guid', name: 'a\nb', code: 'unread' }), { kind: 'chart', code: 'unread', reason: REASONS.unread }, 'an id that is not a GUID and a name with a line break are left out');
+  assert.throws(() => omission({ kind: 'view', code: 'HTTP 500: <fetch>secret</fetch>' }), /unknown omission code/);
+});

@@ -1731,6 +1731,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (an unchanged app's spec already matches; a rename can take effect and still report an error), nor that the
   previous pages are gone (the swap keeps them when it cannot remove its folder, and warns). No copy of the
   previous pages and no recovery folder is made.
+  **The managed download prints the not-round-tripped report after its restore** (`lib/managed-restore-report.js`):
+  with `--include-managed`, `main` also passes `deferReport`, so `runDownload` hands the report back as its parts
+  (`deferredReport`: the inventory and the membership notes) instead of printing it, and `main` recomputes it
+  (`notRoundTrippedReport`) less the ids a family restored (`subtractRestored`, by normalized id, never by name)
+  and prints it once. A plain download, and a library caller that does not ask, prints and answers the report
+  exactly as before. A family's omissions use one shape (`omission`: kind, id, key, name, a fixed `code` and its
+  fixed reason), never a service's own text. The source store is read, never written; its bytes are fingerprinted
+  before the first family reads it and again before `stagedPages.check`, and a store rewritten in between (a build
+  ran) stops the download with `managed-manifest-changed` before anything is written.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,

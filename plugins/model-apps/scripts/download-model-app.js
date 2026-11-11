@@ -74,6 +74,7 @@ const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
+const { subtractRestored, storeRevision, assertStoreUnchanged } = require('./lib/managed-restore-report.js');
 const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
@@ -1941,6 +1942,21 @@ function roundTrippedAware(inventory, globalChoiceDecls) {
   return remaining.length ? { ...rest, globalChoices: remaining } : rest;
 }
 
+// The not-round-tripped report of a download: its inventory less the global choices the spec declares (roundTrippedAware), with the
+// app-membership notes. One function for the two places that compute it — downloadApp, and main once the managed download has put
+// some of the inventory back into the spec (lib/managed-restore-report.js subtractRestored) — so the two can never disagree.
+//
+// Round-tripped means DECLARED in the emitted spec, so subtract `spec.globalChoices` — not the raw
+// `globalChoiceDecls` candidates, which also hold sets bound only by a filtered attribute or a
+// dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
+// report whose job is naming them.
+function notRoundTrippedReport(inventory, spec, membershipNotes) {
+  const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
+  const summary = notRoundTrippedSummary(roundTrippedAware(inventory, declaredGlobalChoices));
+  if (!membershipNotes.length) return summary;
+  return { ...(summary || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
+}
+
 // Render `notRoundTrippedSummary` as the operator-facing warning. Kept separate from the computation
 // so the wording is testable without a download, and so the same summary can be emitted as JSON.
 function notRoundTrippedWarning(summary) {
@@ -3385,7 +3401,7 @@ async function runDownload(options = {}) {
   return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
 }
 
-async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null }) {
+async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null, deferReport = false }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -4063,25 +4079,19 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // reported failure was not that they are omitted — that is a documented limitation — but that
   // NOTHING said so, so a second session reading the spec could not tell "this app has no views"
   // from "this download does not carry views".
-  //
-  // Round-tripped means DECLARED in the emitted spec, so subtract `spec.globalChoices` — not the raw
-  // `globalChoiceDecls` candidates, which also hold sets bound only by a filtered attribute or a
-  // dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
-  // report whose job is naming them.
-  const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
-  let notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
   // The notes come in the order the component rows were read, which Dataverse does not fix (compareNotes).
   const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes].sort(compareNotes);
-  if (membershipNotes.length) {
-    notRoundTripped = { ...(notRoundTripped || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
-  }
-  if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
+  const notRoundTripped = notRoundTrippedReport(capturedInventory, spec, membershipNotes);
+  // `deferReport` (main's managed download, and only it): the report is not printed here but handed back as its parts
+  // (`deferredReport`), because the managed restore may yet put some of what it names back into the spec. main prints it once,
+  // after the restore, without what was restored. Every other caller gets the report printed here, as it always was.
+  if (notRoundTripped && !deferReport) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
   // `publisher` is internal (main hands it to the managed restore, which downloads a form's handler library only under this
   // publisher's verified prefix); it is not part of the printed result.
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(deferReport ? { deferredReport: { inventory: capturedInventory, membershipNotes } } : {}) };
 }
 
 // `error` with `sequel` (what the refusal or failure means for the app folder) added to its message. Its code and reason are kept, so a
@@ -4224,12 +4234,13 @@ async function main(deps = {}) {
 
     // Every download stages its page tree (runDownload `stagePages`): it is checked and published below, after everything that can still
     // stop the download, so a refusal or a failure before then leaves the maker's pages/ exactly as it was.
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, stagePages: true });
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, stagePages: true, ...(includeManaged ? { deferReport: true } : {}) });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
 
-    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft, pageBindings } = result;
+    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, solutionCandidates, navIdsLeft, pageBindings } = result;
+    let { notRoundTripped } = result;
     if (droppedSubareas > 0 || dashboardReconstructionError) {
       const droppedList = (droppedSubareaDetails || [])
         .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -4267,7 +4278,14 @@ async function main(deps = {}) {
     let managedBpfs = null;
     // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
     const fragments = [];
+    // The store's bytes as the restore first reads them: every family below reads the file on its own, so a build that rewrote it
+    // in between would have them prove against two revisions. Rechecked before anything is published (assertStoreUnchanged). A
+    // store that cannot be read here is left to the restore, which names a missing or foreign file in its own words.
+    let storeRev = null;
+    // The ids the restore put back into the spec, by inventory class (lib/managed-restore-report.js subtractRestored).
+    const restoredIds = {};
     if (includeManaged) {
+      try { storeRev = storeRevision(managedManifestFile); } catch { /* named by the restore below */ }
       const source = {
         sdk,
         spec,
@@ -4294,6 +4312,12 @@ async function main(deps = {}) {
       for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
       for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
       for (const p of managedBpfs.personas || []) io.stderr.write(`NOTE: persona '${p.name}' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build.\n`);
+      // The report runDownload deferred (`deferReport`), less what was restored, printed once. A runDownload that hands back no
+      // deferred parts printed its own report already (or had none), so nothing is printed twice.
+      if (result.deferredReport) {
+        notRoundTripped = notRoundTrippedReport(subtractRestored(result.deferredReport.inventory, restoredIds), spec, result.deferredReport.membershipNotes);
+        if (notRoundTripped) io.stderr.write(notRoundTrippedWarning(notRoundTripped));
+      }
     }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
@@ -4320,6 +4344,14 @@ async function main(deps = {}) {
     // fragments file is written. The spec is still written after the tree, and the two are not one transaction: a write of it that
     // fails for a reason no look beforehand can see (a full disk, a lock taken meanwhile) comes after the tree is published.
     let managedFragments = null;
+    if (includeManaged) {
+      try {
+        assertStoreUnchanged(managedManifestFile, storeRev);
+      } catch (e) {
+        finish(false, { ok: false, code: e.code, error: `${e.message}. Nothing was written.` });
+        return;
+      }
+    }
     if (result.stagedPages) {
       result.stagedPages.check();
       try {
@@ -4437,4 +4469,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedReport, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

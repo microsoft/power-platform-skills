@@ -912,7 +912,9 @@ are only added.
   neither on it; the default and order checks of the table's plain forms are unchanged.
 - **Download.** A plain download leaves declared forms out. To bring them back, pass both
   `--include-managed` and `--managed-manifest <store file>`, the `managed-bindings.<hash>.json` file in the
-  build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
+  build's `.maker-workspace` for that environment and app. The download only reads that file: when a build
+  changes it while the download runs, the download stops with `managed-manifest-changed` and writes
+  nothing, so run it again. Each form the store proves comes back with
   `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
   that is pending, gone or not valid is left out and named. A declared form with an event handler
   (`events`) comes back with each handler library the spec does not declare, added to `webResources[]` as
