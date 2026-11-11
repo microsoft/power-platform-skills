@@ -162,6 +162,17 @@ test('the promotion guide is read only for a promote request and cites Microsoft
     'Import order', 'Connections and the import', 'Rollback', 'What travels with a page, and what does not', 'Record the promotion',
   ]);
   assert.match(guide, /The full authoring conversation: in the target, the designer shows only the first prompt and the published code/);
+  // Learn qualifies both promises: a managed component may be customized in the target through an unmanaged layer when its
+  // managed properties allow it, and an upgrade deletes the components a new version drops, with their data, which no
+  // roll-forward brings back. So neither may be stated as absolute, and the backup advice covers such an upgrade too.
+  const flat = (title) => (sections.find((s) => s.startsWith(title)) || '').replace(/\s+/g, ' ');
+  const managed = flat('## 2. Managed or unmanaged');
+  assert.doesNotMatch(managed, /its components cannot be edited in the target/);
+  assert.match(managed, /cannot be edited in the target directly\. A component it brings can still be customized there when its managed properties allow it/);
+  const rollback = flat('## 8. Rollback');
+  assert.doesNotMatch(rollback, /loses nothing/);
+  assert.match(rollback, /it does not bring back data an earlier upgrade or migration deleted/);
+  assert.match(rollback, /Back up the target before an import that cannot be undone:\*\* any unmanaged import, and any upgrade that removes components/);
   // Guidance, not automation: the guide exports nothing and changes no page; the one write it runs is the documented import.
   assert.doesNotMatch(guide, /genpage-upload\.js|pac solution export|ExportSolution/);
   const writes = [...guide.matchAll(/scripts\/([\w-]+\.js)"(?: (\w+))?/g)].map((m) => `${m[1]} ${m[2] || ''}`.trim());

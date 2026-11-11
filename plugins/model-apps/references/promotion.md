@@ -24,7 +24,7 @@ only when it is added itself. Adding a page brings its file rows (`page.tsx`, `c
 
 | Target | Export as | Why |
 | --- | --- | --- |
-| Test, UAT, production | **Managed** | Managed solutions are deployed; unmanaged ones are developed. A managed solution is a build artifact you import, and its components cannot be edited in the target. |
+| Test, UAT, production | **Managed** | Managed solutions are deployed; unmanaged ones are developed. A managed solution is a build artifact you import: it cannot be edited in the target directly. A component it brings can still be customized there when its managed properties allow it, which adds an unmanaged layer on top. |
 | Another development environment | **Unmanaged** | The receiving maker keeps editing the pages. |
 | Source control | **Unmanaged** | Unmanaged exports are the source to keep in source control. |
 
@@ -125,7 +125,9 @@ Plan the rollback before the import:
   the version you imported.
 - **Roll forward.** To go back, rebuild the earlier release in development (put the earlier
   `page.tsx` back and upload it), export it with a **higher** version number, and import it as an
-  update. This is the rollback that loses nothing.
+  update. This restores the code without removing what the solution installed; it does not bring back
+  data an earlier upgrade or migration deleted (an upgrade deletes the components the new version no
+  longer holds, with their data).
 - **Stage for upgrade** keeps the old version installed until you apply the upgrade, so you can check
   the new version first.
   [Update a solution](https://learn.microsoft.com/power-apps/maker/data-platform/update-solutions)
@@ -133,7 +135,9 @@ Plan the rollback before the import:
   tables and custom columns it brought. Do not delete one as a rollback unless the user accepts that
   data loss.
   [Solution concepts](https://learn.microsoft.com/power-platform/alm/solution-concepts-alm#managed-and-unmanaged-solutions)
-- **An unmanaged import cannot be undone.** Back up the target before one.
+- **Back up the target before an import that cannot be undone:** any unmanaged import, and any
+  upgrade that removes components (and so their data). Restoring a backup is the only way to get
+  deleted data back.
   [Import solutions](https://learn.microsoft.com/power-apps/maker/data-platform/import-update-export-solutions)
 
 ## 9. What travels with a page, and what does not
