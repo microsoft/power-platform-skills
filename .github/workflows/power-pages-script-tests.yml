@@ -44,3 +44,8 @@ jobs:
               shell: bash
               working-directory: plugins/power-pages/scripts/tests
               run: node --test
+
+            - name: run-site-configuration-comparison-tests
+              shell: bash
+              working-directory: plugins/power-pages/skills/compare-site-configurations/scripts/tests
+              run: node --test
