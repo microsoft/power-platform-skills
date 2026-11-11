@@ -30,6 +30,7 @@ const CANARY = {
   jsonDefault: 'canary-jsondefault-2b70',
   schema: 'canary-schema-5e1b',
   vault: 'canaryvault7d',
+  need: 'canary-need-91c4',
 };
 const KEY_VAULT = `/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/${CANARY.vault}/secrets/apikey`;
 
@@ -62,12 +63,12 @@ const snapshot = (dir) => Object.fromEntries(walk(dir).map((f) => [path.relative
 
 // The real build command over the strict org, with deployment settings carrying the canary values. Answers the org, the app folder
 // (whose .maker-workspace holds the binding store) and the store file.
-async function built({ variables = VARIABLES, settings = SETTINGS, intercept = {} } = {}) {
+async function built({ lists = { environmentVariables: VARIABLES }, settings = SETTINGS, intercept = {} } = {}) {
   const org = createConfigOrg({ solution: { uniqueName: SOLUTION, version: '1.0.0.0', prefix: 'contoso' }, intercept: (req) => (intercept.fn ? intercept.fn(req) : undefined) });
   const appDir = path.join(makeTempDir('dl-cfg-'), 'app');
   const settingsFile = path.join(makeTempDir('dl-cfg-settings-'), 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify(settings));
-  const out = await runCommand(protectedSpec({ environmentVariables: variables }), { org, appDir, argv: ['--stage', 'data', '--allow-destructive', '--deployment-settings', settingsFile] });
+  const out = await runCommand(protectedSpec(lists), { org, appDir, argv: ['--stage', 'data', '--allow-destructive', '--deployment-settings', settingsFile] });
   assert.ok(!out.exitCode && !out.thrown && out.payload && out.payload.ok, JSON.stringify(out.payload || out.thrown));
   const ws = path.join(appDir, '.maker-workspace');
   const store = path.join(ws, fs.readdirSync(ws).find((f) => f.startsWith('managed-bindings.')));
@@ -76,14 +77,19 @@ async function built({ variables = VARIABLES, settings = SETTINGS, intercept = {
 
 // download-model-app.js main with its connections replaced: the real SDK over the org's transport, a workspace of its own, and
 // runDownload answering the plain download (PLAIN).
-async function download(org, store, { out = makeTempDir('dl-cfg-out-'), managed = true } = {}) {
-  const workspace = makeTempDir('dl-cfg-ws-');
+async function downloadSdk(org, workspace = makeTempDir('dl-cfg-ws-')) {
   const sdk = createMakerSdk({
     workspaceStorage: createNodeWorkspaceStorage(workspace),
     instanceUrl: org.origin,
     httpClient: createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: (r) => org.request(r), sleep: async () => {} }),
   });
   await sdk.initWorkspace();
+  return sdk;
+}
+
+async function download(org, store, { out = makeTempDir('dl-cfg-out-'), managed = true } = {}) {
+  const workspace = makeTempDir('dl-cfg-ws-');
+  const sdk = await downloadSdk(org, workspace);
   const dl = Object.create(sdk);
   dl.queryRecords = async (table, o) => (table === 'appmodule' ? [{ uniquename: APP }] : sdk.queryRecords(table, o));
   const said = [];
@@ -126,6 +132,13 @@ function assertNoCanary(dl) {
 }
 
 const configurationRows = (org) => JSON.stringify(['environmentvariabledefinitions', 'environmentvariablevalues', 'solutioncomponents'].map((s) => org.rows(s)));
+// A row changed outside the plugin (the maker portal's own write): its version moves on.
+const editRow = (org, set, pick, patch) => {
+  const rows = org.sets.get(set);
+  const [id, row] = [...rows].find(([, r]) => pick(r));
+  rows.set(id, { ...row, ...patch, versionnumber: row.versionnumber + 1000 });
+  return id;
+};
 const reason = (code) => require('../lib/managed-restore-report.js').REASONS[code];
 
 test('environment variables: each proved definition is restored with its parent and labels, never a value, default, schema or secret; it rebuilds as no change and downloads again byte for byte', async () => {
@@ -177,14 +190,8 @@ test('environment variables: each proved definition is restored with its parent 
 
 test('environment variables: a definition changed by hand is left out, and so is the data source naming it as parent; a second value row is never picked', async () => {
   const { org, store } = await built();
-  const bump = (set, pick, patch) => {
-    const rows = org.sets.get(set);
-    const [id, row] = [...rows].find(([, r]) => pick(r));
-    rows.set(id, { ...row, ...patch, versionnumber: row.versionnumber + 1000 });
-    return id;
-  };
-  bump('environmentvariabledefinitions', (r) => r.schemaname === 'contoso_Site', { description: 'edited in the maker portal' });
-  const shape = bump('environmentvariabledefinitions', (r) => r.schemaname === 'contoso_Shape', {});
+  editRow(org, 'environmentvariabledefinitions', (r) => r.schemaname === 'contoso_Site', { description: 'edited in the maker portal' });
+  const shape = editRow(org, 'environmentvariabledefinitions', (r) => r.schemaname === 'contoso_Shape', {});
   // A second current value under contoso_Shape, made outside the plugin: a download never chooses between them.
   for (const n of [1, 2]) {
     const id = `00000000-0000-4000-8000-0000000eb${n}00`;
@@ -236,6 +243,31 @@ test('environment variables: a read that fails leaves every item out as unread, 
   assert.deepEqual(snapshot(out), kept);
   assert.deepEqual(refused.writes, []);
   assertNoCanary(refused);
+});
+
+test('environment variables: a required variable whose value was cleared outside the plugin, with no default, is left out rather than declared to stop a rebuild', async () => {
+  const need = { schemaName: 'contoso_Need', type: 'string', isRequired: true };
+  const { org, appDir, store } = await built({
+    lists: { environmentVariables: [VARIABLES[0], need] },
+    settings: { EnvironmentVariables: [SETTINGS.EnvironmentVariables[0], { SchemaName: 'contoso_Need', Value: CANARY.need }] },
+  });
+  const definition = org.rows('environmentvariabledefinitions').find((r) => r.schemaname === 'contoso_Need').environmentvariabledefinitionid;
+  editRow(org, 'environmentvariablevalues', (r) => r._environmentvariabledefinitionid_value === definition, { value: null });
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.environmentVariables.map((v) => v.schemaName), ['contoso_ApiBase']);
+  assert.deepEqual(dl.payload.managedEnvironmentVariables.omitted.map((o) => [o.key, o.code, o.reason]), [['contoso_need', 'required-value-missing', reason('required-value-missing')]]);
+  assert.deepEqual(dl.writes, []);
+  assertNoCanary(dl);
+  // Why it is left out: the same declaration rebuilt over the same app folder stops as incomplete. The download's own spec rebuilds.
+  const withNeed = { ...dl.spec, environmentVariables: [...dl.spec.environmentVariables, { ...need, name: 'contoso_Need' }] };
+  const stopped = await runCommand(withNeed, { org, appDir });
+  assert.ok(stopped.exitCode || stopped.thrown || !stopped.payload.ok, 'a required variable with no value stops the rebuild');
+  assert.match(JSON.stringify(stopped.payload) + stopped.stderr, /ENVIRONMENT_VARIABLE_VALUE_MISSING/);
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
 });
 
 test('a download without --include-managed reads no configuration and writes none, and its result names no configuration list', async () => {

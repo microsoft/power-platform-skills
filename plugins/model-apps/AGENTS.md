@@ -1799,7 +1799,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   written null would clear it on a rebuild). Results: `managedEnvironmentVariables` (only when it says something,
   so a store without configuration answers as before). A secret variable is `secret-withheld`; a data source whose
   parent is not restored at exactly the row it names is `parent-unproven`; a second value row is
-  `multiple-values`. `tests/download-managed-configuration.test.js` builds through the real build command and
+  `multiple-values`; a required variable with neither a default nor a value (`restoreProofOf` answers only
+  `valueFilled`, never the value) is `required-value-missing`, since its rebuild would stop as incomplete. `tests/download-managed-configuration.test.js` builds through the real build command and
   bundle, downloads through `main`, rebuilds over the same app folder with zero writes, downloads again byte for
   byte, and scans every file and stream the download wrote for value, default, schema and secret canaries.
   **Every download, plain or managed, reports the custom field security profiles it does not declare**

@@ -98,8 +98,16 @@ async function declareVariable({ root, key, parentOf }) {
   return { declaration, fields };
 }
 
+// A required variable with neither a default nor a value stops a rebuild as incomplete (configuration-artifacts.js
+// runConfigurationStep, ENVIRONMENT_VARIABLE_VALUE_MISSING), so its declaration would not rebuild as no change; a download never fills
+// one in to force a pass. The test is the build's own (observe): a default or a current value that is neither null nor ''.
+function acceptVariable({ root, declaration, proof }) {
+  const d = root.decoded.fields.defaultValue;
+  if (declaration.isRequired && (d == null || d === '') && !proof.valueFilled) leave('required-value-missing');
+}
+
 const FAMILIES = Object.freeze({
-  environmentVariable: { label: 'environment variable', declare: declareVariable },
+  environmentVariable: { label: 'environment variable', declare: declareVariable, accept: acceptVariable },
 });
 
 /**
@@ -137,6 +145,7 @@ async function restoreItem(ctx, kind, key, group, extra = {}) {
     spec: candidate, manifest: ctx.manifest, dataverse: ctx.dataverse, solution: ctx.solutionUniqueName, kind, key: declaration[field], consumerRows: consumer.rows,
   });
   if (!proof.ok) leave(proof.code);
+  if (FAMILIES[kind].accept) FAMILIES[kind].accept({ root, declaration, proof });
   const check = ctx.validate(candidate);
   if (!check || !check.ok) leave('invalid-in-spec');
   spec[list] = candidate[list];

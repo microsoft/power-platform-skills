@@ -1284,7 +1284,8 @@ function protectedVerifyPort({ spec, manifest, dataverse, solution, bindings }) 
  *     outside the plugin would be downloaded as if the build had made it so (its drift "refreshed away"). A connection reference's
  *     connected flag is not part of its declaration (which connection is private, and is bound per environment), so either value
  *     proves it.
- * Answers { ok: true, values } (`values`: how many value rows a variable has: 0 or 1) or { ok: false, code } with a code of
+ * Answers { ok: true, values, valueFilled } (`values`: how many value rows a variable has: 0 or 1; `valueFilled`: whether that row holds
+ * a value the build's readiness counts, the only thing said of it) or { ok: false, code } with a code of
  * lib/managed-restore-report.js. It sends nothing and never throws for what it reads.
  */
 async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, consumerRows }) {
@@ -1322,12 +1323,17 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
   if (members.some((m) => m.state !== 'present')) return { ok: false, code: 'not-in-solution' };
   const committed = Array.isArray(consumerRows) ? consumerRows : [];
   const sameRow = (c, r) => !!c && c.kind === r.kind && c.key === r.key && normalizeGuid(c.id) === r.id;
+  // Whether a variable's value row holds a usable value, as the build's readiness reads it (configuration-artifacts.js observe:
+  // a value that is neither null nor ''). Only this flag leaves here: the value itself is compared in memory and dropped.
+  let valueFilled = false;
+  const filledValue = (read) => !!read.decoded.private && read.decoded.private.present && read.decoded.private.value != null && read.decoded.private.value !== '';
   for (const r of planned.rows) {
     const c = committed.find((x) => sameRow(x, r));
     if (!c) return { ok: false, code: 'changed' };
     const read = await B.readConfigurationRow(dataverse, r.kind, r.id);
     if (read.state === 'absent') return { ok: false, code: 'missing' };
     if (read.state !== 'present') return { ok: false, code: 'unread' };
+    if (r.kind === 'environmentVariableValue' && filledValue(read)) valueFilled = true;
     const semantic = B.semanticOf(r.kind, read.decoded);
     const variants = r.kind === 'connectionReference' ? [{ ...semantic, connected: false }, { ...semantic, connected: true }] : [semantic];
     const proved = variants.some((s) => B.projectionOf(r.kind, r.expected, s, read.decoded.unmodelled, [], read.decoded.preserved) === c.projectionSha256);
@@ -1339,7 +1345,14 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
     if (c.kind === 'environmentVariableValue') continue;
     if (!planned.rows.some((r) => sameRow(c, r))) return { ok: false, code: 'changed' };
   }
-  return { ok: true, values };
+  // A value set outside the plugin ('environmentVariableValue:<id>', one at most by now) counts as the build's readiness counts it.
+  for (const stray of strayValues) {
+    const read = await B.readConfigurationRow(dataverse, 'environmentVariableValue', stray.slice(stray.indexOf(':') + 1));
+    if (read.state === 'absent') continue;
+    if (read.state !== 'present') return { ok: false, code: 'unread' };
+    if (filledValue(read)) valueFilled = true;
+  }
+  return { ok: true, values, valueFilled };
 }
 
 module.exports = {

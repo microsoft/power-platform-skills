@@ -46,6 +46,7 @@ const REASONS = Object.freeze({
   'secret-withheld': 'it is a secret variable: its Key Vault reference is never downloaded, and a secret is not round-tripped',
   'parent-unproven': 'the parent variable it names is not one this download restores at exactly that row',
   'multiple-values': 'it has more than one current value row, and a download never picks one',
+  'required-value-missing': 'it is required but has neither a default nor a value, so a rebuild of it would stop as incomplete; a download never fills one in',
   'fields-withheld': 'the named parts are never written by a download (they can hold a private or environment-specific value); a rebuild leaves them as they are in the service',
 });
 

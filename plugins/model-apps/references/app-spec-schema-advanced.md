@@ -1505,7 +1505,9 @@ the field builds exactly as before.
     required flag and, for a data source, its connector, parameter key and a parent the download also
     restores. The current value, `defaultValue` and `valueSchema` are never written (`withheld` names
     them). A `secret` variable is left out (`secret-withheld`), as is a data source whose parent is not
-    restored (`parent-unproven`) and a variable with more than one value row (`multiple-values`).
+    restored (`parent-unproven`), a variable with more than one value row (`multiple-values`) and a
+    required variable with neither a default nor a value (`required-value-missing`: a rebuild of it would
+    stop as incomplete, and a download never fills one in).
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
