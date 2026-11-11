@@ -83,7 +83,7 @@ const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
 const { restoreManagedViews } = require('./lib/declared-view-io.js');
 const { restoreManagedCharts } = require('./lib/declared-chart-io.js');
-const { subtractRestored, storeRevision, assertStoreUnchanged } = require('./lib/managed-restore-report.js');
+const { subtractRestored, storeRevision, assertStoreUnchanged, omission } = require('./lib/managed-restore-report.js');
 const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
@@ -94,7 +94,7 @@ const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js')
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
-const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor } = require('./lib/schema-feature-contract.js');
+const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor, SYSTEM_ADMIN_PROFILE_ID, SYSTEM_ADMIN_PROFILE_NAME } = require('./lib/schema-feature-contract.js');
 const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
 const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
@@ -894,7 +894,7 @@ async function readAppShellSettings(sdk, appId) {
   return out;
 }
 
-async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices, componentInventory, { tables } = {}) {
+async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices, componentInventory, { tables, securedColumns } = {}) {
   // `incomplete[]` records an artifact class whose read FAILED. Without it the whole app-component
   // block shared one broad catch, so a 403 on `systemform` left `forms: []` — indistinguishable from
   // an app with no forms, which is EXACTLY the reported bug (AB#6686423) reappearing inside the fix
@@ -902,7 +902,9 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
   // keys reach `app-spec.json`, so this informs the CLI without changing the spec shape.
   //
   // `tables` are the app's tables, whose command bars are inventoried (readCommandInventory); a caller that names none reads none.
-  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], commands: [], roleRestrictedForms: [], incomplete: [] };
+  // `securedColumns` are the { table, column } logical names the download emits with isSecured, whose field security profiles are
+  // named (readFieldSecurityProfiles); a caller that names none looks for profiles in the app's solution only.
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], commands: [], roleRestrictedForms: [], fieldSecurityProfiles: [], incomplete: [] };
   const fail = (kind, err) => inventory.incomplete.push({ kind, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' });
   try {
     const layer = componentInventory ? componentInventory.layer : await currentAppLayer(sdk.dataverse, appId);
@@ -1089,13 +1091,97 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
     }
   }
 
+  await readFieldSecurityProfiles(sdk, inventory, { solIds, solutionError, securedColumns });
+
   // Ordered here, once, for everything that reads the inventory — the spec's `descriptionInventory`, the not-round-tripped report
   // and the role-restriction warning. The rows are in the order Dataverse answered, which differs between two reads of one app; by
   // table, then name, then id (compareArtifacts) they do not.
   for (const key of ['views', 'charts', 'forms', 'businessRules', 'commands', 'roleRestrictedForms']) inventory[key].sort(compareArtifacts);
   inventory.globalChoices.sort((a, b) => compareText(a.name, b.name));
+  inventory.fieldSecurityProfiles.sort((a, b) => compareText(a.name, b.name) || compareText(a.id, b.id));
   inventory.incomplete.sort((a, b) => compareText(a.kind, b.kind) || compareText(a.reason, b.reason));
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
+}
+
+// Field security profiles: REPORTED, never declared. A profile is environment-wide security policy — its permissions say which
+// secured columns its holders may read or change, and its users and teams say who holds it — and no binding store record proves
+// that this app authored one, so a download that declared it would hand a rebuild the power to rewrite somebody else's grant.
+// The download names the custom profiles it finds instead, in BOTH a plain and a managed download, and leaves fieldSecurityProfiles[]
+// out of the spec: a rebuild then neither changes nor recreates them. The secured columns themselves still round-trip (isSecured).
+//
+// Two ways in, de-duplicated by id:
+//   - the app's own solution(s): solution component type 70 is a Field Security Profile
+//     (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent);
+//   - a field permission on a column the download emits as secured — the profile that opens it, wherever it lives
+//     (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/fieldpermission).
+// Only the profile id (`_fieldsecurityprofileid_value`) of a permission is read, and only the id and name of a profile: never a
+// permission's can-read/create/update bits, and never the users or teams a profile is given to, so nothing about who may see what
+// leaves the environment. System Administrator is dropped by its fixed id AND by its name — every org has it, every secured column
+// opens to it, and naming it would only bury the custom profiles the note is for.
+//
+// A failed read is UNKNOWN, never "no profiles": one `incomplete` entry with a FIXED reason (the service's error text can quote the
+// filter, i.e. the column names) — and what the other way in found is kept.
+const FIELD_SECURITY_PROFILES_UNREAD = 'the field security profiles could not be read';
+async function readFieldSecurityProfiles(sdk, inventory, { solIds = [], solutionError = null, securedColumns = [] } = {}) {
+  let failed = false;
+  const ids = [];
+  try {
+    if (solutionError) throw solutionError;
+    for (const solId of solIds) {
+      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid'], filter: `_solutionid_value eq ${solId} and componenttype eq 70`, paginate: true });
+      ids.push(...(comps || []).map((r) => r && r.objectid).filter(Boolean));
+    }
+  } catch {
+    failed = true;
+  }
+  // One request per table, naming its secured columns, so the read is bounded by what the download emits.
+  const byTable = new Map();
+  for (const { table, column } of securedColumns || []) {
+    if (!table || !column) continue;
+    const t = String(table).toLowerCase();
+    if (!byTable.has(t)) byTable.set(t, new Set());
+    byTable.get(t).add(String(column).toLowerCase());
+  }
+  const esc = (v) => v.replace(/'/g, "''");
+  for (const table of [...byTable.keys()].sort(compareText)) {
+    try {
+      const columns = [...byTable.get(table)].sort(compareText).map((c) => `attributelogicalname eq '${esc(c)}'`).join(' or ');
+      const rows = await sdk.queryRecords('fieldpermission', { select: ['_fieldsecurityprofileid_value'], filter: `entityname eq '${esc(table)}' and (${columns})`, paginate: true });
+      ids.push(...(rows || []).map((r) => r && r._fieldsecurityprofileid_value).filter(Boolean));
+    } catch {
+      failed = true;
+    }
+  }
+  const isAdmin = (id) => String(id || '').replace(/[{}]/g, '').toLowerCase() === SYSTEM_ADMIN_PROFILE_ID;
+  const custom = ids.filter((id) => !isAdmin(id));
+  if (custom.length) {
+    try {
+      const rows = await rowsByIds(sdk, 'fieldsecurityprofile', 'fieldsecurityprofileid', custom, ['fieldsecurityprofileid', 'name'], (r) => r);
+      const seen = new Set();
+      for (const r of rows) {
+        const id = String((r && r.fieldsecurityprofileid) || '').replace(/[{}]/g, '').toLowerCase();
+        if (!id || seen.has(id) || isAdmin(id)) continue;
+        if (String((r && r.name) || '').trim().toLowerCase() === SYSTEM_ADMIN_PROFILE_NAME.toLowerCase()) continue;
+        seen.add(id);
+        inventory.fieldSecurityProfiles.push({ id, name: r.name });
+      }
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) inventory.incomplete.push({ kind: 'fieldSecurityProfiles', reason: FIELD_SECURITY_PROFILES_UNREAD });
+}
+
+// The inventory's field security profiles as managed-restore-report omissions (id and name, fixed reason), for the NOTE and the
+// result payload. Ownership-unproven is the honest code: the profile may well be this app's, but nothing binding says so.
+function fieldSecurityProfileOmissions(inventory) {
+  return ((inventory && inventory.fieldSecurityProfiles) || []).map((p) => omission({ kind: 'fieldSecurityProfile', id: p.id, name: p.name, code: 'ownership-unproven' }));
+}
+
+function fieldSecurityProfilesNote(omitted) {
+  if (!omitted || !omitted.length) return '';
+  const n = omitted.length;
+  return `NOTE: ${n} field security profile${n === 1 ? '' : 's'} (${omitted.map((o) => o.name || o.id).join(', ')}) ${n === 1 ? 'is' : 'are'} not declared in fieldSecurityProfiles[]: ${omitted[0].reason}. ${n === 1 ? 'It stays' : 'They stay'} as ${n === 1 ? 'it is' : 'they are'} in this environment, and a rebuild neither changes nor recreates ${n === 1 ? 'it' : 'them'}; the secured columns keep isSecured. Declare a profile only if this app owns it.\n`;
 }
 
 // Read the page tree a download writes (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
@@ -4050,7 +4136,10 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       const scope = solutionUnreadable
         ? new Error(`the solutions this app belongs to could not be read (${solutionUnreadable})`)
         : (solutionCandidates || solution.uniqueName);
-      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced, componentInventory, { tables: [...allLogicals, ...appTables] });
+      // The columns this download secures, whose field security profiles the inventory names (readFieldSecurityProfiles).
+      const securedColumns = [];
+      for (const e of entities || []) for (const c of (e && e.columns) || []) if (c && c.isSecured === true && e.schemaName && c.schemaName) securedColumns.push({ table: String(e.schemaName).toLowerCase(), column: String(c.schemaName).toLowerCase() });
+      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced, componentInventory, { tables: [...allLogicals, ...appTables], securedColumns });
       return capturedInventory;
     },
   };
@@ -4096,11 +4185,14 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // after the restore, without what was restored. Every other caller gets the report printed here, as it always was.
   if (notRoundTripped && !deferReport) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
+  // Printed by every download, plain and managed alike: no restore declares a profile (readFieldSecurityProfiles).
+  const fieldSecurityOmitted = fieldSecurityProfileOmissions(capturedInventory);
+  if (fieldSecurityOmitted.length) process.stderr.write(fieldSecurityProfilesNote(fieldSecurityOmitted));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
   // `publisher` is internal (main hands it to the managed restore, which downloads a form's handler library only under this
   // publisher's verified prefix); it is not part of the printed result.
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(deferReport ? { deferredReport: { inventory: capturedInventory, membershipNotes } } : {}) };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(fieldSecurityOmitted.length ? { fieldSecurityProfiles: { omitted: fieldSecurityOmitted } } : {}), ...(deferReport ? { deferredReport: { inventory: capturedInventory, membershipNotes } } : {}) };
 }
 
 // `error` with `sequel` (what the refusal or failure means for the app folder) added to its message. Its code and reason are kept, so a
@@ -4248,7 +4340,7 @@ async function main(deps = {}) {
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
 
-    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, solutionCandidates, navIdsLeft, pageBindings } = result;
+    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, solutionCandidates, navIdsLeft, pageBindings, fieldSecurityProfiles } = result;
     let { notRoundTripped } = result;
     if (droppedSubareas > 0 || dashboardReconstructionError) {
       const droppedList = (droppedSubareaDetails || [])
@@ -4417,7 +4509,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedViews ? { managedViews: { restored: managedViews.restored.map((r) => r.key), omitted: managedViews.omitted } } : {}), ...(managedCharts ? { managedCharts: { restored: managedCharts.restored.map((r) => r.key), omitted: managedCharts.omitted } } : {}), ...(managedFragments ? { managedFragments } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedViews ? { managedViews: { restored: managedViews.restored.map((r) => r.key), omitted: managedViews.omitted } } : {}), ...(managedCharts ? { managedCharts: { restored: managedCharts.restored.map((r) => r.key), omitted: managedCharts.omitted } } : {}), ...(managedFragments ? { managedFragments } : {}), ...(fieldSecurityProfiles ? { fieldSecurityProfiles } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
@@ -4488,4 +4580,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedReport, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedReport, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, fieldSecurityProfileOmissions, fieldSecurityProfilesNote, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

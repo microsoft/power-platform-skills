@@ -631,8 +631,11 @@ medical note, a national identifier, a private comment. Needs `minimumPluginVers
 - **`--verify`** checks that each declared column is stored secured, that each profile holds exactly
   its declared permissions, and that each named user and team holds the profile. These are metadata
   reads made as the build's account; they do not prove what a user without the profile sees.
-- **Download** writes `isSecured: true` for a secured column. Profiles and their assignments are not
-  downloaded.
+- **Download** writes `isSecured: true` for a secured column. Profiles, their permissions and their
+  assignments are not downloaded: a plain or managed download names each custom profile it finds (in the
+  app's solution, or holding a permission on a column it secures; never System Administrator) in a NOTE
+  and in its result's `fieldSecurityProfiles.omitted`, by id and name only. A rebuild of the downloaded spec
+  neither changes nor recreates a profile.
 - **Teardown** never deletes a profile (users and teams can hold it beyond this app): it keeps each
   declared profile, with its permissions and assignments, and names it as kept, by name only. Remove a
   profile yourself once no one needs it.

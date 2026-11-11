@@ -442,3 +442,26 @@ test('chartDeclarationFromLive says only one count of the id by one column of th
     assert.equal(typeof out.unsupported, 'string', what);
   }
 });
+
+// --- field security profiles: reported by both downloads, restored by neither ---------------------------------------------------
+
+test('the field security profiles runDownload reports reach the result of a plain and a managed download alike, and neither declares one', async () => {
+  const { org, built, flags } = await builtApp();
+  const downloaded = plainDownload(built);
+  const omitted = [{ kind: 'fieldSecurityProfile', id: '00000000-0000-4000-8000-0000000000f1', name: 'HR', code: 'ownership-unproven', reason: 'no binding store record proves this app authored it, so it is not declared' }];
+  const runDownload = async (args) => {
+    const notRoundTripped = notRoundTrippedSummary(downloaded.inventory);
+    return {
+      ok: true, spec: JSON.parse(JSON.stringify(downloaded.spec)), pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [], notRoundTripped,
+      fieldSecurityProfiles: { omitted },
+      ...(args.deferReport ? { deferredReport: { inventory: downloaded.inventory, membershipNotes: [] } } : {}),
+    };
+  };
+  for (const argv of [[], flags]) {
+    const run = await download(org, newDir(), argv, { downloaded, runDownload });
+    assert.equal(run.emitted[0].ok, true, JSON.stringify(run.emitted) + run.said);
+    assert.deepEqual(run.emitted[0].payload.fieldSecurityProfiles, { omitted });
+    assert.equal('fieldSecurityProfiles' in run.written, false);
+    assert.equal(run.writes.some((c) => /fieldsecurityprofile|fieldpermission/i.test(c.path)), false);
+  }
+});

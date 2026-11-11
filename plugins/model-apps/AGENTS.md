@@ -1768,6 +1768,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `reconcile: "declared"`, `chartType`, `groupBy`, the `measure` stated explicitly, and its description
   and title when they hold text. Styling (palette, colours, axes, legend) is not the spec's: the rebuild
   that changes nothing keeps it byte for byte. Omissions are `managedCharts.omitted`, each with a WARNING.
+  **Every download, plain or managed, reports the custom field security profiles it does not declare**
+  (`readFieldSecurityProfiles`). A profile is environment-wide security policy and no store family proves one is
+  this app's, so no restore declares one: `fieldSecurityProfiles[]` stays out of the spec, and a rebuild neither
+  changes nor recreates a profile (the secured columns still round-trip as `isSecured`). The read finds a
+  profile two ways, de-duplicated by id: solution component type 70 in the app's solution(s), and a
+  `fieldpermission` on a column the download emits as secured. It selects only the permission's profile id and
+  the profile's id and name, never a permission's bits or a profile's users and teams, and drops System
+  Administrator by its fixed id and by name. Each profile is named in one NOTE and in the result's
+  `fieldSecurityProfiles.omitted` (`omission`, code `ownership-unproven`); a failed read is a
+  `fieldSecurityProfiles` entry in `incomplete` with a fixed reason, never "no profiles". The list is not part
+  of the not-round-tripped report and never reaches `descriptionInventory`.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,

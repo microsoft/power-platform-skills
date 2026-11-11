@@ -359,3 +359,109 @@ test('omission carries safe identity and the fixed reason of its code, never tex
   assert.deepStrictEqual(omission({ kind: 'chart', id: 'not a guid', name: 'a\nb', code: 'unread' }), { kind: 'chart', code: 'unread', reason: REASONS.unread }, 'an id that is not a GUID and a name with a line break are left out');
   assert.throws(() => omission({ kind: 'view', code: 'HTTP 500: <fetch>secret</fetch>' }), /unknown omission code/);
 });
+
+// --- field security profiles: reported, never declared -------------------------------------------------------------------------
+// A profile is shared security policy and no binding store family proves one is this app's, so the download names the custom profiles
+// it finds (in the app's solution, or holding a permission on a column the download secures) and declares none of them.
+const { fieldSecurityProfileOmissions, fieldSecurityProfilesNote } = require('../download-model-app.js');
+const SOL_ID = '50505050-0000-4000-8000-000000000001';
+const ADMIN = '572329c1-a042-4e22-be47-367c6374ea45';
+const P_HR = '70707070-0000-4000-8000-000000000001';
+const P_PAY = '70707070-0000-4000-8000-000000000002';
+const P_FAKE_ADMIN = '70707070-0000-4000-8000-000000000003';
+const P_OTHER = '70707070-0000-4000-8000-000000000004';
+function profileSdk({ components = [], permissions = [], profiles = [], fail = {} } = {}) {
+  const queries = [];
+  return {
+    queries,
+    dataverse: { get: async () => { throw new Error('no metadata read is expected'); } },
+    queryRecords: async (set, opts) => {
+      queries.push({ set, ...opts });
+      if (fail[set]) throw new Error(fail[set]);
+      if (set === 'solution') return [{ solutionid: SOL_ID }];
+      if (set === 'solutioncomponent') return /componenttype eq 70\b/.test(opts.filter) ? components.map((id) => ({ objectid: id })) : [];
+      if (set === 'fieldpermission') {
+        // `entityname eq '<table>' and (attributelogicalname eq '<column>' or …)`
+        const table = (/entityname eq '([^']+)'/.exec(opts.filter) || [])[1];
+        const columns = [...String(opts.filter).matchAll(/attributelogicalname eq '([^']+)'/g)].map((m) => m[1]);
+        return permissions.filter((p) => p.table === table && columns.includes(p.column)).map((p) => ({ fieldpermissionid: `fp-${p.profile}-${p.column}`, _fieldsecurityprofileid_value: p.profile }));
+      }
+      if (set === 'fieldsecurityprofile') {
+        const ids = [...String(opts.filter).matchAll(/fieldsecurityprofileid eq ([0-9a-f-]{36})/gi)].map((m) => m[1].toLowerCase());
+        return profiles.filter((p) => ids.includes(p.fieldsecurityprofileid));
+      }
+      return [];
+    },
+  };
+}
+const SECURED = [{ table: 'contoso_staff', column: 'contoso_salary' }, { table: 'contoso_staff', column: 'contoso_bonus' }];
+const PROFILES = [
+  { fieldsecurityprofileid: ADMIN, name: 'System Administrator' },
+  { fieldsecurityprofileid: P_HR, name: 'HR' },
+  { fieldsecurityprofileid: P_PAY, name: 'Payroll' },
+  { fieldsecurityprofileid: P_FAKE_ADMIN, name: 'System Administrator' },
+  { fieldsecurityprofileid: P_OTHER, name: 'Elsewhere' },
+];
+
+test('the download names the custom field security profiles it finds by the app\u2019s solution or its secured columns, once each, and never System Administrator', async () => {
+  const sdk = profileSdk({
+    components: [P_HR],
+    permissions: [
+      { table: 'contoso_staff', column: 'contoso_salary', profile: ADMIN },
+      { table: 'contoso_staff', column: 'contoso_salary', profile: P_HR },
+      { table: 'contoso_staff', column: 'contoso_bonus', profile: P_PAY },
+      { table: 'contoso_staff', column: 'contoso_bonus', profile: P_FAKE_ADMIN },
+      { table: 'contoso_staff', column: 'contoso_notes', profile: P_OTHER },
+    ],
+    profiles: PROFILES,
+  });
+  const inv = await readDescriptionInventory(sdk, APP, 'ContosoStaff', new Set(), NO_LAYER, { securedColumns: SECURED });
+  assert.deepStrictEqual(inv.fieldSecurityProfiles, [{ id: P_HR, name: 'HR' }, { id: P_PAY, name: 'Payroll' }]);
+  assert.ok(!(inv.incomplete || []).some((i) => i.kind === 'fieldSecurityProfiles'));
+  // Read: the profile ids a permission names and each profile's id and name. Never a permission's bits, nor who a profile is given to.
+  const perms = sdk.queries.filter((q) => q.set === 'fieldpermission');
+  assert.strictEqual(perms.length, 1, 'one request for the table');
+  assert.deepStrictEqual(perms[0].select, ['_fieldsecurityprofileid_value']);
+  assert.strictEqual(perms[0].filter, "entityname eq 'contoso_staff' and (attributelogicalname eq 'contoso_bonus' or attributelogicalname eq 'contoso_salary')");
+  assert.strictEqual(perms[0].paginate, true);
+  const names = sdk.queries.filter((q) => q.set === 'fieldsecurityprofile');
+  assert.deepStrictEqual(names.map((q) => q.select), [['fieldsecurityprofileid', 'name']]);
+  assert.doesNotMatch(names[0].filter, new RegExp(ADMIN), 'System Administrator is dropped by its id before any read');
+  assert.ok(sdk.queries.every((q) => !/systemuser|team|canread|cancreate|canupdate/i.test(`${q.set} ${q.select} ${q.filter}`)));
+
+  // Reported as omissions with the fixed reason: id and name only.
+  const omitted = fieldSecurityProfileOmissions(inv);
+  assert.deepStrictEqual(omitted, [
+    { kind: 'fieldSecurityProfile', id: P_HR, name: 'HR', code: 'ownership-unproven', reason: REASONS['ownership-unproven'] },
+    { kind: 'fieldSecurityProfile', id: P_PAY, name: 'Payroll', code: 'ownership-unproven', reason: REASONS['ownership-unproven'] },
+  ]);
+  const note = fieldSecurityProfilesNote(omitted);
+  assert.match(note, /^NOTE: 2 field security profiles \(HR, Payroll\) are not declared in fieldSecurityProfiles\[\]/);
+  assert.ok(note.endsWith('\n') && !note.includes('System Administrator'));
+  assert.strictEqual(fieldSecurityProfilesNote([]), '');
+  assert.deepStrictEqual(fieldSecurityProfileOmissions({}), []);
+  // The class is not a not-round-tripped artifact class (it is not in descriptionInventory), so the report is unchanged by it.
+  assert.deepStrictEqual(notRoundTrippedSummary({ fieldSecurityProfiles: inv.fieldSecurityProfiles }), null);
+});
+
+test('a field security profile read that fails is reported as UNKNOWN, keeping what was found; with nothing to look in, nothing is read', async () => {
+  const unknown = (inv) => (inv.incomplete || []).filter((i) => i.kind === 'fieldSecurityProfiles');
+  const permsFail = await readDescriptionInventory(profileSdk({ components: [P_HR], profiles: PROFILES, fail: { fieldpermission: 'HTTP 403 secret detail' } }), APP, 'ContosoStaff', new Set(), NO_LAYER, { securedColumns: SECURED });
+  assert.deepStrictEqual(permsFail.fieldSecurityProfiles, [{ id: P_HR, name: 'HR' }]);
+  assert.strictEqual(unknown(permsFail).length, 1);
+  assert.doesNotMatch(unknown(permsFail)[0].reason, /secret detail/, 'a fixed reason, not the service\u2019s words');
+  assert.match(notRoundTrippedWarning(notRoundTrippedSummary(permsFail)), /fieldSecurityProfiles — /);
+
+  const namesFail = await readDescriptionInventory(profileSdk({ components: [P_HR], fail: { fieldsecurityprofile: 'HTTP 500' } }), APP, 'ContosoStaff', new Set(), NO_LAYER, { securedColumns: SECURED });
+  assert.strictEqual(namesFail.fieldSecurityProfiles, undefined);
+  assert.strictEqual(unknown(namesFail).length, 1);
+
+  const solutionUnread = await readDescriptionInventory(profileSdk({ profiles: PROFILES }), APP, new Error('the solutions could not be read'), new Set(), NO_LAYER, { securedColumns: [] });
+  assert.strictEqual(unknown(solutionUnread).length, 1, 'the solution\u2019s profiles are unknown, not none');
+
+  const nothing = profileSdk({ components: [P_HR], profiles: PROFILES });
+  const none = await readDescriptionInventory(nothing, APP, null, new Set(), NO_LAYER, {});
+  assert.strictEqual(none.fieldSecurityProfiles, undefined);
+  assert.deepStrictEqual(unknown(none), []);
+  assert.deepStrictEqual(nothing.queries.filter((q) => /^field/.test(q.set)), [], 'no solution and no secured column: no profile read');
+});

@@ -1081,7 +1081,8 @@ test('the global-choice inventory unions the owned sets of every candidate solut
   assert.deepStrictEqual((inv.globalChoices || []).map((g) => g.name).sort(), ['set_a', 'set_b']);
   assert.deepStrictEqual(looked, ['SolA', 'SolB'], 'the built-in Default container is never looked up');
   const unread = await readDescriptionInventory(sdk, 'app-1', new Error('membership unreadable'), new Set(['set_a']));
-  assert.deepStrictEqual((unread.incomplete || []).map((i) => i.kind).filter((k) => k !== 'views' && k !== 'charts' && k !== 'forms').sort(), ['businessRules', 'globalChoices']);
+  assert.deepStrictEqual((unread.incomplete || []).map((i) => i.kind).filter((k) => k !== 'views' && k !== 'charts' && k !== 'forms').sort(), ['businessRules', 'fieldSecurityProfiles', 'globalChoices'],
+    'every class scoped by the solution is unknown, field security profiles included');
   assert.strictEqual(unread.globalChoices, undefined, 'nothing is claimed about a scope that could not be read');
 });
 
@@ -5031,4 +5032,69 @@ test('complete reads use SDK pagination where truncation would change download d
     assert.strictEqual(call.opts.paginate, true, `${call.opts.filter} must paginate`);
     assert.strictEqual(call.opts.top, undefined, `${call.opts.filter} must not cap with top`);
   }
+});
+
+test('runDownload names a custom field security profile on a secured column in a NOTE and its result, and the spec declares no profile', async () => {
+  // A field security profile is shared security policy and no store proves one is this app's, so a download reports it and declares
+  // none: the secured column round-trips (isSecured), the profile and its permissions and holders stay in the environment untouched.
+  const APP_ID = '6444e0f2-0000-4000-8000-000000000001';
+  const APP_UNIQUE = 'new_fsp';
+  const SM_ID = '6444e0f2-0000-4000-8000-000000000002';
+  const HR = '6444e0f2-0000-4000-8000-0000000000f1';
+  const ADMIN = '572329c1-a042-4e22-be47-367c6374ea45';
+  const SM_XML = '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-fsp-'));
+  const asked = [];
+  const sdk = {
+    fetchArtifact: async () => ({
+      id: APP_ID, name: 'Fsp', uniquename: APP_UNIQUE, description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'new_order' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: APP_ID, uniquename: APP_UNIQUE }];
+      if (logical === 'appmodulecomponent') return /componenttype eq 62/.test(filter) ? [{ objectid: SM_ID, componenttype: 62 }] : [];
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      if (logical === 'fieldpermission') {
+        asked.push({ logical, ...opts });
+        return /entityname eq 'new_order'/.test(filter) && /attributelogicalname eq 'new_salary'/.test(filter)
+          ? [{ _fieldsecurityprofileid_value: ADMIN }, { _fieldsecurityprofileid_value: HR }] : [];
+      }
+      if (logical === 'fieldsecurityprofile') {
+        asked.push({ logical, ...opts });
+        return [{ fieldsecurityprofileid: HR, name: 'HR' }].filter((p) => filter.includes(p.fieldsecurityprofileid));
+      }
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name',
+      attributes: [
+        { logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true },
+        { logicalName: 'new_salary', displayName: 'Salary', attributeType: 'String', isCustomAttribute: true, isSecured: true },
+      ],
+      relationships: [],
+    }),
+    dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
+  };
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const written = [];
+  process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
+  let res;
+  try {
+    res = await runDownload({ sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }), genpage: fakeGenpage(), outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+  } finally {
+    process.stderr.write = origWrite;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+  assert.strictEqual(res.ok, true, res.error);
+  const note = written.join('').split('\n').find((l) => /field security profile/.test(l)) || '';
+  assert.match(note, /^NOTE: 1 field security profile \(HR\) is not declared in fieldSecurityProfiles\[\]: .*a rebuild neither changes nor recreates it/);
+  assert.doesNotMatch(written.join(''), /System Administrator/);
+  assert.deepStrictEqual(res.fieldSecurityProfiles, { omitted: [{ kind: 'fieldSecurityProfile', id: HR, name: 'HR', code: 'ownership-unproven', reason: 'no binding store record proves this app authored it, so it is not declared' }] });
+  // The spec: the column stays secured; no profile, permission or holder; and the inventory key stays out of descriptionInventory.
+  assert.strictEqual(res.spec.entities[0].columns.find((c) => c.schemaName === 'new_salary').isSecured, true);
+  assert.ok(!('fieldSecurityProfiles' in res.spec));
+  assert.ok(!res.spec.descriptionInventory || !('fieldSecurityProfiles' in res.spec.descriptionInventory));
+  assert.doesNotMatch(JSON.stringify(res.spec), new RegExp(`${HR}|${ADMIN}`));
+  assert.deepStrictEqual(asked.map((q) => [q.logical, q.select]), [['fieldpermission', ['_fieldsecurityprofileid_value']], ['fieldsecurityprofile', ['fieldsecurityprofileid', 'name']]]);
 });
