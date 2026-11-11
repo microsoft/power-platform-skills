@@ -271,7 +271,9 @@ async function restoreManagedViews({ sdk, spec, file, environment, appUniqueName
     }
     if (plan.action !== 'noChange' || !plan.bindUnchanged || plan.refused.length || plan.unknown.length || normalizeGuid(plan.viewId) !== id) { left('would-change', name); continue; }
     const views = Array.isArray(spec.views) ? spec.views : [];
-    const at = views.findIndex((v) => v && lc(v.entity) === table && v.name === declaration.name);
+    // A declaration is replaced by its store key, never by its name: two views of one name on one table are two groups with two
+    // keys (views[].key), and each is restored as itself.
+    const at = views.findIndex((v) => v && viewReconcile.declaredViewKey(v) === key);
     const next = at >= 0 ? views.map((v, i) => (i === at ? declaration : v)) : [...views, declaration];
     const candidate = { ...spec, views: next, createIdentity: 'stable-v1', minimumPluginVersion: floorOf(spec.minimumPluginVersion) };
     const check = validate(candidate);

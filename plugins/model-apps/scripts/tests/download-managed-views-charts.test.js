@@ -238,6 +238,26 @@ test('a view a stable build created is downloaded as the declaration that rebuil
   assert.deepEqual(org.publishLog(fresh), []);
 });
 
+test('two proved views with one name on one table are both restored, each under its own key and id', async () => {
+  const views = [
+    { entity: 'contoso_item', name: 'Declared Items', key: 'first', reconcile: 'declared', columns: ['contoso_name'] },
+    { entity: 'contoso_item', name: 'Declared Items', key: 'second', reconcile: 'declared', columns: ['contoso_name', 'contoso_code'] },
+  ];
+  const { org, dir, built, flags } = await builtApp({ views, charts: [] });
+  const store = JSON.parse(fs.readFileSync(storeFileOf(dir), 'utf8'));
+  const ids = store.groups.filter((g) => g.family === 'view').map((g) => g.records[0].id);
+  assert.equal(new Set(ids).size, 2, JSON.stringify(store.groups));
+  const downloaded = plainDownload(built);
+  downloaded.inventory.views = ids.map((id) => ({ id, name: 'Declared Items', entity: 'contoso_item' }));
+  const res = await download(org, newDir(), flags, { downloaded });
+  assert.equal(res.emitted[0].ok, true, JSON.stringify(res.emitted) + res.said);
+  assert.equal(res.written.views.length, 2, JSON.stringify(res.written.views));
+  assert.deepEqual(res.written.views.map((v) => [v.key, v.columns.map((c) => c.name)]).sort(), [['first', ['contoso_name']], ['second', ['contoso_name', 'contoso_code']]]);
+  assert.deepEqual(res.written.views.map((v) => v.viewId).sort(), [...ids].sort());
+  assert.deepEqual(res.emitted[0].payload.managedViews, { restored: ['first', 'second'], omitted: [] });
+  assert.equal(res.emitted[0].payload.notRoundTripped, undefined, 'both views were restored, so neither is reported as left out');
+});
+
 test('a managed view the restore cannot prove is left out of views[] with a fixed reason and stays in the report', async (t) => {
   const cases = [
     ['edited since its build proved it', 'changed', async ({ org, built }) => {
