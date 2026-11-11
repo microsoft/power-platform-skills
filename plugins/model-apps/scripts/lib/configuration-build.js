@@ -243,4 +243,4 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   };
 }
 
-module.exports = { createConfigurationRuntime, sweepPendingConfiguration };
+module.exports = { createConfigurationRuntime, sweepPendingConfiguration, namedByPages };

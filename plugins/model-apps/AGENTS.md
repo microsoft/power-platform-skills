@@ -1800,7 +1800,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   so a store without configuration answers as before). A secret variable is `secret-withheld`; a data source whose
   parent is not restored at exactly the row it names is `parent-unproven`; a second value row is
   `multiple-values`; a required variable with neither a default nor a value (`restoreProofOf` answers only
-  `valueFilled`, never the value) is `required-value-missing`, since its rebuild would stop as incomplete. `tests/download-managed-configuration.test.js` builds through the real build command and
+  `valueFilled`, never the value) is `required-value-missing`, since its rebuild would stop as incomplete.
+  `managedConnectionReferences` restores a reference's logical name, connector and labels; its connection is
+  withheld (a rebuild without settings keeps it), a custom-connector reference is `unsupported-dependency`, and
+  an unbound one a page names is `page-unready` (the build's page gate, `configuration-build.js namedByPages`
+  over `pagesStatingBindings`, would stop a rebuild before that page; a plain download declares none). `tests/download-managed-configuration.test.js` builds through the real build command and
   bundle, downloads through `main`, rebuilds over the same app folder with zero writes, downloads again byte for
   byte, and scans every file and stream the download wrote for value, default, schema and secret canaries.
   **Every download, plain or managed, reports the custom field security profiles it does not declare**

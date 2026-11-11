@@ -22,6 +22,8 @@ const B = require('./configuration-create-bindings.js');
 const P = require('./configuration-protected.js');
 const { omission } = require('./managed-restore-report.js');
 const { compareVersions, isPluginVersion } = require('./app-spec.js');
+const { namedByPages } = require('./configuration-build.js');
+const { pagesStatingBindings } = require('./page-binding-targets.js');
 
 const IDENTITY = 'stable-v1';
 // The plugin floor of a restored protected item: exact ids, adopted children and the bound-value rules a no-settings rebuild relies
@@ -33,6 +35,7 @@ const lc = (v) => String(v == null ? '' : v).toLowerCase();
 // Each restored kind: its App Spec list and the field its store key is made from.
 const LISTS = Object.freeze({
   environmentVariable: ['environmentVariables', 'schemaName'],
+  connectionReference: ['connectionReferences', 'logicalName'],
 });
 
 class Left extends Error {
@@ -106,8 +109,37 @@ function acceptVariable({ root, declaration, proof }) {
   if (declaration.isRequired && (d == null || d === '') && !proof.valueFilled) leave('required-value-missing');
 }
 
+// The pages of the downloaded spec that name each reference and Custom API, as the build's page gate reads them
+// (configuration-build.js beforePages over page-binding-targets.js pagesStatingBindings).
+function namedByPagesOf(spec) {
+  return namedByPages(pagesStatingBindings(spec));
+}
+
+// The connection reference's declaration from its row: logical name, connector, labels. Which connection it is bound to is private
+// and per environment: it is never written, and a rebuild without settings keeps the binding the row has. A reference to a custom
+// connector names that connector by this environment's row id, which a download cannot prove is the same connector anywhere a
+// rebuild runs, so it is left out rather than converted to a shared connector.
+async function declareReference({ root, key, ctx }) {
+  const { fields: f, unmodelled, preserved } = root.decoded;
+  if (lc(f.logicalName) !== key) leave('changed');
+  if (f.customConnectorId != null) leave('unsupported-dependency');
+  const connected = !!root.decoded.private && root.decoded.private.present && root.decoded.private.value != null && root.decoded.private.value !== '';
+  // A page that names a reference makes a rebuild gate the page on its binding (CONNECTION_REFERENCE_UNBOUND): a plain download
+  // declares no reference, so its page is written without that gate, and a restore must not turn that into a stop.
+  if (!connected && ctx.pagesNaming.references.has(key)) leave('page-unready');
+  const declaration = { logicalName: f.logicalName, connectorId: f.connectorId };
+  if (f.name != null) declaration.name = f.name;
+  if (f.description != null) declaration.description = f.description;
+  const fields = [];
+  if (connected) fields.push('connection');
+  if (unmodelled.length) fields.push('connectionParameters');
+  if (preserved.promptingbehavior !== undefined) fields.push('promptingBehavior');
+  return { declaration, fields };
+}
+
 const FAMILIES = Object.freeze({
   environmentVariable: { label: 'environment variable', declare: declareVariable, accept: acceptVariable },
+  connectionReference: { label: 'connection reference', declare: declareReference },
 });
 
 /**
@@ -133,7 +165,7 @@ async function restoreItem(ctx, kind, key, group, extra = {}) {
     if (r.kind === 'environmentVariableValue') continue;
     children.push({ slot, record: r, read: await readRow(ctx.dataverse, r.kind, normalizeGuid(r.id)) });
   }
-  const { declaration, fields } = await FAMILIES[kind].declare({ root, key, children, group, ...extra });
+  const { declaration, fields } = await FAMILIES[kind].declare({ root, key, children, group, ctx, ...extra });
   const spec = ctx.spec;
   const candidate = {
     ...spec,
@@ -203,15 +235,17 @@ async function restoreKind(ctx, kind) {
 
 /**
  * The explicit managed download's restore of protected configuration (--include-managed --managed-manifest <file>): environment
- * variables. A restored item also sets the spec's `configurationIdentity: "stable-v1"` (only a protected build keeps these groups, so
- * the store itself is the proof of the regime) with its plugin floor. Answers { environmentVariables } (restoreKind's shape); a store
+ * variables, then connection references. A restored item also sets the spec's `configurationIdentity: "stable-v1"` (only a protected
+ * build keeps these groups, so the store itself is the proof of the regime) with its plugin floor. Answers { environmentVariables,
+ * connectionReferences } (restoreKind's shape each); a store
  * file that cannot be used throws `managed-manifest-unusable` (readManagedFormFile).
  */
 async function restoreManagedConfiguration({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
   const { units, manifest } = readConfigurationStore({ file, environment, appUniqueName, solutionUniqueName });
-  const ctx = { spec, units, manifest, dataverse: sdk.dataverse, solutionUniqueName, validate, names: new Map() };
+  const ctx = { spec, units, manifest, dataverse: sdk.dataverse, solutionUniqueName, validate, names: new Map(), pagesNaming: namedByPagesOf(spec) };
   return {
     environmentVariables: await restoreKind(ctx, 'environmentVariable'),
+    connectionReferences: await restoreKind(ctx, 'connectionReference'),
   };
 }
 

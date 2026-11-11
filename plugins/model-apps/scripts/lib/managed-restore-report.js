@@ -47,6 +47,8 @@ const REASONS = Object.freeze({
   'parent-unproven': 'the parent variable it names is not one this download restores at exactly that row',
   'multiple-values': 'it has more than one current value row, and a download never picks one',
   'required-value-missing': 'it is required but has neither a default nor a value, so a rebuild of it would stop as incomplete; a download never fills one in',
+  'unsupported-dependency': 'it depends on a custom connector, which a download cannot prove is the same one wherever the spec is rebuilt',
+  'page-unready': 'a page of the app names it and it is not ready for one (no connection, or no registered implementation), so declaring it would stop a rebuild before that page',
   'fields-withheld': 'the named parts are never written by a download (they can hold a private or environment-specific value); a rebuild leaves them as they are in the service',
 });
 

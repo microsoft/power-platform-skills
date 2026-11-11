@@ -1508,6 +1508,14 @@ the field builds exactly as before.
     restored (`parent-unproven`), a variable with more than one value row (`multiple-values`) and a
     required variable with neither a default nor a value (`required-value-missing`: a rebuild of it would
     stop as incomplete, and a download never fills one in).
+  - *Connection references* (`managedConnectionReferences`): the logical name, connector, name and
+    description. Which connection it is bound to is never written (`withheld` names `connection`, and
+    `connectionParameters` or `promptingBehavior` when the row sets them); a rebuild without settings
+    keeps the binding the row has. A reference to a custom connector is left out
+    (`unsupported-dependency`), and so is one with no connection that a page of the app names
+    (`page-unready`): declaring it would stop a rebuild before that page, which a plain download does not.
+    A restored reference a page names is gated like any declared one, so a rebuild stops before that page
+    if its connection is gone by then.
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.

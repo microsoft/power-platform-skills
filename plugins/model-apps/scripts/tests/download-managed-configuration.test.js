@@ -23,6 +23,7 @@ const SOLUTION = 'ContosoSol';
 const APP = 'contoso_configprobe';
 const APP_ID = '00000000-0000-4000-8000-00000000c0f1';
 const SP = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';
+const SQL = '/providers/Microsoft.PowerApps/apis/shared_sql';
 const CANARY = {
   value: 'canary-value-4c1d',
   siteValue: 'canary-site-3a9d',
@@ -31,6 +32,7 @@ const CANARY = {
   schema: 'canary-schema-5e1b',
   vault: 'canaryvault7d',
   need: 'canary-need-91c4',
+  connection: 'canary-conn-6f3e',
 };
 const KEY_VAULT = `/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/${CANARY.vault}/secrets/apikey`;
 
@@ -131,7 +133,7 @@ function assertNoCanary(dl) {
   }
 }
 
-const configurationRows = (org) => JSON.stringify(['environmentvariabledefinitions', 'environmentvariablevalues', 'solutioncomponents'].map((s) => org.rows(s)));
+const configurationRows = (org) => JSON.stringify(['environmentvariabledefinitions', 'environmentvariablevalues', 'connectionreferences', 'customapis', 'customapirequestparameters', 'customapiresponseproperties', 'duplicaterules', 'duplicateruleconditions', 'solutioncomponents'].map((s) => org.rows(s)));
 // A row changed outside the plugin (the maker portal's own write): its version moves on.
 const editRow = (org, set, pick, patch) => {
   const rows = org.sets.get(set);
@@ -139,6 +141,10 @@ const editRow = (org, set, pick, patch) => {
   rows.set(id, { ...row, ...patch, versionnumber: row.versionnumber + 1000 });
   return id;
 };
+// The restore library itself, over a download SDK, for a downloaded spec main's own runDownload double cannot carry (pages).
+const restoreDirect = async (org, store, spec) => require('../lib/declared-configuration-io.js').restoreManagedConfiguration({
+  sdk: await downloadSdk(org), spec, file: store, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION, validate: () => ({ ok: true }),
+});
 const reason = (code) => require('../lib/managed-restore-report.js').REASONS[code];
 
 test('environment variables: each proved definition is restored with its parent and labels, never a value, default, schema or secret; it rebuilds as no change and downloads again byte for byte', async () => {
@@ -268,6 +274,77 @@ test('environment variables: a required variable whose value was cleared outside
   const rebuilt = await runCommand(dl.spec, { org, appDir });
   assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
   assert.deepEqual(org.writes(mark), []);
+});
+
+const REFERENCES = [
+  { logicalName: 'contoso_sp', connectorId: SP, name: 'SharePoint', description: 'Lists' },
+  { logicalName: 'contoso_sql', connectorId: SQL },
+];
+
+test('connection references: each proved definition is restored with its connector and labels, never its connection; it rebuilds as no change with the connection kept, and downloads again byte for byte', async () => {
+  const { org, appDir, store } = await built({ lists: { connectionReferences: REFERENCES }, settings: {} });
+  // The maker binds a connection after the build (the portal's own write): which connection is private and per environment.
+  editRow(org, 'connectionreferences', (r) => r.connectionreferencelogicalname === 'contoso_sp', { connectionid: CANARY.connection });
+  const storeBefore = fs.readFileSync(store);
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.connectionReferences, [
+    { logicalName: 'contoso_sp', connectorId: SP, name: 'SharePoint', description: 'Lists' },
+    { logicalName: 'contoso_sql', connectorId: SQL, name: 'contoso_sql' },
+  ]);
+  assert.equal(dl.spec.configurationIdentity, 'stable-v1');
+  assert.equal(dl.spec.minimumPluginVersion, '2.25.0');
+  assert.equal(dl.spec.environmentVariables, undefined);
+  const report = dl.payload.managedConnectionReferences;
+  assert.deepEqual(report.restored, ['contoso_sp', 'contoso_sql']);
+  assert.deepEqual(report.omitted, []);
+  assert.deepEqual(report.withheld.map((w) => [w.key, w.fields, w.code]), [['contoso_sp', ['connection'], 'fields-withheld']]);
+  assert.match(dl.said, /NOTE: managed connection reference contoso_sp was restored without connection: /);
+  assert.equal(dl.payload.managedEnvironmentVariables, undefined);
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+  assert.deepEqual(fs.readFileSync(store), storeBefore);
+  assertNoCanary(dl);
+
+  const rows = configurationRows(org);
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual(rebuilt.payload.created.configuration.unchanged.map((u) => u.key).sort(), ['contoso_sp', 'contoso_sql']);
+  assert.equal(configurationRows(org), rows);
+  assert.equal(org.rows('connectionreferences').find((r) => r.connectionreferencelogicalname === 'contoso_sp').connectionid, CANARY.connection);
+  assert.deepEqual(org.unexpected, []);
+
+  const again = await download(org, store);
+  assert.ok(again.specBytes.equals(dl.specBytes), 'a second download writes the same bytes');
+  assertNoCanary(again);
+});
+
+test('connection references: one a page names with no connection, one changed by hand and one to a custom connector are left out', async () => {
+  const custom = { logicalName: 'contoso_custom', connectorId: '/providers/Microsoft.PowerApps/apis/shared_contoso-5f1', customConnectorId: '00000000-0000-4000-8000-0000000cc001' };
+  const { org, store } = await built({ lists: { connectionReferences: [...REFERENCES, custom] }, settings: {} });
+  editRow(org, 'connectionreferences', (r) => r.connectionreferencelogicalname === 'contoso_sp', { connectionid: CANARY.connection });
+  // A page naming both: the bound one is restored (a rebuild gates the page on it as on any declared reference), the unbound one is
+  // left out, as a plain download leaves it (undeclared, so a rebuild writes the page without that gate).
+  const page = { key: 'orders', name: 'Orders', source: { kind: 'tsx', codeFile: 'pages/orders.tsx' }, connectorBindings: [{ logicalName: 'contoso_sp' }, { logicalName: 'contoso_sql' }] };
+  const spec = { ...JSON.parse(JSON.stringify(PLAIN)), pages: [page] };
+  const direct = await restoreDirect(org, store, spec);
+  assert.deepEqual(spec.connectionReferences.map((r) => r.logicalName), ['contoso_sp']);
+  assert.deepEqual(direct.connectionReferences.omitted.map((o) => [o.key, o.code]), [['contoso_custom', 'unsupported-dependency'], ['contoso_sql', 'page-unready']]);
+
+  editRow(org, 'connectionreferences', (r) => r.connectionreferencelogicalname === 'contoso_sql', { description: 'edited in the maker portal' });
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.connectionReferences.map((r) => r.logicalName), ['contoso_sp']);
+  assert.deepEqual(dl.payload.managedConnectionReferences.omitted.map((o) => [o.key, o.code, o.reason]), [
+    ['contoso_custom', 'unsupported-dependency', reason('unsupported-dependency')],
+    ['contoso_sql', 'changed', reason('changed')],
+  ]);
+  assert.match(dl.said, /WARNING: managed connection reference contoso_sql was not restored: .*It is left out of connectionReferences\[\]/);
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+  assertNoCanary(dl);
 });
 
 test('a download without --include-managed reads no configuration and writes none, and its result names no configuration list', async () => {
