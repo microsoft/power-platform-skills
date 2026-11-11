@@ -9,7 +9,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 - **Managed downloads restore more of an app:** declared views and charts, environment variables, connection references and Custom API scaffolds the binding store proves unchanged; values, defaults, secrets and connection ids are never written (#811).
 - The download names the field security profiles it leaves out, and `verify` holds a deployed chart's content to its definition.
-- A rebuild no longer republishes a table only because a declared view on it is unchanged.
+- A rebuild no longer republishes a table solely for a declared view the binding store proves unchanged in this run.
 - **Downloads:** an `app-spec.json` that cannot be replaced is refused before `pages/` or the fragments file is written; a later spec-write failure says only what is known.
 - **Page scroll check:** values with `var()`, `env()`, `attr()`, an escape or a comment compare byte for byte; the fixed-`maxHeight` padding message says when the end may be cut off (#840).
 - **Shared pages:** an app whose sitemap is briefly unreadable is read again, the whole scan repeated after each wait, before the build halts.
