@@ -33,10 +33,10 @@ function stableSpec() {
 
 // A built app and the CLI's download main over the same org. `gated`: the build's client goes through its publication barrier, as the
 // CLI's does — a stable build refuses to create without it.
-async function builtLifecycle(spec) {
+async function builtLifecycle(spec, orgOptions = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-managed-life-'));
   roots.push(root);
-  const org = createLifecycleOrg();
+  const org = createLifecycleOrg(orgOptions);
   const harness = createLifecycleHarness(org, root);
   const built = await harness.measure(() => harness.build(spec, { gated: true }));
   assert.equal(built.error, undefined, built.error && built.error.stack);
@@ -47,11 +47,19 @@ async function builtLifecycle(spec) {
     const out = path.join(root, `download-${n += 1}`);
     let emitted = null;
     const said = [];
-    await main({
-      argv: ['--env', org.origin, '--app', appUniqueName(spec), '--out', out, ...(managed ? ['--include-managed', '--managed-manifest', store] : [])],
-      stderr: { write: (t) => { said.push(String(t)); return true; } }, exit: () => {}, emitResult: (ok, payload) => { emitted = { ok, payload }; },
-      preflightAuth: async () => ({ ok: true }), httpClient: harness.client,
-    });
+    // Some notes go to the process's own streams, not to the injected one: both are captured for the run, so a test can read
+    // everything the download printed.
+    const streams = [process.stdout, process.stderr].map((s) => ({ s, write: s.write }));
+    for (const x of streams) x.s.write = (t) => { said.push(String(t)); return true; };
+    try {
+      await main({
+        argv: ['--env', org.origin, '--app', appUniqueName(spec), '--out', out, ...(managed ? ['--include-managed', '--managed-manifest', store] : [])],
+        stderr: { write: (t) => { said.push(String(t)); return true; } }, exit: () => {}, emitResult: (ok, payload) => { emitted = { ok, payload }; },
+        preflightAuth: async () => ({ ok: true }), httpClient: harness.client,
+      });
+    } finally {
+      for (const x of streams) x.s.write = x.write;
+    }
     assert.equal(emitted && emitted.ok, true, JSON.stringify(emitted) + said.join(''));
     const text = fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8');
     return { out, text, spec: JSON.parse(text), payload: emitted.payload, said: said.join('') };
@@ -90,4 +98,65 @@ test('a complete rebuild of a managed download that restored a view and a chart 
   const again = await app.download({ managed: true });
   assert.equal(again.text, managed.text, 'a second managed download writes the same spec, byte for byte');
   assert.deepEqual(app.org.unexpected, []);
+});
+
+// Column security a download cannot prove is the app's own: a custom profile in the app's solution, and System Administrator, each
+// with a permission on the app's secured column and given to a user and a team. Both downloads name the custom profile and leave it
+// out of the spec; nothing in the download, the complete rebuild of what it wrote, or a second download writes to a profile, a
+// permission or a profile's links, and nothing it writes or prints names who holds a profile or which permission it is.
+test('a profile on a secured column is named and left out by a managed download, and its rebuild and a second download leave every profile, permission and holder as they were', async () => {
+  const spec = stableSpec();
+  spec.entities[0].columns.push({ schemaName: 'contoso_salary', displayName: 'Salary', type: 'Text', isSecured: true });
+  const app = await builtLifecycle(spec, { fieldSecurity: true });
+  const { org } = app;
+  const CANARY = {
+    user: '7a1c0e55-0000-4000-8000-00000000c0a1', userName: 'Canary Holder Person', team: '7a1c0e55-0000-4000-8000-00000000c0a2',
+    customPermission: '7a1c0e55-0000-4000-8000-00000000c0a3', adminPermission: '7a1c0e55-0000-4000-8000-00000000c0a4',
+  };
+  const custom = '7a1c0e55-0000-4000-8000-00000000c0a5';
+  const admin = '572329c1-a042-4e22-be47-367c6374ea45';
+  org.seedRow('systemusers', { systemuserid: CANARY.user, fullname: CANARY.userName, domainname: 'holder@contoso.onmicrosoft.com', _businessunitid_value: org.IDS.businessUnit });
+  org.seedRow('fieldsecurityprofiles', { fieldsecurityprofileid: custom, name: 'Contoso Reviewers', ismanaged: false });
+  org.seedRow('fieldsecurityprofiles', { fieldsecurityprofileid: admin, name: 'System Administrator', ismanaged: true });
+  org.seedComponent('ContosoReview', { objectid: custom, componenttype: 70 });
+  for (const [id, profile] of [[CANARY.customPermission, custom], [CANARY.adminPermission, admin]]) {
+    org.seedRow('fieldpermissions', { fieldpermissionid: id, _fieldsecurityprofileid_value: profile, entityname: 'contoso_item', attributelogicalname: 'contoso_salary', canread: 4, cancreate: 0, canupdate: 0 });
+  }
+  for (const profile of [custom, admin]) {
+    org.associations.push({ set: 'fieldsecurityprofiles', id: profile, nav: 'systemuserprofiles_association', toSet: 'systemusers', toId: CANARY.user });
+    org.associations.push({ set: 'fieldsecurityprofiles', id: profile, nav: 'teamprofiles_association', toSet: 'teams', toId: CANARY.team });
+  }
+  const columnSecurity = () => JSON.stringify({
+    profiles: [...org.rowsOf('fieldsecurityprofiles').values()].map((r) => r.data),
+    permissions: [...org.rowsOf('fieldpermissions').values()].map((r) => r.data),
+    holders: org.associations.filter((a) => a.set === 'fieldsecurityprofiles'),
+    components: org.solutionComponents().filter((c) => c.componenttype === 70),
+  });
+  const before = columnSecurity();
+  const start = org.mark();
+
+  const managed = await app.download({ managed: true });
+  assert.deepEqual(((managed.payload.fieldSecurityProfiles || {}).omitted || []).map((o) => [o.kind, o.id, o.name, o.code]), [['fieldSecurityProfile', custom, 'Contoso Reviewers', 'ownership-unproven']]);
+  assert.match(managed.said, /NOTE: 1 field security profile \(Contoso Reviewers\) is not declared in fieldSecurityProfiles\[\]/);
+  assert.equal(managed.spec.fieldSecurityProfiles, undefined);
+  assert.equal(managed.spec.entities[0].columns.find((c) => c.schemaName === 'contoso_salary').isSecured, true);
+
+  await app.rebuild(managed);
+  const again = await app.download({ managed: true });
+  assert.equal(again.text, managed.text, 'a second managed download writes the same spec, byte for byte');
+  assert.deepEqual(again.payload.fieldSecurityProfiles, managed.payload.fieldSecurityProfiles);
+
+  const touched = org.requests.slice(start)
+    .flatMap((r) => (r.operations ? r.operations : [r]))
+    .filter((r) => r.method !== 'GET' && /fieldsecurityprofile|fieldpermission|profiles_association|\$ref/i.test(r.path));
+  assert.deepEqual(touched, [], 'no write to a profile, a permission or who holds a profile');
+  assert.equal(columnSecurity(), before, 'every profile, permission, holder and solution membership is as it was');
+
+  const written = [managed, again].flatMap((d) => fs.readdirSync(d.out, { recursive: true }).map((f) => path.join(d.out, f)))
+    .filter((f) => fs.statSync(f).isFile()).map((f) => fs.readFileSync(f, 'utf8'));
+  const printed = [managed, again].flatMap((d) => [d.said, JSON.stringify(d.payload)]);
+  for (const [what, canary] of Object.entries(CANARY)) {
+    for (const text of [...written, ...printed]) assert.equal(text.toLowerCase().includes(canary.toLowerCase()), false, `${what} appears in what the download wrote or printed`);
+  }
+  assert.deepEqual(org.unexpected, []);
 });

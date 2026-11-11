@@ -108,6 +108,16 @@ const SYSTEM_TABLES = {
   account: { set: 'accounts', id: 'accountid', name: 'name', otc: 1, stock: true },
   contact: { set: 'contacts', id: 'contactid', name: 'fullname', otc: 2, stock: true },
 };
+// Column security, modelled only for an org made with `{ fieldSecurity: true }` (a test that seeds profiles): a field security profile,
+// its column permissions, and — as N:N links in `associations` — the users and teams it is given to (systemuserprofiles_association,
+// teamprofiles_association). Their READS follow the read contract below; nothing writes them here, so any write to them is answered
+// 501 and recorded in `unexpected`, as every unmodelled request is. Without the option they are not tables of the org at all.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/fieldsecurityprofile
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/fieldpermission
+const FIELD_SECURITY_TABLES = {
+  fieldsecurityprofile: { set: 'fieldsecurityprofiles', id: 'fieldsecurityprofileid', name: 'name', otc: 9020, componentType: 70 },
+  fieldpermission: { set: 'fieldpermissions', id: 'fieldpermissionid', name: null, otc: 9019 },
+};
 const PAGE_PATH = /^\/(uxagentprojects|uxagentprojectfiles|agentconversationmessages)\b/;
 
 // THE READ CONTRACT of the record half: the columns a read may name, per system table, EXPLICITLY — `fields` the platform always fills
@@ -143,6 +153,9 @@ const RECORD_SCHEMA = {
   settingdefinition: { fields: ['settingdefinitionid', 'uniquename', 'displayname', 'datatype', 'defaultvalue', 'isoverridable', 'overridablelevel', ...AUDIT], nullable: [] },
   appsetting: { fields: ['appsettingid', '_parentappmoduleid_value', '_settingdefinitionid_value', 'value', 'componentstate', ...AUDIT], nullable: ['uniquename'], lookups: { parentappmoduleid: 'appmodules', settingdefinitionid: 'settingdefinitions' } },
   organizationsetting: { fields: ['organizationsettingid', '_settingdefinitionid_value', 'value', 'uniquename', ...AUDIT], nullable: [], lookups: { settingdefinitionid: 'settingdefinitions' } },
+  // Reachable only in an org made with `{ fieldSecurity: true }` (FIELD_SECURITY_TABLES).
+  fieldsecurityprofile: { fields: ['fieldsecurityprofileid', 'name', 'ismanaged', ...AUDIT], nullable: ['description'] },
+  fieldpermission: { fields: ['fieldpermissionid', '_fieldsecurityprofileid_value', 'entityname', 'attributelogicalname', 'canread', 'cancreate', 'canupdate', ...AUDIT], nullable: ['canreadunmasked'], lookups: { fieldsecurityprofileid: 'fieldsecurityprofiles' } },
   // The page tables are answered by the page fake (helpers/fake-genpage-server.js); their reads are checked here before it sees them.
   uxagentproject: { fields: ['uxagentprojectid', 'name', 'versionnumber', 'componentstate'], nullable: ['description', 'createdon', 'modifiedon'] },
   uxagentprojectfile: { fields: ['uxagentprojectfileid', 'filename', 'filetype', '_uxagentprojectid_value', 'versionnumber'], nullable: ['createdon', 'modifiedon'], lookups: { uxagentprojectid: 'uxagentprojects' } },
@@ -199,14 +212,16 @@ function createLifecycleOrg(options = {}) {
     onTableDeleted: (table) => tableDeleted(table),
   });
 
+  // The system tables of this org: column security's two only when the test asked for them (FIELD_SECURITY_TABLES).
+  const systemTables = options.fieldSecurity ? { ...SYSTEM_TABLES, ...FIELD_SECURITY_TABLES } : SYSTEM_TABLES;
   const tableInfo = (logical) => {
-    const system = SYSTEM_TABLES[logical];
+    const system = systemTables[logical];
     if (system) return { logical, ...system };
     const t = metadata.tables.get(logical);
     return t ? { logical, set: t.EntitySetName, id: t.PrimaryIdAttribute, name: t.PrimaryNameAttribute, otc: t.ObjectTypeCode } : null;
   };
   const infoOfSet = (set) => {
-    for (const [logical, t] of Object.entries(SYSTEM_TABLES)) if (t.set === set) return { logical, ...t };
+    for (const [logical, t] of Object.entries(systemTables)) if (t.set === set) return { logical, ...t };
     for (const t of metadata.tables.values()) if (t.EntitySetName === set) return tableInfo(t.LogicalName);
     return null;
   };
@@ -677,7 +692,7 @@ function createLifecycleOrg(options = {}) {
   function recordPrivileges(table) {
     for (const p of table.Privileges || []) insertRow('privileges', { privilegeid: p.PrivilegeId, name: p.Name, accessright: p.PrivilegeType, canbebasic: p.CanBeBasic, canbelocal: p.CanBeLocal, canbedeep: p.CanBeDeep, canbeglobal: p.CanBeGlobal });
   }
-  for (const [logical, info] of Object.entries(SYSTEM_TABLES)) seedSystemTable(logical, info);
+  for (const [logical, info] of Object.entries(systemTables)) seedSystemTable(logical, info);
   // The two stock tables the platform relates every File and Image column to (fake-lifecycle-metadata.js mediaRelationshipOf), as
   // definitions only: nothing reads or writes their rows. MEASURED: `fileattachment` reads back `IsCustomEntity: false`.
   for (const [logical, otc] of [['fileattachment', 55], ['imagedescriptor', 1007]]) {
@@ -1032,6 +1047,8 @@ function createLifecycleOrg(options = {}) {
     const info = infoOfSet(set);
     if (!info) throw new Unmodelled(`${method} ${p}: no table has the entity set ${set}`);
     if (key !== undefined) idOf(key, `${method} ${p}`);
+    // Column security is modelled for reading only: a write to a profile, a permission or a profile's links is not modelled.
+    if (method !== 'GET' && Object.values(FIELD_SECURITY_TABLES).some((t) => t.set === set)) throw new Unmodelled(`${method} ${p}: a write to column security is not modelled`);
     if (!key && !rest) {
       if (method === 'GET') return json(200, { value: readRows(set, query, { kind: 'collection', where: p }) });
       if (method === 'POST') { checkRead(set, query, 'write', p); return createRow(set, body, headers, query); }
@@ -1346,6 +1363,10 @@ function createLifecycleOrg(options = {}) {
     unpublished: () => [...sets].flatMap(([set, rows]) => (isLayered(set) ? [...rows.values()].filter((row) => row.publishedVersion !== row.version).map((row) => `${set} ${row.data.name || row.id}`) : [])),
     // A row by name, saved layer: what the platform holds whatever is published.
     find: (set, predicate) => [...rowsOf(set).values()].map((row) => row.data).filter(predicate),
+    // What a test sets up that no lifecycle request makes (a column security profile, its permissions, a second user): a row put in
+    // place as the platform holds it, and a component put in a solution, without a request — so neither is counted as a write.
+    seedRow: (set, data) => clone(insertRow(set, data).data),
+    seedComponent: (solutionName, component) => addComponentByName(solutionName, component),
   };
 }
 
