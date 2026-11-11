@@ -1980,15 +1980,18 @@ async function writeReport(comparison, output) {
     report.websiteId, report.websiteUrl, undefined, undefined, undefined, report.localWebsiteId
   );
   const exported = buildExport(comparison);
+  const exportText = exported.data ? JSON.stringify(exported.data, null, 2) : undefined;
   const receipt = {
     ...comparison,
     htmlSha256: crypto.createHash('sha256').update(html).digest('hex'),
-    ...(exported.data ? { export: path.basename(exportPath(absolute)) } : { exportSkipped: exported.reason }),
+    ...(exported.data
+      ? { export: path.basename(exportPath(absolute)), exportSha256: crypto.createHash('sha256').update(exportText).digest('hex') }
+      : { exportSkipped: exported.reason }),
   };
   fs.mkdirSync(path.dirname(absolute), { recursive: true, mode: 0o700 });
   fs.writeFileSync(absolute, html, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  if (exported.data) {
-    fs.writeFileSync(exportPath(absolute), JSON.stringify(exported.data, null, 2), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  if (exportText) {
+    fs.writeFileSync(exportPath(absolute), exportText, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   }
   // Verification data is a sidecar, never injected into the upstream HTML.
   fs.writeFileSync(receiptPath(absolute), JSON.stringify(receipt, null, 2) + '\n', {
@@ -1997,7 +2000,8 @@ async function writeReport(comparison, output) {
   return absolute;
 }
 
-// The export must list exactly the verified files, in order, so a teammate who
+// The export must be byte-for-byte what was written beside the report, as the
+// HTML is, and list exactly the verified files in order, so a teammate who
 // imports it sees the same comparison as the report.
 function verifyExport(receipt, output) {
   if (receipt.export === undefined) {
@@ -2008,7 +2012,11 @@ function verifyExport(receipt, output) {
     throw new Error('Report receipt names an invalid export file.');
   }
   const file = path.join(path.dirname(output), receipt.export);
-  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const text = fs.readFileSync(file);
+  if (receipt.exportSha256 !== crypto.createHash('sha256').update(text).digest('hex')) {
+    throw new Error('Export does not match the verified report.');
+  }
+  const data = JSON.parse(text.toString('utf8'));
   if (data.version !== EXPORT_FORMAT_VERSION || !Array.isArray(data.files) || data.files.length !== receipt.files.length ||
       data.files.some((entry, i) => entry.relativePath !== receipt.files[i].relativePath || entry.status !== receipt.files[i].status)) {
     throw new Error('Export does not match the verified report.');

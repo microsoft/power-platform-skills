@@ -210,6 +210,11 @@ test('skips the export when a site has no website ID, and verification catches a
   const original = fs.readFileSync(exported, 'utf8');
   fs.writeFileSync(exported, original.replace('"modified"', '"added"'));
   assert.throws(() => verifyReport(source, target, output), /Export does not match/);
+  // A changed file body, with paths and statuses intact, must also fail.
+  const data = JSON.parse(original);
+  data.files[0].localContent = Buffer.from('changed').toString('base64');
+  fs.writeFileSync(exported, JSON.stringify(data, null, 2));
+  assert.throws(() => verifyReport(source, target, output), /Export does not match/);
   fs.writeFileSync(exported, original);
   assert.equal(verifyReport(source, target, output).export, exported);
 
