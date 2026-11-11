@@ -25,6 +25,8 @@ const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
 const { gatedClient } = require('./helpers/gated-fake-client.js');
 const { seedManagedDebt } = require('./helpers/managed-debt.js');
 const { verifySpec } = require('../lib/verify-spec.js');
+const { appComponentsFor, declaredAppPins } = require('../lib/app-components.js');
+const { indexArtifacts } = require('../lib/apply-snapshot-index.js');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -1500,8 +1502,10 @@ test('#845: two same-named declared views under their own keys are both recorded
   const s = createStableCreates({ spec, sdk: null, store: null, basePort: createPassthroughCreates() });
   const [id1, id2] = ['v1', 'v2'].map((k) => s.identityFor('view', k).id);
   assert.deepEqual(new Set(rows.map((r) => r.savedqueryid)), new Set([id1, id2]));
-  // The record of created views holds both: the `entity|name` entry as before (the last of the pair), the other under its key.
-  assert.deepEqual(built.out.created.views, { 'contoso_item|Twin': id2, 'contoso_item|Twin|v1': id1 });
+  // The record of created views holds both: the `entity|name` entry as before (the last of the pair), the other in its own list.
+  assert.deepEqual(built.out.created.views, { 'contoso_item|Twin': id2 });
+  assert.deepEqual(built.out.created.sameNamedViews, [{ entity: 'contoso_item', name: 'Twin', key: 'v1', id: id1 }]);
+  assert.deepEqual(appComponentsFor(built.out.created).views, [id2, id1]);
   // The table is published once, as for one view.
   assert.equal(built.tablePublishes.filter((names) => names.includes('contoso_item')).length, 1);
 
@@ -1545,7 +1549,7 @@ test('#845: a bound or pinned view whose row is gone is missing, and its namesak
     ['contoso_item.Twin', `the view its managed binding (v2) is bound to (${id2}) was not found on its table; a view of the same name is not taken in its place (view key v2)`],
   ]);
   // A pin that names another row than the binding is a conflict to correct, not a pass.
-  const id1 = built.out.created.views['contoso_item|Twin|v1'];
+  const id1 = built.out.created.sameNamedViews.find((v) => v.key === 'v1').id;
   const crossed = await verifySpec(twinSpec([twin('v1', ['contoso_name']), { ...twin('v2', ['contoso_name', 'contoso_code']), viewId: id1 }]), reader, { managedManifest });
   assert.deepEqual(crossed.missing.map((c) => [c.kind, c.detail]), [
     ['view', `its viewId ${id1} is not the view its managed binding (v2) is bound to (${id2}); correct or remove the viewId (view key v2)`],
@@ -1565,6 +1569,7 @@ test('#845 control: a spec without same-named views records and verifies exactly
   const built = await build(org, dir, spec);
   assert.equal(built.err, undefined, built.err && built.err.message);
   assert.deepEqual(Object.keys(built.out.created.views), ['contoso_item|Twin', 'contoso_item|Other']);
+  assert.equal(built.out.created.sameNamedViews, undefined);
   assert.equal(built.tablePublishes.filter((names) => names.includes('contoso_item')).length, 1);
   // Without bindings, a declared view is read by its table and name, one row, as it always was.
   const reads = [];
@@ -1578,4 +1583,28 @@ test('#845 control: a spec without same-named views records and verifies exactly
   assert.equal(legacy.ok, true, JSON.stringify(legacy.missing));
   assert.equal(legacy.checks.filter((c) => c.kind === 'view-columns' && c.present).length, 2);
   assert.deepEqual(legacyReads, ["returnedtypecode eq 'contoso_item' and name eq 'Other'", "returnedtypecode eq 'contoso_item' and name eq 'Other'"]);
+});
+test('#845: a view named like another view plus a key keeps its own entry, and the same-named pair is still recorded in full', async () => {
+  for (const thirdFirst of [true, false]) {
+    // `Twin|v1` is a legal view name of its own; a record that joined `entity|name|key` would give its entry to the first Twin.
+    const third = { ...twin('third', ['contoso_code']), name: 'Twin|v1' };
+    const pair = [twin('v1', ['contoso_name']), twin('v2', ['contoso_name', 'contoso_code'])];
+    const spec = twinSpec(thirdFirst ? [third, ...pair] : [...pair, third]);
+    assert.deepEqual(validateAppSpec(spec).errors, []);
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const built = await build(org, newDir(), spec);
+    assert.equal(built.err, undefined, built.err && built.err.message);
+    const s = createStableCreates({ spec, sdk: null, store: null, basePort: createPassthroughCreates() });
+    const [id1, id2, own] = ['v1', 'v2', 'third'].map((k) => s.identityFor('view', k).id);
+    assert.deepEqual(new Set(org.fake.rows('savedqueries').map((r) => r.data.savedqueryid)), new Set([id1, id2, own]), `thirdFirst=${thirdFirst}`);
+    // The name entries are what they always were: `Twin|v1` is its own view, `Twin` the last of the pair.
+    assert.deepEqual(built.out.created.views, { 'contoso_item|Twin|v1': own, 'contoso_item|Twin': id2 }, `thirdFirst=${thirdFirst}`);
+    assert.equal(indexArtifacts(spec, built.out.created).views['contoso_item|Twin|v1'].viewId, own);
+    assert.equal(indexArtifacts(spec, built.out.created).views['contoso_item|Twin'].viewId, id2);
+    // The first Twin is recorded too, apart from the name entries, so the app's components and declared pins hold all three.
+    assert.deepEqual(built.out.created.sameNamedViews, [{ entity: 'contoso_item', name: 'Twin', key: 'v1', id: id1 }]);
+    assert.deepEqual(new Set(appComponentsFor(built.out.created).views), new Set([id1, id2, own]));
+    assert.deepEqual(new Set(declaredAppPins(built.out.created).views), new Set([id1, id2, own]));
+    assert.equal(appComponentsFor(built.out.created).views.length, 3);
+  }
 });

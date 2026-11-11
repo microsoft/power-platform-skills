@@ -117,9 +117,24 @@ function classifyPages(cur, prior) {
 // #3 views: every changed view must be a PURE COLUMN APPEND (prior columns are an exact prefix of current;
 // everything else identical). A removed/reordered/edited column set does NOT converge (the engine only
 // UNIONS columns and never removes/reorders) → full build + debt. A new view → full build creates it.
+//
+// #845: two declared views may share one name on one table under two keys (views[].key). Aligned by `entity|name` alone, the
+// later of the two takes the place of the earlier on both sides (indexBy keeps the last), so an edit of the earlier one was not
+// seen at all. A name shared that way is aligned by its name AND key instead (viewAlignment). A shared name whose views cannot
+// all be told apart by a key of their own (a legacy workspace, a key missing or repeated) cannot be aligned: if anything in it
+// changed, which view changed cannot be said, so it is a full build with debt, as a non-append edit is.
 function classifyViews(cur, prior) {
   const out = { fast: [], full: [], debt: [] };
-  const { added, removed, common } = alignByIdentity(cur.views, prior.views, identityOf.view);
+  const { alignKey, label, unalignable } = viewAlignment(cur.views, prior.views);
+  for (const [id, sides] of unalignable) {
+    if (stableStringify(sides.cur) === stableStringify(sides.prior)) continue;
+    out.full.push(`views: the views named '${id}' share their name on the table without a key of their own each, and one of them changed — which one cannot be told, so it is not convergent`);
+    out.debt.push({ artifactType: 'view', identity: id, reason: 'view-nonappend-edit' });
+  }
+  const alignable = (arr) => (Array.isArray(arr) ? arr.filter((v) => !(v && typeof v === 'object' && unalignable.has(identityOf.view(v)))) : arr);
+  const aligned = alignByIdentity(alignable(cur.views), alignable(prior.views), alignKey);
+  const named = (e) => ({ ...e, id: label(e.cur || e.prior) });
+  const [added, removed, common] = [aligned.added.map(named), aligned.removed.map(named), aligned.common.map(named)];
   if (added.length) out.full.push(`views: ${added.length} new view(s) added — a new artifact needs a full build`);
   for (const r of removed) { out.full.push(`views: view '${r.id}' removed`); out.debt.push({ artifactType: 'view', identity: r.id, reason: 'view-removed' }); }
   for (const c of common) {
@@ -136,6 +151,34 @@ function classifyViews(cur, prior) {
     }
   }
   return out;
+}
+
+// How classifyViews aligns the current views with the prior ones. A name (`entity|name`, identityOf.view) held by one view on each
+// side aligns by that name, exactly as before. A name held by two or more views on either side aligns by [name, key] when every one
+// of them, on both sides, has a key of its own (a non-empty string, not repeated): JSON, so it cannot collide with a plain name.
+// Otherwise the name is `unalignable` (id -> { cur, prior }: its views on each side, in order). `label` is how a message and a
+// debt entry name a view: its `entity|name`, plus its key when the name is shared.
+function viewAlignment(curViews, priorViews) {
+  const side = (arr) => (Array.isArray(arr) ? arr.filter((v) => v && typeof v === 'object') : []);
+  const groups = new Map();
+  for (const [name, arr] of [['cur', side(curViews)], ['prior', side(priorViews)]]) {
+    for (const v of arr) {
+      const id = identityOf.view(v);
+      if (!groups.has(id)) groups.set(id, { cur: [], prior: [] });
+      groups.get(id)[name].push(v);
+    }
+  }
+  const ownKeys = (members) => members.every((v) => typeof v.key === 'string' && v.key !== '') && new Set(members.map((v) => v.key)).size === members.length;
+  const keyed = new Set();
+  const unalignable = new Map();
+  for (const [id, sides] of groups) {
+    if (sides.cur.length < 2 && sides.prior.length < 2) continue;
+    if (ownKeys(sides.cur) && ownKeys(sides.prior)) keyed.add(id);
+    else unalignable.set(id, sides);
+  }
+  const alignKey = (v) => (keyed.has(identityOf.view(v)) ? JSON.stringify([identityOf.view(v), v.key]) : identityOf.view(v));
+  const label = (v) => (keyed.has(identityOf.view(v)) ? `${identityOf.view(v)} (view key ${v.key})` : identityOf.view(v));
+  return { alignKey, label, unalignable };
 }
 
 // #4 app-shell: fast ONLY when the SITEMAP structure (appShell) changed but the app object is
@@ -246,6 +289,11 @@ function classifyChanges(current, prior) {
       fullReasons.push(`${phase}: changed — always a full build`);
       continue;
     }
+    // Every changed phase must account for its change: a fast shape or a reason for a full build. A phase whose slice changed
+    // while its detectors found nothing (a change they do not look at, or an entry hidden by another of the same identity, #845)
+    // would otherwise ride along with another phase's fast shape — a pages-only run would then skip it and record the new spec
+    // as applied. So it is a full build, as it already is when no phase found anything (below).
+    const before = fastChanges.length + fullReasons.length;
     switch (phase) {
       case 'pages': merge(classifyPages(cur, prior)); break;
       case 'views': merge(classifyViews(cur, prior)); break;
@@ -279,6 +327,7 @@ function classifyChanges(current, prior) {
         // An unrecognized changed phase must never silently pass as fast (fail-closed).
         fullReasons.push(`${phase}: changed — no fast-path shape recognized`);
     }
+    if (fastChanges.length + fullReasons.length === before) fullReasons.push(`${phase}: changed, but no change in it could be classified — full build (fail-closed)`);
   }
 
   // Dedup debt (a phase can push the same identity twice across detectors is unlikely, but be safe).

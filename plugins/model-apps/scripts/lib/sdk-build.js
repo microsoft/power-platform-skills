@@ -148,7 +148,7 @@ const { odataLit } = require('./odata.js');
 const { exactOne, distinctRows } = require('./query-completeness.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows,
-  declaredAppPins, pinDeclaredArtifacts } = require('./app-components.js');
+  declaredAppPins, pinDeclaredArtifacts, createdViewIds } = require('./app-components.js');
 const { pinIntentOf, pinWarningOf, reconcileUnconfirmedPin } = require('./app-pin-recovery.js');
 const { createAppPublication } = require('./app-publication-policy.js');
 const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
@@ -7330,14 +7330,18 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
     (spec.views || []).forEach((v, i) => { result.created.views[`${v.entity.toLowerCase()}|${v.name}`] = ids[i]; });
     // #845: two declared views may share one name on one table under two keys (views[].key), and the build makes both, but the
-    // `entity|name` entry above holds only the last of them. Each other one is kept under `entity|name|<key>`, so the record of the
-    // views this run made or reused holds both: the app's components and declared pins (lib/app-components.js) and the views the
-    // default-view enrichment leaves alone read every value. The `entity|name` entry is as before, so a lookup by name (a dashboard
-    // tile, a sub-grid, the per-table publish) is unchanged, and a spec without same-named views records exactly what it did.
+    // `entity|name` entry above holds only the last of them. Each other one is listed in `sameNamedViews` as { entity, name, key, id },
+    // so the views this run made or reused are all recorded: the app's components and declared pins and the views the default-view
+    // enrichment leaves alone read them through createdViewIds (lib/app-components.js). A list of fields, not more `entity|name|key`
+    // entries: a view may itself be named `Twin|v1`, and a joined key would take its entry. The `entity|name` entries are exactly as
+    // before, so a lookup by name (a dashboard tile, a sub-grid, the per-table publish, the snapshot index) is unchanged, and a spec
+    // without same-named declared views records exactly what it did (no `sameNamedViews`).
+    const sameNamed = [];
     (spec.views || []).forEach((v, i) => {
-      const at = `${v.entity.toLowerCase()}|${v.name}`;
-      if (ids[i] && isDeclaredView(v) && result.created.views[at] !== ids[i]) result.created.views[`${at}|${declaredViewKey(v)}`] = ids[i];
+      const entity = v.entity.toLowerCase();
+      if (ids[i] && isDeclaredView(v) && result.created.views[`${entity}|${v.name}`] !== ids[i]) sameNamed.push({ entity, name: v.name, key: declaredViewKey(v), id: ids[i] });
     });
+    if (sameNamed.length) result.created.sameNamedViews = sameNamed;
   }
 
   // 4a. Quick Find (entities[].quickFind, lib/quick-find.js): the columns the search box matches on are the table's Quick Find
@@ -7386,7 +7390,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
   };
   if (has('views')) {
-    const authorViewIds = Object.values(result.created.views || {}).filter(Boolean);
+    const authorViewIds = createdViewIds(result.created);
     for (const e of spec.entities || []) {
       if (!enrichesDefaultViews(spec, e)) continue;
       const logical = e.schemaName.toLowerCase();
