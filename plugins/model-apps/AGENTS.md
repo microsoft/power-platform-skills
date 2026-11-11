@@ -1813,10 +1813,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `implemented`, one a page's `actionBindings` names is `page-unready` (CUSTOM_API_IMPLEMENTATION_UNPROVEN), and
   other-language labels are withheld as `otherLanguageLabels` unless `RetrieveProvisionedLanguages` answers exactly
   one language (read at most once per download, and not at all when no API gets that far).
-  `managedDuplicateDetectionRules` restores a rule with every condition under its slot key; its status is read
-  from the row's `statecode`/`statuscode` (`ruleStateOf`), because the committed root projection excludes state
-  and the store keeps no rule state to compare, so a status changed by hand comes back as it is now, and a
-  publish in flight is `state-unsettled`; a swapped, added or deleted condition fails the per-slot proof. `tests/download-managed-configuration.test.js` builds through the real build command and
+  `managedDuplicateDetectionRules` restores no rule: the family is withheld (`FAMILIES.duplicateRule.withheld`),
+  and every committed rule is omitted `state-unproven` without a read. A rule's status is part of its
+  declaration, but the committed root projection excludes state and the store keeps no rule state, so a rule
+  published or unpublished by hand reads exactly like one its build left that way; stating the current status
+  would make that change the spec's. Restoring a rule needs the store to commit the state its build proved. `tests/download-managed-configuration.test.js` builds through the real build command and
   bundle, downloads through `main`, rebuilds over the same app folder with zero writes, downloads again byte for
   byte, and scans every file and stream the download wrote for value, default, schema and secret canaries.
   **Every download, plain or managed, reports the custom field security profiles it does not declare**

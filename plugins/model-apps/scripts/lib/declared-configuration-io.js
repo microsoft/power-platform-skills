@@ -197,43 +197,15 @@ async function declareCustomApi({ root, key, children, ctx }) {
   return { declaration, fields: (await severalLanguages(ctx)) ? ['otherLanguageLabels'] : [] };
 }
 
-// The duplicate rule's declaration from its row and its complete bound condition graph: the store key, the name, both tables, the
-// description and flags, its state, and each condition under the key its binding holds it by (the slot), never by its order or its
-// column. Conditions match as a set on the platform, so a criterion swapped between two bound rows looks like the same rule to a
-// rebuild; each row's committed projection is what tells them apart (restoreProofOf), and such a rule is left out as changed.
-async function declareRule({ root, key, children }) {
-  const f = root.decoded.fields;
-  // 0/1 is a publish still running: neither published nor unpublished, so no status a declaration could state is the rule's.
-  // The status is the row's own: the binding store commits each row's projection, which holds a rule's fields but not its state,
-  // so the state the build left cannot be told from a later publish or unpublish. Stating the current one is what a rebuild keeps
-  // (it compares a stated status with the row and changes nothing when they agree).
-  const status = B.ruleStateOf(root.decoded.state.statecode, root.decoded.state.statuscode);
-  if (!status) leave('state-unsettled');
-  const declaration = { key, name: f.name, entity: f.entityLogicalName, matchingEntity: f.matchingEntityLogicalName };
-  if (f.description != null) declaration.description = f.description;
-  declaration.caseSensitive = f.caseSensitive;
-  declaration.excludeInactiveRecords = f.excludeInactiveRecords;
-  declaration.status = status;
-  declaration.conditions = [];
-  for (const { slot, record, read } of children) {
-    if (record.kind !== 'duplicateRuleCondition') leave('invalid');
-    const c = read.decoded.fields;
-    const condition = { key: slot, column: c.column };
-    if (c.matchingColumn != null) condition.matchingColumn = c.matchingColumn;
-    condition.match = c.match;
-    // A character count means something only to a first/last-characters match; the platform keeps a stray one on any other.
-    if ((c.match === 'firstCharacters' || c.match === 'lastCharacters') && c.characters != null) condition.characters = c.characters;
-    condition.ignoreBlankValues = c.ignoreBlankValues;
-    declaration.conditions.push(condition);
-  }
-  return { declaration, fields: [] };
-}
-
 const FAMILIES = Object.freeze({
   environmentVariable: { label: 'environment variable', declare: declareVariable, accept: acceptVariable },
   connectionReference: { label: 'connection reference', declare: declareReference, accept: acceptReference },
   customApi: { label: 'Custom API', declare: declareCustomApi },
-  duplicateRule: { label: 'duplicate rule', declare: declareRule },
+  // Withheld as a family: a rule's state (published or not) is part of what a declaration states, and the binding store commits each
+  // row's projection, which holds a rule's fields and conditions but not the state its build left it in. A rule unpublished or
+  // published outside the plugin reads exactly like one its build left that way, so no state a download could state is proved, and
+  // stating the current one would make a change made outside the plugin the spec's. Every committed rule is left out, unread.
+  duplicateRule: { label: 'duplicate rule', withheld: 'state-unproven' },
 });
 
 /**
@@ -299,6 +271,10 @@ async function restoreKind(ctx, kind) {
     const r = (g.records || []).find((x) => x && x.kind === kind);
     return r ? normalizeGuid(r.id) : '';
   };
+  if (FAMILIES[kind].withheld) {
+    for (const key of [...groups.keys()].sort()) omitted.push(omission({ kind: label, id: rootIdOf(groups.get(key)), key, code: FAMILIES[kind].withheld }));
+    return { restored, omitted, withheld };
+  }
   const keyByRootId = new Map([...groups].map(([k, g]) => [rootIdOf(g), k]));
   // Depth-first so a parent variable is restored (and validated) before the child that names it. A key met again while its own
   // restore is still running is a parent cycle: neither end is proved.
@@ -329,11 +305,10 @@ async function restoreKind(ctx, kind) {
 
 /**
  * The explicit managed download's restore of protected configuration (--include-managed --managed-manifest <file>): environment
- * variables, then connection references, then Custom APIs, then duplicate rules. A restored item also sets the spec's
- * `configurationIdentity: "stable-v1"` (only a protected build keeps these groups, so the store itself is the proof of the regime)
- * with its plugin floor. Answers { environmentVariables, connectionReferences, customApis, duplicateDetectionRules } (restoreKind's
- * shape each); a store
- * file that cannot be used throws `managed-manifest-unusable` (readManagedFormFile).
+ * variables, then connection references, then Custom APIs; every duplicate rule is left out unread (state-unproven, FAMILIES).
+ * A restored item also sets the spec's `configurationIdentity: "stable-v1"` (only a protected build keeps these groups, so the store
+ * itself is the proof of the regime) with its plugin floor. Answers { environmentVariables, connectionReferences, customApis,
+ * duplicateDetectionRules } (restoreKind's shape each); a store file that cannot be used throws `managed-manifest-unusable` (readManagedFormFile).
  */
 async function restoreManagedConfiguration({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
   const { units, manifest } = readConfigurationStore({ file, environment, appUniqueName, solutionUniqueName });
