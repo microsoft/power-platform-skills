@@ -663,10 +663,13 @@ function identityStop(code, id) {
 // A copy that holds edits the service has not seen (an earlier run's unsent change, or one made by hand) is the maker's to
 // keep or drop, never this read's: it stops typed, the copy kept (the protected preflight names it first, as
 // workspace-copy-unsent-edits with the one approval that replaces it, overwrite:<kind>:<key>). Only a diff (lib/unsynced-edits.js), no request; a copy the workspace does not hold reads clean, and a diff
-// that cannot be made reads as edits, so a doubtful copy is kept too.
+// that cannot be made reads as edits, so a doubtful copy is kept too. A copy an earlier plugin version left that the
+// workspace cannot prove clean is refused by the workspace itself (lib/workspace-configuration-memory.js); that refusal
+// keeps its own code (WORKSPACE_LEGACY_CONFIGURATION_COPY), whose remedy differs: delete the old files, not refresh them.
 async function refuseLocalDraft(sdk, kind, id) {
   const { hasUnsyncedEdits } = require('./unsynced-edits.js');
-  if (await hasUnsyncedEdits(sdk, kind, id)) throw identityStop('create-completion-required', id);
+  const { isLegacyCopyRefusal } = require('./workspace-configuration-memory.js');
+  if (await hasUnsyncedEdits(sdk, kind, id, { rethrow: isLegacyCopyRefusal })) throw identityStop('create-completion-required', id);
 }
 
 // The id a typed stop is about, when it names one, so a maker can inspect the row the next run could not read. The

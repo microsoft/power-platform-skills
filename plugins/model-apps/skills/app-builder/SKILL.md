@@ -720,6 +720,17 @@ gates the final *bulk* publish**, which also carries the edits made to existing 
 Without it those edits — and always an existing app's sitemap re-sync — still publish their one
 targeted artifact so the change takes effect (see *Notes & limits*).
 
+**Sensitive configuration in the workspace.** An earlier plugin version wrote environment-variable and
+connection-reference copies (which can hold values, defaults, Key Vault secret references and connection ids) into
+the workspace's `environment-variables` and `connection-references` folders and their `.metadata` folders. This
+version never deletes them for you. While such files remain, every command that opens that workspace prints one
+`WARNING:` naming the folders (never their content). A copy the plugin cannot prove is what the environment last
+held (an edit never sent, a file with no partner, a locked file) stops the step that needs it with
+`WORKSPACE_LEGACY_CONFIGURATION_COPY`, naming its two files. To clear either: when no build is running, move any
+change you still want into the App Spec or the deployment settings file (the build sends configuration only from
+those), close any program holding the files, delete the `.json` files in those folders, and run again. Tell the user
+what the warning or the stop names before deleting anything.
+
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`); environment-variable and connection-reference values,
