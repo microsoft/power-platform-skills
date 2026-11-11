@@ -3077,7 +3077,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   `runDownload` `stagePages` (as it does for every download), which writes the page tree to a hidden staging
   folder inside `<out>`, reads it back and answers `stagedPages` (`check`, `publish`); the tree, the spec and
   the baseline are written only after the fragments file, so a failure there leaves every output as it was (and
-  a tree or an `app-spec.json` that cannot be replaced is refused before the fragments file is written). The
+  a tree or an `app-spec.json` that cannot be replaced is refused before the fragments file is written, with or
+  without generative pages). The
   restored form is the group's `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A
   plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the

@@ -4452,7 +4452,8 @@ async function main(deps = {}) {
     // a link, a folder, a hard link, a read-only file or a folder where no new file can be made), then, for the managed download, the
     // fragments file, then the tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves
     // pages/, the spec and the baseline as they were, and a tree or a spec that cannot be replaced stops the managed download before its
-    // fragments file is written. The spec is still written after the tree, and the two are not one transaction: a write of it that
+    // fragments file is written, with or without a page tree: a managed download of an app with no generative pages has no tree to check,
+    // but its fragments file is still written before the spec. The spec is still written after the tree, and the two are not one transaction: a write of it that
     // fails for a reason no look beforehand can see (a full disk, a lock taken meanwhile) comes after the tree is published.
     let managedFragments = null;
     if (includeManaged) {
@@ -4463,8 +4464,8 @@ async function main(deps = {}) {
         return;
       }
     }
-    if (result.stagedPages) {
-      result.stagedPages.check();
+    if (result.stagedPages || includeManaged) {
+      if (result.stagedPages) result.stagedPages.check();
       try {
         assertFileReplaceable(specPath);
       } catch (e) {
