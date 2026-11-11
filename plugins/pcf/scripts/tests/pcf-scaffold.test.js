@@ -726,6 +726,24 @@ test('rendered Jest setup suppresses only the pinned jsdom punycode deprecation'
   assert.match(config, /test\/pcf-jest-environment\.cjs/);
 });
 
+test('rendered Jest config finds tests without pasting the project path into the test glob (#849)', () => {
+  const source = findFile(renderFieldPlan(), 'jest.config.cjs');
+  const loaded = { exports: {} };
+  new Function('module', 'exports', source)(loaded, loaded.exports);
+  const config = loaded.exports;
+
+  // Jest substitutes <rootDir> into a glob as an absolute path, and on Windows a backslash before a
+  // dot survives as a glob escape, so "C:\work\.repo" stops matching. Path options such as roots
+  // and setupFiles take <rootDir> safely because they are not globs.
+  assert.deepEqual(config.testMatch, ['**/__tests__/**/*.test.ts']);
+  assert.deepEqual(config.roots, ['<rootDir>']);
+  assert.equal(config.testRegex, undefined);
+  assert.equal(config.testPathIgnorePatterns, undefined, 'the default node_modules exclusion must stay in force');
+  assert.equal(config.testEnvironment, '<rootDir>/test/pcf-jest-environment.cjs');
+  assert.deepEqual(config.setupFiles, ['<rootDir>/test/jest-setup.js']);
+  assert.deepEqual(config.transform, { '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.test.json' }] });
+});
+
 test('mockDataSet renders first-class loading, error and paging options', () => {
   const kit = findFile(renderFieldPlan(), path.join('test', 'pcf-context.ts'));
 
