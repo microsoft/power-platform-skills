@@ -754,7 +754,9 @@ spec's new columns.
   `--managed-manifest <store file>` (the build's `managed-bindings.<hash>.json`), each declared view a
   `createIdentity` build created comes back in `views[]` with `reconcile: "declared"`, its `viewId`,
   `activeOnly: false` and every condition it holds, when the store proves it unchanged since that build,
-  saved and published alike, and a rebuild from it changes nothing; the spec gets `createIdentity: "stable-v1"`
+  saved and published alike, and while the app's solution still holds it. A rebuild from it writes nothing to
+  the view; the rest of the rebuild runs as for any spec (its tables, forms and app are still published, its
+  sitemap written, its app components added). The download never adds a view to a solution. The spec gets `createIdentity: "stable-v1"`
   with it. The `viewId` binds the view in that environment: remove it before building the spec elsewhere.
   Any other declared view is left out, named with its reason in `managedViews.omitted` and in a warning,
   and stays in the download's note. Each declared chart such a build created comes back in `charts[]` the
@@ -762,7 +764,8 @@ spec's new columns.
   description and title when set; it carries no id, so only a build that uses the same store binds it (the
   store names the exact row, never a same-named chart). A chart whose query holds anything a declaration
   cannot say (a filter, a join, an order, a second series, a date grouping) or that was renamed is left out,
-  named in `managedCharts.omitted`. Its styling is not in the spec; a rebuild that changes nothing keeps it.
+  named in `managedCharts.omitted`; so is one the app's solution no longer holds. Its styling is not in the
+  spec; a rebuild that writes nothing to the chart keeps it.
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —

@@ -984,7 +984,8 @@ not everything:**
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty
   (a declared form comes back only with `--include-managed --managed-manifest <store file>`; see
   **Declared form layouts**; so does a declared view a `createIdentity` build created and the store proves
-  unchanged, with its `viewId` and `createIdentity`, the rest named in `managedViews.omitted`, and such a
+  unchanged while the app's solution holds it, with its `viewId` and `createIdentity` (a rebuild writes
+  nothing to it; the rest of the rebuild runs as usual), the rest named in `managedViews.omitted`, and such a
   declared chart, with no id (only a build from the same folder's store binds it), the rest named in
   `managedCharts.omitted`). `commandStates[]` is never written either: a button's hidden / disabled
   state stays on the live row.

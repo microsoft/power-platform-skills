@@ -1753,7 +1753,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `noChange` and keeps the binding, and the spec still validates. The declaration carries `viewId` (the bound
   id; environment-bound, like a dashboard's pinned id), `key` only when it is not `<table>/<name>`,
   `activeOnly: false` and every condition the row holds (its `statecode` one included), so the rebuild
-  through the same store sends no write and no publish. Anything else is an omission with a fixed code
+  through the same store sends no write to the view's definition or to its solution membership. That is a
+  claim about the view, not the whole rebuild: the rebuild still runs every other step as for any spec (its
+  tables, forms and app are published, its sitemap written, its app components added). The view alone no
+  longer asks for its table's publish: a bound declared view the planner proves `noChange` with nothing
+  saved is not a reason to publish the table (`noteUnchangedManagedView` in `sdk-build.js`), while a form, a
+  chart written in the run, an owed publish or a changed or unbound view still asks for it. The row must
+  also still be in the app's solution (`solutionMembershipCheck` in `lib/managed-restore-report.js`): the
+  row itself or its whole table (root behaviour 0) counts; a table held without its subcomponents (behaviour
+  1 or 2), or no membership at all, is `not-in-solution`, an unreadable one is `membership-unknown`, and the
+  download never adds or repairs one. The same holds for a chart.
+  Anything else is an omission with a fixed code
   (`managedViews.omitted`), a WARNING, and the view stays in the not-round-tripped report.
   **It restores the declared charts a stable build created the same way** (`lib/declared-chart-io.js`,
   `restoreManagedCharts`), with two differences. A chart declaration has no id and no key field, so the
@@ -1766,12 +1776,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   measure that is not a count of the table's id, or an element the verifier does not model leaves the chart
   out as `unsupported`; a renamed chart is `key-mismatch`. The declaration is the chart's table and name,
   `reconcile: "declared"`, `chartType`, `groupBy`, the `measure` stated explicitly, and its description
-  and title when they hold text. Styling (palette, colours, axes, legend) is not the spec's: the rebuild
-  that changes nothing keeps it byte for byte. Omissions are `managedCharts.omitted`, each with a WARNING.
+  and title when they hold text. Styling (palette, colours, axes, legend) is not the spec's: a rebuild
+  that writes nothing to the chart keeps it byte for byte. Omissions are `managedCharts.omitted`, each with a WARNING.
   **Every download, plain or managed, reports the custom field security profiles it does not declare**
   (`readFieldSecurityProfiles`). A profile is environment-wide security policy and no store family proves one is
   this app's, so no restore declares one: `fieldSecurityProfiles[]` stays out of the spec, and a rebuild neither
-  changes nor recreates a profile (the secured columns still round-trip as `isSecured`). The read finds a
+  changes nor recreates a profile (the secured columns still round-trip as `isSecured`;
+  `tests/download-managed-lifecycle.test.js` runs a download, its complete rebuild and a second download over a
+  custom and the System Administrator profile with permissions, users and teams, and checks none of them is
+  written or named beyond the custom profile's id and name). The read finds a
   profile two ways, de-duplicated by id: solution component type 70 in the app's solution(s), and a
   `fieldpermission` on a column the download emits as secured. It selects only the permission's profile id and
   the profile's id and name, never a permission's bits or a profile's users and teams, and drops System
@@ -2203,7 +2216,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   document — is `unverified`, never dropped to obtain a pass; styling (palette, colours, axes, legends) is not compared. A declared
   chart its managed bindings bind is read by its bound id: a namesake is never taken in its place, and a binding that is pending or
   unusable makes the chart `unverified`. Two charts with the spec's name on its table are present, their content `unverified`. A
-  reader whose rows carry no content columns (the eval's synthesized reader) checks presence only.
+  row read without its content columns (the eval's synthesized reader answers so) is checked for presence, and its type, its data
+  and a declared title are `unverified`, never passed; a declared description is still checked when the row carries one.
   A relationship is verified by its **identity**, not its name: the answer has to state its schema name, its
   type, both its tables and, for a 1:N, its lookup column — for an N:N, its intersect table and the column each
   table has in it — and all of them have to match (`compareRelationship`, `lib/relationship-metadata.js`; an N:N's
