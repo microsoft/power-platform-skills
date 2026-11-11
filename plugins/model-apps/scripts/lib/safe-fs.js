@@ -249,6 +249,7 @@ function assertPlainFileTarget(filePath, opts) {
 // and one more that writeFileSafe only meets as a failed write: a folder in which no new file can be made, so that its temporary
 // sibling cannot be created. That is found by creating, then removing, an empty sibling of the same shape: a look at the permission
 // bits cannot answer it (on Windows the folder's access list decides, and an access check for W_OK reads only the read-only attribute).
+// A probe that cannot then be removed is refused too (`probe-not-removed`), naming it.
 // Like every look beforehand, it says nothing about the moment of the write: a full disk, a lock taken later or a crash still fail
 // the write itself.
 function assertFileReplaceable(filePath, opts) {
@@ -268,11 +269,19 @@ function assertFileReplaceable(filePath, opts) {
     e.reason = 'folder-not-writable';
     throw e;
   }
-  // The probe is empty and named for this process and call only, so removing it touches nothing of anyone else's. Its removal is
-  // best-effort: the folder answered the question already, and an empty hidden file left by a lock that outlasts the retries is
-  // not a reason to stop a download.
-  try { fsImpl.closeSync(fd); } catch { /* the descriptor is gone either way */ }
-  try { unlinkWithRetry(fsImpl, probe); } catch { /* see above */ }
+  // The probe is empty and named for this process and call only (made by an exclusive create), so removing it touches nothing of
+  // anyone else's. A lock on it is waited out (unlinkWithRetry, on Windows); one that outlasts that wait does not let the look
+  // pass: a look that leaves a file of its own behind has not answered cleanly, and stopping here, before anything is replaced,
+  // is the one point where the file can be named and nothing else has changed.
+  try { fsImpl.closeSync(fd); } catch { /* the descriptor is gone either way; the removal below says whether the file is */ }
+  try {
+    unlinkWithRetry(fsImpl, probe);
+  } catch (err) {
+    const e = new Error(`refusing to write ${target}: ${probe}, an empty file this download made to learn whether its folder takes a new file, could not be removed (${(err && err.code) || err}); it holds nothing of the maker's and can be deleted`, { cause: err });
+    e.code = 'IO_ERROR';
+    e.reason = 'probe-not-removed';
+    throw e;
+  }
   return target;
 }
 

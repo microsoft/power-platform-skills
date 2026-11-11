@@ -1126,7 +1126,7 @@ for (const [what, plant, refusal] of [
       plant(specFile, elsewhere);
       try {
         const before = snapshotTree(out);
-        await assert.rejects(run(), (e) => refusal(e) && /^refusing to write .*app-spec\.json: .* The download stopped before writing anything: /.test(e.message));
+        await assert.rejects(run(), (e) => refusal(e) && /^refusing to write .*app-spec\.json: .* The download stopped before replacing anything: /.test(e.message));
         assert.equal(staged(), true, 'the managed download stages its pages');
         assert.equal(fs.readFileSync(pageFile, 'utf8'), 'MAKER EDIT THAT MUST SURVIVE FAILURE');
         assert.equal(fs.readFileSync(specFile, 'utf8'), oldSpec);

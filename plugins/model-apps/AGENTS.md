@@ -1718,14 +1718,19 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `assertFileReplaceable` (`lib/safe-fs.js`) on the spec: the refusals `writeFileSafe` would make at write
   time (a link, a folder, a hard link — `UNSAFE_OUTPUT` — or a read-only file, `IO_ERROR` `read-only`), plus a
   folder in which no new file can be made (`IO_ERROR` `folder-not-writable`, found by creating and removing an
-  empty `.app-spec.json.<pid>.<hex>.tmp`, since on Windows a folder's access list, not its mode, decides). Any
-  of them stops the download before the fragments file or `pages/` is written, and the error ends "The
-  download stopped before writing anything". **Residual limit:** the spec is still written after `pages/` is
-  replaced, and the two are not one transaction. A write of the spec that fails for a reason no look
-  beforehand can see (a full disk, a lock taken meanwhile, a crash) leaves `pages/` holding this download's
-  pages — the previous pages are not kept — beside the previous spec (or none), which does not describe
-  them. The error keeps the write's code and says exactly that; running the same download again makes them
-  match. No copy of the previous pages and no recovery folder is made.
+  empty `.app-spec.json.<pid>.<hex>.tmp`, since on Windows a folder's access list, not its mode, decides). That
+  probe is removed with the Windows lock retry; if it still cannot be removed, the look is refused too
+  (`IO_ERROR` `probe-not-removed`), and the error names the file and says it is an empty file the download made
+  that can be deleted. Any of them stops the download before the fragments file or `pages/` is written, and the
+  error ends "The download stopped before replacing anything". **Residual limit:** the spec is still written
+  after `pages/` is replaced, and the two are not one transaction. A write of the spec that fails for a reason
+  no look beforehand can see (a full disk, a lock taken meanwhile, a crash) comes after the page tree is
+  published. Its error keeps the write's code and says only what is known: the page tree was published, the
+  spec write reported an error, and whether `app-spec.json` matches those pages has not been confirmed —
+  resolve the error and run the same download again. It does not claim the spec is unchanged or mismatched
+  (an unchanged app's spec already matches; a rename can take effect and still report an error), nor that the
+  previous pages are gone (the swap keeps them when it cannot remove its folder, and warns). No copy of the
+  previous pages and no recovery folder is made.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,

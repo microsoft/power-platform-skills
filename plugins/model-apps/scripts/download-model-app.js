@@ -4317,15 +4317,15 @@ async function main(deps = {}) {
     // a link, a folder, a hard link, a read-only file or a folder where no new file can be made), then, for the managed download, the
     // fragments file, then the tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves
     // pages/, the spec and the baseline as they were, and a tree or a spec that cannot be replaced stops the managed download before its
-    // fragments file is written. The spec is still written after the tree: a write of it that fails for a reason no look beforehand can
-    // see (a full disk, a lock taken meanwhile) leaves the new pages with the previous spec, and its error says so.
+    // fragments file is written. The spec is still written after the tree, and the two are not one transaction: a write of it that
+    // fails for a reason no look beforehand can see (a full disk, a lock taken meanwhile) comes after the tree is published.
     let managedFragments = null;
     if (result.stagedPages) {
       result.stagedPages.check();
       try {
         assertFileReplaceable(specPath);
       } catch (e) {
-        throw withSequel(e, `The download stopped before writing anything: ${path.join(outDir, 'pages')} and ${specPath} are as they were`);
+        throw withSequel(e, `The download stopped before replacing anything: ${path.join(outDir, 'pages')} and ${specPath} are as they were`);
       }
     }
     if (includeManaged) {
@@ -4344,11 +4344,11 @@ async function main(deps = {}) {
       writeFileSafe(specPath, JSON.stringify(spec, null, 2));
     } catch (e) {
       if (!result.stagedPages) throw e;
-      // pages/ was replaced a moment ago and the previous pages are not kept, so the folder now pairs this download's pages with a spec
-      // that does not describe them. A failed writeFileSafe never touches the file it was writing, so that spec is the one from before.
-      const pagesDir = path.join(outDir, 'pages');
-      const left = fs.existsSync(specPath) ? 'it is still the spec from before this download, which does not describe them' : 'there is none';
-      throw withSequel(e, `${pagesDir} now holds this download's pages (the previous pages are not kept), but ${specPath} was not written: ${left}. Run the same download again to make them match`);
+      // Only what is known is said: the page tree was published, and then the write of the spec reported an error. What the spec on
+      // disk is now, and whether it matches the pages, is not: the app may be unchanged (the spec already matched), a rename can take
+      // effect and still report an error, and the swap keeps the previous tree when it cannot remove its folder (writePageTree warns
+      // of that itself). Running the same download again writes both once the cause is resolved.
+      throw withSequel(e, `This download had already published its page tree to ${path.join(outDir, 'pages')} when the write of ${specPath} reported this error, so whether ${specPath} matches those pages has not been confirmed: resolve the error and run the same download again`);
     }
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then

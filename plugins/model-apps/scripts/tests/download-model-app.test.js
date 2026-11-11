@@ -2492,7 +2492,7 @@ for (const [what, plant, refusal] of [
       assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
       assert.ok(res.thrown && refusal(res.thrown), String(res.thrown && res.thrown.stack));
       assert.match(res.thrown.message, /^refusing to write .*app-spec\.json: /);
-      assert.ok(res.thrown.message.endsWith(`. The download stopped before writing anything: ${path.join(out, 'pages')} and ${specFile} are as they were`), res.thrown.message);
+      assert.ok(res.thrown.message.endsWith(`. The download stopped before replacing anything: ${path.join(out, 'pages')} and ${specFile} are as they were`), res.thrown.message);
     } finally {
       try { fs.chmodSync(specFile, 0o666); } catch { /* removed already */ }
       fs.rmSync(out, { recursive: true, force: true });
@@ -2501,10 +2501,57 @@ for (const [what, plant, refusal] of [
   });
 }
 
+// The look at the spec makes, then removes, an empty file of its own. When that file cannot be removed the look does not pass: the
+// download stops before it replaces anything, and the error names the file left, so the maker can delete it.
+for (const lateFailure of [false, true]) {
+  test(`the CLI without --include-managed: an empty file the look at app-spec.json made that cannot be removed stops the download before pages/ is touched, and is named${lateFailure ? ' (a write of the spec that would fail later is never reached)' : ''}`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-probe-'));
+    const specFile = path.join(out, 'app-spec.json');
+    // fs.rmSync loads its recursive remover lazily, and that module keeps the unlink it finds then: load it before unlink is mocked,
+    // or a later clean-up runs the mock.
+    const warmup = path.join(out, 'warmup');
+    fs.mkdirSync(warmup);
+    fs.rmSync(warmup, { recursive: true });
+    try {
+      seedEditedPages(out);
+      fs.writeFileSync(specFile, MAKER_SPEC);
+      const before = treeBytes(out);
+      const opened = [];
+      const open = fs.openSync;
+      t.mock.method(fs, 'openSync', function (p, ...args) {
+        if (specTemp(out)(p)) opened.push(String(p));
+        return open.call(this, p, ...args);
+      });
+      const blocked = failFs(t, 'unlinkSync', (p) => String(p) === opened[0], 'EIO');
+      const renamed = lateFailure ? failFs(t, 'renameSync', specTemp(out), 'EIO') : [];
+      const res = await cliDownload(t, out);
+      const probe = opened[0];
+      assert.ok(probe, 'the look made its file');
+      assert.strictEqual(blocked.length, 1, 'its removal was refused');
+      assert.deepStrictEqual(renamed, [], 'no write of the spec was tried');
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && res.thrown.code === 'IO_ERROR' && res.thrown.reason === 'probe-not-removed', String(res.thrown && res.thrown.stack));
+      assert.ok(res.thrown.message.includes(probe), res.thrown.message);
+      assert.match(res.thrown.message, /an empty file this download made .*can be deleted/);
+      assert.ok(res.thrown.message.endsWith(`. The download stopped before replacing anything: ${path.join(out, 'pages')} and ${specFile} are as they were`), res.thrown.message);
+      assert.deepStrictEqual(leftovers(out), [], 'no staging or swap folder is left');
+      fs.unlinkSync(probe);
+      assert.deepStrictEqual(treeBytes(out), before, 'once the named file is deleted, the folder is exactly as it was');
+    } finally {
+      t.mock.restoreAll();
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
+
+// What the error of a write of the spec that fails after pages/ is published says: what is known (the page tree was published, the
+// write reported an error) and what is not (whether the spec on disk matches the pages), and what to do. Nothing more is claimed.
+const lateSpecSequel = (out) => `. This download had already published its page tree to ${path.join(out, 'pages')} when the write of ${path.join(out, 'app-spec.json')} reported this error, so whether ${path.join(out, 'app-spec.json')} matches those pages has not been confirmed: resolve the error and run the same download again`;
+
 // A write of the spec that fails for a reason no look beforehand can see (a full disk, a lock, a crash) comes after pages/ is published,
-// as it did: the error says so plainly, and the same download run again makes the two match.
+// as it did: the error says what is known, and the same download run again makes the two match.
 for (const hadSpec of [true, false]) {
-  test(`the CLI without --include-managed: a write of app-spec.json that fails after pages/ is published${hadSpec ? '' : ', where there was no app-spec.json'}, says that pages/ holds this download's pages and app-spec.json does not describe them, and the same download run again makes them match`, async (t) => {
+  test(`the CLI without --include-managed: a write of app-spec.json that fails after pages/ is published${hadSpec ? '' : ', where there was no app-spec.json'}, says the page tree was published and the spec is not confirmed to match it, and the same download run again makes them match`, async (t) => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-late-'));
     const specFile = path.join(out, 'app-spec.json');
     try {
@@ -2521,8 +2568,7 @@ for (const hadSpec of [true, false]) {
       assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
       assert.ok(res.thrown && res.thrown.code === 'IO_ERROR', String(res.thrown && res.thrown.stack));
       assert.match(res.thrown.message, /^failed to write .*app-spec\.json: EIO: injected/);
-      const state = hadSpec ? 'it is still the spec from before this download, which does not describe them' : 'there is none';
-      assert.ok(res.thrown.message.endsWith(`. ${path.join(out, 'pages')} now holds this download's pages (the previous pages are not kept), but ${specFile} was not written: ${state}. Run the same download again to make them match`), res.thrown.message);
+      assert.ok(res.thrown.message.endsWith(lateSpecSequel(out)), res.thrown.message);
 
       const again = await cliDownload(t, out);
       assert.strictEqual(again.thrown, null, String(again.thrown && again.thrown.stack));
@@ -2530,6 +2576,60 @@ for (const hadSpec of [true, false]) {
       assert.strictEqual(again.emitted[0].ok, true, JSON.stringify(again.emitted));
       const spec = JSON.parse(fs.readFileSync(specFile, 'utf8'));
       assert.deepStrictEqual(spec.pages.map((p) => p.pageId).sort(), fs.readdirSync(path.join(out, 'pages')).sort(), 'the spec describes the pages in pages/');
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
+
+// The error claims nothing about what is on disk beyond the published tree, because every claim it once made can be untrue: a spec
+// that already matched the pages (an unchanged app downloaded again), a rename that took effect before it reported an error, and a
+// previous tree that the swap kept because its folder could not be removed.
+for (const [what, arrange, check] of [
+  ['the app is unchanged since the last download, so the spec on disk already describes the pages', async (t, out) => {
+    const first = await cliDownload(t, out);
+    assert.strictEqual(first.thrown, null, String(first.thrown && first.thrown.stack));
+    const before = treeBytes(out);
+    failFs(t, 'renameSync', specTemp(out), 'EIO');
+    return before;
+  }, (out, before) => assert.deepStrictEqual(treeBytes(out), before, 'the spec and the pages are still the matching pair of the first download')],
+  ['the rename of the spec took effect and then reported an error', async (t, out) => {
+    seedEditedPages(out);
+    fs.writeFileSync(path.join(out, 'app-spec.json'), MAKER_SPEC);
+    const rename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function (from, to) {
+      const done = rename.call(this, from, to);
+      if (specTemp(out)(from)) throw Object.assign(new Error('EIO: injected after the rename'), { code: 'EIO' });
+      return done;
+    });
+  }, (out) => assert.ok(JSON.parse(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8')).pages.length > 0, 'the new spec is on disk')],
+  ['the swap folder that holds the previous pages could not be removed', async (t, out) => {
+    seedEditedPages(out);
+    fs.writeFileSync(path.join(out, 'app-spec.json'), MAKER_SPEC);
+    const before = treeBytes(path.join(out, 'pages'));
+    const rm = fs.rmSync;
+    t.mock.method(fs, 'rmSync', function (p, ...args) {
+      if (topFolder(out, p, '.pages-replace.') === String(p)) throw Object.assign(new Error('EIO: injected, rm'), { code: 'EIO' });
+      return rm.call(this, p, ...args);
+    });
+    failFs(t, 'renameSync', specTemp(out), 'EIO');
+    return before;
+  }, (out, before) => {
+    const swaps = fs.readdirSync(out).filter((n) => n.startsWith('.pages-replace.'));
+    assert.strictEqual(swaps.length, 1);
+    assert.deepStrictEqual(treeBytes(path.join(out, swaps[0], 'previous')), before, 'the previous pages are kept in the swap folder');
+  }],
+]) {
+  test(`the CLI without --include-managed: the error of a write of app-spec.json that fails after pages/ is published claims nothing it cannot know, when ${what}`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-late-'));
+    try {
+      const before = await arrange(t, out);
+      const res = await cliDownload(t, out);
+      check(out, before);
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && res.thrown.code === 'IO_ERROR', String(res.thrown && res.thrown.stack));
+      assert.ok(res.thrown.message.endsWith(lateSpecSequel(out)), res.thrown.message);
+      for (const untrue of ['not kept', 'still the spec', 'does not describe', 'was not written']) assert.ok(!res.thrown.message.includes(untrue), res.thrown.message);
     } finally {
       fs.rmSync(out, { recursive: true, force: true });
     }
