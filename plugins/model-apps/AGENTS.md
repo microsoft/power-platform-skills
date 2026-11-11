@@ -1755,6 +1755,19 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `activeOnly: false` and every condition the row holds (its `statecode` one included), so the rebuild
   through the same store sends no write and no publish. Anything else is an omission with a fixed code
   (`managedViews.omitted`), a WARNING, and the view stays in the not-round-tripped report.
+  **It restores the declared charts a stable build created the same way** (`lib/declared-chart-io.js`,
+  `restoreManagedCharts`), with two differences. A chart declaration has no id and no key field, so the
+  restored chart carries neither: the rebuild finds the row through the store's key (`<table>/<name>`),
+  which makes the restore an edit snapshot for that build folder (the store selects the exact row; a
+  same-named chart is never bound in its place). And the typed chart the SDK reads shows the category and
+  series but not the rest of the query, so the projection hash cannot prove the chart holds nothing more:
+  verify's own content checks (`chartContentChecks`) run on the PUBLISHED row against the declaration, and
+  every one must pass. A filter, a join, an order, a second series, a date grouping, a related category, a
+  measure that is not a count of the table's id, or an element the verifier does not model leaves the chart
+  out as `unsupported`; a renamed chart is `key-mismatch`. The declaration is the chart's table and name,
+  `reconcile: "declared"`, `chartType`, `groupBy`, the `measure` stated explicitly, and its description
+  and title when they hold text. Styling (palette, colours, axes, legend) is not the spec's: the rebuild
+  that changes nothing keeps it byte for byte. Omissions are `managedCharts.omitted`, each with a WARNING.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,

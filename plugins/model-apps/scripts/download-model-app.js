@@ -34,6 +34,9 @@
 // written into views[] as a declaration inverted from the row, pinned to its id, only when it compiles back to the row exactly and
 // the build's planner answers noChange for it (lib/declared-view-io.js; `managedViews`), and is then no longer named as left out;
 // any other is named in `managedViews.omitted` and stays in the not-round-tripped report.
+// A declared chart a stable build created is restored the same way into charts[], without an id (a chart declaration has none: the
+// store's key selects the row), only when verify's content checks pass on its published row and the planner answers noChange
+// (lib/declared-chart-io.js; `managedCharts`); any other is named in `managedCharts.omitted`.
 // A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
 // a NEW file `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json` (`managedFragments.file` in the result;
@@ -79,6 +82,7 @@ const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
 const { restoreManagedViews } = require('./lib/declared-view-io.js');
+const { restoreManagedCharts } = require('./lib/declared-chart-io.js');
 const { subtractRestored, storeRevision, assertStoreUnchanged } = require('./lib/managed-restore-report.js');
 const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
@@ -4276,6 +4280,7 @@ async function main(deps = {}) {
     // and each declared business rule into businessRules[] (lib/declared-rule-io.js restoreManagedRules), which the plain download leaves out;
     // and each declared business process flow into businessProcessFlows[] (lib/declared-bpf-io.js restoreManagedBpfs), which it leaves out too;
     // and each declared view a stable build created into views[] (lib/declared-view-io.js restoreManagedViews), which it leaves out too;
+    // and each declared chart a stable build created into charts[] (lib/declared-chart-io.js restoreManagedCharts), which it leaves out too;
     // every other is named, never silently dropped. A store file that is not this app's on this environment stops the download before
     // anything is written.
     let managedForms = null;
@@ -4283,6 +4288,7 @@ async function main(deps = {}) {
     let managedRules = null;
     let managedBpfs = null;
     let managedViews = null;
+    let managedCharts = null;
     // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
     const fragments = [];
     // The store's bytes as the restore first reads them: every family below reads the file on its own, so a build that rewrote it
@@ -4310,6 +4316,7 @@ async function main(deps = {}) {
         managedRules = await restoreManagedRules(source);
         managedBpfs = await restoreManagedBpfs(source);
         managedViews = await restoreManagedViews(source);
+        managedCharts = await restoreManagedCharts(source);
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
         return;
@@ -4322,6 +4329,8 @@ async function main(deps = {}) {
       for (const p of managedBpfs.personas || []) io.stderr.write(`NOTE: persona '${p.name}' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build.\n`);
       for (const o of managedViews.omitted) io.stderr.write(`WARNING: managed view ${o.key || o.id} was not restored: ${o.reason}. It is left out of views[], as every view is without --include-managed.\n`);
       restoredIds.views = managedViews.restored.map((r) => r.id);
+      for (const o of managedCharts.omitted) io.stderr.write(`WARNING: managed chart ${o.key || o.id} was not restored: ${o.reason}. It is left out of charts[], as every chart is without --include-managed.\n`);
+      restoredIds.charts = managedCharts.restored.map((r) => r.id);
       // The report runDownload deferred (`deferReport`), less what was restored, printed once. A runDownload that hands back no
       // deferred parts printed its own report already (or had none), so nothing is printed twice.
       if (result.deferredReport) {
@@ -4408,7 +4417,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedViews ? { managedViews: { restored: managedViews.restored.map((r) => r.key), omitted: managedViews.omitted } } : {}), ...(managedFragments ? { managedFragments } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedViews ? { managedViews: { restored: managedViews.restored.map((r) => r.key), omitted: managedViews.omitted } } : {}), ...(managedCharts ? { managedCharts: { restored: managedCharts.restored.map((r) => r.key), omitted: managedCharts.omitted } } : {}), ...(managedFragments ? { managedFragments } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

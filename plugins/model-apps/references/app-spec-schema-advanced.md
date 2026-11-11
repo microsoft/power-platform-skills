@@ -754,7 +754,12 @@ spec's new columns.
   saved and published alike, and a rebuild from it changes nothing; the spec gets `createIdentity: "stable-v1"`
   with it. The `viewId` binds the view in that environment: remove it before building the spec elsewhere.
   Any other declared view is left out, named with its reason in `managedViews.omitted` and in a warning,
-  and stays in the download's note. Charts are not restored.
+  and stays in the download's note. Each declared chart such a build created comes back in `charts[]` the
+  same way, as its table and name, `reconcile: "declared"`, `chartType`, `groupBy`, `measure`, and its
+  description and title when set; it carries no id, so only a build that uses the same store binds it (the
+  store names the exact row, never a same-named chart). A chart whose query holds anything a declaration
+  cannot say (a filter, a join, an order, a second series, a date grouping) or that was renamed is left out,
+  named in `managedCharts.omitted`. Its styling is not in the spec; a rebuild that changes nothing keeps it.
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
@@ -1263,8 +1268,8 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
 ## createIdentity (optional — stable create ids for declared views and charts)
 
 Requires `minimumPluginVersion: "2.21.0"`. Write it on a **new** app only; never add it to an existing or
-downloaded spec. A managed download writes it back itself, and only with the declared views it restores (a
-view the store proves this field's build created). The only value is `"stable-v1"`; any other value is a validation error
+downloaded spec. A managed download writes it back itself, and only with the declared views and charts it
+restores (one the store proves this field's build created). The only value is `"stable-v1"`; any other value is a validation error
 (`create-identity-invalid`), and a spec without the field builds exactly as before.
 
 ```jsonc

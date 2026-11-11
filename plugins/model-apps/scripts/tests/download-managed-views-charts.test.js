@@ -48,12 +48,13 @@ function makeSpec(extra = {}) {
 }
 const stableSpec = (extra) => makeSpec({ createIdentity: 'stable-v1', minimumPluginVersion: '2.21.0', ...extra });
 
-// The build that keeps the store: views and charts only, published, as the CLI's build leaves them.
-async function build(org, dir, spec) {
+// The build that keeps the store: views and charts only, published, as the CLI's build leaves them (its publish phase settles the
+// chart's table publish; the views phase publishes its own).
+async function build(org, dir, spec, phases = ['views', 'charts', 'publish']) {
   const barrier = createPublicationBarrier();
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, null) });
   await sdk.initWorkspace();
-  const out = await runSdkBuild(spec, { sdk, apply: true, publish: true, workspaceDir: dir, appDir: dir, env: org.origin, warn: () => {}, phases: ['views', 'charts'], publicationBarrier: barrier });
+  const out = await runSdkBuild(spec, { sdk, apply: true, publish: true, workspaceDir: dir, appDir: dir, env: org.origin, warn: () => {}, phases, publicationBarrier: barrier });
   return { out, sdk };
 }
 const storeFileOf = (dir) => path.join(dir, fs.readdirSync(dir).find((f) => f.startsWith(PREFIX)));
@@ -64,8 +65,8 @@ function plainDownload(built) {
   const { createIdentity, minimumPluginVersion, ...spec } = makeSpec({ views: [], charts: [] });
   void createIdentity; void minimumPluginVersion;
   const inventory = {
-    views: [{ id: built.view, name: 'Declared Items', entity: 'contoso_item' }],
-    charts: [{ id: built.chart, name: 'By Kind', entity: 'contoso_item' }],
+    ...(built.view ? { views: [{ id: built.view, name: 'Declared Items', entity: 'contoso_item' }] } : {}),
+    ...(built.chart ? { charts: [{ id: built.chart, name: 'By Kind', entity: 'contoso_item' }] } : {}),
   };
   return { spec, inventory };
 }
@@ -110,9 +111,10 @@ async function download(org, out, argv, { downloaded, ...extra } = {}) {
 async function builtApp(extra) {
   const org = createFakeBuildOrg({ entities: ENTITIES, solution: { uniqueName: SOLUTION } });
   const dir = newDir();
-  const { out } = await build(org, dir, stableSpec(extra));
+  const spec = stableSpec(extra);
+  const { out } = await build(org, dir, spec);
   const built = { view: out.created.views['contoso_item|Declared Items'], chart: out.created.charts['contoso_item|By Kind'] };
-  assert.ok(built.view && built.chart, JSON.stringify(out.created));
+  assert.ok((!spec.views.length || built.view) && (!spec.charts.length || built.chart), JSON.stringify(out.created));
   return { org, dir, built, flags: ['--include-managed', '--managed-manifest', storeFileOf(dir)] };
 }
 
@@ -121,16 +123,19 @@ async function builtApp(extra) {
 test('the managed download asks runDownload to defer the not-round-tripped report and prints it once, after the restore, less what it restored; the plain one does not ask', async () => {
   const { org, built, flags } = await builtApp();
   const downloaded = plainDownload(built);
+  // A stock view no store proves: it stays in the report.
+  const stock = { id: '00000000-0000-4000-8000-0000000000aa', name: 'Active Items', entity: 'contoso_item' };
+  downloaded.inventory.views.push(stock);
   const managed = await download(org, newDir(), flags, { downloaded });
   assert.equal(managed.emitted.length, 1);
   assert.equal(managed.emitted[0].ok, true, JSON.stringify(managed.emitted) + managed.said);
   assert.equal(managed.asked[0].deferReport, true);
-  // The view is restored into views[], so only the chart is still reported as left out.
-  const left = notRoundTrippedSummary({ charts: downloaded.inventory.charts });
+  // The declared view and chart are restored into views[] and charts[], so only the stock view is still reported as left out.
+  const left = notRoundTrippedSummary({ views: [stock] });
   const warning = notRoundTrippedWarning(notRoundTrippedSummary(downloaded.inventory));
   assert.equal(managed.printed, '', 'runDownload printed nothing itself');
   assert.equal(managed.said.split(notRoundTrippedWarning(left)).length - 1, 1, `main printed the report once: ${managed.said}`);
-  assert.equal(managed.said.includes(warning), false, 'and never the report that still names the restored view');
+  assert.equal(managed.said.includes(warning), false, 'and never the report that still names what was restored');
   assert.deepEqual(managed.emitted[0].payload.notRoundTripped, left);
 
   const plain = await download(org, newDir(), [], { downloaded });
@@ -212,20 +217,23 @@ test('a view a stable build created is downloaded as the declaration that rebuil
   assert.equal(res.written.createIdentity, 'stable-v1');
   assert.equal(res.written.minimumPluginVersion, '2.21.0');
   assert.deepEqual(res.emitted[0].payload.managedViews, { restored: [VIEW_KEY], omitted: [] });
-  // The restored view leaves the report; the stock view and the chart stay in it.
-  const left = { views: [stock], charts: downloaded.inventory.charts };
+  // The restored view (and the restored chart) leave the report; the stock view stays in it.
+  const left = { views: [stock] };
   assert.deepEqual(res.emitted[0].payload.notRoundTripped, notRoundTrippedSummary(left));
   assert.equal(res.said.split(notRoundTrippedWarning(notRoundTrippedSummary(left))).length - 1, 1, res.said);
   assert.deepEqual(res.writes, [], 'the download writes nothing to the service');
 
   // A rebuild from the downloaded spec, through the build's own workspace and store, finds nothing to change: no view write, no publish.
+  // The rebuild runs without the publish phase, which republishes every table a spec declares a view on whatever changed
+  // (sdk-build.js phase 8): what is proved here is that the reconcile itself writes nothing and owes no publish.
+  const reconcileOnly = ['views', 'charts'];
   const mark = org.calls.length;
-  await build(org, dir, res.written);
+  await build(org, dir, res.written, reconcileOnly);
   assert.deepEqual(savedQueryWrites(org.calls.slice(mark)), []);
   assert.deepEqual(org.publishLog(mark), []);
   // And from a new folder with no store, the pin alone names the row, which already holds the declaration.
   const fresh = org.calls.length;
-  await build(org, newDir(), res.written);
+  await build(org, newDir(), res.written, reconcileOnly);
   assert.deepEqual(savedQueryWrites(org.calls.slice(fresh)), []);
   assert.deepEqual(org.publishLog(fresh), []);
 });
@@ -247,7 +255,8 @@ test('a managed view the restore cannot prove is left out of views[] with a fixe
   ];
   for (const [what, code, provoke] of cases) {
     await t.test(what, async () => {
-      const app = await builtApp();
+      // No chart, so a restored chart cannot opt the spec into stable ids either.
+      const app = await builtApp({ charts: [] });
       await provoke(app);
       const downloaded = plainDownload(app.built);
       const res = await download(app.org, newDir(), app.flags, { downloaded });
@@ -302,6 +311,133 @@ test('viewDeclarationFromLive refuses a view whose query a declaration cannot sa
   };
   for (const [what, over] of Object.entries(refused)) {
     const out = viewDeclarationFromLive(view(over), { key: 'contoso_item/V' });
+    assert.equal(out.declaration, undefined, what);
+    assert.equal(typeof out.unsupported, 'string', what);
+  }
+});
+// --- managed charts ----------------------------------------------------------------------------------------------------------------
+
+const { chartDeclarationFromLive } = require('../lib/declared-chart-io.js');
+const { readSavedQueryLayerRows } = require('../lib/savedquery-published.js');
+const CHART_KEY = 'contoso_item/By Kind';
+const chartWrites = (calls) => nonGet(calls).filter((c) => /savedqueryvisualization/i.test(c.path));
+const API = (org) => `${org.origin}/api/data/v9.2`;
+const chartRow = async (org, id) => (await org.httpClient.get(`${API(org)}/savedqueryvisualizations(${id})?$select=name,description,datadescription,presentationdescription`)).body;
+const publishTable = (org) => org.httpClient.post(`${API(org)}/PublishXml`, { ParameterXml: '<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>' });
+function editChartGroup(dir, edit) {
+  const file = storeFileOf(dir);
+  const store = JSON.parse(fs.readFileSync(file, 'utf8'));
+  edit(store.groups.find((g) => g.family === 'chart'));
+  fs.writeFileSync(file, JSON.stringify(store, null, 2));
+}
+// A maker edit the build then proved again: the store's confirmed publish names the saved layer as it is now, so only the restore's
+// own checks (not the publish proof) can refuse the chart.
+async function reproveChart({ org, dir }) {
+  const client = { get: (p) => org.httpClient.get(`${API(org)}${p}`) };
+  const store = JSON.parse(fs.readFileSync(storeFileOf(dir), 'utf8'));
+  const { savedSha256 } = await readSavedQueryLayerRows('chart', client, store.groups.find((g) => g.family === 'chart'));
+  editChartGroup(dir, (g) => { g.publication.desiredSha256 = savedSha256; });
+}
+
+test('a chart a stable build created is downloaded as the declaration that rebuilds it, and a rebuild through the store writes nothing, not even to a namesake', async () => {
+  const { org, dir, built, flags } = await builtApp({ views: [] });
+  const downloaded = plainDownload(built);
+  const res = await download(org, newDir(), flags, { downloaded });
+  assert.equal(res.emitted[0].ok, true, JSON.stringify(res.emitted) + res.said);
+  assert.deepEqual(res.written.charts, [{ entity: 'contoso_item', name: 'By Kind', reconcile: 'declared', chartType: 'Pie', groupBy: 'contoso_kind', measure: 'count' }]);
+  assert.equal(res.written.createIdentity, 'stable-v1');
+  assert.equal(res.written.minimumPluginVersion, '2.21.0');
+  assert.deepEqual(res.emitted[0].payload.managedCharts, { restored: [CHART_KEY], omitted: [] });
+  assert.equal(notRoundTrippedSummary({}), null);
+  assert.equal(res.emitted[0].payload.notRoundTripped, undefined, 'nothing is left to report');
+  assert.doesNotMatch(res.said, /managed chart|does not reconstruct/);
+  assert.deepEqual(res.writes, [], 'the download writes nothing to the service');
+
+  // A chart with the same name on the same table, made after the build: the store names the exact row, so it is never the one bound.
+  const before = await chartRow(org, built.chart);
+  const namesakeRes = await org.httpClient.post(`${API(org)}/savedqueryvisualizations`, {
+    name: 'By Kind', primaryentitytypecode: 'contoso_item', datadescription: before.datadescription, presentationdescription: before.presentationdescription,
+  });
+  assert.ok(namesakeRes.status < 300, JSON.stringify(namesakeRes));
+  const again = await download(org, newDir(), flags, { downloaded });
+  assert.deepEqual(again.written.charts, res.written.charts);
+  assert.deepEqual(again.emitted[0].payload.managedCharts, { restored: [CHART_KEY], omitted: [] });
+
+  const mark = org.calls.length;
+  await build(org, dir, res.written);
+  assert.deepEqual(chartWrites(org.calls.slice(mark)), [], 'no write to the chart or its namesake');
+  assert.deepEqual(org.publishLog(mark), []);
+  assert.deepEqual(await chartRow(org, built.chart), before, 'palette, colours and every other byte of the chart are as they were');
+});
+
+test('a managed chart the restore cannot prove is left out of charts[] with a fixed reason and stays in the report', async (t) => {
+  const patch = (org, id, body) => org.httpClient.patch(`${API(org)}/savedqueryvisualizations(${id})`, body);
+  const cases = [
+    ['edited since its build proved it', 'changed', async ({ org, built }) => { await patch(org, built.chart, { description: 'Edited in the maker portal' }); }],
+    ['renamed and the rename not published', 'unpublished-changes', async ({ org, built }) => { await patch(org, built.chart, { name: 'Renamed Kind' }); }],
+    ['renamed, published and proved again', 'key-mismatch', async (app) => {
+      await patch(app.org, app.built.chart, { name: 'Renamed Kind' });
+      await publishTable(app.org);
+      await reproveChart(app);
+    }],
+    ['given a filter the declaration cannot say, published and proved again', 'unsupported', async (app) => {
+      const { datadescription } = await chartRow(app.org, app.built.chart);
+      const filtered = datadescription.replace(/<\/entity>/, '<filter type="and"><condition attribute="contoso_code" operator="not-null" /></filter></entity>');
+      assert.notEqual(filtered, datadescription);
+      await patch(app.org, app.built.chart, { datadescription: filtered });
+      await publishTable(app.org);
+      await reproveChart(app);
+    }],
+    ['adopted, not created, by its build', 'not-created', async ({ dir }) => editChartGroup(dir, (g) => { g.records[0].origin = 'adopted'; })],
+    ['whose publish is still owed', 'publication-unsettled', async ({ dir }) => editChartGroup(dir, (g) => { g.publication.state = 'owed'; g.publication.dispatchToken = null; })],
+    ['deleted since', 'missing', async ({ org, built }) => {
+      org.intercept((c) => c.method === 'GET' && c.path.includes(`savedqueryvisualizations(${built.chart})`), () => ({ status: 404, headers: {}, body: { error: { code: '0x80040217', message: 'Does Not Exist' } } }));
+    }],
+  ];
+  for (const [what, code, provoke] of cases) {
+    await t.test(what, async () => {
+      const app = await builtApp({ views: [] });
+      await provoke(app);
+      const downloaded = plainDownload(app.built);
+      const res = await download(app.org, newDir(), app.flags, { downloaded });
+      assert.equal(res.emitted[0].ok, true, JSON.stringify(res.emitted) + res.said);
+      const omitted = res.emitted[0].payload.managedCharts.omitted;
+      assert.equal(omitted.length, 1, JSON.stringify(omitted));
+      assert.equal(omitted[0].code, code);
+      assert.equal(omitted[0].key, CHART_KEY);
+      assert.equal(omitted[0].id, app.built.chart);
+      assert.doesNotMatch(JSON.stringify(omitted), /Edited in the maker portal|Does Not Exist/, 'a reason never carries what the service said');
+      assert.match(res.said, new RegExp(`WARNING: managed chart ${CHART_KEY} was not restored: `));
+      assert.deepEqual(res.written.charts, []);
+      assert.equal(res.written.createIdentity, undefined, 'nothing restored, so the spec is not opted into stable ids');
+      assert.deepEqual(res.emitted[0].payload.notRoundTripped, notRoundTrippedSummary(downloaded.inventory));
+      assert.deepEqual(res.writes, [], 'the download writes nothing to the service');
+    });
+  }
+});
+
+test('chartDeclarationFromLive says only one count of the id by one column of the table, and refuses the rest', () => {
+  const chart = (over = {}) => ({
+    id: '00000000-0000-4000-8000-0000000000cc', name: 'By Kind', description: '', entityLogicalName: 'contoso_item', chartType: 'Column', isDefault: false,
+    series: [{ attribute: 'contoso_itemid', aggregate: 'count', alias: 'a' }], categories: [{ attribute: 'contoso_kind', alias: 'b' }],
+    presentation: { showLegend: true }, ...over,
+  });
+  assert.deepEqual(chartDeclarationFromLive(chart()).declaration, { entity: 'contoso_item', name: 'By Kind', reconcile: 'declared', chartType: 'Column', groupBy: 'contoso_kind', measure: 'count' });
+  assert.deepEqual(chartDeclarationFromLive(chart({ description: 'Items', presentation: { title: 'Kinds' } })).declaration,
+    { entity: 'contoso_item', name: 'By Kind', reconcile: 'declared', chartType: 'Column', groupBy: 'contoso_kind', measure: 'count', description: 'Items', title: 'Kinds' });
+  const refused = {
+    'two series': { series: [{ attribute: 'contoso_itemid', aggregate: 'count' }, { attribute: 'contoso_itemid', aggregate: 'countcolumn' }] },
+    'two categories': { categories: [{ attribute: 'contoso_kind' }, { attribute: 'contoso_code' }] },
+    'a category grouped by date': { categories: [{ attribute: 'createdon', dateGrouping: 'month' }] },
+    'a category on a joined table': { categories: [{ attribute: 'contoso_rank', relatedEntity: 'own' }] },
+    'a measure on a joined table': { series: [{ attribute: 'contoso_ownerid', aggregate: 'count', relatedEntity: 'own' }] },
+    'a measure of another column': { series: [{ attribute: 'contoso_code', aggregate: 'count' }] },
+    'a sum': { series: [{ attribute: 'contoso_itemid', aggregate: 'sum' }] },
+    'a chart type a declaration cannot say': { chartType: 'Radar' },
+    'no name': { name: '  ' },
+  };
+  for (const [what, over] of Object.entries(refused)) {
+    const out = chartDeclarationFromLive(chart(over));
     assert.equal(out.declaration, undefined, what);
     assert.equal(typeof out.unsupported, 'string', what);
   }

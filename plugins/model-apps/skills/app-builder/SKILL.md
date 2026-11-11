@@ -276,7 +276,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   publish it in Maker if it should stay, or undo it and save, then run the build again.
 - **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
   **new** app; never add it to an existing or downloaded spec (a managed download writes it back itself, only
-  with the declared views it restores). Tell the maker: declared views and charts
+  with the declared views and charts it restores). Tell the maker: declared views and charts
   get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;
   configuration items, custom APIs, environment variables, field security, duplicate rules and pages keep
   today's ids; and a local copy with an unsent edit stops the build (`create-completion-required`) —
@@ -984,7 +984,9 @@ not everything:**
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty
   (a declared form comes back only with `--include-managed --managed-manifest <store file>`; see
   **Declared form layouts**; so does a declared view a `createIdentity` build created and the store proves
-  unchanged, with its `viewId` and `createIdentity`, the rest named in `managedViews.omitted`). `commandStates[]` is never written either: a button's hidden / disabled
+  unchanged, with its `viewId` and `createIdentity`, the rest named in `managedViews.omitted`, and such a
+  declared chart, with no id (only a build from the same folder's store binds it), the rest named in
+  `managedCharts.omitted`). `commandStates[]` is never written either: a button's hidden / disabled
   state stays on the live row.
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.
