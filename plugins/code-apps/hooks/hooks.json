@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"try { const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root) throw new Error('Plugin root is not set'); require(path.resolve(root,'hooks','set-cli-origin.js')); } catch(error) { console.error('[code-apps] CLI attribution was not applied: '+error.message); }\"",
+            "command": "node -e 'try{const path=require(process.argv[1]);const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT;if(!root)throw new Error(process.argv[3]);process.argv[1]=undefined;require(path.resolve(root,process.argv[2]))}catch(error){console.error(process.argv[4]+error.message)}' node:path hooks/set-cli-origin.js 'Plugin root is not set' '[code-apps] CLI attribution was not applied: '",
             "timeout": 10
           }
         ]
