@@ -648,18 +648,19 @@ test('verify CLI still verifies a spec with two same-key declared views or chart
   assert.deepEqual([lenient.ok, lenient.warnings], [true, [sameKeyMessage('chart', 'By Kind')]]);
 });
 
-test('the maker guidance states that declared views, and declared charts, need their own names on a table, and that a viewId pin does not count', () => {
+test('the maker guidance states that declared charts, and declared views without their own keys, need their own names on a table, and that a viewId pin does not count', () => {
   // White space (line wrapping, a CRLF checkout) is not part of the rule.
   const read = (...parts) => fs.readFileSync(path.join(__dirname, '..', '..', ...parts), 'utf8').replace(/\s+/g, ' ');
   const reference = read('references', 'app-spec-schema-advanced.md');
   for (const rule of [
-    'two declared views on one table need different names, and so do two declared charts',
+    'two declared charts on one table need different names',
+    'and so do two declared views unless each has its own `key`',
     "a chart's name is compared with its outer spaces trimmed",
     'it does not tell two same-named declared views apart',
     'The same name on another table, or on a view and a chart, is fine.',
   ]) assert.ok(reference.includes(rule), `the advanced reference says: ${rule}`);
   const skill = read('skills', 'app-builder', 'SKILL.md');
-  assert.ok(skill.includes('Two declared views on one table need different names, and so do two declared charts: a `viewId` pin does not tell them apart'), 'the skill says it too');
+  assert.ok(skill.includes('Two declared charts on one table need different names, and so do two declared views unless each has its own `key`: a `viewId` pin does not tell them apart'), 'the skill says it too');
 });
 
 test('push preview: a declared view edit is not evaluated rather than previewed as unchanged; the apply writes it', async () => {

@@ -48,7 +48,7 @@ const { formEmbedsOfPage, verifyFormPageEmbed } = require('./form-page-embeds.js
 const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-reasons-keys.js');
 const { columnTypeChecks, declaredTableFlags, verifyTableFlags } = require('./schema-feature-contract.js');
 const { verifyDateBehaviors } = require('./date-behavior.js');
-const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
+const { isDeclaredView, declaredViewKey, compileViewIntent } = require('./view-reconcile.js');
 const { expectedQuickFindProjection } = require('./quick-find.js');
 const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
 const { usesCommandStates, normalizeCommandStates } = require('./command-state-contract.js');
@@ -332,9 +332,52 @@ async function verifySpec(spec, read, opts = {}) {
   const readChoices = typeof read.choiceAttributes === 'function'
     ? memoizeChoiceReader((entity) => read.choiceAttributes(entity, { languageCode: spec.languageCode }))
     : null;
-  plan.each(spec.views || [], async ({ add }, views) => {
+  // #845: which row is the view. A DECLARED view (views[].reconcile "declared") is found as the build finds it (lib/view-reconcile.js
+  // planViewReconcile): by the row its managed binding in this workspace (`opts.managedManifest`) records, else by its `viewId` pin,
+  // and only then by its name on its table. Two declared views may share one name on one table under two keys (views[].key; a managed
+  // download writes one for each view), and the build makes and binds a row for each: the name finds only one of them, so the other
+  // view's columns and filters used to be held to its namesake's row and failed. A row read by id must be that id, on the view's
+  // table; when it is not there the view is missing, and a view of the same name is not taken in its place. A binding with an attempt
+  // still pending, or a group record that is not usable, proves nothing yet: the view is unverified (its managed listing says why).
+  // A keyed view that shares its table and name with another view of the spec, and has neither binding nor pin, is found by its name
+  // as before, but which of the rows of that name it is cannot be told, so its content is unverified rather than held to a row that
+  // may be the other view's; a check that fails on such a view names its key. Every other view is read by its name, as it always was.
+  const viewGuid = (g) => {
+    const s = String(g || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) ? s : '';
+  };
+  const viewNameOn = (v) => `${String(v.entity).toLowerCase()}|${String(v.name).toLowerCase()}`;
+  const viewsByName = new Map();
+  for (const v of spec.views || []) if (v && v.entity != null) viewsByName.set(viewNameOn(v), (viewsByName.get(viewNameOn(v)) || 0) + 1);
+  const keyedNamesake = (v) => isDeclaredView(v) && typeof v.key === 'string' && !!v.key && viewsByName.get(viewNameOn(v)) > 1;
+  const viewIdentity = (v) => {
+    if (!isDeclaredView(v)) return null;
+    const key = declaredViewKey(v);
+    const pin = v.viewId === undefined ? '' : viewGuid(v.viewId);
+    const m = opts.managedManifest;
+    if (m && Array.isArray(m.groups)) {
+      const unsettled = (list) => (Array.isArray(list) ? list : []).find((x) => x && x.family === 'view' && x.key === key);
+      const open = unsettled(m.pending) || unsettled(m.invalid);
+      if (open) return { key, open: `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct` };
+      const g = m.groups.find((x) => x && x.family === 'view' && x.key === key);
+      if (g) {
+        const id = viewGuid(g.root && g.root.id);
+        if (!id) return { key, open: `its managed binding (${key}) records no view id — unverified, not proven correct` };
+        if (pin && pin !== id) return { key, conflict: `its viewId ${String(v.viewId)} is not the view its managed binding (${key}) is bound to (${id}); correct or remove the viewId` };
+        return { key, id, by: `the view its managed binding (${key}) is bound to (${id})` };
+      }
+    }
+    return pin ? { key, id: pin, by: `the view its viewId pins (${pin})` } : null;
+  };
+  plan.each(spec.views || [], async ({ add: addCheck, unverified }, views) => {
   for (const v of views) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
+    // Two views of one name on one table are told apart in what fails by their keys; every other view reports as before.
+    const namesakeKey = keyedNamesake(v) ? declaredViewKey(v) : '';
+    const add = (kind, name, present, detail) => addCheck(kind, name, present, namesakeKey && !present ? `${detail ? `${detail} ` : ''}(view key ${namesakeKey})` : detail);
+    const who = viewIdentity(v);
+    if (who && who.open) { unverified.push(`view:${viewName} (${who.open})`); continue; }
+    if (who && who.conflict) { add('view', viewName, false, who.conflict); continue; }
     // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
     // added or renamed column that never landed would otherwise pass an existence-only verify). It
     // cannot catch a column REMOVED from the spec: reconcileView is additive-union, so the column stays
@@ -343,12 +386,21 @@ async function verifySpec(spec, read, opts = {}) {
     let rows = [];
     let readError = null;
     try {
-      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+      rows = who
+        ? await read.queryRecords('savedquery', { select: ['savedqueryid', 'returnedtypecode', 'layoutxml', 'fetchxml'], filter: `savedqueryid eq ${who.id}`, top: 1 })
+        : await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
     } catch (error) {
       readError = error;
     }
-    const row = rows && rows[0];
-    add('view', viewName, row, readError ? String(readError.message || readError) : '');
+    let row = rows && rows[0];
+    // Read by id, the row is the view only when it IS that id (a reader that did not apply the filter answers another row), on the
+    // view's own table where the row says which.
+    if (who && row && (viewGuid(row.savedqueryid) !== who.id || (row.returnedtypecode != null && String(row.returnedtypecode).toLowerCase() !== String(v.entity).toLowerCase()))) row = undefined;
+    add('view', viewName, row, readError ? String(readError.message || readError) : who && !row ? `${who.by} was not found on its table; a view of the same name is not taken in its place` : '');
+    if (row && !who && namesakeKey) {
+      unverified.push(`view-content:${viewName} (several views on ${String(v.entity).toLowerCase()} have this name, and this one (${namesakeKey}) has neither a managed binding nor a viewId, so which of the rows it is cannot be told)`);
+      continue;
+    }
     const specCols = specViewColumnNames(v);
     if (row && row.layoutxml && specCols.length) {
       // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require

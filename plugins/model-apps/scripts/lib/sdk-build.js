@@ -7329,6 +7329,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
     (spec.views || []).forEach((v, i) => { result.created.views[`${v.entity.toLowerCase()}|${v.name}`] = ids[i]; });
+    // #845: two declared views may share one name on one table under two keys (views[].key), and the build makes both, but the
+    // `entity|name` entry above holds only the last of them. Each other one is kept under `entity|name|<key>`, so the record of the
+    // views this run made or reused holds both: the app's components and declared pins (lib/app-components.js) and the views the
+    // default-view enrichment leaves alone read every value. The `entity|name` entry is as before, so a lookup by name (a dashboard
+    // tile, a sub-grid, the per-table publish) is unchanged, and a spec without same-named views records exactly what it did.
+    (spec.views || []).forEach((v, i) => {
+      const at = `${v.entity.toLowerCase()}|${v.name}`;
+      if (ids[i] && isDeclaredView(v) && result.created.views[at] !== ids[i]) result.created.views[`${at}|${declaredViewKey(v)}`] = ids[i];
+    });
   }
 
   // 4a. Quick Find (entities[].quickFind, lib/quick-find.js): the columns the search box matches on are the table's Quick Find

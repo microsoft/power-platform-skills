@@ -741,6 +741,11 @@ spec's new columns.
   other joins) is kept. `viewId` pins the view to edit in one environment. A new declared view is
   created and published like any other view. The stock `Active <plural>` and `Inactive <plural>` views
   exist on every table, new ones included, so declaring one of them is an adoption (see Approvals).
+  `--verify` finds a declared view as the build does: by the row the workspace's managed bindings record
+  for its key, else by its `viewId`, else by its name on its table. So two declared views with one name on
+  one table, each with its own `key`, are each checked against their own row. With neither a binding nor a
+  `viewId`, the name cannot tell such a pair apart: both are checked as present, and their content is listed
+  as unverified.
 - **`charts[].reconcile: "declared"`** — the chart type, category, series and description follow the
   spec. `title` is written only to a chart whose stored layout already has a title; a new chart cannot
   store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).
@@ -775,8 +780,10 @@ unchanged and unbound without a stop (with `createIdentity`, the build warns and
 Adoption below). `--authorize overwrite:view:<table>/<name>` (or `chart:`)
 approves replacing changes made elsewhere, and `--allow-destructive` approves removing columns. Each key
 approves only the artifact of its family, so a view and a chart with the same name are approved
-separately. Within a family a key must name one artifact: two declared views on one table need different
-names, and so do two declared charts (a chart's name is compared with its outer spaces trimmed). A
+separately. Within a family a key must name one artifact: two declared charts on one table need different
+names (a chart's name is compared with its outer spaces trimmed), and so do two declared views unless each
+has its own `key` (a view's key is its `key` when set, else `<table>/<name>`, and its approval keys name it:
+`adopt:view:<key>`). A
 `viewId` pin chooses the row a view edits but is not part of its key, so it does not tell two
 same-named declared views apart. A build or a plan refuses such a pair before any work; teardown and
 verification only warn. The same name on another table, or on a view and a chart, is fine. The older `adopt:<table>/<name>` form still works when it names exactly one declared view or

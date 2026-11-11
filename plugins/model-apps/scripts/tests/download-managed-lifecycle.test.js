@@ -8,6 +8,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// The `pac` process boundary, for the test of the download's own connections reader (below): list-connections.js takes
+// spawnResultTree from process-runner.js as it loads, so the stand-in must be in place before anything loads it. It passes every
+// call through unless that test has set `pacStandIn`, and then answers only `pac` with it.
+const processRunner = require('../lib/process-runner.js');
+const realSpawnResultTree = processRunner.spawnResultTree;
+let pacStandIn = null;
+processRunner.spawnResultTree = (command, args, options) => (pacStandIn && command === 'pac' ? pacStandIn(args, options) : realSpawnResultTree(command, args, options));
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
 const { createLifecycleHarness, appUniqueName, publishesOf } = require('./helpers/lifecycle-harness.js');
 const { main } = require('../download-model-app.js');
@@ -357,4 +364,108 @@ test('a reference a page names is restored only when the connections prove it bo
   ];
   for (const [where, text] of written) for (const canary of Object.values(CONFIG_CANARY)) assert.ok(!text.includes(canary), `${canary} in ${where}`);
   assert.deepEqual(org.unexpected, []);
+});
+
+// The download's own connections reader — main's default when no `connections` is given, list-connections.js readConnections, the one a
+// build proves a binding with — and not a stand-in for it. Only its boundaries stand in: the Azure CLI tokens (dataverse-auth.js), the
+// SDK's connectivity client (maker-sdk.js createMakerSdk with `connectivity: true`) and the `pac` process. The SDK reads the connections;
+// when its route is refused (here, no Power Apps token) pac reads them, pinned to the download's environment; any other failure of the
+// read is no proof, so the reference is left out as `page-unready` and the download still succeeds. Two references one page names share
+// one read, and the connection id is in nothing the download writes or prints, even in a failed read's message.
+async function withDefaultReader(origin, run) {
+  const auth = require('../lib/dataverse-auth.js');
+  const makerSdk = require('../lib/maker-sdk.js');
+  const saved = { getAuthTokenAsync: auth.getAuthTokenAsync, getPowerAppsTokenAsync: auth.getPowerAppsTokenAsync, createMakerSdk: makerSdk.createMakerSdk };
+  const reader = { mode: 'sdk', listed: [], sdk: 0, pac: [] };
+  auth.getAuthTokenAsync = async () => 'synthetic-dataverse-token';
+  auth.getPowerAppsTokenAsync = async () => (reader.mode === 'pac' ? null : 'synthetic-power-apps-token');
+  makerSdk.createMakerSdk = (options) => {
+    if (!options || options.connectivity !== true) return saved.createMakerSdk(options);
+    assert.equal(options.instanceUrl, origin);
+    return {
+      listConnections: async () => {
+        reader.sdk += 1;
+        if (reader.mode === 'throw') throw new Error(`listing failed after ${CONFIG_CANARY.connection}`);
+        return reader.listed.map((c) => ({ ...c }));
+      },
+    };
+  };
+  pacStandIn = async (args, options) => {
+    reader.pac.push(args);
+    assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
+    return { status: 0, stdout: JSON.stringify(reader.listed), stderr: '' };
+  };
+  try {
+    return await run(reader);
+  } finally {
+    Object.assign(auth, { getAuthTokenAsync: saved.getAuthTokenAsync, getPowerAppsTokenAsync: saved.getPowerAppsTokenAsync });
+    makerSdk.createMakerSdk = saved.createMakerSdk;
+    pacStandIn = null;
+  }
+}
+const leaksConnection = (dl) => [dl.said, JSON.stringify(dl.payload), ...walkFiles(dl.out).map((f) => fs.readFileSync(f, 'latin1'))].some((text) => text.includes(CONFIG_CANARY.connection));
+
+test('with no connections given, a managed download reads them as a build does: through the SDK, through pac when the SDK route is refused, and any other failure leaves a page-named reference out', async () => {
+  const spec = configuredSpec();
+  spec.connectionReferences.push({ ...spec.connectionReferences[0], logicalName: 'contoso_sp2', name: 'SharePoint two' });
+  spec.pages = [{
+    key: 'preview', name: 'Preview', purpose: 'Preview items', dataSources: ['contoso_item'], source: { kind: 'tsx', codeFile: 'KitchenPage.tsx' },
+    connectorBindings: spec.connectionReferences.map((x) => ({ logicalName: x.logicalName, connectorId: SP })),
+  }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'preview', title: 'Preview' });
+  const usable = [{ connectionId: CONFIG_CANARY.connection, connectorId: SP, displayName: 'SharePoint' }];
+  const bindings = readDeploymentBindings({ ConnectionReferences: spec.connectionReferences.map((x) => ({ LogicalName: x.logicalName, ConnectionId: CONFIG_CANARY.connection, ConnectorId: SP })) }, spec);
+  assert.deepEqual(bindings.errors, []);
+  const app = await builtLifecycle(spec, { configuration: true }, { configurationBindings: bindings, connections: usable });
+  const { org } = app;
+  const origin = new URL(org.origin).origin;
+  const referenceRows = () => JSON.stringify([...org.rowsOf('connectionreferences').values()].map((r) => r.data));
+  const rowsBefore = referenceRows();
+  const left = (dl) => dl.payload.managedConnectionReferences.omitted.map((o) => [o.key, o.code]);
+  const unready = [['contoso_sp', 'page-unready'], ['contoso_sp2', 'page-unready']];
+  await withDefaultReader(origin, async (reader) => {
+    reader.listed = usable;
+    const viaSdk = await app.download({ managed: true });
+    assert.deepEqual(viaSdk.payload.managedConnectionReferences.restored, ['contoso_sp', 'contoso_sp2']);
+    assert.deepEqual([reader.sdk, reader.pac.length], [1, 0], 'one SDK read serves both references');
+    assert.equal(leaksConnection(viaSdk), false);
+
+    reader.mode = 'pac';
+    const viaPac = await app.download({ managed: true });
+    assert.deepEqual(viaPac.payload.managedConnectionReferences.restored, ['contoso_sp', 'contoso_sp2']);
+    assert.equal(reader.sdk, 1, 'a refused route makes no SDK read');
+    assert.deepEqual(reader.pac, [['connection', 'list', '--environment', origin]]);
+    assert.equal(leaksConnection(viaPac), false);
+
+    reader.mode = 'throw';
+    const failed = await app.download({ managed: true });
+    assert.deepEqual(failed.payload.managedConnectionReferences.restored, []);
+    assert.deepEqual(left(failed), unready);
+    assert.equal(failed.spec.connectionReferences, undefined);
+    assert.deepEqual([reader.sdk, reader.pac.length], [2, 1], 'one read for both references, and no pac for a failure that is not a refused route');
+    assert.equal(leaksConnection(failed), false);
+
+    reader.mode = 'sdk';
+    reader.listed = [];
+    const absent = await app.download({ managed: true });
+    assert.deepEqual(left(absent), unready);
+    assert.equal(reader.sdk, 3);
+
+    const plain = await app.download({ managed: false });
+    assert.equal(plain.spec.connectionReferences, undefined);
+    assert.deepEqual([reader.sdk, reader.pac.length], [3, 1], 'a plain download reads no connections');
+  });
+  assert.equal(referenceRows(), rowsBefore);
+  assert.deepEqual(org.unexpected, []);
+});
+
+test('the download reads no connections for references no page names', async () => {
+  const app = await builtLifecycle(configuredSpec(), { configuration: true });
+  await withDefaultReader(new URL(app.org.origin).origin, async (reader) => {
+    reader.mode = 'throw';
+    const managed = await app.download({ managed: true });
+    assert.deepEqual(managed.payload.managedConnectionReferences.restored, ['contoso_sp']);
+    assert.deepEqual([reader.sdk, reader.pac.length], [0, 0]);
+  });
+  assert.deepEqual(app.org.unexpected, []);
 });
