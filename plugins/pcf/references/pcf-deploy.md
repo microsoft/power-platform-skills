@@ -17,7 +17,7 @@ node "${PLUGIN_ROOT}/scripts/pcf-push.js" --project <dir> --env <url> (--solutio
 
 `pcf-push.js` wraps `pac pcf push --environment`; the skill obtains consent because `pac pcf push` publishes all pending customizations in the environment.
 
-When the push fails only because its final publish-all step was chosen as a SQL deadlock victim (SQL 1205), the import has already succeeded, so `pcf-push.js` sends that publish again (Web API `PublishAllXml`) at most twice, 5 and 15 seconds apart. It never re-runs `pac`, never re-sends after another error or a lost answer, and reports `publishAttempts` whenever it tried. See [pcf-troubleshooting.md](pcf-troubleshooting.md).
+When the push fails only because its final publish-all step was chosen as a SQL deadlock victim (SQL 1205), the import has already succeeded, so `pcf-push.js` sends that publish again (Web API `PublishAllXml`) at most twice, 5 and 15 seconds apart. It never re-runs `pac`, never re-sends after another error (a 401 or a 429 included) or a lost answer, sends each attempt exactly once, and reports `publishAttempts` (pac's attempt plus the publishes it actually sent) whenever it tried. See [pcf-troubleshooting.md](pcf-troubleshooting.md).
 
 Boolean switches are bare. Use `--allow-dev-bundle` only when intentionally deploying a development bundle, and `--no-verify` only when intentionally skipping registration read-back; valued forms such as `--allow-dev-bundle=false` and `--no-verify=false` fail as usage errors.
 

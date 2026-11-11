@@ -13,7 +13,7 @@ const { pcfprojBuildMode } = require('./lib/pcf-doctor.js');
 const { makePcfSdk, findCustomControl, solutionPrefix } = require('./lib/pcf-dataverse.js');
 const { parseManifest } = require('./lib/pcf-manifest.js');
 const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
-const { isPublishStepDeadlock, retryPublishAll } = require('./lib/pcf-publish-retry.js');
+const { isPublishStepDeadlock, publishOnceClient, retryPublishAll } = require('./lib/pcf-publish-retry.js');
 const { emitSkillCompleted } = require('./lib/telemetry/skill-completed.js');
 
 const USAGE = `Usage:
@@ -223,14 +223,18 @@ async function main(argv = process.argv.slice(2)) {
 
 // Re-sends the publish pac lost to a deadlock through the same SDK workspace the registration read-back uses. A client that cannot be
 // made (no token, for example) sent nothing, so it reports the reason with no re-send rather than throwing out of the push.
+// The client sends each PublishAllXml exactly once and counts the sends (publishOnceClient), so `retries` — and the publishAttempts
+// reported from it — is the number of publishes that reached the wire, never more re-sends hidden behind one loop turn.
 async function resendDeadlockedPublish(envOrigin, projectDir) {
   let sdk;
+  let wire;
   try {
-    sdk = await makePcfSdk(envOrigin, path.join(projectDir, '.maker-workspace', 'pcf-push'));
+    wire = publishOnceClient(envOrigin);
+    sdk = await makePcfSdk(envOrigin, path.join(projectDir, '.maker-workspace', 'pcf-push'), wire.httpClient);
   } catch (err) {
     return { published: false, retries: 0, outcome: 'error', reason: errorReason(err) };
   }
-  return retryPublishAll(sdk.dataverse);
+  return retryPublishAll(sdk.dataverse, { sends: wire.sends });
 }
 
 // What a push's result says, in the closed vocabulary of lib/telemetry/skill-completed.js — never a control, solution or environment name.
