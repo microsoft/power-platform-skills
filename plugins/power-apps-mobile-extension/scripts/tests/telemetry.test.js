@@ -541,9 +541,16 @@ test("registered hook commands honor hard-disable even with spaces in plugin roo
         : ["-c", command];
       const result = spawnSync(shell, args, {
         input: JSON.stringify({ prompt: `/${PLUGIN_NAME}:generate-ppmplugin`, tool_input: { skill: `${PLUGIN_NAME}:generate-ppmplugin` } }),
-        env: { PATH: path.dirname(process.execPath), [rootVariable]: copiedRoot, ...fixtureData.env },
-        timeout: 3000, encoding: "utf8",
+        env: {
+          PATH: path.dirname(process.execPath),
+          ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {}),
+          [rootVariable]: copiedRoot,
+          ...fixtureData.env,
+        },
+        // Include PowerShell cold-start time, as the shared hook-command suite does.
+        timeout: 15000, encoding: "utf8",
       });
+      assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, "");
       assert.equal(result.stderr, "");
