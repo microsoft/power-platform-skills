@@ -258,6 +258,17 @@ test('two proved views with one name on one table are both restored, each under 
   assert.equal(res.emitted[0].payload.notRoundTripped, undefined, 'both views were restored, so neither is reported as left out');
 });
 
+test('a managed download with no view or chart to restore or leave out adds no managedViews or managedCharts to its result', async () => {
+  // A valid store that holds no group: the build's own, emptied (a build with no view or chart keeps no store at all).
+  const { org, dir, built, flags } = await builtApp({ charts: [] });
+  const file = storeFileOf(dir);
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), groups: [] }, null, 2));
+  const res = await download(org, newDir(), flags, { downloaded: plainDownload(built) });
+  assert.equal(res.emitted[0].ok, true, JSON.stringify(res.emitted) + res.said);
+  assert.equal('managedViews' in res.emitted[0].payload, false, JSON.stringify(res.emitted[0].payload));
+  assert.equal('managedCharts' in res.emitted[0].payload, false, JSON.stringify(res.emitted[0].payload));
+});
+
 test('a managed view the restore cannot prove is left out of views[] with a fixed reason and stays in the report', async (t) => {
   const cases = [
     ['edited since its build proved it', 'changed', async ({ org, built }) => {

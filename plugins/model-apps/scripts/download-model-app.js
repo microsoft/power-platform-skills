@@ -4507,9 +4507,14 @@ async function main(deps = {}) {
     } catch (e) {
       if (e && e.code === 'UNSAFE_OUTPUT') io.stderr.write(`WARNING: ${e.message}\n`);
     }
+    // A view or chart restore says something only when it restored or left out a group: a store with neither family answers the
+    // result a managed download gave before views and charts were restored, byte for byte.
+    const familyResult = (r) => (r && (r.restored.length || r.omitted.length) ? { restored: r.restored.map((x) => x.key), omitted: r.omitted } : null);
+    const viewsResult = familyResult(managedViews);
+    const chartsResult = familyResult(managedCharts);
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedViews ? { managedViews: { restored: managedViews.restored.map((r) => r.key), omitted: managedViews.omitted } } : {}), ...(managedCharts ? { managedCharts: { restored: managedCharts.restored.map((r) => r.key), omitted: managedCharts.omitted } } : {}), ...(managedFragments ? { managedFragments } : {}), ...(fieldSecurityProfiles ? { fieldSecurityProfiles } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(viewsResult ? { managedViews: viewsResult } : {}), ...(chartsResult ? { managedCharts: chartsResult } : {}), ...(managedFragments ? { managedFragments } : {}), ...(fieldSecurityProfiles ? { fieldSecurityProfiles } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
