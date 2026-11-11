@@ -5,6 +5,23 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.26.0]
+
+- **Managed downloads restore more of an app:** declared views and charts, environment variables, connection references and Custom API scaffolds the binding store proves unchanged; values, defaults, secrets and connection ids are never written (#811).
+- The download names the field security profiles it leaves out, and `verify` holds a deployed chart's content to its definition.
+- A rebuild no longer republishes a table only because a declared view on it is unchanged.
+- **Downloads:** an `app-spec.json` that cannot be replaced is refused before `pages/` or the fragments file is written; a later spec-write failure says only what is known.
+- **Page scroll check:** values with `var()`, `env()`, `attr()`, an escape or a comment compare byte for byte; the fixed-`maxHeight` padding message says when the end may be cut off (#840).
+- **Shared pages:** an app whose sitemap is briefly unreadable is read again, the whole scan repeated after each wait, before the build halts.
+- **Genpage:** a promotion guide, and a pull mode that brings existing pages into the project unedited (#675).
+
+### Limits
+
+- Secret environment variables, implemented Custom APIs, other-language Custom API labels and duplicate rules are not downloaded.
+- The browser verify step, keyboard scrolling and bare-text scrollers remain open (#840).
+- A publish refused because another customization is running still stops after the ordinary retries.
+- Duplicate rules made before opting in still cannot be adopted; migrating one is a separate replacement outside the plugin (#807).
+- Shared genpage manifests and opt-in page tests (#669, #670), the eval graders (#672, #674) and durable command-bar state (#812) are not in this release.
 ## [2.25.0]
 
 - **Pages scroll:** the rules teach a bounded, scrolling page root; `check-griffel-styles.js` stops a generated page whose layout it can show would clip below the fold, or that it cannot read, with exit 3 and the fix (AB#6793599).
