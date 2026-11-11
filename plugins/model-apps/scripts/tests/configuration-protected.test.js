@@ -5,6 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { validateAppSpec, CONFIGURATION_IDENTITY_MIN_VERSION } = require('../lib/app-spec.js');
@@ -14,7 +15,7 @@ const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
 const { createDeferredManagedCreateGate } = require('../lib/managed-create-transport.js');
 const { createManagedCreateContext } = require('../lib/managed-create-context.js');
-const { openManagedBindings, managedManifestView } = require('../lib/managed-bindings.js');
+const { openManagedBindings, managedManifestView, storeFileName } = require('../lib/managed-bindings.js');
 const { readerFor } = require('../verify-model-app.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
 const { readDeploymentBindings, configurationAuthorizationKeys } = require('../lib/configuration-artifacts.js');
@@ -78,13 +79,16 @@ function configSpec(over = {}) {
 const api = (over) => ({ customApis: [{ ...API, ...over }] });
 const rule = (over) => ({ duplicateDetectionRules: [{ ...RULE, ...over }] });
 
-async function harness({ hookup = true, intercept } = {}) {
+// `storeSeed`: a binding store file as an earlier plugin version wrote it, put where this one opens it.
+async function harness({ hookup = true, intercept, storeSeed } = {}) {
   const org = createConfigOrg({ tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' }, ...(intercept ? { intercept } : {}) });
   const gate = createDeferredManagedCreateGate();
   const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: org.request, sleep: async () => {}, sendOnce: configurationSendOnce, workflowEffectGate: gate });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('cfg-protected-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: SOL });
   await sdk.initWorkspace();
-  const store = openManagedBindings({ workspaceDir: makeTempDir('cfg-protected-store-'), environment: org.origin, appUniqueName: 'contoso_configured', solutionUniqueName: SOL });
+  const storeDir = makeTempDir('cfg-protected-store-');
+  if (storeSeed) fs.writeFileSync(path.join(storeDir, storeFileName(storeSeed.environmentFingerprint, 'contoso_configured', SOL)), JSON.stringify(storeSeed, null, 2));
+  const store = openManagedBindings({ workspaceDir: storeDir, environment: org.origin, appUniqueName: 'contoso_configured', solutionUniqueName: SOL });
   gate.bind(store);
   const ctx = createManagedCreateContext({ store, notFoundCode: B.NOT_FOUND_CODE });
   const protectedConfiguration = hookup ? P.createProtectedConfiguration({ store, gate, ctx, apiBase: `${org.origin}/api/data/v9.0` }) : undefined;
@@ -2292,6 +2296,75 @@ test('a secret variable whose create answer was lost stays pending: never sent a
   assert.equal(back.halt.phase, 'preflight');
   assert.deepEqual(back.sent, []);
   assert.deepEqual(variableRows(h), landed);
+});
+
+// A create the service refused under 2.26.0, which recorded no refusal (no notStarted count): the attempt is pending in
+// phase "sending" and only its own ids can complete it, so corrected settings alone still stop the build. The stop names
+// the supported way out, with the exact approval: remove the item, run with the approval (nothing deleted or sent), restore
+// it. The stores were written by the 2.26.0 modules (fixtures/managed-bindings-2.26-refused-secret.json says how).
+const LEGACY = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'managed-bindings-2.26-refused-secret.json'), 'utf8'));
+async function legacyRefused(which) {
+  const seed = LEGACY[which];
+  const h = await harness({ storeSeed: seed.store });
+  for (const row of seed.landed) {
+    const put = await h.org.request({ url: `${h.org.origin}/api/data/v9.0${row.path}`, method: 'POST', headers: { 'Content-Type': 'application/json', 'MSCRM.SolutionUniqueName': SOL }, body: JSON.stringify(row.body) });
+    assert.ok(put.statusCode < 300, String(put.statusCode));
+  }
+  const token = seed.store.attempts[0].token;
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending.token, token, 'the 2.26.0 store is read as written');
+  return { h, token, flag: `retire:environmentVariable:contoso_key@${token}` };
+}
+function assertLegacyStop(out, flag) {
+  assert.equal(out.halt && out.halt.code, 'create-completion-required', out.halt && out.halt.message);
+  assert.equal(out.halt.phase, 'preflight');
+  assert.deepEqual(out.sent, [], 'corrected settings alone send nothing for it');
+  assert.match(out.halt.message, /remove this item \(and its deployment-settings entry\) from the App Spec/);
+  assert.ok(out.halt.message.includes(`--authorize '${flag}'`), out.halt.message);
+  assert.match(out.halt.message, /then restore them and run again/);
+  assert.ok(!out.halt.message.includes('vault-sample'));
+}
+
+test('a secret create a 2.26.0 build left pending after the service refused it stops with the way out; removing it, retiring it and restoring it creates it once', async () => {
+  const { h, flag } = await legacyRefused('refused');
+  assertLegacyStop(await pass(reopen(h), secretSpec(), secretValue()), flag);
+
+  const retired = await pass(retiring(h, [flag], noConfig()), noConfig());
+  assert.equal(retired.halt, null, retired.halt && `${retired.halt.code}: ${retired.halt.message}`);
+  assert.deepEqual(retired.sent, [], 'nothing is deleted or sent');
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending, null);
+
+  const restored = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(restored.halt, null, restored.halt && `${restored.halt.code}: ${restored.halt.message}`);
+  assert.equal(restored.sent.filter((r) => r.method === 'POST' && r.path.startsWith('/environmentvariabledefinitions')).length, 1, 'created once');
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.equal(committed(h, 'environmentVariable', 'contoso_key').records[0].id, LEGACY.refused.store.attempts[0].root.id, 'at the same derived id');
+  assert.deepEqual((await pass(reopen(h), secretSpec(), secretValue())).sent, []);
+});
+
+test('a 2.26.0 pending secret create whose definition row landed: after the retirement the restored item stops on that row, and deleting it lets the build create the item', async () => {
+  const { h, flag } = await legacyRefused('valueRefused');
+  assert.deepEqual(variableRows(h), [1, 0]);
+  assertLegacyStop(await pass(reopen(h), secretSpec(), secretValue()), flag);
+
+  const retired = await pass(retiring(h, [flag], noConfig()), noConfig());
+  assert.equal(retired.halt, null, retired.halt && `${retired.halt.code}: ${retired.halt.message}`);
+  assert.deepEqual(retired.sent, []);
+  assert.deepEqual(variableRows(h), [1, 0], 'the row it made stays');
+
+  const id = LEGACY.valueRefused.store.attempts[0].root.id;
+  const back = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(back.halt && back.halt.code, 'create-identity-conflict', back.halt && back.halt.message);
+  assert.equal(back.halt.phase, 'preflight');
+  assert.deepEqual(back.sent, []);
+  assert.ok(back.halt.message.includes(id), back.halt.message);
+  assert.match(back.halt.message, /delete that row in the environment, then run again/);
+
+  const gone = await h.org.request({ url: `${h.org.origin}/api/data/v9.0/environmentvariabledefinitions(${id})`, method: 'DELETE', headers: {} });
+  assert.ok(gone.statusCode < 300, String(gone.statusCode));
+  const done = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.equal(committed(h, 'environmentVariable', 'contoso_key').records[0].id, id);
 });
 
 test('the retire approval is read only for an item the App Spec no longer declares, and only in its exact shape', () => {

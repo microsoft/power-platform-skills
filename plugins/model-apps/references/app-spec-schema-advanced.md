@@ -1575,10 +1575,20 @@ the field builds exactly as before.
   item stops with `create-refused` and the code, the items after it still run, and nothing is left
   unfinished: correct the declaration or its deployment settings value and build again, or remove it
   from the App Spec. A refused edit of an existing row is different: it stays unfinished, as above.
+  A create an earlier plugin version (2.26.0 or before) left unfinished after such a refusal is not
+  released by corrected settings: that version did not record that nothing was created, so the build
+  stops with `create-completion-required` and sends nothing. The stop prints the way out with the exact
+  approval: remove the item (and its deployment settings entry) from the App Spec, run the build with
+  `--apply` and the printed `--authorize retire:<kind>:<key>@<attempt token>` (nothing is deleted or
+  sent), then restore the item and its settings and build again; it is then created once. If the
+  refused create had already made a row at the item's derived id (for example a variable's definition
+  whose value was refused), the restored build stops with `create-identity-conflict` naming that id:
+  delete that row in the environment if you do not need it, then build again.
 - **A create that did not finish.** The next build decides it from what the first one recorded before
   sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
   a create that is missing a row, its solution membership or the rule's initial state stops with
-  `create-completion-required` — complete it under the same ids, then build again. An initial
+  `create-completion-required` — complete it under the same ids, then build again (or let it go as
+  described for a refused create above). An initial
   publication that failed or whose answer was lost is never sent again by the build: publish the rule
   under the same id yourself. The one exception is a rule whose content was saved, but whose publish
   request the record proves was never sent (the run stopped first). The next build sends that publish

@@ -22,7 +22,9 @@
 //   create-identity-conflict                     a namesake or a row the binding does not hold stands where a row would go
 //                                                (a single namesake: the stop says whether it can be adopted, and prints the
 //                                                --authorize adopt:<kind>:<key>@<row id> approvals when it can)
-//   create-completion-required                   an earlier create is incomplete: complete it under the same ids
+//   create-completion-required                   an earlier create is incomplete: complete it under the same ids, or let it go
+//                                                (the stop prints how: remove the item, pass the --authorize retire:... it
+//                                                names, restore the item)
 //   create-ownership-required                    rows to bind: pass each printed --authorize adopt:<kind>:... after checking it
 //   configuration-row-not-found                  a bound row is gone (never replaced by a namesake)
 //   managed-pending-intent-changed               the declaration changed while its create was unfinished

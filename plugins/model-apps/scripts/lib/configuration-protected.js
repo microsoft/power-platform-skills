@@ -324,7 +324,9 @@ async function firstCreateVerdict(dataverse, planned, { exactId }) {
   const rootId = planned.plan.rows[0].id;
   if (exactId) {
     const read = await B.readConfigurationRow(dataverse, planned.kind, rootId);
-    if (read.state === 'present') return { id: rootId, code: CONFLICT_CODE, message: `the ${planned.kind} "${planned.key}" derived id ${rootId} is taken by a row no binding holds; it is not adopted, and no service changes were sent by this build` };
+    if (read.state === 'present') return { id: rootId, code: CONFLICT_CODE, message: `the ${planned.kind} "${planned.key}" derived id ${rootId} is taken by a row no binding holds; it is not adopted, and no service changes were sent by this build. `
+      + 'The id is derived from this item, so the row is most likely one an earlier build of it made (one whose unfinished attempt was retired with `--authorize retire:...`, say). '
+      + 'If it is, and you do not need it, delete that row in the environment, then run again' };
     if (read.state !== 'absent') return { id: rootId, code: UNVERIFIED_CODE, message: `the ${planned.kind} "${planned.key}" derived id ${rootId} could not be read; no service changes were sent by this build` };
   }
   const conflicts = await B.readConfigurationConflicts(dataverse, planned);
@@ -785,6 +787,27 @@ async function publishOnce(env, ctx, item) {
   return settled.verdict;
 }
 
+// The way out of a pending create that only its own ids can complete (#847). A create the service refused under an earlier
+// plugin version is pending in phase "sending" with no record that nothing started (2.26.0 kept none), so it reads as
+// possibly sent and a build given corrected settings still stops here: nothing proves its rows were never made, and an
+// absent read alone is not that proof. The maker can let it go instead, by the exact approval the debt sweep reads
+// (pendingSweep: the store stops tracking the attempt, nothing is deleted or sent). That approval is read only for an
+// item the App Spec no longer declares (build-model-app.js CONFIGURATION_RETIRE_DECLARED), so the stop names the whole
+// procedure, with the attempt's own token: remove the item, run with the approval, restore it. A row the attempt made
+// at its derived id then stops the restored create (firstCreateVerdict), which names that row. Never for an edit or an
+// adoption, which hold no create of their own to let go.
+function withWayOut(item, h) {
+  if (item.edit || item.adoption || !item.token || h.code !== COMPLETION_CODE) return h;
+  const flags = A.authorizeFlags([retireToken(h.kind, A.portKeyOf(h.kind, h.key), item.token)]);
+  return {
+    ...h,
+    message: `${h.message}. If it cannot be completed that way (a create an earlier plugin version left pending after the service refused it, say), `
+      + `stop tracking it instead: remove this item (and its deployment-settings entry) from the App Spec and run the build again with ${flags} `
+      + '(nothing is deleted or sent), then restore them and run again. If the attempt made a row at its derived id, that build stops with '
+      + 'create-identity-conflict naming the row',
+  };
+}
+
 const haltOf = (kind, key, verdict) => ({
   kind, key, ...(verdict.rows && verdict.rows[0] ? { id: verdict.rows[0].id } : {}), code: verdict.code || UNVERIFIED_CODE, message: verdict.message || `the ${kind} "${key}" could not be recovered`,
   ...(Array.isArray(verdict.approvals) && verdict.approvals.length ? { approvals: verdict.approvals.slice() } : {}),
@@ -884,7 +907,7 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
           // A saved rule create whose initial publication provably never left: resolve sends it once (unsentPublication).
           const owed = unsentPublication(ctx, item, rec);
           if (owed && owed.would.action === 'commit') continue;
-          halts.push(haltOf(kind, item.planned.key, owed ? owed.would : rec.verdict));
+          halts.push(withWayOut(item, haltOf(kind, item.planned.key, owed ? owed.would : rec.verdict)));
           continue;
         }
         // A complete edit settles read-only (resolve): nothing more is written for it, so it is not judged as an edit.
@@ -1034,7 +1057,7 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         const owed = unsentPublication(ctx, item, rec);
         if (owed) verdict = owed.would.action === 'commit' ? await publishOnce(await env(), ctx, item) : owed.would;
         if (verdict.action === 'commit') return { state: 'present', id: rootId };
-        const h = haltOf(kind, item.planned.key, verdict);
+        const h = withWayOut(item, haltOf(kind, item.planned.key, verdict));
         throw stop(h.code, h.message, h);
       } else if (adoptionAsked(ctx, kind, item.planned.key)) {
         const answer = adopted(kind, await adoptNamesake(await env(), ctx, item, key));
