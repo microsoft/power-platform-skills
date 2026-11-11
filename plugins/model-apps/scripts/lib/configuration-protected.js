@@ -1284,9 +1284,14 @@ function protectedVerifyPort({ spec, manifest, dataverse, solution, bindings }) 
  *     outside the plugin would be downloaded as if the build had made it so (its drift "refreshed away"). A connection reference's
  *     connected flag is not part of its declaration (which connection is private, and is bound per environment), so either value
  *     proves it.
- * Answers { ok: true, values, valueFilled } (`values`: how many value rows a variable has: 0 or 1; `valueFilled`: whether that row holds
- * a value the build's readiness counts, the only thing said of it) or { ok: false, code } with a code of
- * lib/managed-restore-report.js. It sends nothing and never throws for what it reads.
+ * Answers { ok: true, values, valueFilled, defaultSet, defaultFilled, valueSchemaSet, connected } or { ok: false, code } with a code of
+ * lib/managed-restore-report.js. Every flag is read from the rows this proof proved, in this one pass, so what a download says of an
+ * item's readiness is what it proved, never an earlier read a change in between could leave behind:
+ *   - `values`: how many value rows a variable has (0 or 1); `valueFilled`: whether that row holds a value the build's readiness
+ *     counts; `defaultSet` / `defaultFilled`: whether the variable's definition has a default, and one the readiness counts;
+ *     `valueSchemaSet`: whether it has a value schema;
+ *   - `connected`: whether a connection reference is bound to a connection.
+ * Only these flags leave: the values themselves are compared in memory and dropped. It sends nothing and never throws for what it reads.
  */
 async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, consumerRows }) {
   const failed = (error) => ({ ok: false, code: error && error.code === B.NOT_FOUND_CODE ? 'missing' : error && error.code === UNVERIFIED_CODE ? 'unread' : 'not-equivalent' });
@@ -1326,6 +1331,7 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
   // Whether a variable's value row holds a usable value, as the build's readiness reads it (configuration-artifacts.js observe:
   // a value that is neither null nor ''). Only this flag leaves here: the value itself is compared in memory and dropped.
   let valueFilled = false;
+  const root = { defaultSet: false, defaultFilled: false, valueSchemaSet: false, connected: false };
   const filledValue = (read) => !!read.decoded.private && read.decoded.private.present && read.decoded.private.value != null && read.decoded.private.value !== '';
   for (const r of planned.rows) {
     const c = committed.find((x) => sameRow(x, r));
@@ -1334,6 +1340,13 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
     if (read.state === 'absent') return { ok: false, code: 'missing' };
     if (read.state !== 'present') return { ok: false, code: 'unread' };
     if (r.kind === 'environmentVariableValue' && filledValue(read)) valueFilled = true;
+    if (r.kind === 'environmentVariable') {
+      const { defaultValue, valueSchema } = read.decoded.fields;
+      root.defaultSet = defaultValue != null;
+      root.defaultFilled = defaultValue != null && defaultValue !== '';
+      root.valueSchemaSet = valueSchema != null;
+    }
+    if (r.kind === 'connectionReference') root.connected = filledValue(read);
     const semantic = B.semanticOf(r.kind, read.decoded);
     const variants = r.kind === 'connectionReference' ? [{ ...semantic, connected: false }, { ...semantic, connected: true }] : [semantic];
     const proved = variants.some((s) => B.projectionOf(r.kind, r.expected, s, read.decoded.unmodelled, [], read.decoded.preserved) === c.projectionSha256);
@@ -1352,7 +1365,7 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
     if (read.state !== 'present') return { ok: false, code: 'unread' };
     if (filledValue(read)) valueFilled = true;
   }
-  return { ok: true, values, valueFilled };
+  return { ok: true, values, valueFilled, ...root };
 }
 
 module.exports = {

@@ -276,6 +276,47 @@ test('environment variables: a required variable whose value was cleared outside
   assert.deepEqual(org.writes(mark), []);
 });
 
+test('environment variables: a required variable whose default is removed while the download proves it is judged by what the proof read, and left out', async () => {
+  const intercept = {};
+  const need = { schemaName: 'contoso_Need', type: 'string', isRequired: true };
+  const { org, appDir, store } = await built({ lists: { environmentVariables: [need] }, settings: { EnvironmentVariables: [{ SchemaName: 'contoso_Need', Value: CANARY.need }] }, intercept });
+  // Ready by its default only: the value is cleared and a default set outside the plugin, then the default is removed between the
+  // download's first read of the definition and the proof's.
+  editRow(org, 'environmentvariablevalues', () => true, { value: null });
+  editRow(org, 'environmentvariabledefinitions', () => true, { defaultvalue: CANARY.default });
+  let reads = 0;
+  intercept.fn = (req) => {
+    if (req.method === 'GET' && /^\/environmentvariabledefinitions\(/.test(req.path) && ++reads === 2) editRow(org, 'environmentvariabledefinitions', () => true, { defaultvalue: null });
+    return undefined;
+  };
+  const dl = await download(org, store);
+  assert.ok(reads > 2, `the proof reads the definition again (${reads} reads)`);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.equal(dl.spec.environmentVariables, undefined);
+  assert.deepEqual(dl.payload.managedEnvironmentVariables.omitted.map((o) => [o.key, o.code]), [['contoso_need', 'required-value-missing']]);
+  assert.deepEqual(dl.writes, []);
+  assertNoCanary(dl);
+  intercept.fn = undefined;
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
+});
+
+test('environment variables: a required variable whose build gave it a default and no value is restored by its default alone, with the default named as withheld', async () => {
+  const need = { schemaName: 'contoso_Need', type: 'string', isRequired: true };
+  const { org, appDir, store } = await built({ lists: { environmentVariables: [{ ...need, defaultValue: CANARY.default }] }, settings: {} });
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.environmentVariables, [{ ...need, name: 'contoso_Need' }]);
+  assert.deepEqual(dl.payload.managedEnvironmentVariables.withheld.map((w) => [w.key, w.fields]), [['contoso_need', ['defaultValue']]]);
+  assertNoCanary(dl);
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
+});
+
 const REFERENCES = [
   { logicalName: 'contoso_sp', connectorId: SP, name: 'SharePoint', description: 'Lists' },
   { logicalName: 'contoso_sql', connectorId: SQL },
@@ -345,6 +386,32 @@ test('connection references: one a page names with no connection, one changed by
   assert.deepEqual(dl.writes, []);
   assert.deepEqual(org.unexpected, []);
   assertNoCanary(dl);
+});
+
+test('connection references: one a page names whose connection is removed while the download proves it is judged by what the proof read, and left out', async () => {
+  const intercept = {};
+  const { org, store } = await built({ lists: { connectionReferences: [REFERENCES[1]] }, settings: {}, intercept });
+  editRow(org, 'connectionreferences', () => true, { connectionid: CANARY.connection });
+  let reads = 0;
+  intercept.fn = (req) => {
+    if (req.method === 'GET' && /^\/connectionreferences\(/.test(req.path) && ++reads === 2) editRow(org, 'connectionreferences', () => true, { connectionid: null });
+    return undefined;
+  };
+  const page = { key: 'orders', name: 'Orders', source: { kind: 'tsx', codeFile: 'pages/orders.tsx' }, connectorBindings: [{ logicalName: 'contoso_sql' }] };
+  const spec = { ...JSON.parse(JSON.stringify(PLAIN)), pages: [page] };
+  const direct = await restoreDirect(org, store, spec);
+  assert.ok(reads > 2, `the proof reads the reference again (${reads} reads)`);
+  assert.equal(spec.connectionReferences, undefined);
+  assert.deepEqual(direct.connectionReferences.omitted.map((o) => [o.key, o.code]), [['contoso_sql', 'page-unready']]);
+  assert.deepEqual(direct.connectionReferences.withheld, []);
+  // Why: the rebuild's page gate (configuration-build.js beforePages) passes the spec as downloaded, and stops it with the reference
+  // declared, now that it has no connection.
+  const { createConfigurationRuntime } = require('../lib/configuration-build.js');
+  const sdk = await downloadSdk(org);
+  const gate = (s) => createConfigurationRuntime({ spec: s, sdk, appUniqueName: APP }).beforePages(s.pages);
+  await gate(spec);
+  intercept.fn = undefined;
+  await assert.rejects(gate({ ...spec, configurationIdentity: 'stable-v1', minimumPluginVersion: '2.25.0', connectionReferences: [{ logicalName: 'contoso_sql', connectorId: SQL }] }), /CONNECTION_REFERENCE_UNBOUND/);
 });
 
 // A request parameter and a response property may share a unique name: they are two children, in two slots.

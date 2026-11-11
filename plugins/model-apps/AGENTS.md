@@ -1800,7 +1800,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   so a store without configuration answers as before). A secret variable is `secret-withheld`; a data source whose
   parent is not restored at exactly the row it names is `parent-unproven`; a second value row is
   `multiple-values`; a required variable with neither a default nor a value (`restoreProofOf` answers only
-  `valueFilled`, never the value) is `required-value-missing`, since its rebuild would stop as incomplete.
+  flags, never the value) is `required-value-missing`, since its rebuild would stop as incomplete. Readiness and
+  the withheld parts (a default, a value schema, a value, a connection) are the flags `restoreProofOf` reads from
+  the rows it proved, in the same pass, never the earlier read the declaration came from: a default or a
+  connection removed between the two is judged as the proof saw it.
   `managedConnectionReferences` restores a reference's logical name, connector and labels; its connection is
   withheld (a rebuild without settings keeps it), a custom-connector reference is `unsupported-dependency`, and
   an unbound one a page names is `page-unready` (the build's page gate, `configuration-build.js namedByPages`

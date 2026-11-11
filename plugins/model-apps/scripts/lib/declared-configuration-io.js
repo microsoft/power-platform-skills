@@ -97,18 +97,17 @@ async function declareVariable({ root, key, parentOf }) {
     if (!parent) leave('parent-unproven');
     declaration.parentSchemaName = parent;
   }
-  const fields = [];
-  if (f.defaultValue != null) fields.push('defaultValue');
-  if (f.valueSchema != null) fields.push('valueSchema');
-  return { declaration, fields };
+  return { declaration, fields: [] };
 }
 
 // A required variable with neither a default nor a value stops a rebuild as incomplete (configuration-artifacts.js
 // runConfigurationStep, ENVIRONMENT_VARIABLE_VALUE_MISSING), so its declaration would not rebuild as no change; a download never fills
 // one in to force a pass. The test is the build's own (observe): a default or a current value that is neither null nor ''.
-function acceptVariable({ root, declaration, proof }) {
-  const d = root.decoded.fields.defaultValue;
-  if (declaration.isRequired && (d == null || d === '') && !proof.valueFilled) leave('required-value-missing');
+// Readiness, and the parts named as withheld, come from the proof's own read (restoreProofOf), never from the read the declaration
+// was built from: a default removed between the two would otherwise be counted from a row the proof no longer saw.
+function acceptVariable({ declaration, proof }) {
+  if (declaration.isRequired && !proof.defaultFilled && !proof.valueFilled) leave('required-value-missing');
+  return [...(proof.defaultSet ? ['defaultValue'] : []), ...(proof.valueSchemaSet ? ['valueSchema'] : [])];
 }
 
 // The pages of the downloaded spec that name each reference and Custom API, as the build's page gate reads them
@@ -121,22 +120,25 @@ function namedByPagesOf(spec) {
 // and per environment: it is never written, and a rebuild without settings keeps the binding the row has. A reference to a custom
 // connector names that connector by this environment's row id, which a download cannot prove is the same connector anywhere a
 // rebuild runs, so it is left out rather than converted to a shared connector.
-async function declareReference({ root, key, ctx }) {
+async function declareReference({ root, key }) {
   const { fields: f, unmodelled, preserved } = root.decoded;
   if (lc(f.logicalName) !== key) leave('changed');
   if (f.customConnectorId != null) leave('unsupported-dependency');
-  const connected = !!root.decoded.private && root.decoded.private.present && root.decoded.private.value != null && root.decoded.private.value !== '';
-  // A page that names a reference makes a rebuild gate the page on its binding (CONNECTION_REFERENCE_UNBOUND): a plain download
-  // declares no reference, so its page is written without that gate, and a restore must not turn that into a stop.
-  if (!connected && ctx.pagesNaming.references.has(key)) leave('page-unready');
   const declaration = { logicalName: f.logicalName, connectorId: f.connectorId };
   if (f.name != null) declaration.name = f.name;
   if (f.description != null) declaration.description = f.description;
   const fields = [];
-  if (connected) fields.push('connection');
   if (unmodelled.length) fields.push('connectionParameters');
   if (preserved.promptingbehavior !== undefined) fields.push('promptingBehavior');
   return { declaration, fields };
+}
+
+// A page that names a reference makes a rebuild gate the page on its binding (CONNECTION_REFERENCE_UNBOUND): a plain download declares
+// no reference, so its page is written without that gate, and a restore must not turn that into a stop. Whether it is bound is what the
+// proof's own read found (restoreProofOf), never the earlier read: a connection removed between the two must not count.
+function acceptReference({ key, proof, ctx }) {
+  if (!proof.connected && ctx.pagesNaming.references.has(key)) leave('page-unready');
+  return proof.connected ? ['connection'] : [];
 }
 
 // Whether the environment provisions more than one language, read once per download and only when a Custom API is restored:
@@ -229,7 +231,7 @@ async function declareRule({ root, key, children }) {
 
 const FAMILIES = Object.freeze({
   environmentVariable: { label: 'environment variable', declare: declareVariable, accept: acceptVariable },
-  connectionReference: { label: 'connection reference', declare: declareReference },
+  connectionReference: { label: 'connection reference', declare: declareReference, accept: acceptReference },
   customApi: { label: 'Custom API', declare: declareCustomApi },
   duplicateRule: { label: 'duplicate rule', declare: declareRule },
 });
@@ -269,13 +271,13 @@ async function restoreItem(ctx, kind, key, group, extra = {}) {
     spec: candidate, manifest: ctx.manifest, dataverse: ctx.dataverse, solution: ctx.solutionUniqueName, kind, key: declaration[field], consumerRows: consumer.rows,
   });
   if (!proof.ok) leave(proof.code);
-  if (FAMILIES[kind].accept) FAMILIES[kind].accept({ root, declaration, proof });
+  const accepted = FAMILIES[kind].accept ? FAMILIES[kind].accept({ key, declaration, proof, ctx }) : [];
   const check = ctx.validate(candidate);
   if (!check || !check.ok) leave('invalid-in-spec');
   spec[list] = candidate[list];
   spec.configurationIdentity = candidate.configurationIdentity;
   spec.minimumPluginVersion = candidate.minimumPluginVersion;
-  return { id, declaration, fields: [...fields, ...(proof.values ? ['value'] : [])] };
+  return { id, declaration, fields: [...accepted, ...fields, ...(proof.values ? ['value'] : [])] };
 }
 
 /**
