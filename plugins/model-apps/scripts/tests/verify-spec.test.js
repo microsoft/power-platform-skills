@@ -3992,10 +3992,18 @@ test('verifySpec charts: a declared title and an explicit description are held; 
   assert.strictEqual(legacyTitle.checks.some((c) => c.kind === 'chart-title'), false);
 });
 
-test('verifySpec charts: an id-only reader checks presence only; a missing chart stays missing; a namesake pair is present but unverified', async () => {
+test('verifySpec charts: an id-only reader proves presence and names the content unverified; a missing chart stays missing; a namesake pair is present but unverified', async () => {
   const idOnly = await verifySpec(chartSpec({ reconcile: 'declared', title: 'T' }), { sitemapXml: async () => '<SiteMap/>', queryRecords: async () => [{ savedqueryvisualizationid: 'c-1' }] });
+  assert.strictEqual(idOnly.ok, true, 'content that was not read is unverified, not missing');
   assert.deepStrictEqual(chartChecks(idOnly).map((c) => [c.kind, c.present]), [['chart', true]]);
-  assert.strictEqual(idOnly.unverified, undefined);
+  assert.deepStrictEqual(idOnly.unverified, ['chart-type', 'chart-data', 'chart-title'].map((k) => `${k}:C (the read does not carry the chart\u2019s content)`));
+  // A declared description is still held when the row carries one, with or without the XML columns.
+  const described = (description) => verifySpec(chartSpec({ reconcile: 'declared', description: 'Counts open rows' }), { sitemapXml: async () => '<SiteMap/>', queryRecords: async () => [{ savedqueryvisualizationid: 'c-1', description }] });
+  assert.deepStrictEqual(chartChecks(await described('Counts open rows')).map((c) => [c.kind, c.present]), [['chart', true], ['chart-description', true]]);
+  assert.ok((await described('Something else')).missing.some((m) => m.kind === 'chart-description'));
+  const twoIdOnly = await verifySpec(chartSpec({}), { sitemapXml: async () => '<SiteMap/>', queryRecords: async () => [{ savedqueryvisualizationid: 'c-1' }, { savedqueryvisualizationid: 'c-2' }] });
+  assert.strictEqual(twoIdOnly.ok, true);
+  assert.deepStrictEqual(twoIdOnly.unverified, ['chart-data:C (several charts on new_o have this name, so which one the spec describes is not known)']);
   const gone = await verifySpec(chartSpec({}), chartReader([]));
   assert.deepStrictEqual(gone.missing.map((m) => m.kind), ['chart']);
   const two = await verifySpec(chartSpec({}), chartReader([chartRow(), chartRow({ savedqueryvisualizationid: 'c-2', presentationdescription: chartPres({ type: 'Pie' }) })]));

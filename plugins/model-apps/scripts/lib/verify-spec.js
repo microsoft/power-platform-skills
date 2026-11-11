@@ -432,7 +432,7 @@ async function verifySpec(spec, read, opts = {}) {
   // its name on its table, as before; two charts of that name are not told apart, so the chart is present but its content unverified.
   //
   // The content columns are read only for the comparison; a reader that answers without them (the eval's synthesized reader answers
-  // ids) has its charts checked for presence only, as a view's filters are checked only against a row that carries its fetchxml.
+  // ids) has its charts checked for presence, and their content named unverified — a row's presence never stands in for what it holds.
   const chartGuid = (g) => String(g || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
   const chartSelect = ['savedqueryvisualizationid', 'primaryentitytypecode', 'name', 'description', 'datadescription', 'presentationdescription'];
   const chartBinding = (ch) => {
@@ -476,9 +476,7 @@ async function verifySpec(spec, read, opts = {}) {
     add('chart', ch.name, row);
     if (!row) continue;
     if (ambiguous) {
-      if (Object.prototype.hasOwnProperty.call(row, 'datadescription') || Object.prototype.hasOwnProperty.call(row, 'presentationdescription')) {
-        unverified.push(`chart-data:${ch.name} (several charts on ${entity} have this name, so which one the spec describes is not known)`);
-      }
+      unverified.push(`chart-data:${ch.name} (several charts on ${entity} have this name, so which one the spec describes is not known)`);
       continue;
     }
     const content = chartContentChecks(ch, row, ch.name);

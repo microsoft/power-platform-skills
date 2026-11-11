@@ -300,8 +300,9 @@ const LEGACY_NOTE = ' (the chart is not reconcile: "declared", so a rebuild leav
 
 /**
  * The content checks of one present chart. `row` is the published row verify read, with datadescription, presentationdescription and
- * description. A row that carries neither XML column comes from a reader that does not read chart content: nothing is checked, as a view's
- * filters are not checked against a row without fetchxml.
+ * description. A row that carries neither XML column comes from a reader that does not read chart content: its presence is not proof of
+ * what it holds, so its type and query (and a declared title) are named unverified, never passed, and a declared description is still
+ * checked when the row carries one.
  * @param {object} ch the spec chart
  * @param {object} row the deployed row
  * @param {string} name the name the chart's checks report under (the presence check's)
@@ -311,7 +312,7 @@ function chartContentChecks(ch, row, name) {
   const checks = [];
   const unverified = [];
   const has = (k) => !!row && Object.prototype.hasOwnProperty.call(row, k);
-  if (!has('datadescription') && !has('presentationdescription')) return { checks, unverified };
+  const contentFree = !has('datadescription') && !has('presentationdescription');
   const want = expectedChart(ch);
   if (want.unverifiable) {
     unverified.push(`chart-data:${name} (${want.unverifiable})`);
@@ -322,9 +323,17 @@ function chartContentChecks(ch, row, name) {
     else if (v.verdict === 'fail') checks.push({ kind, name, present: false, detail: `${v.detail}${legacyNote && !want.declared ? LEGACY_NOTE : ''}` });
     else unverified.push(`${kind}:${name} (${v.detail})`);
   };
-  const presentation = chartPresentationVerdicts(has('presentationdescription') ? row.presentationdescription : undefined, want);
-  report('chart-type', presentation.type, true);
-  report('chart-data', chartDataVerdict(has('datadescription') ? row.datadescription : undefined, want), true);
+  let presentation = {};
+  if (contentFree) {
+    const notRead = { verdict: 'unverified', detail: 'the read does not carry the chart\u2019s content' };
+    report('chart-type', notRead);
+    report('chart-data', notRead);
+    if (want.title !== undefined) presentation = { title: notRead };
+  } else {
+    presentation = chartPresentationVerdicts(has('presentationdescription') ? row.presentationdescription : undefined, want);
+    report('chart-type', presentation.type, true);
+    report('chart-data', chartDataVerdict(has('datadescription') ? row.datadescription : undefined, want), true);
+  }
   if (want.description !== undefined) {
     if (!has('description')) report('chart-description', { verdict: 'unverified', detail: 'the read does not carry the chart\u2019s description' });
     else {
