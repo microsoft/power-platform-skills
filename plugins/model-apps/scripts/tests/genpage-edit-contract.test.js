@@ -110,3 +110,59 @@ test('apply phase limits mutations to the verified Requested Changes section', (
   assert.match(phase5, /only[\s\S]{0,120}## Requested Changes/i);
   assert.match(flow.split('## Edit Phase 4: Plan the Edit')[1]?.split('## Edit Phase 5:')[0] || '', /page[\s\S]{0,120}change list/i);
 });
+
+// Pull-to-repo and promotion (#675). Pulling pages into the project is a read of the environment and a local write, so
+// the section must name no command that changes the environment, and an unattended pull must neither guess a page nor
+// replace a local copy. The promotion guide is loaded only for a promote request and cites Microsoft Learn for its rules.
+const readText = (...parts) => fs.readFileSync(path.join(PLUGIN, ...parts), 'utf8').replace(/\r\n/g, '\n');
+const pullSection = () => {
+  const skill = readText('skills', 'genpage', 'SKILL.md');
+  const at = skill.indexOf('\n## Pulling existing pages into the project\n');
+  assert.ok(at >= 0, 'SKILL.md has the pull section');
+  const rest = skill.slice(at + 1);
+  const next = rest.indexOf('\n## ', 3);
+  return next < 0 ? rest : rest.slice(0, next);
+};
+
+test('pulling pages into the project reads the environment and never writes to it', () => {
+  const pull = pullSection();
+  const scripts = [...pull.matchAll(/scripts\/([\w-]+\.js)"(?: (\w+))?/g)].map((m) => `${m[1]} ${m[2] || ''}`.trim());
+  assert.deepEqual([...new Set(scripts)].sort(), [
+    'apps.js list', 'check-auth.js', 'genpage-base.js record', 'genpage.js download', 'genpage.js list',
+  ]);
+  assert.doesNotMatch(pull, /genpage-upload|add-to-app|remove-from-app|genpage\.js" delete|--overwrite-deployed/);
+  assert.match(pull, /`<project-root>\/<page-id>\/`/);
+  assert.match(pull, /--page-id '<page-id1>,<page-id2>' --output-directory '<project-root>'/);
+});
+
+test('an unattended pull neither guesses a page nor replaces a local copy', () => {
+  const pull = pullSection().replace(/\s+/g, ' ');
+  assert.match(pull, /\*\*Unattended:\*\* pull only the pages `\$ARGUMENTS` names by id or exact name; when none is named, or a name matches more than one page, halt/);
+  assert.match(pull, /\*\*Unattended:\*\* skip it and report it\. A pull never replaces local work nobody agreed to replace\./);
+  assert.match(pull, /Do not edit, build or upload the pulled pages in this request\./);
+});
+
+test('the promotion guide is read only for a promote request and cites Microsoft Learn for each rule', () => {
+  const skill = readText('skills', 'genpage', 'SKILL.md');
+  const loads = skill.split('\n').filter((line) => line.includes('promotion.md'));
+  assert.equal(loads.length, 2);
+  for (const line of loads) assert.match(line, /promot|\[promotion\.md\]/i);
+  assert.match(skill.replace(/\s+/g, ' '), /\*\*Promote pages to another environment\*\*[^.]*: read \[promotion\.md\]\(\.\.\/\.\.\/references\/promotion\.md\) and follow it\. Read it only for such a request\./);
+
+  const guide = readText('references', 'promotion.md');
+  const sections = guide.split(/\n(?=## \d+\. )/).slice(1);
+  assert.equal(sections.length, 10);
+  const titles = sections.map((s) => s.split('\n')[0]);
+  for (const s of sections.slice(0, 9)) {
+    assert.match(s, /\(https:\/\/learn\.microsoft\.com\/[^)\s]+\)/, `${s.split('\n')[0]} cites Microsoft Learn`);
+  }
+  assert.deepEqual(titles.map((t) => t.replace(/^## \d+\. /, '')), [
+    'Package the pages first', 'Managed or unmanaged', 'Full solution or patch', 'Version number', 'Dependency check',
+    'Import order', 'Connections and the import', 'Rollback', 'What travels with a page, and what does not', 'Record the promotion',
+  ]);
+  assert.match(guide, /The full authoring conversation: in the target, the designer shows only the first prompt and the published code/);
+  // Guidance, not automation: the guide exports nothing and changes no page; the one write it runs is the documented import.
+  assert.doesNotMatch(guide, /genpage-upload\.js|pac solution export|ExportSolution/);
+  const writes = [...guide.matchAll(/scripts\/([\w-]+\.js)"(?: (\w+))?/g)].map((m) => `${m[1]} ${m[2] || ''}`.trim());
+  assert.deepEqual([...new Set(writes)].sort(), ['genpage.js types', 'list-custom-apis.js', 'list-tables.js', 'solution-settings.js import', 'solution-settings.js template']);
+});

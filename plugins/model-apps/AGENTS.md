@@ -3930,6 +3930,7 @@ references/                    ← Shared reference docs
   agent-interaction-contract.md ← Agents are headless: no AskUserQuestion / plan mode inside a Task subagent; a declared tool is not always a delivered one (task tracking is optional)
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
+  promotion.md                 ← Promoting pages to another environment: managed or unmanaged, full solution or patch, version, dependency check, import order, rollback, what travels with a page (loaded only on a promote request)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
@@ -4132,7 +4133,7 @@ skills/
   app-builder/
     SKILL.md                   ← intent → model-driven app (create + edit)
   genpage/
-    SKILL.md                   ← Orchestrator skill (delegates to agents)
+    SKILL.md                   ← Orchestrator skill (delegates to agents); also the pull-to-repo mode (download pages without editing them)
     edit-flow.md               ← Edit flow steps (loaded only on edit path)
     verify-flow.md             ← Playwright browser verification (loaded only when user opts in)
   report-issue/                ← Bug-report skill (bundled shared workflow)
