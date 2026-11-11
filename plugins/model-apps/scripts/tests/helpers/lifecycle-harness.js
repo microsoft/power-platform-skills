@@ -13,7 +13,11 @@ const { createMakerSdk: createVendoredMakerSdk, createNodeWorkspaceStorage } = r
 const { buildModelApp } = require('../../build-model-app.js');
 const { verifySpec } = require('../../lib/verify-spec.js');
 const { readerFor } = require('../../verify-model-app.js');
-const { appUniqueName } = require('../../lib/sdk-build.js');
+const { appUniqueName, protectedConfigurationInPlay } = require('../../lib/sdk-build.js');
+const { createDeferredManagedCreateGate, composeWriteGates } = require('../../lib/managed-create-transport.js');
+const { configurationSendOnce } = require('../../lib/configuration-transport.js');
+const { usesConfiguration } = require('../../lib/configuration-artifacts.js');
+const { connectionRowFromSdk } = require('../../list-connections.js');
 const { makeGenpageSdk } = require('../../lib/genpage-sdk.js');
 const { PHASES } = require('../../lib/stages.js');
 const download = require('../../download-model-app.js');
@@ -154,12 +158,24 @@ function createLifecycleHarness(org, root, { createMakerSdk = createVendoredMake
   // `gated`: the build's client sends through the publication barrier the build is handed, as build-model-app.js makeSdk wires the
   // CLI's (publicationBarrier.gateRequest). A stable build (createIdentity "stable-v1") needs it: it refuses to send a create it cannot
   // tie to its draft at the transport (creates-stable-build.js). Off by default, so every other lifecycle test sends what it always did.
-  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, sdkWorkspace = workspace, languageCode = 1033, gated = false } = {}) {
+  // `configurationBindings`: what build-model-app.js main reads from --deployment-settings (readDeploymentBindings) — the current values
+  // and connections the build binds to the spec's protected configuration. None by default, as a build without the option has none.
+  // Protected configuration in play (configurationIdentity "stable-v1", or a store still holding its state) is wired as main wires it:
+  // the deferred managed-create gate screens the build client's writes and is handed to the build, which binds it to its store, and a
+  // configuration write is sent once (configurationSendOnce). `connections` are the environment's connections the build may bind a
+  // reference to ({ connectionId, connectorId, displayName }, as the SDK lists them); the strict org does not model the listing.
+  // A build without protected configuration gets neither, so it sends what it always did.
+  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, sdkWorkspace = workspace, languageCode = 1033, gated = false, configurationBindings, connections } = {}) {
     const publicationBarrier = gated ? createPublicationBarrier() : undefined;
-    const buildClient = gated ? createAzHttpClient(org.origin, { getToken: () => TOKEN, request: publicationBarrier.gateRequest(org.request), sleep: async () => {} }) : client;
+    const managedCreateGate = apply && protectedConfigurationInPlay(spec, { apply: true, env: org.origin, workspaceDir: workspace, appDir: appFolder }) ? createDeferredManagedCreateGate() : null;
+    const configured = managedCreateGate ? { sendOnce: (method, url) => configurationSendOnce(method, url), workflowEffectGate: composeWriteGates(managedCreateGate) } : {};
+    const buildClient = gated || managedCreateGate ? createAzHttpClient(org.origin, { getToken: () => TOKEN, request: publicationBarrier ? publicationBarrier.gateRequest(org.request) : org.request, sleep: async () => {}, ...configured }) : client;
     const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(throwaway('sdk-')), instanceUrl: org.origin, httpClient: buildClient, solutionUniqueName: spec.solution.uniqueName, languageCode });
     const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(apply ? sdkWorkspace : throwaway('preview-')), instanceUrl: org.origin, httpClient: buildClient, languageCode, createRecovery: 'adoptExact' });
     await provisionSdk.initWorkspace();
+    // As makeSdk does: the configuration items are written through the solution-scoped instance, whose throwaway workspace the SDK
+    // refuses until it is prepared (a local write only). Only for a spec that declares them, so no other build changes.
+    if (usesConfiguration(spec)) await sdk.initWorkspace();
     const genpage = makeGenpageSdk(org.origin, { httpClient: client });
     const warnings = [];
     const log = [];
@@ -167,8 +183,9 @@ function createLifecycleHarness(org, root, { createMakerSdk = createVendoredMake
       const result = await buildModelApp(spec, {
         apply, publish, sampleData, verify, phases: PHASES, profile: apply ? 'deploy' : 'plan', nonInteractive: false,
         appDir: appFolder, env: org.origin, workspaceDir: workspace, preResolvedLanguageCode: apply ? languageCode : undefined,
+        ...(configurationBindings ? { configurationBindings } : {}),
       }, {
-        sdk, provisionSdk, genpage, ...(publicationBarrier ? { publicationBarrier } : {}), sleep: async () => {}, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => org.pageServer.languages.provisioned,
+        sdk, provisionSdk, genpage, ...(publicationBarrier ? { publicationBarrier } : {}), ...(managedCreateGate ? { managedCreateGate } : {}), ...(connections ? { connections: async () => connections.map(connectionRowFromSdk) } : {}), sleep: async () => {}, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => org.pageServer.languages.provisioned,
         verify: async (s, o) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir: workspace }), o),
       });
       return { result, warnings, log };
