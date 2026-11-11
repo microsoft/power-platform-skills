@@ -488,9 +488,10 @@ test('duplicate rules: each proved rule is restored with its state and every con
   assert.ok(again.specBytes.equals(dl.specBytes), 'a second download writes the same bytes');
 });
 
-test('duplicate rules: swapped, added or deleted conditions and a publish still running leave the rule out; a rule unpublished by hand comes back as it is now', async () => {
+test('duplicate rules: swapped, edited, added or deleted conditions and a publish still running leave the rule out; a rule unpublished by hand comes back as it is now', async () => {
   const two = (key, name) => ({ key, name, entity: 'contact', conditions: [condition('a', 'emailaddress1'), condition('b', 'telephone1')] });
-  const rules = [two('swap', 'Swapped'), two('extra', 'Extra'), two('gone', 'Gone'), two('busy', 'Busy'), two('hand', 'By hand')];
+  const rules = [two('swap', 'Swapped'), two('extra', 'Extra'), two('gone', 'Gone'), two('busy', 'Busy'), two('hand', 'By hand'),
+    { key: 'param', name: 'Param', entity: 'contact', status: 'unpublished', conditions: [condition('p', 'lastname', { match: 'firstCharacters', characters: 3 })] }];
   const { org, appDir, store } = await built({ lists: { duplicateDetectionRules: rules }, settings: {}, tables: CONTACT });
   // The two criteria of one rule swapped between their bound rows: as a set the rule matches the same records, but neither row is the
   // condition the build bound under its key.
@@ -503,6 +504,8 @@ test('duplicate rules: swapped, added or deleted conditions and a publish still 
   org.sets.get('duplicateruleconditions').delete(conditionsOf(org, 'Gone')[0][0]);
   editRow(org, 'duplicaterules', (r) => r.name === 'Busy', { statecode: 0, statuscode: 1 });
   editRow(org, 'duplicaterules', (r) => r.name === 'By hand', { statecode: 0, statuscode: 0 });
+  // The character count is the one condition field an environment lets a maker edit in place, and a rebuild does not check it.
+  editRow(org, 'duplicateruleconditions', (r) => r._regardingobjectid_value === ruleId(org, 'Param'), { operatorparam: 5 });
 
   const dl = await download(org, store);
   assert.equal(dl.ok, true, JSON.stringify(dl.payload));
@@ -513,6 +516,7 @@ test('duplicate rules: swapped, added or deleted conditions and a publish still 
     ['busy', 'Busy', 'state-unsettled', reason('state-unsettled')],
     ['extra', 'Extra', 'changed', reason('changed')],
     ['gone', 'Gone', 'missing', reason('missing')],
+    ['param', 'Param', 'changed', reason('changed')],
     ['swap', 'Swapped', 'changed', reason('changed')],
   ]);
   assert.match(dl.said, /WARNING: managed duplicate rule busy was not restored: a publish of it is still running.*It is left out of duplicateDetectionRules\[\]/);
