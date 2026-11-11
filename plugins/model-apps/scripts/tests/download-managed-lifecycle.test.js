@@ -13,6 +13,7 @@ const { createLifecycleHarness, appUniqueName, publishesOf } = require('./helper
 const { main } = require('../download-model-app.js');
 const { PREFIX } = require('../lib/managed-bindings.js');
 const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+const { validateAppSpec } = require('../lib/app-spec.js');
 
 const roots = [];
 test.after(() => { for (const d of roots) fs.rmSync(d, { recursive: true, force: true }); });
@@ -241,6 +242,10 @@ test('protected configuration restored by a managed download rebuilds completely
   const managed = await app.download({ managed: true });
   assert.deepEqual(folderBytes(harness.appDir), before, 'the download leaves the binding store and the build folder as they were');
   assert.deepEqual(org.writeCounts(fromDownload), {}, 'the download sends no write');
+  // The file reloads as an App Spec the build accepts, as a maker's next build reads it.
+  const reloaded = validateAppSpec(JSON.parse(fs.readFileSync(path.join(managed.out, 'app-spec.json'), 'utf8')), { profile: 'deploy' });
+  assert.deepEqual(reloaded.errors, []);
+  assert.equal(reloaded.ok, true);
   assert.equal(managed.spec.configurationIdentity, 'stable-v1');
   assert.equal(managed.spec.minimumPluginVersion, '2.25.0');
   assert.deepEqual(managed.spec.environmentVariables, [
