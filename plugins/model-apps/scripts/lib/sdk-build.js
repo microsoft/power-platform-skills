@@ -134,7 +134,7 @@ const { manifestResourceName, buildManifest, serializeManifest, parseManifestBas
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated; fetchAppsForPages is the only way to prove a generative page is not
 // shared, since a genpage has no appmodulecomponent row (grounded live probe).
-const { fetchSitemap, navigationProof, fetchAppsForPages, rereadUnreadableApps } = require('./sitemap-pages.js');
+const { fetchSitemap, navigationProof, fetchAppsForPages, rescanWhileUnreadable } = require('./sitemap-pages.js');
 // Structural nav oracle — used in the §9 PAGEREF_ scan/parity/resolve pipeline. `extractNavTargets`
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity, strayPageRefs, describePageRefLocations, pageRefAdvice, frontierNote, PAGEREF_RULE } = require('./pageref-resolver.js');
@@ -9713,13 +9713,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // A page this run created is left out of both: it was not there to share when the build began. Each scan reads every other app's
       // navigation (three requests per other app, and three more), so it is taken those two times, not before every page.
       //
-      // An app whose navigation could not be read is read again before either scan that halts gives up on it (`reread`): ONLY those apps, three times over 35 s
-      // (sitemap-pages.js rereadUnreadableApps). Another build or maker changing that app leaves it unreadable for a moment, and the halt then asked a maker to fix an app
-      // that was not broken. One that is read now and holds the page halts as shared; one still unreadable halts as before. The report after the writes only warns, so
-      // it does not wait. `opts.sleep` is the tests' seam for the waits.
-      const scanShared = async (ids, { reread = false } = {}) => {
-        const first = await fetchAppsForPages(provision, ids, { excludeAppUnique: appUnique });
-        const scan = reread ? await rereadUnreadableApps(provision, ids, first, { excludeAppUnique: appUnique }, typeof opts.sleep === 'function' ? { sleep: opts.sleep } : {}) : first;
+      // A scan that halts takes the WHOLE scan again before it gives up on an app it could not read (`rescan`): every app afresh, three more times over 35 s
+      // (sitemap-pages.js rescanWhileUnreadable). Another build or maker changing that app leaves it unreadable for a moment, and the halt then asked a maker to fix an app
+      // that was not broken. The answer is the last complete scan, never the apps read again merged into an older one: another app read before the wait may take the
+      // page in during it, and the scan right before the first write in place is there to stop exactly that. One read now that holds the page halts as shared; one still
+      // unreadable halts as before. The report after the writes only warns, so it does not wait. `opts.sleep` is the tests' seam for the waits.
+      const scanShared = async (ids, { rescan = false } = {}) => {
+        const scan = rescan
+          ? await rescanWhileUnreadable(provision, ids, { excludeAppUnique: appUnique }, typeof opts.sleep === 'function' ? { sleep: opts.sleep } : {})
+          : await fetchAppsForPages(provision, ids, { excludeAppUnique: appUnique });
         if (!scan.ok || scan.unreadable.length) return { scan, entries: null };
         // An app that has the page ONLY in its saved navigation is named as such: nothing in its published app shows the page yet. `detach` is the command that takes the page out of each app that holds it.
         return { scan, entries: Array.from(scan.byId, ([id, apps]) => {
@@ -9733,9 +9735,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }) };
       };
       const sharedPagesNow = async (ids) => {
-        const { scan, entries } = await scanShared(ids, { reread: true });
+        const { scan, entries } = await scanShared(ids, { rescan: true });
         if (!scan.ok) throw new BuildHalt(`could not scan the environment for pages shared across apps (${scan.error}) — refusing to UPDATE a page without verifying it is not shared. Re-run to retry.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, ...retryFrom(scan.cause, scan.error) });
-        // `retry: NEVER`: an app whose sitemap cannot be read even after the re-reads is one a maker has to fix or remove; the message names other apps, which are theirs.
+        // `retry: NEVER`: an app whose sitemap cannot be read even after the scans again is one a maker has to fix or remove; the message names other apps, which are theirs.
         if (scan.unreadable.length) throw new BuildHalt(`cannot verify pages are not shared across apps — ${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')}); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, retry: RETRY.NEVER });
         return entries;
       };

@@ -522,13 +522,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   sitemap from the same saved-layer read, by the sitemap id its layer's sitemap component names (one more read per such app); it has
   no published layer, so whatever it holds is saved only. That list is fail-closed like the others: a read that fails halts as
   `pages-shared-check-failed`, and a never-published app whose layer, sitemap component or saved sitemap cannot be read is listed
-  unreadable. Before either scan that halts gives up on an unreadable app it reads **only those apps** again, after 5 s, 10 s
-  and 20 s (`rereadUnreadableApps`): another build or maker changing an app leaves it unreadable for a moment, and the build
-  halted on that while the same build run minutes later passed. An app read again joins the scan, so one that holds the page
-  halts as `pages-shared-across-apps`; one still unreadable after the last wait halts with the same words as before; a re-read
-  that fails as a whole teaches nothing; and an app whose stored sitemap is `malformed` is not read again, since only an edit
-  of that app changes it. A scan with nothing unreadable sends no extra request. The report after the writes only warns, so it
-  does not wait. A never-published app whose component read **succeeds** and finds **no sitemap component** is not yet shown to have no navigation: the
+  unreadable. Before either scan that halts gives up on an unreadable app it takes the **whole scan** again, every app read
+  afresh, after 5 s, 10 s and 20 s (`rescanWhileUnreadable`): another build or maker changing an app leaves it unreadable for a
+  moment, and the build halted on that while the same build run minutes later passed. The answer is always the **last complete
+  scan**, never the apps read again merged into an older one: another app read before a wait can take the page in during it,
+  and a merged answer let the scan right before the first write in place pass it. So one that holds the page halts as
+  `pages-shared-across-apps`; one still unreadable after the last wait halts with the same words as before; a scan that fails
+  as a whole after a wait is waited out the same way, and the last one halts as a failed scan; and an app whose stored sitemap
+  is `malformed` is not waited for, since only an edit of that app changes it. A scan with nothing unreadable sends no extra
+  request. The report after the writes only warns, so it does not wait. A never-published app whose component read **succeeds** and finds **no sitemap component** is not yet shown to have no navigation: the
   vendored SDK prefers a type-62 sitemap component on the app's **current** `appmoduleidunique` layer, but falls back to
   `sitemapnameunique eq '<the app's unique name>'` when that component is absent and no other live app pins the candidate. So such an app may
   hold a sitemap, and pages in it, that no component row links to it. `ensureSitemapInSolution` (sdk-build.js) still uses the naming convention

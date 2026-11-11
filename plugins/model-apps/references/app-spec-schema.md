@@ -1909,8 +1909,8 @@ custom control), but the spec validator emits a warning.
     takes the page out of its navigation and publishes it (everything that app has saved goes live with it; the page itself stays) — or detach it in Maker.
     `--allow-destructive` does NOT bypass this halt. If another app's
     saved navigation, or the list of apps that were never published, cannot be read, the build halts as `pages-shared-check-failed` instead of assuming it is clear.
-    An app whose navigation cannot be read is read again three times over about 35 seconds first (another build changing it can leave it unreadable for a moment);
-    one still unreadable then halts the build, and one that turns out to hold the page halts it as `pages-shared-across-apps`.
+    When an app's navigation cannot be read, the whole check is run again, every app read afresh, three times over about 35 seconds first (another build changing
+    that app can leave it unreadable for a moment); an app still unreadable then halts the build, and one that turns out to hold the page halts it as `pages-shared-across-apps`.
     The check runs again right before the first page is updated in place, so a page another app takes in while the build runs halts it there too ("became shared
     across apps while this build ran"); one taken in while the pages upload is written by then, and is reported after the uploads as a warning naming the app.
   - `pages-removed` — a page is live in the env but no longer in the spec. Re-add it to the spec, or

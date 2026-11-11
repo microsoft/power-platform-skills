@@ -326,15 +326,12 @@ function currentSitemapRows(rows) {
 //        apps that hold it ONLY in the saved layer), unreadable: appUniqueName[], appIds: Map<lower-cased appUniqueName, appmoduleid> (the id of every app
 //        the scan read, from the rows it lists the apps from: a command that acts on an app takes its id, and this scan keys its answers by unique name),
 //        unreadableReasons: Map<lower-cased appUniqueName, reason> (why each unreadable app could not be read: fetchSitemap's reasons, so `malformed` is stored XML that fails the structural check) } | { ok:false, error, cause? } (`cause`: the error of the read that failed, when it was one)
-// `onlyApps` (unique names) narrows the scan to those apps: the same lists are read, and only the named apps' navigation (rereadUnreadableApps).
 async function fetchAppsForPages(sdk, pageIds, opts) {
   opts = opts || {};
   const want = new Set(Array.from(pageIds || []).map((x) => String(x).toLowerCase()));
   if (!want.size) return { ok: true, byId: new Map(), savedOnly: new Map(), unreadable: [], appIds: new Map(), unreadableReasons: new Map() };
 
   const self = opts.excludeAppUnique ? String(opts.excludeAppUnique).toLowerCase() : null;
-  const only = opts.onlyApps ? new Set(Array.from(opts.onlyApps, (name) => String(name).toLowerCase())) : null;
-  const picked = (name) => !only || only.has(String(name).toLowerCase());
   let apps;
   try {
     apps = await sdk.queryRecords('appmodule', {
@@ -365,14 +362,13 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
 
   // Skip self up-front so a single-app env reads no sitemaps at all (minimal work).
   const others = (apps || []).filter(
-    (a) => a && a.uniquename && String(a.uniquename).toLowerCase() !== self && picked(a.uniquename),
+    (a) => a && a.uniquename && String(a.uniquename).toLowerCase() !== self,
   );
 
   // The apps that were never published, which the list above cannot show. One small request, and in a single-app environment normally the only one beyond the
   // list itself. Fail-closed as a whole, before any sitemap is read: with no answer there is no knowing which apps the scan has not seen.
-  const listed = await draftOnlyApps(sdk, apps, self);
-  if (!listed.ok) return withCause({ ok: false, error: `could not list the apps that have never been published: ${listed.reason}` }, listed.cause);
-  const drafts = only ? { ...listed, apps: listed.apps.filter((d) => picked(d.name)), unreadable: listed.unreadable.filter(picked) } : listed;
+  const drafts = await draftOnlyApps(sdk, apps, self);
+  if (!drafts.ok) return withCause({ ok: false, error: `could not list the apps that have never been published: ${drafts.reason}` }, drafts.cause);
 
   const byId     = new Map();
   const savedOnly = new Map();
@@ -470,49 +466,32 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   return { ok: true, byId, savedOnly, unreadable, appIds, unreadableReasons };
 }
 
-// The waits before each re-read of the apps a scan could not read (rereadUnreadableApps): three re-reads over 35 s. An app is unreadable for a moment while another build or
-// maker is changing it — its sitemap component not added yet, its saved layer answering with two current rows, a read the service throttled — and a build halted on that, while
-// the same build run minutes later passed. Waiting longer would turn every truly broken app into a stall of minutes before the halt it ends in anyway, so the budget is modest.
-const UNREADABLE_REREAD_WAITS_MS = Object.freeze([5000, 10000, 20000]);
+// The waits before each fresh scan of a scan that left an app unreadable (rescanWhileUnreadable): three more scans over 35 s. An app is unreadable for a moment while another
+// build or maker is changing it — its sitemap component not added yet, its saved layer answering with two current rows, a read the service throttled — and a build halted on
+// that, while the same build run minutes later passed. Waiting longer would turn every truly broken app into a stall of minutes before the halt it ends in anyway, so the
+// budget is modest.
+const UNREADABLE_RESCAN_WAITS_MS = Object.freeze([5000, 10000, 20000]);
 
-// `scan` (fetchAppsForPages) with the apps it could not read read again, ONLY those, after each wait in `waits`, until none is left to read again. Fail-closed throughout:
-//   - an app that is read now joins the scan with every page it holds, so one that shares a page is reported as shared, as a first read would have;
-//   - an app still unreadable after the last wait stays in `unreadable`, in the order the first scan named it, so the caller halts with the words it would have used;
-//   - a re-read that fails as a whole teaches nothing, and the apps stay unreadable;
-//   - an app whose stored sitemap is `malformed` (present XML that fails the structural check) is not read again: only an edit of that app changes it, which is what the
-//     caller's halt asks for, and waiting for it spends the budget for nothing. A failed read, an empty or missing sitemap, or an ambiguous layer is read again.
-// A scan with nothing unreadable (or one that failed) is answered as it came, with no request and no wait.
-async function rereadUnreadableApps(sdk, pageIds, scan, opts, { waits = UNREADABLE_REREAD_WAITS_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
-  if (!scan || !scan.ok || !scan.unreadable.length) return scan;
-  const key = (name) => String(name).toLowerCase();
-  const reasons = new Map(scan.unreadableReasons || []);
-  const permanent = (name) => reasons.get(key(name)) === 'malformed';
-  const byId = new Map(Array.from(scan.byId, ([id, names]) => [id, [...names]]));
-  const savedOnly = new Map(Array.from(scan.savedOnly || [], ([id, names]) => [id, [...names]]));
-  const appIds = new Map(scan.appIds || []);
-  const merge = (into, from) => {
-    for (const [id, names] of from) {
-      const arr = into.get(id) || [];
-      for (const name of names) if (!arr.includes(name)) arr.push(name);
-      into.set(id, arr);
-    }
-  };
-  let pending = scan.unreadable.filter((name) => !permanent(name));
+// fetchAppsForPages, taken again WHOLE — every app read afresh, the ones it could read included — after each wait in `waits`, while the last scan left an app unreadable that
+// a wait could change. The answer is always ONE complete scan, the last one taken: the caller decides on it exactly as on a first scan, so no app's answer is older than the
+// wait. Reading again only the apps that were unreadable and keeping the others' answers from before the wait let a write go ahead past an app that took the page in during
+// the wait, which the scan right before the first write in place exists to stop. Fail-closed throughout:
+//   - an app read now that holds the page is in `byId`, so the caller halts as shared;
+//   - an app still unreadable after the last wait is in `unreadable`, so the caller halts with the words it would have used;
+//   - a scan that fails as a whole after a wait is waited out like an unreadable app, and the last one is answered as it came (the caller halts on it);
+//   - an app whose stored sitemap is `malformed` (present XML that fails the structural check) is not waited for: only an edit of that app changes it, which is what the
+//     caller's halt asks for. A scan whose every unreadable app is malformed is answered as it came. A failed read, an empty or missing sitemap, or an ambiguous layer is waited for.
+// A first scan that failed as a whole, or with nothing unreadable, is answered as it came: no wait and no request beyond it.
+async function rescanWhileUnreadable(sdk, pageIds, opts, { waits = UNREADABLE_RESCAN_WAITS_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  let scan = await fetchAppsForPages(sdk, pageIds, opts);
+  if (!scan.ok) return scan;
+  const waitable = (s) => !s.ok || s.unreadable.some((name) => (s.unreadableReasons && s.unreadableReasons.get(String(name).toLowerCase())) !== 'malformed');
   for (const ms of waits) {
-    if (!pending.length) break;
+    if (!waitable(scan)) break;
     await sleep(ms);
-    const again = await fetchAppsForPages(sdk, pageIds, { ...(opts || {}), onlyApps: pending });
-    if (!again.ok) continue;
-    merge(byId, again.byId);
-    merge(savedOnly, again.savedOnly || new Map());
-    for (const [name, id] of again.appIds || []) if (!appIds.has(name)) appIds.set(name, id);
-    const still = new Set(again.unreadable.map(key));
-    for (const [name, reason] of again.unreadableReasons || []) reasons.set(name, reason);
-    pending = pending.filter((name) => still.has(key(name)) && !permanent(name));
+    scan = await fetchAppsForPages(sdk, pageIds, opts);
   }
-  const left = new Set(pending.map(key));
-  const unreadable = scan.unreadable.filter((name) => left.has(key(name)) || permanent(name));
-  return { ...scan, byId, savedOnly, appIds, unreadable, unreadableReasons: new Map(Array.from(reasons).filter(([name]) => unreadable.some((n) => key(n) === name))) };
+  return scan;
 }
 
 // The apps that have NEVER been published. The published `appmodule` list that fetchAppsForPages walks has no row for an app that is only saved in the maker, though its navigation is
@@ -746,4 +725,4 @@ async function sitemapLinkedByName(sdk, appUnique) {
   return navigationOf(layer);
 }
 
-module.exports = { liveNavEntries, navigationGenPageIds, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, navigationProof, fetchAppsForPages, rereadUnreadableApps, UNREADABLE_REREAD_WAITS_MS, XML_TAG, XML_ATTR };
+module.exports = { liveNavEntries, navigationGenPageIds, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, navigationProof, fetchAppsForPages, rescanWhileUnreadable, UNREADABLE_RESCAN_WAITS_MS, XML_TAG, XML_ATTR };
