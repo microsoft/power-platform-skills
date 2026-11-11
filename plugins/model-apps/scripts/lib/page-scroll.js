@@ -1065,6 +1065,7 @@ function derived(value, pair) {
 
 function sameEffect(key, a, b) {
   if (key === 'flexGrow') return Number(a) > 0 === Number(b) > 0;
+  if (opaqueCss(String(a)) || opaqueCss(String(b))) return String(a) === String(b);
   // `overflowY: "var(--Scroll)"` and `overflow: "var(--scroll)"` read two custom properties, so they do not provably agree.
   return foldCss(String(a).trim()) === foldCss(String(b).trim());
 }
@@ -1128,8 +1129,18 @@ function fixedLength(v) {
 // units and function names is ignored: a custom property name is case-sensitive, so "var(--height)" and "var(--HEIGHT)" are two values.
 function sameValue(a, b) {
   if (!a || !b || !a.known || !b.known) return false;
+  if ([a.value, b.value].some((v) => typeof v === 'string' && opaqueCss(v))) return a.value === b.value;
   const norm = (v) => (typeof v === 'number' ? `${v}px` : foldCss(String(v).trim().replace(/\s+/g, ' ')));
   return norm(a.value) === norm(b.value);
+}
+
+// Does CSS text that names a custom property hold an escape or a comment? Then foldCss cannot tell where the name ends: an escaped space,
+// comma or parenthesis is part of a name (`--x\ A` and `--x\ a` are two properties), so is the space that ends a hex escape (`--\41 B`), and
+// a comment beside a name is not (`--height/**UPPER*/` is `--height`). Rather than decode escapes and comments, such text equals only the
+// same text byte for byte, and any other comparison is not proven. That refuses two spellings of one name too (`--\4A` and `--\4a`), a
+// refusal the remedy always clears. https://www.w3.org/TR/css-syntax-3/#escaping
+function opaqueCss(text) {
+  return text.includes('--') && (text.includes('\\') || text.includes('/*'));
 }
 
 // CSS text in lower case but for its custom property names, for comparing two values: keywords, units and function names are ASCII

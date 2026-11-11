@@ -12,8 +12,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const { analyzePageScroll, pageScrollProblems, REMEDY_KEYS } = require('../lib/page-scroll.js');
 const { loadVendoredTypeScript } = require('../lib/typescript-compiler.js');
@@ -46,6 +47,9 @@ const SCROLLS = "height: '100%', overflowY: 'auto', boxSizing: 'border-box'";
 const FLEX_COLUMN = "display: 'flex', flexDirection: 'column'";
 // Content taller than any host.
 const TALL = '<div style={{ height: 2000 }}><Text>end</Text></div>';
+// A root whose height and minHeight are the CSS texts given; JSON.stringify spells each as a TSX string literal, so a backslash in the CSS
+// (String.raw`--x\ A`) reaches the page as one.
+const heightAndMin = (height, min) => page('', `  return (<div style={{ height: ${JSON.stringify(height)}, minHeight: ${JSON.stringify(min)}, overflowY: 'auto' }}>${TALL}</div>);`);
 
 // [name, source, verdict]. Every case that is not a pass is also a case of the remedy invariant below.
 const CASES = [
@@ -164,6 +168,18 @@ const CASES = [
   // Of an overflowY and an overflow on two classes only an agreement is read, and two custom property names in another case do not agree.
   ['overflowY and overflow on two classes naming one custom property in another case', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'var(--Scroll)' },\n  b: { overflow: 'var(--scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
   ['overflowY and overflow on two classes that agree but for case', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'AUTO' },\n  b: { overflow: 'auto' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'pass'],
+  // A custom property name may hold a CSS escape, and an escaped space, comma or parenthesis — or the space that ends a hex escape — is part
+  // of the name: `--x\ A` and `--x\ a` are two properties. Such text, or a comment, is compared byte for byte: anything else is not proven,
+  // which refuses two spellings of one name too (`--\4A` and `--\4a`, a comment in another case); the remedy passes those.
+  ['a minHeight naming an escaped-space custom property in another case', heightAndMin(String.raw`calc(var(--x\ A))`, String.raw`calc(var(--x\ a))`), 'unproven:min-height'],
+  ['a minHeight naming an escaped-comma custom property in another case', heightAndMin(String.raw`calc(var(--x\,A))`, String.raw`calc(var(--x\,a))`), 'unproven:min-height'],
+  ['a minHeight naming an escaped-parenthesis custom property in another case', heightAndMin(String.raw`calc(var(--x\(A))`, String.raw`calc(var(--x\(a))`), 'unproven:min-height'],
+  ['a minHeight naming a custom property whose hex escape ends in a space, in another case', heightAndMin(String.raw`calc(var(--\41 B))`, String.raw`calc(var(--\41 b))`), 'unproven:min-height'],
+  ['a minHeight naming one custom property through hex escapes in another case (refused, not proven)', heightAndMin(String.raw`calc(var(--\4A))`, String.raw`calc(var(--\4a))`), 'unproven:min-height'],
+  ['a minHeight naming one custom property beside a comment in another case (refused, not proven)', heightAndMin('calc(var(--height/**UPPER*/))', 'calc(var(--height/**upper*/))'), 'unproven:min-height'],
+  ['a minHeight that is byte for byte the height with an escaped custom property', heightAndMin(String.raw`calc(var(--x\ A))`, String.raw`calc(var(--x\ A))`), 'pass'],
+  ['a minHeight that is byte for byte the height with a comment', heightAndMin('calc(var(--height/**UPPER*/))', 'calc(var(--height/**UPPER*/))'), 'pass'],
+  ['overflowY and overflow on two classes naming escaped custom properties in another case', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: ${JSON.stringify(String.raw`var(--x\,A)`)} },\n  b: { overflow: ${JSON.stringify(String.raw`var(--x\,a)`)} },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
   ['a minHeight in % smaller than the height', page('', `  return (<div style={{ height: '50%', minHeight: '25%', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   ['a minHeight in rem under a height in px', page('', `  return (<div style={{ height: '480px', minHeight: '10rem', overflowY: 'auto' }}>${TALL}</div>);`), 'unproven:min-height'],
   ['a minHeight given a token', rooted(`${SCROLLS}, minHeight: tokens.spacingVerticalXXXL`), 'unproven:unread-value'],
@@ -196,7 +212,8 @@ for (const [name, source, expected] of CASES) {
 
 // A padded box that fills its container is refused either way, but one whose other bound is a fixed length (height "100%" under maxHeight
 // "400px") is min(container, 400px) tall plus its padding: it overhangs only a container shorter than 400px plus that padding, so its
-// message says the end may be cut off, and when. Every other padding message is as it was.
+// message says the end may be cut off, and when. So does a box capped the other way round (height "400px" under maxHeight "100%") or one
+// that fills by a calc() under a fixed maxHeight. Every other padding message is as it was.
 test('page-scroll: the padding message says the end may be cut off only where a fixed bound caps the box, and is unchanged elsewhere', () => {
   const message = (style) => {
     const problems = pageScrollProblems(page('', `  return (<div style={{ ${style}, overflowY: 'auto', padding: 16 }}>${TALL}</div>);`));
@@ -210,6 +227,7 @@ test('page-scroll: the padding message says the end may be cut off only where a 
   assert.equal(message("height: '100%', maxHeight: 400"), may('100%', 'maxHeight', '400px'));
   assert.equal(message("height: '100%', maxHeight: '30rem', minHeight: 0"), may('100%', 'maxHeight', '30rem'));
   assert.equal(message("height: '400px', maxHeight: '100%'"), may('100%', 'height', '400px'));
+  assert.equal(message("height: 'calc(100% - 8px)', maxHeight: '400px'"), may('calc(100% - 8px)', 'maxHeight', '400px'));
   // Unchanged: nothing caps the box, the cap is not a fixed length (150%, 100vh, a token), or a minimum may hold it at the container's height.
   assert.equal(message("height: '100%'"), stays('100%'));
   assert.equal(message("maxHeight: '100%'"), stays('100%'));
@@ -219,6 +237,28 @@ test('page-scroll: the padding message says the end may be cut off only where a 
   assert.equal(message("height: '100%', maxHeight: '100vh'"), stays('100%'));
   assert.equal(message("height: '100%', maxHeight: tokens.spacingVerticalXXXL"), stays('100%'));
   assert.equal(message("height: '100%', maxHeight: '400px', minHeight: '100%'"), stays('100%'));
+});
+
+// The CLI on the escaped custom property pages: a generated page is refused (exit 3), and a page the run did not generate keeps exit 0
+// with the problem as a note.
+test('page-scroll: check-griffel-styles.js refuses a page whose minHeight names an escaped custom property in another case, and notes it with --existing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-scroll-cli-'));
+  try {
+    const pairs = [[String.raw`--x\ A`, String.raw`--x\ a`], [String.raw`--x\,A`, String.raw`--x\,a`], [String.raw`--x\(A`, String.raw`--x\(a`], [String.raw`--\41 B`, String.raw`--\41 b`]];
+    pairs.forEach(([h, m], i) => {
+      const file = path.join(dir, `page${i}.tsx`);
+      fs.writeFileSync(file, heightAndMin(`calc(var(${h}))`, `calc(var(${m}))`));
+      for (const existing of [false, true]) {
+        const r = spawnSync(process.execPath, [path.join(PLUGIN, 'scripts', 'check-griffel-styles.js'), '--file', file, ...(existing ? ['--existing'] : [])], { encoding: 'utf8' });
+        const out = JSON.parse(r.stdout);
+        const reported = (existing ? out.notes : out.problems) || [];
+        assert.equal(r.status, existing ? 0 : 3, `${h} ${existing}`);
+        assert.deepEqual(reported.map((p) => `${p.code}:${p.reason}`), ['scroll-context-unproven:min-height'], `${h} ${existing}`);
+      }
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('page-scroll: the work item\'s dashboard — default export → error boundary class → body component → a flex column root — has no scroll context', () => {
