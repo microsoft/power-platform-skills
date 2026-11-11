@@ -89,7 +89,7 @@ async function downloadSdk(org, workspace = makeTempDir('dl-cfg-ws-')) {
   return sdk;
 }
 
-async function download(org, store, { out = makeTempDir('dl-cfg-out-'), managed = true } = {}) {
+async function download(org, store, { out = makeTempDir('dl-cfg-out-'), managed = true, connections } = {}) {
   const workspace = makeTempDir('dl-cfg-ws-');
   const sdk = await downloadSdk(org, workspace);
   const dl = Object.create(sdk);
@@ -106,6 +106,7 @@ async function download(org, store, { out = makeTempDir('dl-cfg-out-'), managed 
     makeDownloadSdk: async () => ({ sdk: dl, cleanup() {} }),
     makeGenpageSdk: () => ({}),
     runDownload: async () => ({ ok: true, spec: JSON.parse(JSON.stringify(PLAIN)), pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [], notRoundTripped: null }),
+    ...(connections ? { connections } : {}),
   });
   assert.equal(emitted.length, 1);
   const specFile = path.join(out, 'app-spec.json');
@@ -142,8 +143,10 @@ const editRow = (org, set, pick, patch) => {
   return id;
 };
 // The restore library itself, over a download SDK, for a downloaded spec main's own runDownload double cannot carry (pages).
-const restoreDirect = async (org, store, spec) => require('../lib/declared-configuration-io.js').restoreManagedConfiguration({
+// `connections` is the environment's connection inventory reader (main's `connections` seam); none by default.
+const restoreDirect = async (org, store, spec, connections) => require('../lib/declared-configuration-io.js').restoreManagedConfiguration({
   sdk: await downloadSdk(org), spec, file: store, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION, validate: () => ({ ok: true }),
+  ...(connections ? { connections } : {}),
 });
 const reason = (code) => require('../lib/managed-restore-report.js').REASONS[code];
 
@@ -327,8 +330,11 @@ test('connection references: each proved definition is restored with its connect
   // The maker binds a connection after the build (the portal's own write): which connection is private and per environment.
   editRow(org, 'connectionreferences', (r) => r.connectionreferencelogicalname === 'contoso_sp', { connectionid: CANARY.connection });
   const storeBefore = fs.readFileSync(store);
-  const dl = await download(org, store);
+  // No page names either reference: the restore asks for no connection, so a reader that fails changes nothing and is never called.
+  let inventoryReads = 0;
+  const dl = await download(org, store, { connections: async () => { inventoryReads += 1; throw new Error('connections unreadable'); } });
   assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.equal(inventoryReads, 0);
   assert.deepEqual(dl.spec.connectionReferences, [
     { logicalName: 'contoso_sp', connectorId: SP, name: 'SharePoint', description: 'Lists' },
     { logicalName: 'contoso_sql', connectorId: SQL, name: 'contoso_sql' },
@@ -366,11 +372,14 @@ test('connection references: one a page names with no connection, one changed by
   const custom = { logicalName: 'contoso_custom', connectorId: '/providers/Microsoft.PowerApps/apis/shared_contoso-5f1', customConnectorId: '00000000-0000-4000-8000-0000000cc001' };
   const { org, store } = await built({ lists: { connectionReferences: [...REFERENCES, custom] }, settings: {} });
   editRow(org, 'connectionreferences', (r) => r.connectionreferencelogicalname === 'contoso_sp', { connectionid: CANARY.connection });
-  // A page naming both: the bound one is restored (a rebuild gates the page on it as on any declared reference), the unbound one is
-  // left out, as a plain download leaves it (undeclared, so a rebuild writes the page without that gate).
+  // A page naming both: the bound one is restored (its connection is one of its connector, so a rebuild's gate passes the page), the
+  // unbound one is left out, as a plain download leaves it (undeclared, so a rebuild writes the page without that gate). The
+  // connections are read once, and only for the bound one: an unbound reference needs no inventory to be left out.
   const page = { key: 'orders', name: 'Orders', source: { kind: 'tsx', codeFile: 'pages/orders.tsx' }, connectorBindings: [{ logicalName: 'contoso_sp' }, { logicalName: 'contoso_sql' }] };
   const spec = { ...JSON.parse(JSON.stringify(PLAIN)), pages: [page] };
-  const direct = await restoreDirect(org, store, spec);
+  let inventoryReads = 0;
+  const direct = await restoreDirect(org, store, spec, async () => { inventoryReads += 1; return [{ connectionId: CANARY.connection.toUpperCase(), connectorId: 'shared_sharepointonline', displayName: 'SharePoint' }]; });
+  assert.equal(inventoryReads, 1);
   assert.deepEqual(spec.connectionReferences.map((r) => r.logicalName), ['contoso_sp']);
   assert.deepEqual(direct.connectionReferences.omitted.map((o) => [o.key, o.code]), [['contoso_custom', 'unsupported-dependency'], ['contoso_sql', 'page-unready']]);
 
@@ -386,6 +395,33 @@ test('connection references: one a page names with no connection, one changed by
   assert.deepEqual(dl.writes, []);
   assert.deepEqual(org.unexpected, []);
   assertNoCanary(dl);
+});
+
+test('connection references: one a page names whose connection the connections cannot prove usable is left out, whether they are unreadable, lack it, or hold it under another connector', async () => {
+  const { org, store } = await built({ lists: { connectionReferences: [REFERENCES[0]] }, settings: {} });
+  editRow(org, 'connectionreferences', () => true, { connectionid: CANARY.connection });
+  const page = { key: 'orders', name: 'Orders', source: { kind: 'tsx', codeFile: 'pages/orders.tsx' }, connectorBindings: [{ logicalName: 'contoso_sp' }] };
+  // Each is what the build's page gate (configuration-artifacts.js observe) would stop a rebuild on: no proof of the binding.
+  const cases = [
+    ['no reader', undefined],
+    ['unreadable', async () => { throw new Error('connections unreadable'); }],
+    ['not a list', async () => null],
+    ['without the connection', async () => [{ connectionId: 'contoso-other-connection', connectorId: SP, displayName: 'SharePoint' }]],
+    ['of another connector', async () => [{ connectionId: CANARY.connection, connectorId: SQL, displayName: 'SQL' }]],
+    ['connector not stated', async () => [{ connectionId: CANARY.connection, displayName: 'SharePoint' }]],
+  ];
+  const mark = org.requests.length;
+  for (const [label, connections] of cases) {
+    const spec = { ...JSON.parse(JSON.stringify(PLAIN)), pages: [page] };
+    const direct = await restoreDirect(org, store, spec, connections);
+    assert.equal(spec.connectionReferences, undefined, label);
+    assert.deepEqual(direct.connectionReferences.restored, [], label);
+    assert.deepEqual(direct.connectionReferences.omitted.map((o) => [o.key, o.code, o.reason]), [['contoso_sp', 'page-unready', reason('page-unready')]], label);
+    assert.deepEqual(direct.connectionReferences.withheld, [], label);
+    assert.ok(!JSON.stringify(direct).includes(CANARY.connection), label);
+  }
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual(org.unexpected, []);
 });
 
 test('connection references: one a page names whose connection is removed while the download proves it is judged by what the proof read, and left out', async () => {

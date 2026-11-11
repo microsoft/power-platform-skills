@@ -1806,8 +1806,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   connection removed between the two is judged as the proof saw it.
   `managedConnectionReferences` restores a reference's logical name, connector and labels; its connection is
   withheld (a rebuild without settings keeps it), a custom-connector reference is `unsupported-dependency`, and
-  an unbound one a page names is `page-unready` (the build's page gate, `configuration-build.js namedByPages`
-  over `pagesStatingBindings`, would stop a rebuild before that page; a plain download declares none).
+  one a page names is `page-unready` unless the gate's own verdict is `bound` (the build's page gate,
+  `configuration-build.js namedByPages` over `pagesStatingBindings`, would stop a rebuild before that page; a
+  plain download declares none). That verdict is `configuration-artifacts.js referenceBinding` (the build's
+  `observe`) over the environment's connections, read once per download through `list-connections.js
+  readConnections` and only for such a reference: a connection id in the row is not enough, the connection must
+  be listed and be one of the reference's connector, and an unreadable listing proves nothing.
   `managedCustomApis` restores a scaffold API with both complete child lists, each child matched to the slot its
   binding holds (`request:<unique name>` / `response:<unique name>`); one with `_plugintypeid_value` set is
   `implemented`, one a page's `actionBindings` names is `page-unready` (CUSTOM_API_IMPLEMENTATION_UNPROVEN), and

@@ -1284,16 +1284,21 @@ function protectedVerifyPort({ spec, manifest, dataverse, solution, bindings }) 
  *     outside the plugin would be downloaded as if the build had made it so (its drift "refreshed away"). A connection reference's
  *     connected flag is not part of its declaration (which connection is private, and is bound per environment), so either value
  *     proves it.
- * Answers { ok: true, values, valueFilled, defaultSet, defaultFilled, valueSchemaSet, connected } or { ok: false, code } with a code of
+ * Answers { ok: true, values, valueFilled, defaultSet, defaultFilled, valueSchemaSet, connected[, binding] } or { ok: false, code } with a code of
  * lib/managed-restore-report.js. Every flag is read from the rows this proof proved, in this one pass, so what a download says of an
  * item's readiness is what it proved, never an earlier read a change in between could leave behind:
  *   - `values`: how many value rows a variable has (0 or 1); `valueFilled`: whether that row holds a value the build's readiness
  *     counts; `defaultSet` / `defaultFilled`: whether the variable's definition has a default, and one the readiness counts;
  *     `valueSchemaSet`: whether it has a value schema;
- *   - `connected`: whether a connection reference is bound to a connection.
+ *   - `connected`: whether a connection reference's row holds a connection id;
+ *   - `binding` (only when `connections` is given, the connection inventory reader of configuration-artifacts.js connectionInventory):
+ *     the verdict a rebuild's page gate gives the reference ('bound', 'unbound' or 'unknown', configuration-artifacts.js
+ *     referenceBinding). A connection id in the row is not that proof: the connection must be in the environment's connections and be
+ *     one of the connector the row and the declaration name. Read last, once everything else is proved, so a reference left out for
+ *     another reason costs no inventory read.
  * Only these flags leave: the values themselves are compared in memory and dropped. It sends nothing and never throws for what it reads.
  */
-async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, consumerRows }) {
+async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, consumerRows, connections }) {
   const failed = (error) => ({ ok: false, code: error && error.code === B.NOT_FOUND_CODE ? 'missing' : error && error.code === UNVERIFIED_CODE ? 'unread' : 'not-equivalent' });
   let item;
   try {
@@ -1333,6 +1338,8 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
   let valueFilled = false;
   const root = { defaultSet: false, defaultFilled: false, valueSchemaSet: false, connected: false };
   const filledValue = (read) => !!read.decoded.private && read.decoded.private.present && read.decoded.private.value != null && read.decoded.private.value !== '';
+  // The connection reference's row as the binding verdict reads it, in memory only (its connection id never leaves this function).
+  let referenceRow = null;
   for (const r of planned.rows) {
     const c = committed.find((x) => sameRow(x, r));
     if (!c) return { ok: false, code: 'changed' };
@@ -1346,7 +1353,10 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
       root.defaultFilled = defaultValue != null && defaultValue !== '';
       root.valueSchemaSet = valueSchema != null;
     }
-    if (r.kind === 'connectionReference') root.connected = filledValue(read);
+    if (r.kind === 'connectionReference') {
+      root.connected = filledValue(read);
+      referenceRow = { connectionId: root.connected ? read.decoded.private.value : null, connectorId: read.decoded.fields.connectorId };
+    }
     const semantic = B.semanticOf(r.kind, read.decoded);
     const variants = r.kind === 'connectionReference' ? [{ ...semantic, connected: false }, { ...semantic, connected: true }] : [semantic];
     const proved = variants.some((s) => B.projectionOf(r.kind, r.expected, s, read.decoded.unmodelled, [], read.decoded.preserved) === c.projectionSha256);
@@ -1364,6 +1374,12 @@ async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, 
     if (read.state === 'absent') continue;
     if (read.state !== 'present') return { ok: false, code: 'unread' };
     if (filledValue(read)) valueFilled = true;
+  }
+  if (kind === 'connectionReference' && typeof connections === 'function' && referenceRow) {
+    const entry = (Array.isArray(spec.connectionReferences) ? spec.connectionReferences : [])
+      .find((e) => e && String(e.logicalName).toLowerCase() === String(key).toLowerCase());
+    // An unbound row needs no inventory: the verdict is 'unbound' whatever the environment holds.
+    root.binding = A.referenceBinding(referenceRow, entry, referenceRow.connectionId ? await connections() : null);
   }
   return { ok: true, values, valueFilled, ...root };
 }

@@ -23,6 +23,7 @@ const P = require('./configuration-protected.js');
 const { omission } = require('./managed-restore-report.js');
 const { compareVersions, isPluginVersion } = require('./app-spec.js');
 const { namedByPages } = require('./configuration-build.js');
+const { connectionInventory } = require('./configuration-artifacts.js');
 const { pagesStatingBindings } = require('./page-binding-targets.js');
 
 const IDENTITY = 'stable-v1';
@@ -133,11 +134,14 @@ async function declareReference({ root, key }) {
   return { declaration, fields };
 }
 
-// A page that names a reference makes a rebuild gate the page on its binding (CONNECTION_REFERENCE_UNBOUND): a plain download declares
-// no reference, so its page is written without that gate, and a restore must not turn that into a stop. Whether it is bound is what the
-// proof's own read found (restoreProofOf), never the earlier read: a connection removed between the two must not count.
+// A page that names a reference makes a rebuild gate the page on its binding (CONNECTION_REFERENCE_UNBOUND, or
+// CONNECTION_REFERENCE_BINDING_UNVERIFIED when the connections cannot be read): a plain download declares no reference, so its page is
+// written without that gate, and a restore must not turn that into a stop. So such a reference is restored only when the gate's own
+// verdict is 'bound' (restoreProofOf `binding`, configuration-artifacts.js referenceBinding): its connection is in the environment's
+// connections and is one of its connector. A connection id in the row proves neither, and connections that cannot be read prove
+// nothing. The verdict is taken from the proof's own read, never the earlier read: a connection removed between the two must not count.
 function acceptReference({ key, proof, ctx }) {
-  if (!proof.connected && ctx.pagesNaming.references.has(key)) leave('page-unready');
+  if (ctx.pagesNaming.references.has(key) && proof.binding !== 'bound') leave('page-unready');
   return proof.connected ? ['connection'] : [];
 }
 
@@ -239,8 +243,11 @@ async function restoreItem(ctx, kind, key, group, extra = {}) {
     configurationIdentity: IDENTITY,
     minimumPluginVersion: floorOf(spec.minimumPluginVersion),
   };
+  // The connections are read (once per download) only for a reference a page names: no other restore depends on them.
+  const pageReference = kind === 'connectionReference' && ctx.pagesNaming.references.has(key);
   const proof = await P.restoreProofOf({
     spec: candidate, manifest: ctx.manifest, dataverse: ctx.dataverse, solution: ctx.solutionUniqueName, kind, key: declaration[field], consumerRows: consumer.rows,
+    ...(pageReference ? { connections: ctx.inventory } : {}),
   });
   if (!proof.ok) leave(proof.code);
   const accepted = FAMILIES[kind].accept ? FAMILIES[kind].accept({ key, declaration, proof, ctx }) : [];
@@ -309,10 +316,15 @@ async function restoreKind(ctx, kind) {
  * A restored item also sets the spec's `configurationIdentity: "stable-v1"` (only a protected build keeps these groups, so the store
  * itself is the proof of the regime) with its plugin floor. Answers { environmentVariables, connectionReferences, customApis,
  * duplicateDetectionRules } (restoreKind's shape each); a store file that cannot be used throws `managed-manifest-unusable` (readManagedFormFile).
+ * `connections` reads the environment's connections (rows as list-connections.js answers them), the reader a build is given: without
+ * one, or when it fails, a reference a page names is not proved ready and is left out (`page-unready`). Read only, in memory.
  */
-async function restoreManagedConfiguration({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
+async function restoreManagedConfiguration({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate, connections }) {
   const { units, manifest } = readConfigurationStore({ file, environment, appUniqueName, solutionUniqueName });
-  const ctx = { spec, units, manifest, dataverse: sdk.dataverse, solutionUniqueName, validate, names: new Map(), pagesNaming: namedByPagesOf(spec) };
+  const ctx = {
+    spec, units, manifest, dataverse: sdk.dataverse, solutionUniqueName, validate, names: new Map(), pagesNaming: namedByPagesOf(spec),
+    inventory: connectionInventory({ connections }),
+  };
   return {
     environmentVariables: await restoreKind(ctx, 'environmentVariable'),
     connectionReferences: await restoreKind(ctx, 'connectionReference'),

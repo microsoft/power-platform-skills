@@ -84,6 +84,7 @@ const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
 const { restoreManagedViews } = require('./lib/declared-view-io.js');
 const { restoreManagedCharts } = require('./lib/declared-chart-io.js');
 const { restoreManagedConfiguration } = require('./lib/declared-configuration-io.js');
+const { readConnections } = require('./list-connections.js');
 const { subtractRestored, storeRevision, assertStoreUnchanged, omission } = require('./lib/managed-restore-report.js');
 const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
@@ -4403,6 +4404,11 @@ async function main(deps = {}) {
         validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
         fragments,
         publisher: result.publisher,
+        // The environment's connections, read as a build reads them (list-connections.js readConnections), and only when a page names a
+        // connection reference whose row holds a connection: such a reference is restored only when they prove it bound to its connector,
+        // the proof the rebuild's page gate asks for (lib/declared-configuration-io.js acceptReference). A failed read proves nothing, so
+        // the reference is left out (page-unready); it never stops the download.
+        connections: deps.connections || (async () => (await readConnections(dataverseOrigin(env))).value),
       };
       try {
         managedForms = await restoreManagedForms(source);

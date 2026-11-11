@@ -45,7 +45,9 @@ async function builtLifecycle(spec, orgOptions = {}, buildOptions = {}) {
   assert.equal(built.value.result.ok, true, JSON.stringify(built.value.result.steps || built.value.result));
   const store = path.join(harness.workspaceDir, fs.readdirSync(harness.workspaceDir).find((f) => f.startsWith(PREFIX)));
   let n = 0;
-  async function download({ managed }) {
+  // `connections`: the environment's connections the download may prove a page's reference bound against (main's `connections` seam,
+  // rows as list-connections.js answers them). Read at call time, so a test can change them between downloads.
+  async function download({ managed, connections }) {
     const out = path.join(root, `download-${n += 1}`);
     let emitted = null;
     const said = [];
@@ -58,6 +60,7 @@ async function builtLifecycle(spec, orgOptions = {}, buildOptions = {}) {
         argv: ['--env', org.origin, '--app', appUniqueName(spec), '--out', out, ...(managed ? ['--include-managed', '--managed-manifest', store] : [])],
         stderr: { write: (t) => { said.push(String(t)); return true; } }, exit: () => {}, emitResult: (ok, payload) => { emitted = { ok, payload }; },
         preflightAuth: async () => ({ ok: true }), httpClient: harness.client,
+        ...(connections ? { connections: async () => connections.map((c) => ({ ...c })) } : {}),
       });
     } finally {
       for (const x of streams) x.s.write = x.write;
@@ -66,8 +69,8 @@ async function builtLifecycle(spec, orgOptions = {}, buildOptions = {}) {
     const text = fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8');
     return { out, text, spec: JSON.parse(text), payload: emitted.payload, said: said.join('') };
   }
-  async function rebuild(downloaded) {
-    const step = await harness.measure(() => harness.build(downloaded.spec, { appFolder: downloaded.out, gated: true }));
+  async function rebuild(downloaded, options = {}) {
+    const step = await harness.measure(() => harness.build(downloaded.spec, { appFolder: downloaded.out, gated: true, ...options }));
     assert.equal(step.error, undefined, step.error && step.error.stack);
     assert.equal(step.value.result.ok, true, JSON.stringify(step.value.result.steps || step.value.result));
     return step;
@@ -293,6 +296,63 @@ test('protected configuration restored by a managed download rebuilds completely
   const written = [
     ['managed stream', managed.said], ['managed result', JSON.stringify(managed.payload)], ['second stream', again.said], ['second result', JSON.stringify(again.payload)],
     ...[managed.out, again.out].flatMap((dir) => walkFiles(dir).map((f) => [f, fs.readFileSync(f, 'latin1')])),
+    ...org.requests.slice(fromDownload).map((r, n) => [`request ${n} ${r.method} ${r.path}`, sentText(r)]),
+  ];
+  for (const [where, text] of written) for (const canary of Object.values(CONFIG_CANARY)) assert.ok(!text.includes(canary), `${canary} in ${where}`);
+  assert.deepEqual(org.unexpected, []);
+});
+
+// A page that names a connection reference makes a rebuild gate the page on the reference's binding, proven against the environment's
+// connections (configuration-artifacts.js observe): the connection must be there and be one of the connector the reference names. A
+// connection id on the row is not that proof. So a managed download restores a reference a page names only when the same proof holds
+// as it downloads; otherwise it names it `page-unready` and leaves it out, as a plain download does, and the rebuild writes the page.
+test('a reference a page names is restored only when the connections prove it bound to its connector; with none, or a connection of another connector, it is left out and the rebuild writes the page', async () => {
+  const SQL = '/providers/Microsoft.PowerApps/apis/shared_sql';
+  const spec = configuredSpec();
+  spec.pages = [{ key: 'preview', name: 'Preview', purpose: 'Preview items', dataSources: ['contoso_item'], source: { kind: 'tsx', codeFile: 'KitchenPage.tsx' }, connectorBindings: [{ logicalName: 'contoso_sp', connectorId: SP }] }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'preview', title: 'Preview' });
+  const usable = [{ connectionId: CONFIG_CANARY.connection, connectorId: SP, displayName: 'SharePoint' }];
+  const bindings = readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: CONFIG_CANARY.connection, ConnectorId: SP }] }, spec);
+  assert.deepEqual(bindings.errors, []);
+  const app = await builtLifecycle(spec, { configuration: true }, { configurationBindings: bindings, connections: usable });
+  const { org } = app;
+  const referenceRows = () => JSON.stringify([...org.rowsOf('connectionreferences').values()].map((r) => r.data));
+  const rowsBefore = referenceRows();
+  const fromDownload = org.mark();
+  const reason = require('../lib/managed-restore-report.js').REASONS['page-unready'];
+  const left = (dl) => dl.payload.managedConnectionReferences.omitted.map((o) => [o.key, o.code, o.reason]);
+
+  // The connection is there and is one of the reference's connector: restored, and its rebuild writes the page through the gate.
+  const bound = await app.download({ managed: true, connections: usable });
+  assert.deepEqual(bound.payload.managedConnectionReferences.restored, ['contoso_sp']);
+  assert.deepEqual(left(bound), []);
+  assert.deepEqual(bound.spec.connectionReferences, [{ logicalName: 'contoso_sp', connectorId: SP, name: 'SharePoint', description: 'Lists' }]);
+  const boundRebuild = await app.rebuild(bound, { connections: usable });
+  assert.deepEqual(configurationWrites(org, boundRebuild), []);
+
+  // The connection is gone before the download begins, while the row still holds its id: left out, and the complete rebuild of what
+  // the download wrote, against the same (empty) connections, writes the page as the rebuild of the plain download does.
+  const none = [];
+  const unready = await app.download({ managed: true, connections: none });
+  assert.deepEqual(unready.payload.managedConnectionReferences.restored, []);
+  assert.deepEqual(left(unready), [['contoso_sp', 'page-unready', reason]]);
+  assert.equal(unready.spec.connectionReferences, undefined);
+  assert.match(unready.said, /WARNING: managed connection reference contoso_sp was not restored: a page of the app names it/);
+  assert.deepEqual(unready.payload.managedCustomApis, { restored: ['contoso_ping'], omitted: [] });
+  const unreadyRebuild = await app.rebuild(unready, { connections: none });
+  assert.deepEqual(configurationWrites(org, unreadyRebuild), []);
+  const plain = await app.download({ managed: false });
+  await app.rebuild(plain, { connections: none });
+
+  // The connection id on the row is a connection of another connector: not a binding the page can use.
+  const other = await app.download({ managed: true, connections: [{ connectionId: CONFIG_CANARY.connection, connectorId: SQL, displayName: 'SQL' }] });
+  assert.deepEqual(other.payload.managedConnectionReferences.restored, []);
+  assert.deepEqual(left(other), [['contoso_sp', 'page-unready', reason]]);
+  assert.equal(other.spec.connectionReferences, undefined);
+
+  assert.equal(referenceRows(), rowsBefore, 'the reference row is as the build left it');
+  const written = [
+    ...[bound, other, unready].flatMap((dl) => [[`${dl.out} stream`, dl.said], [`${dl.out} result`, JSON.stringify(dl.payload)], ...walkFiles(dl.out).map((f) => [f, fs.readFileSync(f, 'latin1')])]),
     ...org.requests.slice(fromDownload).map((r, n) => [`request ${n} ${r.method} ${r.path}`, sentText(r)]),
   ];
   for (const [where, text] of written) for (const canary of Object.values(CONFIG_CANARY)) assert.ok(!text.includes(canary), `${canary} in ${where}`);

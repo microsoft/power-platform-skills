@@ -1512,10 +1512,13 @@ the field builds exactly as before.
     description. Which connection it is bound to is never written (`withheld` names `connection`, and
     `connectionParameters` or `promptingBehavior` when the row sets them); a rebuild without settings
     keeps the binding the row has. A reference to a custom connector is left out
-    (`unsupported-dependency`), and so is one with no connection that a page of the app names
-    (`page-unready`): declaring it would stop a rebuild before that page, which a plain download does not.
-    A restored reference a page names is gated like any declared one, so a rebuild stops before that page
-    if its connection is gone by then.
+    (`unsupported-dependency`), and so is one a page of the app names unless the download proves it bound
+    as a rebuild's page gate does — its connection is among the environment's connections (read as
+    `list-connections.js` reads them) and is one of the reference's connector (`page-unready`):
+    declaring it would stop a rebuild before that page, which a plain download does not. No connection,
+    one of another connector, or connections that cannot be read all leave it out. A restored reference a
+    page names is gated like any declared one, so a rebuild stops before that page if its connection is
+    gone by then.
   - *Custom APIs* (`managedCustomApis`): the unique name, labels, binding and bound table, flags,
     allowed processing steps and execute privilege, with both child lists complete: each request
     parameter's and response property's unique name, type, table, labels and (a request parameter's)

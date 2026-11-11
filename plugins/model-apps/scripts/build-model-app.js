@@ -79,8 +79,7 @@ const { createPassthroughCreates } = require('./lib/creates-passthrough.js');
 // against, read as list-connections.js reads it (the SDK first, pac when the SDK's route is refused).
 const { configurationAuthorizationKeys, readDeploymentBindings, usesConfiguration } = require('./lib/configuration-artifacts.js');
 const { configurationSendOnce } = require('./lib/configuration-transport.js');
-const { sdkFirst, connectivity } = require('./lib/sdk-first.js');
-const { connectionRowFromSdk, listConnectionsWithPac } = require('./list-connections.js');
+const { readConnections } = require('./list-connections.js');
 const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js');
 const { approvalKey } = require('./lib/reconcile-common.js');
 const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
@@ -937,13 +936,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // The connections a declared connection reference may be bound to, read as list-connections.js reads them. A function, called by the
   // configuration step only when a binding or a page's readiness needs proof (once per pass), so a spec without references never reads them.
   // Without an environment (a test double) there is no reader, and a bound reference stays unproven rather than assumed bound.
-  const connections = deps.connections || (opts.env
-    ? async () => (await sdkFirst(opts.env, {
-      ...connectivity,
-      fromSdk: async (sdk) => (await sdk.listConnections()).map(connectionRowFromSdk),
-      fromPac: async (refusal) => listConnectionsWithPac(opts.env, refusal),
-    })).value
-    : undefined);
+  const connections = deps.connections || (opts.env ? async () => (await readConnections(opts.env)).value : undefined);
   // What failed attempts still owe for the views and forms they saved and deferred (sdk-build.js: the default-view
   // enrichment 4b, the reconcile of existing views and forms), by target. Every attempt re-runs every phase, but a
   // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
