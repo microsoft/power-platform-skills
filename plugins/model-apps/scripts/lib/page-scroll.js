@@ -1126,7 +1126,7 @@ function fixedLength(v) {
 }
 
 // The same CSS text, whitespace and case aside: "calc(100% - 64px)" and "CALC(100%  -  64px)" are one value, as keywords, units and function
-// names are ASCII case-insensitive. Text that may name a custom property is compared byte for byte instead (opaqueCss).
+// names are ASCII case-insensitive. Text that may name a custom property, an environment variable or an attribute is compared byte for byte instead (opaqueCss).
 function sameValue(a, b) {
   if (!a || !b || !a.known || !b.known) return false;
   if ([a.value, b.value].some((v) => typeof v === 'string' && opaqueCss(v))) return a.value === b.value;
@@ -1137,12 +1137,18 @@ function sameValue(a, b) {
 // Is CSS text one the check does not normalize? A custom property name is case-sensitive (`var(--height)` and `var(--HEIGHT)` read two
 // properties that may hold different sizes), and escapes can spell any part of one — an escaped space, comma or parenthesis inside it
 // (`--x\ A`), the space that ends a hex escape (`--\41 B`), even its leading hyphens (`\2d \2d Height`, `\-\-Height`, `-\-Height` are all
-// `--Height`) — while a comment beside it is not part of it. So rather than find and decode names, any text with a var(), a backslash or a
-// comment equals only the same text byte for byte, and any other comparison is not proven. That refuses some spellings of one value too
+// `--Height`) — while a comment beside it is not part of it. So rather than find and decode names, any text with a var(), an env(), an attr(), a
+// backslash or a comment equals only the same text byte for byte, and any other comparison is not proven. That refuses some spellings of one value too
 // (`CALC(VAR(--h))` beside `calc(var(--h))`, `calc( var(--h) )`, `--\4A` beside `--\4a`), a refusal the remedy always clears.
+// An env() and an attr() are the same case: an env() name is a case-sensitive <custom-ident>, and one the host does not define takes the
+// fallback, so `calc(100% - env(safe-area-inset-bottom, -2000px))` and the same with `SAFE-AREA-INSET-BOTTOM` are two values (a 500px host
+// makes the first 500px and the second a 2500px minimum); an attr() name may be case-sensitive too (HTML and XML differ), so another case
+// of one is refused conservatively, not proven to be a different attribute.
 // https://www.w3.org/TR/css-syntax-3/#escaping https://www.w3.org/TR/css-variables-1/#defining-variables
+// https://www.w3.org/TR/css-env-1/ https://www.w3.org/TR/css-values-4/#identifier-value
+// https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/attr
 function opaqueCss(text) {
-  return /var\(|\\|\/\*/i.test(text);
+  return /var\(|env\(|attr\(|\\|\/\*/i.test(text);
 }
 
 // A `minHeight` that is not provably at most the height that bounds the box: CSS applies the minimum over the height and the maximum, so a

@@ -194,6 +194,20 @@ const CASES = [
   ['overflowY and overflow on two classes naming custom properties in another case through escaped hyphens', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: ${JSON.stringify(String.raw`var(\-\-Scroll)`)} },\n  b: { overflow: ${JSON.stringify(String.raw`var(\-\-scroll)`)} },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
   ['overflowY and overflow on two classes with the same var() but for the case of its function', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'VAR(--Scroll)' },\n  b: { overflow: 'var(--Scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
   ['overflowY and overflow on two classes with byte for byte the same var()', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'var(--Scroll)' },\n  b: { overflow: 'var(--Scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:unread-value'],
+  // An env() name and an attr() name are case-sensitive too, and an unknown env name takes its fallback, so `calc(100% - env(a, -2000px))`
+  // and the same with `A` are not one value: a text with an env() or attr() is compared byte for byte like one with a var(). That refuses
+  // another case or spacing of one value as well (not proven); the remedy passes those.
+  ['a minHeight whose nested env() names another environment variable in another case', heightAndMin('calc(100% - env(safe-area-inset-bottom, -2000px))', 'calc(100% - env(SAFE-AREA-INSET-BOTTOM, -2000px))'), 'unproven:min-height'],
+  ['a minHeight that is byte for byte the height with a nested env()', heightAndMin('calc(100% - env(safe-area-inset-bottom, 0px))', 'calc(100% - env(safe-area-inset-bottom, 0px))'), 'pass'],
+  ['a minHeight that is the same env() as the height but for the case of its function (refused, not proven)', heightAndMin('calc(100% - env(safe-area-inset-bottom))', 'CALC(100% - ENV(safe-area-inset-bottom))'), 'unproven:min-height'],
+  ['a minHeight that is the same env() as the height but for its spacing (refused, not proven)', heightAndMin('calc(100% - env(safe-area-inset-bottom))', 'calc(100% - env( safe-area-inset-bottom ))'), 'unproven:min-height'],
+  ['a minHeight whose attr() names another attribute in another case', heightAndMin('calc(attr(data-h px, 400px))', 'calc(attr(DATA-H px, 400px))'), 'unproven:min-height'],
+  ['a minHeight that is byte for byte the height with an attr()', heightAndMin('calc(attr(data-h px, 400px))', 'calc(attr(data-h px, 400px))'), 'pass'],
+  ['a minHeight that is the same attr() as the height but for the case of its function (refused, not proven)', heightAndMin('calc(attr(data-h px, 400px))', 'calc(ATTR(data-h px, 400px))'), 'unproven:min-height'],
+  ['a minHeight with an env() beside a height without one', heightAndMin('calc(100% - 64px)', 'calc(100% - env(safe-area-inset-bottom, 64px))'), 'unproven:min-height'],
+  ['overflowY and overflow on two classes naming one env() in another case', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'env(Scroll)' },\n  b: { overflow: 'env(scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
+  ['overflowY and overflow on two classes with the same attr() but for the case of its function', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'ATTR(data-scroll)' },\n  b: { overflow: 'attr(data-scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:conflicting-keys'],
+  ['overflowY and overflow on two classes with byte for byte the same env()', page(`  root: { height: '100%', boxSizing: 'border-box' },\n  a: { overflowY: 'env(scroll)' },\n  b: { overflow: 'env(scroll)' },`, `  return <div className={mergeClasses(styles.root, styles.a, styles.b)}>${TALL}</div>;`), 'unproven:unread-value'],
   ['a minHeight in % smaller than the height', page('', `  return (<div style={{ height: '50%', minHeight: '25%', overflowY: 'auto' }}>${TALL}</div>);`), 'pass'],
   ['a minHeight in rem under a height in px', page('', `  return (<div style={{ height: '480px', minHeight: '10rem', overflowY: 'auto' }}>${TALL}</div>);`), 'unproven:min-height'],
   ['a minHeight given a token', rooted(`${SCROLLS}, minHeight: tokens.spacingVerticalXXXL`), 'unproven:unread-value'],
@@ -271,6 +285,36 @@ test('page-scroll: check-griffel-styles.js refuses a page whose minHeight names 
         assert.deepEqual(reported.map((p) => `${p.code}:${p.reason}`), ['scroll-context-unproven:min-height'], `${h} ${existing}`);
       }
     });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The same on the env() and attr() pages: the exit code and the note are those of the custom property pages.
+test('page-scroll: check-griffel-styles.js refuses a page whose minHeight names an env() or attr() in another case, and notes it with --existing', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'page-scroll-cli-'));
+  try {
+    const pairs = [['calc(100% - env(safe-area-inset-bottom, -2000px))', 'calc(100% - env(SAFE-AREA-INSET-BOTTOM, -2000px))'], ['calc(attr(data-h px, 400px))', 'calc(attr(DATA-H px, 400px))']];
+    pairs.forEach(([h, m], i) => {
+      const file = path.join(dir, `page${i}.tsx`);
+      fs.writeFileSync(file, heightAndMin(h, m));
+      for (const existing of [false, true]) {
+        const r = spawnSync(process.execPath, [path.join(PLUGIN, 'scripts', 'check-griffel-styles.js'), '--file', file, ...(existing ? ['--existing'] : [])], { encoding: 'utf8' });
+        const out = JSON.parse(r.stdout);
+        const reported = (existing ? out.notes : out.problems) || [];
+        assert.equal(r.status, existing ? 0 : 3, `${h} ${existing}`);
+        assert.deepEqual(reported.map((p) => `${p.code}:${p.reason}`), ['scroll-context-unproven:min-height'], `${h} ${existing}`);
+      }
+    });
+    // The byte-for-byte same text passes in both modes.
+    const same = path.join(dir, 'same.tsx');
+    fs.writeFileSync(same, heightAndMin('calc(100% - env(safe-area-inset-bottom, 0px))', 'calc(100% - env(safe-area-inset-bottom, 0px))'));
+    for (const existing of [false, true]) {
+      const r = spawnSync(process.execPath, [path.join(PLUGIN, 'scripts', 'check-griffel-styles.js'), '--file', same, ...(existing ? ['--existing'] : [])], { encoding: 'utf8' });
+      assert.equal(r.status, 0, String(existing));
+      const out = JSON.parse(r.stdout);
+      assert.deepEqual([...(out.problems || []), ...(out.notes || [])].map((p) => p.code).filter((c) => c.startsWith('scroll-context')), [], String(existing));
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
