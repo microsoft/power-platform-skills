@@ -1365,15 +1365,19 @@ the field builds exactly as before.
   tokens adopt nothing and the next build prints new ones; if the row is deleted, the tokens are not used
   and the item is created at its own id. A duplicate rule made before the opt-in is never adopted: its
   stop stays exactly as before, and `adopt:duplicateRule:<key>` keeps its one meaning (the rule at its
-  own reserved id, even when the key itself ends in what looks like `@<row id>`). Move that rule to its
-  reserved id outside the plugin, or keep the app without the field.
+  own reserved id, even when the key itself ends in what looks like `@<row id>`).
   Otherwise the stop says why the row cannot be adopted. A stop that names several such items lists the
   tokens of each with its own id and field list. Several namesakes of one item stop as before, and the
   plain `adopt:<kind>:<key>` token never selects a namesake. Plugin versions before this form refuse
   the `@<row id>` tokens before anything is sent; after an adoption they bind an adopted row that has
   no rows under it, and stop on one that has with `create-identity-unverified`. You can also keep the
-  app without the field, or move it to the reserved ids outside the plugin. An app that already has
-  protected bindings cannot go back: see "Removing the field" below.
+  app without the field, or move it to the reserved ids outside the plugin. For a duplicate rule,
+  moving to a reserved id means creating a separate replacement and arranging the cutover outside the
+  plugin; it is not an in-place id change. The plugin does not plan or perform that migration. Never
+  edit or reset the binding store to substitute ids. Leaving `configurationIdentity` absent is only for
+  an app that has not started keeping protected configuration bindings: do not remove it to bypass an
+  existing protected binding or a create still being settled. An app that already has protected
+  bindings cannot go back: see "Removing the field" below.
 - **An uncertain lookup is not absence.** If the namesake lookup a first create needs cannot be read
   completely (a failed read, a page that cannot be continued), the build stops with
   `create-identity-unverified` and creates or binds nothing for that item. Restore access or reliable
