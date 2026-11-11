@@ -18,6 +18,7 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 ### Limits
 
 - Secret environment variables, implemented Custom APIs, other-language Custom API labels and duplicate rules are not downloaded.
+- A connection reference a page names is downloaded only when the environment's connections can be listed and include its connection under its connector.
 - The browser verify step, keyboard scrolling and bare-text scrollers remain open (#840).
 - A publish refused because another customization is running still stops after the ordinary retries.
 - Duplicate rules made before opting in still cannot be adopted; migrating one is a separate replacement outside the plugin (#807).
