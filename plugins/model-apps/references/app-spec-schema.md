@@ -845,7 +845,7 @@ list with "reach for it when…" guidance.
 | `dashboards[].reconcile` | a declared dashboard (`reconcile: "declared"` on a global dashboard: the rebuild applies the spec's tiles by key and its description, adds new tiles, and keeps every tile the spec does not declare) |
 | `businessRules[].reconcile` | a declared business rule (`reconcile: "declared"` on a rule: created Draft under an id the build keeps, then activated; managed and proved whole, with keyed conditions and actions, OR logic, default values, error messages and recommendations; an existing rule is adopted read-only, never edited) |
 | `businessProcessFlows[].reconcile` | a declared business process flow (`reconcile: "declared"` on a flow, with a `key` on every stage and step: created Draft with ids the build keeps, then activated; managed and proved whole, so a rename keeps a stage's or step's id; an existing flow is adopted read-only, never edited, and a removed or reordered stage or step is refused) |
-| `createIdentity` | stable create ids for declared views and charts, on a new app only (`createIdentity: "stable-v1"`) |
+| `createIdentity` | stable create ids for declared views and charts, on a new app only (`createIdentity: "stable-v1"`; a managed download writes it back with the declared views and charts it restores) |
 | `configurationIdentity` | exact ids and a binding store for declared environment variables, connection references, Custom APIs and duplicate rules (`configurationIdentity: "stable-v1"`, `minimumPluginVersion: "2.23.0"`): a duplicate rule is created and then only verified, and a Custom API takes only single-request or create-only edits |
 | `columns[].dateTimeBehavior` | portable schema: calendar-day dates, fixed option values (`{ "value", "label" }`), table search and duplicate detection (`searchEnabled` / `changeTrackingEnabled` / `duplicateDetectionEnabled`) |
 
@@ -1077,6 +1077,11 @@ why they need naming here at all.
   "description": "Where the open workload is concentrated." }
 ```
 - `chartType`: `Column · Bar · Pie · Line`. **`groupBy` MUST be a Choice column** on `entity`.
+- `--verify` checks the deployed chart, not only its name: its type, its table, its group-by column and
+  its measure must match the spec, and it must have no filter, join or second series. An explicit
+  `description`, and the `title` of a declared chart, must match too. A mismatch fails. A rebuild does
+  not change an existing chart unless it has `reconcile: "declared"`, so declare it or recreate it.
+  Parts of a chart that verify cannot read are reported as unverified. Styling is not checked.
 
 ## forms[]
 ```jsonc
@@ -1904,6 +1909,8 @@ custom control), but the spec validator emits a warning.
     takes the page out of its navigation and publishes it (everything that app has saved goes live with it; the page itself stays) — or detach it in Maker.
     `--allow-destructive` does NOT bypass this halt. If another app's
     saved navigation, or the list of apps that were never published, cannot be read, the build halts as `pages-shared-check-failed` instead of assuming it is clear.
+    When an app's navigation cannot be read, the whole check is run again, every app read afresh, three times over about 35 seconds first (another build changing
+    that app can leave it unreadable for a moment); an app still unreadable then halts the build, and one that turns out to hold the page halts it as `pages-shared-across-apps`.
     The check runs again right before the first page is updated in place, so a page another app takes in while the build runs halts it there too ("became shared
     across apps while this build ran"); one taken in while the pages upload is written by then, and is reported after the uploads as a warning naming the app.
   - `pages-removed` — a page is live in the env but no longer in the spec. Re-add it to the spec, or
@@ -1991,7 +1998,11 @@ custom control), but the spec validator emits a warning.
   before you run the build again.
 - **Not carried by teardown or download.** A teardown never deletes a configuration item (nothing proves this app
   owns it); it names each one as kept, by name only, and says when a Custom API bound to a table the spec makes will
-  block that table's delete. A download does not bring these items back into the spec yet.
+  block that table's delete. A plain download does not bring these items back into the spec. A managed download
+  (`--include-managed --managed-manifest <store file>`) of an app built with `configurationIdentity: "stable-v1"`
+  brings back each environment variable the store proves unchanged, without its value, default or value schema,
+  each connection reference, without its connection, and each Custom API that has no implementation yet; it never
+  brings back a duplicate rule (see `configurationIdentity` in app-spec-schema-advanced.md).
 
 ## appShell
 ```jsonc

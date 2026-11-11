@@ -1478,4 +1478,7 @@ module.exports = {
   observe,
   editShapeOf,
   projectionOf,
+  semanticOf,
+  readMembers,
+  ruleStateOf,
 };

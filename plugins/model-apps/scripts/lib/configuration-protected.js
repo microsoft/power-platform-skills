@@ -1268,6 +1268,122 @@ function protectedVerifyPort({ spec, manifest, dataverse, solution, bindings }) 
   };
 }
 
+/**
+ * The explicit managed download's proof that ONE declaration it rebuilt from the service (lib/declared-configuration-io.js) is the
+ * item its committed binding holds, unchanged, so a rebuild of the downloaded spec sends nothing for it. Read-only, over the same
+ * exact location and judgment the build's preflight uses (locateItem, judgeBoundShape), with no deployment settings (the download
+ * writes none, and a rebuild without them is the no-settings rebuild):
+ *   - `spec` holds the candidate declaration and `manifest` is the store's groups in the shape manifestStore reads; the item must be
+ *     bound there (committed, nothing pending) at exactly the ids the declaration derives;
+ *   - the plan of the candidate must change nothing: no root or child edit, no create, no rule-state change, and no row under the root
+ *     the binding does not hold — except, for an environment variable, one value set outside the plugin, which a rebuild without
+ *     settings leaves alone (childVerdict) and which is counted, never read;
+ *   - the solution must hold every member now (readMembers): a restore never repairs membership;
+ *   - every bound row must read back as its committed projection (`consumerRows`, the build's consumer state), computed over the same
+ *     fields: the plan of a bound row expects what the row has for every field the declaration omits, so without this a row changed
+ *     outside the plugin would be downloaded as if the build had made it so (its drift "refreshed away"). A connection reference's
+ *     connected flag is not part of its declaration (which connection is private, and is bound per environment), so either value
+ *     proves it.
+ * Answers { ok: true, values, valueFilled, defaultSet, defaultFilled, valueSchemaSet, connected[, binding] } or { ok: false, code } with a code of
+ * lib/managed-restore-report.js. Every flag is read from the rows this proof proved, in this one pass, so what a download says of an
+ * item's readiness is what it proved, never an earlier read a change in between could leave behind:
+ *   - `values`: how many value rows a variable has (0 or 1); `valueFilled`: whether that row holds a value the build's readiness
+ *     counts; `defaultSet` / `defaultFilled`: whether the variable's definition has a default, and one the readiness counts;
+ *     `valueSchemaSet`: whether it has a value schema;
+ *   - `connected`: whether a connection reference's row holds a connection id;
+ *   - `binding` (only when `connections` is given, the connection inventory reader of configuration-artifacts.js connectionInventory):
+ *     the verdict a rebuild's page gate gives the reference ('bound', 'unbound' or 'unknown', configuration-artifacts.js
+ *     referenceBinding). A connection id in the row is not that proof: the connection must be in the environment's connections and be
+ *     one of the connector the row and the declaration name. Read last, once everything else is proved, so a reference left out for
+ *     another reason costs no inventory read.
+ * Only these flags leave: the values themselves are compared in memory and dropped. It sends nothing and never throws for what it reads.
+ */
+async function restoreProofOf({ spec, manifest, dataverse, solution, kind, key, consumerRows, connections }) {
+  const failed = (error) => ({ ok: false, code: error && error.code === B.NOT_FOUND_CODE ? 'missing' : error && error.code === UNVERIFIED_CODE ? 'unread' : 'not-equivalent' });
+  let item;
+  try {
+    const env = await environmentOf({ spec, store: manifestStore(manifest), dataverse, solution, bindings: undefined });
+    item = await locateItem(env, kind, key);
+  } catch (error) {
+    return failed(error);
+  }
+  if (item.state === 'pending') return { ok: false, code: 'pending' };
+  if (item.state !== 'bound') return { ok: false, code: 'invalid' };
+  const { planned } = item;
+  let judged;
+  try {
+    judged = await judgeBoundShape(dataverse, kind, planned);
+  } catch (error) {
+    return failed(error);
+  }
+  if (judged.halt) return { ok: false, code: judged.halt.code === B.NOT_FOUND_CODE ? 'missing' : 'unread' };
+  const { shape } = judged;
+  if (shape.rootChanged || shape.ruleStateChanged || shape.creates.length || shape.labelEdits.length || shape.fixedEdits.length) return { ok: false, code: 'would-change' };
+  const strayValues = kind === 'environmentVariable' ? shape.removals.filter((r) => r.startsWith('environmentVariableValue:')) : [];
+  if (shape.removals.length > strayValues.length) return { ok: false, code: 'changed' };
+  const values = planned.rows.filter((r) => r.kind === 'environmentVariableValue').length + strayValues.length;
+  if (values > 1) return { ok: false, code: 'multiple-values' };
+  let members;
+  try {
+    members = await B.readMembers(dataverse, planned);
+  } catch {
+    return { ok: false, code: 'membership-unknown' };
+  }
+  if (members.some((m) => m.state === 'unknown')) return { ok: false, code: 'membership-unknown' };
+  if (members.some((m) => m.state !== 'present')) return { ok: false, code: 'not-in-solution' };
+  const committed = Array.isArray(consumerRows) ? consumerRows : [];
+  const sameRow = (c, r) => !!c && c.kind === r.kind && c.key === r.key && normalizeGuid(c.id) === r.id;
+  // Whether a variable's value row holds a usable value, as the build's readiness reads it (configuration-artifacts.js observe:
+  // a value that is neither null nor ''). Only this flag leaves here: the value itself is compared in memory and dropped.
+  let valueFilled = false;
+  const root = { defaultSet: false, defaultFilled: false, valueSchemaSet: false, connected: false };
+  const filledValue = (read) => !!read.decoded.private && read.decoded.private.present && read.decoded.private.value != null && read.decoded.private.value !== '';
+  // The connection reference's row as the binding verdict reads it, in memory only (its connection id never leaves this function).
+  let referenceRow = null;
+  for (const r of planned.rows) {
+    const c = committed.find((x) => sameRow(x, r));
+    if (!c) return { ok: false, code: 'changed' };
+    const read = await B.readConfigurationRow(dataverse, r.kind, r.id);
+    if (read.state === 'absent') return { ok: false, code: 'missing' };
+    if (read.state !== 'present') return { ok: false, code: 'unread' };
+    if (r.kind === 'environmentVariableValue' && filledValue(read)) valueFilled = true;
+    if (r.kind === 'environmentVariable') {
+      const { defaultValue, valueSchema } = read.decoded.fields;
+      root.defaultSet = defaultValue != null;
+      root.defaultFilled = defaultValue != null && defaultValue !== '';
+      root.valueSchemaSet = valueSchema != null;
+    }
+    if (r.kind === 'connectionReference') {
+      root.connected = filledValue(read);
+      referenceRow = { connectionId: root.connected ? read.decoded.private.value : null, connectorId: read.decoded.fields.connectorId };
+    }
+    const semantic = B.semanticOf(r.kind, read.decoded);
+    const variants = r.kind === 'connectionReference' ? [{ ...semantic, connected: false }, { ...semantic, connected: true }] : [semantic];
+    const proved = variants.some((s) => B.projectionOf(r.kind, r.expected, s, read.decoded.unmodelled, [], read.decoded.preserved) === c.projectionSha256);
+    if (!proved) return { ok: false, code: 'changed' };
+  }
+  // A committed row the plan does not hold is a child the declaration no longer derives: the graph changed. A variable's committed
+  // value removed outside the plugin is the one exception — it held nothing a declaration says, and its absence is counted above.
+  for (const c of committed) {
+    if (c.kind === 'environmentVariableValue') continue;
+    if (!planned.rows.some((r) => sameRow(c, r))) return { ok: false, code: 'changed' };
+  }
+  // A value set outside the plugin ('environmentVariableValue:<id>', one at most by now) counts as the build's readiness counts it.
+  for (const stray of strayValues) {
+    const read = await B.readConfigurationRow(dataverse, 'environmentVariableValue', stray.slice(stray.indexOf(':') + 1));
+    if (read.state === 'absent') continue;
+    if (read.state !== 'present') return { ok: false, code: 'unread' };
+    if (filledValue(read)) valueFilled = true;
+  }
+  if (kind === 'connectionReference' && typeof connections === 'function' && referenceRow) {
+    const entry = (Array.isArray(spec.connectionReferences) ? spec.connectionReferences : [])
+      .find((e) => e && String(e.logicalName).toLowerCase() === String(key).toLowerCase());
+    // An unbound row needs no inventory: the verdict is 'unbound' whatever the environment holds.
+    root.binding = A.referenceBinding(referenceRow, entry, referenceRow.connectionId ? await connections() : null);
+  }
+  return { ok: true, values, valueFilled, ...root };
+}
+
 module.exports = {
   EDIT_CODE,
   OPT_IN_CODE,
@@ -1280,5 +1396,7 @@ module.exports = {
   preflightProtectedConfiguration,
   protectedConfigurationPort,
   protectedVerifyPort,
+  restoreProofOf,
+  slotOf,
   createProtectedConfiguration,
 };

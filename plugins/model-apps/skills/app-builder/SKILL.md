@@ -275,7 +275,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   layer holds a change made elsewhere. If the stop says that change is not published, tell the maker to
   publish it in Maker if it should stay, or undo it and save, then run the build again.
 - **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
-  **new** app; never add it to an existing or downloaded spec. Tell the maker: declared views and charts
+  **new** app; never add it to an existing or downloaded spec (a managed download writes it back itself, only
+  with the declared views and charts it restores). Tell the maker: declared views and charts
   get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;
   configuration items, custom APIs, environment variables, field security, duplicate rules and pages keep
   today's ids; and a local copy with an unsent edit stops the build (`create-completion-required`) —
@@ -290,7 +291,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   reference is bound to a connection and the Custom API has an implementation (a plug-in type) — a declared
   Custom API alone is a scaffold; clearing a value, unbinding a reference or removing a parameter or condition
   needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
-  a download does not bring them back into the spec yet; and a whole-build retry after a lost answer can create
+  a plain download does not bring them back into the spec (a managed download of a `configurationIdentity:
+  "stable-v1"` app brings back the ones its store proves, never a value, default, connection, implementation or duplicate rule); and a whole-build retry after a lost answer can create
   a second row, so check the environment before running a failed build again. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → *Configuration items*.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
@@ -982,7 +984,11 @@ not everything:**
   carrying the deployed view/chart ids), the icon web resources, and the solution.
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty
   (a declared form comes back only with `--include-managed --managed-manifest <store file>`; see
-  **Declared form layouts**). `commandStates[]` is never written either: a button's hidden / disabled
+  **Declared form layouts**; so does a declared view a `createIdentity` build created and the store proves
+  unchanged while the app's solution holds it, with its `viewId` and `createIdentity` (a rebuild writes
+  nothing to it; the rest of the rebuild runs as usual), the rest named in `managedViews.omitted`, and such a
+  declared chart, with no id (only a build from the same folder's store binds it), the rest named in
+  `managedCharts.omitted`). `commandStates[]` is never written either: a button's hidden / disabled
   state stays on the live row.
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.

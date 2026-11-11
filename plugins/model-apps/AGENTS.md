@@ -522,7 +522,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   sitemap from the same saved-layer read, by the sitemap id its layer's sitemap component names (one more read per such app); it has
   no published layer, so whatever it holds is saved only. That list is fail-closed like the others: a read that fails halts as
   `pages-shared-check-failed`, and a never-published app whose layer, sitemap component or saved sitemap cannot be read is listed
-  unreadable. A never-published app whose component read **succeeds** and finds **no sitemap component** is not yet shown to have no navigation: the
+  unreadable. Before either scan that halts gives up on an unreadable app it takes the **whole scan** again, every app read
+  afresh, after 5 s, 10 s and 20 s (`rescanWhileUnreadable`): another build or maker changing an app leaves it unreadable for a
+  moment, and the build halted on that while the same build run minutes later passed. The answer is always the **last complete
+  scan**, never the apps read again merged into an older one: another app read before a wait can take the page in during it,
+  and a merged answer let the scan right before the first write in place pass it. So one that holds the page halts as
+  `pages-shared-across-apps`; one still unreadable after the last wait halts with the same words as before; a scan that fails
+  as a whole after a wait is waited out the same way, and the last one halts as a failed scan; and an app whose stored sitemap
+  is `malformed` is not waited for, since only an edit of that app changes it. A scan with nothing unreadable sends no extra
+  request. The report after the writes only warns, so it does not wait. A never-published app whose component read **succeeds** and finds **no sitemap component** is not yet shown to have no navigation: the
   vendored SDK prefers a type-62 sitemap component on the app's **current** `appmoduleidunique` layer, but falls back to
   `sitemapnameunique eq '<the app's unique name>'` when that component is absent and no other live app pins the candidate. So such an app may
   hold a sitemap, and pages in it, that no component row links to it. `ensureSitemapInSolution` (sdk-build.js) still uses the naming convention
@@ -1714,6 +1722,122 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   lossy-download gate, the App Spec validation and, for `--include-managed`, the fragments file — a refusal
   or a failed write before then leaves `pages/`, `app-spec.json` and the baseline as they were. A library
   caller that omits `stagePages` still has `runDownload` write `pages/` itself.
+  **`app-spec.json` is checked with the tree, written after it.** Right after `stagedPages.check`, `main` runs
+  `assertFileReplaceable` (`lib/safe-fs.js`) on the spec: the refusals `writeFileSafe` would make at write
+  time (a link, a folder, a hard link — `UNSAFE_OUTPUT` — or a read-only file, `IO_ERROR` `read-only`), plus a
+  folder in which no new file can be made (`IO_ERROR` `folder-not-writable`, found by creating and removing an
+  empty `.app-spec.json.<pid>.<hex>.tmp`, since on Windows a folder's access list, not its mode, decides). That
+  probe is removed with the Windows lock retry; if it still cannot be removed, the look is refused too
+  (`IO_ERROR` `probe-not-removed`), and the error names the file and says it is an empty file the download made
+  that can be deleted. Any of them stops the download before the fragments file or `pages/` is written, and the
+  error ends "The download stopped before replacing anything". **Residual limit:** the spec is still written
+  after `pages/` is replaced, and the two are not one transaction. A write of the spec that fails for a reason
+  no look beforehand can see (a full disk, a lock taken meanwhile, a crash) comes after the page tree is
+  published. Its error keeps the write's code and says only what is known: the page tree was published, the
+  spec write reported an error, and whether `app-spec.json` matches those pages has not been confirmed —
+  resolve the error and run the same download again. It does not claim the spec is unchanged or mismatched
+  (an unchanged app's spec already matches; a rename can take effect and still report an error), nor that the
+  previous pages are gone (the swap keeps them when it cannot remove its folder, and warns). No copy of the
+  previous pages and no recovery folder is made.
+  **The managed download prints the not-round-tripped report after its restore** (`lib/managed-restore-report.js`):
+  with `--include-managed`, `main` also passes `deferReport`, so `runDownload` hands the report back as its parts
+  (`deferredReport`: the inventory and the membership notes) instead of printing it, and `main` recomputes it
+  (`notRoundTrippedReport`) less the ids a family restored (`subtractRestored`, by normalized id, never by name)
+  and prints it once. A plain download, and a library caller that does not ask, prints and answers the report
+  exactly as before. A family's omissions use one shape (`omission`: kind, id, key, name, a fixed `code` and its
+  fixed reason), never a service's own text. The source store is read, never written; its bytes are fingerprinted
+  before the first family reads it and again before `stagedPages.check`, and a store rewritten in between (a build
+  ran) stops the download with `managed-manifest-changed` before anything is written.
+  **The managed download restores the declared views a stable build created** (`lib/declared-view-io.js`,
+  `restoreManagedViews`). A view group exists only under `createIdentity: "stable-v1"`, so a restored view is
+  itself proof of that regime, and the download writes `createIdentity: "stable-v1"` and the floor with it. A
+  view comes back only when every check holds, in order: the group is settled and valid, its build created
+  (not adopted) the row, its publish is confirmed or not needed, the row is read with the table its
+  publication names, its projection hash equals the one the build proved, its saved and published layers are
+  equal (and equal the layer the build published), the inverse (`viewDeclarationFromLive`) can state the
+  query exactly (no aggregate, distinct, top, count, quick-find or unrepresentable filter, nested join or
+  related column it cannot bind), the key its table and name give is the bound key, the declaration compiles
+  back to the row part for part, the build's own planner (`planViewReconcile`, with the store record) answers
+  `noChange` and keeps the binding, and the spec still validates. The declaration carries `viewId` (the bound
+  id; environment-bound, like a dashboard's pinned id), `key` only when it is not `<table>/<name>`,
+  `activeOnly: false` and every condition the row holds (its `statecode` one included), so the rebuild
+  through the same store sends no write to the view's definition or to its solution membership. That is a
+  claim about the view, not the whole rebuild: the rebuild still runs every other step as for any spec (its
+  tables, forms and app are published, its sitemap written, its app components added). The view alone no
+  longer asks for its table's publish: a bound declared view the planner proves `noChange` with nothing
+  saved is not a reason to publish the table (`noteUnchangedManagedView` in `sdk-build.js`), while a form, a
+  chart written in the run, an owed publish or a changed or unbound view still asks for it. The row must
+  also still be in the app's solution (`solutionMembershipCheck` in `lib/managed-restore-report.js`): the
+  row itself or its whole table (root behaviour 0) counts; a table held without its subcomponents (behaviour
+  1 or 2), or no membership at all, is `not-in-solution`, an unreadable one is `membership-unknown`, and the
+  download never adds or repairs one. The same holds for a chart.
+  Anything else is an omission with a fixed code
+  (`managedViews.omitted`), a WARNING, and the view stays in the not-round-tripped report.
+  **It restores the declared charts a stable build created the same way** (`lib/declared-chart-io.js`,
+  `restoreManagedCharts`), with two differences. A chart declaration has no id and no key field, so the
+  restored chart carries neither: the rebuild finds the row through the store's key (`<table>/<name>`),
+  which makes the restore an edit snapshot for that build folder (the store selects the exact row; a
+  same-named chart is never bound in its place). And the typed chart the SDK reads shows the category and
+  series but not the rest of the query, so the projection hash cannot prove the chart holds nothing more:
+  verify's own content checks (`chartContentChecks`) run on the PUBLISHED row against the declaration, and
+  every one must pass. A filter, a join, an order, a second series, a date grouping, a related category, a
+  measure that is not a count of the table's id, or an element the verifier does not model leaves the chart
+  out as `unsupported`; a renamed chart is `key-mismatch`. The declaration is the chart's table and name,
+  `reconcile: "declared"`, `chartType`, `groupBy`, the `measure` stated explicitly, and its description
+  and title when they hold text. Styling (palette, colours, axes, legend) is not the spec's: a rebuild
+  that writes nothing to the chart keeps it byte for byte. Omissions are `managedCharts.omitted`, each with a WARNING.
+  **It restores protected configuration** (`configurationIdentity: "stable-v1"`; `lib/declared-configuration-io.js`,
+  `restoreManagedConfiguration`). A configuration group keeps no declaration, so each one is rebuilt from the bound
+  rows as they are now, read IN MEMORY at their exact ids (`readConfigurationRow`), never through the SDK's cached
+  `fetchArtifact` (which writes current values, defaults and connection ids into workspace files). It is accepted
+  only when `restoreProofOf` (`lib/configuration-protected.js`) proves a rebuild of it changes nothing: the build's
+  own exact location, plan and judgment, every planned row matching a committed consumer row, and each such row's
+  current projection equal to the one the build committed (that comparison is what catches a row edited by hand,
+  since an omitted field plans as the row's own value), and the solution still holding it. Then the spec must
+  still validate. A declaration never carries a value, default, value schema, secret reference or connection: a
+  part left out is named in `withheld` (`fields`, never a value) and a NOTE, and is never written as a null (a
+  written null would clear it on a rebuild). Results: `managedEnvironmentVariables` (only when it says something,
+  so a store without configuration answers as before). A secret variable is `secret-withheld`; a data source whose
+  parent is not restored at exactly the row it names is `parent-unproven`; a second value row is
+  `multiple-values`; a required variable with neither a default nor a value (`restoreProofOf` answers only
+  flags, never the value) is `required-value-missing`, since its rebuild would stop as incomplete. Readiness and
+  the withheld parts (a default, a value schema, a value, a connection) are the flags `restoreProofOf` reads from
+  the rows it proved, in the same pass, never the earlier read the declaration came from: a default or a
+  connection removed between the two is judged as the proof saw it.
+  `managedConnectionReferences` restores a reference's logical name, connector and labels; its connection is
+  withheld (a rebuild without settings keeps it), a custom-connector reference is `unsupported-dependency`, and
+  one a page names is `page-unready` unless the gate's own verdict is `bound` (the build's page gate,
+  `configuration-build.js namedByPages` over `pagesStatingBindings`, would stop a rebuild before that page; a
+  plain download declares none). That verdict is `configuration-artifacts.js referenceBinding` (the build's
+  `observe`) over the environment's connections, read once per download through `list-connections.js
+  readConnections` and only for such a reference: a connection id in the row is not enough, the connection must
+  be listed and be one of the reference's connector, and an unreadable listing proves nothing.
+  `managedCustomApis` restores a scaffold API with both complete child lists, each child matched to the slot its
+  binding holds (`request:<unique name>` / `response:<unique name>`); one with `_plugintypeid_value` set is
+  `implemented`, one a page's `actionBindings` names is `page-unready` (CUSTOM_API_IMPLEMENTATION_UNPROVEN), and
+  other-language labels are withheld as `otherLanguageLabels` unless `RetrieveProvisionedLanguages` answers exactly
+  one language (read at most once per download, and not at all when no API gets that far).
+  `managedDuplicateDetectionRules` restores no rule: the family is withheld (`FAMILIES.duplicateRule.withheld`),
+  and every committed rule is omitted `state-unproven` without a read. A rule's status is part of its
+  declaration, but the committed root projection excludes state and the store keeps no rule state, so a rule
+  published or unpublished by hand reads exactly like one its build left that way; stating the current status
+  would make that change the spec's. Restoring a rule needs the store to commit the state its build proved. `tests/download-managed-configuration.test.js` builds through the real build command and
+  bundle, downloads through `main`, rebuilds over the same app folder with zero writes, downloads again byte for
+  byte, and scans every file and stream the download wrote for value, default, schema and secret canaries.
+  **Every download, plain or managed, reports the custom field security profiles it does not declare**
+  (`readFieldSecurityProfiles`). A profile is environment-wide security policy and no store family proves one is
+  this app's, so no restore declares one: `fieldSecurityProfiles[]` stays out of the spec, and a rebuild neither
+  changes nor recreates a profile (the secured columns still round-trip as `isSecured`;
+  `tests/download-managed-lifecycle.test.js` runs a download, its complete rebuild and a second download over a
+  custom and the System Administrator profile with permissions, users and teams, and checks none of them is
+  written or named beyond the custom profile's id and name). The read finds a
+  profile two ways, de-duplicated by id: solution component type 70 in the app's solution(s), and a
+  `fieldpermission` on a column the download emits as secured. It selects only the permission's profile id and
+  the profile's id and name, never a permission's bits or a profile's users and teams, and drops System
+  Administrator by its fixed id and by name. Each profile is named in one NOTE and in the result's
+  `fieldSecurityProfiles.omitted` (`omission`, code `ownership-unproven`); a failed read is a
+  `fieldSecurityProfiles` entry in `incomplete` with a fixed reason, never "no profiles". The list is not part
+  of the not-round-tripped report and never reaches `descriptionInventory`.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,
@@ -2129,6 +2253,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the build's reuse line makes): a rebuild never writes the content of a web resource that exists, so an edit that was not
   recreated fails this check (`web-resource`), a spec content this machine cannot read (a missing `contentPath`, read relative to
   the spec's folder) is `unverified`, and a run whose build skipped the web-resources phase reports it as phase-skipped.
+  Each **chart** is held to its definition, read from the published row (`lib/chart-verify.js`): its type (`chart-type`, the one
+  Series item's `ChartType`), the query it draws (`chart-data`: its table, one group-by column with no date grouping, one measure of
+  the primary id with the spec's aggregate — `count` and `countcolumn` are distinct — one category, one series, no filter and no
+  join), an explicit `description` (`chart-description`) and a declared chart's `title` (`chart-title`). A contradiction fails, a
+  legacy chart's as a declared one's (its message says a rebuild leaves a legacy chart as it is). What the verifier does not model —
+  an order, an outer join with nothing in it, an unknown element or attribute, a document type declaration, a malformed or oversized
+  document — is `unverified`, never dropped to obtain a pass; styling (palette, colours, axes, legends) is not compared. A declared
+  chart its managed bindings bind is read by its bound id: a namesake is never taken in its place, and a binding that is pending or
+  unusable makes the chart `unverified`. Two charts with the spec's name on its table are present, their content `unverified`. A
+  row read without its content columns (the eval's synthesized reader answers so) is checked for presence, and its type, its data
+  and a declared title are `unverified`, never passed; a declared description is still checked when the row carries one.
   A relationship is verified by its **identity**, not its name: the answer has to state its schema name, its
   type, both its tables and, for a 1:N, its lookup column — for an N:N, its intersect table and the column each
   table has in it — and all of them have to match (`compareRelationship`, `lib/relationship-metadata.js`; an N:N's
@@ -2979,7 +3114,9 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   It is settled after the restore and the validation and before anything is published: `main` passes
   `runDownload` `stagePages` (as it does for every download), which writes the page tree to a hidden staging
   folder inside `<out>`, reads it back and answers `stagedPages` (`check`, `publish`); the tree, the spec and
-  the baseline are written only after the fragments file, so a failure there leaves every output as it was. The
+  the baseline are written only after the fragments file, so a failure there leaves every output as it was (and
+  a tree or an `app-spec.json` that cannot be replaced is refused before the fragments file is written, with or
+  without generative pages). The
   restored form is the group's `consumerState.declaration` (`DECLARATION_KEYS`, `autoSubgrids` included). A
   plain download reads no form.
   The download writes no store and transfers no binding authority: the first binding of a form from the
@@ -3832,6 +3969,7 @@ references/                    ← Shared reference docs
   agent-interaction-contract.md ← Agents are headless: no AskUserQuestion / plan mode inside a Task subagent; a declared tool is not always a delivered one (task tracking is optional)
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
+  promotion.md                 ← Promoting pages to another environment: managed or unmanaged, full solution or patch, version, dependency check, import order, rollback, what travels with a page (loaded only on a promote request)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
@@ -4034,7 +4172,7 @@ skills/
   app-builder/
     SKILL.md                   ← intent → model-driven app (create + edit)
   genpage/
-    SKILL.md                   ← Orchestrator skill (delegates to agents)
+    SKILL.md                   ← Orchestrator skill (delegates to agents); also the pull-to-repo mode (download pages without editing them)
     edit-flow.md               ← Edit flow steps (loaded only on edit path)
     verify-flow.md             ← Playwright browser verification (loaded only when user opts in)
   report-issue/                ← Bug-report skill (bundled shared workflow)
@@ -4088,7 +4226,7 @@ Fluent UI V9 styles are Griffel's, and Griffel's runtime silently drops ten shor
 
 The generative-page host renders a page inside a container of fixed height (the page root's parent is a host `FluentProvider` div with a definite height) and nothing above the page scrolls: every ancestor is `overflow: hidden` or `visible`, and the window does not scroll. So a page that does not establish its own scroll context shows only what fits, and everything below the fold is cut off with no scrollbar and no error (AB#6793599). The reported pages were flex columns with no bounded height; the rule that said otherwise lived only in the dark-mode section of `references/rules.md`. Live-verified on the host: a root with `height: "100%"` and `overflowY: "auto"` scrolls to its end; `overflowY` alone, `minHeight: "100%"`, and a two-div wrapper around a bare inner root all clip; a fixed header over a `flex: 1`, `minHeight: 0`, `overflowY: "auto"` body scrolls; and a content-box root with `height: "100%"` and 16 px of vertical padding scrolls but keeps its last 16 px below the visible area, which `boxSizing: "border-box"` fixes.
 
-- **The rule** (`scripts/lib/page-scroll.js`). It parses the page with the vendored TypeScript, follows the default export (through `memo`/`forwardRef`, an alias, an error-boundary class, a function declared below its `export default`, body components and components that render their `children` inside a box of their own) to the page's top element, and requires an element from there down that is bounded (a definite `height`/`maxHeight`, or a growing flex item in a bounded flex column with its automatic minimum removed) and scrolls (`overflowY` auto or scroll), with every element above it bounded. A percentage `height`/`maxHeight` is bounded only under a parent of *definite* height (a `height`, or a growing flex item of a definite column): a parent bounded by `maxHeight` alone bounds itself, but a `height: "100%"` child of it grows (CSS 2 §10.5). A `minHeight` that may be larger than the bound defeats it. One that is the same value as the bound (`calc()` included, whitespace aside) fits; two literals of the same unit (px, %, rem, em, vh) are compared within that unit, never converted, and a larger one fails; one the check cannot compare (px against a percentage or a rem, a token) is `scroll-context-unproven` with reason `min-height` (or the token's own reason). The alternatives of a condition (`a ? <X/> : <Y/>`, `a && <X/>`, a local component's arms, a `.map` callback's returns) are on screen one at a time, so each one that renders content must provide. One that renders nothing, or only recognised state views, is not judged: `Spinner`, `ProgressBar`, `Skeleton`, `MessageBar` and the Fluent text components (`Text`, `Body1`, `Caption1`, `Title1`, …), holding only text, values, their own parts (`MessageBarBody`, `SkeletonItem`, an action `Button`) and inline tags (`STATE_VIEWS` in the lib). Any other library or imported component in an alternative (a `Card` holding rows) is content whose layout the check cannot see, and is judged; one alternative that scrolls beside one that does not, or cannot be shown to, is `scroll-context-unproven` with reason `partial-alternatives`. It reads `makeStyles` slots (through `mergeClasses` and conditions) and inline styles; what it cannot read is `scroll-context-unproven` with a `reason`, never a pass. An element on that path that fills its container — its `height` or `maxHeight` is exactly `"100%"` or `calc(100% - N px)` with N smaller than its vertical padding in px, and its used height, `max(minHeight, min(height, maxHeight))` as CSS sizes it, is not provably smaller than the container by at least that padding (only `calc(100% - N px)` with N at least the padding proves it: `height: "100%"` under `maxHeight: "calc(100% - 64px)"` leaves room, but not under a looser `maxHeight: "150%"`, a fixed `maxHeight` the check cannot compare with the host, or with a `minHeight: "100%"` that wins over the maximum) — with vertical padding (any padding key that is not literally 0, a token or shorthand included) and no `boxSizing: "border-box"` is `scroll-context-padding`; `50%`, a calc() that leaves room for the padding or whose padding is a token, a box sized by flex or by a fixed length, and a scroll container in a flex column are not. That includes a bounded root that does not scroll around a scrolling body, because its padding pushes the body's end below the host in the same way (reasoned from the measurement, not measured).
+- **The rule** (`scripts/lib/page-scroll.js`). It parses the page with the vendored TypeScript, follows the default export (through `memo`/`forwardRef`, an alias, an error-boundary class, a function declared below its `export default`, body components and components that render their `children` inside a box of their own) to the page's top element, and requires an element from there down that is bounded (a definite `height`/`maxHeight`, or a growing flex item in a bounded flex column with its automatic minimum removed) and scrolls (`overflowY` auto or scroll), with every element above it bounded. A percentage `height`/`maxHeight` is bounded only under a parent of *definite* height (a `height`, or a growing flex item of a definite column): a parent bounded by `maxHeight` alone bounds itself, but a `height: "100%"` child of it grows (CSS 2 §10.5). A `minHeight` that may be larger than the bound defeats it. One that is the same value as the bound (`calc()` included, whitespace and the case of keywords, units and function names aside; but a value with a `var()`, an `env()`, an `attr()`, a CSS escape or a comment equals only the same text byte for byte, as custom property and environment variable names are case-sensitive (an `env()` name the host does not define takes its fallback), an `attr()` name may be, and escapes can spell any part of one, so `var(--height)` and `var(--HEIGHT)` are two values, `env(a, 0px)` and `env(A, 0px)` are not proven to be one, and another case or spacing of one value, `CALC(VAR(--h))`, is refused as unproven, which the remedy clears) fits; two literals of the same unit (px, %, rem, em, vh) are compared within that unit, never converted, and a larger one fails; one the check cannot compare (px against a percentage or a rem, a token) is `scroll-context-unproven` with reason `min-height` (or the token's own reason). The alternatives of a condition (`a ? <X/> : <Y/>`, `a && <X/>`, a local component's arms, a `.map` callback's returns) are on screen one at a time, so each one that renders content must provide. One that renders nothing, or only recognised state views, is not judged: `Spinner`, `ProgressBar`, `Skeleton`, `MessageBar` and the Fluent text components (`Text`, `Body1`, `Caption1`, `Title1`, …), holding only text, values, their own parts (`MessageBarBody`, `SkeletonItem`, an action `Button`) and inline tags (`STATE_VIEWS` in the lib). Any other library or imported component in an alternative (a `Card` holding rows) is content whose layout the check cannot see, and is judged; one alternative that scrolls beside one that does not, or cannot be shown to, is `scroll-context-unproven` with reason `partial-alternatives`. It reads `makeStyles` slots (through `mergeClasses` and conditions) and inline styles; what it cannot read is `scroll-context-unproven` with a `reason`, never a pass. An element on that path that fills its container — its `height` or `maxHeight` is exactly `"100%"` or `calc(100% - N px)` with N smaller than its vertical padding in px, and its used height, `max(minHeight, min(height, maxHeight))` as CSS sizes it, is not provably smaller than the container by at least that padding (only `calc(100% - N px)` with N at least the padding proves it: `height: "100%"` under `maxHeight: "calc(100% - 64px)"` leaves room, but not under a looser `maxHeight: "150%"`, a fixed `maxHeight` the check cannot compare with the host, or with a `minHeight: "100%"` that wins over the maximum) — with vertical padding (any padding key that is not literally 0, a token or shorthand included) and no `boxSizing: "border-box"` is `scroll-context-padding`; `50%`, a calc() that leaves room for the padding or whose padding is a token, a box sized by flex or by a fixed length, and a scroll container in a flex column are not. That includes a bounded root that does not scroll around a scrolling body, because its padding pushes the body's end below the host in the same way (reasoned from the measurement, not measured). Its message says the end of the page stays cut off, except where the other of `height` and `maxHeight` is a fixed length (`height: "100%"` under `maxHeight: "400px"`) and no `minHeight` other than auto or 0 is set: that box overhangs only a container shorter than that length plus the padding, so the message says the end may be cut off, and when (the box is refused all the same, as the host's height is not known to the check).
 - **The remedy always works.** Each message gives one edit: `height: "100%"`, `overflowY: "auto"`, `boxSizing: "border-box"` (plus `minHeight: 0` when the element has a `minHeight` that may be larger than its container, or one the check cannot read) on the top element's `makeStyles` slot (with any overflow key in that slot deleted), or as the last keys of its inline `style`, made its last attribute, when its class cannot be read (an inline style wins over every class). For a library top element (`<Card>`), the edit wraps it in a `<div>` that has those keys. `page-scroll.test.js` applies the remedy to every shape the check rejects, including a template-string `className`, a spread of attributes and a `minHeight` that wins, and requires a pass. In a bounded flex column the message also advises `flexShrink: 0` on items that clip their own content: a Fluent `Card` is `overflow: hidden`, so it has no automatic minimum height and would be squeezed.
 - **Who runs it.** `check-griffel-styles.js` runs it on every file with a default export, after the Griffel check. Its problems are appended to `problems` with exit 3, without the lib's internal `fix` object. The generation flows judge pages in full: `/genpage` 5b step 9 and 5c, the §7.5 fix when verification follows generation, and `/app-builder` Phase 1.5 step 5. The flows that change a page the run did not generate pass `--existing`: the `/genpage` edit flow (its Phase 5 check, and the §7.5 fix when verification follows an edit) and the `/app-builder` hand edit. There the problems go to `notes` and do not change `ok` or the exit code, and the flow tells the maker and offers the edit, applied only if they agree. The one exception: when the maker's requested edit itself rewrites the page's top-level layout, that layout is new code written in this run, so the agent applies the remedy as part of that edit and tells the maker in one sentence that it did. `edit-flow.md` and `verify-flow.md` §7.5 state this in the same words, and `genpage-dispatch-contract.test.js` pins both halves and that no note is applied without asking. If the scroll check itself throws — including when the vendored compiler is missing or corrupt — the CLI adds a `scroll-check-failed` note and leaves the Griffel result and exit code as they were; it never reports a silent clean result. The page-builder worker has no shell, so it gets the rule and a self-review. The Layer 2 eval grades every generated page with the same lib (`evals/model-apps/genpage/lib/scroll-context.js`); the pages captured before the rule are listed with their verdicts and report a skip.
 - **Browser verification** (`skills/genpage/verify-flow.md` 7.2 and 7.4) cannot scroll the window or read the document's height, since neither moves in the host: it finds the element that scrolls and holds more than it shows, scrolls it to the end, and requires the last content's bottom to be at or above the lowest point the scroller and its clipping ancestors leave visible. Content inside a scroll region of its own (a list in a fixed-height panel) is left out of that measure; each such region is then scrolled to its own end and measured the same way, so a region that has not been scrolled is not taken for a cut-off page, and a padded region that overhangs its panel is still caught. With no scroller, content below the window is the clipping defect. `genpage-dispatch-contract.test.js` pins those scripts; they were run against an offline replica of the host (a bare root, the remedy, a padded content-box root, a short page, a root with a scrolling list and a footer, and a root with a padded list that overhangs its panel).
@@ -5441,6 +5579,18 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/sdk
   workflow itself, across ubuntu × windows × macos and Node 20 × 22.
   Keep `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` on any new job that could run a
   telemetry-emitting hook or script.
+- **A test that compares paths must accept the real name of a folder.** The product names an output folder
+  by its real path (`fs.realpathSync.native`), which is not always the path the test gave it: `os.tmpdir()` is
+  `/var/...` on macOS while its real path is `/private/var/...`, and on Windows CI it can be an 8.3 short name
+  (`C:\Users\RUNNER~1\...`). Canonicalize the expected path with `fs.realpathSync.native` first, or accept
+  either name (`download-model-app.test.js` checks both `out` and `fs.realpathSync.native(out)`); a plain
+  string compare passes on one runner and fails on another.
+- **Retry a test's own file moves on Windows.** When the test itself moves, removes or replaces a folder the
+  product has just written, an antivirus or indexer handle can refuse the call for a moment (EPERM, EACCES or
+  EBUSY). Wrap such test-own fs calls in the retry helper the download tests use (`hookRetry` in
+  `download-model-app.test.js`: Windows only, those three codes only, about 2 s), so the refusal does not
+  fail the test or escape into the product's own fs call. Never retry the product's call under test this way,
+  and keep every assertion as it is.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - Evals: `node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js

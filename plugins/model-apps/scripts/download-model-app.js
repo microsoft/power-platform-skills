@@ -30,6 +30,13 @@
 // this publisher's own unmanaged script (lib/declared-form-io.js libraryEntry; `managedForms.libraries`).
 // A persona a declared flow's securityRoles name that the downloaded spec lacks is read from its role and written into personas[] only
 // when a rebuild provably leaves that role exactly as it is (lib/persona-restore.js; `managedBpfs.personas`).
+// A declared view (views[].reconcile "declared") a stable build (createIdentity "stable-v1") created, settled and still proves is
+// written into views[] as a declaration inverted from the row, pinned to its id, only when it compiles back to the row exactly and
+// the build's planner answers noChange for it (lib/declared-view-io.js; `managedViews`), and is then no longer named as left out;
+// any other is named in `managedViews.omitted` and stays in the not-round-tripped report.
+// A declared chart a stable build created is restored the same way into charts[], without an id (a chart declaration has none: the
+// store's key selects the row), only when verify's content checks pass on its published row and the planner answers noChange
+// (lib/declared-chart-io.js; `managedCharts`); any other is named in `managedCharts.omitted`.
 // A declared form or flow that is proved but left out only for what the download cannot bring (the script library a form handler
 // calls, the persona a flow's securityRoles name) is written ready to paste, with what it still needs, to
 // a NEW file `<out>/.maker-workspace/managed-fragments-<UTC time>-<random>.json` (`managedFragments.file` in the result;
@@ -61,7 +68,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
+const { assertSafeOutputDir, assertPlainFileTarget, assertFileReplaceable, writeFileSafe, removeTreeWithRetry } = require('./lib/safe-fs.js');
 const { renameWithRetry } = require('./lib/rename-retry.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin, requireDataverseOrigin, webApiUrl, readOrgLanguageCode, readLanguageCodeFlag } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
@@ -74,6 +81,11 @@ const { restoreManagedForms } = require('./lib/declared-form-io.js');
 const { restoreManagedDashboards } = require('./lib/declared-dashboard-io.js');
 const { restoreManagedRules } = require('./lib/declared-rule-io.js');
 const { restoreManagedBpfs } = require('./lib/declared-bpf-io.js');
+const { restoreManagedViews } = require('./lib/declared-view-io.js');
+const { restoreManagedCharts } = require('./lib/declared-chart-io.js');
+const { restoreManagedConfiguration } = require('./lib/declared-configuration-io.js');
+const { readConnections } = require('./list-connections.js');
+const { subtractRestored, storeRevision, assertStoreUnchanged, omission } = require('./lib/managed-restore-report.js');
 const { settleFragments } = require('./lib/managed-fragments.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
@@ -84,7 +96,7 @@ const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js')
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
-const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor } = require('./lib/schema-feature-contract.js');
+const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor, SYSTEM_ADMIN_PROFILE_ID, SYSTEM_ADMIN_PROFILE_NAME } = require('./lib/schema-feature-contract.js');
 const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
 const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
@@ -884,7 +896,7 @@ async function readAppShellSettings(sdk, appId) {
   return out;
 }
 
-async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices, componentInventory, { tables } = {}) {
+async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices, componentInventory, { tables, securedColumns } = {}) {
   // `incomplete[]` records an artifact class whose read FAILED. Without it the whole app-component
   // block shared one broad catch, so a 403 on `systemform` left `forms: []` — indistinguishable from
   // an app with no forms, which is EXACTLY the reported bug (AB#6686423) reappearing inside the fix
@@ -892,7 +904,9 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
   // keys reach `app-spec.json`, so this informs the CLI without changing the spec shape.
   //
   // `tables` are the app's tables, whose command bars are inventoried (readCommandInventory); a caller that names none reads none.
-  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], commands: [], roleRestrictedForms: [], incomplete: [] };
+  // `securedColumns` are the { table, column } logical names the download emits with isSecured, whose field security profiles are
+  // named (readFieldSecurityProfiles); a caller that names none looks for profiles in the app's solution only.
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], commands: [], roleRestrictedForms: [], fieldSecurityProfiles: [], incomplete: [] };
   const fail = (kind, err) => inventory.incomplete.push({ kind, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' });
   try {
     const layer = componentInventory ? componentInventory.layer : await currentAppLayer(sdk.dataverse, appId);
@@ -1079,13 +1093,97 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
     }
   }
 
+  await readFieldSecurityProfiles(sdk, inventory, { solIds, solutionError, securedColumns });
+
   // Ordered here, once, for everything that reads the inventory — the spec's `descriptionInventory`, the not-round-tripped report
   // and the role-restriction warning. The rows are in the order Dataverse answered, which differs between two reads of one app; by
   // table, then name, then id (compareArtifacts) they do not.
   for (const key of ['views', 'charts', 'forms', 'businessRules', 'commands', 'roleRestrictedForms']) inventory[key].sort(compareArtifacts);
   inventory.globalChoices.sort((a, b) => compareText(a.name, b.name));
+  inventory.fieldSecurityProfiles.sort((a, b) => compareText(a.name, b.name) || compareText(a.id, b.id));
   inventory.incomplete.sort((a, b) => compareText(a.kind, b.kind) || compareText(a.reason, b.reason));
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
+}
+
+// Field security profiles: REPORTED, never declared. A profile is environment-wide security policy — its permissions say which
+// secured columns its holders may read or change, and its users and teams say who holds it — and no binding store record proves
+// that this app authored one, so a download that declared it would hand a rebuild the power to rewrite somebody else's grant.
+// The download names the custom profiles it finds instead, in BOTH a plain and a managed download, and leaves fieldSecurityProfiles[]
+// out of the spec: a rebuild then neither changes nor recreates them. The secured columns themselves still round-trip (isSecured).
+//
+// Two ways in, de-duplicated by id:
+//   - the app's own solution(s): solution component type 70 is a Field Security Profile
+//     (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent);
+//   - a field permission on a column the download emits as secured — the profile that opens it, wherever it lives
+//     (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/fieldpermission).
+// Only the profile id (`_fieldsecurityprofileid_value`) of a permission is read, and only the id and name of a profile: never a
+// permission's can-read/create/update bits, and never the users or teams a profile is given to, so nothing about who may see what
+// leaves the environment. System Administrator is dropped by its fixed id AND by its name — every org has it, every secured column
+// opens to it, and naming it would only bury the custom profiles the note is for.
+//
+// A failed read is UNKNOWN, never "no profiles": one `incomplete` entry with a FIXED reason (the service's error text can quote the
+// filter, i.e. the column names) — and what the other way in found is kept.
+const FIELD_SECURITY_PROFILES_UNREAD = 'the field security profiles could not be read';
+async function readFieldSecurityProfiles(sdk, inventory, { solIds = [], solutionError = null, securedColumns = [] } = {}) {
+  let failed = false;
+  const ids = [];
+  try {
+    if (solutionError) throw solutionError;
+    for (const solId of solIds) {
+      const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid'], filter: `_solutionid_value eq ${solId} and componenttype eq 70`, paginate: true });
+      ids.push(...(comps || []).map((r) => r && r.objectid).filter(Boolean));
+    }
+  } catch {
+    failed = true;
+  }
+  // One request per table, naming its secured columns, so the read is bounded by what the download emits.
+  const byTable = new Map();
+  for (const { table, column } of securedColumns || []) {
+    if (!table || !column) continue;
+    const t = String(table).toLowerCase();
+    if (!byTable.has(t)) byTable.set(t, new Set());
+    byTable.get(t).add(String(column).toLowerCase());
+  }
+  const esc = (v) => v.replace(/'/g, "''");
+  for (const table of [...byTable.keys()].sort(compareText)) {
+    try {
+      const columns = [...byTable.get(table)].sort(compareText).map((c) => `attributelogicalname eq '${esc(c)}'`).join(' or ');
+      const rows = await sdk.queryRecords('fieldpermission', { select: ['_fieldsecurityprofileid_value'], filter: `entityname eq '${esc(table)}' and (${columns})`, paginate: true });
+      ids.push(...(rows || []).map((r) => r && r._fieldsecurityprofileid_value).filter(Boolean));
+    } catch {
+      failed = true;
+    }
+  }
+  const isAdmin = (id) => String(id || '').replace(/[{}]/g, '').toLowerCase() === SYSTEM_ADMIN_PROFILE_ID;
+  const custom = ids.filter((id) => !isAdmin(id));
+  if (custom.length) {
+    try {
+      const rows = await rowsByIds(sdk, 'fieldsecurityprofile', 'fieldsecurityprofileid', custom, ['fieldsecurityprofileid', 'name'], (r) => r);
+      const seen = new Set();
+      for (const r of rows) {
+        const id = String((r && r.fieldsecurityprofileid) || '').replace(/[{}]/g, '').toLowerCase();
+        if (!id || seen.has(id) || isAdmin(id)) continue;
+        if (String((r && r.name) || '').trim().toLowerCase() === SYSTEM_ADMIN_PROFILE_NAME.toLowerCase()) continue;
+        seen.add(id);
+        inventory.fieldSecurityProfiles.push({ id, name: r.name });
+      }
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) inventory.incomplete.push({ kind: 'fieldSecurityProfiles', reason: FIELD_SECURITY_PROFILES_UNREAD });
+}
+
+// The inventory's field security profiles as managed-restore-report omissions (id and name, fixed reason), for the NOTE and the
+// result payload. Ownership-unproven is the honest code: the profile may well be this app's, but nothing binding says so.
+function fieldSecurityProfileOmissions(inventory) {
+  return ((inventory && inventory.fieldSecurityProfiles) || []).map((p) => omission({ kind: 'fieldSecurityProfile', id: p.id, name: p.name, code: 'ownership-unproven' }));
+}
+
+function fieldSecurityProfilesNote(omitted) {
+  if (!omitted || !omitted.length) return '';
+  const n = omitted.length;
+  return `NOTE: ${n} field security profile${n === 1 ? '' : 's'} (${omitted.map((o) => o.name || o.id).join(', ')}) ${n === 1 ? 'is' : 'are'} not declared in fieldSecurityProfiles[]: ${omitted[0].reason}. ${n === 1 ? 'It stays' : 'They stay'} as ${n === 1 ? 'it is' : 'they are'} in this environment, and a rebuild neither changes nor recreates ${n === 1 ? 'it' : 'them'}; the secured columns keep isSecured. Declare a profile only if this app owns it.\n`;
 }
 
 // Read the page tree a download writes (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
@@ -1939,6 +2037,21 @@ function roundTrippedAware(inventory, globalChoiceDecls) {
   const { globalChoices, ...rest } = inventory;
   void globalChoices;
   return remaining.length ? { ...rest, globalChoices: remaining } : rest;
+}
+
+// The not-round-tripped report of a download: its inventory less the global choices the spec declares (roundTrippedAware), with the
+// app-membership notes. One function for the two places that compute it — downloadApp, and main once the managed download has put
+// some of the inventory back into the spec (lib/managed-restore-report.js subtractRestored) — so the two can never disagree.
+//
+// Round-tripped means DECLARED in the emitted spec, so subtract `spec.globalChoices` — not the raw
+// `globalChoiceDecls` candidates, which also hold sets bound only by a filtered attribute or a
+// dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
+// report whose job is naming them.
+function notRoundTrippedReport(inventory, spec, membershipNotes) {
+  const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
+  const summary = notRoundTrippedSummary(roundTrippedAware(inventory, declaredGlobalChoices));
+  if (!membershipNotes.length) return summary;
+  return { ...(summary || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
 }
 
 // Render `notRoundTrippedSummary` as the operator-facing warning. Kept separate from the computation
@@ -3385,7 +3498,7 @@ async function runDownload(options = {}) {
   return { ...result, stagedPages: { check: () => assertPageTreeReplaceable(pagesRoot), publish: () => writePageTree(pagesRoot, pages) } };
 }
 
-async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null }) {
+async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities, stage = null, deferReport = false }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -4025,7 +4138,10 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       const scope = solutionUnreadable
         ? new Error(`the solutions this app belongs to could not be read (${solutionUnreadable})`)
         : (solutionCandidates || solution.uniqueName);
-      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced, componentInventory, { tables: [...allLogicals, ...appTables] });
+      // The columns this download secures, whose field security profiles the inventory names (readFieldSecurityProfiles).
+      const securedColumns = [];
+      for (const e of entities || []) for (const c of (e && e.columns) || []) if (c && c.isSecured === true && e.schemaName && c.schemaName) securedColumns.push({ table: String(e.schemaName).toLowerCase(), column: String(c.schemaName).toLowerCase() });
+      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced, componentInventory, { tables: [...allLogicals, ...appTables], securedColumns });
       return capturedInventory;
     },
   };
@@ -4063,25 +4179,32 @@ async function downloadApp({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // reported failure was not that they are omitted — that is a documented limitation — but that
   // NOTHING said so, so a second session reading the spec could not tell "this app has no views"
   // from "this download does not carry views".
-  //
-  // Round-tripped means DECLARED in the emitted spec, so subtract `spec.globalChoices` — not the raw
-  // `globalChoiceDecls` candidates, which also hold sets bound only by a filtered attribute or a
-  // dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
-  // report whose job is naming them.
-  const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
-  let notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
   // The notes come in the order the component rows were read, which Dataverse does not fix (compareNotes).
   const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes].sort(compareNotes);
-  if (membershipNotes.length) {
-    notRoundTripped = { ...(notRoundTripped || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
-  }
-  if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
+  const notRoundTripped = notRoundTrippedReport(capturedInventory, spec, membershipNotes);
+  // `deferReport` (main's managed download, and only it): the report is not printed here but handed back as its parts
+  // (`deferredReport`), because the managed restore may yet put some of what it names back into the spec. main prints it once,
+  // after the restore, without what was restored. Every other caller gets the report printed here, as it always was.
+  if (notRoundTripped && !deferReport) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
+  // Printed by every download, plain and managed alike: no restore declares a profile (readFieldSecurityProfiles).
+  const fieldSecurityOmitted = fieldSecurityProfileOmissions(capturedInventory);
+  if (fieldSecurityOmitted.length) process.stderr.write(fieldSecurityProfilesNote(fieldSecurityOmitted));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
   // `publisher` is internal (main hands it to the managed restore, which downloads a form's handler library only under this
   // publisher's verified prefix); it is not part of the printed result.
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, publisher: { prefix: solution.publisherPrefix, resolved: solution.prefixResolved }, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(fieldSecurityOmitted.length ? { fieldSecurityProfiles: { omitted: fieldSecurityOmitted } } : {}), ...(deferReport ? { deferredReport: { inventory: capturedInventory, membershipNotes } } : {}) };
+}
+
+// `error` with `sequel` (what the refusal or failure means for the app folder) added to its message. Its code and reason are kept, so a
+// caller that tells one failure from another by them still can; the original is its cause.
+function withSequel(error, sequel) {
+  if (!error || typeof error.message !== 'string') return error;
+  const told = new Error(`${error.message.replace(/\.\s*$/, '')}. ${sequel}`, { cause: error });
+  if (error.code !== undefined) told.code = error.code;
+  if (error.reason !== undefined) told.reason = error.reason;
+  return told;
 }
 
 async function main(deps = {}) {
@@ -4214,12 +4337,13 @@ async function main(deps = {}) {
 
     // Every download stages its page tree (runDownload `stagePages`): it is checked and published below, after everything that can still
     // stop the download, so a refusal or a failure before then leaves the maker's pages/ exactly as it was.
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, stagePages: true });
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities, stagePages: true, ...(includeManaged ? { deferReport: true } : {}) });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
 
-    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft, pageBindings } = result;
+    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, solutionCandidates, navIdsLeft, pageBindings, fieldSecurityProfiles } = result;
+    let { notRoundTripped } = result;
     if (droppedSubareas > 0 || dashboardReconstructionError) {
       const droppedList = (droppedSubareaDetails || [])
         .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -4249,15 +4373,27 @@ async function main(deps = {}) {
     // dashboards[], in place of the plain entry the download reconstructed for it (lib/declared-dashboard-io.js restoreManagedDashboards),
     // and each declared business rule into businessRules[] (lib/declared-rule-io.js restoreManagedRules), which the plain download leaves out;
     // and each declared business process flow into businessProcessFlows[] (lib/declared-bpf-io.js restoreManagedBpfs), which it leaves out too;
+    // and each declared view a stable build created into views[] (lib/declared-view-io.js restoreManagedViews), which it leaves out too;
+    // and each declared chart a stable build created into charts[] (lib/declared-chart-io.js restoreManagedCharts), which it leaves out too;
     // every other is named, never silently dropped. A store file that is not this app's on this environment stops the download before
     // anything is written.
     let managedForms = null;
     let managedDashboards = null;
     let managedRules = null;
     let managedBpfs = null;
+    let managedViews = null;
+    let managedCharts = null;
+    let managedConfiguration = null;
     // The proved items the restore leaves out only for what the download cannot bring (lib/managed-fragments.js).
     const fragments = [];
+    // The store's bytes as the restore first reads them: every family below reads the file on its own, so a build that rewrote it
+    // in between would have them prove against two revisions. Rechecked before anything is published (assertStoreUnchanged). A
+    // store that cannot be read here is left to the restore, which names a missing or foreign file in its own words.
+    let storeRev = null;
+    // The ids the restore put back into the spec, by inventory class (lib/managed-restore-report.js subtractRestored).
+    const restoredIds = {};
     if (includeManaged) {
+      try { storeRev = storeRevision(managedManifestFile); } catch { /* named by the restore below */ }
       const source = {
         sdk,
         spec,
@@ -4268,12 +4404,20 @@ async function main(deps = {}) {
         validate: (s) => io.validateAppSpec(s, { profile: 'plan', reconstructed: true }),
         fragments,
         publisher: result.publisher,
+        // The environment's connections, read as a build reads them (list-connections.js readConnections), and only when a page names a
+        // connection reference whose row holds a connection: such a reference is restored only when they prove it bound to its connector,
+        // the proof the rebuild's page gate asks for (lib/declared-configuration-io.js acceptReference). A failed read proves nothing, so
+        // the reference is left out (page-unready); it never stops the download.
+        connections: deps.connections || (async () => (await readConnections(dataverseOrigin(env))).value),
       };
       try {
         managedForms = await restoreManagedForms(source);
         managedDashboards = await restoreManagedDashboards(source);
         managedRules = await restoreManagedRules(source);
         managedBpfs = await restoreManagedBpfs(source);
+        managedViews = await restoreManagedViews(source);
+        managedCharts = await restoreManagedCharts(source);
+        managedConfiguration = await restoreManagedConfiguration(source);
       } catch (e) {
         finish(false, { ok: false, code: (e && e.code) || 'managed-manifest-unusable', error: `${(e && e.message) || e}. Nothing was written.` });
         return;
@@ -4284,6 +4428,22 @@ async function main(deps = {}) {
       for (const s of managedRules.stale) io.stderr.write(`WARNING: managed business rule ${s.key} was not restored: ${s.reason}. It is left out of businessRules[], as every business rule is without --include-managed.\n`);
       for (const s of managedBpfs.stale) io.stderr.write(`WARNING: managed business process flow ${s.key} was not restored: ${s.reason}. It is left out of businessProcessFlows[], as every process flow is without --include-managed.\n`);
       for (const p of managedBpfs.personas || []) io.stderr.write(`NOTE: persona '${p.name}' was written from its role as it is now; a build owns a persona's role, so a privilege added to that role outside the spec is removed by the next build.\n`);
+      for (const o of managedViews.omitted) io.stderr.write(`WARNING: managed view ${o.key || o.id} was not restored: ${o.reason}. It is left out of views[], as every view is without --include-managed.\n`);
+      restoredIds.views = managedViews.restored.map((r) => r.id);
+      for (const o of managedCharts.omitted) io.stderr.write(`WARNING: managed chart ${o.key || o.id} was not restored: ${o.reason}. It is left out of charts[], as every chart is without --include-managed.\n`);
+      restoredIds.charts = managedCharts.restored.map((r) => r.id);
+      // Protected configuration (lib/declared-configuration-io.js): an item left out is named as every family's is; an item restored
+      // without some of its parts (a default, a value, a connection) names those parts, never their values.
+      for (const [list, r] of Object.entries(managedConfiguration)) {
+        for (const o of r.omitted) io.stderr.write(`WARNING: managed ${o.kind} ${o.key || o.id} was not restored: ${o.reason}. It is left out of ${list}[], as every ${o.kind} is without --include-managed.\n`);
+        for (const w of r.withheld) io.stderr.write(`NOTE: managed ${w.kind} ${w.key || w.id} was restored without ${w.fields.join(', ')}: ${w.reason}.\n`);
+      }
+      // The report runDownload deferred (`deferReport`), less what was restored, printed once. A runDownload that hands back no
+      // deferred parts printed its own report already (or had none), so nothing is printed twice.
+      if (result.deferredReport) {
+        notRoundTripped = notRoundTrippedReport(subtractRestored(result.deferredReport.inventory, restoredIds), spec, result.deferredReport.membershipNotes);
+        if (notRoundTripped) io.stderr.write(notRoundTrippedWarning(notRoundTripped));
+      }
     }
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
@@ -4303,11 +4463,30 @@ async function main(deps = {}) {
       );
     }
     // The staged page tree is published here, for every download, after validation and everything else that can stop the download: its
-    // checks first (writePageTree's own refusals, made without writing), then, for the managed download, the fragments file, then the
-    // tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves pages/, the spec and the
-    // baseline as they were, and a tree that cannot be replaced stops the managed download before its fragments file is written.
+    // checks first (writePageTree's own refusals, made without writing, and the refusals writeFileSafe would make of app-spec.json —
+    // a link, a folder, a hard link, a read-only file or a folder where no new file can be made), then, for the managed download, the
+    // fragments file, then the tree, and only then the spec and the baseline. So a refusal or a failed write before this point leaves
+    // pages/, the spec and the baseline as they were, and a tree or a spec that cannot be replaced stops the managed download before its
+    // fragments file is written, with or without a page tree: a managed download of an app with no generative pages has no tree to check,
+    // but its fragments file is still written before the spec. The spec is still written after the tree, and the two are not one transaction: a write of it that
+    // fails for a reason no look beforehand can see (a full disk, a lock taken meanwhile) comes after the tree is published.
     let managedFragments = null;
-    if (result.stagedPages) result.stagedPages.check();
+    if (includeManaged) {
+      try {
+        assertStoreUnchanged(managedManifestFile, storeRev);
+      } catch (e) {
+        finish(false, { ok: false, code: e.code, error: `${e.message}. Nothing was written.` });
+        return;
+      }
+    }
+    if (result.stagedPages || includeManaged) {
+      if (result.stagedPages) result.stagedPages.check();
+      try {
+        assertFileReplaceable(specPath);
+      } catch (e) {
+        throw withSequel(e, `The download stopped before replacing anything: ${path.join(outDir, 'pages')} and ${specPath} are as they were`);
+      }
+    }
     if (includeManaged) {
       try {
         managedFragments = settleFragments(outDir, { app: appUnique, items: fragments });
@@ -4320,7 +4499,16 @@ async function main(deps = {}) {
       }
     }
     if (result.stagedPages) result.stagedPages.publish();
-    writeFileSafe(specPath, JSON.stringify(spec, null, 2));
+    try {
+      writeFileSafe(specPath, JSON.stringify(spec, null, 2));
+    } catch (e) {
+      if (!result.stagedPages) throw e;
+      // Only what is known is said: the page tree was published, and then the write of the spec reported an error. What the spec on
+      // disk is now, and whether it matches the pages, is not: the app may be unchanged (the spec already matched), a rename can take
+      // effect and still report an error, and the swap keeps the previous tree when it cannot remove its folder (writePageTree warns
+      // of that itself). Running the same download again writes both once the cause is resolved.
+      throw withSequel(e, `This download had already published its page tree to ${path.join(outDir, 'pages')} when the write of ${specPath} reported this error, so whether ${specPath} matches those pages has not been confirmed: resolve the error and run the same download again`);
+    }
     // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
     // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this
@@ -4335,9 +4523,22 @@ async function main(deps = {}) {
     } catch (e) {
       if (e && e.code === 'UNSAFE_OUTPUT') io.stderr.write(`WARNING: ${e.message}\n`);
     }
+    // A view or chart restore says something only when it restored or left out a group: a store with neither family answers the
+    // result a managed download gave before views and charts were restored, byte for byte.
+    const familyResult = (r) => (r && (r.restored.length || r.omitted.length) ? { restored: r.restored.map((x) => x.key), omitted: r.omitted } : null);
+    const viewsResult = familyResult(managedViews);
+    const chartsResult = familyResult(managedCharts);
+    // A configuration list says something only when it restored, left out or withheld part of an item, under its own key, so a store
+    // without protected configuration answers the result a managed download gave before it was restored, byte for byte.
+    const CONFIGURATION_RESULTS = { environmentVariables: 'managedEnvironmentVariables', connectionReferences: 'managedConnectionReferences', customApis: 'managedCustomApis', duplicateDetectionRules: 'managedDuplicateDetectionRules' };
+    const configurationResults = {};
+    for (const [list, r] of Object.entries(managedConfiguration || {})) {
+      if (!r.restored.length && !r.omitted.length && !r.withheld.length) continue;
+      configurationResults[CONFIGURATION_RESULTS[list]] = { restored: r.restored.map((x) => x.key), omitted: r.omitted, ...(r.withheld.length ? { withheld: r.withheld } : {}) };
+    }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(managedFragments ? { managedFragments } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...    (pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}), ...(managedForms ? { managedForms } : {}), ...(managedDashboards ? { managedDashboards } : {}), ...(managedRules ? { managedRules } : {}), ...(managedBpfs ? { managedBpfs } : {}), ...(viewsResult ? { managedViews: viewsResult } : {}), ...(chartsResult ? { managedCharts: chartsResult } : {}), ...configurationResults, ...(managedFragments ? { managedFragments } : {}), ...(fieldSecurityProfiles ? { fieldSecurityProfiles } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
@@ -4408,4 +4609,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, untypedColumnWarnings, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedReport, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, fieldSecurityProfileOmissions, fieldSecurityProfilesNote, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, writePageTree, generatedFolders, GUARDED_FS_METHODS, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

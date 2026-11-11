@@ -1629,6 +1629,15 @@ function connectorName(value) {
   return match ? match[1] : text;
 }
 
+// The binding a page's gate reads for one connection reference whose row a caller read itself (the managed download's restore,
+// lib/configuration-protected.js restoreProofOf): 'bound', 'unbound' or 'unknown', from the same definition (observe) as every
+// build's, so a restore cannot call ready what a rebuild would stop on. `row` is { connectionId, connectorId } as the row holds them,
+// `entry` the reference's App Spec declaration, and `inventory` what connectionInventory answers (a Map, or null when unread). Only
+// the verdict leaves: the connection id is compared in memory.
+function referenceBinding(row, entry, inventory) {
+  return observe('connectionReference', '', null, entry, row, 'plan-read', inventory).binding;
+}
+
 // The connections a binding can be proven against: a Map of lower-cased connection id -> connector name (null
 // when the row does not say), read once per run through `ctx.connections()` (the caller's inventory reader, rows
 // as list-connections.js answers them: { connectionId, connectorId, displayName }). Without a reader, or when the
@@ -3252,6 +3261,10 @@ module.exports = {
   hasConfigurationDefinitions,
   configurationReadiness,
   observeConfiguration,
+  // A page's readiness of one connection reference, for the managed download's restore (lib/configuration-protected.js
+  // restoreProofOf): the connection inventory reader and the binding verdict every build's page gate uses.
+  connectionInventory,
+  referenceBinding,
   configurationPageBlockers,
   configurationContext,
   configurationDestructive,

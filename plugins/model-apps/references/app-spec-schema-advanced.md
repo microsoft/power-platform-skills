@@ -631,8 +631,11 @@ medical note, a national identifier, a private comment. Needs `minimumPluginVers
 - **`--verify`** checks that each declared column is stored secured, that each profile holds exactly
   its declared permissions, and that each named user and team holds the profile. These are metadata
   reads made as the build's account; they do not prove what a user without the profile sees.
-- **Download** writes `isSecured: true` for a secured column. Profiles and their assignments are not
-  downloaded.
+- **Download** writes `isSecured: true` for a secured column. Profiles, their permissions and their
+  assignments are not downloaded: a plain or managed download names each custom profile it finds (in the
+  app's solution, or holding a permission on a column it secures; never System Administrator) in a NOTE
+  and in its result's `fieldSecurityProfiles.omitted`, by id and name only. A rebuild of the downloaded spec
+  neither changes nor recreates a profile.
 - **Teardown** never deletes a profile (users and teams can hold it beyond this app): it keeps each
   declared profile, with its permissions and assignments, and names it as kept, by name only. Remove a
   profile yourself once no one needs it.
@@ -747,6 +750,22 @@ spec's new columns.
   list, in order (`quick-find <table>`); a stored search template such as `{0}%` is kept and verifies.
   A changed list is written without any `--authorize` key: `overwrite:quickfind:<table>` approves only
   replacing a local copy that differs from the server's (see Local copy below).
+- **Download.** A plain download leaves declared views out. With both `--include-managed` and
+  `--managed-manifest <store file>` (the build's `managed-bindings.<hash>.json`), each declared view a
+  `createIdentity` build created comes back in `views[]` with `reconcile: "declared"`, its `viewId`,
+  `activeOnly: false` and every condition it holds, when the store proves it unchanged since that build,
+  saved and published alike, and while the app's solution still holds it. A rebuild from it writes nothing to
+  the view; the rest of the rebuild runs as for any spec (its tables, forms and app are still published, its
+  sitemap written, its app components added). The download never adds a view to a solution. The spec gets `createIdentity: "stable-v1"`
+  with it. The `viewId` binds the view in that environment: remove it before building the spec elsewhere.
+  Any other declared view is left out, named with its reason in `managedViews.omitted` and in a warning,
+  and stays in the download's note. Each declared chart such a build created comes back in `charts[]` the
+  same way, as its table and name, `reconcile: "declared"`, `chartType`, `groupBy`, `measure`, and its
+  description and title when set; it carries no id, so only a build that uses the same store binds it (the
+  store names the exact row, never a same-named chart). A chart whose query holds anything a declaration
+  cannot say (a filter, a join, an order, a second series, a date grouping) or that was renamed is left out,
+  named in `managedCharts.omitted`; so is one the app's solution no longer holds. Its styling is not in the
+  spec; a rebuild that writes nothing to the chart keeps it.
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
@@ -912,7 +931,9 @@ are only added.
   neither on it; the default and order checks of the table's plain forms are unchanged.
 - **Download.** A plain download leaves declared forms out. To bring them back, pass both
   `--include-managed` and `--managed-manifest <store file>`, the `managed-bindings.<hash>.json` file in the
-  build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
+  build's `.maker-workspace` for that environment and app. The download only reads that file: when a build
+  changes it while the download runs, the download stops with `managed-manifest-changed` and writes
+  nothing, so run it again. Each form the store proves comes back with
   `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
   that is pending, gone or not valid is left out and named. A declared form with an event handler
   (`events`) comes back with each handler library the spec does not declare, added to `webResources[]` as
@@ -1253,7 +1274,8 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
 ## createIdentity (optional — stable create ids for declared views and charts)
 
 Requires `minimumPluginVersion: "2.21.0"`. Write it on a **new** app only; never add it to an existing or
-downloaded spec. The only value is `"stable-v1"`; any other value is a validation error
+downloaded spec. A managed download writes it back itself, and only with the declared views and charts it
+restores (one the store proves this field's build created). The only value is `"stable-v1"`; any other value is a validation error
 (`create-identity-invalid`), and a spec without the field builds exactly as before.
 
 ```jsonc
@@ -1320,7 +1342,8 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   A page edit makes that check under the app's build and pages leases, so it is refused with
   `build-locked` while a build of the app runs in the same workspace; run it again once the build ends.
 - **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
-  a file it cannot read, is reported as unverified, never as a pass.
+  a file it cannot read, is reported as unverified, never as a pass. A bound declared chart is checked at
+  its bound row only; a chart with the same name is never taken in its place.
 
 ## configurationIdentity (optional — exact ids for protected configuration)
 
@@ -1365,15 +1388,19 @@ the field builds exactly as before.
   tokens adopt nothing and the next build prints new ones; if the row is deleted, the tokens are not used
   and the item is created at its own id. A duplicate rule made before the opt-in is never adopted: its
   stop stays exactly as before, and `adopt:duplicateRule:<key>` keeps its one meaning (the rule at its
-  own reserved id, even when the key itself ends in what looks like `@<row id>`). Move that rule to its
-  reserved id outside the plugin, or keep the app without the field.
+  own reserved id, even when the key itself ends in what looks like `@<row id>`).
   Otherwise the stop says why the row cannot be adopted. A stop that names several such items lists the
   tokens of each with its own id and field list. Several namesakes of one item stop as before, and the
   plain `adopt:<kind>:<key>` token never selects a namesake. Plugin versions before this form refuse
   the `@<row id>` tokens before anything is sent; after an adoption they bind an adopted row that has
   no rows under it, and stop on one that has with `create-identity-unverified`. You can also keep the
-  app without the field, or move it to the reserved ids outside the plugin. An app that already has
-  protected bindings cannot go back: see "Removing the field" below.
+  app without the field, or move it to the reserved ids outside the plugin. For a duplicate rule,
+  moving to a reserved id means creating a separate replacement and arranging the cutover outside the
+  plugin; it is not an in-place id change. The plugin does not plan or perform that migration. Never
+  edit or reset the binding store to substitute ids. Leaving `configurationIdentity` absent is only for
+  an app that has not started keeping protected configuration bindings: do not remove it to bypass an
+  existing protected binding or a create still being settled. An app that already has protected
+  bindings cannot go back: see "Removing the field" below.
 - **An uncertain lookup is not absence.** If the namesake lookup a first create needs cannot be read
   completely (a failed read, a page that cannot be continued), the build stops with
   `create-identity-unverified` and creates or binds nothing for that item. Restore access or reliable
@@ -1465,6 +1492,47 @@ the field builds exactly as before.
   it again. The build command keeps these items' copies in a working folder of its own and removes it
   when the command ends, so a copy kept after a failed send lasts until then: the stop applies within
   that command, and the next command reads the server's rows afresh.
+- **Download.** A plain download writes none of these items. With both `--include-managed` and
+  `--managed-manifest <store file>`, each item the store holds is read again at its bound id and written
+  back into its list only when a rebuild of it through that store would change nothing: every bound row
+  still reads as the build committed it, the app's solution still holds it, and the spec still validates.
+  The restored spec gets `configurationIdentity: "stable-v1"` and a floor of at least
+  `minimumPluginVersion: "2.25.0"`. Anything else is left out with a fixed reason (`changed`, `missing`,
+  `unread`, `not-in-solution`, `pending`, …), a WARNING, and an entry in the result's `omitted`; a
+  restored item that leaves parts out names them, never their values, in a NOTE and the result's `withheld`.
+  A rebuild without `--deployment-settings` leaves those parts as they are.
+  - *Environment variables* (`managedEnvironmentVariables`): the schema name, type, name, description,
+    required flag and, for a data source, its connector, parameter key and a parent the download also
+    restores. The current value, `defaultValue` and `valueSchema` are never written (`withheld` names
+    them). A `secret` variable is left out (`secret-withheld`), as is a data source whose parent is not
+    restored (`parent-unproven`), a variable with more than one value row (`multiple-values`) and a
+    required variable with neither a default nor a value (`required-value-missing`: a rebuild of it would
+    stop as incomplete, and a download never fills one in).
+  - *Connection references* (`managedConnectionReferences`): the logical name, connector, name and
+    description. Which connection it is bound to is never written (`withheld` names `connection`, and
+    `connectionParameters` or `promptingBehavior` when the row sets them); a rebuild without settings
+    keeps the binding the row has. A reference to a custom connector is left out
+    (`unsupported-dependency`), and so is one a page of the app names unless the download proves it bound
+    as a rebuild's page gate does — its connection is among the environment's connections (read as
+    `list-connections.js` reads them) and is one of the reference's connector (`page-unready`):
+    declaring it would stop a rebuild before that page, which a plain download does not. No connection,
+    one of another connector, or connections that cannot be read all leave it out. A restored reference a
+    page names is gated like any declared one, so a rebuild stops before that page if its connection is
+    gone by then.
+  - *Custom APIs* (`managedCustomApis`): the unique name, labels, binding and bound table, flags,
+    allowed processing steps and execute privilege, with both child lists complete: each request
+    parameter's and response property's unique name, type, table, labels and (a request parameter's)
+    optional flag. Only a scaffold comes back: an API with a registered implementation (a plug-in type) is
+    left out (`implemented`), since the spec never declares one, and so is an API a page of the app calls
+    (`page-unready`): its rebuild would stop before that page until it had one. A child renamed, added or
+    deleted outside the plugin leaves the whole API out. Labels come back in the one language the row
+    answers in; on an environment with more than one language the others are not written (`withheld`
+    names `otherLanguageLabels`) and a rebuild leaves them as they are.
+  - *Duplicate rules* (`managedDuplicateDetectionRules`) are never brought back: each is left out
+    (`state-unproven`) without being read. A rule's status (published or unpublished) is part of what it
+    declares, and the store records its fields and conditions but not the status its build left it in, so a
+    rule published or unpublished by hand cannot be told from one its build left that way. The downloaded
+    spec declares no rule, and a rebuild of it leaves every rule as it is.
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.

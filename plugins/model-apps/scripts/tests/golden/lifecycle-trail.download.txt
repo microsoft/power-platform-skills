@@ -1,4 +1,4 @@
-# 136 requests, 0 publishes
+# 137 requests, 0 publishes
 ## after the last publish
   4x GET /EntityDefinitions(<id>)?$select=LogicalName,IsCustomEntity -> 200
   1x GET /EntityDefinitions(LogicalName='appaction')?$select=EntitySetName -> 200
@@ -105,6 +105,7 @@
   1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapname,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
   1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapxml,componentstate&$filter=sitemapid eq <id> -> 200
   1x GET /solutioncomponents?$select=_solutionid_value&$filter=objectid eq <id> -> 200
+  1x GET /solutioncomponents?$select=objectid&$filter=_solutionid_value eq <id> and componenttype eq 70 -> 200
   1x GET /solutioncomponents?$select=objectid&$filter=_solutionid_value eq <id> and componenttype eq 9 -> 200
   1x GET /solutioncomponents?$select=objectid,componenttype&$filter=_solutionid_value eq <id> and componenttype eq 29 -> 200
   1x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200

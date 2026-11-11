@@ -11,7 +11,7 @@ const scriptPath = path.join(__dirname, '..', 'pcf-push.js');
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-push-workspace-'));
 
 function resetWorkspace() {
-  fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  fs.rmSync(workspaceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(workspaceRoot, { recursive: true });
 }
 
@@ -90,9 +90,9 @@ async function run(argv, overrides = {}) {
     },
     ...(overrides.requires || {}),
     './lib/pcf-dataverse': {
-      makePcfSdk: async (env, workspace) => {
+      makePcfSdk: async (env, workspace, httpClient) => {
         calls.push(['makePcfSdk', env, workspace]);
-        if (overrides.makePcfSdk) return overrides.makePcfSdk(env, workspace);
+        if (overrides.makePcfSdk) return overrides.makePcfSdk(env, workspace, httpClient);
         return { tag: 'sdk' };
       },
       findCustomControl: async (sdk, name) => {
@@ -147,7 +147,7 @@ function withProcessRunnerStub(stub, fn) {
 }
 
 test.beforeEach(resetWorkspace);
-test.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
+test.after(() => fs.rmSync(workspaceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 test('happy path forwards exact pac argv, verifies registration, and writes a safe receipt', async () => {
   const projectDir = makeProject('happy');
@@ -296,12 +296,16 @@ test('a publish deadlock (SQL 1205) gets a wait-and-retry hint instead of the ge
       ].join('\n'),
       stderr: '',
     }),
+    // No Dataverse client can be made (no token), so the publish is not re-sent and pac's failure is reported with its hint.
+    makePcfSdk: () => { throw new Error('az token unavailable'); },
   });
 
   assert.equal(cli.exitCode, 1);
   const payload = JSON.parse(cli.stdoutText());
   assert.equal(payload.ok, false);
   assert.equal(payload.stage, 'push');
+  assert.equal(payload.publishAttempts, 1);
+  assert.match(payload.publishRetryError, /az token unavailable/);
   assert.equal(payload.hints.length, 1);
   assert.match(payload.hints[0], /deadlock victim \(SQL 1205\)/);
   // The inventory check needs --env: pcf-inventory.js rejects a call without it, so a hint that
@@ -310,6 +314,167 @@ test('a publish deadlock (SQL 1205) gets a wait-and-retry hint instead of the ge
   assert.match(payload.hints[0], /re-run the same push/);
   assert.doesNotMatch(payload.hints[0], /Review the pac pcf push output/);
 });
+
+// The pac output of a push whose import succeeded and whose publish-all step lost a SQL deadlock.
+const DEADLOCK_TEXT = 'Error:  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205';
+const publishDeadlockPac = () => ({
+  status: 1,
+  stdout: ['Importing the temporary solution wrapper into the current org: done.', 'Publishing All Customizations...', DEADLOCK_TEXT].join('\n'),
+  stderr: '',
+});
+// What the transport (lib/dataverse-auth.js makeRequest) resolves for a PublishAllXml: a JSON error answer, a deadlock victim, a success.
+const wireJson = (statusCode, error) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error }) });
+const deadlockAnswer = () => wireJson(500, { code: '0x80044150', message: ` ${DEADLOCK_TEXT.replace('Error:  ', '')}` });
+const publishedAnswer = () => ({ statusCode: 204, headers: {}, body: '' });
+
+// Runs a push whose publish re-send goes through the REAL stack: publishOnceClient, the shared HTTP client (sdk-http-client.js),
+// makePcfSdk and the vendored SDK. Only the token, the transport and the waits are faked. `answers` are the transport's answers to each
+// PublishAllXml in order (the last one repeats), so `posts` is what reached the wire, including any re-send a lower layer would add.
+// Any other request fails the test: the re-send must send nothing but the publish.
+async function runPublishRetry(name, answers, overrides = {}, clientDeps = {}) {
+  const projectDir = makeProject(name);
+  const posts = [];
+  const sleeps = [];
+  const realRetry = require('../lib/pcf-publish-retry.js');
+  const { makePcfSdk } = require('../lib/pcf-dataverse.js');
+  const request = async ({ method, url, body }) => {
+    const pathname = new URL(url).pathname.replace(/^\/api\/data\/v[\d.]+/, '');
+    if (!(method === 'POST' && pathname === '/PublishAllXml')) throw new Error(`unexpected request ${method} ${pathname}`);
+    posts.push([method, pathname, body]);
+    return answers[Math.min(posts.length - 1, answers.length - 1)];
+  };
+  const cli = await run([
+    '--project', projectDir,
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--publisher-prefix', 'abc',
+  ], {
+    runPac: publishDeadlockPac,
+    makePcfSdk: (env, workspace, httpClient) => makePcfSdk(env, workspace, httpClient),
+    requires: {
+      './lib/pcf-publish-retry': {
+        ...realRetry,
+        publishOnceClient: (env) => realRetry.publishOnceClient(env, {
+          getToken: () => 'fake-push-test-token-0123456789',
+          request,
+          sleep: async () => {},
+          ...clientDeps,
+        }),
+        retryPublishAll: (dataverse, opts) => realRetry.retryPublishAll(dataverse, { ...opts, sleep: async (ms) => { sleeps.push(ms); } }),
+      },
+    },
+    ...overrides,
+  });
+  return { cli, projectDir, posts, sleeps };
+}
+
+test('a publish deadlock is re-sent as PublishAllXml once and the push then succeeds without re-running pac', async () => {
+  const { cli, posts, sleeps } = await runPublishRetry('publish-retry-ok', [publishedAnswer()]);
+
+  assert.equal(cli.exitCode, 0);
+  assert.equal(cli.calls.filter((call) => call[0] === 'runPac').length, 1);
+  assert.deepEqual(posts, [['POST', '/PublishAllXml', '{}']]);
+  assert.deepEqual(sleeps, [5000]);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, true);
+  assert.equal(payload.stage, 'done');
+  assert.equal(payload.publishAttempts, 2);
+  assert.deepEqual(payload.registered, { ok: true, version: '1.2.3', expected: '1.2.3' });
+});
+
+test('a publish that keeps deadlocking is sent at most twice more, then fails as before with the attempt count', async () => {
+  const { cli, posts, sleeps } = await runPublishRetry('publish-retry-deadlock', [deadlockAnswer(), deadlockAnswer(), deadlockAnswer()]);
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(posts.length, 2);
+  assert.deepEqual(sleeps, [5000, 15000]);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.status, 1);
+  assert.equal(payload.publishAttempts, 3);
+  assert.equal(payload.publishRetryError, undefined);
+  assert.equal(payload.hints.length, 1);
+  assert.match(payload.hints[0], /deadlock victim \(SQL 1205\)/);
+  assert.equal(cli.calls.some((call) => call[0] === 'findCustomControl'), false);
+});
+
+test('a re-sent publish answered with another error is not sent again', async () => {
+  const uniqueKey = wireJson(500, { code: '0x80044150', message: 'Sql error: duplicate key (Sql Number: 1205). CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627' });
+  const { cli, posts } = await runPublishRetry('publish-retry-other', [uniqueKey, publishedAnswer()]);
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(posts.length, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.publishAttempts, 2);
+  assert.match(payload.publishRetryError, /^HTTP 500: .*Sql Number: 2627$/);
+});
+
+test('a re-sent publish whose answer was lost is not sent again', async () => {
+  const lost = { error: 'socket hang up', code: 'ECONNRESET' };
+  const { cli, posts } = await runPublishRetry('publish-retry-lost', [lost, publishedAnswer()]);
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(posts.length, 1);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.publishAttempts, 2);
+  assert.match(payload.publishRetryError, /socket hang up/);
+});
+
+test('a SQL 1205 before the publish step, or any other push failure, is never re-sent', async () => {
+  for (const [label, stdout] of [
+    ['import deadlock', ['Importing the temporary solution wrapper into the current org...', DEADLOCK_TEXT].join('\n')],
+    ['other publish error', ['Publishing All Customizations...', 'Error:  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 2627'].join('\n')],
+    ['tool failure', 'Missing required tool dotnet'],
+  ]) {
+    const { cli, posts } = await runPublishRetry(`publish-no-retry-${slugOf(label)}`, [publishedAnswer()], {
+      runPac: () => ({ status: 1, stdout, stderr: '' }),
+    });
+    assert.equal(cli.exitCode, 1, label);
+    assert.equal(posts.length, 0, label);
+    assert.equal(cli.calls.some((call) => call[0] === 'makePcfSdk'), false, label);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.stage, 'push', label);
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'publishAttempts'), false, label);
+  }
+});
+
+// The shared HTTP client re-sends a publish refused with a 401 (after a token refresh) or a service-protection 429 on its own; under the
+// deadlock re-send that would multiply the sends behind one reported attempt. Each answer must reach the wire exactly once.
+for (const [label, answer, pattern] of [
+  ['service-protection 429', { ...wireJson(429, { code: '0x80072322', message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.' }), headers: { 'content-type': 'application/json', 'retry-after': '1' } }, /^HTTP 429: Number of requests exceeded/],
+  ['401', wireJson(401, { code: '0x80072560', message: 'The user is not a member of the organization.' }), /^HTTP 401/],
+]) {
+  test(`a re-sent publish answered ${label} is sent exactly once and reported as two attempts`, async () => {
+    const { cli, posts, sleeps } = await runPublishRetry(`publish-retry-${slugOf(label)}`, [answer, publishedAnswer()]);
+
+    assert.equal(cli.exitCode, 1, label);
+    assert.equal(posts.length, 1, label);
+    assert.deepEqual(sleeps, [5000], label);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.stage, 'push', label);
+    assert.equal(payload.publishAttempts, 2, label);
+    assert.match(payload.publishRetryError, pattern, label);
+  });
+}
+
+test('a re-send that never reached the wire (no token) is not counted as an attempt', async () => {
+  const { cli, posts } = await runPublishRetry('publish-retry-no-token', [publishedAnswer()], {}, {
+    getToken: () => { throw new Error('az token unavailable'); },
+  });
+
+  assert.equal(cli.exitCode, 1);
+  assert.equal(posts.length, 0);
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.stage, 'push');
+  assert.equal(payload.publishAttempts, 1);
+  assert.match(payload.publishRetryError, /az token unavailable/);
+});
+
+function slugOf(label) {
+  return label.replace(/\W+/g, '-');
+}
 
 test('push refusal from process-runner emits one JSON error through the real pac adapter', async () => {
   const projectDir = makeProject('runner-refusal');

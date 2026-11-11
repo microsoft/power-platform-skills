@@ -1081,7 +1081,8 @@ test('the global-choice inventory unions the owned sets of every candidate solut
   assert.deepStrictEqual((inv.globalChoices || []).map((g) => g.name).sort(), ['set_a', 'set_b']);
   assert.deepStrictEqual(looked, ['SolA', 'SolB'], 'the built-in Default container is never looked up');
   const unread = await readDescriptionInventory(sdk, 'app-1', new Error('membership unreadable'), new Set(['set_a']));
-  assert.deepStrictEqual((unread.incomplete || []).map((i) => i.kind).filter((k) => k !== 'views' && k !== 'charts' && k !== 'forms').sort(), ['businessRules', 'globalChoices']);
+  assert.deepStrictEqual((unread.incomplete || []).map((i) => i.kind).filter((k) => k !== 'views' && k !== 'charts' && k !== 'forms').sort(), ['businessRules', 'fieldSecurityProfiles', 'globalChoices'],
+    'every class scoped by the solution is unknown, field security profiles included');
   assert.strictEqual(unread.globalChoices, undefined, 'nothing is claimed about a scope that could not be read');
 });
 
@@ -2444,10 +2445,199 @@ test('the CLI without --include-managed: a successful download answers, asks, pr
     assert.ok(fs.readFileSync(path.join(out, 'pages', SWAP_A, 'page.tsx'), 'utf8').includes('PAGEREF_'), 'the navigating page was rewritten');
     assert.ok(fs.existsSync(path.join(out, 'app-spec.json')));
     assert.deepStrictEqual(leftovers(out), []);
+    assert.deepStrictEqual(fs.readdirSync(out).filter((n) => n.startsWith('.app-spec.json.')), [], 'no temporary file of the spec is left');
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
 });
+
+// ── app-spec.json is written after pages/ is published: what would refuse its write is refused before pages/ is touched ──────────────
+
+// A temporary sibling writeFileSafe makes for <out>/app-spec.json (`.app-spec.json.<pid>.<8 hex>.tmp`), under either name of <out>:
+// the pre-check's probe is one, and so is the file whose rename gives <out>/app-spec.json its new content.
+const specTemp = (out) => {
+  const outs = new Set([out, fs.realpathSync.native(out)]);
+  return (p) => path.basename(String(p)).startsWith('.app-spec.json.') && outs.has(path.dirname(String(p)));
+};
+
+for (const [what, plant, refusal] of [
+  ['a hard link', (file, elsewhere) => fs.linkSync(file, path.join(elsewhere, 'twin.json')), (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'hard-link'],
+  ['read-only', (file) => fs.chmodSync(file, 0o444), (e) => e.code === 'IO_ERROR' && e.reason === 'read-only'],
+  ['a folder', (file) => { fs.rmSync(file); fs.mkdirSync(file); fs.writeFileSync(path.join(file, 'kept.txt'), 'the maker\'s file'); }, (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'not-file'],
+  ['a symbolic link', (file, elsewhere) => {
+    const real = path.join(elsewhere, 'real-spec.json');
+    fs.writeFileSync(real, MAKER_SPEC);
+    fs.rmSync(file);
+    fs.symlinkSync(real, file, 'file');
+  }, (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'link'],
+  ['in a folder where no new file can be made', (file, elsewhere, t, out) => failFs(t, 'openSync', (p, flags) => flags === 'wx' && specTemp(out)(p), 'EACCES'), (e) => e.code === 'IO_ERROR' && e.reason === 'folder-not-writable'],
+]) {
+  test(`the CLI without --include-managed: an app-spec.json that is ${what} is refused before pages/ is touched: the maker's pages and spec are as they were, and nothing is left`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-refused-'));
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-elsewhere-'));
+    const specFile = path.join(out, 'app-spec.json');
+    try {
+      seedEditedPages(out);
+      fs.writeFileSync(specFile, MAKER_SPEC);
+      try {
+        plant(specFile, elsewhere, t, out);
+      } catch (e) {
+        if (e && e.code === 'EPERM' && what === 'a symbolic link') { t.skip('this account cannot make a symbolic link'); return; }
+        throw e;
+      }
+      const before = treeBytes(out);
+      const res = await cliDownload(t, out);
+      assert.deepStrictEqual(treeBytes(out), before, 'pages/ and app-spec.json are as they were');
+      assert.deepStrictEqual(leftovers(out), [], 'no staging or swap folder is left');
+      assert.deepStrictEqual(fs.readdirSync(out).filter((n) => n.startsWith('.app-spec.json.')), [], 'no temporary file is left');
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && refusal(res.thrown), String(res.thrown && res.thrown.stack));
+      assert.match(res.thrown.message, /^refusing to write .*app-spec\.json: /);
+      assert.ok(res.thrown.message.endsWith(`. The download stopped before replacing anything: ${path.join(out, 'pages')} and ${specFile} are as they were`), res.thrown.message);
+    } finally {
+      // Only the read-only case changed a mode, and only a file's mode needs restoring. A folder planted at the spec's name keeps
+      // its search bit: on POSIX a chmod to 0o666 would drop it, and the clean-up below could not remove the file inside (EACCES).
+      try { if (fs.lstatSync(specFile).isFile()) fs.chmodSync(specFile, 0o666); } catch { /* removed already */ }
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+}
+
+// The look at the spec makes, then removes, an empty file of its own. When that file cannot be removed the look does not pass: the
+// download stops before it replaces anything, and the error names the file left, so the maker can delete it.
+for (const lateFailure of [false, true]) {
+  test(`the CLI without --include-managed: an empty file the look at app-spec.json made that cannot be removed stops the download before pages/ is touched, and is named${lateFailure ? ' (a write of the spec that would fail later is never reached)' : ''}`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-probe-'));
+    const specFile = path.join(out, 'app-spec.json');
+    // fs.rmSync loads its recursive remover lazily, and that module keeps the unlink it finds then: load it before unlink is mocked,
+    // or a later clean-up runs the mock.
+    const warmup = path.join(out, 'warmup');
+    fs.mkdirSync(warmup);
+    fs.rmSync(warmup, { recursive: true });
+    try {
+      seedEditedPages(out);
+      fs.writeFileSync(specFile, MAKER_SPEC);
+      const before = treeBytes(out);
+      const opened = [];
+      const open = fs.openSync;
+      t.mock.method(fs, 'openSync', function (p, ...args) {
+        if (specTemp(out)(p)) opened.push(String(p));
+        return open.call(this, p, ...args);
+      });
+      const blocked = failFs(t, 'unlinkSync', (p) => String(p) === opened[0], 'EIO');
+      const renamed = lateFailure ? failFs(t, 'renameSync', specTemp(out), 'EIO') : [];
+      const res = await cliDownload(t, out);
+      const probe = opened[0];
+      assert.ok(probe, 'the look made its file');
+      assert.strictEqual(blocked.length, 1, 'its removal was refused');
+      assert.deepStrictEqual(renamed, [], 'no write of the spec was tried');
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && res.thrown.code === 'IO_ERROR' && res.thrown.reason === 'probe-not-removed', String(res.thrown && res.thrown.stack));
+      assert.ok(res.thrown.message.includes(probe), res.thrown.message);
+      assert.match(res.thrown.message, /an empty file this download made .*can be deleted/);
+      assert.ok(res.thrown.message.endsWith(`. The download stopped before replacing anything: ${path.join(out, 'pages')} and ${specFile} are as they were`), res.thrown.message);
+      assert.deepStrictEqual(leftovers(out), [], 'no staging or swap folder is left');
+      fs.unlinkSync(probe);
+      assert.deepStrictEqual(treeBytes(out), before, 'once the named file is deleted, the folder is exactly as it was');
+    } finally {
+      t.mock.restoreAll();
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
+
+// What the error of a write of the spec that fails after pages/ is published says: what is known (the page tree was published, the
+// write reported an error) and what is not (whether the spec on disk matches the pages), and what to do. Nothing more is claimed.
+const lateSpecSequel = (out) => `. This download had already published its page tree to ${path.join(out, 'pages')} when the write of ${path.join(out, 'app-spec.json')} reported this error, so whether ${path.join(out, 'app-spec.json')} matches those pages has not been confirmed: resolve the error and run the same download again`;
+
+// A write of the spec that fails for a reason no look beforehand can see (a full disk, a lock, a crash) comes after pages/ is published,
+// as it did: the error says what is known, and the same download run again makes the two match.
+for (const hadSpec of [true, false]) {
+  test(`the CLI without --include-managed: a write of app-spec.json that fails after pages/ is published${hadSpec ? '' : ', where there was no app-spec.json'}, says the page tree was published and the spec is not confirmed to match it, and the same download run again makes them match`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-late-'));
+    const specFile = path.join(out, 'app-spec.json');
+    try {
+      seedEditedPages(out);
+      if (hadSpec) fs.writeFileSync(specFile, MAKER_SPEC);
+      const failed = failFs(t, 'renameSync', specTemp(out), 'EIO');
+      const res = await cliDownload(t, out);
+      assert.strictEqual(failed.length, 1, 'the spec\'s rename into place was refused');
+      assert.deepStrictEqual(fs.readdirSync(path.join(out, 'pages')).sort(), [SWAP_A, SWAP_B].sort(), 'pages/ holds this download\'s pages');
+      assert.ok(fs.readFileSync(path.join(out, 'pages', SWAP_A, 'page.tsx'), 'utf8').includes('PAGEREF_'));
+      if (hadSpec) assert.strictEqual(fs.readFileSync(specFile, 'utf8'), MAKER_SPEC, 'app-spec.json is the previous spec');
+      else assert.ok(!fs.existsSync(specFile), 'there is still no app-spec.json');
+      assert.deepStrictEqual(leftovers(out), [], 'no staging or swap folder is left');
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && res.thrown.code === 'IO_ERROR', String(res.thrown && res.thrown.stack));
+      assert.match(res.thrown.message, /^failed to write .*app-spec\.json: EIO: injected/);
+      assert.ok(res.thrown.message.endsWith(lateSpecSequel(out)), res.thrown.message);
+
+      const again = await cliDownload(t, out);
+      assert.strictEqual(again.thrown, null, String(again.thrown && again.thrown.stack));
+      assert.strictEqual(again.emitted.length, 1);
+      assert.strictEqual(again.emitted[0].ok, true, JSON.stringify(again.emitted));
+      const spec = JSON.parse(fs.readFileSync(specFile, 'utf8'));
+      assert.deepStrictEqual(spec.pages.map((p) => p.pageId).sort(), fs.readdirSync(path.join(out, 'pages')).sort(), 'the spec describes the pages in pages/');
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
+
+// The error claims nothing about what is on disk beyond the published tree, because every claim it once made can be untrue: a spec
+// that already matched the pages (an unchanged app downloaded again), a rename that took effect before it reported an error, and a
+// previous tree that the swap kept because its folder could not be removed.
+for (const [what, arrange, check] of [
+  ['the app is unchanged since the last download, so the spec on disk already describes the pages', async (t, out) => {
+    const first = await cliDownload(t, out);
+    assert.strictEqual(first.thrown, null, String(first.thrown && first.thrown.stack));
+    const before = treeBytes(out);
+    failFs(t, 'renameSync', specTemp(out), 'EIO');
+    return before;
+  }, (out, before) => assert.deepStrictEqual(treeBytes(out), before, 'the spec and the pages are still the matching pair of the first download')],
+  ['the rename of the spec took effect and then reported an error', async (t, out) => {
+    seedEditedPages(out);
+    fs.writeFileSync(path.join(out, 'app-spec.json'), MAKER_SPEC);
+    const rename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function (from, to) {
+      const done = rename.call(this, from, to);
+      if (specTemp(out)(from)) throw Object.assign(new Error('EIO: injected after the rename'), { code: 'EIO' });
+      return done;
+    });
+  }, (out) => assert.ok(JSON.parse(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8')).pages.length > 0, 'the new spec is on disk')],
+  ['the swap folder that holds the previous pages could not be removed', async (t, out) => {
+    seedEditedPages(out);
+    fs.writeFileSync(path.join(out, 'app-spec.json'), MAKER_SPEC);
+    const before = treeBytes(path.join(out, 'pages'));
+    const rm = fs.rmSync;
+    t.mock.method(fs, 'rmSync', function (p, ...args) {
+      if (topFolder(out, p, '.pages-replace.') === String(p)) throw Object.assign(new Error('EIO: injected, rm'), { code: 'EIO' });
+      return rm.call(this, p, ...args);
+    });
+    failFs(t, 'renameSync', specTemp(out), 'EIO');
+    return before;
+  }, (out, before) => {
+    const swaps = fs.readdirSync(out).filter((n) => n.startsWith('.pages-replace.'));
+    assert.strictEqual(swaps.length, 1);
+    assert.deepStrictEqual(treeBytes(path.join(out, swaps[0], 'previous')), before, 'the previous pages are kept in the swap folder');
+  }],
+]) {
+  test(`the CLI without --include-managed: the error of a write of app-spec.json that fails after pages/ is published claims nothing it cannot know, when ${what}`, async (t) => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-cli-spec-late-'));
+    try {
+      const before = await arrange(t, out);
+      const res = await cliDownload(t, out);
+      check(out, before);
+      assert.deepStrictEqual(res.emitted.filter((e) => e.ok), [], 'no success emitted');
+      assert.ok(res.thrown && res.thrown.code === 'IO_ERROR', String(res.thrown && res.thrown.stack));
+      assert.ok(res.thrown.message.endsWith(lateSpecSequel(out)), res.thrown.message);
+      for (const untrue of ['not kept', 'still the spec', 'does not describe', 'was not written']) assert.ok(!res.thrown.message.includes(untrue), res.thrown.message);
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  });
+}
 
 test('writePageTree on Windows: a moment\'s lock on the move into pages/ is waited out, but the move of the maker\'s pages/ aside is one attempt (#814)', (t) => {
   freshRenameWaitTotal(t);
@@ -4842,4 +5032,69 @@ test('complete reads use SDK pagination where truncation would change download d
     assert.strictEqual(call.opts.paginate, true, `${call.opts.filter} must paginate`);
     assert.strictEqual(call.opts.top, undefined, `${call.opts.filter} must not cap with top`);
   }
+});
+
+test('runDownload names a custom field security profile on a secured column in a NOTE and its result, and the spec declares no profile', async () => {
+  // A field security profile is shared security policy and no store proves one is this app's, so a download reports it and declares
+  // none: the secured column round-trips (isSecured), the profile and its permissions and holders stay in the environment untouched.
+  const APP_ID = '6444e0f2-0000-4000-8000-000000000001';
+  const APP_UNIQUE = 'new_fsp';
+  const SM_ID = '6444e0f2-0000-4000-8000-000000000002';
+  const HR = '6444e0f2-0000-4000-8000-0000000000f1';
+  const ADMIN = '572329c1-a042-4e22-be47-367c6374ea45';
+  const SM_XML = '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-fsp-'));
+  const asked = [];
+  const sdk = {
+    fetchArtifact: async () => ({
+      id: APP_ID, name: 'Fsp', uniquename: APP_UNIQUE, description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'new_order' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: APP_ID, uniquename: APP_UNIQUE }];
+      if (logical === 'appmodulecomponent') return /componenttype eq 62/.test(filter) ? [{ objectid: SM_ID, componenttype: 62 }] : [];
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      if (logical === 'fieldpermission') {
+        asked.push({ logical, ...opts });
+        return /entityname eq 'new_order'/.test(filter) && /attributelogicalname eq 'new_salary'/.test(filter)
+          ? [{ _fieldsecurityprofileid_value: ADMIN }, { _fieldsecurityprofileid_value: HR }] : [];
+      }
+      if (logical === 'fieldsecurityprofile') {
+        asked.push({ logical, ...opts });
+        return [{ fieldsecurityprofileid: HR, name: 'HR' }].filter((p) => filter.includes(p.fieldsecurityprofileid));
+      }
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name',
+      attributes: [
+        { logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true },
+        { logicalName: 'new_salary', displayName: 'Salary', attributeType: 'String', isCustomAttribute: true, isSecured: true },
+      ],
+      relationships: [],
+    }),
+    dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
+  };
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const written = [];
+  process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
+  let res;
+  try {
+    res = await runDownload({ sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }), genpage: fakeGenpage(), outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+  } finally {
+    process.stderr.write = origWrite;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+  assert.strictEqual(res.ok, true, res.error);
+  const note = written.join('').split('\n').find((l) => /field security profile/.test(l)) || '';
+  assert.match(note, /^NOTE: 1 field security profile \(HR\) is not declared in fieldSecurityProfiles\[\]: .*a rebuild neither changes nor recreates it/);
+  assert.doesNotMatch(written.join(''), /System Administrator/);
+  assert.deepStrictEqual(res.fieldSecurityProfiles, { omitted: [{ kind: 'fieldSecurityProfile', id: HR, name: 'HR', code: 'ownership-unproven', reason: 'no binding store record proves this app authored it, so it is not declared' }] });
+  // The spec: the column stays secured; no profile, permission or holder; and the inventory key stays out of descriptionInventory.
+  assert.strictEqual(res.spec.entities[0].columns.find((c) => c.schemaName === 'new_salary').isSecured, true);
+  assert.ok(!('fieldSecurityProfiles' in res.spec));
+  assert.ok(!res.spec.descriptionInventory || !('fieldSecurityProfiles' in res.spec.descriptionInventory));
+  assert.doesNotMatch(JSON.stringify(res.spec), new RegExp(`${HR}|${ADMIN}`));
+  assert.deepStrictEqual(asked.map((q) => [q.logical, q.select]), [['fieldpermission', ['_fieldsecurityprofileid_value']], ['fieldsecurityprofile', ['fieldsecurityprofileid', 'name']]]);
 });
