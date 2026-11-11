@@ -50,6 +50,7 @@ const REASONS = Object.freeze({
   'unsupported-dependency': 'it depends on a custom connector, which a download cannot prove is the same one wherever the spec is rebuilt',
   'page-unready': 'a page of the app names it and it is not ready for one (no connection, or no registered implementation), so declaring it would stop a rebuild before that page',
   'implemented': 'it has an implementation (a plug-in type) registered in this environment, which an App Spec never declares and a rebuild elsewhere would not have',
+  'state-unsettled': 'a publish of it is still running (neither published nor unpublished), so no status a spec could state is its own',
   'fields-withheld': 'the named parts are never written by a download (they can hold a private or environment-specific value); a rebuild leaves them as they are in the service',
 });
 

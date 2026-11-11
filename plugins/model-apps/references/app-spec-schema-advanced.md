@@ -1525,6 +1525,13 @@ the field builds exactly as before.
     deleted outside the plugin leaves the whole API out. Labels come back in the one language the row
     answers in; on an environment with more than one language the others are not written (`withheld`
     names `otherLanguageLabels`) and a rebuild leaves them as they are.
+  - *Duplicate rules* (`managedDuplicateDetectionRules`): the key, name, table and matching table,
+    description, case-sensitive and inactive-records flags, status and every condition under the key it
+    was built with (column, matching column, match, character count and blank-value flag). The store does
+    not record a rule's status, so it is the status the rule has now: a rule published or unpublished by
+    hand since the build comes back that way, and a rebuild leaves it so. A rule whose publish is still
+    running is left out (`state-unsettled`), and so is one with a condition swapped, added or deleted
+    outside the plugin (`changed`, `missing`).
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.

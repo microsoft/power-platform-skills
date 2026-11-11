@@ -2001,7 +2001,8 @@ custom control), but the spec validator emits a warning.
   block that table's delete. A plain download does not bring these items back into the spec. A managed download
   (`--include-managed --managed-manifest <store file>`) of an app built with `configurationIdentity: "stable-v1"`
   brings back each environment variable the store proves unchanged, without its value, default or value schema,
-  each connection reference, without its connection, and each Custom API that has no implementation yet (see `configurationIdentity` in app-spec-schema-advanced.md).
+  each connection reference, without its connection, each Custom API that has no implementation yet, and each
+  duplicate rule with its conditions, in the status it has now (see `configurationIdentity` in app-spec-schema-advanced.md).
 
 ## appShell
 ```jsonc

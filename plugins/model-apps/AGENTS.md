@@ -1809,7 +1809,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   binding holds (`request:<unique name>` / `response:<unique name>`); one with `_plugintypeid_value` set is
   `implemented`, one a page's `actionBindings` names is `page-unready` (CUSTOM_API_IMPLEMENTATION_UNPROVEN), and
   other-language labels are withheld as `otherLanguageLabels` unless `RetrieveProvisionedLanguages` answers exactly
-  one language (read at most once per download, and not at all when no API gets that far). `tests/download-managed-configuration.test.js` builds through the real build command and
+  one language (read at most once per download, and not at all when no API gets that far).
+  `managedDuplicateDetectionRules` restores a rule with every condition under its slot key; its status is read
+  from the row's `statecode`/`statuscode` (`ruleStateOf`), because the committed root projection excludes state
+  and the store keeps no rule state to compare, so a status changed by hand comes back as it is now, and a
+  publish in flight is `state-unsettled`; a swapped, added or deleted condition fails the per-slot proof. `tests/download-managed-configuration.test.js` builds through the real build command and
   bundle, downloads through `main`, rebuilds over the same app folder with zero writes, downloads again byte for
   byte, and scans every file and stream the download wrote for value, default, schema and secret canaries.
   **Every download, plain or managed, reports the custom field security profiles it does not declare**

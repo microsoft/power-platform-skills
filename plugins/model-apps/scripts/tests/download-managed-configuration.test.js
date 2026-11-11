@@ -65,8 +65,8 @@ const snapshot = (dir) => Object.fromEntries(walk(dir).map((f) => [path.relative
 
 // The real build command over the strict org, with deployment settings carrying the canary values. Answers the org, the app folder
 // (whose .maker-workspace holds the binding store) and the store file.
-async function built({ lists = { environmentVariables: VARIABLES }, settings = SETTINGS, intercept = {} } = {}) {
-  const org = createConfigOrg({ solution: { uniqueName: SOLUTION, version: '1.0.0.0', prefix: 'contoso' }, intercept: (req) => (intercept.fn ? intercept.fn(req) : undefined) });
+async function built({ lists = { environmentVariables: VARIABLES }, settings = SETTINGS, intercept = {}, tables } = {}) {
+  const org = createConfigOrg({ solution: { uniqueName: SOLUTION, version: '1.0.0.0', prefix: 'contoso' }, ...(tables ? { tables } : {}), intercept: (req) => (intercept.fn ? intercept.fn(req) : undefined) });
   const appDir = path.join(makeTempDir('dl-cfg-'), 'app');
   const settingsFile = path.join(makeTempDir('dl-cfg-settings-'), 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify(settings));
@@ -439,6 +439,91 @@ test('Custom APIs: an implemented one, one a page calls, and one with a child re
   assert.equal(dl.requests.filter((r) => /RetrieveProvisionedLanguages/.test(r.path)).length, 1);
   assert.deepEqual(dl.writes, []);
   assert.deepEqual(org.unexpected, []);
+});
+
+const CONTACT = [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname', 'firstname', 'telephone1'] }];
+const condition = (key, column, extra) => ({ key, column, match: 'exact', ...extra });
+const ruleId = (org, name) => org.rows('duplicaterules').find((r) => r.name === name).duplicateruleid;
+const conditionsOf = (org, name) => [...org.sets.get('duplicateruleconditions')].filter(([, r]) => r._regardingobjectid_value === ruleId(org, name));
+
+test('duplicate rules: each proved rule is restored with its state and every condition under its original key; it rebuilds as no change and downloads again byte for byte', async () => {
+  const rules = [
+    { key: 'email', name: 'Same email', entity: 'contact', description: 'By mail', conditions: [condition('e', 'emailaddress1'), condition('n', 'lastname', { match: 'firstCharacters', characters: 3, ignoreBlankValues: true })] },
+    { key: 'draft', name: 'Draft rule', entity: 'contact', status: 'unpublished', caseSensitive: true, excludeInactiveRecords: true, conditions: [condition('l', 'lastname')] },
+  ];
+  const { org, appDir, store } = await built({ lists: { duplicateDetectionRules: rules }, settings: {}, tables: CONTACT });
+  const storeBefore = fs.readFileSync(store);
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.duplicateDetectionRules, [
+    {
+      key: 'draft', name: 'Draft rule', entity: 'contact', matchingEntity: 'contact', caseSensitive: true, excludeInactiveRecords: true, status: 'unpublished',
+      conditions: [{ key: 'l', column: 'lastname', matchingColumn: 'lastname', match: 'exact', ignoreBlankValues: false }],
+    },
+    {
+      key: 'email', name: 'Same email', entity: 'contact', matchingEntity: 'contact', description: 'By mail', caseSensitive: false, excludeInactiveRecords: false, status: 'published',
+      conditions: [
+        { key: 'e', column: 'emailaddress1', matchingColumn: 'emailaddress1', match: 'exact', ignoreBlankValues: false },
+        { key: 'n', column: 'lastname', matchingColumn: 'lastname', match: 'firstCharacters', characters: 3, ignoreBlankValues: true },
+      ],
+    },
+  ]);
+  assert.equal(dl.spec.configurationIdentity, 'stable-v1');
+  assert.equal(dl.spec.minimumPluginVersion, '2.25.0');
+  assert.deepEqual(dl.payload.managedDuplicateDetectionRules, { restored: ['draft', 'email'], omitted: [] });
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+  assert.deepEqual(fs.readFileSync(store), storeBefore);
+
+  const rows = configurationRows(org);
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual(rebuilt.payload.created.configuration.unchanged.map((u) => u.key).sort(), ['draft', 'email']);
+  assert.equal(configurationRows(org), rows);
+  assert.deepEqual(org.unexpected, []);
+
+  const again = await download(org, store);
+  assert.ok(again.specBytes.equals(dl.specBytes), 'a second download writes the same bytes');
+});
+
+test('duplicate rules: swapped, added or deleted conditions and a publish still running leave the rule out; a rule unpublished by hand comes back as it is now', async () => {
+  const two = (key, name) => ({ key, name, entity: 'contact', conditions: [condition('a', 'emailaddress1'), condition('b', 'telephone1')] });
+  const rules = [two('swap', 'Swapped'), two('extra', 'Extra'), two('gone', 'Gone'), two('busy', 'Busy'), two('hand', 'By hand')];
+  const { org, appDir, store } = await built({ lists: { duplicateDetectionRules: rules }, settings: {}, tables: CONTACT });
+  // The two criteria of one rule swapped between their bound rows: as a set the rule matches the same records, but neither row is the
+  // condition the build bound under its key.
+  const [[idA, a], [idB, b]] = conditionsOf(org, 'Swapped');
+  editRow(org, 'duplicateruleconditions', (r) => r === a, { baseattributename: b.baseattributename, matchingattributename: b.matchingattributename });
+  editRow(org, 'duplicateruleconditions', (r) => r === org.sets.get('duplicateruleconditions').get(idB), { baseattributename: a.baseattributename, matchingattributename: a.matchingattributename });
+  assert.notEqual(idA, idB);
+  const added = '00000000-0000-4000-8000-0000000dd001';
+  org.sets.get('duplicateruleconditions').set(added, { duplicateruleconditionid: added, baseattributename: 'lastname', matchingattributename: 'lastname', operatorcode: 0, operatorparam: null, ignoreblankvalues: false, _regardingobjectid_value: ruleId(org, 'Extra'), versionnumber: 9200 });
+  org.sets.get('duplicateruleconditions').delete(conditionsOf(org, 'Gone')[0][0]);
+  editRow(org, 'duplicaterules', (r) => r.name === 'Busy', { statecode: 0, statuscode: 1 });
+  editRow(org, 'duplicaterules', (r) => r.name === 'By hand', { statecode: 0, statuscode: 0 });
+
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.duplicateDetectionRules.map((r) => [r.key, r.status]), [['hand', 'unpublished']]);
+  const report = dl.payload.managedDuplicateDetectionRules;
+  assert.deepEqual(report.restored, ['hand']);
+  assert.deepEqual(report.omitted.map((o) => [o.key, o.name, o.code, o.reason]), [
+    ['busy', 'Busy', 'state-unsettled', reason('state-unsettled')],
+    ['extra', 'Extra', 'changed', reason('changed')],
+    ['gone', 'Gone', 'missing', reason('missing')],
+    ['swap', 'Swapped', 'changed', reason('changed')],
+  ]);
+  assert.match(dl.said, /WARNING: managed duplicate rule busy was not restored: a publish of it is still running.*It is left out of duplicateDetectionRules\[\]/);
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+
+  // What the download states is what the row is, so a rebuild of it changes nothing.
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
 });
 
 test('a download without --include-managed reads no configuration and writes none, and its result names no configuration list', async () => {
