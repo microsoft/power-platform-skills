@@ -1516,6 +1516,15 @@ the field builds exactly as before.
     (`page-unready`): declaring it would stop a rebuild before that page, which a plain download does not.
     A restored reference a page names is gated like any declared one, so a rebuild stops before that page
     if its connection is gone by then.
+  - *Custom APIs* (`managedCustomApis`): the unique name, labels, binding and bound table, flags,
+    allowed processing steps and execute privilege, with both child lists complete: each request
+    parameter's and response property's unique name, type, table, labels and (a request parameter's)
+    optional flag. Only a scaffold comes back: an API with a registered implementation (a plug-in type) is
+    left out (`implemented`), since the spec never declares one, and so is an API a page of the app calls
+    (`page-unready`): its rebuild would stop before that page until it had one. A child renamed, added or
+    deleted outside the plugin leaves the whole API out. Labels come back in the one language the row
+    answers in; on an environment with more than one language the others are not written (`withheld`
+    names `otherLanguageLabels`) and a rebuild leaves them as they are.
 - **Unfinished work is checked first, declared or not.** Before its first service change, every build
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.

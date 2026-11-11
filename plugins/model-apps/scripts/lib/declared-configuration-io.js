@@ -36,6 +36,7 @@ const lc = (v) => String(v == null ? '' : v).toLowerCase();
 const LISTS = Object.freeze({
   environmentVariable: ['environmentVariables', 'schemaName'],
   connectionReference: ['connectionReferences', 'logicalName'],
+  customApi: ['customApis', 'uniqueName'],
 });
 
 class Left extends Error {
@@ -137,9 +138,66 @@ async function declareReference({ root, key, ctx }) {
   return { declaration, fields };
 }
 
+// Whether the environment provisions more than one language, read once per download and only when a Custom API is restored:
+//   GET /RetrieveProvisionedLanguages()  ->  { "RetrieveProvisionedLanguages": [1033, 1036] }
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveprovisionedlanguages
+// A Custom API's labels are localized: its row answers them in one language only, and the other languages' labels need message calls
+// the build does not make (it refuses a label edit on such an environment, CUSTOM_API_LABELS_UNSUPPORTED). They are never written by a
+// download and are named as withheld. A read that fails, or answers a list this cannot read, counts as several: unknown is not one.
+async function severalLanguages(ctx) {
+  if (ctx.severalLanguages === undefined) {
+    let list = null;
+    try {
+      const res = await ctx.dataverse.get('/RetrieveProvisionedLanguages()');
+      const body = res && res.status >= 200 && res.status < 300 ? res.body : null;
+      list = body && Array.isArray(body.RetrieveProvisionedLanguages) ? body.RetrieveProvisionedLanguages : null;
+    } catch {
+      list = null;
+    }
+    ctx.severalLanguages = !(Array.isArray(list) && list.length === 1 && Number.isInteger(list[0]));
+  }
+  return ctx.severalLanguages;
+}
+
+// The Custom API's declaration from its row and its complete bound graph: the root's fixed fields and labels, and both child lists
+// with each child's unique name, type, entity, labels and (a request parameter's) optional flag. Its implementation (the plug-in
+// type) is never authored by an App Spec, and an API that has one is left out whole: what it runs is this environment's code, which
+// the spec cannot carry and a rebuild elsewhere would not have. A scaffold (no implementation) is restored as the scaffold it is.
+async function declareCustomApi({ root, key, children, ctx }) {
+  const { fields: f, preserved } = root.decoded;
+  if (lc(f.uniqueName) !== key) leave('changed');
+  if (preserved._plugintypeid_value != null) leave('implemented');
+  // A page that names an API makes a rebuild gate the page on its implementation (CUSTOM_API_IMPLEMENTATION_UNPROVEN), and a
+  // scaffold has none: declaring it would stop that rebuild before the page a plain download lets it write.
+  if (ctx.pagesNaming.apis.has(key)) leave('page-unready');
+  const declaration = { uniqueName: f.uniqueName };
+  for (const name of ['name', 'displayName', 'description']) if (f[name] != null) declaration[name] = f[name];
+  declaration.binding = f.binding;
+  if (f.boundEntityLogicalName != null) declaration.boundEntityLogicalName = f.boundEntityLogicalName;
+  for (const name of ['isFunction', 'isPrivate', 'allowedProcessingSteps', 'enabledForWorkflow']) declaration[name] = f[name];
+  if (f.executePrivilegeName != null) declaration.executePrivilegeName = f.executePrivilegeName;
+  declaration.requestParameters = [];
+  declaration.responseProperties = [];
+  // Each child by the slot its binding holds it in ('request:<unique name>' / 'response:<unique name>', lower case): a child whose
+  // row now carries another name, or sits in the other direction, is not the child the build bound there.
+  for (const { slot, record, read } of children) {
+    const request = record.kind === 'customApiRequestParameter';
+    if (!request && record.kind !== 'customApiResponseProperty') leave('invalid');
+    const c = read.decoded.fields;
+    if (slot !== `${request ? 'request' : 'response'}:${lc(c.uniqueName)}`) leave('changed');
+    const child = { uniqueName: c.uniqueName, type: c.type };
+    if (c.entityLogicalName != null) child.entityLogicalName = c.entityLogicalName;
+    for (const name of ['name', 'displayName', 'description']) if (c[name] != null) child[name] = c[name];
+    if (request) child.isOptional = c.isOptional === true;
+    (request ? declaration.requestParameters : declaration.responseProperties).push(child);
+  }
+  return { declaration, fields: (await severalLanguages(ctx)) ? ['otherLanguageLabels'] : [] };
+}
+
 const FAMILIES = Object.freeze({
   environmentVariable: { label: 'environment variable', declare: declareVariable, accept: acceptVariable },
   connectionReference: { label: 'connection reference', declare: declareReference },
+  customApi: { label: 'Custom API', declare: declareCustomApi },
 });
 
 /**
@@ -235,9 +293,9 @@ async function restoreKind(ctx, kind) {
 
 /**
  * The explicit managed download's restore of protected configuration (--include-managed --managed-manifest <file>): environment
- * variables, then connection references. A restored item also sets the spec's `configurationIdentity: "stable-v1"` (only a protected
- * build keeps these groups, so the store itself is the proof of the regime) with its plugin floor. Answers { environmentVariables,
- * connectionReferences } (restoreKind's shape each); a store
+ * variables, then connection references, then Custom APIs. A restored item also sets the spec's `configurationIdentity: "stable-v1"`
+ * (only a protected build keeps these groups, so the store itself is the proof of the regime) with its plugin floor. Answers
+ * { environmentVariables, connectionReferences, customApis } (restoreKind's shape each); a store
  * file that cannot be used throws `managed-manifest-unusable` (readManagedFormFile).
  */
 async function restoreManagedConfiguration({ sdk, spec, file, environment, appUniqueName, solutionUniqueName, validate }) {
@@ -246,6 +304,7 @@ async function restoreManagedConfiguration({ sdk, spec, file, environment, appUn
   return {
     environmentVariables: await restoreKind(ctx, 'environmentVariable'),
     connectionReferences: await restoreKind(ctx, 'connectionReference'),
+    customApis: await restoreKind(ctx, 'customApi'),
   };
 }
 

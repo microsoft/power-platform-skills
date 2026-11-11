@@ -1804,7 +1804,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `managedConnectionReferences` restores a reference's logical name, connector and labels; its connection is
   withheld (a rebuild without settings keeps it), a custom-connector reference is `unsupported-dependency`, and
   an unbound one a page names is `page-unready` (the build's page gate, `configuration-build.js namedByPages`
-  over `pagesStatingBindings`, would stop a rebuild before that page; a plain download declares none). `tests/download-managed-configuration.test.js` builds through the real build command and
+  over `pagesStatingBindings`, would stop a rebuild before that page; a plain download declares none).
+  `managedCustomApis` restores a scaffold API with both complete child lists, each child matched to the slot its
+  binding holds (`request:<unique name>` / `response:<unique name>`); one with `_plugintypeid_value` set is
+  `implemented`, one a page's `actionBindings` names is `page-unready` (CUSTOM_API_IMPLEMENTATION_UNPROVEN), and
+  other-language labels are withheld as `otherLanguageLabels` unless `RetrieveProvisionedLanguages` answers exactly
+  one language (read at most once per download, and not at all when no API gets that far). `tests/download-managed-configuration.test.js` builds through the real build command and
   bundle, downloads through `main`, rebuilds over the same app folder with zero writes, downloads again byte for
   byte, and scans every file and stream the download wrote for value, default, schema and secret canaries.
   **Every download, plain or managed, reports the custom field security profiles it does not declare**

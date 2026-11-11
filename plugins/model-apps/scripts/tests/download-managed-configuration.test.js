@@ -347,6 +347,100 @@ test('connection references: one a page names with no connection, one changed by
   assertNoCanary(dl);
 });
 
+// A request parameter and a response property may share a unique name: they are two children, in two slots.
+const CALC = {
+  uniqueName: 'contoso_Calc', displayName: 'Calc', description: 'Adds', binding: 'global', isFunction: true,
+  requestParameters: [{ uniqueName: 'A', type: 'integer' }, { uniqueName: 'Note', type: 'string', isOptional: true, description: 'Free text' }],
+  responseProperties: [{ uniqueName: 'A', type: 'integer' }, { uniqueName: 'Ok', type: 'boolean' }],
+};
+const scaffold = (uniqueName) => ({ uniqueName, binding: 'global', requestParameters: [{ uniqueName: 'In', type: 'string' }], responseProperties: [{ uniqueName: 'Out', type: 'string' }] });
+const apiId = (org, uniqueName) => org.rows('customapis').find((r) => r.uniquename === uniqueName).customapiid;
+
+test('Custom APIs: each proved scaffold is restored with both complete child lists and its labels, never an implementation; it rebuilds as no change and downloads again byte for byte', async () => {
+  const { org, appDir, store } = await built({ lists: { customApis: [CALC, scaffold('contoso_Ping')] }, settings: {} });
+  const storeBefore = fs.readFileSync(store);
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  // The labels the build pinned when the App Spec left them out are the row's own, so they come back as stated.
+  assert.deepEqual(dl.spec.customApis, [
+    {
+      uniqueName: 'contoso_Calc', name: 'contoso_Calc', displayName: 'Calc', description: 'Adds', binding: 'global', isFunction: true, isPrivate: false, allowedProcessingSteps: 'none', enabledForWorkflow: false,
+      requestParameters: [
+        { uniqueName: 'A', type: 'integer', name: 'contoso_Calc.A', displayName: 'A', description: 'A', isOptional: false },
+        { uniqueName: 'Note', type: 'string', name: 'contoso_Calc.Note', displayName: 'Note', description: 'Free text', isOptional: true },
+      ],
+      responseProperties: [
+        { uniqueName: 'A', type: 'integer', name: 'contoso_Calc.A', displayName: 'A', description: 'A' },
+        { uniqueName: 'Ok', type: 'boolean', name: 'contoso_Calc.Ok', displayName: 'Ok', description: 'Ok' },
+      ],
+    },
+    {
+      uniqueName: 'contoso_Ping', name: 'contoso_Ping', displayName: 'contoso_Ping', description: 'contoso_Ping', binding: 'global', isFunction: false, isPrivate: false, allowedProcessingSteps: 'none', enabledForWorkflow: false,
+      requestParameters: [{ uniqueName: 'In', type: 'string', name: 'contoso_Ping.In', displayName: 'In', description: 'In', isOptional: false }],
+      responseProperties: [{ uniqueName: 'Out', type: 'string', name: 'contoso_Ping.Out', displayName: 'Out', description: 'Out' }],
+    },
+  ]);
+  assert.equal(dl.spec.configurationIdentity, 'stable-v1');
+  assert.equal(dl.spec.minimumPluginVersion, '2.25.0');
+  assert.deepEqual(dl.payload.managedCustomApis, { restored: ['contoso_calc', 'contoso_ping'], omitted: [] });
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+  assert.deepEqual(fs.readFileSync(store), storeBefore);
+  assertNoCanary(dl);
+
+  const rows = configurationRows(org);
+  const mark = org.requests.length;
+  const rebuilt = await runCommand(dl.spec, { org, appDir });
+  assert.ok(!rebuilt.exitCode && !rebuilt.thrown && rebuilt.payload.ok, JSON.stringify(rebuilt.payload || rebuilt.thrown));
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual(rebuilt.payload.created.configuration.unchanged.map((u) => u.key).sort(), ['contoso_Calc', 'contoso_Ping']);
+  assert.equal(configurationRows(org), rows);
+  assert.deepEqual(org.unexpected, []);
+
+  const again = await download(org, store);
+  assert.ok(again.specBytes.equals(dl.specBytes), 'a second download writes the same bytes');
+});
+
+test('Custom APIs: an implemented one, one a page calls, and one with a child renamed, added or deleted outside the plugin are left out whole; other-language labels are named as withheld', async () => {
+  const intercept = {};
+  const names = ['contoso_Ok', 'contoso_Impl', 'contoso_Paged', 'contoso_Renamed', 'contoso_Extra', 'contoso_Gone'];
+  const { org, store } = await built({ lists: { customApis: names.map(scaffold) }, settings: {}, intercept });
+  // A plug-in type registered on the row after the build: this environment's code, which a spec never carries.
+  editRow(org, 'customapis', (r) => r.uniquename === 'contoso_Impl', { _plugintypeid_value: '00000000-0000-4000-8000-0000000ad001' });
+  editRow(org, 'customapirequestparameters', (r) => r._customapiid_value === apiId(org, 'contoso_Renamed'), { uniquename: 'Input' });
+  const extra = '00000000-0000-4000-8000-0000000ad002';
+  org.sets.get('customapiresponseproperties').set(extra, { customapiresponsepropertyid: extra, uniquename: 'More', name: 'More', displayname: 'More', description: 'More', type: 10, logicalentityname: null, _customapiid_value: apiId(org, 'contoso_Extra'), versionnumber: 9100 });
+  const props = org.sets.get('customapiresponseproperties');
+  props.delete([...props].find(([, r]) => r._customapiid_value === apiId(org, 'contoso_Gone'))[0]);
+  // An environment with two languages: the labels of the other one are not read, so never written.
+  intercept.fn = (req) => (req.method === 'GET' && /RetrieveProvisionedLanguages/.test(req.path) ? { statusCode: 200, body: { RetrieveProvisionedLanguages: [1033, 1036] } } : undefined);
+
+  const page = { key: 'calc', name: 'Calc', source: { kind: 'tsx', codeFile: 'pages/calc.tsx' }, actionBindings: [{ name: 'contoso_Paged' }] };
+  const spec = { ...JSON.parse(JSON.stringify(PLAIN)), pages: [page] };
+  const direct = await restoreDirect(org, store, spec);
+  assert.deepEqual(spec.customApis.map((a) => a.uniqueName), ['contoso_Ok']);
+  assert.deepEqual(direct.customApis.omitted.map((o) => [o.key, o.code]), [
+    ['contoso_extra', 'changed'], ['contoso_gone', 'missing'], ['contoso_impl', 'implemented'], ['contoso_paged', 'page-unready'], ['contoso_renamed', 'changed'],
+  ]);
+
+  const dl = await download(org, store);
+  assert.equal(dl.ok, true, JSON.stringify(dl.payload));
+  assert.deepEqual(dl.spec.customApis.map((a) => a.uniqueName), ['contoso_Ok', 'contoso_Paged']);
+  const report = dl.payload.managedCustomApis;
+  assert.deepEqual(report.restored, ['contoso_ok', 'contoso_paged']);
+  assert.deepEqual(report.omitted.map((o) => [o.key, o.code, o.reason]), [
+    ['contoso_extra', 'changed', reason('changed')],
+    ['contoso_gone', 'missing', reason('missing')],
+    ['contoso_impl', 'implemented', reason('implemented')],
+    ['contoso_renamed', 'changed', reason('changed')],
+  ]);
+  assert.deepEqual(report.withheld.map((w) => [w.key, w.fields]), [['contoso_ok', ['otherLanguageLabels']], ['contoso_paged', ['otherLanguageLabels']]]);
+  assert.match(dl.said, /WARNING: managed Custom API contoso_impl was not restored: it has an implementation .*It is left out of customApis\[\]/);
+  assert.equal(dl.requests.filter((r) => /RetrieveProvisionedLanguages/.test(r.path)).length, 1);
+  assert.deepEqual(dl.writes, []);
+  assert.deepEqual(org.unexpected, []);
+});
+
 test('a download without --include-managed reads no configuration and writes none, and its result names no configuration list', async () => {
   const { org, store } = await built();
   const dl = await download(org, store, { managed: false });

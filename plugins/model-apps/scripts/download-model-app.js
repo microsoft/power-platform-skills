@@ -4524,7 +4524,7 @@ async function main(deps = {}) {
     const chartsResult = familyResult(managedCharts);
     // A configuration list says something only when it restored, left out or withheld part of an item, under its own key, so a store
     // without protected configuration answers the result a managed download gave before it was restored, byte for byte.
-    const CONFIGURATION_RESULTS = { environmentVariables: 'managedEnvironmentVariables', connectionReferences: 'managedConnectionReferences' };
+    const CONFIGURATION_RESULTS = { environmentVariables: 'managedEnvironmentVariables', connectionReferences: 'managedConnectionReferences', customApis: 'managedCustomApis' };
     const configurationResults = {};
     for (const [list, r] of Object.entries(managedConfiguration || {})) {
       if (!r.restored.length && !r.omitted.length && !r.withheld.length) continue;
