@@ -2494,7 +2494,9 @@ for (const [what, plant, refusal] of [
       assert.match(res.thrown.message, /^refusing to write .*app-spec\.json: /);
       assert.ok(res.thrown.message.endsWith(`. The download stopped before replacing anything: ${path.join(out, 'pages')} and ${specFile} are as they were`), res.thrown.message);
     } finally {
-      try { fs.chmodSync(specFile, 0o666); } catch { /* removed already */ }
+      // Only the read-only case changed a mode, and only a file's mode needs restoring. A folder planted at the spec's name keeps
+      // its search bit: on POSIX a chmod to 0o666 would drop it, and the clean-up below could not remove the file inside (EACCES).
+      try { if (fs.lstatSync(specFile).isFile()) fs.chmodSync(specFile, 0o666); } catch { /* removed already */ }
       fs.rmSync(out, { recursive: true, force: true });
       fs.rmSync(elsewhere, { recursive: true, force: true });
     }
