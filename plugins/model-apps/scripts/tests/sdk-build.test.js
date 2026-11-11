@@ -8,6 +8,7 @@ const { commandDef, chartDef, runSdkBuild: runSdkBuildWithRealWaits, planFor, re
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { withPageType } = require('./helpers/page-component-type.js');
+const { RETRY } = require('../lib/retry-policy.js');
 // The AI phase's proof after a publish waits 500 ms between reads of an override row that is not there yet, as --verify
 // does. No test below is about that wait (it is pinned through `proofBudget`), and every one that leaves a row absent
 // would otherwise sleep a second for it.
@@ -192,6 +193,12 @@ function mockSdk(opts = {}) {
         const smId = (filter.match(/sitemapid eq (\S+)/) || [])[1];
         if (smId === SELF_SITEMAP_ID) return [{ sitemapxml: opts.liveSitemapXml || EMPTY_SITEMAP_XML }];
         const idx = Number(String(smId).replace('sm-', '')) - 2;
+        // `readPlan`: what each of the app's published sitemap reads does, in order — 'ok' answers, 'fail' throws (a 5xx while another build changes the app), and a
+        // function is called with the app (to change what it holds from then on) and throws. Reads past the plan answer.
+        const planned = opts.otherApps && opts.otherApps[idx] && opts.otherApps[idx].readPlan;
+        const step = planned && planned.shift();
+        if (step === 'fail') throw new Error('sitemap read failed');
+        if (typeof step === 'function') { step(opts.otherApps[idx]); throw new Error('sitemap read failed'); }
         return [{ sitemapxml: (opts.otherApps && opts.otherApps[idx] && opts.otherApps[idx].sitemapxml) || '<SiteMap/>' }];
       }
       // systemform queries come from THREE build paths, distinguished by their filter:
@@ -7656,7 +7663,8 @@ test('pages: another app\'s saved navigation that cannot be read HALTS pages-sha
     for (const [what, [extra, message]] of Object.entries(cases)) {
       const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, ...extra });
       await assert.rejects(
-        runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+        // The waits before the re-reads of an unreadable app are not taken here (`sleep`): what is read again is pinned by the tests after the never-published ones.
+        runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], sleep: async () => {} }),
         (e) => {
           assert.strictEqual(e.phase, 'pages', what);
           assert.strictEqual(e.code, 'pages-shared-check-failed', what);
@@ -7827,10 +7835,13 @@ test('pages: a never-published app whose navigation cannot be read HALTS pages-s
       'its saved row did not come back': { uniquename: 'contoso_draftapp', savedRows: [] },
       'its saved XML is cut short': { uniquename: 'contoso_draftapp', savedRows: [{ sitemapxml: '<SiteMap><Area', componentstate: 1 }] },
     };
+    // Each is read again three times before the halt (`waits`), except the cut-short XML: a stored sitemap that is malformed only changes when someone edits that app.
+    const waits = { 'its sitemap component read fails': [5000, 10000, 20000], 'its saved row did not come back': [5000, 10000, 20000], 'its saved XML is cut short': [] };
     for (const [what, draft] of Object.entries(cases)) {
       const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [draft] });
+      const sleeps = [];
       await assert.rejects(
-        runPagesUpdate(s, sdk),
+        runPagesUpdate(s, sdk, { sleep: async (ms) => { sleeps.push(ms); } }),
         (e) => {
           assert.strictEqual(e.code, 'pages-shared-check-failed', what);
           assert.match(e.message, /1 app\(s\) had an unreadable sitemap \(contoso_draftapp\)/, what);
@@ -7838,7 +7849,112 @@ test('pages: a never-published app whose navigation cannot be read HALTS pages-s
         },
         what
       );
+      assert.deepStrictEqual(sleeps, waits[what], what);
     }
+    assert.deepStrictEqual(s.uploads, []);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// Another app's navigation that cannot be read for a moment — while another build or maker changes that app — halted the build, and the same build run minutes later passed.
+// The scan that halts reads such an app again, ONLY it, after 5 s, 10 s and 20 s; one still unreadable halts as before, and one that is read and holds the page halts as shared.
+const OTHER_PAGE_SITEMAP = '<SiteMap><Area><Group><SubArea GenPageId="00000000-0000-4000-8000-0000000000aa" Title="Other"/></Group></Area></SiteMap>';
+const UNREADABLE_HALT = 'cannot verify pages are not shared across apps — 1 app(s) had an unreadable sitemap (contoso_secondapp); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.';
+// What `more` has that `base` has not, by request, as a multiset; and asserts `base` has nothing `more` has not.
+const extraRequests = (more, base) => {
+  const key = (c) => JSON.stringify([c.name, c.args]);
+  const left = more.map(key);
+  for (const k of base.map(key)) {
+    const i = left.indexOf(k);
+    assert.ok(i >= 0, `a request of the steady run was not sent: ${k}`);
+    left.splice(i, 1);
+  }
+  return left.map((k) => JSON.parse(k));
+};
+const shortRequest = ([name, [first, o]]) => (name === 'queryRecords' ? `${first} ${(o && o.filter) || '(all)'}` : first);
+const updateWithOtherApps = async (s, otherApps) => {
+  const sleeps = [];
+  const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, otherApps });
+  let halt = null;
+  try { await runPagesUpdate(s, sdk, { sleep: async (ms) => { sleeps.push(ms); } }); } catch (e) { halt = e; }
+  return { calls, sleeps, halt };
+};
+
+test('pages: another app whose sitemap read fails for a moment is read again — that app only — and the update goes ahead; the requests are today\'s plus the re-read', async () => {
+  const s = stageUpdate();
+  try {
+    const apps = (readPlan) => [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan }, { uniquename: 'contoso_thirdapp', sitemapxml: OTHER_PAGE_SITEMAP }];
+    const steady = await updateWithOtherApps(s, apps([]));
+    assert.strictEqual(steady.halt, null);
+    assert.deepStrictEqual(steady.sleeps, [], 'nothing unreadable: no wait');
+    const flaky = await updateWithOtherApps(s, apps(['fail']));
+    assert.strictEqual(flaky.halt, null, `the build goes ahead: ${flaky.halt && flaky.halt.message}`);
+    assert.deepStrictEqual(flaky.sleeps, [5000], 'one wait, then the re-read that succeeds');
+    assert.deepStrictEqual(s.uploads.map((u) => u.pageId), [GP_O, GP_O], 'the page is updated in place in both builds');
+    // The re-read is the scan narrowed to the one app: the two lists the apps are found in, that app's three reads, and the saved layer.
+    assert.deepStrictEqual(extraRequests(flaky.calls, steady.calls).map(shortRequest).sort(), [
+      APPS_LIST_URL,
+      SAVED_URL,
+      'appmodule (all)',
+      'appmodule uniquename eq \'contoso_secondapp\'',
+      'appmodulecomponent _appmoduleidunique_value eq uv-2 and componenttype eq 62',
+      'sitemap sitemapid eq sm-2',
+    ].sort());
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: another app whose sitemap read fails every time is read again three times, then HALTS pages-shared-check-failed exactly as before; a malformed one is not read again', async () => {
+  const s = stageUpdate();
+  try {
+    const cases = {
+      'every read fails': [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['fail', 'fail', 'fail', 'fail', 'ok'] }, [5000, 10000, 20000]],
+      'its stored sitemap is malformed': [{ uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area' }, []],
+    };
+    for (const [what, [app, waits]] of Object.entries(cases)) {
+      const { sleeps, halt } = await updateWithOtherApps(s, [app]);
+      assert.ok(halt, what);
+      assert.deepStrictEqual({ phase: halt.phase, code: halt.code, recoverable: halt.recoverable, retry: halt.retry, message: halt.message },
+        { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, retry: RETRY.NEVER, message: UNREADABLE_HALT }, what);
+      assert.deepStrictEqual(sleeps, waits, what);
+      if (app.readPlan) assert.deepStrictEqual(app.readPlan, ['ok'], `${what}: the first read and three re-reads, no more`);
+    }
+    assert.deepStrictEqual(s.uploads, [], 'nothing was uploaded while sharing could not be ruled out');
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: another app read on a re-read that HOLDS the page halts pages-shared-across-apps — before any write, and right before the first write in place', async () => {
+  const s = stageUpdate();
+  try {
+    // Before any write: its first read fails, and the re-read finds the page.
+    const before = await updateWithOtherApps(s, [{ uniquename: 'contoso_secondapp', sitemapxml: s.sitemapWithO, readPlan: ['fail'] }]);
+    assert.ok(before.halt);
+    assert.strictEqual(before.halt.code, 'pages-shared-across-apps');
+    assert.match(before.halt.message, new RegExp(`^generative page\\(s\\) shared across apps: ${GP_O} \\(also in contoso_secondapp\\)`));
+    assert.deepStrictEqual(before.sleeps, [5000]);
+    // The scan right before the first write in place: the first scan reads the app, the second cannot, and by the re-read the app holds the page.
+    const during = await updateWithOtherApps(s, [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['ok', (app) => { app.sitemapxml = s.sitemapWithO; }] }]);
+    assert.ok(during.halt);
+    assert.strictEqual(during.halt.code, 'pages-shared-across-apps');
+    assert.match(during.halt.message, new RegExp(`^generative page\\(s\\) became shared across apps while this build ran: ${GP_O} \\(also in contoso_secondapp\\)`));
+    assert.deepStrictEqual(during.sleeps, [5000]);
+    assert.deepStrictEqual(s.uploads, [], 'the shared page was never uploaded');
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: the scan right before the first write in place reads an app again too — the build goes ahead when it is read, and halts exactly as before when it never is', async () => {
+  const s = stageUpdate();
+  try {
+    const passes = await updateWithOtherApps(s, [{ uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['ok', 'fail'] }]);
+    assert.strictEqual(passes.halt, null, `the build goes ahead: ${passes.halt && passes.halt.message}`);
+    assert.deepStrictEqual(passes.sleeps, [5000]);
+    assert.deepStrictEqual(s.uploads.map((u) => u.pageId), [GP_O]);
+    s.uploads.length = 0;
+    const app = { uniquename: 'contoso_secondapp', sitemapxml: OTHER_PAGE_SITEMAP, readPlan: ['ok', 'fail', 'fail', 'fail', 'fail', 'ok'] };
+    const halts = await updateWithOtherApps(s, [app]);
+    assert.ok(halts.halt);
+    assert.deepStrictEqual({ phase: halts.halt.phase, code: halts.halt.code, recoverable: halts.halt.recoverable, retry: halts.halt.retry, message: halts.halt.message },
+      { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true, retry: RETRY.NEVER, message: UNREADABLE_HALT });
+    assert.deepStrictEqual(halts.sleeps, [5000, 10000, 20000]);
+    assert.deepStrictEqual(app.readPlan, ['ok'], 'the read of each scan and three re-reads, no more');
     assert.deepStrictEqual(s.uploads, []);
   } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
 });

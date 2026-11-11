@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { sitemapGenPages, sitemapGenPageIds, navigationGenPageIds, liveNavEntries, fetchSitemap, fetchAppsForPages, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
+const { sitemapGenPages, sitemapGenPageIds, navigationGenPageIds, liveNavEntries, fetchSitemap, fetchAppsForPages, rereadUnreadableApps, decodeXmlEntities, appNavigationMatchesSitemap, navigationProof } = require('../lib/sitemap-pages.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -443,6 +443,42 @@ function scanEnv(apps, { drafts = [], savedPages, appList, noDataverse } = {}) {
   }
   return { sdk, calls };
 }
+
+// A build halted when another app was unreadable for a moment (another build was changing it), and passed when run again minutes later. The apps the scan could not read
+// are read again — those apps only — before the caller gives up on them, and fail closed throughout.
+test('rereadUnreadableApps: reads only the unreadable apps again after each wait; a re-read that fails as a whole teaches nothing; an app read at last joins the scan, its saved layer included', async () => {
+  const apps = [
+    { name: 'app-a', published: withPage() },
+    { name: 'app-b', published: '' }, // no XML yet: unreadable for now (sitemap-xml-unreadable)
+    { name: 'app-c', published: withPage(GP_DETAIL) },
+  ];
+  let listReads = 0;
+  // The second read of the list of apps fails, so the first re-read fails as a whole.
+  const appList = () => (++listReads === 2 ? { status: 503, body: null } : { status: 200, body: { value: apps.map((a, i) => ({ appmoduleid: `app-${i}`, appmoduleidunique: layerKey(i), uniquename: a.name, componentstate: 0 })) } });
+  const { sdk, calls } = scanEnv(apps, { appList });
+  const first = await fetchAppsForPages(sdk, [GP_OVERVIEW], { excludeAppUnique: 'app-a' });
+  assert.deepStrictEqual(first.unreadable, ['app-b']);
+  assert.strictEqual(first.unreadableReasons.get('app-b'), 'sitemap-xml-unreadable');
+  const sleeps = [];
+  const sleep = async (ms) => {
+    sleeps.push(ms);
+    // By the second wait the other build has published app-b, and saved the page into its draft.
+    if (sleeps.length === 2) Object.assign(apps[1], { published: withPage(GP_DETAIL), saved: withPage(GP_DETAIL, GP_OVERVIEW) });
+  };
+  const sitemapReadsBefore = calls.queries.filter((e) => e === 'sitemap').length;
+  const r = await rereadUnreadableApps(sdk, [GP_OVERVIEW], first, { excludeAppUnique: 'app-a' }, { sleep });
+  assert.deepStrictEqual(sleeps, [5000, 10000], 'the failed re-read is followed by another; the one that reads it ends the waits');
+  assert.strictEqual(calls.queries.filter((e) => e === 'sitemap').length - sitemapReadsBefore, 1, 'only app-b is read again, and only by the re-read that got the lists');
+  assert.deepStrictEqual(r.unreadable, []);
+  assert.deepStrictEqual(r.byId.get(GP_OVERVIEW), ['app-b'], 'the app read at last holds the page: the caller halts as shared');
+  assert.deepStrictEqual(r.savedOnly.get(GP_OVERVIEW), ['app-b']);
+  // Control: a scan with nothing unreadable is answered as it came, with no request and no wait.
+  const queriesBefore = calls.queries.length;
+  const clean = { ...first, unreadable: [] };
+  assert.strictEqual(await rereadUnreadableApps(sdk, [GP_OVERVIEW], clean, { excludeAppUnique: 'app-a' }, { sleep }), clean);
+  assert.strictEqual(calls.queries.length, queriesBefore);
+  assert.deepStrictEqual(sleeps, [5000, 10000]);
+});
 
 test('fetchAppsForPages: a page only in another app\'s SAVED navigation is a shared page, and says it is not published', async () => {
   const { sdk } = scanEnv([
