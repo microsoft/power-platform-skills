@@ -184,6 +184,8 @@ const useStyles = makeStyles({
         gap: tokens.spacingVerticalL,
         padding: tokens.spacingHorizontalXL,
         width: '100%',
+        height: '100%',
+        overflowY: 'auto',
         boxSizing: 'border-box',
     },
     header: {
@@ -192,7 +194,8 @@ const useStyles = makeStyles({
         gap: tokens.spacingHorizontalM,
     },
     title: { flex: 1 },
-    card: { padding: tokens.spacingHorizontalL },
+    // A Card clips its own overflow, so in the bounded root column it must not shrink.
+    card: { padding: tokens.spacingHorizontalL, flexShrink: 0 },
     fieldGrid: {
         display: 'grid',
         gridTemplateColumns: 'minmax(140px, max-content) 1fr',

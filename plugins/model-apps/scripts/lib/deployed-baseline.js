@@ -131,7 +131,11 @@ function writeBaseline(workspaceDir, spec, { appDir, environment, appUniqueName,
   // truncated file, which reads as no baseline — and without one the spec wins over every nav change made
   // in the designer. A failed write now leaves the previous snapshot of this app and environment, which is
   // still right about everything the latest apply did not change.
-  writeFileAtomic(baselinePath(workspaceDir), JSON.stringify(snapshot));
+  // One rename, no retry through a Windows file lock ({ retryLock: false }): download-model-app.js writes this file
+  // WITHOUT the app's build lease, so an older write that was refused and retried could land after a newer build's
+  // write under the lease and put the older baseline back (the build would then overwrite the maker's designer edits).
+  // A refused write keeps failing with its original error, which callers already treat as non-fatal.
+  writeFileAtomic(baselinePath(workspaceDir), JSON.stringify(snapshot), { retryLock: false });
 }
 
 /**

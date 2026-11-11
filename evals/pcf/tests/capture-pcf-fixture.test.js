@@ -22,7 +22,7 @@ function withDirs(fn) {
     fs.mkdirSync(fixtures, { recursive: true });
     return fn({ root, project, fixtures });
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -76,7 +76,7 @@ test('does not delete a source directory named ..source when the destination is 
     );
     assert.equal(fs.existsSync(marker), true);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

@@ -1235,8 +1235,8 @@ test('a capability the prompt asks for must be authored: deleting it, or droppin
   // A kind the prompt did not ask for fails even on a positive fixture.
   assert.strictEqual(gradeOptional(23, (s) => { s.businessProcessFlows = [{ entity: 'cnt_request', name: 'Extra', reconcile: 'declared', stages: [] }]; }).status, 'fail', 'a flow nobody asked for beside the rules');
   assert.strictEqual(gradeOptional(21, (s) => { s.dashboards = [{ name: 'Board', key: 'board', reconcile: 'declared', tiles: [] }]; }).status, 'fail', 'a dashboard nobody asked for beside the form');
-  // Shape and wording are not this check's business, and fixtures 22-24 have no shape assertion of their own yet: another stage
-  // word, a reversed tile order, a rule scope swapped between two rules, or a changed tile kind still pass here.
+  // Shape and wording are not THIS check's business, and the shapes of fixtures 22-24 are graded by their own assertions (below): another
+  // stage word, a reversed tile order, a rule scope swapped between two rules, or a changed tile kind still pass here.
   assert.strictEqual(gradeOptional(24, (s) => { const st = s.businessProcessFlows[0].stages; st[1].name = 'Appraisal'; st[2].name = 'Outcome'; }).status, 'pass', 'other stage labels');
   assert.strictEqual(gradeOptional(22, (s) => { s.dashboards[0].tiles.reverse(); }).status, 'pass', 'tiles in another order');
   assert.strictEqual(gradeOptional(23, (s) => { const [r1, r2] = s.businessRules; [r1.scope, r2.scope] = [r2.scope, r1.scope]; }).status, 'pass', 'swapped scopes');
@@ -1259,6 +1259,136 @@ test('what must NOT change: plain forms, dashboards, rules and flows are not opt
   // No fixture carries offer evidence and no assertion grades an offer: the evals grade the spec only.
   for (const f of loadFixtures(path.join(__dirname, '..', 'fixtures'))) assert.strictEqual(f.evidence.offers, undefined, `fixture ${f.id}`);
   assert.ok(![...ASSERTIONS.keys()].some((t) => /^offers:/.test(t)));
+});
+
+// The shape of a declared dashboard, business rule and process flow (fixtures 22-24). Each expectation is written from the prompt, and
+// each assertion reads what the plugin compiles for the artifact, so a mapping that drops a size, a binding, a condition or a stage fails.
+const DASHBOARD_SHAPE = 'process: a declared dashboard holds exactly the tiles the prompt describes, each bound to the view, chart or address it names and sized as asked';
+const RULE_SHAPE = 'process: each declared business rule has the condition, scope and actions the prompt describes';
+const FLOW_SHAPE = 'process: a declared process flow has exactly the stages the prompt names, in order';
+async function gradeShape(id, text, mutate, mutateEval) {
+  const fixture = fixtureFor(id);
+  const spec = structuredClone(fixture.spec);
+  if (mutate) mutate(spec);
+  const ev = structuredClone(evalsManifest.evals.find((e) => e.id === id));
+  if (mutateEval) mutateEval(ev);
+  const facts = await stageFacts(spec, { fixture });
+  return ASSERTIONS.get(text)({ facts, spec, eval: ev });
+}
+async function assertShape(id, text, mutate, reason, what) {
+  const result = await gradeShape(id, text, mutate);
+  assert.strictEqual(result.status, 'fail', `${what}: expected a failure, got ${result.status}`);
+  assert.match(reasonOf(result), reason, what);
+}
+const tilesOf = (s) => s.dashboards[0].tiles;
+const closeOutRule = (s) => s.businessRules.find((r) => r.key === 'close-out');
+const askRule = (s) => s.businessRules.find((r) => r.key === 'ask-assignee');
+
+test('the shape assertions of fixtures 22-24 are listed by their evals, and the expectations come from the prompts', () => {
+  for (const [id, text, key] of [[22, DASHBOARD_SHAPE, 'declaredDashboards'], [23, RULE_SHAPE, 'declaredRules'], [24, FLOW_SHAPE, 'declaredFlows']]) {
+    const ev = evalsManifest.evals.find((e) => e.id === id);
+    assert.ok(ev.expectations.includes(text), `eval ${id} lists its shape assertion`);
+    assert.ok(Array.isArray(ev.expect[key]) && ev.expect[key].length, `eval ${id} states ${key}`);
+  }
+  const prompt = (id) => evalsManifest.evals.find((e) => e.id === id).prompt;
+  assert.match(prompt(22), /wide list of open work orders, a chart of work orders by status and a tall crew map from https:\/\/contoso\.example\/field-map/);
+  assert.match(prompt(23), /closed request needs a resolution and its notes lock, and a request in progress with no assignee shows an error on every form/);
+  assert.match(prompt(24), /intake, assessment and a decision/);
+});
+
+test('the shipped fixtures 22-24 pass their shape assertions, and an eval that states no expectation cannot use one', async () => {
+  for (const [id, text, key] of [[22, DASHBOARD_SHAPE, 'declaredDashboards'], [23, RULE_SHAPE, 'declaredRules'], [24, FLOW_SHAPE, 'declaredFlows']]) {
+    assert.deepStrictEqual(await gradeShape(id, text), { status: 'pass' }, `fixture ${id}`);
+    const result = await gradeShape(id, text, null, (ev) => { delete ev.expect[key]; });
+    assert.strictEqual(result.status, 'fail', `fixture ${id} without ${key}`);
+    assert.match(reasonOf(result), /no independent expectation/);
+  }
+});
+
+test('declared dashboard shape: a missing, extra, unbound, re-addressed or undersized tile fails; names, order and extra size do not', async () => {
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { tilesOf(s).pop(); }, /2 tile\(s\) \[list,chart\], the prompt asks for 3/, 'the map is missing');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { tilesOf(s).push({ key: 'more', type: 'iframe', url: 'https://contoso.example/more', name: 'More' }); }, /4 tile\(s\)/, 'a tile nobody asked for');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { delete tilesOf(s).find((t) => t.type === 'iframe').rowspan; }, /iframe of https:\/\/contoso\.example\/field-map is 12 row\(s\) tall, the prompt asks for more than 12/, 'the map is not tall');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { tilesOf(s).find((t) => t.type === 'iframe').rowspan = 12; }, /row\(s\) tall/, 'the map is as tall as an unsized tile');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { delete tilesOf(s).find((t) => t.type === 'list').colspan; }, /list of view "Open Work Orders" on cnt_workorder is 1 column\(s\) wide, the prompt asks for at least 2/, 'the list is not wide');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { tilesOf(s).find((t) => t.type === 'iframe').url = 'https://contoso.example/other-map'; }, /no tile is the iframe of https:\/\/contoso\.example\/field-map/, 'the map address changed');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => {
+    s.views.push({ entity: 'cnt_workorder', name: 'All Work Orders', columns: ['cnt_name'] });
+    tilesOf(s).find((t) => t.type === 'list').view = 'All Work Orders';
+  }, /no tile is the list of view "Open Work Orders"/, 'the list shows another view');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => {
+    s.charts.push({ entity: 'cnt_workorder', name: 'Work Orders by Due', groupBy: 'cnt_dueon', measure: 'count', chartType: 'Column' });
+    tilesOf(s).find((t) => t.type === 'chart').chart = 'Work Orders by Due';
+  }, /no tile is the chart "Work Orders by Status"/, 'the chart tile shows another chart');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { tilesOf(s).find((t) => t.type === 'chart').type = 'list'; }, /no tile is the chart "Work Orders by Status"/, 'the chart became a list');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { delete s.dashboards[0].reconcile; }, /0 declared dashboard\(s\) \[\], the prompt asks for 1/, 'the dashboard is not declared');
+  await assertShape(22, DASHBOARD_SHAPE, (s) => { s.dashboards.push({ name: 'Second', key: 'second', reconcile: 'declared', tiles: [] }); }, /2 declared dashboard\(s\)/, 'a second declared dashboard');
+  // What the prompt leaves to the maker keeps its verdict.
+  const keeps = [
+    ['tiles in another order', (s) => { tilesOf(s).reverse(); }],
+    ['other tile names', (s) => { tilesOf(s).forEach((t, i) => { t.name = `Tile ${i}`; }); }],
+    ['a wider list and a taller map', (s) => { tilesOf(s).find((t) => t.type === 'list').colspan = 4; tilesOf(s).find((t) => t.type === 'iframe').rowspan = 30; }],
+  ];
+  for (const [what, mutate] of keeps) assert.deepStrictEqual(await gradeShape(22, DASHBOARD_SHAPE, mutate), { status: 'pass' }, what);
+});
+
+test('declared business rule shape: a changed condition, option, scope, logic or action fails; names, order and the unstated scope do not', async () => {
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).conditions[0].value = '100000000'; }, /no declared rule fires on exactly \[cnt_status Equals "Closed"\]/, 'closed became New');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).conditions[0].operator = 'NotEqual'; }, /no declared rule fires on exactly/, 'another operator');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).conditions[0].field = 'cnt_assignee'; }, /no declared rule fires on exactly/, 'another column');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).actions = closeOutRule(s).actions.filter((a) => a.type !== 'LockUnlock'); }, /lacks the action\(s\) \[LockUnlock cnt_notes\]/, 'the lock is missing');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).actions.find((a) => a.type === 'LockUnlock').lock = false; }, /lacks the action\(s\) \[LockUnlock cnt_notes\]/, 'the notes unlock');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).actions.find((a) => a.type === 'SetBusinessRequired').required = false; }, /lacks the action\(s\) \[SetBusinessRequired cnt_resolution\]/, 'the resolution is not required');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).actions.find((a) => a.type === 'SetBusinessRequired').field = 'cnt_notes'; }, /lacks the action\(s\) \[SetBusinessRequired cnt_resolution\]/, 'another required column');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).actions.push({ key: 'hide', type: 'SetVisibility', field: 'cnt_notes', visible: false }); }, /carries the action\(s\) \[SetVisibility cnt_notes\] the prompt does not ask for/, 'an extra action');
+  await assertShape(23, RULE_SHAPE, (s) => { askRule(s).scope = 'Entity'; }, /its scope is Entity, the prompt asks for AllForms/, 'not every form');
+  await assertShape(23, RULE_SHAPE, (s) => { delete askRule(s).scope; }, /its scope is Entity, the prompt asks for AllForms/, 'the default scope');
+  await assertShape(23, RULE_SHAPE, (s) => { askRule(s).conditionLogic = 'OR'; }, /combine with OR, the prompt asks for AND/, 'either condition');
+  await assertShape(23, RULE_SHAPE, (s) => { askRule(s).conditions.pop(); }, /no declared rule fires on exactly \[cnt_status Equals "In Progress",cnt_assignee DoesNotContainData\]/, 'the assignee test is missing');
+  await assertShape(23, RULE_SHAPE, (s) => { askRule(s).conditions[1].operator = 'ContainsData'; }, /no declared rule fires on exactly/, 'an assignee is required rather than missing');
+  await assertShape(23, RULE_SHAPE, (s) => { askRule(s).actions[0].errorMessage = '  '; }, /lacks the action\(s\) \[ShowErrorMessage\]/, 'an empty message');
+  await assertShape(23, RULE_SHAPE, (s) => { askRule(s).actions[0].type = 'LockUnlock'; askRule(s).actions[0].lock = true; delete askRule(s).actions[0].errorMessage; }, /lacks the action\(s\) \[ShowErrorMessage\]/, 'a lock instead of an error');
+  await assertShape(23, RULE_SHAPE, (s) => { s.businessRules.pop(); }, /1 declared rule\(s\) \[Close out a request\], the prompt asks for 2/, 'one rule is missing');
+  await assertShape(23, RULE_SHAPE, (s) => { const [r1, r2] = s.businessRules; [r1.scope, r2.scope] = [r2.scope, r1.scope]; }, /its scope is Entity, the prompt asks for AllForms/, 'scopes swapped between the rules');
+  await assertShape(23, RULE_SHAPE, (s) => { closeOutRule(s).status = 'Draft'; }, /its status is Draft, the prompt asks for a rule that is Active/, 'a rule left as a draft');
+  await assertShape(23, RULE_SHAPE, (s) => { askRule(s).status = 'Inactive'; }, /its status is Inactive, the prompt asks for a rule that is Active/, 'an inactive rule');
+  const keeps = [
+    ['another rule name', (s) => { closeOutRule(s).name = 'Closing'; askRule(s).name = 'Assignee'; }],
+    ['rules in another order', (s) => { s.businessRules.reverse(); }],
+    ['conditions and actions in another order', (s) => { askRule(s).conditions.reverse(); closeOutRule(s).actions.reverse(); }],
+    ['the unstated scope of the closed rule', (s) => { closeOutRule(s).scope = 'AllForms'; }],
+    ['a rule that states it is Active', (s) => { closeOutRule(s).status = 'Active'; }],
+    ['another error message', (s) => { askRule(s).actions[0].errorMessage = 'Name an assignee.'; }],
+  ];
+  for (const [what, mutate] of keeps) assert.deepStrictEqual(await gradeShape(23, RULE_SHAPE, mutate), { status: 'pass' }, what);
+});
+
+test('declared process flow shape: a missing, extra, reordered or renamed stage fails; wording within the stage and its steps do not', async () => {
+  const flow = (s) => s.businessProcessFlows[0];
+  await assertShape(24, FLOW_SHAPE, (s) => { flow(s).stages.pop(); }, /2 stage\(s\) \[Intake,Assess\], the prompt names 3/, 'the decision is missing');
+  await assertShape(24, FLOW_SHAPE, (s) => { flow(s).stages.splice(1, 1); }, /2 stage\(s\)/, 'the assessment is missing');
+  await assertShape(24, FLOW_SHAPE, (s) => { flow(s).stages.push({ key: 'close', name: 'Close', steps: [{ key: 'x', name: 'X', field: 'cnt_decision' }] }); }, /4 stage\(s\)/, 'a stage nobody asked for');
+  await assertShape(24, FLOW_SHAPE, (s) => { flow(s).stages.reverse(); }, /stage 1 is "Decide", which is not \/intake\/i/, 'reversed');
+  await assertShape(24, FLOW_SHAPE, (s) => { const st = flow(s).stages; [st[0], st[1]] = [st[1], st[0]]; }, /stage 1 is "Assess"/, 'two swapped');
+  await assertShape(24, FLOW_SHAPE, (s) => { flow(s).stages[1].name = 'Appraisal'; }, /stage 2 is "Appraisal", which is not \/assess\/i/, 'the assessment renamed');
+  await assertShape(24, FLOW_SHAPE, (s) => { delete flow(s).reconcile; }, /0 declared flow\(s\) \[\], the prompt asks for 1/, 'the flow is not declared');
+  await assertShape(24, FLOW_SHAPE, (s) => { s.businessProcessFlows.push({ ...structuredClone(flow(s)), name: 'Another flow' }); }, /2 declared flow\(s\)/, 'a second flow');
+  const keeps = [
+    ['other wording for the same stages', (s) => { const st = flow(s).stages; st[0].name = 'Intake review'; st[1].name = 'Assessment'; st[2].name = 'Decision'; }],
+    ['another flow name', (s) => { flow(s).name = 'Handling'; }],
+    ['other steps', (s) => { flow(s).stages.forEach((st) => { st.steps = st.steps.slice(0, 1); }); }],
+    ['a stage key rename', (s) => { flow(s).stages[1].key = 'appraise'; }],
+  ];
+  for (const [what, mutate] of keeps) assert.deepStrictEqual(await gradeShape(24, FLOW_SHAPE, mutate), { status: 'pass' }, what);
+});
+
+test('the shape assertions read a declared artifact only: a plain dashboard, rule or flow never satisfies or spoils them', async () => {
+  const plainRule = { entity: 'cnt_request', name: 'Plain', conditions: [{ field: 'cnt_status', operator: 'Equals', value: '100000002', dataType: 'Picklist' }], actions: [{ type: 'LockUnlock', field: 'cnt_notes', lock: true }] };
+  assert.deepStrictEqual(await gradeShape(23, RULE_SHAPE, (s) => { s.businessRules.push(plainRule); }), { status: 'pass' }, 'a plain rule beside the declared ones');
+  await assertShape(23, RULE_SHAPE, (s) => { s.businessRules.forEach((r) => { delete r.reconcile; }); }, /0 declared rule\(s\) \[\], the prompt asks for 2/, 'no rule is declared');
+  const facts = await stageFacts(structuredClone(fixtureFor(22).spec), { fixture: fixtureFor(22) });
+  assert.deepStrictEqual(facts.declaredShapes.dashboards[0].tiles.map((t) => [t.type, t.colspan, t.rowspan]), [['list', 2, 12], ['chart', 1, 12], ['iframe', 1, 16]],
+    'an unsized tile is one column wide and the common 12 rows tall');
 });
 
 test('a maker who declines business rules and process flows gets none of ANY kind, graded independently of the declared-capability check', async () => {

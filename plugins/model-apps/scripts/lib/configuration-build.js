@@ -54,6 +54,25 @@ function namedByPages(pages) {
   return { references, apis };
 }
 
+// Every stop before the build's first write: the same plan stops again, so it is RETRY.NEVER.
+const preflightHalt = (preflightCode, message) => new BuildHalt(message, { phase: 'preflight', code: preflightCode, recoverable: false, retry: RETRY.NEVER });
+
+/**
+ * The binding store's own configuration debt (lib/configuration-protected.js pendingSweep, answered by the build's hookup
+ * `opts.protectedConfiguration.sweep`), read before the build's first service change: an attempt an earlier build left
+ * unfinished for an item this App Spec no longer declares stops the build here, with nothing sent. It runs whatever the
+ * App Spec declares — sdk-build.js calls it directly for an App Spec that uses no configuration kind, and the runtime's
+ * preflight calls it first otherwise — so omitting a declaration never bypasses its debt. No hookup, nothing to read.
+ */
+function sweepPendingConfiguration(spec, opts = {}) {
+  const sweep = opts.protectedConfiguration && opts.protectedConfiguration.sweep;
+  if (typeof sweep !== 'function') return { halts: [] };
+  const { halts } = sweep({ spec });
+  if (!halts.length) return { halts };
+  const others = halts.slice(1).map((h) => `${h.kind} ${h.key}`);
+  throw preflightHalt(halts[0].code, `${halts[0].kind} ${halts[0].key}: ${halts[0].message}${others.length ? ` Also held: ${others.join(', ')}.` : ''}`);
+}
+
 /**
  * @param {object} parts
  * @param {object} parts.spec           the App Spec (normalized, validated)
@@ -67,14 +86,25 @@ function namedByPages(pages) {
 function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUniqueName } = {}) {
   if (!spec || !sdk) throw new TypeError('createConfigurationRuntime: spec and sdk are required');
   precomputeIntents(spec);
+  // Protected configuration (`configurationIdentity: "stable-v1"`) is loaded only when the App Spec opts in, so a build
+  // without the opt-in loads none of its modules and sends exactly what it sent before. Under the opt-in the build hands
+  // over its hookup (`opts.protectedConfiguration`, lib/configuration-protected.js createProtectedConfiguration over the
+  // build's binding store, send-once gate and managed create context); without it nothing protected can be proved, so the
+  // preflight stops the build before any write (create-identity-unverified) rather than fall back to name lookup.
+  const protectedOptIn = spec.configurationIdentity === 'stable-v1';
+  const hookup = protectedOptIn && opts.protectedConfiguration && typeof opts.protectedConfiguration.port === 'function' ? opts.protectedConfiguration : null;
+  // `sdk` is the workspace the build reads protected rows into: the preflight refuses to read over a local copy with edits.
+  const protectedArgs = () => ({ spec, dataverse: sdk.dataverse, solution: spec.solution && spec.solution.uniqueName, bindings: opts.configurationBindings, sdk });
+  const protectedPort = hookup ? hookup.port(protectedArgs()) : null;
   const ctx = C.configurationContext({
     sdk,
     // The build's create port only when it can stand in for the configuration kinds' own (it protects every one of
     // them and resolves: C.configurationAcceptsPort). The build's port protects the kinds of its own catalog or none
     // (the plain pass-through), and half using it would send these creates under random ids; otherwise the helper
-    // uses its default, the plain pass-through (lib/creates-passthrough.js): the configuration kinds load no
-    // stable-id module in this release. Ordinary creation never depends on a port being supplied.
-    creates: C.configurationAcceptsPort(opts.creates) ? opts.creates : undefined,
+    // uses its default, the plain pass-through (lib/creates-passthrough.js): without the protected opt-in the
+    // configuration kinds load no stable-id module. Ordinary creation never depends on a port being supplied. Under the
+    // protected opt-in the port is the protected one, always: exact ids from the binding store, never a name.
+    creates: protectedPort || (C.configurationAcceptsPort(opts.creates) ? opts.creates : undefined),
     managed: opts.managed,
     bindings: opts.configurationBindings,
     solutionUniqueName: spec.solution && spec.solution.uniqueName,
@@ -119,6 +149,47 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
 
   return {
     ctx,
+    // The protected configuration's whole-plan, read-only preflight (lib/configuration-protected.js), run by the build
+    // before its first write — the solution, its version, a table, a variable. Without the opt-in it reads only the binding
+    // store the build handed over, if any (nothing is sent). Under it, an item the binding store cannot locate exactly, or an edit the protected path cannot
+    // make, stops the build here with nothing sent; every such stop is RETRY.NEVER, as the same plan stops again.
+    async preflight() {
+      const fail = preflightHalt;
+      // The store's own debt first, whatever this App Spec still declares (sweepPendingConfiguration).
+      sweepPendingConfiguration(spec, opts);
+      if (!protectedOptIn) {
+        // Removing the opt-in is not a migration: a declared item the build's binding store still holds (committed, or an
+        // attempt pending) would go back to name lookup, where a namesake could stand in for its bound row. A local store
+        // read only, and only when the build handed its hookup over; an App Spec that never opted in has nothing there.
+        // The hookup answers it itself (createProtectedConfiguration obligations), so a default build never requires the
+        // protected modules from here.
+        const obligations = opts.protectedConfiguration && opts.protectedConfiguration.obligations;
+        if (typeof obligations !== 'function') return { halts: [] };
+        const { halts } = obligations({ spec });
+        if (!halts.length) return { halts };
+        const others = halts.slice(1).map((h) => `${h.kind} ${h.key}`);
+        throw fail(halts[0].code, `${halts[0].kind} ${halts[0].key}: ${halts[0].message}${others.length ? ` Also held: ${others.join(', ')}.` : ''}`);
+      }
+      if (!hookup) {
+        throw fail('create-identity-unverified', 'configurationIdentity "stable-v1" needs the binding store for protected configuration, and it is not available to this build. No service changes were sent by this build.');
+      }
+      // The maker's overwrite approvals reach only the preflight: the one step that may replace a protected item's local copy.
+      const { halts } = await hookup.preflight({ ...protectedArgs(), authorizedOverwrite: opts.authorizedOverwrite });
+      if (!halts.length) return { halts };
+      // The edit refusal leads when there is one: it is the halt a maker acts on first, and its text is fixed.
+      const first = halts.find((h) => h.code === 'configuration-edit-unsupported') || halts[0];
+      const others = halts.filter((h) => h !== first).map((h) => `${h.kind} ${h.key} (${h.code})`);
+      // A row of an earlier, unfinished create that no answer proved this build's own is adopted only under the maker's
+      // exact approval token, one per row (managed-create-context.js judgeRows), never wholesale.
+      const approvals = [...new Set(halts.filter((h) => !h.adoption).flatMap((h) => h.approvals || []))];
+      const approve = approvals.length ? ` Its rows are bound only under these exact approvals, given after checking those rows are yours: ${approvals.map((t) => JSON.stringify(t)).join(', ')}.` : '';
+      // A namesake made before the opt-in (configuration-protected.js adoptionHalt) is adopted only under its own exact
+      // approvals, and they are printed for EVERY such item of the stop with what they approve — its kind, key and id,
+      // the id of each row (in the approvals themselves) and every field the build would then change — never a bare
+      // token for an item whose own sentence is not the one shown.
+      const adoptions = halts.filter((h) => h.adoption).map((h) => ` Adopt ${h.kind} ${h.key} at its id ${h.adoption.id} (the build would then change ${h.adoption.change}) only under these exact approvals, given after checking those rows are yours: ${h.adoption.approvals.map((t) => JSON.stringify(t)).join(', ')}.`).join('');
+      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}${adoptions}`);
+    },
     // Plan, apply and observe ONE phase's items. Returns {outcome, blocking, halt, plan}.
     async apply(phase) {
       if (phase !== 'solution' && phase !== 'data-model') throw new TypeError(`configuration runtime: unknown phase ${phase}`);
@@ -172,4 +243,4 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   };
 }
 
-module.exports = { createConfigurationRuntime };
+module.exports = { createConfigurationRuntime, sweepPendingConfiguration, namedByPages };

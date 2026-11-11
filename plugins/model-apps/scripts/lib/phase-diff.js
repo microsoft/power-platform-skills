@@ -21,7 +21,15 @@ const PHASE_SLICES = {
   // data-model owns the whole schema; a change here can ripple into everything downstream (views,
   // charts, forms reference columns; app-shell references entities), so callers treat a data-model
   // change as "recommend a full build", not "run only data-model".
-  'data-model': (s) => ({ entities: s.entities, relationships: s.relationships, globalChoices: s.globalChoices }),
+  // The configuration kinds (lib/configuration-artifacts.js FIELDS) are written in the solution and data-model phases, and the protected
+  // opt-in decides how. They were missing here, so a spec whose only change was one of them diffed as "nothing changed" and
+  // `--changed-only` applied nothing; as part of this slice a change to any of them is a full build (FULL_BUILD_PHASES). An absent field
+  // compares as null on both sides, so a spec that declares none of them compares exactly as it did.
+  'data-model': (s) => ({
+    entities: s.entities, relationships: s.relationships, globalChoices: s.globalChoices,
+    configurationIdentity: s.configurationIdentity, environmentVariables: s.environmentVariables, connectionReferences: s.connectionReferences,
+    customApis: s.customApis, duplicateDetectionRules: s.duplicateDetectionRules,
+  }),
   'sample-data': (s) => s.sampleData,
   'web-resources': (s) => s.webResources,
   views: (s) => s.views,
@@ -33,7 +41,9 @@ const PHASE_SLICES = {
   // so their edits force a full build and record debt rather than a silent skip.
   'business-rules': (s) => s.businessRules,
   'business-process-flows': (s) => s.businessProcessFlows,
-  commands: (s) => s.commands,
+  // commandStates[] are applied in the commands phase. Only a spec that declares some compares them, ordered by row id (their order means
+  // nothing): a spec without them diffs exactly as before. A change to them is a full build (classify-changes.js).
+  commands: (s) => (hasCommandStates(s) ? { commands: s.commands, commandStates: commandStatesByRow(s.commandStates) } : s.commands),
   dashboards: (s) => s.dashboards,
   'app-shell': (s) => ({ app: s.app, appShell: s.appShell }),
   pages: (s) => s.pages,
@@ -46,6 +56,14 @@ const PHASE_SLICES = {
   // FULL_BUILD_PHASES in classify-changes.js — never a silent changed-only no-op.
   security: (s) => ({ personas: s.personas, roleGrants: s.roleGrants }),
 };
+
+function hasCommandStates(s) {
+  return !!s && Array.isArray(s.commandStates) && s.commandStates.length > 0;
+}
+function commandStatesByRow(states) {
+  const key = (e) => String((e && e.rowId) || '').toLowerCase();
+  return [...states].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
 
 // Deterministic, key-order-independent JSON so a reordered-but-equal slice compares equal. Arrays keep
 // their order (order is semantic for views/columns/sitemap); only object KEYS are sorted.

@@ -76,6 +76,50 @@ test('rejects an invalid spec before any build', async () => {
   assert.strictEqual(calls.length, 0, 'no SDK writes on a bad spec');
 });
 
+// An SDK double that counts EVERY method the build calls, not only the ones mockSdk() logs: several writes (createPublisher, pushArtifact, updateRecord,
+// addSolutionComponent, publishArtifact) are not in its `calls`, so a count of `calls` alone would miss a build that wrote before it validated.
+function countingSdk() {
+  const { sdk } = mockSdk();
+  const touched = [];
+  return { sdk: new Proxy(sdk, { get: (target, name) => (typeof target[name] === 'function' ? (...args) => { touched.push(String(name)); return target[name](...args); } : target[name]) }), touched };
+}
+
+test('a view written with `filter` is refused on load, before any SDK call, while the same view written with `filters` is built', async () => {
+  const withKey = (key) => { const s = jclone(desk); s.views.find((v) => v.name === 'Active Tickets')[key] = [{ attr: 'new_status', op: 'eq', value: 1 }]; return s; };
+  const refused = countingSdk();
+  const r = await buildModelApp(withKey('filter'), { apply: true, env: 'https://x' }, { sdk: refused.sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /^view 'Active Tickets': unknown key 'filter' — did you mean 'filters'\?/.test(e)), JSON.stringify(r.errors));
+  assert.deepStrictEqual(refused.touched, [], 'no SDK method is called on a spec whose view would be built without its filter');
+  const built = countingSdk();
+  const ok = await buildModelApp(withKey('filters'), { apply: true, env: 'https://x' }, { sdk: built.sdk });
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+  assert.ok(built.touched.length > 0, 'the control spec is built');
+});
+
+// The structural profile reads a spec to tear it down or preview it and lets an unknown view key through as a warning; a build that applied under it would
+// write the view without that part. So an apply refuses it, with no SDK call, whatever the spec holds — and the same spec under it is still accepted to read.
+test('an apply asked to validate under the structural profile is refused before any SDK call, on a spec with a typo and on one without', async () => {
+  const withKey = (key) => { const s = jclone(desk); s.views.find((v) => v.name === 'Active Tickets')[key] = [{ attr: 'new_status', op: 'eq', value: 1 }]; return s; };
+  for (const [label, spec] of [['with `filter`', withKey('filter')], ['with `filters`', withKey('filters')]]) {
+    const refused = countingSdk();
+    const r = await buildModelApp(spec, { apply: true, env: 'https://x', profile: 'structural' }, { sdk: refused.sdk });
+    assert.strictEqual(r.ok, false, label);
+    assert.ok(r.errors.some((e) => /cannot validate under the 'structural' profile/.test(e)), `${label}: ${JSON.stringify(r.errors)}`);
+    assert.deepStrictEqual(refused.touched, [], `${label}: no SDK method is called`);
+  }
+  const structural = validateAppSpec(withKey('filter'), { profile: 'structural' });
+  assert.strictEqual(structural.ok, true, 'a spec read to tear it down or preview it is still accepted');
+  assert.ok(structural.warnings.some((w) => /unknown key 'filter'/.test(w)));
+  for (const profile of ['plan', 'deploy']) {
+    const refused = countingSdk();
+    const r = await buildModelApp(withKey('filter'), { apply: true, env: 'https://x', profile }, { sdk: refused.sdk });
+    assert.strictEqual(r.ok, false, profile);
+    assert.ok(r.errors.some((e) => /unknown key 'filter'/.test(e)), `${profile}: ${JSON.stringify(r.errors)}`);
+    assert.deepStrictEqual(refused.touched, [], `${profile}: no SDK method is called`);
+  }
+});
+
 // The web-resources phase reads contentPath files after the solution and tables are written, so a
 // missing source must be caught here, with the page sources, before the first SDK call.
 test('a web resource whose contentPath file is missing halts before any SDK call', async (t) => {
@@ -1493,6 +1537,129 @@ test('--authorize: each repeated key is read, matched case-insensitively, and ke
   }
 });
 
+test('--authorize overwrite:<configuration kind>:<key> approves replacing exactly one declared protected item\'s local copy, only under the opt-in', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc' }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+    connectionReferences: [{ logicalName: 'contoso_sp', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }],
+    duplicateDetectionRules: [{ key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', 'overwrite:customApi:CONTOSO_CALC', '--authorize=overwrite:environmentVariable:contoso_apibase',
+    '--authorize', 'overwrite:connectionReference:contoso_SP', '--authorize', 'overwrite:duplicateRule:Email rule'], spec());
+  assert.strictEqual(ok.error, null);
+  // Stored as the preflight asks for it: <kind>:<port key> (a name in lower case, a rule's key byte for byte).
+  assert.deepStrictEqual([...ok.overwrite].sort(), ['connectionReference:contoso_sp', 'customApi:contoso_calc', 'duplicateRule:Email rule', 'environmentVariable:contoso_apibase']);
+  assert.strictEqual(ok.keys.size, 0, 'an overwrite consents to no destructive change');
+  assert.strictEqual(ok.adopt.size, 0);
+  for (const [key, over, why] of [
+    ['overwrite:duplicateRule:email rule', {}, /names a configuration item the spec does not declare/],
+    ['overwrite:customApi:contoso_Other', {}, /names a configuration item the spec does not declare/],
+    ['overwrite:customApi:contoso_Calc', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1"/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.overwrite.size, 0, key);
+  }
+});
+
+test('--authorize adopt:<configuration kind>:... approves binding exactly the one protected row it names, as the stop printed it, only under the opt-in', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'String' }], responseProperties: [{ uniqueName: 'Total', type: 'Integer' }] }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', value: 'x' }],
+    duplicateDetectionRules: [{ key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', 'adopt:customApi:CONTOSO_CALC', '--authorize=adopt:customApiRequestParameter:contoso_calc/request%3AA',
+    '--authorize', 'adopt:customApiResponseProperty:Contoso_Calc/response%3Atotal', '--authorize', 'adopt:environmentVariableValue:contoso_apibase/value',
+    '--authorize', 'adopt:duplicateRuleCondition:Email%20rule/e'], spec());
+  assert.strictEqual(ok.error, null);
+  // Stored in the stop's own spelling (a name and a parameter in lower case, a rule's and a condition's key byte for byte, both parts
+  // percent-encoded), one row each: the root's approval covers none of its children.
+  assert.deepStrictEqual([...ok.configurationApprovals].sort(), [
+    'adopt:customApi:contoso_calc', 'adopt:customApiRequestParameter:contoso_calc/request%3Aa', 'adopt:customApiResponseProperty:contoso_calc/response%3Atotal',
+    'adopt:duplicateRuleCondition:Email%20rule/e', 'adopt:environmentVariableValue:contoso_apibase/value',
+  ]);
+  assert.strictEqual(ok.adopt.size, 0, 'a configuration row approval adopts no view or chart');
+  assert.strictEqual(ok.overwrite.size, 0);
+  assert.strictEqual(ok.keys.size, 0);
+  for (const [key, over, why] of [
+    ['adopt:customApi:contoso_Other', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiRequestParameter:contoso_calc/request%3Ab', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiResponseProperty:contoso_calc/request%3Aa', {}, /names a configuration item the spec does not declare/],
+    ['adopt:duplicateRuleCondition:email%20rule/e', {}, /names a configuration item the spec does not declare/],
+    ['adopt:environmentVariableValue:contoso_apibase/default', {}, /names a configuration item the spec does not declare/],
+    ['adopt:customApiRequestParameter:contoso_calc', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApiRequestParameter:contoso_calc/request%3Aa/x', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApiRequestParameter:contoso_calc/%E0%A4%A', {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    ['adopt:customApi:contoso_Calc', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+    ['adopt:duplicateRuleCondition:Email%20rule/e', { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.configurationApprovals.size, 0, key);
+  }
+});
+
+test('--authorize adopt:...@<row id>[+digest] approves the one namesake row the stop printed; the plain form, every problem and every rule token are read as before', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const ID = '0B7C6F5E-0000-4000-8000-00000000000A';
+  const id = ID.toLowerCase();
+  const spec = (over = {}) => ({
+    configurationIdentity: 'stable-v1',
+    customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'String' }] }],
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string', value: 'x' }],
+    // A rule key may itself end in what reads like an id: the whole text names it first.
+    duplicateDetectionRules: [{ key: `odd@${id}`, name: 'Odd', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] },
+      { key: 'Email rule', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    ...over,
+  });
+  const ok = authorizationKeys(['--authorize', `adopt:customApi:CONTOSO_CALC@${ID}+3F2A9C0D1E2B4A59`, '--authorize', `adopt:customApiRequestParameter:contoso_calc/request%3AA@${ID}`,
+    '--authorize', `adopt:environmentVariable:contoso_apibase@${ID}`,
+    '--authorize', `adopt:duplicateRule:odd@${id}`, '--authorize', 'adopt:customApi:contoso_calc'], spec());
+  assert.strictEqual(ok.error, null);
+  // The id and digest in lower case, after the key in the stop's own spelling. The two meanings are typed apart: an
+  // `@<row id>` approval as adopt-row:, which no plain approval reads as, and the plain form (`odd@<id>` is a declared
+  // rule's whole key) as adopt:, exactly as before.
+  assert.deepStrictEqual([...ok.configurationApprovals].sort(), [
+    `adopt-row:customApi:contoso_calc@${id}+3f2a9c0d1e2b4a59`, `adopt-row:customApiRequestParameter:contoso_calc/request%3Aa@${id}`,
+    `adopt-row:environmentVariable:contoso_apibase@${id}`,
+    'adopt:customApi:contoso_calc', `adopt:duplicateRule:odd@${id}`,
+  ]);
+  for (const [key, over, why] of [
+    [`adopt:customApi:contoso_Other@${id}`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApiRequestParameter:contoso_calc/request%3Ab@${id}`, {}, /names a configuration item the spec does not declare/],
+    // Not an id, or a digest on a child or of another length: the text is read whole, as before, and names nothing.
+    ['adopt:customApi:contoso_calc@not-an-id', {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApi:contoso_calc@${id}+3f2a`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApiRequestParameter:contoso_calc/request%3Aa@${id}+3f2a9c0d1e2b4a59`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:customApiRequestParameter:contoso_calc@${id}`, {}, /is not adopt:<kind>:<declared key> or adopt:<child kind>/],
+    [`adopt:customApi:contoso_Calc@${id}`, { configurationIdentity: undefined }, /does not set configurationIdentity "stable-v1", so there is no such row to bind/],
+    // A duplicate rule or condition is never adopted: an `@<id>` ending is part of its key, exactly as in 2.24.0.
+    [`adopt:duplicateRuleCondition:Email%20rule/e@${id}`, {}, /names a configuration item the spec does not declare/],
+    [`adopt:duplicateRule:Email rule@${id}`, {}, /names a configuration item the spec does not declare/],
+    // Both readings name a declared item (`contoso_calc` as well as `contoso_calc@<id>`, a key no valid App Spec has but
+    // the parser does not assume so), or a declared child: refused, never read either way.
+    [`adopt:customApi:contoso_calc@${id}`, { customApis: [{ uniqueName: 'contoso_Calc' }, { uniqueName: `contoso_calc@${id}` }] }, /reads both as the approval of one declared configuration item and, ending @<row id>, as the adoption of another's namesake/],
+    [`adopt:customApiRequestParameter:contoso_calc/request%3AA@${id}`, { customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A' }, { uniqueName: `A@${id}` }] }] }, /reads both as the approval/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec(over));
+    assert.match(r.error || '', why, key);
+    assert.strictEqual(r.configurationApprovals.size, 0, key);
+  }
+  // A rule or condition whose own key ends in what reads like `@<id>`, beside one named by the text before it: the token
+  // is the plain approval of the whole key, as in 2.24.0, never refused and never an adoption.
+  const rules = { duplicateDetectionRules: [{ key: 'odd', name: 'Odd 2', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }, { key: `e@${id}`, column: 'lastname', match: 'exact' }] },
+    { key: `odd@${id}`, name: 'Odd', entity: 'contact', conditions: [] }] };
+  const plain = authorizationKeys(['--authorize', `adopt:duplicateRule:odd@${id}`, '--authorize', `adopt:duplicateRuleCondition:odd/e@${id}`], spec(rules));
+  assert.strictEqual(plain.error, null);
+  assert.deepStrictEqual([...plain.configurationApprovals].sort(), [`adopt:duplicateRule:odd@${id}`, `adopt:duplicateRuleCondition:odd/e%40${id}`]);
+});
+
 test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets, under its family', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   const spec = {
@@ -2654,34 +2821,27 @@ test('build --verify wires readers that verify-spec will NOT skip role-privilege
   // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
   // business-rule skip must not read as "not deployed"). Pinning `(s)` exactly made this test fail
   // for a change that did not touch what it is actually guarding. The lambda now makes (and disposes)
-  // the page backend around that call, so the line is found by what it calls.
-  const call = src.split(/\r?\n/).find((l) => /verifySpec\(\s*s\s*,\s*readerFor\(provisionSdk,/.test(l));
+  // the page backend around that call, so the line is found by what it calls. The reader itself is made by
+  // inlineVerifyReader from the whole makeSdk result (`made`), so a reader makeSdk hands back cannot be left
+  // out at this line.
+  const call = src.split(/\r?\n/).find((l) => /verifySpec\(\s*s\s*,\s*inlineVerifyReader\(made,/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
-  assert.match(call, /readerFor\(provisionSdk,/, 'verify must read through the provisioning SDK');
   // The second argument must actually be forwarded, or the environment-skip list is silently
   // dropped and verify keeps failing on rules the build already reported it could not create.
   assert.match(call, /verifySpec\(\s*s\s*,[\s\S]*\)\s*,\s*verifyOpts\s*\)/,
     'the caller-supplied verify options must reach verifySpec');
+  const helper = src.slice(src.indexOf('function inlineVerifyReader'), src.indexOf('\n}\n', src.indexOf('function inlineVerifyReader')));
+  assert.match(helper, /readerFor\(made\.provisionSdk,/, 'verify must read through the provisioning SDK');
 
-  // The substantive half: the option bag on that line, fed to the real `readerFor`, must yield BOTH
-  // privilege readers. A source match alone would keep passing if `entityPrivileges` were made
-  // conditional again on something the build does not supply.
-  const optsSrc = /readerFor\(provisionSdk,[^,]+,\s*(\{[^}]*\})\s*\)/.exec(call);
-  assert.ok(optsSrc, `could not extract the readerFor options from: ${call}`);
-  // Shorthand-aware: `{ genpage, workspaceDir, isolatedReader }` carries only SHORTHAND keys, and a
-  // colon-only pattern would see none of them, which would make the assertion below weaker than it
-  // looks — it would have kept passing for an option bag that had lost `workspaceDir` entirely.
-  // Match a name followed by `:`, `,` or `}`.
-  const optKeys = [...optsSrc[1].matchAll(/([A-Za-z_$][\w$]*)\s*(?::|[,}])/g)].map((m) => m[1]);
-  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpage'),
-    `expected both readerFor options to be extracted, got ${JSON.stringify(optKeys)}`);
-  const { readerFor } = require('../verify-model-app.js');
-  // A bare object is enough: every base reader is a lazy closure, so this asserts PRESENCE, which is
-  // exactly what verify-spec's method-presence gate tests.
-  const reader = readerFor({}, 'contoso_app', Object.fromEntries(optKeys.map((k) => [k, k === 'workspaceDir' ? __dirname : {}])));
+  // The substantive half: the real helper, fed what makeSdk returns, must yield BOTH privilege readers. A
+  // source match alone would keep passing if `entityPrivileges` were made conditional again on something
+  // the build does not supply. A bare object is enough: every base reader is a lazy closure, so this asserts
+  // PRESENCE, which is exactly what verify-spec's method-presence gate tests.
+  const { inlineVerifyReader } = require('../build-model-app.js');
+  const reader = inlineVerifyReader({ provisionSdk: {}, isolatedReader: {} }, { app: { uniqueName: 'contoso_app' } }, { genpage: {}, workspaceDir: __dirname });
   for (const name of ['rolePrivileges', 'entityPrivileges']) {
     assert.strictEqual(typeof reader[name], 'function',
-      `verify-spec silently skips role-privileges without '${name}'; the build's options are ${JSON.stringify(optKeys)}`);
+      `verify-spec silently skips role-privileges without '${name}'`);
   }
 });
 
@@ -2695,11 +2855,16 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
   const returned = /return \{ ([^}]*) \};/.exec(src.slice(src.indexOf('function makeSdk')));
   assert.ok(returned, 'expected makeSdk to return an object literal');
   // `await` is optional in the pattern: `makeSdk` became async when the SDK's workspace calls did,
-  // and this guard is about the KEY SETS agreeing, not about how the promise is unwrapped.
-  const destructured = /const \{ ([^}]*) \} = (?:await\s+)?makeSdk\(/.exec(src);
-  assert.ok(destructured, 'expected main to destructure makeSdk()');
+  // and this guard is about the KEY SETS agreeing, not about how the promise is unwrapped. main keeps
+  // the whole result as `made` (the inline verify reader takes all of it) and destructures the rest, so
+  // the keys it uses are the destructured ones plus those inlineVerifyReader reads off `made`.
+  assert.match(src, /const made = await makeSdk\(/, 'expected main to keep makeSdk()\u2019s result');
+  const destructured = /const \{ ([^}]*) \} = made;/.exec(src);
+  assert.ok(destructured, 'expected main to destructure makeSdk()\u2019s result');
+  const helper = src.slice(src.indexOf('function inlineVerifyReader'), src.indexOf('\n}\n', src.indexOf('function inlineVerifyReader')));
   const names = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).sort();
-  assert.deepStrictEqual(names(destructured[1]), names(returned[1]),
+  const used = [...new Set([...names(destructured[1]), ...[...helper.matchAll(/made\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1])])].sort();
+  assert.deepStrictEqual(used, names(returned[1]),
     'main destructures keys makeSdk does not return (or ignores ones it does)');
 });
 
@@ -2709,10 +2874,13 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(sendObserver \? sendObserver\.wrap\(\) : undefined\) \} : \{\}\), \.\.\.\(workflowEffectGate \? \{ workflowEffectGate \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate, with the managed attempts\u2019 send observer inside the gate, and screens a declared workflow write with the build\u2019s workflow effect gate only when it has one');
+  assert.match(body, /const writeGate = managedCreateGate \? require\('\.\/lib\/managed-create-transport\.js'\)\.composeWriteGates\(workflowEffectGate, managedCreateGate\) : workflowEffectGate;/, 'the workflow effect gate alone unless protected configuration\u2019s managed create gate was made, and then both, composed into the one slot');
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(sendObserver \? sendObserver\.wrap\(\) : undefined\) \} : \{\}\), \.\.\.\(writeGate \? \{ workflowEffectGate: writeGate \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate, with the managed attempts\u2019 send observer inside the gate, and screens a declared workflow write (and a protected configuration create) with the build\u2019s write gate only when it has one');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
-  assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
+  assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /inlineVerifyReader\(made, /, 'verify takes the readers makeSdk returned');
+  const helper = src.slice(src.indexOf('function inlineVerifyReader'), src.indexOf('\n}\n', src.indexOf('function inlineVerifyReader')));
+  assert.match(helper, /isolatedReader: made\.isolatedReader/, 'including the isolated reader');
   assert.strictEqual((src.match(/isolatedReaderFor\(/g) || []).length, 1, 'no second reader, and so no second client, is made');
 });
 

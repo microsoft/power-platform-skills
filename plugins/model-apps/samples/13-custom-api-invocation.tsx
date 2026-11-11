@@ -183,13 +183,17 @@ const useStyles = makeStyles({
         gap: tokens.spacingVerticalL,
         padding: tokens.spacingHorizontalXL,
         width: '100%',
+        height: '100%',
+        overflowY: 'auto',
         boxSizing: 'border-box',
     },
+    // A Card clips its own overflow, so in the bounded root column it must not shrink.
     card: {
         display: 'flex',
         flexDirection: 'column',
         gap: tokens.spacingVerticalM,
         padding: tokens.spacingHorizontalL,
+        flexShrink: 0,
     },
     summaryGrid: {
         display: 'grid',

@@ -35,6 +35,6 @@ test('runner: exits non-zero when a contract expectation is deliberately broken'
     assert.equal(code, 1, `stdout:\n${stdout}`);
     assert.match(stdout, /PCF_INTENT_THIS_CODE_DOES_NOT_EXIST/);
   } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    fs.rmSync(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

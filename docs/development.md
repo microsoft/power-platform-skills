@@ -41,6 +41,17 @@ To develop and test plugins locally, follow these steps:
 For Process Intelligence, first follow its [setup instructions](../plugins/process-intelligence/README.md#installation),
 including the explicit profile and absolute plugin root needed to avoid duplicate workspace MCP loads.
 
+### Cross-platform hook commands
+
+Hook commands may be launched through nested shells on Windows. Inline JavaScript wrapped in
+double quotes can lose those quotes before `node -e` receives it, causing PowerShell to parse the
+JavaScript itself. Use a single-quoted `node -e` script with any string arguments passed after the
+script and read from `process.argv`; see [issue #788](https://github.com/microsoft/power-platform-skills/issues/788).
+Telemetry-only commands should fail open, but do not suppress failures from validation hooks.
+
+Run `node --test scripts/tests/hook-command-quoting.test.cjs` to exercise affected manifests through
+POSIX shells and, on Windows, direct and nested PowerShell.
+
 ## Repository Structure
 
 ```text

@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
+const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
 const { runUpgrade } = require('./lib/pcf-upgrade.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
@@ -46,9 +47,8 @@ function runMain(argv = process.argv.slice(2)) {
   if (flagError) usageError(flagError);
 
   const flags = parsed.flags;
-  for (const booleanFlag of ['apply', 'allow-dirty', 'no-install']) {
-    if (flags[booleanFlag] !== undefined && flags[booleanFlag] !== true) usageError(`--${booleanFlag} does not take a value`);
-  }
+  const booleanError = booleanFlagError(flags, ['apply', 'allow-dirty', 'no-install']);
+  if (booleanError) usageError(booleanError);
   const hosts = splitList(flags.hosts, ['model']);
   validateHosts(hosts, flags.hosts !== undefined);
   const steps = splitList(flags.steps, []);

@@ -125,17 +125,27 @@ function createSolutionMembership({ read, solutionUniqueName, componentTypes, re
     }
     return tableIds.get(logical);
   };
+  // 'held' when the solution is PROVEN to hold the component: it has a row, or — for a view, chart or form given with
+  // its `table` — the solution holds that table with all its subcomponents. 'unknown' when the proof could not be
+  // looked for: the solution's rows could not be read, or a table held whole might be the component's but its
+  // MetadataId could not be resolved. 'absent' otherwise: the rows were read and none of them vouches for it.
+  // The build only needs held-or-not (`has`); a reader that must not treat an outage as "not in the solution" (the
+  // managed download's restore) asks for all three.
+  async function status(componentId, componentType, { table } = {}) {
+    const held = await members();
+    if (!held) return 'unknown';
+    if (held.members.has(keyOf(componentType, componentId))) return 'held';
+    if (!table || typeof resolveTableId !== 'function' || !held.wholeTables.size) return 'absent';
+    if (!TABLE_SUBCOMPONENT_TYPES.has(Number(componentType))) return 'absent';
+    const tableId = await tableIdOf(table);
+    if (!tableId) return 'unknown';
+    return held.wholeTables.has(tableId) ? 'held' : 'absent';
+  }
   return {
-    // True only when the solution is PROVEN to hold the component: it has a row, or — for a view, chart or form
-    // given with its `table` — the solution holds that table with all its subcomponents.
-    async has(componentId, componentType, { table } = {}) {
-      const held = await members();
-      if (!held) return false;
-      if (held.members.has(keyOf(componentType, componentId))) return true;
-      if (!table || typeof resolveTableId !== 'function' || !held.wholeTables.size) return false;
-      if (!TABLE_SUBCOMPONENT_TYPES.has(Number(componentType))) return false;
-      const tableId = await tableIdOf(table);
-      return !!tableId && held.wholeTables.has(tableId);
+    status,
+    // True only when the solution is PROVEN to hold the component (`status` is 'held').
+    async has(componentId, componentType, options) {
+      return (await status(componentId, componentType, options)) === 'held';
     },
     // Records a component this run added, so a repeated assert of it is skipped. Never invents membership
     // the read did not establish: with nothing known there is nothing to add to.

@@ -108,7 +108,7 @@ test('capture containment refuses outside targets before creating their parents'
     assert.throws(() => assertInsideFixtures(outsideTarget, { fixturesRoot }), /Refusing to write outside/);
     assert.equal(fs.existsSync(outsideParent), false, 'outside parent must not be created before refusal');
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -120,7 +120,7 @@ test('capture containment refuses parent traversal targets', () => {
 
     assert.throws(() => assertInsideFixtures(path.join(fixturesRoot, '..', 'escape'), { fixturesRoot }), /Refusing to write outside/);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -134,6 +134,6 @@ test('capture containment allows fixture-internal targets', () => {
     assert.doesNotThrow(() => assertInsideFixtures(target, { fixturesRoot }));
     assert.equal(fs.existsSync(fixturesRoot), true);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
