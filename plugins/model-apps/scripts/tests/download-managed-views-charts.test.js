@@ -24,7 +24,10 @@ function newDir() {
   return dir;
 }
 
-const ENTITIES = { contoso_item: { attributes: { contoso_name: 'String', contoso_code: 'String', contoso_kind: 'Picklist' } } };
+const ENTITIES = {
+  contoso_item: { attributes: { contoso_name: 'String', contoso_code: 'String', contoso_kind: 'Picklist', contoso_ownerid: 'Lookup' } },
+  contoso_owner: { attributes: { contoso_name: 'String', contoso_rank: 'Integer' } },
+};
 const SOLUTION = 'ContosoStable';
 const APP = 'contoso_stableids';
 const APP_ID = '00000000-0000-4000-8000-00000000a111';
@@ -104,10 +107,10 @@ async function download(org, out, argv, { downloaded, ...extra } = {}) {
   return { asked, emitted, said: said.join(''), printed: printed.join(''), calls, writes: calls.filter((c) => c.method !== 'GET'), written: fs.existsSync(specFile) ? JSON.parse(fs.readFileSync(specFile, 'utf8')) : null };
 }
 
-async function builtApp() {
+async function builtApp(extra) {
   const org = createFakeBuildOrg({ entities: ENTITIES, solution: { uniqueName: SOLUTION } });
   const dir = newDir();
-  const { out } = await build(org, dir, stableSpec());
+  const { out } = await build(org, dir, stableSpec(extra));
   const built = { view: out.created.views['contoso_item|Declared Items'], chart: out.created.charts['contoso_item|By Kind'] };
   assert.ok(built.view && built.chart, JSON.stringify(out.created));
   return { org, dir, built, flags: ['--include-managed', '--managed-manifest', storeFileOf(dir)] };
@@ -115,24 +118,27 @@ async function builtApp() {
 
 // --- the report seam ---------------------------------------------------------------------------------------------------------------
 
-test('the managed download asks runDownload to defer the not-round-tripped report and prints it once, after the restore; the plain one does not ask', async () => {
+test('the managed download asks runDownload to defer the not-round-tripped report and prints it once, after the restore, less what it restored; the plain one does not ask', async () => {
   const { org, built, flags } = await builtApp();
   const downloaded = plainDownload(built);
   const managed = await download(org, newDir(), flags, { downloaded });
   assert.equal(managed.emitted.length, 1);
   assert.equal(managed.emitted[0].ok, true, JSON.stringify(managed.emitted) + managed.said);
   assert.equal(managed.asked[0].deferReport, true);
+  // The view is restored into views[], so only the chart is still reported as left out.
+  const left = notRoundTrippedSummary({ charts: downloaded.inventory.charts });
   const warning = notRoundTrippedWarning(notRoundTrippedSummary(downloaded.inventory));
   assert.equal(managed.printed, '', 'runDownload printed nothing itself');
-  assert.equal(managed.said.split(warning).length - 1, 1, `main printed the report once: ${managed.said}`);
-  assert.deepEqual(managed.emitted[0].payload.notRoundTripped, notRoundTrippedSummary(downloaded.inventory));
+  assert.equal(managed.said.split(notRoundTrippedWarning(left)).length - 1, 1, `main printed the report once: ${managed.said}`);
+  assert.equal(managed.said.includes(warning), false, 'and never the report that still names the restored view');
+  assert.deepEqual(managed.emitted[0].payload.notRoundTripped, left);
 
   const plain = await download(org, newDir(), [], { downloaded });
   assert.equal(plain.emitted[0].ok, true, JSON.stringify(plain.emitted));
   assert.equal('deferReport' in plain.asked[0], false, 'the plain download asks runDownload exactly what it did');
   assert.equal(plain.printed, warning, 'runDownload printed the report, as it always did');
   assert.equal(plain.said.includes(warning), false, 'and main did not print it again');
-  assert.deepEqual(plain.emitted[0].payload.notRoundTripped, managed.emitted[0].payload.notRoundTripped);
+  assert.deepEqual(plain.emitted[0].payload.notRoundTripped, notRoundTrippedSummary(downloaded.inventory));
 });
 
 test('a store rewritten while the managed download reads it stops the download before anything is written', async () => {
@@ -156,4 +162,147 @@ test('a store rewritten while the managed download reads it stops the download b
   assert.match(res.emitted[0].payload.error, /changed while this download read it.*Nothing was written\.$/s);
   assert.deepEqual(fs.readdirSync(out), [], 'no spec, baseline or fragments file');
   assert.deepEqual(res.writes, [], 'the download writes nothing to the service');
+});
+
+// --- managed views -----------------------------------------------------------------------------------------------------------------
+
+const { viewDeclarationFromLive } = require('../lib/declared-view-io.js');
+const VIEW_KEY = 'contoso_item/Declared Items';
+// A declared view using every part a declaration can say: widths, a joined-table column, sort on the join and the base table, the
+// default active filter, an `in` list written partly as a label, a condition with no value, one on the join, and the join's own filter.
+const RICH_VIEW = {
+  entity: 'contoso_item', name: 'Declared Items', reconcile: 'declared', description: 'Items by kind',
+  columns: ['contoso_name', { name: 'contoso_code', width: 150 }, { name: 'own.contoso_name', relatedEntity: 'own', width: 120 }],
+  sort: [{ attr: 'contoso_name', relatedEntity: 'own' }, { attr: 'contoso_code', dir: 'desc' }],
+  filters: [{ attr: 'contoso_kind', op: 'in', values: ['A', 100000001] }, { attr: 'contoso_code', op: 'not-null' }, { attr: 'contoso_rank', op: 'gt', value: 3, relatedEntity: 'own' }],
+  linkEntities: [{ name: 'contoso_owner', from: 'contoso_ownerid', to: 'contoso_ownerid', alias: 'own', linkType: 'outer', filters: [{ attr: 'contoso_rank', op: 'ge', value: 1 }] }],
+};
+const nonGet = (calls) => calls.filter((c) => c.method !== 'GET');
+const savedQueryWrites = (calls) => nonGet(calls).filter((c) => /savedquer/i.test(c.path));
+// Rewrite the view group of the store file in place (a test of what the restore makes of a group it cannot trust).
+function editViewGroup(dir, edit) {
+  const file = storeFileOf(dir);
+  const store = JSON.parse(fs.readFileSync(file, 'utf8'));
+  edit(store.groups.find((g) => g.family === 'view'));
+  fs.writeFileSync(file, JSON.stringify(store, null, 2));
+}
+
+test('a view a stable build created is downloaded as the declaration that rebuilds it, pinned to its id, and is no longer reported as left out', async () => {
+  const { org, dir, built, flags } = await builtApp({ views: [RICH_VIEW] });
+  const downloaded = plainDownload(built);
+  const stock = { id: '00000000-0000-4000-8000-0000000000aa', name: 'Active Items', entity: 'contoso_item' };
+  downloaded.inventory.views.push(stock);
+  const res = await download(org, newDir(), flags, { downloaded });
+  assert.equal(res.emitted[0].ok, true, JSON.stringify(res.emitted) + res.said);
+  assert.deepEqual(res.written.views, [{
+    entity: 'contoso_item', name: 'Declared Items', reconcile: 'declared', description: 'Items by kind',
+    columns: [{ name: 'contoso_name', width: 100 }, { name: 'contoso_code', width: 150 }, { name: 'own.contoso_name', relatedEntity: 'own', width: 120 }],
+    sort: [{ attr: 'contoso_name', relatedEntity: 'own' }, { attr: 'contoso_code', dir: 'desc' }],
+    // The active filter the build added is written out as a condition, with activeOnly false: never the default, re-guessed.
+    activeOnly: false,
+    filters: [
+      { attr: 'statecode', op: 'eq', value: 0 },
+      { attr: 'contoso_code', op: 'not-null' },
+      { attr: 'contoso_rank', op: 'gt', value: 3, relatedEntity: 'own' },
+      { attr: 'contoso_kind', op: 'in', values: [100000000, 100000001] },
+    ],
+    linkEntities: [{ name: 'contoso_owner', from: 'contoso_ownerid', to: 'contoso_ownerid', alias: 'own', linkType: 'outer', filters: [{ attr: 'contoso_rank', op: 'ge', value: 1 }] }],
+    viewId: built.view,
+  }]);
+  assert.equal(res.written.createIdentity, 'stable-v1');
+  assert.equal(res.written.minimumPluginVersion, '2.21.0');
+  assert.deepEqual(res.emitted[0].payload.managedViews, { restored: [VIEW_KEY], omitted: [] });
+  // The restored view leaves the report; the stock view and the chart stay in it.
+  const left = { views: [stock], charts: downloaded.inventory.charts };
+  assert.deepEqual(res.emitted[0].payload.notRoundTripped, notRoundTrippedSummary(left));
+  assert.equal(res.said.split(notRoundTrippedWarning(notRoundTrippedSummary(left))).length - 1, 1, res.said);
+  assert.deepEqual(res.writes, [], 'the download writes nothing to the service');
+
+  // A rebuild from the downloaded spec, through the build's own workspace and store, finds nothing to change: no view write, no publish.
+  const mark = org.calls.length;
+  await build(org, dir, res.written);
+  assert.deepEqual(savedQueryWrites(org.calls.slice(mark)), []);
+  assert.deepEqual(org.publishLog(mark), []);
+  // And from a new folder with no store, the pin alone names the row, which already holds the declaration.
+  const fresh = org.calls.length;
+  await build(org, newDir(), res.written);
+  assert.deepEqual(savedQueryWrites(org.calls.slice(fresh)), []);
+  assert.deepEqual(org.publishLog(fresh), []);
+});
+
+test('a managed view the restore cannot prove is left out of views[] with a fixed reason and stays in the report', async (t) => {
+  const cases = [
+    ['edited since its build proved it', 'changed', async ({ org, built }) => {
+      await org.httpClient.patch(`${org.origin}/api/data/v9.2/savedqueries(${built.view})`, { description: 'Edited in the maker portal' });
+    }],
+    ['renamed and the rename not published', 'unpublished-changes', async ({ org, built }) => {
+      await org.httpClient.patch(`${org.origin}/api/data/v9.2/savedqueries(${built.view})`, { name: 'Renamed Items' });
+    }],
+    ['adopted, not created, by its build', 'not-created', async ({ dir }) => editViewGroup(dir, (g) => { g.records[0].origin = 'adopted'; })],
+    // The store says the table's publish is still owed (the shape a build leaves after a saved, unpublished write).
+    ['whose publish is still owed', 'publication-unsettled', async ({ dir }) => editViewGroup(dir, (g) => { g.publication.state = 'owed'; g.publication.dispatchToken = null; })],
+    ['deleted since', 'missing', async ({ org, built }) => {
+      org.intercept((c) => c.method === 'GET' && c.path.includes(`savedqueries(${built.view})`), () => ({ status: 404, headers: {}, body: { error: { code: '0x80040217', message: 'Does Not Exist' } } }));
+    }],
+  ];
+  for (const [what, code, provoke] of cases) {
+    await t.test(what, async () => {
+      const app = await builtApp();
+      await provoke(app);
+      const downloaded = plainDownload(app.built);
+      const res = await download(app.org, newDir(), app.flags, { downloaded });
+      assert.equal(res.emitted[0].ok, true, JSON.stringify(res.emitted) + res.said);
+      const omitted = res.emitted[0].payload.managedViews.omitted;
+      assert.equal(omitted.length, 1, JSON.stringify(omitted));
+      assert.equal(omitted[0].code, code);
+      assert.equal(omitted[0].key, VIEW_KEY);
+      assert.equal(omitted[0].id, app.built.view);
+      assert.doesNotMatch(JSON.stringify(omitted), /Edited in the maker portal|Does Not Exist/, 'a reason never carries what the service said');
+      assert.match(res.said, new RegExp(`WARNING: managed view ${VIEW_KEY} was not restored: `));
+      assert.deepEqual(res.written.views, []);
+      assert.equal(res.written.createIdentity, undefined, 'nothing restored, so the spec is not opted into stable ids');
+      assert.deepEqual(res.emitted[0].payload.notRoundTripped, notRoundTrippedSummary(downloaded.inventory));
+    });
+  }
+});
+
+test('viewDeclarationFromLive refuses a view whose query a declaration cannot say, and never flattens a filter tree', () => {
+  const view = (over = {}) => ({
+    id: '00000000-0000-4000-8000-0000000000bb', name: 'V', entityLogicalName: 'contoso_item', queryType: 0,
+    columns: [{ name: 'contoso_name', width: 100, order: 0 }],
+    filters: { type: 'and', conditions: [{ attribute: 'contoso_code', operator: 'not-null' }], groups: [] },
+    sort: [],
+    fetchBag: { a: [['version', '1.0']], c: [{ i: 0, node: { n: 'entity', a: [['name', 'contoso_item']], c: [
+      { n: 'attribute', a: [['name', 'contoso_name']], c: [] },
+      { n: 'filter', a: [['type', 'and']], c: [{ n: 'condition', a: [['attribute', 'contoso_code'], ['operator', 'not-null']], c: [] }] },
+    ] } }] },
+    ...over,
+  });
+  assert.deepEqual(viewDeclarationFromLive(view(), { key: 'contoso_item/V' }).declaration, {
+    entity: 'contoso_item', name: 'V', reconcile: 'declared', columns: [{ name: 'contoso_name', width: 100 }], activeOnly: false, filters: [{ attr: 'contoso_code', op: 'not-null' }],
+  });
+  assert.equal(viewDeclarationFromLive(view(), { key: 'custom-key' }).declaration.key, 'custom-key', 'a key that is not the default is kept');
+  const tree = (groups) => ({ type: 'and', conditions: [], groups });
+  const refused = {
+    'an OR of two columns': { filters: tree([{ type: 'or', conditions: [{ attribute: 'a', operator: 'eq', value: '1' }, { attribute: 'b', operator: 'eq', value: '1' }], groups: [] }]) },
+    'an OR of mixed operators': { filters: tree([{ type: 'or', conditions: [{ attribute: 'a', operator: 'eq', value: '1' }, { attribute: 'a', operator: 'ne', value: '2' }], groups: [] }]) },
+    'a nested group': { filters: tree([{ type: 'or', conditions: [{ attribute: 'a', operator: 'eq', value: '1' }], groups: [{ type: 'and', conditions: [], groups: [] }] }]) },
+    'an OR at the top': { filters: { type: 'or', conditions: [], groups: [] } },
+    'a quick-find filter': { fetchBag: { a: [], c: [{ i: 0, node: { n: 'entity', a: [], c: [
+      { n: 'filter', a: [['type', 'and']], c: [{ n: 'condition', a: [['attribute', 'contoso_code'], ['operator', 'not-null']], c: [] }] },
+      { n: 'filter', a: [['type', 'or'], ['isquickfindfields', '1']], c: [{ n: 'condition', a: [['attribute', 'contoso_name'], ['operator', 'like'], ['value', '{0}']], c: [] }] },
+    ] } }] } },
+    'an aggregate query': { fetchBag: { a: [['aggregate', 'true']], c: [{ i: 0, node: { n: 'entity', a: [], c: [{ n: 'filter', a: [], c: [{ n: 'condition', a: [], c: [] }] }] } }] } },
+    'a join the typed tree does not show': { fetchBag: { a: [], c: [{ i: 0, node: { n: 'entity', a: [], c: [
+      { n: 'filter', a: [], c: [{ n: 'condition', a: [], c: [] }] }, { n: 'link-entity', a: [['name', 'x']], c: [] },
+    ] } }] } },
+    'a column read back without its join': { columns: [{ name: 'own.contoso_name', width: 100, order: 0 }] },
+    'a column with no width': { columns: [{ name: 'contoso_name', order: 0 }] },
+    'a quick find view': { queryType: 4 },
+  };
+  for (const [what, over] of Object.entries(refused)) {
+    const out = viewDeclarationFromLive(view(over), { key: 'contoso_item/V' });
+    assert.equal(out.declaration, undefined, what);
+    assert.equal(typeof out.unsupported, 'string', what);
+  }
 });

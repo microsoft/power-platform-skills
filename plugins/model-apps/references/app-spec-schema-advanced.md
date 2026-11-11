@@ -747,6 +747,14 @@ spec's new columns.
   list, in order (`quick-find <table>`); a stored search template such as `{0}%` is kept and verifies.
   A changed list is written without any `--authorize` key: `overwrite:quickfind:<table>` approves only
   replacing a local copy that differs from the server's (see Local copy below).
+- **Download.** A plain download leaves declared views out. With both `--include-managed` and
+  `--managed-manifest <store file>` (the build's `managed-bindings.<hash>.json`), each declared view a
+  `createIdentity` build created comes back in `views[]` with `reconcile: "declared"`, its `viewId`,
+  `activeOnly: false` and every condition it holds, when the store proves it unchanged since that build,
+  saved and published alike, and a rebuild from it changes nothing; the spec gets `createIdentity: "stable-v1"`
+  with it. The `viewId` binds the view in that environment: remove it before building the spec elsewhere.
+  Any other declared view is left out, named with its reason in `managedViews.omitted` and in a warning,
+  and stays in the download's note. Charts are not restored.
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
@@ -1255,7 +1263,8 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
 ## createIdentity (optional — stable create ids for declared views and charts)
 
 Requires `minimumPluginVersion: "2.21.0"`. Write it on a **new** app only; never add it to an existing or
-downloaded spec. The only value is `"stable-v1"`; any other value is a validation error
+downloaded spec. A managed download writes it back itself, and only with the declared views it restores (a
+view the store proves this field's build created). The only value is `"stable-v1"`; any other value is a validation error
 (`create-identity-invalid`), and a spec without the field builds exactly as before.
 
 ```jsonc

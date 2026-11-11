@@ -1740,6 +1740,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   fixed reason), never a service's own text. The source store is read, never written; its bytes are fingerprinted
   before the first family reads it and again before `stagedPages.check`, and a store rewritten in between (a build
   ran) stops the download with `managed-manifest-changed` before anything is written.
+  **The managed download restores the declared views a stable build created** (`lib/declared-view-io.js`,
+  `restoreManagedViews`). A view group exists only under `createIdentity: "stable-v1"`, so a restored view is
+  itself proof of that regime, and the download writes `createIdentity: "stable-v1"` and the floor with it. A
+  view comes back only when every check holds, in order: the group is settled and valid, its build created
+  (not adopted) the row, its publish is confirmed or not needed, the row is read with the table its
+  publication names, its projection hash equals the one the build proved, its saved and published layers are
+  equal (and equal the layer the build published), the inverse (`viewDeclarationFromLive`) can state the
+  query exactly (no aggregate, distinct, top, count, quick-find or unrepresentable filter, nested join or
+  related column it cannot bind), the key its table and name give is the bound key, the declaration compiles
+  back to the row part for part, the build's own planner (`planViewReconcile`, with the store record) answers
+  `noChange` and keeps the binding, and the spec still validates. The declaration carries `viewId` (the bound
+  id; environment-bound, like a dashboard's pinned id), `key` only when it is not `<table>/<name>`,
+  `activeOnly: false` and every condition the row holds (its `statecode` one included), so the rebuild
+  through the same store sends no write and no publish. Anything else is an omission with a fixed code
+  (`managedViews.omitted`), a WARNING, and the view stays in the not-round-tripped report.
   **The navigation titles are read in the language a rebuild of the spec resolves, and only in a language the
   download knows**: `--language-code` (read as the build and verify read it), else the `languageCode` the spec
   already on disk pins, else the environment's base language (one read through the download's own client,
