@@ -71,7 +71,7 @@ function buildInvocation(agent, { pluginDir, model = null, maxTurns = 4, copilot
 // The menu above is read-only, so an agent that has decided no skill fits has no tool to do the work
 // with. Observed in saved Copilot CLI transcripts of the failing negative cases (separate observations,
 // not one proven sequence): some runs decide that no product skill fits and then say they have no
-// file-write or shell tool; some of those, and some that never say it, go on to call `report-issue`
+// file-write or shell tool; other runs, which never say it, go on to call `report-issue`
 // (the generic skill, whose frontmatter lists Bash) while checking what tooling exists. The grade counts
 // that call, so a "none" first turn can still fail a case no description pulls in. The working
 // inference is that the empty menu leaves such an agent without a way to finish; it is not shown that
