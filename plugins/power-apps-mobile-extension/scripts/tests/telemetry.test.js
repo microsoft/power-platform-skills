@@ -528,8 +528,8 @@ test("registered hook commands honor hard-disable even with spaces in plugin roo
   fs.writeFileSync(path.join(copiedRoot, "scripts/lib/telemetry/ikey.json"), JSON.stringify({ ...fixtureData.config, disabled: true }));
   const hooks = require("../../hooks/hooks.json").hooks;
   assert.deepEqual(Object.keys(hooks), ["PreToolUse", "UserPromptSubmit"]);
-  // The restricted child PATH deliberately excludes PAC and other enrichment
-  // tools. Use an absolute shell path so Windows runs PowerShell, not cmd.exe.
+  // Restrict PATH to exclude PAC, but preserve the host environment PowerShell
+  // needs to start. An empty environment can hang Windows PowerShell before Node.
   const shell = process.platform === "win32"
     ? path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe")
     : "/bin/sh";
@@ -542,8 +542,10 @@ test("registered hook commands honor hard-disable even with spaces in plugin roo
       const result = spawnSync(shell, args, {
         input: JSON.stringify({ prompt: `/${PLUGIN_NAME}:generate-ppmplugin`, tool_input: { skill: `${PLUGIN_NAME}:generate-ppmplugin` } }),
         env: {
+          ...process.env,
           PATH: path.dirname(process.execPath),
-          ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {}),
+          PLUGIN_ROOT: "",
+          CLAUDE_PLUGIN_ROOT: "",
           [rootVariable]: copiedRoot,
           ...fixtureData.env,
         },
