@@ -69,11 +69,14 @@ function buildInvocation(agent, { pluginDir, model = null, maxTurns = 4, copilot
 }
 
 // The menu above is read-only, so an agent that has decided no skill fits has no tool to do the work
-// with. Measured on Copilot CLI: it then says so ("I don't have any file-write, edit, or shell tool")
-// and, on its next turn, asks for the nearest skill whose description is generic (`report-issue`, whose
-// frontmatter lists Bash) as a stand-in. The grade counts that call, so a correct "none" failed on
-// requests no description pulls in. This note names the way out the menu lacks; it names no skill and does
-// not say which to prefer, so a description that really pulls a request in is still seen.
+// with. Observed in saved Copilot CLI transcripts of the failing negative cases (separate observations,
+// not one proven sequence): some runs decide that no product skill fits and then say they have no
+// file-write or shell tool; some of those, and some that never say it, go on to call `report-issue`
+// (the generic skill, whose frontmatter lists Bash) while checking what tooling exists. The grade counts
+// that call, so a "none" first turn can still fail a case no description pulls in. The working
+// inference is that the empty menu leaves such an agent without a way to finish; it is not shown that
+// every mis-route in a weekly run follows it. This note names the way out the menu lacks; it names no
+// skill and does not say which to prefer, so a description that really pulls a request in is still seen.
 const TRIAL_NOTE = 'This is a routing test. You can only call a skill or read files: nothing can be written or run here, '
   + 'and you cannot ask me a question. If one of the available skills fits the request, call it. If none of them does, '
   + 'reply in one short sentence naming what the request needs, and stop: do not try to build it.';

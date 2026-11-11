@@ -53,9 +53,13 @@ rule things out, and these are how a rule-out that is read too widely would show
   session offers more tools, so the model sees a slightly smaller menu. Because nothing can be built
   with it, every prompt is sent after a short note (`TRIAL_NOTE` in `lib/agents.js`, shown by
   `--dry-run`): it says that only a skill or a file read is possible, and that if no skill fits the
-  agent should answer in one sentence and stop. It names no skill and no product. Without it, an
-  agent that had decided no skill applied said it had no tool to do the work and asked for the
-  nearest generic skill (`report-issue`) as a stand-in, so a correct "none" failed.
+  agent should answer in one sentence and stop. It names no skill and no product. Why: in saved
+  transcripts of the failing negative cases the first turn chose no skill; some runs then said they
+  had no file-write or shell tool, and some runs (with or without that remark) later called
+  `report-issue`, the generic skill, while checking what tooling exists. These are separate
+  observations, and the working inference is that an agent with an empty menu has no way to finish.
+  It is not shown that every weekly mis-route follows that sequence; compare a whole-eval run
+  before and after a change to the note to see its effect.
 - **Stopped at the decision.** The JSONL transcript is parsed as it streams, and the agent is killed
   the moment it invokes a model-apps skill, so a positive trial costs about one model turn. A run that
   has not chosen a skill goes on to its own end, so a skill it reaches for later is seen, and graded, too
