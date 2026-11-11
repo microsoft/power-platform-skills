@@ -223,19 +223,26 @@ test('a view a stable build created is downloaded as the declaration that rebuil
   assert.equal(res.said.split(notRoundTrippedWarning(notRoundTrippedSummary(left))).length - 1, 1, res.said);
   assert.deepEqual(res.writes, [], 'the download writes nothing to the service');
 
-  // A rebuild from the downloaded spec, through the build's own workspace and store, finds nothing to change: no view write, no publish.
-  // The rebuild runs without the publish phase, which republishes every table a spec declares a view on whatever changed
-  // (sdk-build.js phase 8): what is proved here is that the reconcile itself writes nothing and owes no publish.
-  const reconcileOnly = ['views', 'charts'];
+  // A rebuild from the downloaded spec, through the build's own workspace and store and with its publish phase, finds nothing to
+  // change: no view write, and no publish of the view's table (the view is bound and proved as it is, so it owes its table nothing).
   const mark = org.calls.length;
-  await build(org, dir, res.written, reconcileOnly);
+  const rebuilt = await build(org, dir, res.written);
+  assert.equal(rebuilt.out.ok, true, JSON.stringify(rebuilt.out.steps || rebuilt.out));
   assert.deepEqual(savedQueryWrites(org.calls.slice(mark)), []);
   assert.deepEqual(org.publishLog(mark), []);
-  // And from a new folder with no store, the pin alone names the row, which already holds the declaration.
+  // And from a new folder with no store, the pin alone names the row, which already holds the declaration: that build writes nothing.
+  const reconcileOnly = ['views', 'charts'];
   const fresh = org.calls.length;
   await build(org, newDir(), res.written, reconcileOnly);
   assert.deepEqual(savedQueryWrites(org.calls.slice(fresh)), []);
   assert.deepEqual(org.publishLog(fresh), []);
+  // A declaration that changes the view still has its table published: the rebuild saves the view, and the saved view owes it.
+  const changed = { ...res.written, views: [{ ...res.written.views[0], description: 'Items by kind, edited' }] };
+  const edit = org.calls.length;
+  const edited = await build(org, dir, changed);
+  assert.equal(edited.out.ok, true, JSON.stringify(edited.out.steps || edited.out));
+  assert.notDeepEqual(savedQueryWrites(org.calls.slice(edit)), []);
+  assert.deepEqual(org.publishLog(edit), ['tables contoso_item']);
 });
 
 test('two proved views with one name on one table are both restored, each under its own key and id', async () => {

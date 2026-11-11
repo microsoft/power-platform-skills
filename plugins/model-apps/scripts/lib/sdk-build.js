@@ -4949,7 +4949,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
     if (!describedCharts.has(logical)) describedCharts.set(logical, new Set());
     describedCharts.get(logical).add(name);
   };
-
+  // The declared views this run settled through the binding store and proved as they are (the planner answered noChange for a row
+  // the store binds, nothing was saved), as `<table>` -> Set of store keys. The publish phase used to ask for the table of EVERY declared view, changed or not, so a rebuild
+  // that changed nothing on a stable app still republished each such table — shipping whatever else was saved there, by anyone. A
+  // managed view owes its table a publish only through its store debt (managedTables.owedTables), which the phase pays anyway; so a
+  // table is no longer asked for on account of a view listed here. Every other reason to publish it — a form, a chart this run wrote,
+  // a deferred reconcile, a debt, a view not listed here — still asks for it. Only views; no request depends on it otherwise.
+  const unchangedManagedViews = new Map();
+  const noteUnchangedManagedView = (entityLogical, key) => {
+    const logical = String(entityLogical || '').toLowerCase();
+    if (!logical) return;
+    if (!unchangedManagedViews.has(logical)) unchangedManagedViews.set(logical, new Set());
+    unchangedManagedViews.get(logical).add(key);
+  };
+  const viewAsksForTable = (v) => !(v && v.reconcile === 'declared' && (unchangedManagedViews.get(String(v.entity).toLowerCase()) || new Set()).has(declaredViewKey(v)));
   // 1. Solution (idempotent; header-less provisioning client).
   if (has('solution')) await provisionSolution({ sdk, provision, runner, solution: sol });
   // The solution's version (solution.version), set after the solution exists and only when it differs: an equal version is one read.
@@ -7247,6 +7260,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (!out.managed) warnUnadopted('view', out.plan.viewId, out.plan, out.r);
           const made = out.r.saved.find((s) => s.created);
           if (made) noteSaved(def.entityLogicalName, `view ${def.name}`);
+          // A bound view this run proved as it is — the planner answered noChange for a row the store binds (bindUnchanged), nothing
+          // was refused, unknown or saved — gives its table no reason to be published in the publish phase (unchangedManagedViews).
+          // An unadopted look-alike (noChange without bindUnchanged) keeps asking, as before.
+          const settled = out.r || {};
+          if (out.plan && out.plan.action === 'noChange' && out.plan.bindUnchanged === true && !(settled.saved || []).length && !(settled.refused || []).length && !(settled.unknown || []).length && (settled.unchanged || []).some((u) => u && u.key === stableKey)) noteUnchangedManagedView(def.entityLogicalName, stableKey);
           await commitSettledPublishes();
           return made ? made.id : out.plan.viewId;
         }
@@ -10950,14 +10968,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     await runner.run('publish', 'publish customizations', async () => {
       const seen = new Set(owed.barrier.blockedTables());
       // Routed tables: what the plain path asked for, and every table a committed group still owes, are published by the
-      // managed publisher before the app; none of them is in the envelope below.
+      // managed publisher before the app; none of them is in the envelope below. A declared view this run proved unchanged is no reason
+      // to ask for its table (viewAsksForTable): its store debt, if it has one, is in owedTables.
       let managedOut = { published: [], withheld: [] };
       if (managedTables) {
         const ask = [...owed.barrier.routedWanted(), ...managedTables.owedTables()];
         for (const k of owed.barrier.routedTables()) {
           if (seen.has(k)) continue;
           seen.add(k);
-          const asked = (spec.forms || []).some((f) => f.entity.toLowerCase() === k) || (spec.views || []).some((v) => v.entity.toLowerCase() === k) || chartsToPublish.has(k) || owed.tables.has(k);
+          const asked = (spec.forms || []).some((f) => f.entity.toLowerCase() === k) || (spec.views || []).some((v) => v.entity.toLowerCase() === k && viewAsksForTable(v)) || chartsToPublish.has(k) || owed.tables.has(k);
           if (asked) ask.push(k);
         }
         managedOut = await tablePublication.managed(ask, { phase: 'publish', path: 'publish customizations', observed: 'managed-publish-phase' });

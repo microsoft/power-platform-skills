@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
 const { createAzHttpClient } = require('../../lib/sdk-http-client.js');
+const { createPublicationBarrier } = require('../../lib/publication-barrier.js');
 const { createMakerSdk: createVendoredMakerSdk, createNodeWorkspaceStorage } = require('../../lib/maker-sdk.js');
 const { buildModelApp } = require('../../build-model-app.js');
 const { verifySpec } = require('../../lib/verify-spec.js');
@@ -150,9 +151,14 @@ function createLifecycleHarness(org, root, { createMakerSdk = createVendoredMake
   // folder's workspace and recovers a form create whose answer was lost — and the deps its main() hands buildModelApp. `sdkWorkspace` is
   // where that second one keeps its copies: the build's workspace, as the CLI makes it, unless a test says otherwise — the CLI makes no SDK
   // for an apply its build lease refuses, so a second build a test starts beside a running one is given copies of its own.
-  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, sdkWorkspace = workspace, languageCode = 1033 } = {}) {
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(throwaway('sdk-')), instanceUrl: org.origin, httpClient: client, solutionUniqueName: spec.solution.uniqueName, languageCode });
-    const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(apply ? sdkWorkspace : throwaway('preview-')), instanceUrl: org.origin, httpClient: client, languageCode, createRecovery: 'adoptExact' });
+  // `gated`: the build's client sends through the publication barrier the build is handed, as build-model-app.js makeSdk wires the
+  // CLI's (publicationBarrier.gateRequest). A stable build (createIdentity "stable-v1") needs it: it refuses to send a create it cannot
+  // tie to its draft at the transport (creates-stable-build.js). Off by default, so every other lifecycle test sends what it always did.
+  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, sdkWorkspace = workspace, languageCode = 1033, gated = false } = {}) {
+    const publicationBarrier = gated ? createPublicationBarrier() : undefined;
+    const buildClient = gated ? createAzHttpClient(org.origin, { getToken: () => TOKEN, request: publicationBarrier.gateRequest(org.request), sleep: async () => {} }) : client;
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(throwaway('sdk-')), instanceUrl: org.origin, httpClient: buildClient, solutionUniqueName: spec.solution.uniqueName, languageCode });
+    const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(apply ? sdkWorkspace : throwaway('preview-')), instanceUrl: org.origin, httpClient: buildClient, languageCode, createRecovery: 'adoptExact' });
     await provisionSdk.initWorkspace();
     const genpage = makeGenpageSdk(org.origin, { httpClient: client });
     const warnings = [];
@@ -162,7 +168,7 @@ function createLifecycleHarness(org, root, { createMakerSdk = createVendoredMake
         apply, publish, sampleData, verify, phases: PHASES, profile: apply ? 'deploy' : 'plan', nonInteractive: false,
         appDir: appFolder, env: org.origin, workspaceDir: workspace, preResolvedLanguageCode: apply ? languageCode : undefined,
       }, {
-        sdk, provisionSdk, genpage, sleep: async () => {}, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => org.pageServer.languages.provisioned,
+        sdk, provisionSdk, genpage, ...(publicationBarrier ? { publicationBarrier } : {}), sleep: async () => {}, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => org.pageServer.languages.provisioned,
         verify: async (s, o) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir: workspace }), o),
       });
       return { result, warnings, log };
