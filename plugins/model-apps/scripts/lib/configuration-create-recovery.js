@@ -345,7 +345,9 @@ const isQuarantineAcknowledgment = (v) => !!v && typeof v === 'object' && acknow
  *   pending / publication-pending   for an open unit
  *   pending             for a declaration that reintroduces or depends on a deferred unit's root
  *   quarantined         for configuration work while a quarantine is not acknowledged (unrelated work may proceed)
- * `quarantineAcknowledgment` is an acknowledgment from validateQuarantineAcknowledgment, or the raw list of ids to validate.
+ * `quarantineAcknowledgment` must be the acknowledgment validateQuarantineAcknowledgment answered in this process (the build's entry
+ * point validates the raw ids once); anything else is `configuration-create-quarantined`, and an acknowledgment of a set of quarantines
+ * that has changed since is `configuration-create-approval-stale`.
  * Answers a frozen { quarantineIds, acknowledged, deferredUnits }.
  */
 function preflightConfigurationCreates({ workspaceDir, context, kindTable, declarations, configurationWork = false, quarantineAcknowledgment } = {}) {
@@ -371,9 +373,12 @@ function preflightConfigurationCreates({ workspaceDir, context, kindTable, decla
     if (quarantineAcknowledgment === undefined || quarantineAcknowledgment === null) {
       throw halt('configuration-create-quarantined', { reason: `${quarantineIds.length} quarantine(s) are not acknowledged` });
     }
-    const ack = isQuarantineAcknowledgment(quarantineAcknowledgment)
-      ? quarantineAcknowledgment
-      : validateQuarantineAcknowledgment(workspaceDir, quarantineAcknowledgment);
+    // Only an acknowledgment minted in this process by validateQuarantineAcknowledgment counts: raw ids are validated once, at the
+    // build's explicit entry point, so a list or a look-alike object handed in here is never treated as an acknowledgment.
+    if (!isQuarantineAcknowledgment(quarantineAcknowledgment)) {
+      throw halt('configuration-create-quarantined', { reason: 'the acknowledgment was not validated at the build entry point' });
+    }
+    const ack = quarantineAcknowledgment;
     if (!sameJson([...ack.quarantineIds], [...quarantineIds].sort())) throw halt('configuration-create-approval-stale', { reason: 'the quarantines changed after they were acknowledged' });
     acknowledged = true;
   }

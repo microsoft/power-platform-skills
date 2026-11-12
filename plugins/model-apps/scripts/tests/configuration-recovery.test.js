@@ -484,13 +484,23 @@ test('a quarantine fences configuration work until every quarantine is acknowled
   const b = quarantined(dir);
   assert.deepEqual([...preflight(dir).quarantineIds].sort(), [a, b].sort(), 'unrelated work proceeds');
   assert.throws(() => preflight(dir, { configurationWork: true }), { code: 'configuration-create-quarantined' });
-  assert.throws(() => preflight(dir, { configurationWork: true, quarantineAcknowledgment: [a] }), { code: 'configuration-create-quarantined' });
-  assert.throws(() => preflight(dir, { configurationWork: true, quarantineAcknowledgment: [a, b, G()] }), { code: 'configuration-create-approval-stale' });
+  assert.throws(() => R.validateQuarantineAcknowledgment(dir, [a]), { code: 'configuration-create-quarantined' });
+  assert.throws(() => R.validateQuarantineAcknowledgment(dir, [a, b, G()]), { code: 'configuration-create-approval-stale' });
   const ack = R.validateQuarantineAcknowledgment(dir, [a.toUpperCase(), b]);
   assert.ok(R.isQuarantineAcknowledgment(ack));
   assert.equal(R.isQuarantineAcknowledgment({ quarantineIds: [a, b] }), false);
   assert.equal(preflight(dir, { configurationWork: true, quarantineAcknowledgment: ack }).acknowledged, true);
-  assert.equal(preflight(dir, { configurationWork: true, quarantineAcknowledgment: [a, b] }).acknowledged, true);
+  // The guard takes only the acknowledgment the entry point validated: never raw ids, and never an object shaped like one.
+  for (const [name, raw] of [
+    ['the exact raw ids', [a, b]],
+    ['a partial raw list', [a]],
+    ['a raw list with an unknown id', [a, b, G()]],
+    ['a look-alike', { quarantineIds: [a, b].sort() }],
+    ['a frozen look-alike', Object.freeze({ quarantineIds: Object.freeze([a, b].sort()) })],
+    ['a copy of the acknowledgment', { ...ack }],
+  ]) {
+    assert.throws(() => preflight(dir, { configurationWork: true, quarantineAcknowledgment: raw }), { code: 'configuration-create-quarantined', message: /not validated at the build entry point/ }, name);
+  }
   // A third quarantine after the acknowledgment makes it stale.
   const c = quarantined(dir);
   assert.throws(() => preflight(dir, { configurationWork: true, quarantineAcknowledgment: ack }), { code: 'configuration-create-approval-stale' });
