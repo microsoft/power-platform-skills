@@ -101,9 +101,16 @@ Interpret the decision:
 3. Capture a private local snapshot of the current app (including dirty/untracked app-owned files, instructions, lockfiles, configuration, permissions and absent-file state). Exclude `.git`, `node_modules`, generated native build output, and logs from the rehearsal copy. Do not follow symlinks outside the project or upload the snapshot. Stop if the copy cannot preserve the app safely. No Git reset/checkout/stash.
    Restore the preview's source dependencies from its unchanged lock using the
    reviewed install policy before resolving inherited TypeScript configuration.
+   For a standalone npm app, use the path-bound helper:
+   `mobile-template-lifecycle.js restore-preview --project-root '<working_dir>' --preview-root '<preview_dir>'`.
+   The preview must be outside the source app. Never run bare `npm ci` or
+   `npm install` during preview preparation: shells do not preserve a previous
+   `cd`, and doing so can replace the source app's dependencies before approval.
+   The helper keeps registry/auth context but directs npm writes to the explicit
+   preview prefix. Unsupported workspace/package-manager layouts block for review.
    A missing source configuration is a preparation blocker; do not substitute
    target-reference `NODE_PATH` resolution for the source dependency context.
-4. Obtain the **exact reviewed target host** in a separate private tooling installation, not by installing it into the old app's dependency graph. Use `mobile-template-lifecycle.js acquire --destination '<reference_dir>' --host-version "<exact-host-version>"` with a new/empty directory. It installs the exact host with lifecycle scripts disabled and checks its npm lock integrity and contained upgrade CLI. Review any required lifecycle scripts separately before approving their execution. This tooling folder is not a scaffolded app; do not run app admission against it or copy its lock over the customer app. Read the installed host's actual `bin["upgrade-template"]` path and supported help; invoke that CLI with `--project '<preview_dir>' --dry-run` to preview one edge. The host owns the app's dependency edits and installation, including the section/spec recorded in the target's `managedDependencies`; an exact installed version does not authorize rewriting a reviewed range. Do not install a new host with incompatible peers into the old dependency set before previewing the coupled migration. Classify output: conflicts block application and need a reviewed resolution; other command failures block investigation. A nonzero preview is never automatically a clean plan.
+4. Obtain the **exact reviewed target host** in a separate private tooling installation, not by installing it into the old app's dependency graph. Use `mobile-template-lifecycle.js acquire --destination '<reference_dir>' --host-version "<exact-host-version>"` with a new/empty directory. It installs the exact host with lifecycle scripts disabled, seeds the verified release's managed dependencies and overrides to avoid floating optional peers, and checks its npm lock integrity and contained upgrade CLI. Review any required lifecycle scripts separately before approving their execution. This tooling folder is not a scaffolded app; do not run app admission against it or copy its lock over the customer app. Read the installed host's actual `bin["upgrade-template"]` path and supported help; invoke that CLI with `--project '<preview_dir>' --dry-run` to preview one edge. The host owns the app's dependency edits and installation, including the section/spec recorded in the target's `managedDependencies`; an exact installed version does not authorize rewriting a reviewed range. Do not install a new host with incompatible peers into the old dependency set before previewing the coupled migration. Classify output: conflicts block application and need a reviewed resolution; other command failures block investigation. A nonzero preview is never automatically a clean plan.
    Package override conflicts are blocking even when source patches apply. Show
    the retained override and proposed direct dependency, obtain approval for the
    exact resolution, and rerun the preview. Never silently remove customer pins
@@ -116,7 +123,14 @@ Interpret the decision:
    producer fix. Migration authoring, release tagging, runtime preparation and
    Player build scripts are maintainer tools, not customer upgrade steps.
 5. For a clean edge, apply it only to the disposable copy with `upgrade-template --project '<preview_dir>'`, including its validated install. Do not use `--no-install` to simulate state advancement. Record every changed/deleted/created file and dependency, plus the actual before/after protected metadata. Require progress without overshoot, then repeat dry-run and apply until the selected target is reached. No target migration is needed for host-only repair. Never reuse approval of one preview for unseen later edges.
-6. Resolve the disposable app against the selected release, run dependency admission, Expo check, type-check, changed-file validation, and target platform bundles. Preserve customer instructions/settings; review any customer-section conflict, never resolve by whole-file replacement. If the published tool cannot rehearse the full chain, return `BLOCKED` before touching the real app.
+6. Resolve the disposable app against the selected release, run dependency admission, the installed SDK check below, type-check, changed-file validation, and target platform bundles. Preserve customer instructions/settings; review any customer-section conflict, never resolve by whole-file replacement. If the published tool cannot rehearse the full chain, return `BLOCKED` before touching the real app.
+   Run `mobile-template-lifecycle.js check-sdk --project-root '<preview_dir>'` for
+   the Expo check. It binds the actual installed Expo CLI to the explicit app
+   directory and scopes `EXPO_OFFLINE=1` to that check only, validating the frozen
+   SDK's bundled versions rather than newer online recommendations. Validation is
+   not skipped. Do not substitute bare `expo install --check`, use `npx --prefix`
+   as a working-directory change, or set offline mode globally. Use this same
+   helper against the real app after approved application.
 7. Present the **aggregate full-chain diff**, each edge, conflicts/resolutions, install scripts, expected binaries, and rollback scope. Ask **Apply reviewed release** or **Skip native release** (recommended). Only explicit application approval authorizes real edits.
 
 ### Apply only the approved plan
@@ -143,7 +157,7 @@ For each approved package update:
 
 1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
 2. Install with `--ignore-scripts`; use `--package-lock=false` when the project had no npm lockfile.
-3. Run `npm install --ignore-scripts`, `npx --no-install expo install --check`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file (including `package.json`, passing approved exact JS dependency exceptions). Re-resolve the native release and reject lock/native closure drift. Never run `npx expo install --fix`.
+3. Run `npm install --ignore-scripts`, `mobile-template-lifecycle.js check-sdk --project-root '<working_dir>'`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file (including `package.json`, passing approved exact JS dependency exceptions). Re-resolve the native release and reject lock/native closure drift. Never run `npx expo install --fix`.
 4. If any command fails, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Otherwise delete the snapshot and continue.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.

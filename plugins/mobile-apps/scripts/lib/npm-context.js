@@ -37,8 +37,15 @@ function withNpmContext(sourceRoot, installRoot, operation) {
   try {
     if (fs.existsSync(source)) {
       const content = fs.readFileSync(source);
-      fs.writeFileSync(destination, content, { flag: 'wx', mode: 0o600 });
-      created = true;
+      if (fs.existsSync(destination)) {
+        const stat = fs.lstatSync(destination);
+        if (!stat.isFile() || stat.isSymbolicLink() || !content.equals(fs.readFileSync(destination))) {
+          throw new Error('The isolated npm configuration differs from the original context; review the snapshot before installing.');
+        }
+      } else {
+        fs.writeFileSync(destination, content, { flag: 'wx', mode: 0o600 });
+        created = true;
+      }
     }
     // npm's prefix isolates package writes; the original cwd preserves relative TLS/auth paths.
     return operation(env, cwd);

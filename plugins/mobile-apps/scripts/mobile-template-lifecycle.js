@@ -99,7 +99,7 @@ function assertEmptyDestination(destination) {
   }
 }
 
-function run(command, args, cwd, { env = process.env } = {}) {
+function run(command, args, cwd, { env = process.env, failureMessage } = {}) {
   const isNpm = command === 'npm';
   const configuredTimeoutMs = Number.parseInt(process.env.MOBILE_TEMPLATE_NPM_TIMEOUT_MS ?? '', 10);
   const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
@@ -115,7 +115,7 @@ function run(command, args, cwd, { env = process.env } = {}) {
     });
   } catch (error) {
     if (!(error instanceof CliLaunchError) && !(Number.isInteger(error.status) && error.status > 0)) throw error;
-    throw new Error(`${isNpm ? 'Template package installation' : 'Template CLI'} failed; check registry access, slow network conditions, package support locally, or increase MOBILE_TEMPLATE_NPM_TIMEOUT_MS if the command is timing out (raw output withheld)`);
+    throw new Error(failureMessage || `${isNpm ? 'Template package installation' : 'Template CLI'} failed; check registry access, slow network conditions, package support locally, or increase MOBILE_TEMPLATE_NPM_TIMEOUT_MS if the command is timing out (raw output withheld)`);
   }
 }
 
@@ -216,13 +216,21 @@ function acquireTemplate(destination, releaseId, options = {}) {
 function acquireHost(destination, version, options = {}) {
   const target = path.resolve(destination);
   assertEmptyDestination(target);
-  const contract = require('./lib/mobile-published-packages').selectPublishedContract(version, options);
+  const published = require('./lib/mobile-published-packages');
+  const source = published.createSource(options);
+  const contract = published.selectPublishedContract(version, {
+    ...options, readPackage: source.read, versions: source.versions,
+  });
+  const profile = source.read(HOST, version).profile;
   const execute = options.run || run;
   assertEmptyDestination(target);
   fs.mkdirSync(target, { recursive: true });
   withNpmContext(options.cwd || process.cwd(), target, (env, cwd) => {
     fs.writeFileSync(path.join(target, 'package.json'), `${JSON.stringify({
-      name: 'mobile-upgrade-tooling', private: true, dependencies: { [HOST]: version },
+      name: 'mobile-upgrade-tooling', private: true,
+      ...contract.managedDependencies,
+      dependencies: { ...contract.managedDependencies.dependencies, [HOST]: version },
+      ...(profile.managedOverrides ? { overrides: profile.managedOverrides } : {}),
     }, null, 2)}\n`, { flag: 'wx' });
     return execute('npm', [
       'install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund',
@@ -251,18 +259,105 @@ function acquireHost(destination, version, options = {}) {
   };
 }
 
+function restorePreviewDependencies(projectRoot, previewRoot, options = {}) {
+  const source = fs.realpathSync.native(path.resolve(projectRoot));
+  const preview = fs.realpathSync.native(path.resolve(previewRoot));
+  const related = (parent, child) => {
+    const relative = path.relative(parent, child);
+    return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+  };
+  if (related(source, preview) || related(preview, source)) {
+    throw new Error('Source and preview must be separate, non-nested directories; source dependencies cannot be restored during preview.');
+  }
+  const modules = path.join(preview, 'node_modules');
+  if (fs.lstatSync(modules, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new Error('Preview node_modules must not be a symbolic link.');
+  }
+  const snapshots = new Map();
+  for (const name of ['package.json', 'package-lock.json', 'app.json', '.npmrc']) {
+    const sourcePath = path.join(source, name);
+    const previewPath = path.join(preview, name);
+    if (name === '.npmrc' && !fs.existsSync(sourcePath) && !fs.existsSync(previewPath)) continue;
+    for (const file of [sourcePath, previewPath]) {
+      if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) {
+        throw new Error('Source and preview inputs must be regular files.');
+      }
+    }
+    const original = fs.readFileSync(sourcePath);
+    if (!original.equals(fs.readFileSync(previewPath))) {
+      throw new Error(`Preview ${name} differs from the source; create and review a fresh snapshot.`);
+    }
+    snapshots.set(name, original);
+  }
+  const manifest = readJson(path.join(source, 'package.json'));
+  const lock = readJson(path.join(source, 'package-lock.json'));
+  if (manifest.workspaces || fs.existsSync(path.join(source, 'npm-shrinkwrap.json'))
+    || (manifest.packageManager && !manifest.packageManager.startsWith('npm@'))
+    || ![2, 3].includes(lock.lockfileVersion) || !lock.packages?.['']) {
+    throw new Error('Preview dependency restore requires a standalone npm package-lock project.');
+  }
+  const execute = options.run || run;
+  try {
+    withNpmContext(source, preview, (env, cwd) => execute('npm', [
+      'ci', '--ignore-scripts', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund',
+      '--prefix', preview,
+    ], cwd, { env }));
+  } finally {
+    for (const [name, content] of snapshots) {
+      if (!content.equals(fs.readFileSync(path.join(source, name)))
+        || !content.equals(fs.readFileSync(path.join(preview, name)))) {
+        throw new Error(`Preview dependency restore changed ${name}; preserve the snapshot and investigate before continuing.`);
+      }
+    }
+  }
+  return { previewRoot: preview, installedDependencies: true, sourceModified: false, lifecycleScriptsExecuted: false };
+}
+
+function checkSdk(projectRoot, options = {}) {
+  const root = fs.realpathSync.native(path.resolve(projectRoot));
+  const expoRoot = fs.realpathSync.native(path.join(root, 'node_modules/expo'));
+  const expo = readJson(path.join(expoRoot, 'package.json'));
+  const bin = typeof expo.bin === 'string' ? expo.bin : expo.bin?.expo;
+  if (expo.name !== 'expo' || typeof bin !== 'string' || !bin || path.isAbsolute(bin)) {
+    throw new Error('SDK validation requires the project\'s installed Expo CLI; automatic acquisition is not allowed.');
+  }
+  const cli = fs.realpathSync.native(path.resolve(expoRoot, bin));
+  const relative = path.relative(expoRoot, cli);
+  if (!relative || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)
+    || !fs.statSync(cli).isFile()) {
+    throw new Error('The installed Expo CLI must be contained in its package.');
+  }
+  const output = (options.run || run)(process.execPath, [cli, 'install', '--check'], root, {
+    env: { ...process.env, EXPO_OFFLINE: '1' },
+    failureMessage: 'Installed Expo SDK validation failed. Preserve the release pins and investigate the local compatibility mismatch; do not install newer online recommendations (raw output withheld).',
+  });
+  return { projectRoot: root, expoVersion: expo.version, versionSource: 'installed-expo', output: output.trim() };
+}
+
 function main(argv) {
   const [action, ...args] = argv;
   const values = {};
-  const allowed = action === 'destination' ? ['--destination'] : action === 'acquire'
+  const allowed = action === 'check-sdk' ? ['--project-root']
+    : action === 'restore-preview' ? ['--project-root', '--preview-root']
+    : action === 'destination' ? ['--destination'] : action === 'acquire'
     ? ['--destination', '--release', '--host-version', '--template-version']
     : ['--project-root', '--release', '--host-version'];
-  if (!['acquire', 'plan', 'destination'].includes(action)) throw new Error('Use acquire, plan or destination with explicit arguments; the published host CLI owns migration writes');
+  if (!['acquire', 'plan', 'destination', 'restore-preview', 'check-sdk'].includes(action)) throw new Error('Use acquire, plan, destination, restore-preview or check-sdk with explicit arguments; the published host CLI owns migration writes');
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index];
     if (!allowed.includes(key) || values[key] !== undefined || !args[index + 1]
       || args[index + 1].startsWith('--')) throw new Error('Unknown, duplicate, or missing lifecycle argument');
     values[key] = args[index + 1];
+  }
+  if (action === 'check-sdk') {
+    if (!values['--project-root']) throw new Error('Required: --project-root for installed SDK validation.');
+    return checkSdk(values['--project-root']);
+  }
+  if (action === 'restore-preview') {
+    if (!values['--project-root'] || !values['--preview-root']) {
+      throw new Error('Required: --project-root and --preview-root for an approved isolated snapshot.');
+    }
+    return restorePreviewDependencies(values['--project-root'], values['--preview-root']);
   }
   if (action === 'destination') {
     if (!values['--destination']) throw new Error('Required: --destination for read-only creation inspection');
@@ -287,4 +382,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, assertMajorTransition, compareVersions, inspectDestination, main, planUpdate };
+module.exports = { acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, assertMajorTransition, checkSdk, compareVersions, inspectDestination, main, planUpdate, restorePreviewDependencies };

@@ -388,6 +388,7 @@ test('selectors reject tags, prereleases, URLs and shell syntax before npm runs'
 
 test('host acquisition is isolated, script-disabled, integrity-bound and cannot overwrite an app', (t) => {
   const f = fixture(t);
+  f.packages.get(`${HOST}@1.0.0`).profile.managedOverrides = { 'fixture-peer': '1.0.0' };
   const before = fs.readFileSync(path.join(f.projectRoot, 'package.json'), 'utf8');
   const destination = path.join(f.directory, 'tooling');
   const options = {
@@ -397,6 +398,11 @@ test('host acquisition is isolated, script-disabled, integrity-bound and cannot 
       assert.equal(command, 'npm');
       assert.equal(cwd, fs.realpathSync.native(f.projectRoot));
       assert.equal(invocation.env.npm_config_prefix, destination);
+      const tooling = JSON.parse(fs.readFileSync(path.join(destination, 'package.json'), 'utf8'));
+      assert.deepEqual(tooling.dependencies, {
+        ...f.packages.get(`${HOST}@1.0.0`).profile.managedDependencies, [HOST]: '1.0.0',
+      });
+      assert.deepEqual(tooling.overrides, { 'fixture-peer': '1.0.0' });
       assert.deepEqual(args, ['install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund', '--prefix', destination]);
       const hostRoot = path.join(destination, 'node_modules', HOST);
       writeJson(path.join(hostRoot, 'package.json'), { name: HOST, version: '1.0.0', bin: { 'upgrade-template': 'scripts/upgrade.js' } });
@@ -412,6 +418,8 @@ test('host acquisition is isolated, script-disabled, integrity-bound and cannot 
   assert.equal(result.lifecycleScriptsExecuted, false);
   assert.equal(result.upgradeCli, `node_modules/${HOST}/scripts/upgrade.js`);
   assert.equal(fs.readFileSync(path.join(f.projectRoot, 'package.json'), 'utf8'), before);
+  assert.equal(f.requests.filter(request => request === `${HOST}@1.0.0`).length, 1,
+    'Reuse the verified publication rather than fetching a second profile for tooling');
   assert.throws(() => acquireHost(f.projectRoot, '1.0.0', options), /existing apps are never overwritten/);
   assert.throws(() => acquireHost(destination, '1.0.0', options), /existing apps are never overwritten/);
 });

@@ -299,7 +299,15 @@ test('production workflows use published packages without advertising retired di
 test('upgrade rehearsals preserve source config context and require reviewed override resolutions', () => {
   const skill = read('skills/check-updates/SKILL.md');
   const lifecycle = read('shared/references/mobile-release-lifecycle.md');
+  assert.match(skill, /restore-preview --project-root '<working_dir>' --preview-root '<preview_dir>'/);
+  assert.match(skill, /Never run bare `npm ci`/);
+  assert.match(skill, /check-sdk --project-root '<preview_dir>'/);
+  assert.match(skill, /check-sdk --project-root '<working_dir>'/);
+  assert.doesNotMatch(skill, /`npx --no-install expo install --check`/);
   for (const source of [skill, lifecycle]) {
+    assert.match(source, /restore-preview/);
+    assert.match(source, /EXPO_OFFLINE=1/);
+    assert.match(source, /installed SDK|frozen\s+SDK/);
     assert.match(source, /source dependencies from its\s+unchanged (?:source )?lock/);
     assert.match(source, /target-reference `NODE_PATH`/);
     assert.match(source, /source dependency context/);

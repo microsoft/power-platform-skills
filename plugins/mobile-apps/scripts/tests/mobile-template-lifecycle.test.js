@@ -6,7 +6,8 @@ const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const test = require('node:test');
 const {
-  acquireTemplate, assertEmptyDestination, assertTemplateManifest, compareVersions, inspectDestination, main, planUpdate,
+  acquireTemplate, assertEmptyDestination, assertTemplateManifest, checkSdk, compareVersions, inspectDestination, main, planUpdate,
+  restorePreviewDependencies,
 } = require('../mobile-template-lifecycle');
 const { fixtureRelease, writeProject: project, writeJson } = require('./helpers/mobile-release-fixture');
 
@@ -78,6 +79,129 @@ function packageRunner(entry, overrides = {}) {
   };
   return { calls, run: execute };
 }
+
+test('SDK validation binds the installed Expo CLI and cwd without changing the parent environment', t => {
+  const root = directory(t);
+  const expo = path.join(root, 'node_modules/expo');
+  writeJson(path.join(expo, 'package.json'), { name: 'expo', version: '57.0.25', bin: { expo: 'bin/cli' } });
+  fs.mkdirSync(path.join(expo, 'bin'));
+  fs.writeFileSync(path.join(expo, 'bin/cli'), '// synthetic fixture CLI\n');
+  const before = { ...process.env };
+  const result = checkSdk(root, { run(command, args, cwd, invocation) {
+    assert.equal(command, process.execPath);
+    assert.deepEqual(args, [path.join(expo, 'bin/cli'), 'install', '--check']);
+    assert.equal(cwd, fs.realpathSync.native(root));
+    assert.deepEqual(invocation.env, { ...before, EXPO_OFFLINE: '1' });
+    return 'Dependencies are up to date\n';
+  } });
+  assert.equal(result.expoVersion, '57.0.25');
+  assert.equal(result.versionSource, 'installed-expo');
+  assert.deepEqual({ ...process.env }, before);
+  assert.throws(() => checkSdk(root, { run() { throw new Error('SDK mismatch'); } }), /SDK mismatch/);
+  assert.deepEqual({ ...process.env }, before);
+  assert.throws(() => main(['check-sdk']), /--project-root/);
+});
+
+test('SDK validation cannot download Expo or execute a CLI outside the installed package', t => {
+  const root = directory(t);
+  const options = { run() { assert.fail('Invalid installed SDK must fail before execution'); } };
+  assert.throws(() => checkSdk(root, options), /ENOENT/);
+  const expo = path.join(root, 'node_modules/expo');
+  writeJson(path.join(expo, 'package.json'), { name: 'expo', bin: { expo: '../../outside.js' } });
+  fs.writeFileSync(path.join(root, 'outside.js'), '// outside package\n');
+  assert.throws(() => checkSdk(root, options), /contained in its package/);
+});
+
+test('preview dependency restore always targets the preview prefix, even when npm runs from the source context', t => {
+  const root = directory(t);
+  const source = path.join(root, 'source');
+  const preview = path.join(root, 'preview');
+  const files = {
+    'package.json': { name: 'source-fixture', private: true, dependencies: {},
+      scripts: { postinstall: 'node -e "process.exit(41)"' } },
+    'package-lock.json': { lockfileVersion: 3, packages: { '': { dependencies: {} } } },
+    'app.json': { expo: { extra: { powerappsNative: { templateVersion: 1 } } } },
+  };
+  for (const [file, value] of Object.entries(files)) {
+    writeJson(path.join(source, file), value);
+    writeJson(path.join(preview, file), value);
+  }
+  const config = '@microsoft:registry=https://packages.example.invalid/\n';
+  fs.writeFileSync(path.join(source, '.npmrc'), config);
+  fs.writeFileSync(path.join(preview, '.npmrc'), config);
+  writeJson(path.join(source, 'node_modules/source-marker.json'), { preserve: true });
+  let calls = 0;
+  const result = restorePreviewDependencies(source, preview, {
+    run(command, args, cwd, invocation) {
+      calls++;
+      assert.equal(command, 'npm');
+      assert.equal(cwd, fs.realpathSync.native(source));
+      assert.deepEqual(args, ['ci', '--ignore-scripts', '--no-legacy-peer-deps', '--no-force',
+        '--no-audit', '--no-fund', '--prefix', fs.realpathSync.native(preview)]);
+      assert.equal(invocation.env.npm_config_prefix, fs.realpathSync.native(preview));
+      assert.equal(invocation.env.npm_config_global, 'false');
+      assert.equal(invocation.env.npm_config_workspaces, 'false');
+      assert.equal(fs.readFileSync(path.join(preview, '.npmrc'), 'utf8'), config);
+      writeJson(path.join(preview, 'node_modules/restored.json'), { restored: true });
+      return '';
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.sourceModified, false);
+  assert.equal(fs.existsSync(path.join(source, 'node_modules/restored.json')), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, 'node_modules/source-marker.json'))), { preserve: true });
+  assert.equal(fs.readFileSync(path.join(preview, '.npmrc'), 'utf8'), config);
+  for (const [file, value] of Object.entries(files)) {
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, file))), value);
+  }
+  assert.equal(restorePreviewDependencies(source, preview).installedDependencies, true);
+  assert.equal(fs.existsSync(path.join(preview, 'node_modules/restored.json')), false,
+    'Real npm ci must clean the disposable preview dependency tree');
+  assert.equal(fs.existsSync(path.join(source, 'node_modules/source-marker.json')), true,
+    'Real npm ci must leave the source dependency tree untouched');
+  assert.throws(() => restorePreviewDependencies(source, source), /separate, non-nested/);
+  assert.throws(() => restorePreviewDependencies(root, preview), /separate, non-nested/);
+  writeJson(path.join(preview, 'app.json'), { changed: true });
+  assert.throws(() => restorePreviewDependencies(source, preview, {
+    run() { assert.fail('Changed previews must fail before npm'); },
+  }), /differs from the source/);
+});
+
+test('preview restoration rejects source aliases and linked dependency directories before npm runs', t => {
+  const root = directory(t);
+  const source = path.join(root, 'source');
+  const preview = path.join(root, 'preview');
+  const alias = path.join(root, 'source-alias');
+  fs.mkdirSync(source);
+  fs.mkdirSync(preview);
+  fs.symlinkSync(source, alias, 'junction');
+  const options = { run() { assert.fail('Unsafe preview paths must fail before npm'); } };
+  assert.throws(() => restorePreviewDependencies(source, alias, options), /separate, non-nested/);
+  assert.throws(() => restorePreviewDependencies(preview, root, options), /separate, non-nested/);
+  fs.symlinkSync(source, path.join(preview, 'node_modules'), 'junction');
+  assert.throws(() => restorePreviewDependencies(source, preview, options), /must not be a symbolic link/);
+});
+
+test('preview dependency failures leave source files and dependency tree untouched', t => {
+  const root = directory(t);
+  const source = path.join(root, 'source');
+  const preview = path.join(root, 'preview');
+  for (const [file, value] of Object.entries({
+    'package.json': { name: 'source-fixture', private: true },
+    'package-lock.json': { lockfileVersion: 3, packages: { '': {} } },
+    'app.json': { expo: {} },
+  })) {
+    writeJson(path.join(source, file), value);
+    writeJson(path.join(preview, file), value);
+  }
+  writeJson(path.join(source, 'node_modules/source-marker.json'), { preserve: true });
+  assert.throws(() => restorePreviewDependencies(source, preview, {
+    run() { throw new Error('Synthetic preview registry failure'); },
+  }), /Synthetic preview registry failure/);
+  assert.equal(fs.existsSync(path.join(source, 'node_modules/source-marker.json')), true);
+  assert.equal(fs.existsSync(path.join(source, '.npmrc')), false);
+  assert.throws(() => main(['restore-preview', '--project-root', source]), /--preview-root/);
+});
 
 test('package version comparisons are numeric, inclusive and stable-only', () => {
   assert.equal(compareVersions('1.10.0', '1.9.9'), 1);

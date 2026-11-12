@@ -140,6 +140,21 @@ Use the **verified reference installation's target host CLI** for rehearsal, not
 an older app's host or an invented target. Resolve its real `package.json`
 `bin["upgrade-template"]` path. Restore the preview's source dependencies from its
 unchanged source lock before reading inherited TypeScript configurations.
+For a standalone npm app, use `mobile-template-lifecycle.js restore-preview
+--project-root '<working_dir>' --preview-root '<preview_dir>'` with a snapshot
+outside the source app. It verifies disjoint canonical paths and unchanged inputs,
+preserves npm configuration, and binds `npm ci` to the preview's explicit prefix.
+Never rely on a previous shell's `cd` or run bare installs during preview setup.
+Unsupported workspace/package-manager layouts require review, not a fallback install.
+The isolated target tooling acquisition uses the verified release's managed pins
+and overrides so optional peers cannot float to an unreviewed newer SDK.
+Run the independent Expo check with `mobile-template-lifecycle.js check-sdk
+--project-root '<app_dir>'`, in both rehearsal and approved application. It runs
+the app's installed CLI in that app's directory with `EXPO_OFFLINE=1` scoped only
+to the explicit SDK version check. This still rejects incompatible dependencies
+against the installed SDK's bundled versions; it does not skip validation or
+adopt newer online recommendations. Keep npm installation, dependency admission,
+configuration, TypeScript and bundle checks in their normal environment.
 Do not use target-reference `NODE_PATH` instead of the source dependency context.
 Preview one edge with `--project '<preview_dir>' --dry-run`, then apply only an
 approved clean edge with the same CLI and its normal validated installation.

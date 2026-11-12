@@ -76,8 +76,25 @@ test('npm context never overwrites a pre-existing tooling config', t => {
   const { source, target } = fixture(t);
   fs.writeFileSync(path.join(source, '.npmrc'), 'registry=https://project.example.invalid/\n');
   fs.writeFileSync(path.join(target, '.npmrc'), 'keep');
-  assert.throws(() => withNpmContext(source, target, () => assert.fail('Do not install')), /EEXIST/);
+  assert.throws(() => withNpmContext(source, target, () => assert.fail('Do not install')), /configuration differs/);
   assert.equal(fs.readFileSync(path.join(target, '.npmrc'), 'utf8'), 'keep');
+});
+
+test('npm context preserves an identical preview config on success and failure', t => {
+  const { source, target } = fixture(t);
+  const config = 'registry=https://project.example.invalid/\n';
+  fs.writeFileSync(path.join(source, '.npmrc'), config);
+  fs.writeFileSync(path.join(target, '.npmrc'), config);
+  for (const fail of [false, true]) {
+    const operation = () => withNpmContext(source, target, () => {
+      if (fail) throw new Error('Synthetic preview failure');
+      return 'installed';
+    });
+    if (fail) assert.throws(operation, /Synthetic preview failure/);
+    else assert.equal(operation(), 'installed');
+    assert.equal(fs.readFileSync(path.join(source, '.npmrc'), 'utf8'), config);
+    assert.equal(fs.readFileSync(path.join(target, '.npmrc'), 'utf8'), config);
+  }
 });
 
 test('real npm acquisition writes only its isolated prefix and never executes package lifecycle scripts', t => {
