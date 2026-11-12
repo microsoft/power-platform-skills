@@ -64,6 +64,45 @@ test('all planning and building agents receive the same release context, not plu
   assert.match(planner, /requirements-only[\s\S]{0,90}cannot authorize native mutation/);
 });
 
+test('creation handoffs retain published npm acquisition and separate installation approval', () => {
+  const planner = read('agents/native-app-planner.md');
+  const start = planner.indexOf('Next steps for the orchestrator:');
+  assert.ok(start >= 0);
+  const handoff = planner.slice(start, planner.indexOf('\n```', start));
+  assert.match(handoff, /orchestrator-approved/);
+  assert.match(handoff, /exact stable published npm template/);
+  assert.match(handoff, /verified package creation CLI/);
+  assert.match(handoff, /separately approved shipped-lock `npm ci`/);
+  assert.doesNotMatch(planner, /\bdegit\b|power-platform-skills\/plugins\/mobile-apps\/template#main/);
+});
+
+test('screen planning follows the foreground npm scaffold owner instead of a retired clone pipeline', () => {
+  const planner = read('agents/screen-planner.md');
+  const start = planner.indexOf('**The scaffolded project');
+  assert.ok(start >= 0);
+  const scaffold = planner.slice(start, planner.indexOf('## Workflow', start));
+  assert.match(scaffold, /reviewed published npm template/);
+  assert.match(scaffold, /separately approved shipped-lock `npm ci`/);
+  assert.match(scaffold, /foreground-only/);
+  assert.match(scaffold, /DEFERRED_CONCERNS\[\]/);
+  assert.doesNotMatch(scaffold, /Step 2d background pipeline|clone\s*\u2192|cp -R|after JOIN/);
+
+  const creation = read('skills/create-mobile-app/SKILL.md');
+  const mode = creation.slice(creation.indexOf('### Step 2d'), creation.indexOf('### Step 3'));
+  assert.match(mode, /fresh-template gate/);
+  assert.match(mode, /separately approved shipped-lock `npm ci`/);
+  assert.doesNotMatch(mode, /`npm install`/);
+});
+
+test('README keeps the bundled directory as a fixture rather than a new-app template source', () => {
+  const entry = read('README.md').split(/\r?\n/).find(line => line.startsWith('- [`plugins/mobile-apps/template`]'));
+  assert.ok(entry, 'Keep the fixture navigation link with its actual scope');
+  assert.match(entry, /legacy preparation\/test fixture/);
+  assert.match(entry, /missing-guidance defaults/);
+  assert.match(entry, /not an app-template acquisition source/);
+  assert.doesNotMatch(entry, /fresh-template working directory source/);
+});
+
 test('release links are valid local references from every owned surface', () => {
   const files = [
     ...entrySkills.map((skill) => `skills/${skill}/SKILL.md`),

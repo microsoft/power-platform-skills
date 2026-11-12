@@ -708,7 +708,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 
 ### Step 2d — Template-only mode
 
-No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
+No background scaffold pipeline is used. The fresh-template gate must already have provided the reviewed published npm template at `<working_dir>` and its separately approved shipped-lock `npm ci` installation. Reuse that verified project; planning approval does not authorize another acquisition or install. Continue directly to Step 3.
 
 ### Step 3 — Plan (planner agent + up to 4 applicable approval gates)
 

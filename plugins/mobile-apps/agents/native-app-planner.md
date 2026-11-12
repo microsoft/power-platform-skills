@@ -905,7 +905,7 @@ Sections approved:
 
 Next steps for the orchestrator:
   1. Auth + environment selection
-  2. Use the user-prepared fresh template folder materialized from `microsoft/power-platform-skills/plugins/mobile-apps/template#main` with `degit`
+  2. Use the orchestrator-approved fresh app from the exact stable published npm template and its verified package creation CLI; reuse the separately approved shipped-lock `npm ci` installation.
   3. $PA app init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
   4. If Dataverse was approved, apply data model via /add-dataverse using the plan
   5. Apply native capabilities via /add-native using the plan

@@ -494,6 +494,6 @@ Control the per-user transmission preference with:
 
 ## See also
 
-- [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template) — bundled Expo standalone template and fresh-template working directory source
+- [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template) — legacy preparation/test fixture and missing-guidance defaults; not an app-template acquisition source
 - [Expo docs](https://docs.expo.dev/)
 - [Power Apps developer docs](https://learn.microsoft.com/en-us/power-apps/developer/)

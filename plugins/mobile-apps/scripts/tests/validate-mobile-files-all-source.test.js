@@ -30,6 +30,11 @@ test('protected paths remain blocked with POSIX and Windows path separators', ()
     });
     assert.strictEqual(result.status, 2, `${filePath}: ${result.stderr}`);
     assert.match(result.stderr, /BLOCKED: protected path/);
+    if (filePath.endsWith('.tgz')) {
+      assert.match(result.stderr, /reviewed published npm template\/dependency set/);
+      assert.match(result.stderr, /\/check-updates/);
+      assert.doesNotMatch(result.stderr, /github\.com\/microsoft\/power-platform-skills|sourced from plugins\/mobile-apps\/template/);
+    }
   }
   for (const filePath of ['/project/src/items.ts', 'C:\\project\\src\\items.ts']) {
     const result = spawnSync(process.execPath, [

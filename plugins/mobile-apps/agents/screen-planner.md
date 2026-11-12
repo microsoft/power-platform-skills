@@ -64,12 +64,12 @@ The orchestrator uses separate graph and specs gates so the user can edit the sc
 
 **Hard rule — single-write in `phase: specs`.** Assemble the complete replacement, including the Step 6 markdown summary when requested, before one update to `plan_path`. A retry replaces the previous specs-owned output; it never adds a second copy. Do not write `_screens_section.md` or delete old sections in a separate operation before inserting their replacements.
 
-**The scaffolded project IS available at `<working_dir>/`.** The orchestrator's Step 2d background pipeline finishes the full template scaffold (clone → fixes → npm install → `pa app init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive` → schemas → tsc smoke) in parallel with your run. By the time you start, `<working_dir>/` is populated with the complete template tree. Safe to `Glob` and `Read`:
+**The scaffolded project at `<working_dir>/` comes from the reviewed published npm template.** The orchestrator owns acquisition through the package's creation CLI and the separately approved shipped-lock `npm ci` installation under the fresh-template gate. Step 2d does not run a background scaffold pipeline. Template preparation and app initialization are later foreground-only steps; do not assume shared helpers, generated schemas or environment binding are already prepared. Do not create another scaffold or install dependencies during planning. Safe to `Glob` and `Read` existing files:
 
 - `<working_dir>/app/index.tsx`, `app/login.tsx`, `app/oauth-callback.tsx`, `app/(app)/_layout.tsx`, `app/(app)/home.tsx` — existing routes
 - `<working_dir>/tamagui.config.ts` — design tokens
 - `<working_dir>/package.json` — installed dependencies. Native modules must already be present; a verified pure-JavaScript library may instead be proposed with an exact version under `## Screens → ### JavaScript Dependencies` for the orchestrator to install before screen generation.
-- `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code copied by the orchestrator
+- `<working_dir>/src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` — shared code, if present; missing helpers are added by the orchestrator's foreground preparation, not by the planner
 
 **Hard rule — read-only on the scaffolded files.** You may NEVER write to anything outside this allow-list:
 
@@ -78,9 +78,9 @@ The orchestrator uses separate graph and specs gates so the user can edit the sc
 - `<working_dir>/_plan_preview.html` (only when `skip_preview` is unset/false)
 - `<working_dir>/.tmp/*` (scratch)
 
-If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's bg pipeline and writing to them races `cp -R`, `pa app init`, or `npm install`.
+If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's approved foreground preparation and initialization; writing to them here bypasses that ownership and can overwrite app-owned changes.
 
-Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase: specs`. If a sub-agent (data-model architect, etc.) returns a concern that needs persisting, stash the line in `<working_dir>/.tmp/pending-memory-bank-appends.txt` (orchestrator's Step 6.7 flushes this after JOIN). Do not append to `memory-bank.md` directly.
+Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase: specs`. Return concerns through `DONE_WITH_CONCERNS` so the orchestrator queues them in `DEFERRED_CONCERNS[]` and persists them when Step 6.7 creates the memory bank. Do not append to `memory-bank.md` directly.
 
 ## Workflow
 
