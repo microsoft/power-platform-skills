@@ -58,7 +58,7 @@ const TYPES = { connectionreference: 10132, customapi: 10133, duplicaterule: 441
 function compile(kind, key, { s = spec(), dep = deploy(), ...over } = {}) {
   return P.compileConfigurationCreateUnit(s, { kind, key, bindings: A.readDeploymentBindings(dep, s), solution: SOL, ...over });
 }
-const requestsOf = (c) => c.unit.rows.filter((r) => r.role === 'create').map((r) => P.compiledRowRequest(c.handle, r.key));
+const requestsOf = (c) => c.unit.rows.filter((r) => r.role === 'create').map((r) => P.compiledRowRequest(c.handle, r.id));
 
 function orgOf() {
   return createConfigOrg({ tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }, { logicalName: 'account', attributes: ['name'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' } });
@@ -197,7 +197,7 @@ test('compile: every body is the bundled SDK\'s own payload for the same declara
       assert.equal(read.state, 'present', `${row.kind} ${row.key}`);
       const observed = P.publicProjectionFromObserved(row.kind, read);
       assert.deepEqual(observed.public, row.public, `${kind} ${key} ${row.key}: observed = posted`);
-      assert.deepEqual(P.publicProjectionFromPost(c.handle, row.key), { ok: true, public: row.public });
+      assert.deepEqual(P.publicProjectionFromPost(c.handle, row.id), { ok: true, public: row.public });
     }
     // NEW: the flat bodies sent one by one to an empty org build the same graph, whose baseline is the unit's public rows.
     const newOrg = orgOf();
@@ -322,6 +322,41 @@ test('a compiled unit is frozen and its bodies are fixed: changing the spec or t
   assert.throws(() => P.compiledRowRequest({}, 'value'), /not a compiled configuration create unit/);
   assert.throws(() => P.compiledRowRequest(c.handle, 'nope'), /creates no row nope/);
   assert.throws(() => P.compiledPublicationRequest(Object.freeze(Object.create(null))), /not a compiled/);
+});
+
+// A rule's key and a condition's key are authored separately and may be equal; a row is addressed by its id.
+test('a rule and its condition may share a key: each row is still addressed and sent as itself, new rule or addition', async () => {
+  const own = { key: 'email', column: 'emailaddress1', match: 'exact' };
+  const s = ruleSpec([own]);
+  assert.deepEqual(A.validateConfiguration(s).errors, []);
+  const c = compile('duplicateRule', 'email', { s });
+  assert.equal(c.ok, true, c.reason);
+  const [rule, condition] = [c.unit.rows.find((r) => r.kind === 'duplicate-rule'), c.unit.rows.find((r) => r.kind === 'rule-condition')];
+  assert.deepEqual([rule.key, condition.key], ['email', 'email']);
+  const ruleReq = P.compiledRowRequest(c.handle, rule.id);
+  assert.deepEqual([ruleReq.kind, ruleReq.id, ruleReq.path], ['duplicate-rule', rule.id, '/duplicaterules']);
+  assert.equal(JSON.parse(ruleReq.body).duplicateruleid, rule.id);
+  const condReq = P.compiledRowRequest(c.handle, condition.id);
+  assert.deepEqual([condReq.kind, condReq.id, condReq.path], ['rule-condition', condition.id, '/duplicateruleconditions']);
+  assert.equal(JSON.parse(condReq.body)['regardingobjectid@odata.bind'], `/duplicaterules(${rule.id})`);
+  assert.deepEqual(P.publicProjectionFromPost(c.handle, rule.id), { ok: true, public: rule.public });
+  assert.deepEqual(P.publicProjectionFromPost(c.handle, condition.id.toUpperCase()), { ok: true, public: condition.public }, 'an id in any case');
+  assert.deepEqual(P.validateRecordedCreateUnit(JSON.parse(JSON.stringify(c.unit)), { current: c.unit }), { ok: true, samePlan: true });
+  // The same under a rule that already exists: the new condition shares the preserved rule's key.
+  const org = orgOf();
+  const first = compile('duplicateRule', 'email', { s: ruleSpec([{ key: 'e', column: 'emailaddress1', match: 'exact' }]) });
+  for (const req of requestsOf(first)) await send(org, req);
+  const baseline = await P.captureConfigurationBaseline((await sdkOf(org, [])).dataverse, { kind: 'duplicateRule', rootId: first.unit.root.id });
+  assert.equal(baseline.ok, true, baseline.reason);
+  const added = compile('duplicateRule', 'email', { s: ruleSpec([{ key: 'e', column: 'emailaddress1', match: 'exact' }, { key: 'email', column: 'lastname', match: 'exact' }]), baseline, additions: ['email'] });
+  assert.equal(added.ok, true, added.reason);
+  const newRow = added.unit.rows.find((r) => r.role === 'create');
+  assert.deepEqual([newRow.kind, newRow.key, added.unit.root.key], ['rule-condition', 'email', 'email']);
+  const req = P.compiledRowRequest(added.handle, newRow.id);
+  assert.deepEqual([req.kind, req.path, JSON.parse(req.body).baseattributename], ['rule-condition', '/duplicateruleconditions', 'lastname']);
+  assert.throws(() => P.compiledRowRequest(added.handle, first.unit.root.id), /creates no row/, 'a preserved rule is never sent');
+  assert.deepEqual(requestsOf(added).map((r) => r.id), [newRow.id]);
+  assert.deepEqual(P.validateRecordedCreateUnit(JSON.parse(JSON.stringify(added.unit)), { current: added.unit }), { ok: true, samePlan: true });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -544,6 +579,51 @@ test('publicProjectionFromObserved: the closed public fields only, a rule\'s sta
   assert.throws(() => P.publicProjectionFromObserved('table', raw), /not a configuration create kind/);
 });
 
+// A faithful read of a row as this module created it: every default column, each empty column null and each defaulted one
+// at its create default, e.g. for a definition
+//   { "environmentvariabledefinitionid": "<id>", "schemaname": "contoso_S", ..., "hint": null, "learnmoreurl": null, ... }
+function faithfulRead(c) {
+  const row = c.unit.rows[0];
+  const k = P.CONFIGURATION_CREATE_KIND_TABLE[row.kind];
+  const body = JSON.parse(P.compiledRowRequest(c.handle, row.id).body);
+  const raw = { [k.idColumn]: row.id };
+  for (const col of B.DEFAULT_READ_COLUMNS[k.bindingKind]) {
+    const mapped = B.KINDS[k.bindingKind].columns[col];
+    raw[col] = col in body ? body[col] : Array.isArray(mapped) && mapped.length === 3 ? mapped[2] : null;
+  }
+  return raw;
+}
+
+test('observed public state the closed projection cannot represent is refused, never dropped; its empty or default form is not', async () => {
+  const ev = compile('environmentVariable', 'contoso_S', { s: evSpec() });
+  const cr = compile('connectionReference', 'contoso_c1');
+  const api = compile('customApi', 'contoso_Act');
+  const cases = [
+    [ev, 'env-definition', 'hint', 'A public hint 3b9d'], [ev, 'env-definition', 'learnmoreurl', 'https://contoso.example/help-3b9d'],
+    [ev, 'env-definition', 'inputcontrolconfig', '{"control":"3b9d"}'],
+    [cr, 'connection-reference', 'connectionparametersconfig', '{"p":"3b9d"}'], [cr, 'connection-reference', 'connectionparametersetconfig', '{"s":"3b9d"}'],
+    [cr, 'connection-reference', 'promptingbehavior', 1],
+  ];
+  for (const [c, tag, column, value] of cases) {
+    const raw = faithfulRead(c);
+    assert.deepEqual(P.publicProjectionFromObserved(tag, raw), { ok: true, public: c.unit.rows[0].public }, `${column}: the faithful read`);
+    const out = P.publicProjectionFromObserved(tag, { ...raw, [column]: value });
+    assert.deepEqual([out.ok, out.code], [false, P.CODES.graphUnreadable], column);
+    assert.match(out.reason, new RegExp(`the ${column} column`));
+    assert.ok(!out.reason.includes(String(value)), 'the refusal names the column, never its value');
+  }
+  assert.deepEqual(P.publicProjectionFromObserved('connection-reference', { ...faithfulRead(cr), promptingbehavior: null }), { ok: true, public: cr.unit.rows[0].public }, 'an empty prompting behavior is the default');
+  // A Custom API's implementation lookup is not part of the projection: a wider read that carries it changes nothing.
+  assert.deepEqual(P.publicProjectionFromObserved('custom-api', { ...faithfulRead(api), _plugintypeid_value: GUID(9) }), { ok: true, public: api.unit.rows[0].public });
+  // The baseline of an existing root reads it the same way: a customized root is no baseline, a faithful one is.
+  const dvOf = (rootRow) => ({ get: async (p) => ({ status: 200, body: p.startsWith('/environmentvariabledefinitions(') ? rootRow : { value: [] } }) });
+  const good = await P.captureConfigurationBaseline(dvOf(faithfulRead(ev)), { kind: 'environmentVariable', rootId: ev.unit.root.id });
+  assert.deepEqual(good, { ok: true, root: { kind: 'env-definition', id: ev.unit.root.id, public: ev.unit.rows[0].public }, children: [] });
+  const hinted = await P.captureConfigurationBaseline(dvOf({ ...faithfulRead(ev), hint: 'A public hint 3b9d' }), { kind: 'environmentVariable', rootId: ev.unit.root.id });
+  assert.deepEqual([hinted.ok, hinted.code], [false, P.CODES.graphUnreadable]);
+  assert.match(hinted.reason, /the hint column/);
+});
+
 test('validatePublicRow: exactly the kind\'s fields, each of its type', () => {
   const pub = compile('duplicateRule', 'email').unit.rows[1].public;
   assert.deepEqual(P.validatePublicRow('rule-condition', pub), { ok: true });
@@ -558,6 +638,17 @@ test('validatePublicRow: exactly the kind\'s fields, each of its type', () => {
   ];
   for (const [row, reason] of cases) assert.match(P.validatePublicRow('rule-condition', row).reason, reason);
   assert.equal(P.validatePublicRow('nope', pub).ok, false);
+});
+
+test('the receipt kind table is the kind table\'s exact receipt view: root, parentKinds, publicFields, privateFields, frozen', () => {
+  const R = P.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE;
+  assert.deepEqual(Object.keys(R), Object.keys(P.CONFIGURATION_CREATE_KIND_TABLE));
+  for (const [tag, k] of Object.entries(P.CONFIGURATION_CREATE_KIND_TABLE)) {
+    assert.deepEqual(Object.keys(R[tag]), ['root', 'parentKinds', 'publicFields', 'privateFields'], tag);
+    assert.deepEqual(R[tag], { root: k.root, parentKinds: k.parentKinds, publicFields: k.publicFields, privateFields: k.privateFields }, tag);
+    for (const v of [R[tag], R[tag].parentKinds, R[tag].publicFields, R[tag].privateFields]) assert.ok(Object.isFrozen(v), tag);
+  }
+  assert.ok(Object.isFrozen(R));
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -604,4 +695,38 @@ test('validateRecordedCreateUnit: a stored unit is exactly a unit this module co
   // The same intent at another root id (found under an older id) is the same attempt, but not the same plan.
   const elsewhere = compile('duplicateRule', 'email', { solution: 'Other' });
   assert.deepEqual(P.validateRecordedCreateUnit(stored(), { current: elsewhere.unit }), { ok: true, samePlan: false });
+});
+
+test('validateRecordedCreateUnit: the publication slot and publicationRequired never contradict, and only a new rule has either', () => {
+  const published = compile('duplicateRule', 'email');
+  const unpublished = compile('duplicateRule', 'x');
+  const api = compile('customApi', 'contoso_Calc');
+  assert.deepEqual([published.unit.publicationRequired, unpublished.unit.publicationRequired, api.unit.publicationRequired], [true, false, false]);
+  const recorded = (c, edit) => { const u = JSON.parse(JSON.stringify(c.unit)); edit(u); return u; };
+  const slot = { dispatch: 'dispatched' };
+  // Each representation alone, and both when they agree, are the compiled plan.
+  const legit = [
+    [published, 'compiled only', () => {}],
+    [unpublished, 'compiled only', () => {}],
+    [api, 'compiled only', () => {}],
+    [published, 'stored only', (u) => { delete u.publicationRequired; u.publication = { dispatch: 'unsent' }; }],
+    [unpublished, 'stored only', (u) => { delete u.publicationRequired; u.publication = null; }],
+    [api, 'stored only', (u) => { delete u.publicationRequired; u.publication = null; }],
+    [published, 'both', (u) => { u.publication = slot; }],
+    [api, 'both', (u) => { u.publication = null; }],
+  ];
+  for (const [c, what, edit] of legit) {
+    assert.deepEqual(P.validateRecordedCreateUnit(recorded(c, edit), { current: c.unit }), { ok: true, samePlan: true }, `${c.unit.root.key}: ${what}`);
+  }
+  // The hashes are left as compiled: a contradiction is refused before them, never read as either side.
+  const contradictions = [
+    [api, 'a Custom API with a publication slot', (u) => { u.publication = slot; }],
+    [api, 'a Custom API stored with only a publication slot', (u) => { delete u.publicationRequired; u.publication = slot; }],
+    [unpublished, 'an unpublished rule with a publication slot', (u) => { u.publication = slot; }],
+    [published, 'a published rule without its publication slot', (u) => { u.publication = null; }],
+  ];
+  for (const [c, what, edit] of contradictions) {
+    const out = P.validateRecordedCreateUnit(recorded(c, edit), { current: c.unit });
+    assert.deepEqual([out.ok, out.code], [false, P.CODES.stateInvalid], what);
+  }
 });

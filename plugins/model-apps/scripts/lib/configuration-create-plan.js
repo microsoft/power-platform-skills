@@ -10,6 +10,7 @@
 // sends nothing and keeps no state on disk.
 //
 //   CONFIGURATION_CREATE_KIND_TABLE                    the closed per-row-kind table (fields, types, set, id column, binds)
+//   CONFIGURATION_CREATE_RECEIPT_KIND_TABLE            its receipt view: { root, parentKinds, publicFields, privateFields }
 //   validatePublicRow(kind, row)                       one public projection against its kind: closed keys, scalar types
 //   publicIntentSha256(unit) / publicPlanSha256(unit)  the two public hashes of a unit (no private value, no dispatch state)
 //   classifyConfigurationMutation(op, opts)            one planned root operation -> create unit, additions, existing route
@@ -17,9 +18,9 @@
 //   deriveConfigurationCreateIds(spec, opts)           the root's id (stable, or the existing row's) and its children's ids
 //   captureConfigurationBaseline(dv, opts, ports)      the complete public baseline of an existing root (GET only)
 //   compileConfigurationCreateUnit(spec, opts)         the unit: an opaque handle to the frozen bodies + its public rows
-//   compiledRowRequest(handle, key) / compiledPublicationRequest(handle) / compiledUnitOf(handle)
+//   compiledRowRequest(handle, rowId) / compiledPublicationRequest(handle) / compiledUnitOf(handle)
 //                                                      what the writer sends for a handle, and nothing else
-//   publicProjectionFromPost(handle, key)              the public projection of the exact bytes a row is sent with
+//   publicProjectionFromPost(handle, rowId)            the public projection of the exact bytes a row is sent with
 //   publicProjectionFromObserved(kind, observed)       the public projection of a row read back
 //   validateRecordedCreateUnit(recorded, opts)         a stored unit's plan content, and whether the current one still matches
 //
@@ -158,6 +159,12 @@ const CONFIGURATION_CREATE_KIND_TABLE = deepFreeze({
   },
 });
 
+// The receipt's view of the kind table: per kind exactly { root, parentKinds, publicFields, privateFields }, the closed
+// shape the receipt module validates a kind table against. Derived here, once, so the two can never drift apart.
+const CONFIGURATION_CREATE_RECEIPT_KIND_TABLE = deepFreeze(Object.fromEntries(Object.entries(CONFIGURATION_CREATE_KIND_TABLE).map(([tag, k]) => [tag, {
+  root: k.root, parentKinds: [...k.parentKinds], publicFields: { ...k.publicFields }, privateFields: [...k.privateFields],
+}])));
+
 const TAG_OF = Object.freeze(Object.fromEntries(Object.entries(CONFIGURATION_CREATE_KIND_TABLE).map(([tag, k]) => [k.bindingKind, tag])));
 // A kind is named by its receipt tag or by its configuration kind ('environmentVariable', ...); both answer the tag.
 function tagOf(kind) {
@@ -251,6 +258,22 @@ function publicOf(tag, decoded, mode, parentId) {
 
 const RULE_BIND = /^\/duplicaterules\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/;
 
+// A row read back may hold public state outside the closed projection: an environment variable's `hint`, `learnmoreurl` or
+// `inputcontrolconfig`, a connection reference's `connectionparametersconfig` or `connectionparametersetconfig` (UNMODELLED:
+// any value), or its `promptingbehavior` (defaulted: any value but the platform's 0). The decoder reports them
+// (decoded.unmodelled, decoded.preserved); dropping them would make a customized row project equal to the create that
+// never wrote them, and a baseline would lose them. So such a row cannot be represented and is refused, by column name
+// only (never its value). The one exception is a Custom API's implementation lookup (`_plugintypeid_value`): the create
+// never writes, plans or proves it, the default reader does not select it, and a caller's wider read may carry it.
+// Answers the first such column, or null.
+const NOT_PROJECTED = new Set(['_plugintypeid_value']);
+function unrepresentableColumnOf(decoded) {
+  const unmodelled = Array.isArray(decoded.unmodelled) ? decoded.unmodelled : [];
+  if (unmodelled.length) return unmodelled[0];
+  const preserved = isPlain(decoded.preserved) ? Object.keys(decoded.preserved).filter((col) => !NOT_PROJECTED.has(col)) : [];
+  return preserved.length ? preserved[0] : null;
+}
+
 // The public projection of a POST body this module built, e.g. a condition:
 //   { "duplicateruleconditionid": "<id>", "baseattributename": "EmailAddress1", "matchingattributename": "EmailAddress1",
 //     "operatorcode": 0, "ignoreblankvalues": false, "regardingobjectid@odata.bind": "/duplicaterules(<rule id>)" }
@@ -279,6 +302,8 @@ function projectBody(tag, body) {
  *   { "customapirequestparameterid": "<id>", "uniquename": "A", ..., "_customapiid_value": "<api id>" }
  * Answers { ok: true, public, ruleState } (`ruleState` 'unpublished' | 'published' | null for a rule in flight, rules only:
  * a rule's state is proved apart from its content) or { ok: false, code: 'configuration-create-graph-unreadable', reason }.
+ * A row holding public state the projection cannot represent (unrepresentableColumnOf) is unreadable too, never projected
+ * without it.
  */
 function publicProjectionFromObserved(kind, observed) {
   const tag = tagOf(kind);
@@ -295,6 +320,8 @@ function publicProjectionFromObserved(kind, observed) {
     parentId = decoded.parentId;
   }
   if (!k.root && !normalizeGuid(parentId)) return { ok: false, code: CODES.graphUnreadable, reason: 'the row names no parent' };
+  const unrepresentable = unrepresentableColumnOf(decoded);
+  if (unrepresentable) return { ok: false, code: CODES.graphUnreadable, reason: `the ${unrepresentable} column holds a value the public projection cannot represent` };
   const pub = publicOf(tag, decoded, 'read', k.root ? undefined : normalizeGuid(parentId));
   if (!pub) return { ok: false, code: CODES.graphUnreadable, reason: 'a public field cannot be read' };
   const out = { ok: true, public: pub };
@@ -352,8 +379,10 @@ function deriveConfigurationCreateIds(spec, { kind, key, bindings, solution, roo
  * Every child collection of the root's kind is read to its last page; a child the declaration does not name is kept too
  * (the plan preserves it). Answers { ok: true, root: { kind, id, public, ruleState? }, children: [{ kind, id, parentId,
  * public }] } or { ok: false, code, reason }: the root read absent is configuration-create-row-missing; a failed or
- * incomplete page, a row without an id or under another parent, an id listed twice, a missing column or an unknown option
- * value is configuration-create-graph-unreadable — never an empty collection. A private column is not selected.
+ * incomplete page, a row without an id or under another parent, an id listed twice, a missing column, an unknown option
+ * value or a column holding public state the projection cannot represent (a hint, a non-default prompting behavior) is
+ * configuration-create-graph-unreadable — never an empty collection, never a baseline without it. A private column is not
+ * selected.
  */
 async function captureConfigurationBaseline(dataverse, { kind, rootId } = {}, { readRow = B.readDefaultConfigurationRow, readAllPages = B.readAllPages } = {}) {
   const tag = tagOf(kind);
@@ -618,7 +647,8 @@ const closed = (o, fields, what) => {
 // ---------------------------------------------------------------------------------------------
 // Compile
 
-// handle -> { unit, rows: Map(key -> frozen request), publication }. Module-private: only this module's accessors read it,
+// handle -> { unit, rows: Map(row id -> frozen request), publication }. A row is addressed by its id, the one thing unique across
+// kinds: a rule and one of its conditions may share an authored key. Module-private: only this module's accessors read it,
 // so a writer can send nothing but what a handle this compiler issued holds.
 const COMPILED = new WeakMap();
 
@@ -714,7 +744,7 @@ function compileConfigurationCreateUnit(spec, { kind, key, bindings, solution, b
     const pub = projectBody(r.kind, JSON.parse(json));
     if (!pub) return refuse(CODES.shapeRefused, `the ${r.kind} row cannot be projected`);
     rows.push({ kind: r.kind, key: r.key, id: r.id, parentId: r.parentId, role: 'create', public: pub, privateFields: [...k.privateFields] });
-    frozenRows.set(r.key, Object.freeze({ kind: r.kind, key: r.key, id: r.id, parentId: r.parentId, method: 'POST', path: `/${k.entitySet}`, body: json, solutionHeader: k.solutionHeader }));
+    frozenRows.set(r.id, Object.freeze({ kind: r.kind, key: r.key, id: r.id, parentId: r.parentId, method: 'POST', path: `/${k.entitySet}`, body: json, solutionHeader: k.solutionHeader }));
   }
   if (adding) {
     const preserved = [{ kind: tag, key: ids.key, id: baseline.root.id, parentId: null, public: baseline.root.public }];
@@ -749,16 +779,17 @@ function compileConfigurationCreateUnit(spec, { kind, key, bindings, solution, b
 }
 
 /**
- * What the writer sends for one new row of a compiled unit:
+ * What the writer sends for one new row of a compiled unit, by the row's id (a `role: 'create'` row of the unit):
  *   { kind, key, id, parentId, method: 'POST', path: '/<entity set>', body: '<serialized JSON>', solutionHeader }
  * `body` is the frozen serialization (it may hold a private input: send it, never store or log it). `solutionHeader` says
  * whether the request carries MSCRM.SolutionUniqueName (the unit's `solution`); a value row never does.
  * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api
  */
-function compiledRowRequest(handle, key) {
+function compiledRowRequest(handle, rowId) {
   const c = compiledOf(handle);
-  const row = c.rows.get(key);
-  if (!row) throw new TypeError(`compiledRowRequest: the unit creates no row ${key}`);
+  const id = typeof rowId === 'string' ? normalizeGuid(rowId) : '';
+  const row = id ? c.rows.get(id) : undefined;
+  if (!row) throw new TypeError(`compiledRowRequest: the unit creates no row ${rowId}`);
   return row;
 }
 
@@ -777,9 +808,9 @@ function compiledUnitOf(handle) {
   return compiledOf(handle).unit;
 }
 
-/** The public projection of the exact bytes a new row is sent with: { ok: true, public } (never the private input). */
-function publicProjectionFromPost(handle, key) {
-  const row = compiledRowRequest(handle, key);
+/** The public projection of the exact bytes a new row (by its id) is sent with: { ok: true, public } (never the private input). */
+function publicProjectionFromPost(handle, rowId) {
+  const row = compiledRowRequest(handle, rowId);
   const pub = projectBody(row.kind, JSON.parse(row.body));
   return pub ? { ok: true, public: pub } : { ok: false, code: CODES.shapeRefused, reason: 'the row cannot be projected' };
 }
@@ -841,9 +872,15 @@ function validateRecordedCreateUnit(recorded, { current } = {}) {
   if (rootRows !== 1) return invalid('the unit has no single root row');
   if (!creates) return invalid('the unit creates nothing');
   const rootRow = recorded.rows.find((r) => r.id === root.id);
-  const publicationRequired = publicationRequiredOf(recorded);
   if (has(recorded, 'publicationRequired') && typeof recorded.publicationRequired !== 'boolean') return invalid('publicationRequired is not a boolean');
-  if (publicationRequired && (rootTag !== 'duplicate-rule' || rootRow.role !== 'create')) return invalid('only a new rule can require publication');
+  // A compiled unit says `publicationRequired`; a stored one may hold the publication slot instead (null when none). When
+  // both are present they must agree, or the hashes (which read one of them) would hide the other.
+  if (has(recorded, 'publicationRequired') && has(recorded, 'publication') && recorded.publicationRequired !== (recorded.publication != null)) {
+    return invalid('the publication slot contradicts publicationRequired');
+  }
+  const publicationRequired = publicationRequiredOf(recorded);
+  const newRule = rootTag === 'duplicate-rule' && rootRow.role === 'create';
+  if ((publicationRequired || (has(recorded, 'publication') && recorded.publication != null)) && !newRule) return invalid('only a new rule can require publication');
   for (const field of ['publicIntentSha256', 'publicPlanSha256']) if (typeof recorded[field] !== 'string' || !SHA256.test(recorded[field])) return invalid(`${field} is not a SHA-256`);
   if (publicIntentSha256(recorded) !== recorded.publicIntentSha256) return invalid('the public intent hash does not match the rows');
   if (publicPlanSha256(recorded) !== recorded.publicPlanSha256) return invalid('the public plan hash does not match the rows');
@@ -858,6 +895,7 @@ function validateRecordedCreateUnit(recorded, { current } = {}) {
 module.exports = {
   CODES,
   CONFIGURATION_CREATE_KIND_TABLE,
+  CONFIGURATION_CREATE_RECEIPT_KIND_TABLE,
   validatePublicRow,
   publicIntentSha256,
   publicPlanSha256,
