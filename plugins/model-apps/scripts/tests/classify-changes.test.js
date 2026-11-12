@@ -242,7 +242,8 @@ test('#845: an edit of the EARLIER of two same-named views is seen — with a pa
   edited.pages[0].__contentSha = 'psha2';
   const e = C.classifyChanges(edited, prior);
   assert.strictEqual(e.verdict, 'full');
-  assert.deepStrictEqual(e.debt, [{ artifactType: 'view', identity: 'new_x|Twin (view key v1)', reason: 'view-nonappend-edit' }]);
+  // The debt is owed under the view's name and key, not its label (a view may be named like a label; see below).
+  assert.deepStrictEqual(e.debt, [{ artifactType: 'view', identity: '["new_x|Twin","v1"]', reason: 'view-nonappend-edit' }]);
   assert.match(e.fullReasons.join('\n'), /view 'new_x\|Twin \(view key v1\)' changed beyond a pure column-append/);
 });
 
@@ -264,7 +265,25 @@ test('#845 controls: the later namesake edit, a pages-only change, a second key 
   assert.match(added.fullReasons[0], /1 new view\(s\) added/);
   assert.deepStrictEqual(added.debt, []);
   const removed = C.classifyChanges(one, prior);
-  assert.deepStrictEqual(removed.debt, [{ artifactType: 'view', identity: 'new_x|Twin (view key v2)', reason: 'view-removed' }]);
+  assert.deepStrictEqual(removed.debt, [{ artifactType: 'view', identity: '["new_x|Twin","v2"]', reason: 'view-removed' }]);
+});
+
+test('#845: two changed views keep two debt entries when one is named like the label of the other\'s key', () => {
+  // 'Twin (view key v2)' is a legal view name of its own: a debt identity built from the label would make it and the keyed v2 one entry.
+  const views = (s) => { s.views = [...twins(s).views, { key: 'third', entity: 'new_x', name: 'Twin (view key v2)', reconcile: 'declared', columns: ['new_name'] }]; return s; };
+  const prior = views(spec());
+  const cur = views(spec());
+  cur.views[1].columns = ['createdon'];
+  cur.views[2].columns = ['createdon'];
+  cur.pages[0].__contentSha = 'psha2';
+  const r = C.classifyChanges(cur, prior);
+  assert.strictEqual(r.verdict, 'full');
+  assert.deepStrictEqual(r.debt, [
+    { artifactType: 'view', identity: '["new_x|Twin","v2"]', reason: 'view-nonappend-edit' },
+    { artifactType: 'view', identity: 'new_x|Twin (view key v2)', reason: 'view-nonappend-edit' },
+  ]);
+  // The messages still name each view as a person reads it.
+  assert.deepStrictEqual(r.fullReasons.filter((m) => /beyond a pure column-append/.test(m)).length, 2);
 });
 
 test('#845: same-named views without a key of their own each cannot be aligned — any change among them is a full build with debt', () => {

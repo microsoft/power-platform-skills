@@ -125,7 +125,7 @@ function classifyPages(cur, prior) {
 // changed, which view changed cannot be said, so it is a full build with debt, as a non-append edit is.
 function classifyViews(cur, prior) {
   const out = { fast: [], full: [], debt: [] };
-  const { alignKey, label, unalignable } = viewAlignment(cur.views, prior.views);
+  const { alignKey, label, debtIdentity, unalignable } = viewAlignment(cur.views, prior.views);
   for (const [id, sides] of unalignable) {
     if (stableStringify(sides.cur) === stableStringify(sides.prior)) continue;
     out.full.push(`views: the views named '${id}' share their name on the table without a key of their own each, and one of them changed — which one cannot be told, so it is not convergent`);
@@ -133,10 +133,10 @@ function classifyViews(cur, prior) {
   }
   const alignable = (arr) => (Array.isArray(arr) ? arr.filter((v) => !(v && typeof v === 'object' && unalignable.has(identityOf.view(v)))) : arr);
   const aligned = alignByIdentity(alignable(cur.views), alignable(prior.views), alignKey);
-  const named = (e) => ({ ...e, id: label(e.cur || e.prior) });
+  const named = (e) => ({ ...e, id: label(e.cur || e.prior), debtId: debtIdentity(e.cur || e.prior) });
   const [added, removed, common] = [aligned.added.map(named), aligned.removed.map(named), aligned.common.map(named)];
   if (added.length) out.full.push(`views: ${added.length} new view(s) added — a new artifact needs a full build`);
-  for (const r of removed) { out.full.push(`views: view '${r.id}' removed`); out.debt.push({ artifactType: 'view', identity: r.id, reason: 'view-removed' }); }
+  for (const r of removed) { out.full.push(`views: view '${r.id}' removed`); out.debt.push({ artifactType: 'view', identity: r.debtId, reason: 'view-removed' }); }
   for (const c of common) {
     const restSame = equalExcept(c.cur, c.prior, ['columns']);
     const colsSame = stableStringify(c.cur.columns || []) === stableStringify(c.prior.columns || []);
@@ -147,7 +147,7 @@ function classifyViews(cur, prior) {
       // width/order/filter/sort change, a non-append column edit, or a removal/reorder — the additive
       // engine only unions columns, so this cannot be converged incrementally.
       out.full.push(`views: view '${c.id}' changed beyond a pure column-append (reorder/remove/width/filter/sort) — not convergent`);
-      out.debt.push({ artifactType: 'view', identity: c.id, reason: 'view-nonappend-edit' });
+      out.debt.push({ artifactType: 'view', identity: c.debtId, reason: 'view-nonappend-edit' });
     }
   }
   return out;
@@ -156,8 +156,12 @@ function classifyViews(cur, prior) {
 // How classifyViews aligns the current views with the prior ones. A name (`entity|name`, identityOf.view) held by one view on each
 // side aligns by that name, exactly as before. A name held by two or more views on either side aligns by [name, key] when every one
 // of them, on both sides, has a key of its own (a non-empty string, not repeated): JSON, so it cannot collide with a plain name.
-// Otherwise the name is `unalignable` (id -> { cur, prior }: its views on each side, in order). `label` is how a message and a
-// debt entry name a view: its `entity|name`, plus its key when the name is shared.
+// Otherwise the name is `unalignable` (id -> { cur, prior }: its views on each side, in order). `label` is how a message names a
+// view: its `entity|name`, plus its key when the name is shared. A debt entry names it by `debtIdentity` instead, which is its
+// alignment key: `entity|name` for a name held once, exactly as before, and the [name, key] JSON for a shared one. The label is
+// for a person and cannot be the identity: a view may be named like another's label ("Twin (view key v2)" beside the keyed Twin
+// v2), and the snapshot keeps one entry per identity (apply-snapshot.js addDebt), so two changed views would owe one debt. JSON
+// cannot collide with a plain name: no table's logical name starts with '['.
 function viewAlignment(curViews, priorViews) {
   const side = (arr) => (Array.isArray(arr) ? arr.filter((v) => v && typeof v === 'object') : []);
   const groups = new Map();
@@ -178,7 +182,7 @@ function viewAlignment(curViews, priorViews) {
   }
   const alignKey = (v) => (keyed.has(identityOf.view(v)) ? JSON.stringify([identityOf.view(v), v.key]) : identityOf.view(v));
   const label = (v) => (keyed.has(identityOf.view(v)) ? `${identityOf.view(v)} (view key ${v.key})` : identityOf.view(v));
-  return { alignKey, label, unalignable };
+  return { alignKey, label, debtIdentity: alignKey, unalignable };
 }
 
 // #4 app-shell: fast ONLY when the SITEMAP structure (appShell) changed but the app object is
