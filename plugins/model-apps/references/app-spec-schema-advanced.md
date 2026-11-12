@@ -741,6 +741,11 @@ spec's new columns.
   other joins) is kept. `viewId` pins the view to edit in one environment. A new declared view is
   created and published like any other view. The stock `Active <plural>` and `Inactive <plural>` views
   exist on every table, new ones included, so declaring one of them is an adoption (see Approvals).
+  `--verify` finds a declared view as the build does: by the row the workspace's managed bindings record
+  for its key, else by its `viewId`, else by its name on its table. So two declared views with one name on
+  one table, each with its own `key`, are each checked against their own row. With neither a binding nor a
+  `viewId`, the name cannot tell such a pair apart: both are checked as present, and their content is listed
+  as unverified.
 - **`charts[].reconcile: "declared"`** — the chart type, category, series and description follow the
   spec. `title` is written only to a chart whose stored layout already has a title; a new chart cannot
   store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).
@@ -775,8 +780,10 @@ unchanged and unbound without a stop (with `createIdentity`, the build warns and
 Adoption below). `--authorize overwrite:view:<table>/<name>` (or `chart:`)
 approves replacing changes made elsewhere, and `--allow-destructive` approves removing columns. Each key
 approves only the artifact of its family, so a view and a chart with the same name are approved
-separately. Within a family a key must name one artifact: two declared views on one table need different
-names, and so do two declared charts (a chart's name is compared with its outer spaces trimmed). A
+separately. Within a family a key must name one artifact: two declared charts on one table need different
+names (a chart's name is compared with its outer spaces trimmed), and so do two declared views unless each
+has its own `key` (a view's key is its `key` when set, else `<table>/<name>`, and its approval keys name it:
+`adopt:view:<key>`). A
 `viewId` pin chooses the row a view edits but is not part of its key, so it does not tell two
 same-named declared views apart. A build or a plan refuses such a pair before any work; teardown and
 verification only warn. The same name on another table, or on a view and a chart, is fine. The older `adopt:<table>/<name>` form still works when it names exactly one declared view or
@@ -1537,7 +1544,12 @@ the field builds exactly as before.
   reads the binding store for protected items whose create or edit has not finished. If the App Spec no
   longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
   This applies with or without the field and whatever phases run. Declare the item again, with the
-  field, to finish it.
+  field, to finish it. Or, if you no longer want it, stop tracking it: the stop prints the exact
+  approval, `--authorize retire:<kind>:<key>@<attempt token>`. Pass it as printed, with the item still
+  left out of the App Spec. Nothing is deleted: rows the create may have made stay in the environment,
+  unmanaged, and declaring the item again later stops with `create-identity-conflict` until you remove
+  them. An unfinished item that the binding store proves was never sent is let go without an approval,
+  with a warning.
   An item that finished before it was removed from the App Spec does not stop the build.
 - **`--changed-only` runs the whole build.** While the field is set, or the binding store holds
   configuration state, a `--changed-only` apply runs the full build and prints
@@ -1558,10 +1570,28 @@ the field builds exactly as before.
   environment with more than one language, `CUSTOM_API_LABELS_UNSUPPORTED`) stops that build and leaves
   nothing unfinished: the next build is judged on what the App Spec then declares, the earlier
   declaration, another edit or the same one.
+- **A create the service refused.** When the service refuses the only request of a protected create with an
+  error code, nothing was created. The item stops with `create-refused` and the code, the items after it still
+  run, and nothing is left unfinished: correct the declaration or its deployment settings value and build
+  again, or remove it from the App Spec. A refused edit of an existing row is different: it stays unfinished,
+  as above. A secret environment variable is created in two requests, its definition and then its value:
+  when the service refuses the value (for example a Key Vault reference it rejects), the definition already
+  exists, so the build stops with the outcome unknown and keeps the attempt; retire it as described next, then
+  delete that definition row before you declare the variable again.
+  A create an earlier plugin version (2.26.0 or before) left unfinished after such a refusal is not
+  released by corrected settings: that version did not record that nothing was created, so the build
+  stops with `create-completion-required` and sends nothing. The stop prints the way out with the exact
+  approval: remove the item (and its deployment settings entry) from the App Spec, run the build with
+  `--apply` and the printed `--authorize retire:<kind>:<key>@<attempt token>` (nothing is deleted or
+  sent), then restore the item and its settings and build again; it is then created once. If the
+  refused create had already made a row at the item's derived id (for example a variable's definition
+  whose value was refused), the restored build stops with `create-identity-conflict` naming that id:
+  delete that row in the environment if you do not need it, then build again.
 - **A create that did not finish.** The next build decides it from what the first one recorded before
   sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
   a create that is missing a row, its solution membership or the rule's initial state stops with
-  `create-completion-required` — complete it under the same ids, then build again. An initial
+  `create-completion-required` — complete it under the same ids, then build again (or let it go as
+  described for a refused create above). An initial
   publication that failed or whose answer was lost is never sent again by the build: publish the rule
   under the same id yourself. The one exception is a rule whose content was saved, but whose publish
   request the record proves was never sent (the run stopped first). The next build sends that publish

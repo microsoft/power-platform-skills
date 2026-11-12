@@ -33,6 +33,9 @@
   },
   "overrides": {
     "argparse": "2.0.1",
-    "source-map-js": "1.2.2"
+    "source-map-js": "1.2.2",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.8"
+    }
   }
 }

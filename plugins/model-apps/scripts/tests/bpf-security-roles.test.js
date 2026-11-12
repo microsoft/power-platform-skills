@@ -628,3 +628,95 @@ test('#513 verify reads the deployed uniquename too, or build and verify disagre
   assert.ok(asked.includes(DEPLOYED), 'verify must ask about the DEPLOYED table');
   assert.strictEqual(asked.includes(bpfUniqueName('Ticket Handling')), false, 'and never about the derivation');
 });
+
+test('#513 verify checks a DECLARED flow\'s grants on the table of the row its binding names, never on a namesake\'s', async () => {
+  // The build grants a declared flow's roles on the backing table its settled row stores, read by that row's id (sdk-build.js), so verify
+  // reads the same row: a same-named flow found by name has another table, and so may the display-name derivation. A binding the store
+  // cannot settle (an unusable record, an unreadable store, a pending attempt that names no row), or a row read without its stored
+  // table, leaves the grants unverified rather than proved on a table found by name or derived.
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const BOUND = '11111111-2222-4333-8444-555555555555';
+  const OWN = 'contoso_ticketprocess';
+  const OTHER = 'contoso_namesake';
+  // The display-name derivation: never the table of a declared flow whose row does not say (the build refuses to guess it).
+  const DERIVED = bpfUniqueName(FLOW.name);
+  const TABLES = [OWN, OTHER, DERIVED];
+  const KEY = 'contoso_ticket/Ticket Handling';
+  const filters = [];
+  const asked = [];
+  const read = ({ answer } = {}) => ({
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, o) => {
+      const filter = String((o && o.filter) || '');
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') return [{ roleid: 'role-1', name: 'Dispatcher', description: SDK_ROLE_MARKER }];
+      if (set !== 'workflow') return [];
+      filters.push(filter);
+      if (filter === `workflowid eq ${BOUND}`) return answer || [{ workflowid: BOUND, statecode: 1, uniquename: OWN }];
+      // A name read answers an Active namesake whose backing table is another.
+      return /\bname eq\b/.test(filter) ? [{ workflowid: '77777777-7777-4777-8777-777777777777', statecode: 1, uniquename: OTHER }] : [];
+    },
+    entityPrivileges: async (t) => {
+      asked.push(t);
+      return TABLES.includes(t) ? BPF_ROLE_ACCESS.map((a) => ({ Name: `prv${a[0].toUpperCase()}${a.slice(1)}${t}`, PrivilegeId: `${t}-${a}`, PrivilegeType: a[0].toUpperCase() + a.slice(1) })) : [];
+    },
+    // The persona holds the grants on EVERY table, so only the table verify reads decides what it proved.
+    rolePrivileges: async () => TABLES.flatMap((t) => BPF_ROLE_ACCESS.map((a) => ({ privilegeId: `${t}-${a}`, depth: 'Global' }))),
+  });
+  const manifest = (over) => ({ revision: 1, groups: [], pending: [], invalid: [], ...over });
+  const run = async (reconcile, m, reader = read()) => {
+    filters.length = 0;
+    asked.length = 0;
+    const r = await verifySpec(base({ ...reconcile, securityRoles: { personas: ['Dispatcher'] } }), reader, { managedManifest: m });
+    return { r, roles: r.checks.filter((x) => x.kind === 'bpf-roles'), nameReads: filters.filter((f) => /\bname eq\b/.test(f)) };
+  };
+  const declared = { reconcile: 'declared' };
+
+  // Bound: the grants are proved on the bound row's own table, and the flow is never read by name.
+  const bound = await run(declared, manifest({ groups: [{ family: 'bpf', key: KEY, root: { kind: 'bpf', key: KEY, id: BOUND } }] }));
+  assert.deepStrictEqual(bound.roles.map((c) => [c.present, c.detail]), [[true, `4 privilege(s) held on ${OWN}`]], JSON.stringify(bound.roles));
+  assert.deepStrictEqual(bound.nameReads, []);
+  assert.ok(asked.includes(OWN) && !asked.includes(OTHER), JSON.stringify(asked));
+
+  // Unsettled: unverified, with no name read and no table read.
+  for (const [what, m, why] of [
+    ['an unreadable store', manifest({ revision: 0, invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] }), /is not settled \(managed-binding-store-unreadable\)/],
+    ['an unusable record', manifest({ invalid: [{ family: 'bpf', key: KEY, reason: 'its record is not usable' }] }), /is not settled \(its record is not usable\)/],
+    ['a pending attempt naming no row', manifest({ pending: [{ family: 'bpf', key: KEY, code: 'managed-settlement-pending', root: null }] }), /the store does not name its row/],
+  ]) {
+    const u = await run(declared, m);
+    assert.deepStrictEqual(u.roles, [], `${what}: ${JSON.stringify(u.roles)}`);
+    assert.ok(u.r.unverified.some((x) => x.startsWith('bpf-roles:Ticket Handling (') && why.test(x)), `${what}: ${JSON.stringify(u.r.unverified)}`);
+    assert.deepStrictEqual(u.nameReads, [], what);
+    assert.deepStrictEqual(asked.filter((t) => t === OWN || t === OTHER), [], what);
+  }
+
+  // The bound row's read answering another row is unverified; the bound row gone fails, as the presence check fails it.
+  const boundM = manifest({ groups: [{ family: 'bpf', key: KEY, root: { kind: 'bpf', key: KEY, id: BOUND } }] });
+  const other = await run(declared, boundM, read({ answer: [{ workflowid: '77777777-7777-4777-8777-777777777777', uniquename: OTHER }] }));
+  assert.deepStrictEqual(other.roles, []);
+  assert.ok(other.r.unverified.some((x) => x.startsWith('bpf-roles:Ticket Handling (') && /answered another row/.test(x)), JSON.stringify(other.r.unverified));
+  const gone = await run(declared, boundM, read({ answer: [] }));
+  assert.deepStrictEqual(gone.roles.map((c) => c.present), [false]);
+  assert.match(gone.roles[0].detail, new RegExp(`its bound row ${BOUND} is not there`));
+  assert.deepStrictEqual(gone.nameReads, []);
+
+  // The bound row read without a usable stored name of its backing table: unverified, never checked on the display-name derivation
+  // (an adopted or renamed flow keeps another table), as the build never grants on one it derives.
+  for (const uniquename of [undefined, null, '', 'Not a table']) {
+    const row = { workflowid: BOUND, statecode: 1, ...(uniquename === undefined ? {} : { uniquename }) };
+    const blind = await run(declared, boundM, read({ answer: [row] }));
+    assert.deepStrictEqual(blind.roles, [], `${JSON.stringify(uniquename)}: ${JSON.stringify(blind.roles)}`);
+    assert.ok(blind.r.unverified.some((x) => x.startsWith('bpf-roles:Ticket Handling (') && /without the name of its backing table/.test(x)), JSON.stringify(blind.r.unverified));
+    assert.deepStrictEqual(asked.filter((t) => TABLES.includes(t)), [], `${JSON.stringify(uniquename)}: no table is read`);
+  }
+
+  // Controls: a legacy flow is read by its name whatever the store holds, and so is a declared flow the store holds nothing for.
+  for (const [reconcile, m] of [[{}, manifest({ invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] })], [declared, manifest({})]]) {
+    const c = await run(reconcile, m);
+    assert.deepStrictEqual(c.roles.map((x) => [x.present, x.detail]), [[true, `4 privilege(s) held on ${OTHER}`]], JSON.stringify(c.roles));
+    assert.ok(c.nameReads.length >= 1);
+  }
+});

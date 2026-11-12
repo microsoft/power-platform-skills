@@ -1408,6 +1408,7 @@ module.exports = {
   createAttemptSendObserver,
   attemptProvenUnsent,
   notStartedAnswer,
+  dataverseErrorCode,
   rowsCreatedByAttempt,
   existingRowDispatches,
   editSwitchRequired,
