@@ -22,6 +22,7 @@ const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
 const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { STAGES } = require('../lib/stages.js');
 
@@ -332,10 +333,13 @@ test('a direct build of a connection reference and variables keeps the connectio
   const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request, sleep: async () => {}, sendOnce: (m, u) => configurationSendOnce(m, u) });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(sdkDir), instanceUrl: org.origin, httpClient, solutionUniqueName: SOLUTION });
   await sdk.initWorkspace();
+  // The create bridge build-model-app.js makeSdk attaches: new rows are flat POSTs, their receipts in the build's workspace.
+  const workspaceDir = makeTempDir('ws-cfg-direct-ws-');
+  attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p) });
   const spec = specOf({ connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] });
   const bindings = readDeploymentBindings({ ...SETTINGS, ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: CANARY.connection }] }, spec);
   assert.deepEqual(bindings.errors, []);
-  const r = await buildModelApp(spec, { apply: true, env: org.origin, phases: STAGES.data, workspaceDir: makeTempDir('ws-cfg-direct-ws-'), retryDelayMs: 0, configurationBindings: bindings },
+  const r = await buildModelApp(spec, { apply: true, env: org.origin, phases: STAGES.data, workspaceDir, retryDelayMs: 0, configurationBindings: bindings },
     { sdk, log: () => {}, warn: () => {}, connections: async () => [{ connectionId: CANARY.connection, connectorId: SP }] });
   assert.equal(r.ok, true, JSON.stringify(r.errors));
   assert.equal(org.rows('connectionreferences')[0].connectionid, CANARY.connection, 'the connection was bound');
@@ -344,6 +348,9 @@ test('a direct build of a connection reference and variables keeps the connectio
   assert.equal((await sdk.fetchArtifact('connectionReference', ref.connectionreferenceid, { overwrite: true })).connectionId, CANARY.connection);
   assert.deepEqual(atSend, []);
   assert.deepEqual(canariesIn([sdkDir]), []);
+  // The create receipts hold the public projection only: no value, default, value schema or connection id.
+  assert.ok(walk(workspaceDir).some((f) => /configuration-create-state\.v1\.json$/.test(f)), 'the build kept its create receipt');
+  assert.deepEqual(canariesIn([workspaceDir]), []);
 });
 
 // The build command in a separate OS process, killed (SIGKILL: no cleanup runs) while its first configuration create is on the wire.

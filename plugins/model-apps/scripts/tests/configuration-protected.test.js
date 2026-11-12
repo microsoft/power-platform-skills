@@ -20,11 +20,13 @@ const { openManagedBindings, managedManifestView, storeFileName } = require('../
 const { readerFor } = require('../verify-model-app.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
 const { readDeploymentBindings, configurationAuthorizationKeys, authorizeFlags, configurationHaltMessage } = require('../lib/configuration-artifacts.js');
+const C = require('../lib/configuration-artifacts.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
 const { RETRY } = require('../lib/retry-policy.js');
 const B = require('../lib/configuration-create-bindings.js');
 const P = require('../lib/configuration-protected.js');
+const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
 
 const SOL = 'ContosoSol';
 function baseSpec(extra = {}) {
@@ -88,6 +90,9 @@ async function harness({ hookup = true, intercept, storeSeed } = {}) {
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('cfg-protected-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: SOL });
   await sdk.initWorkspace();
   const storeDir = makeTempDir('cfg-protected-store-');
+  // The default (not opted-in) path creates through the build's create bridge, as makeSdk attaches it; its receipts live
+  // beside the binding store, so a later process over the same harness reads them.
+  attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p), workspaceDir: storeDir });
   if (storeSeed) fs.writeFileSync(path.join(storeDir, storeFileName(storeSeed.environmentFingerprint, 'contoso_configured', SOL)), JSON.stringify(storeSeed, null, 2));
   const store = openManagedBindings({ workspaceDir: storeDir, environment: org.origin, appUniqueName: 'contoso_configured', solutionUniqueName: SOL });
   gate.bind(store);
@@ -1722,11 +1727,17 @@ const ADOPT_KINDS = [
   { kind: 'customApi', key: 'contoso_calc', set: 'customapis', spec: () => apiOnly(), children: 2 },
 ];
 const withoutOptIn = (spec) => { const { configurationIdentity, ...plain } = spec; return plain; };
-// The maker's rows, made by a build without the opt-in: the plain path creates them by name.
+// The maker's rows, made as a build without the opt-in made them before default creates took stable ids: the plain
+// pass-through (the configuration step with no create capability, as a standalone caller still runs it) creates them by
+// name at ids the service picked. A default build of this version makes them at the derived id instead; that case is
+// pinned separately below.
 async function madeBeforeOptIn(h, spec, opts = {}) {
-  const out = await pass(h, withoutOptIn(spec), opts);
-  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
-  return out;
+  const plain = withoutOptIn(spec);
+  const mark = h.org.requests.length;
+  const ctx = C.configurationContext({ sdk: h.sdk, bindings: opts.configurationBindings, solutionUniqueName: SOL, authorizedDestructive: opts.authorizedDestructive, connections: opts.connections });
+  const step = await C.runConfigurationStep(plain, ctx, 'data-model');
+  assert.equal(step.halt, null, step.halt && `${step.halt.code}: ${step.halt.message}`);
+  return { halt: null, step, sent: h.org.requests.slice(mark).filter((r) => r.method !== 'GET') };
 }
 const idIn = (h, set) => h.org.rows(set)[0][PK[set]];
 // The approvals a stop printed, of every item it names: configuration-build.js quotes each one.

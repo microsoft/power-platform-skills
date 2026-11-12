@@ -230,6 +230,16 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
     // their runtime), so every other spec keeps the client it had. Preparing sends no request: it reads and writes this throwaway folder only
     // (manifest.json and the kind folders), which is removed with the rest of the run's temporary files.
     if (usesConfiguration(spec)) await sdk.initWorkspace();
+    // The default build's new configuration rows (lib/configuration-create-writer.js) are sent through this one authenticated
+    // client, never through `sdk`'s solution-scoped writes, so that the writer alone decides each request's headers (a value row
+    // and a rule's publication carry no solution header). Held for `sdk` in the writer's own WeakMap, with the durable app
+    // workspace its receipt lives in and the header-less provision SDK its proof reads use, both handed over apart from this
+    // temporary solution SDK. An apply only: a preview never writes a receipt.
+    if (persistent && usesConfiguration(spec)) {
+      require('./lib/configuration-create-writer.js').attachConfigurationCreateBridge(sdk, {
+        httpClient, apiUrl: (p) => sdk.dataverse.apiUrl(p), workspaceDir, reader: provisionSdk, environmentUrl: env, authoringLanguageCode: languageCode,
+      });
+    }
     if (!persistent) {
       // The preview did not open the app folder's workspace, so it cannot be refused by it — but an --apply
       // would be, and the operator is better told now than after the plan has been read and approved.

@@ -1829,10 +1829,12 @@ const INVENTORY = Symbol('configuration-artifacts.inventory');
 
 // The create port a caller without one gets: the plain pass-through (lib/creates-passthrough.js). It allocates a
 // fresh id per create, and the declared name is the identity, so a later run finds an earlier run's row by that name.
-// This is deliberate: the configuration kinds use the plain create path and never load a stable-id module, so a
-// whole-build retry after a lost create answer can create a second row (the build's known limit for every create).
-// Only a caller that injects the stable-id functions itself (configurationContext `fence`) gets the configuration
-// kinds' own stable port, built when the configuration is planned (planDefaultPort). Ordinary creation always works.
+// It serves only a caller without ctx.createUnits — the standalone helpers (create-connection-reference.js and the
+// like) — and there a retry after a lost create answer can still create a second row.
+// The default build never reaches it: its new rows go through ctx.createUnits (applyCreateUnit), at stable ids, sent
+// once, and a build without that capability is refused rather than sent here (compileCreateUnits). Only a caller that
+// injects the stable-id functions itself (configurationContext `fence`) gets the configuration kinds' own stable port,
+// built when the configuration is planned (planDefaultPort). Ordinary creation always works.
 function defaultCreates(ctx) {
   if (!ctx[DEFAULT_PORT]) {
     // A stable port is built from the spec's intents, so it exists only after a plan: an apply that reaches here
@@ -1927,6 +1929,115 @@ async function applyCreate(op, ctx, result, known) {
     // `matched` is the platform's row at the derived id, not this run's create: it is never recorded as created.
     origin: answer.outcome === 'created' ? 'created' : null,
     publishError: pushed.publish && pushed.publish.kind !== 'verified' ? pushed.publish.error : null,
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// The default build's new rows (ctx.createUnits): closed singleton creates at stable ids, through a durable receipt
+// (lib/configuration-create-writer.js over lib/configuration-create-plan.js and lib/configuration-create-state.js).
+// The modules are required lazily: the plan module requires this one, and a caller without ctx.createUnits (the
+// standalone helpers, the protected path) never loads them.
+
+// The halt that stopped a step, kept on its result non-enumerable (never printed or serialized with it): the step's
+// stop code is the halt's own (runConfigurationStep), and its message says what was and was not dispatched.
+const CREATE_HALT = Symbol('configuration-artifacts.create-halt');
+const createHaltOf = (result) => (result && Object.prototype.hasOwnProperty.call(result, CREATE_HALT) ? result[CREATE_HALT] : null);
+function attachCreateHalt(result, error) {
+  if (!createHaltOf(result)) Object.defineProperty(result, CREATE_HALT, { value: error, enumerable: false });
+}
+// compileCreateUnits' answer when the step stops before its first write.
+const STEP_REFUSED = Symbol('configuration-artifacts.step-refused');
+
+const createTagOf = (kind) => {
+  const { CONFIGURATION_CREATE_KIND_TABLE: table } = require('./configuration-create-plan.js');
+  return Object.keys(table).find((tag) => table[tag].root && table[tag].bindingKind === kind) || null;
+};
+
+// A create the step refuses before anything of it is sent: its line, and the halt the step stops with.
+function refuseCreateUnit(result, op, code, reason) {
+  const S = require('./configuration-create-state.js');
+  const { normalizeGuid } = require('./reconcile-common.js');
+  const error = S.configurationCreateHalt(code, { rootKind: createTagOf(op.kind), rootId: normalizeGuid(op.id) || undefined, reason, transition: 'prepare', dispatched: false });
+  pushFinding(result, 'refused', { kind: op.kind, key: op.key, id: op.id, code, reason });
+  attachCreateHalt(result, error);
+}
+
+// Classify every operation of the plan and compile every new row into its closed unit, before the step writes anything:
+// a mixed edit, a shape the compiler refuses, an existing root whose graph cannot be read, or a build without the durable
+// workspace stops the WHOLE step here, so no item is half applied around it. Answers Map(op -> compiled) or STEP_REFUSED.
+async function compileCreateUnits(plan, ctx, result, known) {
+  const P = require('./configuration-create-plan.js');
+  const caps = ctx.createUnits;
+  const routed = [];
+  for (const op of plan.operations || []) {
+    if (op.action === 'refuse') continue;
+    const route = P.classifyConfigurationMutation(op);
+    if (route.route === 'existing') continue;
+    if (route.route === 'refused') { refuseCreateUnit(result, op, route.code, route.reason); return STEP_REFUSED; }
+    if (!caps.available) { refuseCreateUnit(result, op, P.CODES.shapeRefused, caps.reason || 'this build has no durable configuration create state'); return STEP_REFUSED; }
+    routed.push({ op, route });
+  }
+  // A data-source variable's parent: the id this step already knows (the plan's read), else the build's binding.
+  const boundIdOf = (kind, portKey) => known.get(knownKey(kind, portKey)) || (typeof ctx.boundIdOf === 'function' ? ctx.boundIdOf(kind, portKey) : undefined);
+  const units = new Map();
+  for (const { op, route } of routed) {
+    let baseline;
+    if (route.route === 'additions') {
+      baseline = await P.captureConfigurationBaseline(caps.dataverse, { kind: route.kind, rootId: route.rootId });
+      if (!baseline.ok) { refuseCreateUnit(result, op, baseline.code, baseline.reason); return STEP_REFUSED; }
+    }
+    let compiled;
+    try {
+      compiled = P.compileConfigurationCreateUnit(caps.spec, {
+        kind: route.kind, key: op.key, bindings: bindingsOf(ctx), solution: ctx.solutionUniqueName, boundIdOf,
+        ...(baseline ? { baseline, additions: route.additions } : {}),
+      });
+    } catch {
+      // The id derivation throws for a declaration it cannot name (no identity, an undeclared parent): not sendable.
+      compiled = { ok: false, code: P.CODES.shapeRefused, reason: 'the declaration cannot be compiled into closed rows' };
+    }
+    if (!compiled.ok) { refuseCreateUnit(result, op, compiled.code, compiled.reason); return STEP_REFUSED; }
+    units.set(op, compiled);
+  }
+  return units;
+}
+
+// Send one compiled unit through the writer, then read it back and settle it exactly as a create or an edit is settled.
+// The writer proves the unit's own rows and their membership itself (`membership.unit`) before a new rule's one
+// publication; every stop it raises is that item's line and halts the step.
+async function applyCreateUnit(op, ctx, result, known, compiled, membership) {
+  const { kind, key } = op;
+  if (op.action === 'create' && op.detail.parentKey && !known.get(knownKey('environmentVariable', op.detail.parentKey))) {
+    pushFinding(result, 'refused', { kind, key, code: 'ENVIRONMENT_VARIABLE_PARENT_UNAVAILABLE' });
+    return;
+  }
+  const unit = compiled.unit;
+  const planned = {};
+  for (const row of unit.rows) if (row.role === 'create' && row.id !== unit.root.id) planned[row.key] = row.id;
+  const handle = handleOf(op, { id: unit.root.id, childIds: planned });
+  let done;
+  try {
+    done = await ctx.createUnits.writer.executeCreateUnit(compiled, { membership: (items) => membership.unit(items, unit.root.id) });
+  } catch (error) {
+    if (!error || error.name !== 'ConfigurationCreateHalt') throw error;
+    pushFinding(result, error.dispatched === false ? 'refused' : 'unknown', { kind, key, id: unit.root.id, code: error.code }, handle);
+    attachCreateHalt(result, error);
+    return;
+  }
+  const { rootId, childIds } = done;
+  handle.ids = { id: rootId, childIds: { ...childIds } };
+  known.set(knownKey(kind, key), rootId);
+  if (op.action === 'create') {
+    const back = await readBack(op, ctx, known, rootId, childIds);
+    settle(op, ctx, result, { id: rootId, back, action: 'create', childIds, unsettled: false, handle, wroteDefinition: true, origin: 'created', publishError: null });
+    return;
+  }
+  const back = await readBack(op, ctx, known, rootId, { ...(op.detail.childIds || {}), ...childIds });
+  settle(op, ctx, result, {
+    id: rootId, back, action: 'update', fields: [...op.fields], childIds, unsettled: false, handle,
+    wroteDefinition: op.detail.changes.some((change) => change.pointer !== '/currentValue'),
+    origin: op.origin === 'adopted' || Object.keys(childIds).length ? op.origin : null,
+    publishError: null,
   });
 }
 
@@ -2154,29 +2265,31 @@ function membershipOf(ctx) {
     return types.get(kind);
   };
   const applies = (op) => active && (has(MEMBERSHIP_TABLES, op.kind) || has(CHILD_MEMBERSHIP_TABLES, op.kind)) && !!op.id;
-  return {
-    async ensure(op) {
-      if (!applies(op)) return null;
-      const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
-      const { withConfigurationWrite } = require('./configuration-transport.js');
-      let componentType;
-      try {
-        componentType = await typeOf(op.kind);
-      } catch (error) {
-        return { bucket: 'unknown', code: codeOf(error) };
-      }
-      const classic = has(CLASSIC_MEMBERSHIP_TYPES, op.kind) ? CLASSIC_MEMBERSHIP_TYPES[op.kind] : null;
-      if (!memberships.has(op.kind)) {
-        memberships.set(op.kind, createSolutionMembership({ read: ctx.sdk, solutionUniqueName: ctx.solutionUniqueName, componentTypes: classic ? [componentType, classic] : [componentType] }));
-      }
-      try {
-        if (classic && await memberships.get(op.kind).has(op.id, classic)) return null;
-        await withConfigurationWrite(() => ensureSolutionComponent(ctx.sdk, memberships.get(op.kind), { componentId: op.id, componentType, solutionUniqueName: ctx.solutionUniqueName }));
-      } catch (error) {
-        return outcomeOf(error, true) === 'nothing' ? { bucket: 'refused', code: codeOf(error) } : { bucket: 'unknown', code: 'SOLUTION_MEMBERSHIP_UNKNOWN' };
-      }
-      return null;
-    },
+  // `cache` holds one membership read per kind: the step's own (`memberships`), or a fresh one (`unit`).
+  const ensureIn = async (cache, op) => {
+    if (!applies(op)) return null;
+    const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
+    const { withConfigurationWrite } = require('./configuration-transport.js');
+    let componentType;
+    try {
+      componentType = await typeOf(op.kind);
+    } catch (error) {
+      return { bucket: 'unknown', code: codeOf(error) };
+    }
+    const classic = has(CLASSIC_MEMBERSHIP_TYPES, op.kind) ? CLASSIC_MEMBERSHIP_TYPES[op.kind] : null;
+    if (!cache.has(op.kind)) {
+      cache.set(op.kind, createSolutionMembership({ read: ctx.sdk, solutionUniqueName: ctx.solutionUniqueName, componentTypes: classic ? [componentType, classic] : [componentType] }));
+    }
+    try {
+      if (classic && await cache.get(op.kind).has(op.id, classic)) return null;
+      await withConfigurationWrite(() => ensureSolutionComponent(ctx.sdk, cache.get(op.kind), { componentId: op.id, componentType, solutionUniqueName: ctx.solutionUniqueName }));
+    } catch (error) {
+      return outcomeOf(error, true) === 'nothing' ? { bucket: 'refused', code: codeOf(error) } : { bucket: 'unknown', code: 'SOLUTION_MEMBERSHIP_UNKNOWN' };
+    }
+    return null;
+  };
+  const api = {
+    ensure: (op) => ensureIn(memberships, op),
     // The kinds among `kinds` whose component type cannot be read: none when the build joins no solution. It shares
     // typeOf's memo, so a type read here is not read again by ensure or prove, and a failed read is not retried.
     async unreadable(kinds) {
@@ -2209,7 +2322,22 @@ function membershipOf(ctx) {
       const holds = (type, item) => held.members.has(`${type}:${bare(item.id)}`) || (!!classicOf(item) && held.members.has(`${classicOf(item)}:${bare(item.id)}`));
       return typed.filter(({ item, type }) => !held || !type || !holds(type, item)).map(({ item }) => item);
     },
+    // One create unit's rows, after its creates and before a new rule's publication (configuration-create-writer.js):
+    // each new or preserved child is added only when a read taken NOW does not hold it (zero or one add; the step's own
+    // per-kind read may predate this unit's creates), the root is never added (its create carried the solution
+    // header, or the step's ensure already ran for an existing root), and then every row is proven by a fresh read.
+    // Answers the items not proven members.
+    async unit(items, rootId) {
+      const fresh = new Map();
+      const failed = [];
+      for (const item of items) {
+        if (ref(item.id) === ref(rootId)) continue;
+        if (await ensureIn(fresh, item)) failed.push(item);
+      }
+      return [...failed, ...await api.prove(items.filter((item) => !failed.includes(item)))];
+    },
   };
+  return api;
 }
 
 // Apply a plan from any of the plan functions (or several concatenated). Operations run in plan order, which is
@@ -2233,6 +2361,11 @@ async function applyConfiguration(plan, ctx) {
   if ((plan.operations || []).some((op) => op.kind === 'connectionReference')) {
     Object.defineProperty(result, INVENTORY, { value: await inventory(), enumerable: false });
   }
+  // The default build's new rows (ctx.createUnits, set by configuration-build.js): the WHOLE plan is classified and every
+  // unit compiled before the first write of this step, so a mixed edit, a refused shape or a missing capability stops the
+  // step with nothing written for any item.
+  const units = ctx.createUnits ? await compileCreateUnits(plan, ctx, result, known) : null;
+  if (units === STEP_REFUSED) return result;
   let stopped = false;
   for (const op of plan.operations || []) {
     const { kind, key } = op;
@@ -2310,9 +2443,12 @@ async function applyConfiguration(plan, ctx) {
     }
     if (blocked === undefined) blocked = await preconditionsHold(op, ctx, preconditionCache);
     if (blocked) { pushFinding(result, 'refused', { kind, key, id: op.id, code: blocked }); continue; }
-    if (op.action === 'create') await applyCreate(op, ctx, result, known);
+    const compiled = units ? units.get(op) : undefined;
+    if (compiled) await applyCreateUnit(op, ctx, result, known, compiled, membership);
+    else if (units && op.action === 'create') refuseCreateUnit(result, op, 'configuration-create-shape-refused', 'the create was not compiled');
+    else if (op.action === 'create') await applyCreate(op, ctx, result, known);
     else if (op.action === 'update') await applyUpdate(op, ctx, result, known);
-    if (result.unknown.length > unknownBefore) stopped = true;
+    if (result.unknown.length > unknownBefore || createHaltOf(result)) stopped = true;
   }
   // Membership proof: one fresh read of the solution for every root this run saved or found unchanged, and for each
   // child those rows hold. A child not proven a member is added first (after every write of the run, so only when no
@@ -2641,12 +2777,15 @@ async function runConfigurationStep(spec, ctx, phase) {
   for (const b of blocking) {
     if ((b.code === 'ENVIRONMENT_VARIABLE_VALUE_MISSING' || requested(b)) && !problems.some((p) => p.kind === b.kind && lower(p.key) === lower(b.key))) problems.push({ kind: b.kind, key: b.key, code: b.code });
   }
+  const created = createHaltOf(outcome);
   const halt = problems.length
     ? {
       phase,
-      code: 'configuration-incomplete',
+      // A default-build create stop keeps its own code (configuration-create-*) and its text, which says whether a
+      // create was dispatched and what to do next; the lines the step left follow it.
+      code: created ? created.code : 'configuration-incomplete',
       retry: 'never',
-      message: configurationHaltMessage(problems),
+      message: created ? `${created.message} (${configurationHaltMessage(problems)})` : configurationHaltMessage(problems),
       items: problems,
     }
     : null;
@@ -3356,6 +3495,8 @@ module.exports = {
   // overwrite approval names a duplicate rule's key, which may hold white space or quotes.
   authorizeFlags,
   runConfigurationStep,
+  // The default build's create stop a step result carries (applyConfiguration with ctx.createUnits), or null.
+  configurationCreateHaltOf: createHaltOf,
   configurationBlocking,
   configurationPlanItems,
   configurationIntentOf,

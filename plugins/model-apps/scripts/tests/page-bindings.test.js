@@ -1325,6 +1325,7 @@ const configurationRouted = (() => {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
   const { configurationSendOnce } = require('../lib/configuration-transport.js');
   const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  const { attachConfigurationCreateBridge } = require('../lib/configuration-create-writer.js');
   const CONFIG_KIND = /^(environmentVariable|connectionReference|customApi|duplicateRule)/;
   const CONFIG_PATH = /^\/(duplicaterules|EntityDefinitions\(LogicalName='(connectionreference|customapi|duplicaterule)'\))/;
   return async function routed(mock, spec) {
@@ -1345,6 +1346,9 @@ const configurationRouted = (() => {
     sdk.dataverse = { ...mock.dataverse, get: (p, ...rest) => (CONFIG_PATH.test(String(p)) ? real.dataverse.get(p, ...rest) : mock.dataverse.get(p, ...rest)) };
     sdk.addSolutionComponent = (o) => (ids.has(String(o && o.componentId).toLowerCase()) ? real.addSolutionComponent(o) : mock.addSolutionComponent(o));
     sdk.queryRecords = (entity, options) => ((entity === 'solutioncomponent' || (entity === 'solution' && options && options.top === 1 && String(options.select) === 'solutionid')) ? real.queryRecords(entity, options) : mock.queryRecords(entity, options));
+    // The build's create bridge (build-model-app.js makeSdk attaches it): new configuration rows are flat POSTs through the
+    // configuration org's own client, proved through its reader, with their receipts in a workspace of this build's own.
+    attachConfigurationCreateBridge(sdk, { httpClient, apiUrl: (p) => real.dataverse.apiUrl(p), reader: real, workspaceDir: tmp('config-ws-') });
     return { sdk, org, creates: createPassthroughCreates() };
   };
 })();

@@ -57,6 +57,61 @@ function namedByPages(pages) {
 // Every stop before the build's first write: the same plan stops again, so it is RETRY.NEVER.
 const preflightHalt = (preflightCode, message) => new BuildHalt(message, { phase: 'preflight', code: preflightCode, recoverable: false, retry: RETRY.NEVER });
 
+/**
+ * The default build's create capability (#807), or an unavailable one with the reason (never a fallback to another route):
+ *   { available: true, writer, spec, dataverse, workspaceDir, context, kindTable }  |  { available: false, reason }
+ * Made from the bridge build-model-app.js makeSdk attaches to the build's SDK (lib/configuration-create-writer.js): the raw
+ * client, the durable app workspace the receipt lives in, the header-less reader and the receipt's context. The modules
+ * load only here, so a build without configuration loads none of them.
+ */
+function createUnitsFor({ spec, sdk, provision, opts = {}, appUniqueName }) {
+  const W = require('./configuration-create-writer.js');
+  const S = require('./configuration-create-state.js');
+  const P = require('./configuration-create-plan.js');
+  const bridge = W.configurationCreateBridgeOf(sdk) || W.configurationCreateBridgeOf(provision);
+  if (!bridge) return { available: false, reason: 'the build has no configuration create writer (its SDK carries no create bridge)' };
+  const workspaceDir = bridge.workspaceDir || (typeof opts.workspaceDir === 'string' && opts.workspaceDir ? opts.workspaceDir : null);
+  if (!workspaceDir) return { available: false, reason: 'the build has no durable app workspace for the create receipt' };
+  const reader = bridge.reader || provision || sdk;
+  const dataverse = reader && reader.dataverse;
+  if (!dataverse || typeof dataverse.get !== 'function') return { available: false, reason: 'the build has no reader for the verification reads' };
+  // The receipt's context: the environment origin, the solution, the app and the authoring language. The language is what
+  // the build authors labels in (build-model-app.js runBuildCommand authoringLanguageCode), handed over with the bridge;
+  // a caller that made its own bridge may name it as opts.preResolvedLanguageCode. A unit saved under another language is
+  // refused (configuration-create-context-mismatch), never continued.
+  const language = Number.isSafeInteger(bridge.authoringLanguageCode) ? bridge.authoringLanguageCode
+    : Number.isSafeInteger(opts.preResolvedLanguageCode) ? opts.preResolvedLanguageCode : null;
+  let context;
+  try {
+    const origin = new URL(bridge.environmentUrl || bridge.apiUrl('/')).origin;
+    context = S.createStateContext({ environmentUrl: origin, solutionUniqueName: spec.solution && spec.solution.uniqueName, appUniqueName, authoringLanguageCode: language });
+  } catch (error) {
+    return { available: false, reason: error && error.reason ? error.reason : 'the configuration create context could not be made' };
+  }
+  const writer = W.createDefaultConfigurationWriter({ bridge, dataverse, workspaceDir, context, ...(bridge.sleep ? { sleep: bridge.sleep } : {}) });
+  return Object.freeze({ available: true, writer, spec, dataverse, workspaceDir, context, kindTable: P.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE });
+}
+
+// The App Spec's configuration roots as the receipt guard matches them (lib/configuration-create-recovery.js
+// assertDeferredUnitsExcluded): kind tag, port key, every name the root answers to, and the root a declaration depends on
+// (a data-source variable's parent definition). A declaration that reintroduces or depends on a deferred unit's root stops.
+function createDeclarationsOf(spec) {
+  const out = [];
+  const each = (list, fn) => { for (const e of Array.isArray(list) ? list : []) if (e && typeof e === 'object') fn(e); };
+  each(spec.environmentVariables, (e) => {
+    if (typeof e.schemaName !== 'string') return;
+    const parent = typeof e.parentSchemaName === 'string' && e.parentSchemaName ? [{ kind: 'env-definition', key: lower(e.parentSchemaName), name: e.parentSchemaName }] : [];
+    out.push({ kind: 'env-definition', key: lower(e.schemaName), names: [e.schemaName], ...(parent.length ? { dependsOn: parent } : {}) });
+  });
+  each(spec.connectionReferences, (e) => { if (typeof e.logicalName === 'string') out.push({ kind: 'connection-reference', key: lower(e.logicalName), names: [e.logicalName] }); });
+  each(spec.customApis, (e) => { if (typeof e.uniqueName === 'string') out.push({ kind: 'custom-api', key: lower(e.uniqueName), names: [e.uniqueName] }); });
+  each(spec.duplicateDetectionRules, (e) => {
+    if (typeof e.key !== 'string') return;
+    out.push({ kind: 'duplicate-rule', key: e.key, names: [e.key, ...(typeof e.name === 'string' && e.name ? [e.name] : [])] });
+  });
+  return out;
+}
+
 // Why the sweep let an undeclared attempt go (pendingSweep `retired[].how`), as the build's notice says it.
 const RETIRED_WHY = {
   unsent: 'it was never sent',
@@ -162,6 +217,14 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   }
   // The protected port's own methods as the hookup issued it: a step that starts with any other one is not explained.
   const protectedMethods = protectedPort ? { resolve: protectedPort.resolve, run: protectedPort.run } : null;
+  // The default build's new rows (#807): closed singleton creates at stable ids through a durable receipt in the app
+  // workspace (lib/configuration-create-writer.js), never the SDK's deep insert and never the plain pass-through
+  // (configuration-artifacts.js defaultCreates). It is its own property, so the protected port above (ctx.creates) is never
+  // replaced or wrapped. A protected build and a caller that hands over a port of its own keep their route. A build whose SDK
+  // carries no bridge (made by build-model-app.js makeSdk for an apply) still classifies its plan, and any new row then
+  // stops the step with nothing sent (configuration-create-shape-refused): there is no fallback.
+  const createUnits = !protectedOptIn && !ctx.creates ? createUnitsFor({ spec, sdk, provision, opts, appUniqueName }) : null;
+  if (createUnits) Object.defineProperty(ctx, 'createUnits', { value: createUnits, enumerable: false });
   const portIntact = () => Boolean(protectedPort) && !portSwapped && ctx.creates === protectedPort
     && protectedPort.resolve === protectedMethods.resolve && protectedPort.run === protectedMethods.run;
   // What this run last observed of each item a page can name, `<kind>:<lower key>` -> blocker | null. Filled by
@@ -209,6 +272,25 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       // The store's own debt first, whatever this App Spec still declares (sweepPendingConfiguration).
       sweepPendingConfiguration(spec, opts);
       if (!protectedOptIn) {
+        // The default build's create receipt (#807), a local read of the app workspace only: an open unit, an invalid or
+        // foreign receipt, a declaration that brings back a deferred unit's root, or an unacknowledged quarantine stops the
+        // build here, before its first service change. Never replayed: the operator resolves it with configuration-recovery.js.
+        if (ctx.createUnits && ctx.createUnits.available) {
+          const units = ctx.createUnits;
+          try {
+            require('./configuration-create-recovery.js').preflightConfigurationCreates({
+              workspaceDir: units.workspaceDir,
+              context: units.context,
+              kindTable: units.kindTable,
+              declarations: createDeclarationsOf(spec),
+              configurationWork: true,
+              quarantineAcknowledgment: opts.configurationQuarantineAcknowledgment,
+            });
+          } catch (error) {
+            if (!error || error.name !== 'ConfigurationCreateHalt') throw error;
+            throw fail(error.code, `${error.message} No service changes were sent by this build.`);
+          }
+        }
         // Removing the opt-in is not a migration: a declared item the build's binding store still holds (committed, or an
         // attempt pending) would go back to name lookup, where a namesake could stand in for its bound row. A local store
         // read only, and only when the build handed its hookup over; an App Spec that never opted in has nothing there.
@@ -260,7 +342,11 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       let halt = step.halt;
       if (step.outcome.unknown.length > before) {
         const items = [...(halt ? halt.items : []), ...step.outcome.unknown.slice(before).map(({ kind, key, code }) => ({ kind, key, code }))];
-        halt = { phase, code: 'configuration-incomplete', retry: 'never', items, message: C.configurationHaltMessage(items) };
+        // A stopped create unit keeps its own configuration-create-* code: it names the receipt the next build is held by.
+        const created = C.configurationCreateHaltOf(step.outcome);
+        halt = created
+          ? { phase, code: created.code, retry: 'never', items, message: `${created.message} (${C.configurationHaltMessage(items)})` }
+          : { phase, code: 'configuration-incomplete', retry: 'never', items, message: C.configurationHaltMessage(items) };
       }
       // A stopped rule whose first publication is not confirmed says how to finish it (#808). Asked only when the stop is
       // this runtime's protected port's own: exactly one unknown outcome for the item, carrying its id, from exactly one
