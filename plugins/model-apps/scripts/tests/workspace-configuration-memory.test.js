@@ -184,9 +184,9 @@ test('an unprotected build halted after its values were sent leaves none of them
 });
 
 // The copies an earlier version's verify left (real SDK files: each artifact and its snapshot). They are proven to be what
-// the environment last held, so they are not read and change no decision; they are neither rewritten nor deleted (this version
+// the environment last held, so they are not used as configuration and change no decision; they are neither rewritten nor deleted (this version
 // never deletes a file it did not write); the build says, once and without any of their content, which folders hold them.
-test('copies an earlier version\u2019s verify left in the app folder\u2019s workspace are never read or deleted: an ordinary apply makes the same decisions, keeps them byte for byte and warns once naming their folders, never their content', async () => {
+test('copies an earlier version\u2019s verify left in the app folder\u2019s workspace are never used as configuration or deleted: an ordinary apply makes the same decisions, keeps them byte for byte and warns once naming their folders, never their content', async () => {
   const appDir = path.join(makeTempDir('ws-cfg-legacy-'), 'app');
   const ws = path.join(appDir, '.maker-workspace');
   const first = await command(specOf(PROTECTED), { appDir });

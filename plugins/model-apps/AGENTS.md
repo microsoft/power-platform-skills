@@ -636,7 +636,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   that SDK instance's memory and are never written to any workspace, the build's throwaway one included
   (`lib/workspace-configuration-memory.js`, applied by `lib/maker-sdk.js` to every SDK it makes). Copies an earlier
   version wrote there are never deleted or hidden by the plugin: a pair the SDK's own metadata proves clean (the copy
-  equals its last-synced `snapshot`) is left on disk unread; anything else (a draft, a lone file, a file that cannot be
+  equals its last-synced `snapshot`) is left on disk and never used as configuration (it is read only to prove it clean); anything else (a draft, a lone file, a file that cannot be
   read) is refused with `WORKSPACE_LEGACY_CONFIGURATION_COPY` at the SDK's first touch of that artifact, naming its two
   files and quoting none of their content, and checked again on the next touch; every SDK made over a folder that still
   holds such files warns once per process, naming the folders. The maker removes them by hand (app-builder skill,
@@ -3589,7 +3589,9 @@ owed recovery) is un-sealed by the transport while its scope is open (`managed-c
 `notStarted`). One Dataverse operation is rolled back whole, so if it was the attempt's only send the port's
 `ctx.release` succeeds and the item stops as `create-refused` (`refusedStop`, `nothingCreated`, the service
 code), routed to the refused bucket so later items still run: nothing is pending, and the next build creates it
-again from what the App Spec then declares (a secret variable's value from the settings), or drops it. Environment variable and connection reference updates (definition, first
+again from what the App Spec then declares (a secret variable's value from the settings), or drops it. Measured live, a
+secret variable's protected create is two sends (the definition, then its value): a refused value therefore keeps the
+attempt (`create-outcome-unknown`, the definition row left), and the maker retires it as the reference describes. Environment variable and connection reference updates (definition, first
 value, own value replacement) go through the protected port as one checked set over the item's plan; a value
 row the binding does not hold is `create-identity-conflict`. Before any service change, every build runs the
 store-driven `pendingSweep` (the hookup's `sweep`, run by `configuration-build.js` `sweepPendingConfiguration`
@@ -4173,7 +4175,7 @@ scripts/
     apply-snapshot-store.js    ← changed-only: atomic snapshot write (writeFileAtomic, also the baseline's and the page ownership and publish records', with the access tokens the process obtained taken out of what it writes — a text, or bytes masked with as many `*` — `lib/output-redaction.js` `redactFileData`) + workspace lease + invalidate/claim/tombstone/delete + distrust marker. `acquireLease` is the one exclusive-create-and-reclaim protocol for a lock file in a workspace: the snapshot lease (`apply-snapshot.lock`) and the build's pages lock (`pages-<app>.lock`, `sdk-build.js` `acquireAppPagesLease`) both use it, the pages lock with the owner record of `process-owner.js` and a stricter rule for "stale" — a lock left by a build that was killed is released by the next build, which says so (`released the pages lock for '<app>': the build that held it (pid …) is no longer running`), but only when that build is provably gone; a lock whose pid runs, another machine's, one with no readable record, is refused in the words it always had, and none is ever taken by age
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
-    workspace-configuration-memory.js ← keeps the SDK's environment-variable and connection-reference copies (values, defaults, value schemas, secret references, connection ids) in memory, never in a workspace file; never deletes or hides copies an earlier version left (a clean pair is left unread, anything else is refused with WORKSPACE_LEGACY_CONFIGURATION_COPY; maker-sdk.js warns naming their folders)
+    workspace-configuration-memory.js ← keeps the SDK's environment-variable and connection-reference copies (values, defaults, value schemas, secret references, connection ids) in memory, never in a workspace file; never deletes or hides copies an earlier version left (a clean pair is left in place and never used as configuration, anything else is refused with WORKSPACE_LEGACY_CONFIGURATION_COPY; maker-sdk.js warns naming their folders)
     workspace-binding.js       ← a persistent `.maker-workspace` belongs to the environment it was first opened for (only `--apply` opens it; a dry run uses a temporary workspace): turns the SDK's `WORKSPACE_ORG_MISMATCH`, and a manifest the JSON parser rejects, into the build's halt (both environments as origins, the safe remedies — the teardown one only for another environment that was built in, with the folder printed on its own line; a folder that was only opened gets no build-there/teardown advice; a folder with no usable environment is moved aside, not deleted; never clears or re-binds) and into the dry run's warning
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)

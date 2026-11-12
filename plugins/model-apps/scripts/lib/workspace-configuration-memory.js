@@ -230,8 +230,9 @@ function legacyCopyFolders(storage) {
 // The one warning about legacyCopyFolders, worded without any content of those files.
 function legacyCopyWarning(root, folders) {
   return `the workspace ${root} still holds environment-variable or connection-reference copies an earlier plugin version wrote, `
-    + `in ${folders.join(', ')}. They may hold values, defaults, Key Vault secret references or connection ids. This version neither `
-    + 'reads nor writes them and does not delete them for you: when no build is running, delete the .json files in those folders '
+    + `in ${folders.join(', ')}. They may hold values, defaults, Key Vault secret references or connection ids. This version never `
+    + 'uses them as configuration, never writes them and does not delete them for you (it reads them only to check that none holds a '
+    + 'change you never sent): when no build is running, delete the .json files in those folders '
     + '(a change in one that you never sent goes into the App Spec or the deployment settings file first). '
     + 'See "Sensitive configuration in the workspace" in the app-builder skill.';
 }

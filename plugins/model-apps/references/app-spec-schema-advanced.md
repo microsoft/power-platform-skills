@@ -1570,11 +1570,14 @@ the field builds exactly as before.
   environment with more than one language, `CUSTOM_API_LABELS_UNSUPPORTED`) stops that build and leaves
   nothing unfinished: the next build is judged on what the App Spec then declares, the earlier
   declaration, another edit or the same one.
-- **A create the service refused.** When the service refuses a protected create with an error code (for
-  example a secret environment variable whose Key Vault reference it rejects), nothing was created. The
-  item stops with `create-refused` and the code, the items after it still run, and nothing is left
-  unfinished: correct the declaration or its deployment settings value and build again, or remove it
-  from the App Spec. A refused edit of an existing row is different: it stays unfinished, as above.
+- **A create the service refused.** When the service refuses the only request of a protected create with an
+  error code, nothing was created. The item stops with `create-refused` and the code, the items after it still
+  run, and nothing is left unfinished: correct the declaration or its deployment settings value and build
+  again, or remove it from the App Spec. A refused edit of an existing row is different: it stays unfinished,
+  as above. A secret environment variable is created in two requests, its definition and then its value:
+  when the service refuses the value (for example a Key Vault reference it rejects), the definition already
+  exists, so the build stops with the outcome unknown and keeps the attempt; retire it as described next, then
+  delete that definition row before you declare the variable again.
   A create an earlier plugin version (2.26.0 or before) left unfinished after such a refusal is not
   released by corrected settings: that version did not record that nothing was created, so the build
   stops with `create-completion-required` and sends nothing. The stop prints the way out with the exact

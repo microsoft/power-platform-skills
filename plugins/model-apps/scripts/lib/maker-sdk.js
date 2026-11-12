@@ -37,7 +37,7 @@
 // this instance's memory and never reach the storage (lib/workspace-configuration-memory.js, #846/#847): the SDK still creates, pushes and reads them
 // back within the run, but no file of any workspace — the build's throwaway one or the app folder's `.maker-workspace` — holds one at rest, even when the
 // process dies between two steps. A copy an earlier plugin version left there is never deleted or hidden by this plugin: one
-// the SDK's own metadata proves clean is left unread, anything else is refused (WORKSPACE_LEGACY_CONFIGURATION_COPY) at the
+// the SDK's own metadata proves clean is left in place and never used as configuration (it is read only to prove it clean), anything else is refused (WORKSPACE_LEGACY_CONFIGURATION_COPY) at the
 // SDK's first touch of that artifact, and the folders still holding such files are named in one warning per workspace per process.
 const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
