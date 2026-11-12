@@ -818,6 +818,16 @@ function validateDefinition(definition, connectionReferences, opts) {
   let connectorActionCount = 0;
   const placeholderHits = [];
   const responseActions = [];
+  const connRefKeys = connectionReferences ? Object.keys(connectionReferences) : [];
+  const connectionRefLogicalNameToKey = connectionReferences ? new Map(
+    connRefKeys.map((key) => [connectionReferences[key].connectionReferenceLogicalName, key]).filter(([logicalName]) => typeof logicalName === "string")
+  ) : null;
+  const KNOWN_WEBHOOK_OPERATIONS = /* @__PURE__ */ new Set([
+    "StartAndWaitForAnApproval",
+    "WaitForAnApproval",
+    "SubscribeWebhook",
+    "HttpWebhookTrigger"
+  ]);
   const walkActions = (container, prefix, nested) => {
     if (!container || typeof container !== "object" || Array.isArray(container))
       return;
@@ -838,7 +848,7 @@ function validateDefinition(definition, connectionReferences, opts) {
           if (connName in connectionReferences) {
             refKey = connName;
           } else {
-            refKey = Object.keys(connectionReferences).find((k) => connectionReferences[k].connectionReferenceLogicalName === connName);
+            refKey = connectionRefLogicalNameToKey?.get(connName);
           }
           if (refKey) {
             const source = connectionReferences[refKey].source;
@@ -860,12 +870,6 @@ function validateDefinition(definition, connectionReferences, opts) {
           path: `${ap}`
         });
       }
-      const KNOWN_WEBHOOK_OPERATIONS = /* @__PURE__ */ new Set([
-        "StartAndWaitForAnApproval",
-        "WaitForAnApproval",
-        "SubscribeWebhook",
-        "HttpWebhookTrigger"
-      ]);
       if (action.type === "OpenApiConnection") {
         const host2 = inputs?.host;
         const operationId = host2?.operationId;
