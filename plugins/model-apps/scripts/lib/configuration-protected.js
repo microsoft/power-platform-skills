@@ -807,6 +807,8 @@ const VALUE_MESSAGES = {
   unverified: (key) => `the original definition and value rows for environmentVariable "${key}" could not be read completely; no value request was sent for this item`,
   conflict: (key) => `environmentVariable "${key}" has a row that differs from its pending create; no definition or value was replaced and no value request was sent for this item`,
   membership: (key) => `the pending create of environmentVariable "${key}" is missing required solution membership. Restore that membership under the original ids, then build again. No value request was sent for this item`,
+  contradicted: (key, id) => `the definition of environmentVariable "${key}" at ${id} differs from the one this build's own request created: its id, parent, content or child rows were changed after it was made. `
+    + 'Nothing was replaced and nothing more is sent for it; check who changed it before deciding how to recover',
 };
 
 // The definition and value rows of an attempt that is an original variable create of exactly those two rows, or null.
@@ -816,6 +818,19 @@ function variableRowsOf(attempt) {
   const root = p.rows.find((r) => r.parentId === null);
   const value = p.rows.find((r) => r.parentId !== null);
   return root && value && value.kind === VALUE_ROW_KIND ? { root, value } : null;
+}
+
+// How a fresh read (B.observe) finds the prepared root `root` (#847): 'exact' (present at its id, no parent, its planned
+// projection over a complete child graph), 'contradicted' (present, but at another id, under a parent, or with other
+// public content or an unexpected child — observe folds the graph into the root's projection), 'absent', or 'unread'
+// (missing from the read, unknown, or a graph observe could not read completely). Only 'contradicted' is a positive fact
+// against the root; an unreadable or absent root is no proof either way.
+function rootReadOf(root, observation) {
+  const d = ((observation && observation.rows) || []).find((x) => x.kind === root.kind && x.key === root.key);
+  if (!d || (d.state !== 'present' && d.state !== 'absent')) return 'unread';
+  if (d.state === 'absent') return 'absent';
+  return normalizeGuid(d.id) !== root.id || (d.parentId ? normalizeGuid(d.parentId) : null) !== null || d.projectionSha256 !== root.expectedSha256
+    ? 'contradicted' : 'exact';
 }
 
 /**
@@ -854,14 +869,11 @@ function valueOwed(env, ctx, item, observation) {
   if (!input || typeof input.value !== 'string' || input.value === '') return halt(COMPLETION_CODE, VALUE_MESSAGES.input(key));
   if (!sameRows(planned.plan.rows, p.rows)) return null;
   const seen = (r) => ((observation && observation.rows) || []).find((x) => x.kind === r.kind && x.key === r.key);
-  const d = seen(root);
   const v = seen(value);
-  if (!d || !v || d.state === 'unknown' || v.state === 'unknown') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
-  if (d.state === 'absent') return null;
-  if (d.state !== 'present') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
-  if (normalizeGuid(d.id) !== root.id || (d.parentId ? normalizeGuid(d.parentId) : null) !== null || d.projectionSha256 !== root.expectedSha256) {
-    return halt(CONFLICT_CODE, VALUE_MESSAGES.conflict(key), { rows: [{ id: root.id }] });
-  }
+  const rootRead = rootReadOf(root, observation);
+  if (!v || rootRead === 'unread' || v.state === 'unknown') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  if (rootRead === 'absent') return null;
+  if (rootRead === 'contradicted') return halt(CONFLICT_CODE, VALUE_MESSAGES.conflict(key), { rows: [{ id: root.id }] });
   if (v.state === 'present') return null;
   if (v.state !== 'absent') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
   const members = new Map(((observation && observation.members) || []).map((m) => [normalizeGuid(m.id), m.state]));
@@ -1390,10 +1402,21 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const refused = refusedUnsent(ctx, attempt, pushed);
       const released = !pushed.checked && ctx.release(attempt);
       if (refused && released) throw refusedStop(kind, planned.key, id, refused, 'create');
+      // #847: an original variable create whose run was not checked — its value request was refused unstarted, its answer
+      // was lost, or anything after the definition's own acknowledged answer failed — is proved by a fresh exact read when
+      // this process holds that genuine answer (ctx.hasPartialRoot: the context kept the candidate only for a current-scope
+      // acknowledgement with no conflicting fact and no local failure). An exact root is receipted, so a later build needs
+      // no ownership approval for the definition; the value's possibly-sent flag is never touched, so a value that may
+      // have left is still never sent again. A root the read positively contradicts stops create-identity-conflict here,
+      // before any hint that settings could correct it; an absent or unreadable one proves nothing either way.
+      if (!pushed.checked && !released && !pushed.localError && kind === 'environmentVariable' && ctx.hasPartialRoot(attempt.token, attempt.epoch)) {
+        const observation = await B.observe(dataverse, planned);
+        const rootRead = rootReadOf(planned.plan.rows[0], observation);
+        if (rootRead === 'contradicted') throw stop(CONFLICT_CODE, VALUE_MESSAGES.contradicted(planned.key, id), { kind, key: planned.key, id });
+        if (rootRead === 'exact') ctx.receiptPartialVariableRoot({ token: attempt.token, epoch: attempt.epoch, observation, declarationSha256: planned.plan.declarationSha256 });
+      }
       // A variable whose definition this run sent and whose value request the service refused unstarted (#847): the
-      // attempt stays pending (the definition may be there, so it is never released) and the stop says so. When this
-      // run's own answer acknowledged the definition and a fresh exact read now finds it as prepared, that root is
-      // receipted first, so a later build can send only the value without an ownership approval.
+      // attempt stays pending (the definition may be there, so it is never released) and the stop says so.
       if (refused && !released && !pushed.localError && kind === 'environmentVariable') {
         const mine = ctx.facts(attempt.token).filter((f) => f.type === 'row');
         const root = planned.plan.rows[0];
@@ -1401,10 +1424,7 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         // durable unstarted reset; a conflict anywhere, or a definition answer that never came, is not this case.
         const rootAnswered = mine.some((f) => f.kind === root.kind && f.key === root.key && (f.outcome === 'unchecked' || f.outcome === 'acknowledged'));
         const valueFact = mine.find((f) => f.kind === VALUE_ROW_KIND && f.notStarted === true);
-        if (rootAnswered && valueFact && !mine.some((f) => f.outcome === 'conflict')) {
-          ctx.receiptPartialVariableRoot({ token: attempt.token, epoch: attempt.epoch, observation: await B.observe(dataverse, planned), declarationSha256: planned.plan.declarationSha256 });
-          throw valueRefusedStop(kind, planned.key, id, valueFact, attempt.token);
-        }
+        if (rootAnswered && valueFact && !mine.some((f) => f.outcome === 'conflict')) throw valueRefusedStop(kind, planned.key, id, valueFact, attempt.token);
       }
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });

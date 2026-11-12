@@ -390,6 +390,15 @@ function createManagedCreateContext({ store, approvals = [], notFoundCode, appro
       return { family: a.family, key: a.key, token, epoch, expected: a.expected };
     },
     /**
+     * #847: whether this process holds a partial-root candidate for `token` at `epoch` (run kept one: an unchecked original
+     * variable create whose own definition answer was acknowledged, no conflicting fact, no local failure). Read only; a
+     * caller asks before spending a fresh read on receiptPartialVariableRoot.
+     */
+    hasPartialRoot(token, epoch) {
+      const cand = partialRoots.get(token);
+      return !!cand && cand.epoch === epoch;
+    },
+    /**
      * #847: receipt the root of an original two-row variable create whose run was NOT checked (its value request failed)
      * when this process saw that root's own create acknowledged (run kept it as a candidate at `epoch`) AND the fresh
      * read `observation` (taken after that run) shows the root exactly as prepared: present at its id, no parent, its

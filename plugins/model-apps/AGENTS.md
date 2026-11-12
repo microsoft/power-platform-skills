@@ -3643,11 +3643,15 @@ owed recovery) is un-sealed by the transport while its scope is open (`managed-c
 code), routed to the refused bucket so later items still run: nothing is pending, and the next build creates it
 again from what the App Spec then declares (a secret variable's value from the settings), or drops it. Measured live, a
 variable's protected create with a value is two sends (the definition, then its value outside the solution): a refused
-value therefore keeps the attempt. When the run saw the definition acknowledged, the value fact is `notStarted` and no
-fact conflicts, the port receipts the root by a fresh exact read (`ctx.receiptPartialVariableRoot`, only for a candidate
-`run` kept in memory — a later process never receipts a root from a matching GET) and stops `create-value-refused`
-(`valueRefusedStop`: the service code and the attempt's own token, routed as unknown; `valueRefusedHint` spells the
-exact retire approval). The value is the one row a later build may still send (`valueOwed`, `completeValueOnce`): its
+value therefore keeps the attempt. Whenever such an unchecked run saw its own definition acknowledged with no
+conflicting fact and no local failure (`ctx.hasPartialRoot`: the candidate `run` kept in memory — a later process never
+receipts a root from a matching GET), the port reads the definition afresh (`rootReadOf`): an exact read is receipted
+(`ctx.receiptPartialVariableRoot`) whatever became of the value, whose possibly-sent mark is never touched, so a lost
+value answer later needs only the value's own approval; a positive contradiction (another id, a parent, other public
+content or child rows) stops `create-identity-conflict`; an absent or unreadable read proves nothing. A value the
+service refused unstarted then stops `create-value-refused` (`valueRefusedStop`: the service code and the attempt's own
+token, routed as unknown; `valueRefusedHint` spells the exact retire approval). The value is the one row a later build
+may still send (`valueOwed`, `completeValueOnce`): its
 record proves it never dispatched (no sealed fields, no child receipt), the attempt's own rows still hash to its
 declaration, the settings supply a non-empty value, a fresh read shows the definition exactly as prepared with the
 value and membership as recorded, and the definition is the attempt's own (`acknowledgedRoot`) or approved by its root
@@ -5965,7 +5969,13 @@ created. A command bar's or a rule's old copy is never re-read: the build never 
 refused either. The previous bundle comes from `tests/helpers/previous-bundle.js` — the file `MODEL_APPS_PREVIOUS_BUNDLE`
 names (CI fetches the release commit by hash in both suite jobs) or else git history, its SHA-256 checked; without it
 the tests skip locally and FAIL in CI. On the next re-vendor, point `PREVIOUS_RELEASE` and `PREVIOUS_BUNDLE_SHA256`
-there, and the workflow's fetch (`run-tests.test.js` holds them equal), at the release being replaced.
+there, and the workflow's fetch (`run-tests.test.js` holds them equal), at the release being replaced. The downgrade
+tests of a variable's refused value (`configuration-protected.test.js`) run the release before this one, unchanged, over
+each binding record this one writes for it (refused, claimed, sealed, acknowledged but unsettled, completed): it never
+sends the value or the definition again. Its code comes from `tests/helpers/downgrade-release.js` — the `scripts` folder
+`MODEL_APPS_DOWNGRADE_SCRIPTS` names (CI fetches the release commit by hash in both suite jobs) or else git history,
+its plugin version checked; without it the test skips locally and FAILS in CI. On the next release, point
+`DOWNGRADE_RELEASE` and `DOWNGRADE_VERSION`, and the workflow's fetch, at the release being replaced.
 
 **Newer SDK behaviors the plugin adopts, and the options it leaves off.** Each is pinned against the
 real bundle, because a stub stays green through a change in the SDK's own rule.
