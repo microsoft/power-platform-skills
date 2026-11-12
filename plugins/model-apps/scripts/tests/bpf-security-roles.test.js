@@ -630,13 +630,17 @@ test('#513 verify reads the deployed uniquename too, or build and verify disagre
 });
 
 test('#513 verify checks a DECLARED flow\'s grants on the table of the row its binding names, never on a namesake\'s', async () => {
-  // The build grants a declared flow's roles on the backing table of its settled row, read by that row's id (sdk-build.js), so verify
-  // reads the same row: a same-named flow found by name has another table. A binding the store cannot settle (an unusable record, an
-  // unreadable store, a pending attempt that names no row) leaves the grants unverified rather than proved on a table found by name.
+  // The build grants a declared flow's roles on the backing table its settled row stores, read by that row's id (sdk-build.js), so verify
+  // reads the same row: a same-named flow found by name has another table, and so may the display-name derivation. A binding the store
+  // cannot settle (an unusable record, an unreadable store, a pending attempt that names no row), or a row read without its stored
+  // table, leaves the grants unverified rather than proved on a table found by name or derived.
   const { verifySpec } = require('../lib/verify-spec.js');
   const BOUND = '11111111-2222-4333-8444-555555555555';
   const OWN = 'contoso_ticketprocess';
   const OTHER = 'contoso_namesake';
+  // The display-name derivation: never the table of a declared flow whose row does not say (the build refuses to guess it).
+  const DERIVED = bpfUniqueName(FLOW.name);
+  const TABLES = [OWN, OTHER, DERIVED];
   const KEY = 'contoso_ticket/Ticket Handling';
   const filters = [];
   const asked = [];
@@ -656,10 +660,10 @@ test('#513 verify checks a DECLARED flow\'s grants on the table of the row its b
     },
     entityPrivileges: async (t) => {
       asked.push(t);
-      return [OWN, OTHER].includes(t) ? BPF_ROLE_ACCESS.map((a) => ({ Name: `prv${a[0].toUpperCase()}${a.slice(1)}${t}`, PrivilegeId: `${t}-${a}`, PrivilegeType: a[0].toUpperCase() + a.slice(1) })) : [];
+      return TABLES.includes(t) ? BPF_ROLE_ACCESS.map((a) => ({ Name: `prv${a[0].toUpperCase()}${a.slice(1)}${t}`, PrivilegeId: `${t}-${a}`, PrivilegeType: a[0].toUpperCase() + a.slice(1) })) : [];
     },
-    // The persona holds the grants on BOTH tables, so only the table verify reads decides what it proved.
-    rolePrivileges: async () => [OWN, OTHER].flatMap((t) => BPF_ROLE_ACCESS.map((a) => ({ privilegeId: `${t}-${a}`, depth: 'Global' }))),
+    // The persona holds the grants on EVERY table, so only the table verify reads decides what it proved.
+    rolePrivileges: async () => TABLES.flatMap((t) => BPF_ROLE_ACCESS.map((a) => ({ privilegeId: `${t}-${a}`, depth: 'Global' }))),
   });
   const manifest = (over) => ({ revision: 1, groups: [], pending: [], invalid: [], ...over });
   const run = async (reconcile, m, reader = read()) => {
@@ -698,6 +702,16 @@ test('#513 verify checks a DECLARED flow\'s grants on the table of the row its b
   assert.deepStrictEqual(gone.roles.map((c) => c.present), [false]);
   assert.match(gone.roles[0].detail, new RegExp(`its bound row ${BOUND} is not there`));
   assert.deepStrictEqual(gone.nameReads, []);
+
+  // The bound row read without a usable stored name of its backing table: unverified, never checked on the display-name derivation
+  // (an adopted or renamed flow keeps another table), as the build never grants on one it derives.
+  for (const uniquename of [undefined, null, '', 'Not a table']) {
+    const row = { workflowid: BOUND, statecode: 1, ...(uniquename === undefined ? {} : { uniquename }) };
+    const blind = await run(declared, boundM, read({ answer: [row] }));
+    assert.deepStrictEqual(blind.roles, [], `${JSON.stringify(uniquename)}: ${JSON.stringify(blind.roles)}`);
+    assert.ok(blind.r.unverified.some((x) => x.startsWith('bpf-roles:Ticket Handling (') && /without the name of its backing table/.test(x)), JSON.stringify(blind.r.unverified));
+    assert.deepStrictEqual(asked.filter((t) => TABLES.includes(t)), [], `${JSON.stringify(uniquename)}: no table is read`);
+  }
 
   // Controls: a legacy flow is read by its name whatever the store holds, and so is a declared flow the store holds nothing for.
   for (const [reconcile, m] of [[{}, manifest({ invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] })], [declared, manifest({})]]) {

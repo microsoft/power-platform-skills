@@ -2262,7 +2262,8 @@ async function verifySpec(spec, read, opts = {}) {
     // A DECLARED flow is the row the presence check above holds it to (boundWorkflowOf), read here by its id, as the build grants its
     // roles on the backing table of its settled row (sdk-build.js): a same-named flow found by name has another table, whose grants
     // would prove nothing about this one. A binding the store cannot settle, a pending attempt that names no row, and a read that
-    // fails or answers another row are unverified, never checked on a table found by name or derived from it.
+    // fails, answers another row or does not carry the row's stored backing table are unverified, never checked on a table found by
+    // name or derived from it.
     const boundFlow = boundWorkflowOf(opts.managedManifest, 'bpf', `${String(f.entity).toLowerCase()}/${f.name}`, f.reconcile === 'declared');
     if (boundFlow) {
       if (!boundFlow.id) {
@@ -2283,8 +2284,15 @@ async function verifySpec(spec, read, opts = {}) {
         add('bpf-roles', f.name, false, `its bound row ${boundFlow.id} is not there, so its backing table cannot be identified and no role grant on it can be verified`);
         continue;
       }
-      // A row WITHOUT a uniquename keeps the derivation, as below: the flow demonstrably exists.
-      if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
+      // The build grants a declared flow's roles only on the backing table its row STORES (a table's logical name), never on one
+      // derived from the display name (an adopted or renamed flow keeps another), and stops when that name cannot be read
+      // (sdk-build.js bpf-backing-unproved). A row read without a usable stored name proves nothing about where the grants are.
+      const stored = typeof row.uniquename === 'string' ? row.uniquename.toLowerCase() : '';
+      if (!/^[a-z][a-z0-9_]{0,127}$/.test(stored)) {
+        unverified.push(`bpf-roles:${f.name} (its bound row ${boundFlow.id} was read without the name of its backing table, so no role grant on it can be verified)`);
+        continue;
+      }
+      backingTable = stored;
     } else {
       try {
         const rows = await read.queryRecords('workflow', {
