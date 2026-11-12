@@ -18,7 +18,7 @@ const { createManagedCreateContext } = require('../lib/managed-create-context.js
 const { openManagedBindings, managedManifestView, storeFileName } = require('../lib/managed-bindings.js');
 const { readerFor } = require('../verify-model-app.js');
 const { createConfigurationRuntime } = require('../lib/configuration-build.js');
-const { readDeploymentBindings, configurationAuthorizationKeys } = require('../lib/configuration-artifacts.js');
+const { readDeploymentBindings, configurationAuthorizationKeys, authorizeFlags, configurationHaltMessage } = require('../lib/configuration-artifacts.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
 const { RETRY } = require('../lib/retry-policy.js');
@@ -1124,6 +1124,39 @@ async function savedUnpublishedRule(h, { settle }) {
   return { ruleId: planned.rows[0].id, token: attempt.token };
 }
 
+// #808: the guidance a stopped protected rule create carries when its first publication is not confirmed. `name` and `key`
+// are given as the sentence quotes them (JSON string text).
+const hintOf = (name, key, id) => `The first publication of duplicate detection rule ${name} (App Spec key ${key}, original id ${id}) has not been confirmed. `
+  + 'The build does not send this publication again. Check that exact rule: if it reads Publishing, wait and rebuild; otherwise check its definition '
+  + 'and conditions and, if they are what you intend, publish it in the environment\'s duplicate detection rules settings, then rebuild. '
+  + 'Setting "status": "published" in the App Spec does not bypass this pending attempt.';
+// Today's stops, which the guidance is appended to and never changes.
+const stepStop = (code, key = 'email') => `1 configuration item not completed: duplicateRule ${key} (${code})`;
+const completionStop = (h, key = 'email') => `duplicateRule ${key}: the managed duplicateRule "${key}" is not complete (missing rows, solution membership, rule state or a private input); `
+  + 'complete it under the same ids, then run again. If it cannot be completed that way (a create an earlier plugin version left pending after the service refused it, say), '
+  + 'stop tracking it instead: remove this item (and its deployment-settings entry) from the App Spec and run the build again with '
+  + `${authorizeFlags([`retire:duplicateRule:${key}@${h.store.readGroup('duplicateRule', key).pending.token}`])} `
+  + '(nothing is deleted or sent), then restore them and run again. If the attempt made a row at its derived id, that build stops with create-identity-conflict naming the row';
+const unverifiedStop = (key = 'email') => `duplicateRule ${key}: the managed duplicateRule "${key}" could not be read completely; nothing is created or bound`;
+const refusedPublish = { statusCode: 400, body: { error: { code: '0x80040216', message: 'publish failed' } } };
+// A harness whose service refuses every publication; `before(row)` changes the rule's row first (its state, say), as the
+// service's own publish job would have.
+async function refusingPublish({ before } = {}) {
+  let h = null;
+  h = await harness({
+    intercept: ({ method, path }) => {
+      const m = method === 'POST' && /\/duplicaterules\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/.exec(path);
+      if (!m) return undefined;
+      if (before) before(h.org.sets.get('duplicaterules').get(m[1].replace(/^\{|\}$/g, '').toLowerCase()));
+      return refusedPublish;
+    },
+  });
+  return h;
+}
+const ruleRow = (h, id) => h.org.sets.get('duplicaterules').get(id);
+const publishing = (row) => { row.statecode = 0; row.statuscode = 1; };
+const unreadable = (row) => { delete row.statecode; delete row.statuscode; };
+
 test('a saved rule create whose initial publication never left is published once by the rerun, then bound; nothing is sent again', async () => {
   const h = await harness();
   const { ruleId } = await savedUnpublishedRule(h, { settle: true });
@@ -1163,12 +1196,17 @@ test('the one send of an unsent rule publication is fenced: a refused publish st
   const first = await pass(reopen(h), ruleOnly());
   assert.equal(first.halt && first.halt.code, 'configuration-incomplete', first.halt && first.halt.message);
   assert.match(first.halt.message, /duplicateRule email \(create-completion-required\)/);
+  // The publication this build sent is not confirmed: the stop says which rule, at which id, and how to finish it (#808).
+  assert.equal(first.halt.message, `${stepStop('create-completion-required')} (${hintOf('"Same email"', '"email"', ruleId)})`);
+  assert.deepEqual(first.step.halt.items.map((p) => Object.keys(p)), [['kind', 'key', 'code']], 'the public halt item is unchanged');
+  assert.deepEqual(first.step.outcome.unknown.map((f) => [f.code, f.id]), [['create-completion-required', ruleId]], 'the stop now carries the rule\'s original id');
   assert.equal(publishes(first.sent).length, 1, 'sent once');
   assert.deepEqual(h.store.readGroup('duplicateRule', 'email').pending.rowProtocol.effects.filter((e) => e.kind === 'rule-state').map((e) => e.dispatched), [true]);
   refuse = false;
   const again = await pass(reopen(h), ruleOnly());
   assert.equal(again.halt && again.halt.code, 'create-completion-required');
   assert.equal(again.halt.phase, 'preflight');
+  assert.equal(again.halt.message, `${completionStop(h)} (${hintOf('"Same email"', '"email"', ruleId)})`);
   assert.deepEqual(again.sent, [], 'a publish that was sent is never replayed');
   // The maker publishes it under the same id; the next build binds it with nothing sent.
   await h.org.request({ url: `${h.org.origin}/api/data/v9.2/duplicaterules(${ruleId})/Microsoft.Dynamics.CRM.PublishDuplicateRule`, method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
@@ -1190,6 +1228,198 @@ test('only one claim may send an unsent rule publication: an older claim is refu
   const out = await pass(reopen(h), ruleOnly());
   assert.equal(out.halt && out.halt.code, 'create-completion-required');
   assert.deepEqual(out.sent, []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// #808: a protected rule create whose first publication is not confirmed names the rule and its original id, and says how
+// to finish it. Wording only: the same requests, the same codes, the same store; a stop the build cannot prove is that
+// case keeps today's text.
+
+test('a first publication that is not confirmed names the rule and its original id, in the step stop and in every later preflight', async () => {
+  const h = await refusingPublish();
+  const first = await pass(h, configSpec());
+  const pending = h.store.readGroup('duplicateRule', 'email').pending;
+  const ruleId = pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  assert.equal(first.halt && first.halt.message, `${stepStop('create-completion-required')} (${hint})`);
+  assert.deepEqual(first.step.halt.items.map((p) => Object.keys(p)), [['kind', 'key', 'code']]);
+  const sentPublishes = publishes(h.org.requests).length;
+
+  // Unpublished: today's preflight stop, then the guidance.
+  const again = await pass(h, configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(again.halt && again.halt.message, `${completionStop(h)} (${hint})`);
+  assert.deepEqual(again.sent, []);
+  // Publishing (statecode 0, statuscode 1) and a status that cannot be read: the identity is unverified, and the same advice holds.
+  publishing(ruleRow(h, ruleId));
+  const busy = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(busy.halt && busy.halt.code, 'create-identity-unverified');
+  assert.equal(busy.halt.message, `${unverifiedStop()} (${hint})`);
+  unreadable(ruleRow(h, ruleId));
+  const blind = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(blind.halt && blind.halt.message, `${unverifiedStop()} (${hint})`);
+  assert.deepEqual([...busy.sent, ...blind.sent], []);
+  // Writing "status": "published" does not send it: that declaration is not the one the pending attempt was prepared for.
+  const asked = await pass(reopen(h), configSpec(rule({ status: 'published' })), overwriteCopy('duplicateRule', 'email'));
+  assert.match(asked.halt && asked.halt.message, /has a pending attempt prepared for another declaration/);
+  assert.equal(publishes(h.org.requests).length, sentPublishes, 'the publication is never sent again');
+
+  // Published by the maker: the build binds it, with nothing sent and nothing to explain.
+  ruleRow(h, ruleId).statecode = 1;
+  ruleRow(h, ruleId).statuscode = 2;
+  const done = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent, []);
+});
+
+test('a first publication left Publishing, or whose status cannot be read, names the rule in the step stop', async () => {
+  for (const [label, before] of [['publishing', publishing], ['unreadable', unreadable]]) {
+    // eslint-disable-next-line no-await-in-loop
+    const h = await refusingPublish({ before });
+    // eslint-disable-next-line no-await-in-loop
+    const out = await pass(h, configSpec());
+    const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+    assert.equal(out.halt && out.halt.message, `${stepStop('create-identity-unverified')} (${hintOf('"Same email"', '"email"', ruleId)})`, label);
+  }
+});
+
+test('the guidance follows a rule stopped behind another item, and a step stop rebuilt for an unrecorded binding carries it once', async () => {
+  const h = await refusingPublish();
+  const failing = { lookup: async () => null, recordApplied: async () => { throw new Error('the manifest could not be written'); }, planAdoption: async () => ({ allowed: false, code: 'ADOPTION_REFUSED' }) };
+  const first = await pass(h, configSpec(), { managed: failing });
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  assert.match(first.halt.message, /CONFIGURATION_RECORD_UNCONFIRMED/);
+  assert.ok(first.halt.message.includes(`duplicateRule email (create-completion-required) (${hint})`), first.halt.message);
+  assert.equal(first.halt.message.split('The first publication').length, 2, 'once');
+  // An unsupported edit leads the preflight stop; the rule follows it, with its guidance.
+  const out = await pass(h, configSpec(api({ requestParameters: [{ ...API.requestParameters[0], type: 'string' }] })), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(out.halt && out.halt.code, 'configuration-edit-unsupported', out.halt && out.halt.message);
+  assert.ok(out.halt.message.includes(` Also stopped: duplicateRule email (create-completion-required) (${hint}).`), out.halt.message);
+});
+
+test('a rule key and name are quoted losslessly in the guidance, however long or unusual', async () => {
+  const key = `k"\\\u007f${'x'.repeat(400)}`;
+  const name = 'Same "email"\t\u2028';
+  const h = await refusingPublish();
+  const spec = configSpec({ environmentVariables: [], customApis: [], duplicateDetectionRules: [{ ...RULE, key, name }] });
+  const out = await pass(h, spec);
+  const ruleId = h.store.readGroup('duplicateRule', key).pending.root.id;
+  assert.equal(out.halt && out.halt.message, `${stepStop('create-completion-required', key)} (${hintOf('"Same \\"email\\"\\t\\u2028"', `"k\\"\\\\\\u007f${'x'.repeat(400)}"`, ruleId)})`);
+});
+
+test('the halt formatter is unchanged without guidance, and guidance that fails or is not text adds nothing', () => {
+  const items = [{ kind: 'duplicateRule', key: 'email', code: 'create-completion-required' }, { kind: 'customApi', key: 'contoso_Calc', code: 'create-refused', serviceCode: '0x80040216' }];
+  const today = configurationHaltMessage(items);
+  for (const extra of [undefined, null, () => '', () => null, () => 42, () => { throw new Error('no'); }]) assert.equal(configurationHaltMessage(items, extra), today);
+  assert.equal(configurationHaltMessage(items, (p) => (p.kind === 'duplicateRule' ? 'advice' : null)),
+    today.replace('duplicateRule email (create-completion-required)', 'duplicateRule email (create-completion-required) (advice)'));
+});
+
+test('the guidance is given only for the hookup\'s own port, unchanged and in place: a replaced or wrapped port, another hookup or a raw helper keeps today\'s text', async () => {
+  const h = await refusingPublish();
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  const today = stepStop('create-completion-required');
+  // The step of a later build meets the pending create in resolve; a build runs it, so a step alone is enough here.
+  const step = async (hookup, before) => {
+    const runtime = createConfigurationRuntime({ spec: configSpec(), sdk: h.sdk, opts: { protectedConfiguration: hookup }, appUniqueName: 'contoso_configured' });
+    if (before) before(runtime);
+    const mark = h.org.requests.length;
+    const out = await runtime.apply('data-model');
+    assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), [], 'nothing is sent');
+    assert.deepEqual(out.outcome.unknown.map((f) => [f.code, f.id]), [['create-completion-required', ruleId]]);
+    return out.halt.message;
+  };
+  const own = reopen(h).protectedConfiguration;
+  assert.equal(await step(own), `${today} (${hint})`, 'the hookup\'s own port');
+  // ctx.creates replaced, by a copy or by a wrapper that throws its own error after the port's stop.
+  assert.equal(await step(own, (rt) => { rt.ctx.creates = { ...rt.ctx.creates }; }), today);
+  assert.equal(await step(own, (rt) => {
+    const port = rt.ctx.creates;
+    rt.ctx.creates = { ...port, resolve: async (q) => { try { return await port.resolve(q); } catch (e) { throw Object.assign(new Error('forged'), { code: e.code, kind: e.kind, key: e.key, id: ruleId }); } } };
+  }), today);
+  // The hookup's port with a method replaced in place.
+  const inPlace = { ...own, port: (args) => { const port = own.port(args); const { resolve } = port; port.resolve = (q) => resolve(q); return port; } };
+  assert.equal(await step(inPlace), today);
+  // Another hookup's reader over the same store, and a reader answering for a port no hookup issued.
+  assert.equal(await step({ ...own, publicationHint: reopen(h).protectedConfiguration.publicationHint }), today);
+  assert.equal(await step({ ...own, port: (args) => P.protectedConfigurationPort({ ...args, store: h.store, ctx: own.ctx }) }), today);
+  // A raw preflight's answer is no source either, even with the stop's own id.
+  const args = { spec: configSpec(), dataverse: h.sdk.dataverse, solution: SOL, ctx: own.ctx, store: h.store };
+  const raw = await P.preflightProtectedConfiguration(args);
+  assert.equal(raw.halts.length, 1);
+  assert.equal(own.publicationHint({ spec: args.spec, source: raw, kind: 'duplicateRule', key: 'email', code: raw.halts[0].code, guardId: raw.halts[0].id }), null);
+});
+
+test('the guidance reader answers only for the stop it observed and the store record that proves it, and reads nothing from the service', async () => {
+  const h = await refusingPublish();
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  // The reader sees the store through this proxy, so one record can be changed under it without touching the store.
+  let tamper = null;
+  const store = new Proxy(h.store, {
+    get(target, prop) {
+      if (prop === 'readGroup' && tamper) return (kind, key) => { const g = structuredClone(target.readGroup(kind, key)); tamper(g); return g; };
+      const value = target[prop];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const ctx = createManagedCreateContext({ store: h.store, notFoundCode: B.NOT_FOUND_CODE });
+  const hookup = P.createProtectedConfiguration({ store, gate: h.gate, ctx, apiBase: `${h.org.origin}/api/data/v9.0` });
+  const spec = configSpec();
+  const result = await hookup.preflight({ spec, dataverse: h.sdk.dataverse, solution: SOL });
+  const halt = result.halts.find((x) => x.kind === 'duplicateRule');
+  assert.deepEqual([halt.code, halt.id], ['create-completion-required', ruleId], 'the qualified stop carries the original id');
+  const ask = (over = {}) => hookup.publicationHint({ spec, source: result, kind: 'duplicateRule', key: 'email', code: halt.code, guardId: halt.id, ...over });
+  const mark = h.org.requests.length;
+  assert.equal(ask(), hint);
+  for (const [label, over] of [
+    ['no id', { guardId: undefined }], ['an id not normalized', { guardId: ruleId.toUpperCase() }], ['another id', { guardId: '00000000-0000-0000-0000-000000000001' }],
+    ['another key', { key: 'other' }], ['another code', { code: 'create-ownership-required' }], ['another kind', { kind: 'customApi' }],
+    ['another spec', { spec: configSpec() }], ['another source', { source: { halts: result.halts } }],
+  ]) assert.equal(ask(over), null, label);
+  const rs = (g) => g.pending.rowProtocol.effects.find((e) => e.kind === 'rule-state');
+  for (const [label, change] of [
+    ['a publication not dispatched', (g) => { rs(g).dispatched = false; }],
+    ['no publication effect', (g) => { g.pending.rowProtocol.effects = g.pending.rowProtocol.effects.filter((e) => e.kind !== 'rule-state'); }],
+    ['a committed group', (g) => { g.committed = { records: [] }; }],
+    ['another attempt', (g) => { g.pending.token = '00000000-0000-4000-8000-000000000000'; }],
+    ['another declaration', (g) => { g.pending.declarationSha256 = '0'.repeat(64); }],
+    ['an edit', (g) => { g.pending.expected.baseObservation = {}; }],
+    ['another root', (g) => { g.pending.root.id = '00000000-0000-0000-0000-000000000001'; }],
+    ['no initial publication owed', (g) => { g.pending.rowProtocol.completion.ruleState = 'unpublished'; }],
+  ]) {
+    tamper = change;
+    assert.equal(ask(), null, label);
+    tamper = null;
+  }
+  // The declaration changed in place since the stop was observed.
+  spec.duplicateDetectionRules[0].conditions[0].column = 'lastname';
+  assert.equal(ask(), null, 'a changed declaration');
+  spec.duplicateDetectionRules[0].conditions[0].column = 'emailaddress1';
+  assert.equal(ask(), hint);
+  assert.equal(h.org.requests.length, mark, 'the reader sends and reads nothing');
+});
+
+test('a pending rule whose row is gone, or whose conditions changed, keeps today\'s stop with no guidance', async () => {
+  const h = await refusingPublish();
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const conditions = h.org.sets.get('duplicateruleconditions');
+  const condition = [...conditions.values()].find((c) => String(c._regardingobjectid_value || '').toLowerCase() === ruleId);
+  assert.ok(condition && condition.baseattributename === 'emailaddress1', 'the rule\'s condition row');
+  condition.baseattributename = 'lastname';
+  const changed = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.ok(changed.halt, 'it stops');
+  assert.ok(!changed.halt.message.includes('The first publication'), changed.halt.message);
+  condition.baseattributename = 'emailaddress1';
+  h.org.sets.get('duplicaterules').delete(ruleId);
+  const gone = await pass(reopen(h), configSpec(), overwriteCopy('duplicateRule', 'email'));
+  assert.equal(gone.halt && gone.halt.code, 'create-completion-required', gone.halt && gone.halt.message);
+  assert.equal(gone.halt.message, completionStop(h), 'today\'s text');
+  assert.deepEqual([...changed.sent, ...gone.sent], []);
 });
 
 test('removing the opt-in does not move protected items back to name lookup: the build stops before any request', async () => {

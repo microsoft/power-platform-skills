@@ -3567,7 +3567,17 @@ The one exception (`unsentPublication`, `publishOnce`): a saved rule create (`ac
 unpublished whose `rule-state` effect is still `dispatched: false`, and which would commit (or need only
 ownership approvals, named first) if that publish had landed, sends `PublishDuplicateRule` once under a new
 epoch (`store.claimUnsentRowEffect`, through `ctx.claimEffect`), sealed dispatched before it leaves, then
-reads the rule a bounded number of times and settles. A pending EDIT is decided by
+reads the rule a bounded number of times and settles. When a protected rule create's first publication may
+have left but is not confirmed (its `rule-state` effect dispatched, the create neither committed nor an edit
+nor an adoption, read with a root and a stop of `create-completion-required` or `create-identity-unverified`),
+the stop also names the rule, its App Spec key and its original id, and says to wait and rebuild if the rule reads
+Publishing, otherwise to check it and publish it in the environment's duplicate detection rules settings, then
+rebuild; `status: "published"` does not bypass the pending attempt. This is wording only: no extra read, send,
+store field or code. The protected module notes the stop it settled (`noteStop`, keyed by the hookup's own
+preflight result or port and the attempt's token, root and declaration digest) and `publicationHint` answers only
+for that note, re-checked against the binding store; the build asks it only for its own port, so a replaced or
+wrapped port, another hookup or a raw helper keeps today's text. `configurationHaltMessage` takes the advice as
+an optional callback and appends it to the item in parentheses. A pending EDIT is decided by
 the rows its attempt persisted (`settlePendingEdit`, answering `settled`, `retired` or `needs-write`): complete
 -> committed read-only; already at its target -> accepted read-only only when that acceptance commits (its
 verdict is judged in the preflight by `judgeReadOnly` and again by `resolve`, so an ownership approval it needs

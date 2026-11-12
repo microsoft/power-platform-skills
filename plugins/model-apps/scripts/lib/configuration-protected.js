@@ -764,7 +764,7 @@ const PUBLISH_READ_INTERVAL_MS = 3000;
  * dispatched before it leaves; then the attempt is observed and settled. Answers the settled verdict.
  * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/publishduplicaterule
  */
-async function publishOnce(env, ctx, item) {
+async function publishOnce(env, ctx, item, scope = null) {
   const { planned } = item;
   const id = planned.plan.rows[0].id;
   const attempt = ctx.claimEffect(item.token, { kind: 'rule-state', id });
@@ -784,6 +784,8 @@ async function publishOnce(env, ctx, item) {
     observation = await B.observe(env.dataverse, planned);
   }
   const [settled] = ctx.settle([{ token: item.token, observation, declarationSha256: planned.plan.declarationSha256 }]);
+  // The publish was sent now, so a stop that follows is a publication not confirmed: noted for its guidance (#808).
+  noteStop(scope, item, observation, settled.verdict);
   return settled.verdict;
 }
 
@@ -812,6 +814,114 @@ const haltOf = (kind, key, verdict) => ({
   kind, key, ...(verdict.rows && verdict.rows[0] ? { id: verdict.rows[0].id } : {}), code: verdict.code || UNVERIFIED_CODE, message: verdict.message || `the ${kind} "${key}" could not be recovered`,
   ...(Array.isArray(verdict.approvals) && verdict.approvals.length ? { approvals: verdict.approvals.slice() } : {}),
 });
+
+// ---------------------------------------------------------------------------------------------
+// Guidance for a protected rule create whose first publication is not confirmed (#808).
+//
+// A rule create that saved its content but whose initial publication was not confirmed stops as
+// create-completion-required (the rule read Unpublished) or create-identity-unverified (its status read neither
+// Published nor Unpublished: a publish job in flight, statecode 0 / statuscode 1, or an unreadable status). The build
+// never sends that publication again, so the maker has to finish it, and the bare code does not say how. The runtime
+// that formats the stop (configuration-build.js) asks this module's hookup for one advisory sentence
+// (createProtectedConfiguration publicationHint), built only from trusted state this module holds:
+//   - a note this invocation recorded from an observation it made itself (recoverPending, publishOnce, run's
+//     settlement), kept private in SCOPES against the exact port or preflight result that made it;
+//   - the checked declaration (its name) and the binding store's current in-memory record (the original id, and that
+//     the publication's request was dispatched).
+// Nothing travels on an exception, a finding or a halt item: a resolver or error can carry any text, so none of it is
+// ever a source of the sentence, and a failure that does not match a note and the record exactly gets today's text.
+// Wording only: no request, read, persisted field, approval or code is added, and no recovery decision changes.
+
+// Port or preflight result -> { spec, store, notes: Map(<kind>\0<key> -> note), resolve?, run? }. Module-private:
+// neither the map nor a writer is exported, so a caller cannot seed a note.
+const SCOPES = new WeakMap();
+const noteKey = (kind, key) => `${kind}\u0000${key}`;
+const scopeOf = (source, spec, store) => {
+  const scope = { spec, store, notes: new Map() };
+  SCOPES.set(source, scope);
+  return scope;
+};
+// Pending phases a sent create can be in; `prepared` never sent anything (managed-bindings.js PHASES).
+const SENT_PHASES = new Set(['sending', 'saved', 'state-pending', 'membership-pending']);
+
+/**
+ * Record (or clear) the note for one stopped pending rule create, from an observation this invocation already made and
+ * the verdict judged from it. Eligible only when the rows and members read back exactly as planned (asIsReason, used only
+ * as a yes/no predicate: a phase alone does not prove that only the publication is missing, since state-pending is also
+ * chosen when a row is absent) and either the rule read Unpublished (create-completion-required, state-pending) or its
+ * status read neither Published nor Unpublished (create-identity-unverified). Answers true when a note was recorded.
+ */
+function noteStop(scope, { planned, token, edit, adoption }, observation, verdict) {
+  if (!scope || !planned) return false;
+  scope.notes.delete(noteKey(planned.kind, planned.key));
+  if (edit || adoption || planned.kind !== 'duplicateRule' || typeof token !== 'string' || !observation || !verdict || verdict.action !== 'halt') return false;
+  const state = observation.ruleState;
+  const unpublished = verdict.code === COMPLETION_CODE && verdict.phase === 'state-pending' && state === 'unpublished';
+  const unknownState = verdict.code === UNVERIFIED_CODE && state !== 'published' && state !== 'unpublished';
+  if (!unpublished && !unknownState) return false;
+  try {
+    if (asIsReason(planned, observation) !== null) return false;
+  } catch {
+    return false;
+  }
+  scope.notes.set(noteKey(planned.kind, planned.key), Object.freeze({
+    kind: planned.kind, key: planned.key, token, rootId: normalizeGuid(planned.plan.rows[0].id), declarationSha256: planned.plan.declarationSha256,
+    solution: planned.solution, code: verdict.code, phase: verdict.phase || null, ruleState: unpublished ? 'unpublished' : 'unknown',
+  }));
+  return true;
+}
+
+// A name or key shown inside the sentence, lossless and on one line: JSON string escaping (quotes, backslashes and
+// control characters), plus DEL and the Unicode line and paragraph separators, which JSON.stringify leaves as they are.
+const quoted = (s) => JSON.stringify(s).replace(/[\u007f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const publicationHintText = (name, key, id) => `The first publication of duplicate detection rule ${quoted(name)} (App Spec key ${quoted(key)}, original id ${id}) has not been confirmed. `
+  + 'The build does not send this publication again. Check that exact rule: if it reads Publishing, wait and rebuild; otherwise check its definition '
+  + 'and conditions and, if they are what you intend, publish it in the environment\'s duplicate detection rules settings, then rebuild. '
+  + 'Setting "status": "published" in the App Spec does not bypass this pending attempt.';
+
+/**
+ * The hookup's read-only reader (createProtectedConfiguration publicationHint): the sentence for one stopped duplicate
+ * rule, or null for today's text. `source` must be a port or preflight result this hookup issued, over this same spec
+ * and store, with its original methods; `guardId` is the stopped item's own normalized id, compared only (the id shown
+ * is the store's). Reads the in-memory store record only: no request, no disk refresh. Every failure answers null.
+ */
+function publicationHintOf({ store, owned }, { spec, source, kind, key, code, guardId } = {}) {
+  try {
+    if (!configurationIdentityOf(spec) || kind !== 'duplicateRule' || typeof key !== 'string' || !key) return null;
+    if (code !== COMPLETION_CODE && code !== UNVERIFIED_CODE) return null;
+    if (!source || typeof source !== 'object' || !owned.has(source)) return null;
+    const scope = SCOPES.get(source);
+    if (!scope || scope.spec !== spec || scope.store !== store) return null;
+    if ((scope.resolve || scope.run) && (source.resolve !== scope.resolve || source.run !== scope.run)) return null;
+    const note = scope.notes.get(noteKey(kind, key));
+    if (!note || note.kind !== kind || note.key !== key || note.code !== code) return null;
+    const entry = A.configurationIntentOf(spec, kind, key);
+    if (!entry || entry.key !== key || typeof entry.name !== 'string' || entry.name.trim() === '' || entry.name.length > 100) return null;
+    const guard = typeof guardId === 'string' ? normalizeGuid(guardId) : '';
+    if (!guard || guard !== guardId) return null;
+    const group = store.readGroup(kind, key);
+    const a = group && group.pending;
+    if (!a || group.committed || a.family !== kind || a.key !== key || a.token !== note.token || !SENT_PHASES.has(a.phase)) return null;
+    if (a.acknowledgedRoot !== true || !a.expected || a.expected.baseObservation !== null) return null;
+    const p = a.rowProtocol;
+    if (!p || !Array.isArray(p.rows) || !p.completion || p.completion.ruleState !== 'published' || !Array.isArray(p.effects)) return null;
+    const roots = p.rows.filter((r) => r.parentId === null);
+    if (roots.length !== 1 || roots[0].kind !== kind || roots[0].key !== key || roots[0].mode !== 'create') return null;
+    const rootId = normalizeGuid(roots[0].id);
+    if (!rootId || rootId !== normalizeGuid(a.root && a.root.id) || rootId !== note.rootId || rootId !== guard) return null;
+    if (a.declarationSha256 !== note.declarationSha256) return null;
+    // The declaration as it is now, over the rows the attempt persisted: a declaration changed since the stop was observed
+    // is not the one this sentence would describe.
+    if (B.declarationSha256Of(spec, { kind, key, solution: note.solution, rows: p.rows, ruleState: p.completion.ruleState }) !== a.declarationSha256) return null;
+    // Only a publication whose request was dispatched is "not sent again". One still `dispatched: false` is sent once by
+    // the next build (unsentPublication), and a record without the effect proves nothing either way: today's text.
+    const effects = p.effects.filter((e) => e && e.kind === 'rule-state');
+    if (effects.length !== 1 || normalizeGuid(effects[0].id) !== rootId || effects[0].dispatched !== true) return null;
+    return publicationHintText(entry.name, key, rootId);
+  } catch {
+    return null;
+  }
+}
 
 // What every protected read needs, read once per build: the solution's component types (membership is planned only
 // outside the restricted solutions, but the read is cheap and fail-closed).
@@ -861,6 +971,9 @@ async function replaceLocalCopy(dataverse, sdk, kind, id) {
 async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk = null, authorizedOverwrite = null }) {
   if (!configurationIdentityOf(spec)) return { halts: [] };
   const halts = [];
+  // The answer, registered with this preflight's own notes before any is recorded (publicationHintOf reads them).
+  const result = { halts };
+  const scope = scopeOf(result, spec, store);
   // The maker's approvals as given (exact spellings): an adoption is forecast as made only when every one it needs is here.
   const given = new Set(ctx && typeof ctx.approvals === 'function' ? ctx.approvals() : []);
   let env;
@@ -870,6 +983,7 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
     return { halts: [{ kind: 'configuration', key: '*', code: error.code || UNVERIFIED_CODE, message: error.message }] };
   }
   for (const { kind, key } of parentsFirst(spec, declaredItems(spec))) {
+    scope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
     try {
       const item = await locateItem(env, kind, key);
       // Every later step of a bound or pending item reads its row into the workspace over the local copy (locate's
@@ -912,7 +1026,10 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
           // A saved rule create whose initial publication provably never left: resolve sends it once (unsentPublication).
           const owed = unsentPublication(ctx, item, rec);
           if (owed && owed.would.action === 'commit') continue;
-          halts.push(withWayOut(item, haltOf(kind, item.planned.key, owed ? owed.would : rec.verdict)));
+          // Only the stop judged from this preflight's own read is explained (#808); a hypothetical one (owed.would) is not.
+          const h = haltOf(kind, item.planned.key, owed ? owed.would : rec.verdict);
+          const noted = !owed && noteStop(scope, item, rec.observation, rec.verdict);
+          halts.push(withWayOut(item, noted && !h.id ? { ...h, id: scope.notes.get(noteKey(kind, item.planned.key)).rootId } : h));
           continue;
         }
         // A complete edit settles read-only (resolve): nothing more is written for it, so it is not judged as an edit.
@@ -961,10 +1078,11 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
           : await childVerdict(env, item.planned, shape);
       if (verdict) halts.push({ kind, key: item.planned.key, ...verdict });
     } catch (error) {
+      scope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
       halts.push({ kind, key, ...(error.id ? { id: error.id } : {}), code: error.code || UNVERIFIED_CODE, message: error.message });
     }
   }
-  return { halts };
+  return result;
 }
 
 // The members a planned create still owes the solution, added in the create set's own scope (the classifier admits only
@@ -1021,11 +1139,12 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
   // attempt is still recovered read-only from what it persisted (recoverPending), and the next build's preflight stops on
   // the copy (DRAFT_CODE) until the maker keeps what they want and approves replacing it with the server's
   // (--authorize overwrite:<kind>:<key>, overwriteKey).
-  return {
+  const port = {
     // The binding store is the authority on these kinds: locate asks this port before any other record (configuration-artifacts.js).
     exact: true,
     protects: (kind) => KINDS.has(kind),
     async resolve({ kind, key }) {
+      hintScope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
       const item = await locateItem(await env(), kind, key);
       const rootId = item.planned.plan.rows[0].id;
       if (item.state === 'bound') return { state: 'present', id: rootId };
@@ -1060,9 +1179,14 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         if (verdict.action === 'resume') return { state: 'absent', id: rootId };
         // A saved rule create whose initial publication provably never left: sent once, fenced, then settled.
         const owed = unsentPublication(ctx, item, rec);
-        if (owed) verdict = owed.would.action === 'commit' ? await publishOnce(await env(), ctx, item) : owed.would;
+        if (owed) verdict = owed.would.action === 'commit' ? await publishOnce(await env(), ctx, item, hintScope) : owed.would;
+        // A stop judged from this resolve's own read, with no publication owed, is explained too (#808): its note, and the
+        // original id on the stop, which the haltOf of an empty verdict does not carry.
+        else noteStop(hintScope, item, observation, verdict);
         if (verdict.action === 'commit') return { state: 'present', id: rootId };
-        const h = withWayOut(item, haltOf(kind, item.planned.key, verdict));
+        const halt = haltOf(kind, item.planned.key, verdict);
+        const note = hintScope.notes.get(noteKey(kind, item.planned.key));
+        const h = withWayOut(item, note && !halt.id ? { ...halt, id: note.rootId } : halt);
         throw stop(h.code, h.message, h);
       } else if (adoptionAsked(ctx, kind, item.planned.key)) {
         const answer = adopted(kind, await adoptNamesake(await env(), ctx, item, key));
@@ -1074,6 +1198,7 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       throw stop(read.state === 'present' ? CONFLICT_CODE : UNVERIFIED_CODE, `the ${kind} "${item.planned.key}" derived id is ${read.state === 'present' ? 'taken by a row no binding holds' : 'unreadable'}`, { kind, key: item.planned.key, id: rootId });
     },
     async run({ kind, key }, fn) {
+      hintScope.notes.delete(noteKey(kind, A.portKeyOf(kind, key)));
       const item = await locateItem(await env(), kind, key);
       let resumed = null;
       // An adoption attempt is never sent as a create: its rows are a maker's, at ids no create derives.
@@ -1106,8 +1231,12 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
       const added = await addMissingMembers(dataverse, planned, scope);
       if (added.error || added.localError) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" solution membership was not acknowledged`, { kind, key: planned.key, id });
-      const [settled] = ctx.settle([{ token: attempt.token, observation: await B.observe(dataverse, planned) }]);
-      if (settled.verdict.action !== 'commit') throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
+      const observation = await B.observe(dataverse, planned);
+      const [settled] = ctx.settle([{ token: attempt.token, observation }]);
+      if (settled.verdict.action !== 'commit') {
+        noteStop(hintScope, { planned, token: attempt.token }, observation, settled.verdict);
+        throw stop(settled.verdict.code || UNVERIFIED_CODE, settled.verdict.message || `the ${kind} "${planned.key}" create was not proved`, { kind, key: planned.key, id });
+      }
       return { outcome: 'created', id, childIds, result: pushed.value };
     },
     /**
@@ -1176,6 +1305,12 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       return { outcome: 'updated', id: rootId, childIds, result: pushed.value };
     },
   };
+  // This port's own notes (#808), kept with its original resolve and run: a port whose methods were replaced is not the
+  // one that observed the stop, so publicationHintOf answers nothing for it.
+  const hintScope = scopeOf(port, spec, store);
+  hintScope.resolve = port.resolve;
+  hintScope.run = port.run;
+  return port;
 }
 
 /**
@@ -1258,16 +1393,26 @@ function retireUndeclared(store, unit, a, how) {
 function createProtectedConfiguration({ store, gate, ctx, apiBase = null, retirements = [] } = {}) {
   if (!store || typeof store.readGroup !== 'function') throw new TypeError('createProtectedConfiguration needs the managed binding store');
   if (!ctx || typeof ctx.begin !== 'function' || typeof ctx.run !== 'function' || typeof ctx.settle !== 'function') throw new TypeError('createProtectedConfiguration needs the managed create context');
+  // The ports and preflight results this hookup issued: publicationHint answers only for one of them (a source made by
+  // another hookup, or by calling the module's functions directly, is not this hookup's to explain).
+  const owned = new WeakSet();
+  const own = (source) => {
+    if (source && typeof source === 'object') owned.add(source);
+    return source;
+  };
   return {
     store,
     gate,
     ctx,
-    preflight: ({ spec, dataverse, solution, bindings, sdk, authorizedOverwrite }) => preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk, authorizedOverwrite }),
-    port: ({ spec, dataverse, solution, bindings, sdk }) => protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase, sdk }),
+    preflight: async ({ spec, dataverse, solution, bindings, sdk, authorizedOverwrite }) => own(await preflightProtectedConfiguration({ spec, store, ctx, dataverse, solution, bindings, sdk, authorizedOverwrite })),
+    port: ({ spec, dataverse, solution, bindings, sdk }) => own(protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bindings, apiBase, sdk })),
     // A build without the opt-in: what the store still holds for its declared items (optInObligations), read locally.
     obligations: ({ spec }) => optInObligations({ spec, store }),
     // Every build, before its first service change: what the store still owes for items the App Spec no longer declares.
     sweep: ({ spec }) => pendingSweep({ spec, store, retirements }),
+    // Read-only advice for one stopped duplicate rule whose first publication is not confirmed (#808), or null:
+    // publicationHintOf. No request is made.
+    publicationHint: (query) => publicationHintOf({ store, owned }, query),
   };
 }
 

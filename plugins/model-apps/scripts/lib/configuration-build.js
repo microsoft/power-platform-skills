@@ -111,6 +111,20 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   // `sdk` is the workspace the build reads protected rows into: the preflight refuses to read over a local copy with edits.
   const protectedArgs = () => ({ spec, dataverse: sdk.dataverse, solution: spec.solution && spec.solution.uniqueName, bindings: opts.configurationBindings, sdk });
   const protectedPort = hookup ? hookup.port(protectedArgs()) : null;
+  // The hookup's read-only advice for a stopped duplicate rule whose first publication is not confirmed (#808), captured
+  // once with the port: a reader installed on the hookup later is not consulted.
+  const publicationHint = hookup && typeof hookup.publicationHint === 'function' ? hookup.publicationHint : null;
+  // One stop's advice, or '' (today's text). The reader decides from the hookup's own state; a throw or a non-string
+  // answer is no advice, never a failed build.
+  const hintFor = (query) => {
+    if (!publicationHint) return '';
+    try {
+      const text = publicationHint({ spec, ...query });
+      return typeof text === 'string' && text ? text : '';
+    } catch {
+      return '';
+    }
+  };
   const ctx = C.configurationContext({
     sdk,
     // The build's create port only when it can stand in for the configuration kinds' own (it protects every one of
@@ -189,11 +203,18 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
         throw fail('create-identity-unverified', 'configurationIdentity "stable-v1" needs the binding store for protected configuration, and it is not available to this build. No service changes were sent by this build.');
       }
       // The maker's overwrite approvals reach only the preflight: the one step that may replace a protected item's local copy.
-      const { halts } = await hookup.preflight({ ...protectedArgs(), authorizedOverwrite: opts.authorizedOverwrite });
+      const result = await hookup.preflight({ ...protectedArgs(), authorizedOverwrite: opts.authorizedOverwrite });
+      const { halts } = result;
       if (!halts.length) return { halts };
+      // A stopped rule whose first publication is not confirmed says how to finish it (#808), asked of the preflight
+      // result that judged it; every other stop reads as before.
+      const hint = (h) => {
+        const text = hintFor({ source: result, kind: h.kind, key: h.key, code: h.code, guardId: h.id });
+        return text ? ` (${text})` : '';
+      };
       // The edit refusal leads when there is one: it is the halt a maker acts on first, and its text is fixed.
       const first = halts.find((h) => h.code === 'configuration-edit-unsupported') || halts[0];
-      const others = halts.filter((h) => h !== first).map((h) => `${h.kind} ${h.key} (${h.code})`);
+      const others = halts.filter((h) => h !== first).map((h) => `${h.kind} ${h.key} (${h.code})${hint(h)}`);
       // A row of an earlier, unfinished create that no answer proved this build's own is adopted only under the maker's
       // exact approval token, one per row (managed-create-context.js judgeRows), never wholesale.
       const approvals = [...new Set(halts.filter((h) => !h.adoption).flatMap((h) => h.approvals || []))];
@@ -203,7 +224,7 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       // the id of each row (in the approvals themselves) and every field the build would then change — never a bare
       // token for an item whose own sentence is not the one shown.
       const adoptions = halts.filter((h) => h.adoption).map((h) => ` Adopt ${h.kind} ${h.key} at its id ${h.adoption.id} (the build would then change ${h.adoption.change}) only under these exact approvals, given after checking those rows are yours: ${h.adoption.approvals.map((t) => JSON.stringify(t)).join(', ')}.`).join('');
-      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}${adoptions}`);
+      throw fail(first.code, `${first.kind} ${first.key}: ${first.message}${hint(first)}${others.length ? ` Also stopped: ${others.join(', ')}.` : ''}${approve}${adoptions}`);
     },
     // Plan, apply and observe ONE phase's items. Returns {outcome, blocking, halt, plan}.
     async apply(phase) {
@@ -215,6 +236,24 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       if (step.outcome.unknown.length > before) {
         const items = [...(halt ? halt.items : []), ...step.outcome.unknown.slice(before).map(({ kind, key, code }) => ({ kind, key, code }))];
         halt = { phase, code: 'configuration-incomplete', retry: 'never', items, message: C.configurationHaltMessage(items) };
+      }
+      // A stopped rule whose first publication is not confirmed says how to finish it (#808). Asked only when the stop is
+      // this runtime's protected port's own: exactly one unknown outcome for the item, carrying its id, from exactly one
+      // planning source (its plan read, or its one create). The step's own halt is left as it was; a new one carries the
+      // advice, and only when there is any.
+      if (halt && publicationHint && protectedPort && ctx.creates === protectedPort) {
+        const same = (p) => (f) => f && f.kind === p.kind && f.key === p.key;
+        const extraHint = (p) => {
+          const found = step.outcome.unknown.filter((f) => same(p)(f) && f.code === p.code);
+          if (found.length !== 1 || typeof found[0].id !== 'string') return '';
+          const plan = step.plan || {};
+          const planned = (plan.unknown || []).filter((f) => same(p)(f) && f.code === p.code).length
+            + (plan.operations || []).filter((op) => same(p)(op) && op.action === 'create').length;
+          if (planned !== 1) return '';
+          return hintFor({ source: protectedPort, kind: p.kind, key: p.key, code: p.code, guardId: found[0].id });
+        };
+        const message = C.configurationHaltMessage(halt.items, extraHint);
+        if (message !== halt.message) halt = { ...halt, message };
       }
       if (phase === 'data-model') {
         applied = true;

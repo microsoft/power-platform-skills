@@ -2571,9 +2571,22 @@ const REFUSED_FIX = {
 };
 const refusedHint = (p) => `the service refused it${p.serviceCode ? ` (${p.serviceCode})` : ''}: nothing was created or changed and nothing is left pending; `
   + `${REFUSED_FIX[p.kind] || 'correct its definition in the App Spec'}, then build again, or remove it from the App Spec`;
-function configurationHaltMessage(items) {
+// `extraHint(item)` is optional and supplied only by the build's configuration runtime (configuration-build.js), which
+// derives it from its own trusted state, never from a failure's text: a nonempty string is appended in parentheses after
+// the line's existing text. It is advice only, so an answer that is not a string, or a throw, leaves the line as it was.
+// Without it the message is byte-identical to before.
+function configurationHaltMessage(items, extraHint) {
   const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : p.code === 'create-refused' ? ` (${refusedHint(p)})` : '');
-  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}${hint(p)}`;
+  const extra = (p) => {
+    if (typeof extraHint !== 'function') return '';
+    try {
+      const text = extraHint(p);
+      return typeof text === 'string' && text ? ` (${text})` : '';
+    } catch {
+      return '';
+    }
+  };
+  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}${hint(p)}${extra(p)}`;
   return `${items.length} configuration item${items.length === 1 ? '' : 's'} not completed: ${items.map(line).join(', ')}`;
 }
 

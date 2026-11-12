@@ -293,7 +293,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
   a plain download does not bring them back into the spec (a managed download of a `configurationIdentity:
   "stable-v1"` app brings back the ones its store proves, never a value, default, connection, implementation or duplicate rule); and a whole-build retry after a lost answer can create
-  a second row, so check the environment before running a failed build again. See
+  a second row, so check the environment before running a failed build again. Under `"stable-v1"`, a stop
+  that says a duplicate rule's first publication has not been confirmed names the rule and its original id:
+  relay its advice (wait if that rule reads Publishing, otherwise the maker checks and publishes it in the
+  environment, then rebuilds); never retry the build to resend it or add `"status": "published"` to force it. See
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → *Configuration items*.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
   / AI data visualization, M365 Copilot (opt-in); per-table Copilot row summaries (Insight Cards)

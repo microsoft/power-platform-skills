@@ -1592,8 +1592,12 @@ the field builds exactly as before.
   a create that is missing a row, its solution membership or the rule's initial state stops with
   `create-completion-required` — complete it under the same ids, then build again (or let it go as
   described for a refused create above). An initial
-  publication that failed or whose answer was lost is never sent again by the build: publish the rule
-  under the same id yourself. The one exception is a rule whose content was saved, but whose publish
+  publication that failed or whose answer was lost is never sent again by the build. The stop names the
+  rule, its App Spec key and its original id: check that exact rule in the environment. If it reads
+  Publishing, wait and build again. Otherwise check its definition and conditions and, if they are what you
+  intend, publish it yourself in the environment's duplicate detection rules settings, then build again.
+  Setting `"status": "published"` in the App Spec does not bypass this pending attempt. The one exception
+  is a rule whose content was saved, but whose publish
   request the record proves was never sent (the run stopped first). The next build sends that publish
   once, then binds the rule. If the rule's conditions still need your approval, the build asks for it
   first. Rows that no answer proved this build's own are bound only after you check
