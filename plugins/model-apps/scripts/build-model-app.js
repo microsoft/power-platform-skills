@@ -49,7 +49,7 @@ const { createPublicationBarrier, describeWithheld } = require('./lib/publicatio
 const { usesCommandStates, commandStateAuthorizationKeys } = require('./lib/command-state-contract.js');
 const { commandStateMode, createCommandStatePublicationObserver } = require('./lib/command-state-run.js');
 const { commandStateSendOnce } = require('./lib/command-state-transport.js');
-const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
+const { RETRY, judgeFailure, retryPolicyFor, throttleAskOf, publishLockRefusalOf } = require('./lib/retry-policy.js');
 const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
@@ -962,6 +962,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // made. Each wait takes one retry from the same count, with the same backoff, so a lag never earns retries of its own; once the count
   // is spent the read fails as it did, and the build stops with the service's answer.
   let retriesUsed = 0;
+  // The runs that ended on a publish the customization lock refused, and what the loop waited for it: said when the build stops on one (#848).
+  let lockRefusals = 0;
+  let lockWaitedMs = 0;
   const retryFreshRead = async (err, table) => {
     if (retriesUsed >= maxRetries) return false;
     retriesUsed += 1;
@@ -1091,26 +1094,45 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       // asked (the SDK's error holds no headers), and the client tells the budget instead (`declined`, lib/throttle-budget.js). The service said it was not ready for longer than the run may wait, so running the phases again would meet the
       // same answer: stop here, as for a wait of the build's own that does not fit — and so on the last run as on the first.
       const refused = transient && ask.throttled && declinedCount() > declinedBefore ? throttle.declined() : null;
+      // A publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf: a 429 with a lock's code, to a publish): the next run waits for the lock,
+      // longer than the ordinary backoff (LOCK_WAITS_MS), and for what the answer's Retry-After asked when that is longer still. It is the same run again — every
+      // write in front of the publish is sent again with it — so no publish is sent again without what it publishes being written first; and no run is added.
+      const lock = transient ? publishLockRefusalOf(err) : null;
+      if (lock) lockRefusals += 1;
       if (refused) {
         halted = budgetHalt(Math.max(ask.askedMs, refused.askedMs), refused.waitMs);
       } else if (retriesUsed < maxRetries && transient) {
         retriesUsed += 1;
-        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(retriesUsed);
+        const ordinary = backoffMs(retriesUsed);
+        // The lock's own wait takes no more than what is left of the budget, and never less than the ordinary backoff: a lock that outlasts the budget then stops the
+        // run as any throttle does. A wait the caller set (`retryDelayMs`) is the wait, for the lock as for anything else.
+        const left = typeof throttle.remainingMs === 'function' ? throttle.remainingMs() : Infinity;
+        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : lock ? Math.max(ordinary, Math.min(lockWaitMs(retriesUsed), left)) : ordinary;
         // What the service asked of the next send, carried across the layers (retry-policy.js, throttleAskOf): when the page backend's sends ran out it handed over the moment before which nothing may be
         // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
-        const asked = ask.notBefore > 0 ? Math.ceil(Math.min(ask.askedMs || Infinity, Math.max(0, ask.notBefore - now())) / 1000) * 1000 : 0;
-        const delay = Math.max(backoff, asked);
+        const leftOf = (askedMs, notBefore) => (notBefore > 0 ? Math.ceil(Math.min(askedMs || Infinity, Math.max(0, notBefore - now())) / 1000) * 1000 : 0);
+        const asked = leftOf(ask.askedMs, ask.notBefore);
+        // The Retry-After of the lock's answer (the HTTP client's moment, or, for the plugin's own publish, which has none, the whole ask) is honoured whole, never clamped.
+        const lockAsked = lock ? (lock.notBefore > 0 ? leftOf(lock.askedMs, lock.notBefore) : Math.ceil(lock.askedMs / 1000) * 1000) : 0;
+        const delay = Math.max(backoff, asked, lockAsked);
         if (ask.throttled && !throttle.fits(delay)) {
           // The wait does not fit what is left of the run's budget.
-          halted = budgetHalt(ask.askedMs || asked, delay);
+          halted = budgetHalt(ask.askedMs || (lock && lock.askedMs) || asked, delay);
         } else {
           if (ask.throttled) throttle.spend(delay);
-          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${retriesUsed}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
-          const askNote = asked > 0 ? ` (the service asked to wait ${Math.ceil((ask.askedMs || asked) / 1000)} s)` : '';
-          log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${retriesUsed}/${maxRetries}) after ${delay}ms${askNote}…`);
+          if (lock) lockWaitedMs += delay;
+          const why = lock ? 'a publish was refused because another customization is running' : 'transient error';
+          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `${why} (attempt ${retriesUsed}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
+          const askedOf = lockAsked > asked ? lock.askedMs || lockAsked : ask.askedMs || asked;
+          const askNote = Math.max(asked, lockAsked) > 0 ? ` (the service asked to wait ${Math.ceil(askedOf / 1000)} s)` : '';
+          log(`\n⟳ ${why} in ${err && err.phase} — retrying (attempt ${retriesUsed}/${maxRetries}) after ${delay}ms${askNote}…`);
           await sleep(delay);
           continue;
         }
+      }
+      // The build stops on a publish the lock refused: the halt is what it always was, and this says what it was and what to do.
+      if (lock) {
+        log(`\n✖ a publish was refused ${lockRefusals} time${lockRefusals === 1 ? '' : 's'} because another customization (a solution import or another publish) was running; the build waited ${Math.round(lockWaitedMs / 1000)} s for it. Run the same command again once that operation has finished.`);
       }
       // A non-transient (or retries-exhausted, or out-of-budget) halt — journal where/why it stopped, then propagate.
       // Resume by re-running the same command (idempotent): a partial range (--from and the like) is
@@ -1447,6 +1469,15 @@ function isTransientHalt(err, { spec } = {}) {
 // Exponential backoff with jitter: ~3s, 6s, 12s (capped at 30s).
 function backoffMs(attempt) {
   return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
+}
+
+// The wait before the next run after a publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf): ~30 s, 60 s, 90 s, with the same jitter. The
+// lock is held for as long as the operation that holds it runs — a solution import, another publish — which is a minute and more, so the ordinary backoff spent all
+// three runs while it was still held (#848). The runs are the same three: only the wait before each is longer. 180 s in all, inside the five-minute budget a run
+// allows itself for waiting out a throttle (lib/throttle-budget.js), which a 429 draws from.
+const LOCK_WAITS_MS = Object.freeze([30000, 60000, 90000]);
+function lockWaitMs(attempt) {
+  return LOCK_WAITS_MS[Math.min(attempt, LOCK_WAITS_MS.length) - 1] + Math.floor(Math.random() * 1000);
 }
 
 function list(v) {

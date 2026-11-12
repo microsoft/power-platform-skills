@@ -555,3 +555,43 @@ test('throttleAskOf: what a throttled failure asks of the next send — the long
     assert.deepStrictEqual(throttleAskOf(junk), { throttled: false, askedMs: 0, notBefore: 0 }, String(junk));
   }
 });
+
+// #848: what the build reads of a publish the customization lock refused. The HTTP client records the Retry-After of an answer that is not a success on its body —
+// the body the SDK keeps as its ConnectionError's `cause` — and not as anything that prints or compares; publishLockRefusalOf finds the refusal along the chain only
+// when the answer is a 429, its code is one the platform gives the lock, and the request was a publish.
+test('a publish the lock refused: the client records the Retry-After the answer gave, invisibly, and the rule finds the refusal only for a 429 with a lock code to a publish', async () => {
+  const { createAzHttpClient, HTTP_RETRY_AFTER } = require('../lib/sdk-http-client.js');
+  const { publishLockRefusalOf } = require('../lib/retry-policy.js');
+  const LOCKED = { error: { code: '0x80071151', message: 'Cannot start the requested operation [Publish] because there is another [Import] running at this moment.' } };
+  const answers = [];
+  const at = 1800000000000;
+  const http = createAzHttpClient('https://contoso.crm.dynamics.com', {
+    getToken: () => 'TOK', sleep: async () => {}, now: () => at,
+    request: async () => answers.shift(),
+  });
+  const PUBLISH = 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml';
+  answers.push({ statusCode: 429, headers: { 'retry-after': '400' }, body: JSON.stringify(LOCKED) });
+  const refused = await http.post(PUBLISH, { ParameterXml: '<importexportxml/>' });
+  assert.strictEqual(answers.length, 0, 'sent once');
+  assert.deepStrictEqual(refused.body, LOCKED, 'the body compares as it did');
+  assert.deepStrictEqual(Object.keys(refused.body), ['error']);
+  assert.deepStrictEqual(refused.body[HTTP_RETRY_AFTER], { askedMs: 400000, notBefore: at + 400000 }, 'the whole ask, past the client\'s own cap');
+  answers.push({ statusCode: 429, headers: {}, body: JSON.stringify(LOCKED) });
+  assert.strictEqual((await http.post(PUBLISH, {})).body[HTTP_RETRY_AFTER], undefined, 'no header, no ask');
+  answers.push({ statusCode: 200, headers: { 'Retry-After': '5' }, body: '{"value":[]}' });
+  assert.strictEqual((await http.get('https://contoso.crm.dynamics.com/api/data/v9.2/accounts')).body[HTTP_RETRY_AFTER], undefined, 'a success is the caller\'s data, untouched');
+
+  const sdkError = (statusCode, url, body) => Object.assign(new Error(`HTTP ${statusCode} from ${url}: x`), { code: 'CONNECTION_ERROR', statusCode, url, cause: body });
+  const halt = (cause) => new BuildHalt('web-resources failed', { phase: 'web-resources', code: 'WEB_RESOURCE_UNVERIFIED', recoverable: true, cause: Object.assign(new Error('unconfirmed'), { code: 'WEB_RESOURCE_UNVERIFIED', cause }) });
+  assert.deepStrictEqual(publishLockRefusalOf(halt(sdkError(429, PUBLISH, refused.body))), { code: '0x80071151', askedMs: 400000, notBefore: at + 400000 });
+  assert.deepStrictEqual(publishLockRefusalOf(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/Microsoft.Dynamics.CRM.PublishAllXml', { error: { code: '0x8004F064' } })), { code: '0x8004f064', askedMs: 0, notBefore: 0 });
+  for (const [what, error] of [
+    ['a 500', sdkError(500, PUBLISH, LOCKED)],
+    ['a read', sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries', LOCKED)],
+    ['a custom action', sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/contoso_PublishXml', LOCKED)],
+    ['a service-protection limit', sdkError(429, PUBLISH, { error: { code: '0x80072322' } })],
+    ['a code only in words', sdkError(429, PUBLISH, { error: { message: 'CustomizationLockException 0x80071151' } })],
+    ['a bare 429', Object.assign(new Error('HTTP 429 from PublishXml'), { statusCode: 429 })],
+    ['nothing', undefined],
+  ]) assert.strictEqual(publishLockRefusalOf(error), null, what);
+});

@@ -180,7 +180,7 @@ function scenario({ realClient = false } = {}) {
     }
   }
   const row = (name) => [...org.resources.values()].find((r) => r.name === name);
-  return { org, dir, build, row, warnings, wire };
+  return { org, dir, build, row, warnings, wire, httpClient };
 }
 
 const SCRIPT = 'contoso_/scripts/form.js';
@@ -405,6 +405,35 @@ test('the build\'s own re-run of the halt writes it again by id in the same invo
   });
   assert.equal(result.ok, true);
   assert.deepEqual(writesOf(s.org.calls), ['POST /webresourceset', 'POST /PublishXml webresource', 'POST /AddSolutionComponent web resource', 'PATCH /webresourceset(id)', 'POST /PublishXml webresource', 'POST /AddSolutionComponent web resource'], 'one create; the second attempt wrote it again by id');
+  assert.equal(s.row(SCRIPT).publishedContent, base64(SCRIPT_CODE));
+});
+
+// #848: the run after a publish the lock refused waits for the lock — about 30 s, then 60 s, or what the answer's Retry-After asked when that is longer — and
+// that is all that changes. It is the same whole run again, so the content is written again by id before every publish that follows a refused one: no publish
+// is sent again without the write in front of it. The answer reaches the build through the real HTTP client, which records its Retry-After on the body.
+test('the build\'s own re-run of a publish the lock refused waits for the lock, honouring the Retry-After the answer gave, and writes the content again by id before each publish', async () => {
+  const s = scenario({ realClient: true });
+  let left = 2;
+  s.org.intercept((c) => namesWebResource(c) && left > 0 && (left -= 1, true), () => ({ status: 429, headers: { 'Retry-After': '40' }, body: { error: LOCK } }));
+  const sdk = createClientSdk({ workspaceStorage: createNodeWorkspaceStorage(s.dir), instanceUrl: s.org.origin, httpClient: s.httpClient });
+  await sdk.initWorkspace();
+  const sleeps = [];
+  const logs = [];
+  const result = await buildModelApp(spec(), { apply: true, publish: true, maxRetries: 3, appDir: s.dir, workspaceDir: s.dir }, {
+    sdk,
+    warn: (w) => s.warnings.push(String(w)),
+    log: (m) => logs.push(String(m)),
+    sleep: async (ms) => { sleeps.push(ms); },
+    runBuild: (runSpec, options) => runSdkBuild(runSpec, { ...options, phases: ['web-resources'], env: s.org.origin }),
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(sleeps.map((ms) => Math.floor(ms / 1000)), [40, 60], `the 40 s the service asked, longer than the lock's 30; then the lock's 60: ${sleeps}`);
+  assert.ok(logs.some((l) => /a publish was refused because another customization is running/.test(l)), logs.join('\n'));
+  assert.deepEqual(writesOf(s.org.calls), [
+    'POST /webresourceset', 'POST /PublishXml webresource', 'POST /AddSolutionComponent web resource',
+    'PATCH /webresourceset(id)', 'POST /PublishXml webresource', 'POST /AddSolutionComponent web resource',
+    'PATCH /webresourceset(id)', 'POST /PublishXml webresource', 'POST /AddSolutionComponent web resource',
+  ], 'one create; each publish after a refused one follows a write of the content by id, and the runs are the three they always were');
   assert.equal(s.row(SCRIPT).publishedContent, base64(SCRIPT_CODE));
 });
 

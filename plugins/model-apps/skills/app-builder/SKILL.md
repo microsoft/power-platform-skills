@@ -716,7 +716,12 @@ guard or a SQL timeout the service names by its error code, a timeout or reset o
 **auto-retried** with backoff on `--apply` (the build is idempotent, so a retry reuses what's already created).
 A throttled service is waited for as long as it asks (`Retry-After`) — by the HTTP client's re-sends of a throttled read or service-protection-limited publish, by the page writes and by the build's own re-runs of a phase — inside one budget of five minutes per run for all the waiting
 a throttle costs: when the next wait does not fit, the build stops with a `throttle-budget-exhausted`
-halt that says what the service asked — run it again later and it continues. (A 5xx, a reset connection or a deadlock is not a throttle: those keep their own, shorter schedule and are not counted in it.) If the build still **halts** (`BuildHalt`) on an
+halt that says what the service asked — run it again later and it continues. (A 5xx, a reset connection or a deadlock is not a throttle: those keep their own, shorter schedule and are not counted in it.)
+A publish the service refuses with a 429 because another customization (a solution import or another publish) holds
+the lock waits longer before the build's next run — about 30 s, 60 s and 90 s, or its `Retry-After` when that is
+longer — inside the same five-minute budget; the build still runs at most three more times, writes again before each
+publish, and when it stops it says how often the publish was refused and how long it waited: run the same command
+again once that operation has finished. If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
 gates the final *bulk* publish**, which also carries the edits made to existing views and forms.

@@ -629,6 +629,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   would be run three more times, after every earlier phase, with a log that blames the service. The halts that wrap a failure of the service (`pages-publish-failed`, `pages-existence-failed`, `pages-sitemap-read-failed`, `pages-shared-check-failed`, `pages-read-throttled`) follow it: a 429 or a 503 is run again, a refusal is not. A listing that fails *before*
   anything is written leaves nothing to duplicate, and is retried like any transient halt. A transient halt *later* in the same run (a 503 on a later read or write, say) still re-runs the whole build,
   which reads each page again — as each rebuild does — and a page that already holds its content is not written (and is published only if this workspace did not record that this very content was published), so its history does not record the prompt again.
+  **A publish refused because another customization holds the lock waits longer before the build's next run** (#848; `publishLockRefusalOf`, `lib/retry-policy.js`; `lockWaitMs`, build-model-app.js). The lock is
+  judged only when the answer is a 429, its `error.code` is one of `CUSTOMIZATION_LOCK_CODES` (each also in the transient codes; `0x80071154` is not one of them, its wait is the ordinary one), and the request was a
+  publish — the plugin's own `PublishXml` of its app components (`publishAppComponents` keeps the answer on its error with `notePublishRefusal`, non-enumerable) or the SDK's `PublishXml`/`PublishAllXml`, which
+  `lib/sdk-http-client.js` keeps by the answer's `Retry-After` on the error body (`HTTP_RETRY_AFTER`, a non-enumerable symbol, uncapped, with the moment it was read). A 500 or 503 with a lock code, a lock named only
+  in words, a lock on another request and a service-protection 429 keep the ordinary schedule. The wait before the next run is about 30 s, 60 s and 90 s (plus jitter under a second), or the `Retry-After` when that
+  is longer, and is spent from the run's throttle budget: a wait the budget has no room for is cut to what is left (or the build stops with `throttle-budget-exhausted` when the service asked for more than is left).
+  The number of runs does not change (the same `maxRetries`), and each run writes the content again before its publish — a publish is never sent again on its own. The log names the refusal ("a publish was refused
+  because another customization is running"), and a build that stops on it says how many times the publish was refused and how long it waited, and to run the same command again once that operation has finished.
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. Environment variables and connection references are the

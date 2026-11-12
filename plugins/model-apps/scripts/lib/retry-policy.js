@@ -41,7 +41,7 @@
 //     tests/halt-retry-policy.test.js enumerates every halt in the sources and holds each to a table, so a halt added without a policy fails there.
 // An error that carries none of this — an SDK or transport error that reaches the build as it is — is read by the rule above, as it always was.
 // The platform's signature of a SQL deadlock victim, the one the HTTP client already sends requests again on (lib/sdk-http-client.js): `Sql Number: 1205`.
-const { SQL_DEADLOCK_VICTIM } = require('./sdk-http-client.js');
+const { SQL_DEADLOCK_VICTIM, HTTP_RETRY_AFTER, isPublishRequest, retryAfterMs } = require('./sdk-http-client.js');
 const RETRY = Object.freeze({ NEVER: 'never', SERVICE: 'service' });
 
 // The statuses a run again can ride out. 429 is the service's throttle; 502, 503 and 504 are the answers of a gateway or a service that is down or overloaded, never a verdict on the request.
@@ -459,8 +459,66 @@ function throttleAskOf(error) {
   return { throttled, askedMs, notBefore };
 }
 
+// The codes of TRANSIENT_SERVICE_CODES that say the CUSTOMIZATION LOCK is held — another solution import or removal, another publish, another entity customization —
+// and not that SQL or a single record was busy. The lock is held for as long as that other operation runs, a minute and more for an import, so a publish it refused
+// waits longer before the build runs again than the ordinary 3/6/12 s backoff (build-model-app.js, LOCK_WAITS_MS: #848). Each is documented at
+//   https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+const CUSTOMIZATION_LOCK_CODES = Object.freeze(new Set([
+  '0x80071151', // SolutionConcurrencyFailure — measured live as the answer to a publish the lock refused (lib/sdk-http-client.js, publishOnce)
+  '0x80090412', // EntityCustomizationLockException
+  '0x8004f061', '0x8004f062', '0x8004f063', '0x8004f064', '0x8004f067', // CustomizationLockEx_*
+  '0x8004f077', // RACCannotAcquireCustomizationLock
+]));
+
+// What the plugin's own publish (lib/app-components.js publishAppComponents, which sends PublishXml through lib/publish-xml.js) records of an answer it got and did not
+// accept, for the build to read as the SDK's ConnectionError is read below: the status, the OData `error.code` of the body, and what its Retry-After asked. Not
+// enumerable, so the error prints, serializes and compares as it did. The answer is the SDK's dataverse client's, e.g.
+//   { status: 429, headers: { 'retry-after': '40' }, body: { error: { code: '0x80071151', message: 'Cannot start the requested operation [Publish] …' } } }
+// The ask is the whole of it and has no moment on the build's clock (the plugin's publish has no clock seam): the build waits it whole.
+const PUBLISH_REFUSAL = Symbol('a publish the service answered and the plugin did not accept');
+function notePublishRefusal(error, answer) {
+  if (!isObject(error) || !isObject(answer)) return error;
+  const body = isObject(answer.body) ? answer.body : null;
+  const code = body && isObject(body.error) && typeof body.error.code === 'string' && body.error.code ? body.error.code.toLowerCase() : null;
+  const recorded = isObject(body) && isObject(body[HTTP_RETRY_AFTER]) ? body[HTTP_RETRY_AFTER] : null;
+  const askedMs = retryAfterMs(answer.headers, Date.now(), Infinity) || (recorded && Number(recorded.askedMs)) || 0;
+  Object.defineProperty(error, PUBLISH_REFUSAL, { value: Object.freeze({ status: answer.status, code, askedMs, notBefore: 0 }), enumerable: false });
+  return error;
+}
+
+// The answer to a publish one error of a chain carries, as { status, code, askedMs, notBefore }, or null when it carries none: what notePublishRefusal recorded, or
+// an SDK ConnectionError for an answer to a request whose url is a publish (lib/sdk-http-client.js isPublishRequest: `…/PublishXml`, `…/PublishAllXml`, bare or
+// namespaced — never a custom action such as `contoso_PublishXml`). Its `cause` is the body, with the Retry-After the HTTP client recorded on it (HTTP_RETRY_AFTER).
+function publishAnswerOf(error) {
+  if (Object.prototype.hasOwnProperty.call(error, PUBLISH_REFUSAL)) return error[PUBLISH_REFUSAL];
+  if (!isConnectionError(error) || !(error.statusCode > 0) || typeof error.url !== 'string') return null;
+  let publish = false;
+  try { publish = isPublishRequest('POST', error.url); } catch { publish = false; }
+  if (!publish) return null;
+  const ask = isObject(error.cause) && isObject(error.cause[HTTP_RETRY_AFTER]) ? error.cause[HTTP_RETRY_AFTER] : {};
+  const positive = (value) => (Number.isFinite(value) && value > 0 ? value : 0);
+  return { status: error.statusCode, code: serviceCodeOf(error), askedMs: positive(ask.askedMs), notBefore: positive(ask.notBefore) };
+}
+
+// A publish the customization lock refused, found along the failure's chain, as { code, askedMs, notBefore } — or null. All three must hold: the service answered
+// 429 (a 500 or a 503 that carries a lock code is a failure of another kind, and keeps the ordinary wait), the code of its answer is a lock's (CUSTOMIZATION_LOCK_CODES;
+// a service-protection 429 is waited out by the HTTP client, and words alone are not a code), and the request was a publish. Only the wait before the build's next run
+// reads it; whether the failure is run again at all is judgeFailure's, as for any other.
+function publishLockRefusalOf(failure) {
+  if (!isObject(failure)) return null;
+  for (const e of causeChain(failure)) {
+    const answer = publishAnswerOf(e);
+    if (answer && answer.status === 429 && answer.code && CUSTOMIZATION_LOCK_CODES.has(answer.code)) {
+      return { code: answer.code, askedMs: answer.askedMs, notBefore: answer.notBefore };
+    }
+  }
+  return null;
+}
+
 module.exports = {
   RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf, markFreshTable, isFreshTableReadLag, freshTableLagAnswer,
+  // A publish the customization lock refused: the codes, what the plugin's own publish records of its answer, and the reader the build's wait is chosen by (#848).
+  CUSTOMIZATION_LOCK_CODES, notePublishRefusal, publishLockRefusalOf,
   // The code of the build's stop before a default view whose copy names no table, and the error it stops with (sdk-build.js, guardDefaultViewCopies).
   DEFAULT_VIEW_NO_TABLE_CODE, unsentDefaultView,
   // Also the reader of an answer's code for lib/entity-provision.js, which recognises an "already exists" refusal by it (isAlreadyExists).
