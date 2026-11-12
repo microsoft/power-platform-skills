@@ -32,6 +32,34 @@ const snapStore = require('./lib/apply-snapshot-store.js');
 const { checkPageOwnershipClearable } = require('./lib/page-ownership-records.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { withAppBuildLease } = require('./lib/app-operation-lease.js');
+const { appUniqueName } = require('./lib/app-unique-name.js');
+const { assertTeardownClear } = require('./lib/configuration-create-guard.js');
+
+// The highest folder on the way to `dir` that does not exist yet (`dir` itself when only it is missing), or null when `dir` exists: what
+// the build lease's mkdir is about to create, so a clean teardown can remove it again (apply-snapshot-store.js removeCreatedDir).
+function topmostMissingDir(dir) {
+  let missing = null;
+  for (let d = path.resolve(dir); !fs.existsSync(d); d = path.dirname(d)) {
+    missing = d;
+    if (path.dirname(d) === d) break;
+  }
+  return missing;
+}
+
+// #807: the refusal of a teardown whose workspace holds configuration create evidence (configuration-create-guard.js assertTeardownClear),
+// as the structured result the CLI emits: the stop code, `retry` (never), and the unit and next step when the halt names them. Null when
+// the workspace is clear. Any other error is not a verdict about the receipt and is thrown as it is.
+function configurationRefusal(workspaceDir, log) {
+  try {
+    assertTeardownClear(workspaceDir);
+    return null;
+  } catch (error) {
+    if (!error || typeof error.code !== 'string' || !error.code.startsWith('configuration-create-')) throw error;
+    log(`\n✗ ${error.message} Nothing was deleted.`);
+    return { ok: false, errors: [error.message], code: error.code, retry: error.retry, ...(error.unitId ? { unitId: error.unitId } : {}), ...(error.nextStep ? { nextStep: error.nextStep } : {}) };
+  }
+}
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
 // `publicationBarrier` (lib/managed-standalone-fence.js): the managed debt of the app's workspace, checked at every publish request the client sends.
@@ -133,50 +161,76 @@ async function teardownModelApp(spec, opts, deps) {
   let createdWorkspaceDir = null;
   let teardownId = null;
   let heartbeat = null;
-  if (opts.apply && opts.workspaceDir) {
-    const tomb = snapStore.tombstoneSnapshot(opts.workspaceDir);
-    if (!tomb.ok) {
-      const msg = `could not fence the changed-only snapshot before teardown (${tomb.reason}) — nothing was deleted. Let any running build of this app finish, then re-run the teardown.`;
-      log(`\n✗ ${msg}`);
-      return { ok: false, errors: [msg] };
-    }
-    createdWorkspaceDir = tomb.createdDir || null;
-    teardownId = tomb.teardownId || null;
-    // While it runs, the teardown keeps its entry fresh (apply-snapshot-store.js liveTeardowns): an entry
-    // counts as running only while it keeps being seen, so one a killed teardown left behind stops counting
-    // within minutes. unref'd, so it never keeps the process alive; cleared the moment the teardown ends.
-    if (teardownId) {
-      heartbeat = setInterval(() => snapStore.beatTeardown(opts.workspaceDir, teardownId), snapStore.TEARDOWN_BEAT_MS);
-      if (typeof heartbeat.unref === 'function') heartbeat.unref();
-    }
-  }
-  let r;
-  try {
-    r = await runTeardown(spec, { apply: opts.apply, workspaceDir: opts.workspaceDir, env: opts.env, ...(opts.publicationBarrier ? { publicationBarrier: opts.publicationBarrier } : {}), ...(opts.managedFenceError ? { managedFenceError: opts.managedFenceError } : {}) }, { sdk: deps.sdk, emit, warn });
-  } finally {
-    if (heartbeat) clearInterval(heartbeat);
-    // Every teardown that FINISHES drops its entry from the tombstone's list of teardowns in flight — a
-    // clean one, one that finished with errors, and one that threw. An entry left behind read as a
-    // teardown still running whenever its pid was alive (reused, slow to exit, or this very process), and
-    // a later clean teardown then kept the fence for up to a day.
-    //
-    // Only a CLEAN teardown may also delete the snapshot — the app is gone, so a fresh rebuild must start a
-    // new baseline — and then only as the last one to finish: an overlapping teardown still deleting keeps
-    // its fence (releaseTombstone). One that failed or threw keeps the tombstone (`keep`: a surviving
-    // artifact must not be rebaselined), in a folder it created too, since that tombstone is what keeps it.
-    if (teardownId) {
-      const clean = !!(r && r.ok && !r.dryRun);
-      const rel = snapStore.releaseTombstone(opts.workspaceDir, teardownId, clean ? {} : { keep: true });
-      if (clean && rel.ok && !rel.left) {
-        if (createdWorkspaceDir) snapStore.removeCreatedDir(opts.workspaceDir, createdWorkspaceDir);
-      } else if (clean) {
-        // On the result, so main() leaves the workspace alone: --clear-workspace would delete the fence.
-        r.snapshotKept = rel.reason;
-        log(`\n▸ the changed-only snapshot stays tombstoned: ${rel.reason}.${rel.left ? ' The last of them to finish removes it.' : ' A --changed-only build full-builds until a clean teardown removes it.'}`);
-      } else if (!rel.ok) {
-        log(`\n▸ could not drop this teardown from the changed-only fence (${rel.reason}); the snapshot stays tombstoned, and a later teardown may keep it until this process has exited.`);
+  let removeWorkspaceAfter = false;
+  // The fenced part of an apply: the tombstone, the deletes and the release. Run under the app's build lease when there is a workspace
+  // (below), and answers the teardown's result.
+  const fencedTeardown = async () => {
+    if (opts.apply && opts.workspaceDir) {
+      const tomb = snapStore.tombstoneSnapshot(opts.workspaceDir);
+      if (!tomb.ok) {
+        const msg = `could not fence the changed-only snapshot before teardown (${tomb.reason}) — nothing was deleted. Let any running build of this app finish, then re-run the teardown.`;
+        log(`\n✗ ${msg}`);
+        return { ok: false, errors: [msg] };
+      }
+      createdWorkspaceDir = tomb.createdDir || createdWorkspaceDir;
+      teardownId = tomb.teardownId || null;
+      // While it runs, the teardown keeps its entry fresh (apply-snapshot-store.js liveTeardowns): an entry
+      // counts as running only while it keeps being seen, so one a killed teardown left behind stops counting
+      // within minutes. unref'd, so it never keeps the process alive; cleared the moment the teardown ends.
+      if (teardownId) {
+        heartbeat = setInterval(() => snapStore.beatTeardown(opts.workspaceDir, teardownId), snapStore.TEARDOWN_BEAT_MS);
+        if (typeof heartbeat.unref === 'function') heartbeat.unref();
       }
     }
+    let r;
+    try {
+      r = await runTeardown(spec, { apply: opts.apply, workspaceDir: opts.workspaceDir, env: opts.env, ...(opts.publicationBarrier ? { publicationBarrier: opts.publicationBarrier } : {}), ...(opts.managedFenceError ? { managedFenceError: opts.managedFenceError } : {}) }, { sdk: deps.sdk, emit, warn });
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      // Every teardown that FINISHES drops its entry from the tombstone's list of teardowns in flight — a
+      // clean one, one that finished with errors, and one that threw. An entry left behind read as a
+      // teardown still running whenever its pid was alive (reused, slow to exit, or this very process), and
+      // a later clean teardown then kept the fence for up to a day.
+      //
+      // Only a CLEAN teardown may also delete the snapshot — the app is gone, so a fresh rebuild must start a
+      // new baseline — and then only as the last one to finish: an overlapping teardown still deleting keeps
+      // its fence (releaseTombstone). One that failed or threw keeps the tombstone (`keep`: a surviving
+      // artifact must not be rebaselined), in a folder it created too, since that tombstone is what keeps it.
+      if (teardownId) {
+        const clean = !!(r && r.ok && !r.dryRun);
+        const rel = snapStore.releaseTombstone(opts.workspaceDir, teardownId, clean ? {} : { keep: true });
+        if (clean && rel.ok && !rel.left) {
+          // The folders this teardown made are removed once the build lease is let go too: its lock lives in them.
+          if (createdWorkspaceDir) removeWorkspaceAfter = true;
+        } else if (clean) {
+          // On the result, so main() leaves the workspace alone: --clear-workspace would delete the fence.
+          r.snapshotKept = rel.reason;
+          log(`\n▸ the changed-only snapshot stays tombstoned: ${rel.reason}.${rel.left ? ' The last of them to finish removes it.' : ' A --changed-only build full-builds until a clean teardown removes it.'}`);
+        } else if (!rel.ok) {
+          log(`\n▸ could not drop this teardown from the changed-only fence (${rel.reason}); the snapshot stays tombstoned, and a later teardown may keep it until this process has exited.`);
+        }
+      }
+    }
+    return r;
+  };
+  let r;
+  if (opts.apply && opts.workspaceDir) {
+    // #807: an apply runs under the app's build lease (lib/app-operation-lease.js), the one a build of the app holds, so a teardown and a
+    // build of the same app in this workspace never run at once, and the configuration create receipt it checks cannot change under it.
+    // A held lease is refused (`build-locked`) before anything is fenced or deleted. The lease makes the workspace folder when it is
+    // missing, so the folders above it that did not exist are noted first, to be removed again after a clean teardown as before.
+    createdWorkspaceDir = topmostMissingDir(opts.workspaceDir);
+    r = await withAppBuildLease({ workspaceDir: opts.workspaceDir, appUniqueName: appUniqueName(spec), warn }, async () => {
+      // A workspace holding configuration create evidence — an open or deferred unit, an unreadable or unknown receipt file, a
+      // quarantine marker or archive — is refused before the fence and before any delete: the receipt says the environment may hold
+      // configuration rows nobody has accounted for, and only configuration-recovery.js may settle that. A build's quarantine
+      // acknowledgment is never permission here; teardown accepts none.
+      const refused = configurationRefusal(opts.workspaceDir, log);
+      return refused || fencedTeardown();
+    });
+    if (removeWorkspaceAfter) snapStore.removeCreatedDir(opts.workspaceDir, createdWorkspaceDir);
+  } else {
+    r = await fencedTeardown();
   }
   if (opts.apply && r && !r.dryRun) {
     // A skip is one of three different facts, and the summary used to call all of them "not found" —
@@ -238,6 +292,16 @@ async function main() {
       managed = { managedFenceError: error };
     }
   }
+  // #807: a workspace holding configuration create evidence is refused before the destructive client exists. teardownModelApp checks it
+  // again under the app's build lease, which is the check that counts; this one only spares the client and its throwaway workspace.
+  if (apply) {
+    const refused = configurationRefusal(workspaceDir, (m) => process.stderr.write(m + '\n'));
+    if (refused) {
+      makeWritesBlocking(process.stdout, process.stderr);
+      emitResult(false, refused);
+      return;
+    }
+  }
   const { sdk, cleanup } = await makeSdk(env, managed.publicationBarrier);
   let r;
   let thrown = null;
@@ -268,9 +332,12 @@ async function main() {
       // records are disposable. Retain all unconsumed records, including foreign scopes.
       // Check under the clear lease and again after atomic isolation, before recursive removal:
       // another app can finish a receipt between the first check and the directory rename.
+      // #807: the configuration create receipt is checked the same way, against the target and then the isolated folder: a workspace
+      // holding an open or deferred unit, an unreadable receipt, a quarantine or its archive is never disposable.
       const requireDisposable = (dir) => {
         const ownership = checkPageOwnershipClearable(dir);
         if (!ownership.ok) throw new Error(ownership.reason);
+        assertTeardownClear(dir);
       };
       const cleared = clearable.ok ? snapStore.clearWorkspace(clearable.target, {
         beforeRename: () => requireDisposable(clearable.target),

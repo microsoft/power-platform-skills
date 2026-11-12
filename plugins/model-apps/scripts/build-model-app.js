@@ -94,6 +94,7 @@ const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
+const { assertConfigurationCreatesClear, acknowledgeQuarantines } = require('./lib/configuration-create-guard.js');
 const { publicationRiskApproval } = require('./lib/managed-bindings.js');
 const { readVerifyManifest } = require('./lib/declared-form-io.js');
 const { createAttemptSendObserver } = require('./lib/managed-feature-contract.js');
@@ -1029,6 +1030,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         ...(deps.managedCreateGate ? { managedCreateGate: deps.managedCreateGate } : {}),
         ...(opts.configurationApprovals ? { configurationApprovals: opts.configurationApprovals } : {}),
     ...(opts.configurationRetirements ? { configurationRetirements: opts.configurationRetirements } : {}),
+        // #807: the in-process quarantine acknowledgment the command validated, for the FIRST attempt only: it lets one attempt do
+        // configuration work beside the acknowledged quarantines, and an automatic re-run asks again (the engine spends it as well).
+        ...(attempt === 1 && opts.configurationQuarantineAcknowledgment ? { configurationQuarantineAcknowledgment: opts.configurationQuarantineAcknowledgment } : {}),
         // commandStates: the exact --authorize tokens of the feature, the raw client its rows are read and written through, and the invocation's observer.
         ...(opts.commandStateApprovals ? { commandStateApprovals: opts.commandStateApprovals } : {}),
         ...(deps.commandStateClient ? { commandStateClient: deps.commandStateClient } : {}),
@@ -1926,7 +1930,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE =
-    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--preview-push] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--deployment-settings <file>] [--workspace <dir>]';
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--preview-push] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--deployment-settings <file>] [--workspace <dir>] [--acknowledge-quarantined-configuration <id>[,<id>...]]';
   // The declared flag contract, enforced before anything else runs.
   //
   // `needValue` lists every flag whose MISSING value would be read as a default rather than an
@@ -1941,8 +1945,8 @@ async function main() {
   const flagError = validateFlags(argv, {
     known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan', 'preview-push',
       'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
-      'allow-destructive', 'authorize', 'deployment-settings', 'workspace'],
-    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'deployment-settings', 'workspace'],
+      'allow-destructive', 'authorize', 'deployment-settings', 'workspace', 'acknowledge-quarantined-configuration'],
+    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'deployment-settings', 'workspace', 'acknowledge-quarantined-configuration'],
   });
   if (flagError) {
     makeWritesBlocking(process.stdout, process.stderr);
@@ -2092,7 +2096,10 @@ async function main() {
   // verify, the SDK's cleanup and the baseline written last, and it is let go — in the `finally` of withAppBuildLease — before the result is
   // printed: emitResult ends the process, and a `finally` around it would never run. So the command's body ANSWERS its result, and it is printed
   // here, after the release; an error it throws goes on to main().catch the same way. A dry run reads only, and takes no lease.
-  const command = { env, spec, languageCode, changedOnly, workspaceDir };
+  // --acknowledge-quarantined-configuration: the raw quarantine ids, validated against the workspace inside runBuildCommand (under the
+  // lease) and never saved: an acknowledgment is good for this invocation only.
+  const acknowledgeQuarantined = typeof flags['acknowledge-quarantined-configuration'] === 'string' ? flags['acknowledge-quarantined-configuration'] : undefined;
+  const command = { env, spec, languageCode, changedOnly, workspaceDir, ...(acknowledgeQuarantined !== undefined ? { acknowledgeQuarantined } : {}) };
   // skill_completed telemetry, for an APPLY only: a dry run changes nothing in the environment. Set before the run so a halt thrown out of
   // it (main().catch) is reported too; reportCompletion awaits at most a short WhoAmI and never throws.
   if (opts.apply) {
@@ -2173,7 +2180,7 @@ async function reportCompletion(run, result, emit = emitSkillCompleted) {
 // Everything main() does once the command line has been checked: auth, the authoring language, the SDK, the journal, the build and the baseline.
 // Answers { ok, payload } for main() to print: a refusal of the identity as the `{ ok: false, error }` it has always printed, and otherwise the
 // build's result, `ok` only when the build and its verify succeeded.
-async function runBuildCommand({ env, spec, languageCode, changedOnly, workspaceDir, opts, stepTally }) {
+async function runBuildCommand({ env, spec, languageCode, changedOnly, workspaceDir, acknowledgeQuarantined, opts, stepTally }) {
   // #455: the App, Form and Dashboard adapters bake the authoring LCID in at CONSTRUCTION, so it
   // has to be resolved before the SDK exists — which is why this reads over the transport hatch
   // rather than through `provision.queryRecords`. Resolving here also means the provisioned-language
@@ -2210,6 +2217,20 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // provisioned-languages probe. A disagreement between the two would label columns in one language
   // and FormXML/sitemap titles in another — assigned after resolution because `opts` is built above.
   opts.preResolvedLanguageCode = authoringLanguageCode;
+  // #807: the configuration create receipt guard, a local read that sends nothing, run before the SDK is made, the journal opened or any
+  // shortcut taken (changed-only, the protected path, a phase-only apply): an open create unit, an unreadable receipt, a receipt of
+  // another environment, solution, app or language, a deferred unit's root brought back, or an unacknowledged quarantine stops an apply
+  // with a retry-never halt naming configuration-recovery.js. The acknowledgment is validated here, under the lease, once; it is handed
+  // on in-process only. A dry run sends no write, so the same finding is a warning and a `configurationCreate` note on its result.
+  let configurationCreateNote = null;
+  try {
+    if (acknowledgeQuarantined !== undefined) opts.configurationQuarantineAcknowledgment = acknowledgeQuarantines(workspaceDir, acknowledgeQuarantined);
+    assertConfigurationCreatesClear(workspaceDir, { spec, env, languageCode: authoringLanguageCode, phases: opts.phases, quarantineAcknowledgment: opts.configurationQuarantineAcknowledgment });
+  } catch (err) {
+    if (opts.apply || !err || typeof err.code !== 'string' || !err.code.startsWith('configuration-create-')) throw err;
+    configurationCreateNote = { code: err.code, ...(err.unitId ? { unitId: err.unitId } : {}), ...(err.nextStep ? { nextStep: err.nextStep } : {}) };
+    process.stderr.write(`⚠ ${err.message} An --apply of this App Spec stops here until the receipt is resolved.\n`);
+  }
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
   // Only an apply opens (and so binds) the app folder's workspace; a dry run works in a throwaway one and
@@ -2368,7 +2389,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // main() prints this once the lease is let go (emitResult calls process.exit). A build that applied cleanly but whose auto-verify found missing
   // artifacts exits NON-ZERO (the silent-partial signal auto-verify exists to raise), while r still carries the full build + verify detail.
   const ok = r.ok && (!r.verify || r.verify.ok);
-  return { ok, payload: r };
+  return { ok, payload: configurationCreateNote && r && typeof r === 'object' ? { ...r, configurationCreate: configurationCreateNote } : r };
 }
 
 if (require.main === module) {

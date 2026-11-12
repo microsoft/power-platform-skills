@@ -24,6 +24,7 @@ const { authorizeFlag } = require('./cli-failure.js');
 // lease's exclusive create-and-reclaim and reclaimed only from a build that is provably gone; and the build lease an apply holds outside it
 // (lib/app-operation-lease.js).
 const { acquireAppPagesLease, withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
+const { assertConfigurationCreatesClear } = require('./configuration-create-guard.js');
 const { unreadableAnswer } = require('./collection-answers.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
@@ -3613,8 +3614,23 @@ async function runSdkBuild(spec, opts = {}) {
   const commandStateSpecError = commandStateSpecHalt(spec);
   if (commandStateSpecError) throw commandStateSpecError;
   if (!opts.apply) return runSdkBuildAttempt(spec, opts);
-  return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: opts.warn }, () => runSdkBuildAttempt(spec, opts));
+  return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: opts.warn }, () => {
+    // #807: the configuration create receipt guard at the engine's own entry, under the lease and before the attempt sends anything, so a
+    // direct caller (a test harness, the changed-only flow, another script) cannot pass an open unit, an unreadable receipt or an
+    // unacknowledged quarantine that the command would have stopped. Local only: a workspace with no receipt adds no request.
+    // A quarantine acknowledgment lets ONE attempt do configuration work; once spent it is dropped, so an automatic re-run asks again.
+    const ack = opts.configurationQuarantineAcknowledgment;
+    const attemptOpts = ack && typeof ack === 'object' && spentQuarantineAcknowledgments.has(ack) ? { ...opts, configurationQuarantineAcknowledgment: undefined } : opts;
+    const cleared = assertConfigurationCreatesClear(applyWorkspaceOf(opts), {
+      spec, env: opts.env, languageCode: opts.preResolvedLanguageCode, phases: opts.phases,
+      quarantineAcknowledgment: attemptOpts.configurationQuarantineAcknowledgment,
+    });
+    if (cleared.acknowledged) spentQuarantineAcknowledgments.add(ack);
+    return runSdkBuildAttempt(spec, attemptOpts);
+  });
 }
+// The quarantine acknowledgments an engine attempt has already used (see runSdkBuild). Held by identity, never serialized.
+const spentQuarantineAcknowledgments = new WeakSet();
 
 // One attempt; the phases run in runSdkBuildPhases. This wrapper only carries what an attempt
 // still owes out of a halt, for the caller that retries:

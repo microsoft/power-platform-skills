@@ -1,0 +1,237 @@
+'use strict';
+// The read-only recovery command (configuration-recovery.js, #807) over a real receipt and the strict fake Dataverse: inspect, prepare
+// and resolve each reach the service with GETs only (the fake org records every write), a receipt of another environment is refused
+// before any read, a deferral reads nothing, and a completed resolution answers configuration-create-reconciled rather than success.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { createConfigOrg } = require('./helpers/fake-config-org.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+const { appUniqueName } = require('../lib/app-unique-name.js');
+const A = require('../lib/configuration-artifacts.js');
+const P = require('../lib/configuration-create-plan.js');
+const S = require('../lib/configuration-create-state.js');
+const { runRecoveryCommand, currentIntentOf } = require('../configuration-recovery.js');
+
+const SOL = 'ContosoSol';
+const ENV = 'https://contoso.crm.dynamics.com';
+const SP = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';
+const RECEIPT_KT = P.CONFIGURATION_CREATE_RECEIPT_KIND_TABLE;
+const spec = ({ apis = true, calcDescription } = {}) => ({
+  minimumPluginVersion: '2.21.0',
+  solution: { uniqueName: SOL, publisherPrefix: 'contoso' },
+  app: { name: 'Recovery Test' },
+  connectionReferences: [{ logicalName: 'contoso_c1', connectorId: SP }],
+  customApis: apis ? [{ uniqueName: 'contoso_Calc', isFunction: true, ...(calcDescription ? { description: calcDescription } : {}), requestParameters: [{ uniqueName: 'A', type: 'integer' }], responseProperties: [{ uniqueName: 'R', type: 'string' }] }] : [],
+});
+
+function orgOf() {
+  // childrenJoin: a child created with the solution header under a member root joins the solution too, as the platform does.
+  return createConfigOrg({ childrenJoin: true, tables: [{ logicalName: 'contact', attributes: ['lastname'] }], solution: { uniqueName: SOL, version: '1.0.0.0', prefix: 'contoso' } });
+}
+
+// An app folder holding the spec and a receipt with one prepared (nothing sent yet) unit for `kind`/`key`.
+function appWithUnit(s, kind, key, { environmentUrl = ENV } = {}) {
+  const appDir = path.join(makeTempDir('cfg-recovery-cli-'), 'app');
+  fs.mkdirSync(appDir, { recursive: true });
+  fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify(s));
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const c = P.compileConfigurationCreateUnit(s, { kind, key, bindings: A.readDeploymentBindings({}, s), solution: SOL });
+  assert.equal(c.ok, true, JSON.stringify(c));
+  const context = S.createStateContext({ environmentUrl, solutionUniqueName: SOL, appUniqueName: appUniqueName(s), authoringLanguageCode: 1033 });
+  // The receipt keeps the compiled unit's public facts; the solution is the receipt context's, not the unit's.
+  const { solution, ...unit } = c.unit;
+  assert.equal(solution, SOL);
+  S.prepareCreateUnit(workspaceDir, { kindTable: RECEIPT_KT, context, unit });
+  return { appDir, workspaceDir, compiled: c, unitId: S.readConfigurationCreateState(workspaceDir, { kindTable: RECEIPT_KT }).units[0].unitId };
+}
+
+// Each create row straight to the fake org with the exact request the writer would send (as an interrupted build left it).
+async function sendRows(org, c) {
+  for (const r of c.unit.rows.filter((x) => x.role === 'create')) {
+    const req = P.compiledRowRequest(c.handle, r.id);
+    const headers = { 'content-type': 'application/json', ...(req.solutionHeader ? { 'MSCRM.SolutionUniqueName': SOL } : {}) };
+    const res = await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: req.method, headers, body: req.body });
+    assert.ok(res.statusCode < 300, `${req.path}: ${res.statusCode} ${res.body}`);
+  }
+}
+
+// The raw client the command is handed, over the fake org; `made` counts how often the command asked for one.
+function clientOver(org) {
+  const made = { count: 0 };
+  const httpClient = (origin) => {
+    made.count += 1;
+    return createAzHttpClient(origin, { getToken: () => 'test-token-0123456789abcdef', request: org.request, sleep: async () => {} });
+  };
+  return { httpClient, made };
+}
+const noClient = () => { throw new Error('the command asked for a service client'); };
+const run = (argv, deps = {}) => runRecoveryCommand(argv, { warn: () => {}, ...deps });
+
+test('usage errors name the problem and print the usage', async () => {
+  for (const [argv, words] of [
+    [[], /name one command/],
+    [['inspect', '--app-dir', 'x', '--bogus'], /bogus/],
+    [['prepare', '--app-dir', 'x', '--unit', 'u', '--resolution', 'defer'], /--env is required/],
+    [['resolve', '--app-dir', 'x', '--resolution', 'quarantine-unreadable'], /--acknowledge-unknown-dispatch/],
+    [['inspect', '--app-dir', 'x', '--unit', 'u'], /not an inspect option/],
+    [['prepare', '--app-dir', 'x', '--env', ENV, '--unit', 'u', '--resolution', 'accept-current', '--approval-token', 't'], /belong to resolve/],
+  ]) {
+    const r = await run(argv, { httpClient: noClient });
+    assert.equal(r.ok, false);
+    assert.match(r.payload.error, words);
+    assert.match(r.payload.error, /Usage: node scripts\/configuration-recovery\.js/);
+  }
+});
+
+test('inspect of a workspace with no receipt is clear and reads nothing', async () => {
+  const appDir = path.join(makeTempDir('cfg-recovery-cli-'), 'app');
+  fs.mkdirSync(appDir, { recursive: true });
+  fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify(spec()));
+  const r = await run(['inspect', '--app-dir', appDir, '--env', ENV], { httpClient: noClient });
+  assert.equal(r.ok, true);
+  assert.equal(r.payload.receipt, 'absent');
+  assert.equal(r.payload.clear, true);
+  assert.equal(r.payload.serviceReads, 0);
+});
+
+test('inspect without --env lists the saved unit from the workspace alone', async () => {
+  const app = appWithUnit(spec(), 'connection-reference', 'contoso_c1');
+  const r = await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient });
+  assert.equal(r.ok, true);
+  assert.equal(r.payload.clear, false);
+  assert.equal(r.payload.units.length, 1);
+  assert.equal(r.payload.units[0].unitId, app.unitId);
+  assert.equal(r.payload.units[0].state, 'open');
+  assert.ok(r.payload.nextSteps.some((s) => /--env/.test(s)));
+});
+
+test('a receipt of another environment is refused before any client is made or any read is sent', async () => {
+  const app = appWithUnit(spec(), 'connection-reference', 'contoso_c1', { environmentUrl: 'https://fabrikam.crm.dynamics.com' });
+  for (const argv of [
+    ['inspect', '--app-dir', app.appDir, '--env', ENV],
+    ['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current'],
+  ]) {
+    const r = await run(argv, { httpClient: noClient });
+    assert.equal(r.ok, false);
+    assert.equal(r.payload.code, 'configuration-create-context-mismatch', JSON.stringify(r.payload));
+    assert.equal(r.payload.retry, 'never');
+  }
+});
+
+test('inspect of rows never sent describes each one for manual completion, with GETs only', async () => {
+  const org = orgOf();
+  const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
+  const { httpClient } = clientOver(org);
+  const writesBefore = org.writes.length;
+  const r = await run(['inspect', '--app-dir', app.appDir, '--env', ENV], { httpClient });
+  assert.equal(r.ok, true, JSON.stringify(r.payload));
+  const [u] = r.payload.units;
+  assert.equal(u.dispatch, 'not-dispatched');
+  assert.ok(r.payload.serviceReads > 0);
+  assert.equal(u.manualCompletion.length, 3);
+  assert.ok(u.manualCompletion.every((m) => m.method === 'POST' && typeof m.entitySet === 'string' && typeof m.idColumn === 'string'));
+  assert.match(r.payload.manualCompletionNote, /Not executed/);
+  assert.equal(org.writes.length, writesBefore);
+  assert.deepEqual(org.unexpected, []);
+});
+
+test('accept-current: a unit whose rows all landed is prepared and resolved with GETs only, and the receipt is cleared', async () => {
+  const org = orgOf();
+  const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
+  await sendRows(org, app.compiled);
+  const { httpClient } = clientOver(org);
+  const writesBefore = org.writes.length;
+  const seen = await run(['inspect', '--app-dir', app.appDir, '--env', ENV], { httpClient });
+  assert.equal(seen.payload.units[0].outcome, 'match', JSON.stringify(seen.payload.units[0]));
+  const prepared = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current'], { httpClient });
+  assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+  assert.match(prepared.payload.approvalToken, /\./);
+  const argv = ['resolve', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current', '--approval-token', prepared.payload.approvalToken];
+  if (prepared.payload.privateAcknowledgmentRequired) argv.push('--accept-current-private-state');
+  const done = await run(argv, { httpClient });
+  assert.equal(done.ok, false, 'a resolution is never a build success');
+  assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
+  assert.equal(org.writes.length, writesBefore, 'recovery sent no write');
+  const after = await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient });
+  assert.equal(after.payload.units.length, 0);
+  // A used token is spent.
+  const again = await run(argv, { httpClient });
+  assert.equal(again.payload.code, 'configuration-create-approval-stale');
+});
+
+test('accept-current refuses when the App Spec now asks for something else (intent-changed)', async () => {
+  const org = orgOf();
+  const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
+  await sendRows(org, app.compiled);
+  fs.writeFileSync(path.join(app.appDir, 'app-spec.json'), JSON.stringify(spec({ calcDescription: 'changed since' })));
+  const r = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'accept-current'], clientOver(org));
+  assert.equal(r.ok, false);
+  assert.equal(r.payload.code, 'configuration-create-intent-changed', JSON.stringify(r.payload));
+});
+
+test('defer reads nothing, needs the root gone from the App Spec, and leaves the unit recorded as deferred', async () => {
+  const app = appWithUnit(spec(), 'custom-api', 'contoso_Calc');
+  const still = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer'], { httpClient: noClient });
+  assert.equal(still.payload.code, 'configuration-create-pending');
+  fs.writeFileSync(path.join(app.appDir, 'app-spec.json'), JSON.stringify(spec({ apis: false })));
+  const prepared = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer'], { httpClient: noClient });
+  assert.equal(prepared.ok, true, JSON.stringify(prepared.payload));
+  assert.equal(prepared.payload.serviceReads, 0);
+  const done = await run(['resolve', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'defer', '--approval-token', prepared.payload.approvalToken], { httpClient: noClient });
+  assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
+  const after = await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient });
+  assert.equal(after.payload.units[0].state, 'deferred');
+  assert.equal(after.payload.clear, false);
+});
+
+test('a prepare while the app build lock is held is configuration-create-state-busy', async () => {
+  const app = appWithUnit(spec({ apis: false }), 'connection-reference', 'contoso_c1');
+  await withAppBuildLease({ workspaceDir: app.workspaceDir, appUniqueName: appUniqueName(spec()), warn: () => {} }, async () => {
+    const r = await run(['prepare', '--app-dir', app.appDir, '--env', ENV, '--unit', app.unitId, '--resolution', 'cancel-unsent'], { httpClient: noClient });
+    assert.equal(r.payload.code, 'configuration-create-state-busy', JSON.stringify(r.payload));
+  });
+});
+
+test('an unreadable receipt is quarantined only with --acknowledge-unknown-dispatch, and inspect then names the build acknowledgment', async () => {
+  const app = appWithUnit(spec(), 'connection-reference', 'contoso_c1');
+  fs.writeFileSync(path.join(app.workspaceDir, 'configuration-create-state.v1.json'), '{"not":"a receipt"}');
+  const seen = await run(['inspect', '--app-dir', app.appDir, '--env', ENV], { httpClient: noClient });
+  assert.equal(seen.payload.receipt, 'invalid');
+  assert.equal(seen.payload.clear, false);
+  const done = await run(['resolve', '--app-dir', app.appDir, '--resolution', 'quarantine-unreadable', '--acknowledge-unknown-dispatch'], { httpClient: noClient });
+  assert.equal(done.ok, false);
+  assert.equal(done.payload.code, 'configuration-create-reconciled', JSON.stringify(done.payload));
+  assert.match(done.payload.nextStep, /--acknowledge-quarantined-configuration/);
+  const after = await run(['inspect', '--app-dir', app.appDir], { httpClient: noClient });
+  assert.equal(after.payload.quarantines.length, 1);
+  assert.equal(after.payload.quarantines[0].quarantineId, done.payload.quarantineId);
+  assert.ok(after.payload.nextSteps.some((s) => s.includes(`--acknowledge-quarantined-configuration ${done.payload.quarantineId}`)));
+});
+
+test('the current intent is compiled the way the build compiled the unit: over a preserved root, and under the recorded parent definition', () => {
+  const s = {
+    ...spec(),
+    customApis: [{ uniqueName: 'contoso_Calc', isFunction: true, requestParameters: [{ uniqueName: 'A', type: 'integer' }, { uniqueName: 'B', type: 'integer' }] }],
+    environmentVariables: [{ schemaName: 'contoso_V', type: 'string' }, { schemaName: 'contoso_D', type: 'dataSource', connectorId: SP, parameterKey: 'dataset', parentSchemaName: 'contoso_V' }],
+  };
+  const bindings = A.readDeploymentBindings({}, s);
+  const receiptOf = (c) => { assert.equal(c.ok, true, JSON.stringify(c)); const { solution, ...unit } = c.unit; return unit; };
+  const fresh = receiptOf(P.compileConfigurationCreateUnit(s, { kind: 'custom-api', key: 'contoso_Calc', bindings, solution: SOL }));
+  const [root, kept, added] = fresh.rows;
+  const baseline = { ok: true, root: { kind: 'custom-api', id: root.id, public: root.public }, children: [{ kind: kept.kind, id: kept.id, parentId: root.id, public: kept.public }] };
+  const grown = receiptOf(P.compileConfigurationCreateUnit(s, { kind: 'custom-api', key: 'contoso_Calc', bindings, solution: SOL, baseline, additions: [added.key] }));
+  assert.ok(grown.rows.some((r) => r.role === 'preserved'));
+  assert.equal(currentIntentOf(s, grown, { bindings, solution: SOL }), grown.publicIntentSha256);
+  // A data-source variable whose parent was bound to an existing definition: the intent keeps that recorded parent.
+  const parentId = '11111111-2222-4333-8444-555555555555';
+  const boundIdOf = (k, key) => (k === 'environmentVariable' && key === A.portKeyOf('environmentVariable', 'contoso_V') ? parentId : undefined);
+  const child = receiptOf(P.compileConfigurationCreateUnit(s, { kind: 'environmentVariable', key: 'contoso_D', bindings, solution: SOL, boundIdOf }));
+  assert.equal(child.rows[0].public.parentDefinitionId, parentId);
+  assert.equal(currentIntentOf(s, child, { bindings, solution: SOL }), child.publicIntentSha256);
+  // A declaration that is gone has no intent.
+  assert.equal(currentIntentOf({ ...s, customApis: [] }, grown, { bindings, solution: SOL }), null);
+});

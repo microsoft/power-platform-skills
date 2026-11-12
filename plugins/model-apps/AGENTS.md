@@ -54,6 +54,7 @@ able to tell what moved from the docs alone):
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
 | [`docs/app-builder-capabilities.md`](docs/app-builder-capabilities.md) | `/app-builder` **capabilities** — what ships today, with the evidence for each | You ship an app-builder capability |
 | [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
+| [`docs/configuration-create-recovery.md`](docs/configuration-create-recovery.md) | The maker-facing guide to interrupted configuration creates: why a build stops, `configuration-recovery.js`, every `configuration-create-*` stop code and its way forward | You change the receipt guard, the recovery command or a stop code |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — at most 300 words per release entry and 45 per bullet, enforced by `scripts/tests/changelog-brevity.test.js`; the reasoning and evidence belong in the PR and `docs/` | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract (always-present fields) | You change the App Spec shape or validation |
 | [`references/app-spec-schema-advanced.md`](references/app-spec-schema-advanced.md) | The conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants) — split out so the always-read contract stays small | You change one of those features |
@@ -3578,6 +3579,34 @@ retired, so they have no incarnation. Tests: `tests/managed-bindings.test.js` ("
 `tests/creates-composite-catalog.test.js` ("incarnations"), and "declared again after" / "after
 retirement" / "two retirements" in `tests/sdk-build-declared-{forms,dashboards,rules,bpf}.test.js`.
 
+**Configuration create receipts, the guard and recovery** (#807). A default build's configuration creates
+are recorded in `<workspace>/configuration-create-state.v1.json` (`lib/configuration-create-state.js`) before
+the first request. `lib/configuration-create-guard.js` is the one local, request-free check every entry point
+runs before configuration work: `build-model-app.js` `runBuildCommand` (under the build lease, before the
+shortcuts and before `makeSdk`; a dry run only warns and adds `configurationCreate` to its result),
+`sdk-build.js` (inside `withAppBuildLease`, so a direct engine caller is guarded too), `changed-only-flow.js`
+`runChangedOnlyApplyHeld` (first, before the snapshot is read, so no no-op or fast apply certifies a workspace
+with an open unit) and `teardown-model-app.js` (`assertTeardownClear`: any recovery evidence at all — an open
+or deferred unit, an unreadable receipt, a quarantine marker or archive — refuses with
+`configuration-create-workspace-in-use`, before the fence, in `beforeRename` and in `beforeRemove` against the
+isolated folder). A teardown apply now holds the app's build lease too, so a concurrent build or teardown of
+the same app in the workspace gets `build-locked`. The legacy original/snapshot pair check of
+`workspace-configuration-memory.js` is exported (`checkLegacyConfigurationPair`) so the guard and recovery
+refuse a dirty legacy copy against the real workspace with the existing `WORKSPACE_LEGACY_CONFIGURATION_COPY`.
+
+The halts are `retry: "never"` and must never be read as "run it again": an agent relays the stop and runs
+the GET-only `configuration-recovery.js inspect`, never a rebuild, a workspace delete or a row recreate.
+`configuration-recovery.js` (`inspect` · `prepare` · `resolve`) wraps `lib/configuration-create-recovery.js`
+over a read-only Dataverse client (`readonly-operations.js`); it never creates, updates, deletes, adds
+membership or publishes, and its completed resolution exits 1 with `configuration-create-reconciled` (never a
+build success). `--env` is required to prepare or resolve a unit, and a receipt of another context is refused
+before any read. The build's `--acknowledge-quarantined-configuration <id>[,<id>...]` is invocation-only:
+validated against the workspace's quarantines (`validateQuarantineAcknowledgment`), handed to the first
+attempt only and spent by the engine (a WeakSet), never persisted and never accepted by teardown. Maker guide
+and stop-code table: [`docs/configuration-create-recovery.md`](docs/configuration-create-recovery.md). Tests:
+`tests/configuration-create-guard.test.js`, `tests/configuration-recovery-cli.test.js`,
+`tests/teardown-model-app.test.js` ("teardown CLI ... receipt", "... holds its lease").
+
 **Protected configuration** (`configurationIdentity: "stable-v1"`, `minimumPluginVersion: "2.23.0"`, a lint
 warning below it). Declared environment variables, connection references, Custom APIs (with their children)
 and duplicate rules (with their conditions) get exact ids (`lib/configuration-create-bindings.js` plans,
@@ -4142,9 +4171,10 @@ scripts/
   provision-solution.js        ← Creates a Dataverse solution via the SDK
   write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
   promote-intent-pages.js      ← app-builder Phase 1.5: validates every generated page, then atomically flips source: intent → tsx
-  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code; --preview-push on a dry run; --deployment-settings <file> for the declared configuration items)
+  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code; --preview-push on a dry run; --deployment-settings <file> for the declared configuration items; --acknowledge-quarantined-configuration <id>[,<id>...], invocation-only)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow; takes the build's --language-code: the language the navigation titles are read in, when the spec on disk pins none and the base language cannot be read)
-  teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
+  teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown (an apply holds the app's build lease and refuses a workspace holding configuration create evidence)
+  configuration-recovery.js    ← app-builder: GET-only recovery of interrupted default configuration creates (inspect · prepare · resolve accept-current|defer|cancel-unsent|quarantine-unreadable); changes only the local receipt
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in; its result JSON is pure ASCII and lists every `WARNING:` line it printed in an optional `warnings` array; `--inspect-components` adds the command-control inspection, `components` in the result)
   data-fix.js                  ← plan/apply/resume/revert a reviewed repair of values in existing rows; shares the app build's lock (`--app`); non-zero unless every change was made
   solutions.js                 ← `inspect`: what the SDK can read of one solution, by kind, with what it skipped or could not read (read-only)
@@ -4296,6 +4326,7 @@ scripts/
     workspace-configuration-memory.js ← keeps the SDK's environment-variable and connection-reference copies (values, defaults, value schemas, secret references, connection ids) in memory, never in a workspace file; never deletes or hides copies an earlier version left (a clean pair is left in place and never used as configuration, anything else is refused with WORKSPACE_LEGACY_CONFIGURATION_COPY; maker-sdk.js warns naming their folders)
     workspace-binding.js       ← a persistent `.maker-workspace` belongs to the environment it was first opened for (only `--apply` opens it; a dry run uses a temporary workspace): turns the SDK's `WORKSPACE_ORG_MISMATCH`, and a manifest the JSON parser rejects, into the build's halt (both environments as origins, the safe remedies — the teardown one only for another environment that was built in, with the folder printed on its own line; a folder that was only opened gets no build-there/teardown advice; a folder with no usable environment is moved aside, not deleted; never clears or re-binds) and into the dry run's warning
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
+    configuration-create-guard.js ← the local, request-free stop every entry point runs before configuration work: open/deferred receipt units, an unreadable receipt, quarantines (with the build's invocation-only acknowledgment) and, for teardown, any recovery evidence at all
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
     modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks

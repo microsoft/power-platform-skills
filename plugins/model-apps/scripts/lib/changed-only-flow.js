@@ -32,6 +32,7 @@ const { odataLit } = require('./odata.js');
 const { withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
 const { appUniqueName } = require('./sdk-build.js');
 const { usesCommandStates } = require('./command-state-contract.js');
+const { assertConfigurationCreatesClear } = require('./configuration-create-guard.js');
 
 // Why a changed-only apply runs whole while protected configuration is in play (the decision's reason, printed and in the result).
 const PROTECTED_CONFIGURATION_FULL = 'protected configuration is in play (configurationIdentity "stable-v1", or configuration state in the binding store) — full build, so its checks run before any write and its changes are applied';
@@ -224,6 +225,13 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
 async function runChangedOnlyApplyHeld({ spec, opts, deps }) {
   const log = deps.log || (() => {});
   const ws = opts.workspaceDir;
+  // #807: the configuration create receipt guard, first, under the lease: before the snapshot is read, so no no-op, fast apply or
+  // baseline can certify an environment while the workspace holds an open create unit, an unreadable receipt or an unacknowledged
+  // quarantine. It throws the retry-never halt; nothing below runs and no snapshot is blessed. Local only (no request).
+  assertConfigurationCreatesClear(ws, {
+    spec, env: opts.env, languageCode: opts.preResolvedLanguageCode, phases: opts.phases,
+    quarantineAcknowledgment: opts.configurationQuarantineAcknowledgment,
+  });
   const annotate = (s) => annotateContentHashes(s, deps.readContent);
   const annotatedSpec = annotate(spec);
   const snapshot = store.readSnapshot(ws);

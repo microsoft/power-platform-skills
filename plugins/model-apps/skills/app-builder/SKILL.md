@@ -295,8 +295,14 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   Custom API alone is a scaffold; clearing a value, unbinding a reference or removing a parameter or condition
   needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
   a plain download does not bring them back into the spec (a managed download of a `configurationIdentity:
-  "stable-v1"` app brings back the ones its store proves, never a value, default, connection, implementation or duplicate rule); and a whole-build retry after a lost answer can create
-  a second row, so check the environment before running a failed build again. Under `"stable-v1"`, a stop
+  "stable-v1"` app brings back the ones its store proves, never a value, default, connection, implementation or duplicate rule). A default
+  build creates these rows at ids fixed in advance and records them in the workspace; when it is interrupted, the next build, `--changed-only`
+  run and teardown stop with a `configuration-create-*` code and `retry: "never"`. Never rerun the build blindly, delete or copy the
+  workspace, or recreate a row to get past it: run `node "${PLUGIN_ROOT}/scripts/configuration-recovery.js" inspect --app-dir
+  "<app-folder>" --env "<envUrl>"` (GET-only), relay its `nextSteps`, and let the maker choose `prepare`/`resolve` (accept-current,
+  defer after removing the root from the spec, or cancel-unsent); a missing row is completed by hand at its recorded id, never resent.
+  Pass `--acknowledge-quarantined-configuration <id>` to a build only when the maker accepts, for that one build, that rows may be sent
+  again. See [`docs/configuration-create-recovery.md`](../../docs/configuration-create-recovery.md). Under `"stable-v1"`, a stop
   that says a duplicate rule's first publication has not been confirmed names the rule and its original id:
   relay its advice (wait if that rule reads Publishing, otherwise the maker checks and publishes it in the
   environment, then rebuilds); never retry the build to resend it or add `"status": "published"` to force it. See

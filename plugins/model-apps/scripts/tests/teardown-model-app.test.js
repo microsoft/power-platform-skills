@@ -368,6 +368,11 @@ function loadTeardownCli({
   releaseResult = { ok: true, deleted: true },
   // What the lease-held clear answers.
   clearResult = { ok: true },
+  // #807: the configuration create halt the workspace's receipt check throws, or null when the workspace holds no receipt. A function is
+  // asked on each check, with the folder and the check's 1-based number, and answers the halt or null.
+  configurationHalt = null,
+  // #807: the error the app build lease is refused with, or null when it is free.
+  leaseRefusal = null,
 }) {
   const scriptPath = path.join(__dirname, '..', 'teardown-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
@@ -409,6 +414,28 @@ function loadTeardownCli({
     if (id === './lib/managed-standalone-fence.js') {
       const { createPublicationBarrier } = require('../lib/publication-barrier.js');
       return { openStandaloneManagedFence: (o) => { events.push({ type: 'managedFence', workspaceDir: o.workspaceDir }); return { barrier: createPublicationBarrier(), absent: true, debt: [] }; } };
+    }
+    // The app build lease works on the real file system, which the harness's workspace paths are not: it stands in for the lease with a
+    // recorded call around the held work.
+    if (id === './lib/app-operation-lease.js') {
+      return {
+        withAppBuildLease: async (o, fn) => {
+          events.push({ type: 'appLease', workspaceDir: o.workspaceDir, appUniqueName: o.appUniqueName });
+          if (leaseRefusal) throw leaseRefusal;
+          try { return await fn(); } finally { events.push({ type: 'appLeaseReleased', workspaceDir: o.workspaceDir }); }
+        },
+      };
+    }
+    if (id === './lib/app-unique-name.js') return require('../lib/app-unique-name.js');
+    if (id === './lib/configuration-create-guard.js') {
+      return {
+        assertTeardownClear: (dir) => {
+          const n = events.filter((e) => e.type === 'assertTeardownClear').length + 1;
+          events.push({ type: 'assertTeardownClear', dir });
+          const halt = typeof configurationHalt === 'function' ? configurationHalt(dir, n) : configurationHalt;
+          if (halt) throw halt;
+        },
+      };
     }
     if (id === './lib/configuration-artifacts.js') return require('../lib/configuration-artifacts.js');
     if (id === './lib/field-security.js') return require('../lib/field-security.js');
@@ -466,7 +493,18 @@ function loadTeardownCli({
         deleteSnapshot: (workspaceDir) => events.push({ type: 'deleteSnapshot', workspaceDir }),
         releaseTombstone: (workspaceDir, teardownId, deps) => { events.push({ type: 'releaseTombstone', workspaceDir, teardownId, keep: !!(deps && deps.keep) }); return releaseResult; },
         beatTeardown: (workspaceDir, teardownId) => { events.push({ type: 'beatTeardown', workspaceDir, teardownId }); return { ok: true }; },
-        clearWorkspace: (target) => { events.push({ type: 'clearWorkspace', target }); return clearResult; },
+        // The hooks run where the real clear runs them: before the move aside, and on the folder moved aside, whose refusal keeps it.
+        clearWorkspace: (target, deps = {}) => {
+          events.push({ type: 'clearWorkspace', target });
+          if (!clearResult.ok) return clearResult;
+          try {
+            if (typeof deps.beforeRename === 'function') deps.beforeRename();
+          } catch (e) { return { ok: false, reason: `it could not be moved aside (${e.message})` }; }
+          try {
+            if (typeof deps.beforeRemove === 'function') deps.beforeRemove(`${target}.cleared-test`);
+          } catch (e) { return { ok: false, reason: `it was moved aside and kept (${e.message})` }; }
+          return clearResult;
+        },
         TEARDOWN_BEAT_MS: 60000,
       };
     }
@@ -652,6 +690,92 @@ test('teardown CLI skips --clear-workspace when a fence appeared after its relea
   assert.match(err, /skipped --clear-workspace: a changed-only snapshot was written to it after this teardown finished/);
   assert.doesNotMatch(err, /cleared workspace/);
   assert.strictEqual(harness.events.find((e) => e.type === 'emitResult').ok, true, 'the teardown itself succeeded');
+});
+
+// #807: a workspace holding configuration create evidence is refused before the destructive client is made and before the fence: the
+// receipt says the environment may hold configuration rows nobody has accounted for. The refusal is structured, never retried, and
+// clears nothing.
+const UNIT_ID = '11111111-2222-4333-8444-555555555555';
+function configurationHaltFor(code) {
+  return Object.assign(new Error(`a configuration create unit is not settled (${code})`), {
+    name: 'ConfigurationCreateHalt', code, retry: 'never', unitId: UNIT_ID, nextStep: 'Run configuration-recovery.js inspect.',
+  });
+}
+const applyFlags = (workspace) => ({
+  env: 'https://org.example',
+  spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+  apply: true,
+  'allow-destructive': true,
+  'clear-workspace': true,
+  workspace,
+});
+
+test('teardown CLI refuses a workspace holding a configuration create receipt before the client, the fence or any delete', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\receipt';
+  const harness = loadTeardownCli({ configurationHalt: configurationHaltFor('configuration-create-pending'), parseResult: { positional: [], flags: applyFlags(workspaceDir) } });
+
+  await harness.main();
+
+  assert.ok(harness.events.some((e) => e.type === 'assertTeardownClear' && e.dir === workspaceDir));
+  for (const type of ['createMakerSdk', 'mkdtempSync', 'tombstoneSnapshot', 'runTeardown', 'clearWorkspace', 'checkWorkspaceClearable']) {
+    assert.ok(!harness.events.some((e) => e.type === type), `no ${type} after the refusal`);
+  }
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, false);
+  assert.strictEqual(emitted.payload.code, 'configuration-create-pending');
+  assert.strictEqual(emitted.payload.retry, 'never');
+  assert.strictEqual(emitted.payload.unitId, UNIT_ID);
+  assert.strictEqual(emitted.payload.nextStep, 'Run configuration-recovery.js inspect.');
+  assert.match(harness.stderr.join(''), /not settled \(configuration-create-pending\) Nothing was deleted\./);
+});
+
+test('teardown CLI checks the receipt again under the app build lease, before the fence', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\receipt-late';
+  // Clear at the early check; a receipt written before the lease was taken is caught by the check inside it.
+  const harness = loadTeardownCli({ configurationHalt: (dir, n) => (n === 2 ? configurationHaltFor('configuration-create-quarantined') : null), parseResult: { positional: [], flags: applyFlags(workspaceDir) } });
+
+  await harness.main();
+
+  const lease = harness.events.findIndex((e) => e.type === 'appLease' && e.workspaceDir === workspaceDir);
+  const second = harness.events.findIndex((e, i) => e.type === 'assertTeardownClear' && i > lease);
+  assert.ok(lease > -1 && second > lease, 'the second check runs while the lease is held');
+  assert.ok(!harness.events.some((e) => e.type === 'tombstoneSnapshot' || e.type === 'runTeardown' || e.type === 'clearWorkspace'));
+  assert.ok(harness.events.some((e) => e.type === 'appLeaseReleased'), 'the lease is let go');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, false);
+  assert.strictEqual(emitted.payload.code, 'configuration-create-quarantined');
+  assert.strictEqual(emitted.payload.retry, 'never');
+});
+
+test('teardown CLI keeps a cleared workspace when a receipt appears in it before the move or in the folder moved aside', async () => {
+  for (const [at, reason] of [[3, /it could not be moved aside \(a configuration create unit is not settled/], [4, /it was moved aside and kept \(a configuration create unit is not settled/]]) {
+    const workspaceDir = `D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\receipt-clear-${at}`;
+    const harness = loadTeardownCli({ configurationHalt: (dir, n) => (n === at ? configurationHaltFor('configuration-create-pending') : null), parseResult: { positional: [], flags: applyFlags(workspaceDir) } });
+
+    await harness.main();
+
+    const checks = harness.events.filter((e) => e.type === 'assertTeardownClear').map((e) => e.dir);
+    assert.deepStrictEqual(checks.slice(0, 3), [workspaceDir, workspaceDir, workspaceDir]);
+    if (at === 4) assert.strictEqual(checks[3], `${workspaceDir}.cleared-test`, 'the folder moved aside is checked before it is removed');
+    const err = harness.stderr.join('');
+    assert.match(err, new RegExp(`skipped --clear-workspace: ${reason.source}`));
+    assert.doesNotMatch(err, /cleared workspace/);
+    assert.strictEqual(harness.events.find((e) => e.type === 'emitResult').ok, true, 'the teardown itself succeeded');
+  }
+});
+
+test('teardown CLI is refused while a build of the app holds its lease, before any delete', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\leased';
+  const refusal = Object.assign(new Error('another build of this app is running in this workspace'), { code: 'build-locked' });
+  const harness = loadTeardownCli({ leaseRefusal: refusal, emitThrows: true, parseResult: { positional: [], flags: applyFlags(workspaceDir) } });
+
+  await assert.rejects(harness.main(), (err) => err.exitCode === 1);
+
+  assert.ok(harness.events.some((e) => e.type === 'appLease' && e.workspaceDir === workspaceDir && e.appUniqueName));
+  assert.ok(!harness.events.some((e) => e.type === 'tombstoneSnapshot' || e.type === 'runTeardown' || e.type === 'clearWorkspace'));
+  const failed = harness.events.find((e) => e.type === 'emitResult' && e.ok === false);
+  assert.ok(failed && failed.payload === refusal, 'the lease refusal is the result');
+  assert.ok(harness.events.some((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp), 'the throwaway SDK workspace is still removed');
 });
 
 // A release that FAILED (a held lease, a busy file) leaves the tombstone in place — safe, since a

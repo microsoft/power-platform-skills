@@ -29,7 +29,8 @@ function appFolder(spec) {
   return { appDir, specPath, workspaceDir, lock: path.join(workspaceDir, `app-build.${sha256(app.toLowerCase())}.lock`) };
 }
 
-// The command for `folder`'s spec, with `--apply` and `argv`, and these doubles — each optional, each handed `held` first:
+// The command for `folder`'s spec, with `--apply` (unless `apply` is false: a dry run) and `argv`, and these doubles — each optional, each
+// handed `held` first:
 //   auth(held)              what the auth check answers (else `{ ok: true }`);
 //   language(held)          the authoring language (else 1033);
 //   makeSdk(held)           called as the SDK is made; it may throw;
@@ -39,10 +40,10 @@ function appFolder(spec) {
 //   writeBaseline(held)     called as the baseline is written (the real one is written after it); it may throw;
 //   live                    the live identity a --changed-only apply reads for the app (else the real read, which asks the environment).
 // `calls` lists, in order, which doubles ran.
-function command(folder, { argv = [], auth, language, makeSdk, openJournal, engine, verify, writeBaseline, live } = {}) {
+function command(folder, { argv = [], apply = true, auth, language, makeSdk, openJournal, engine, verify, writeBaseline, live } = {}) {
   const held = () => fs.existsSync(folder.lock);
   const authCli = loadCli(path.join(SCRIPTS, 'lib', 'dataverse-auth.js'));
-  const printed = { at: null, ok: null, heldThen: null };
+  const printed = { at: null, ok: null, heldThen: null, payload: null };
   const calls = [];
   const note = (what) => { calls.push(what); return held(); };
   const sdk = { initWorkspace: async () => {}, queryRecords: async () => [] };
@@ -50,7 +51,7 @@ function command(folder, { argv = [], auth, language, makeSdk, openJournal, engi
     './lib/dataverse-auth.js': {
       ...authCli.exports,
       preflightAuth: async () => { note('auth'); return auth ? auth(held) : { ok: true }; },
-      emitResult: (ok, payload) => { printed.ok = ok; printed.heldThen = held(); printed.at = calls.length; authCli.exports.emitResult(ok, payload); },
+      emitResult: (ok, payload) => { printed.ok = ok; printed.payload = payload; printed.heldThen = held(); printed.at = calls.length; authCli.exports.emitResult(ok, payload); },
     },
     './lib/entity-provision.js': { ...realEntityProvision, resolveAuthoringLanguage: async () => { note('language'); return language ? language(held) : 1033; } },
     './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
@@ -71,7 +72,7 @@ function command(folder, { argv = [], auth, language, makeSdk, openJournal, engi
     requires['./lib/build-journal.js'] = { ...realJournal, openJournal: (...a) => { note('journal'); openJournal(held); return realJournal.openJournal(...a); } };
   }
   const cli = loadCli(path.join(SCRIPTS, 'build-model-app.js'), {
-    argv: ['--env', ENV, '--spec', `@${folder.specPath}`, '--apply', ...argv],
+    argv: ['--env', ENV, '--spec', `@${folder.specPath}`, ...(apply ? ['--apply'] : []), ...argv],
     env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
     requires,
   });
