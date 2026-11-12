@@ -87,6 +87,7 @@ const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js')
 const { approvalKey } = require('./lib/reconcile-common.js');
 const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
 const { isDeclaredForm, formLayoutKey } = require('./lib/form-layout-reconcile.js');
+const { captionSharingNoteOf } = require('./lib/form-caption-sharing.js');
 const { isDeclaredDashboard, dashboardKey } = require('./lib/dashboard-reconcile.js');
 const { declaredFeatureOn } = require('./lib/declared-features.js');
 const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
@@ -2135,6 +2136,21 @@ function completionFor(run, { ok, payload, error }) {
   return { outcome: 'failure', errorClass: 'halted', eventInfo: { ...eventInfo, haltPhase: 'preflight' } };
 }
 
+// What the CLI prints for a failure: the error's message and then, for a halt that carries one, the display-only caption-sharing note
+// (lib/form-caption-sharing.js; a non-enumerable property on the halt or an error it wraps). The note may quote maker form names and
+// captions, so it is never part of the message — the message is what buildModelApp's journal persists (build-log.jsonl and
+// build-status.json) — and is joined to it here, for the console only, after everything the message says.
+function haltDisplay(err) {
+  const note = captionSharingNoteOf(err);
+  return note && err instanceof Error ? new Error(`${err.message}\n${note}`) : err;
+}
+
+// main()'s failure: skill_completed telemetry for an apply that ran, then the error printed (haltDisplay) and exit 1 (emitResult).
+async function reportMainFailure(err, { emit = emitResult } = {}) {
+  await reportCompletion(completionRun, { ok: false, error: err });
+  emit(false, haltDisplay(err));
+}
+
 async function reportCompletion(run, result, emit = emitSkillCompleted) {
   if (!run) return;
   try {
@@ -2345,9 +2361,6 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
 }
 
 if (require.main === module) {
-  main().catch(async (err) => {
-    await reportCompletion(completionRun, { ok: false, error: err });
-    emitResult(false, err);
-  });
+  main().catch(reportMainFailure);
 }
-module.exports = { buildModelApp, inlineVerifyReader, authorizationKeys, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion };
+module.exports = { buildModelApp, inlineVerifyReader, authorizationKeys, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion, haltDisplay, reportMainFailure };

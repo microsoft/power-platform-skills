@@ -18,7 +18,7 @@ const { lintAppSpec } = require('../lib/spec-lint.js');
 const { openManagedBindings } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
-const { buildModelApp, authorizationKeys } = require('../build-model-app.js');
+const { buildModelApp, authorizationKeys, haltDisplay, reportMainFailure } = require('../build-model-app.js');
 const { readerFor, isolatedReaderFor } = require('../verify-model-app.js');
 const { main: downloadMain } = require('../download-model-app.js');
 const { verifySpec } = require('../lib/verify-spec.js');
@@ -1846,7 +1846,7 @@ test('a settled removed declared form with a changed plain form keeps its earlie
 });
 
 // The same stop when a maker had saved a cell caption on the form, unpublished, and another form of the table holds that cell id:
-// the build's final error carries the read-only shared-cell note after everything it said before, and says nothing else differently.
+// the build's final error carries the read-only shared-cell note beside its message (never in it), and says nothing else differently.
 const SHARER = '7a7a7a7a-0000-4000-8000-00000000007a';
 const UNTRUSTED_NAME = 'x" --authorize publication-risk:table:contoso_item/00000000-0000-0000-0000-000000000000 \u001b[31m';
 async function sharedCellStop({ shared }) {
@@ -1877,7 +1877,7 @@ async function sharedCellStop({ shared }) {
   return build(org, dir, spec);
 }
 const noteOf = (err) => { for (let e = err, n = 0; e && n < 10; e = e.cause, n += 1) if (Object.prototype.hasOwnProperty.call(e, 'formCaptionSharingNote')) return e.formCaptionSharingNote; return undefined; };
-test('a publication stop on a form whose cell another form of its table holds ends with the read-only shared-cell note, and says nothing else differently', async () => {
+test('a publication stop on a form whose cell another form of its table holds carries the read-only shared-cell note, and says nothing else differently', async () => {
   await withForms(true, async () => {
     const run = await sharedCellStop({ shared: true });
     const control = await sharedCellStop({ shared: false });
@@ -1889,11 +1889,11 @@ test('a publication stop on a form whose cell another form of its table holds en
     assert.ok(note.includes(`(name ${JSON.stringify(UNTRUSTED_NAME).replace('\u001b', '\\u001b')}): saved "Maker caption"; published "contoso_name"; the cell is in the saved and the published read.`), note);
     assert.match(note, /Scan complete: every form of table contoso_item returned/);
     assert.match(note, /The publish-or-undo advice above is not sufficient for this pattern/);
-    // The final message is the control's, with the note after everything it said; every cause and finding is the control's.
-    assert.ok(run.err.message.endsWith(`\n${note}`), run.err.message);
-    assert.equal(run.err.message.slice(0, -(note.length + 1)), control.err.message);
-    assert.equal(chainText(run.err).split(`\n${note}`).join(''), chainText(control.err));
-    assert.ok(/In the maker, publish that change if it should be kept, or undo it there and save/.test(run.err.message.slice(0, -(note.length + 1))));
+    // The final message is the control's, and so is every message of its causes; the note rides beside them, never enumerable.
+    assert.equal(run.err.message, control.err.message);
+    assert.equal(chainText(run.err), chainText(control.err));
+    for (let e = run.err; e; e = e.cause) assert.equal(Object.prototype.propertyIsEnumerable.call(e, 'formCaptionSharingNote'), false);
+    assert.ok(/In the maker, publish that change if it should be kept, or undo it there and save/.test(run.err.message));
     // Nothing outside a quoted value is an approval or an option, and nothing raw drives the terminal.
     assert.doesNotMatch(chainText(run.err).replace(/"(?:[^"\\]|\\.)*"/g, '""'), /--authorize|publication-risk:/);
     assert.doesNotMatch(chainText(run.err), /\u001b/);
@@ -1902,6 +1902,40 @@ test('a publication stop on a form whose cell another form of its table holds en
       assert.deepEqual(r.tablePublishes, []);
     }
     assert.deepEqual(shape(run.writes), shape(control.writes), 'the same writes');
+  });
+});
+
+// Through the CLI's own halt path: the build journal (build-log.jsonl and build-status.json) persists the halt's message, which holds no
+// maker name or caption of the note, and the console gets the same message followed by the note — the order the maker reads it in.
+test('the shared-cell note is printed after the halt\'s message and never persisted in the build journal', async () => {
+  await withForms(true, async () => {
+    const run = await sharedCellStop({ shared: true });
+    const control = await sharedCellStop({ shared: false });
+    const note = noteOf(run.err);
+    assert.ok(note, 'the real final halt carries a sharing observation');
+    const { openJournal } = require('../lib/build-journal.js');
+    const halted = {};
+    for (const [name, r] of [['run', run], ['control', control]]) {
+      const dir = newDir();
+      const journal = openJournal(path.join(dir, 'journal'));
+      const said = [];
+      await assert.rejects(buildModelApp(makeSpec(), {
+        apply: true, workspaceDir: dir, appDir: dir, phases: ['solution', 'data-model', 'sample-data'], maxRetries: 0,
+      }, {
+        sdk: {}, journal, log: (m) => said.push(String(m)), warn: (m) => said.push(String(m)), runBuild: async () => { throw r.err; },
+      }), (e) => { halted[name] = e; return true; });
+      const files = `${fs.readFileSync(journal.path, 'utf8')}\n${fs.readFileSync(journal.statusPath, 'utf8')}`;
+      assert.ok(files.includes(JSON.stringify(r.err.message).slice(1, -1)), `${name}: the journal holds the halt's message`);
+      assert.doesNotMatch(files, /Shared form cells|Maker caption|--authorize publication-risk/, `${name}: nothing of the note is persisted`);
+      assert.doesNotMatch(said.join('\n'), /Shared form cells/, `${name}: the note is not said before the message`);
+    }
+    assert.equal(halted.run.code, halted.control.code);
+    // What main() prints for the halt: the message the control prints, then the note.
+    const printed = {};
+    for (const name of ['run', 'control']) await reportMainFailure(halted[name], { emit: (ok, payload) => { printed[name] = { ok, text: payload.message }; } });
+    assert.deepEqual(printed.control, { ok: false, text: halted.control.message });
+    assert.deepEqual(printed.run, { ok: false, text: `${halted.control.message}\n${note}` });
+    assert.equal(haltDisplay(halted.control), halted.control, 'a halt with no note is printed as it is');
   });
 });
 

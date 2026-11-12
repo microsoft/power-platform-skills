@@ -3120,7 +3120,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   It cannot tell an unpublished edit from the platform's read projection (the saved layer has no version), so the
   stop still needs the printed `publication-risk` approval. Created forms and dashboards get no diagnostic.
   **Shared form cells** (`lib/form-caption-sharing.js`, a supplement to that diagnostic, not a replacement): a cell
-  id can be held by more than one form of a table (a form saved as a copy keeps its cells' ids). At the drift stop
+  id can be held by more than one form of a table (measured with form XML copied with its cell ids kept; no Maker
+  copy route was checked). At the drift stop
   and at the unconfirmed-publication stops (`publishManagedScope`, `confirmUncertainPublication`, and a later run's
   owed or settle stop), once the stop is decided and its scope blocked, each stopped managed form on a TABLE scope
   whose saved and published hashes differ is read afresh (it must still give the hashes the stop decided on:
@@ -3128,11 +3129,21 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   its layers are the table's forms listed: `GET systemforms?$filter=objecttypecode eq '<table>'` and its
   `RetrieveUnpublishedMultiple()`, `Prefer: odata.maxpagesize=100`, through the shared paged reader
   `lib/systemform-inventory.js` (also behind `lib/page-reference-guard.js`), bounded in reads, forms and XML bytes.
+  ONE byte budget (8 MiB a document, 32 MiB in all) covers the fresh root reads and both listings, spent as each
+  answer arrives and before any parser sees it, so a root past it is never parsed and opens no listing. The root's
+  listing row must fingerprint as its fresh read (`systemFormRootLayerSha256` of name, description, form XML, type
+  and table, both layers), else `observations-changed`. The paged reader's optional `progress` channel keeps the
+  rows of the pages it accepted before a later failure (the deletion guard does not pass it, and keeps its
+  all-or-nothing refusal), so the scan is partial with `scan.coverage` per listing ('complete' | 'partial' |
+  'unread') and a form a partial listing does not hold reads as not read, never as not returned. A returned row of
+  a read form type with no text name or XML is an unreadable form (`invalid-row`).
   Form types 2, 6, 7 and 11 are read; dashboards are skipped; any other type, a failed or malformed page, a budget
   or an unreadable sharer makes the scan PARTIAL or UNAVAILABLE with its reason, never a negative. A form is a sharer
   only by the same normalized cell id (never a control, caption or GUID found elsewhere). The answer is display-only:
-  a non-enumerable `formCaptionSharingNote` on the stop (the build's final message appends it after everything it
-  said: `managedStop` in `lib/sdk-build.js`) and one maker-text-free barrier label. Every name and caption in it is an
+  a non-enumerable `formCaptionSharingNote` on the stop, carried up onto the halt (`managedStop` in
+  `lib/sdk-build.js`) but never into any message, so the build journal (`build-log.jsonl`, `build-status.json`),
+  which persists the message, never holds it; the CLI prints it after the message (`haltDisplay` in
+  `build-model-app.js`, used by `main()`'s failure path); and one maker-text-free barrier label. Every name and caption in it is an
   observation, JSON-quoted with control, separator and bidi characters escaped, cut at 256 code points with the cut
   marked outside the quote; at most 8 entries of 20 forms and 32 KiB. Equal ETags do not tell the layers apart, so
   the note never claims a cause. Its guidance: at the drift stop the generic publish-or-undo sentence is qualified
@@ -3140,9 +3151,13 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   form plus a publish of that table put the existing SAVED CELL LABEL live on every observed sharer, but that column
   is not the cell caption (the label's description ATTRIBUTE is), the saved label may be another maker's, and a table
   publish puts every other pending customization of the table live. There is no repair writer: any write needs exact
-  approval naming the form, every sharer, the full caption and the table's other pending changes, and no adopt or
-  `publication-risk` approval grants it. It changes no decision, code, message, data, store record or approval, and
-  anything it throws adds nothing.
+  approval naming the form, every sharer, the cell, language and full caption and the one table, with the table's
+  other pending changes accounted for separately, and no adopt or `publication-risk` approval grants it; a partial
+  scan is not an approval basis (the note says so). The note also says never to repeat a PATCH or publish whose
+  answer was lost, that caption equality does not settle an outstanding publish, and to re-read every affected form
+  after any action, and points to the six-step recovery sequence in `references/app-spec-schema-advanced.md`
+  ("Form cells that another form shares"). It changes no decision, code, message, data, store record or approval,
+  and anything it throws adds nothing.
   **Verify and download** (`lib/declared-form-io.js`): verify reads each bound declared form fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredForm`, never `readGroup`) and runs
   `verifyDeclaredForm` against the declaration and the store's recorded children (`managed-form` check);

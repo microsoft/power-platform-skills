@@ -841,23 +841,52 @@ stop can also name the cells and languages whose caption reads differently in th
 there. This does not show whether the difference is an unpublished edit or how the platform reads the layer,
 so the stop and its key stay the same. A form the build created and a dashboard get no such list.
 
-**Form cells that another form shares.** A form saved as a copy of another keeps its cells' ids, so two forms
-of one table can hold the same cell. When the build stops on a form's publication (a saved change it did not
-make, or a publish it could not confirm) and a cell caption of that form reads differently in its saved and
-published layers, the build reads the forms of that table (read-only, a bounded number of reads) and adds a
-note after the stop: each form that holds the same cell id, and the caption each shows saved and published.
-The names and captions are quoted as read; they are observations, not proof of what caused the difference.
-If a form could not be read, the note says the scan was partial or could not be completed, and why; that is
-not evidence that no other form shares the cell.
+**Form cells that another form shares.** Two forms of one table can hold a cell with the same id. The
+measured case made such a pair by copying form XML with its cell ids kept; no particular Maker copy route
+was checked. When the build stops on a form's publication (a saved change it did not make, or a publish it
+could not confirm) and a cell caption of that form reads differently in its saved and published layers, the
+build reads the forms of that table (read-only, a bounded number of reads) and prints a note after the stop:
+each form that holds the same cell id, and the caption each shows saved and published. The note is printed
+only: it is not written to `build-log.jsonl` or `build-status.json`. The names and captions are quoted as
+read; they are observations, not proof of what caused the difference. If a form could not be read, the note
+says the scan was partial or could not be completed, and why, and which listings were read whole, in part or
+not at all; that is not evidence that no other form shares the cell. A partial scan is not an approval
+basis: stop rather than approving a change for only the forms it lists.
 
 At the drift stop, the note says that publishing or undoing the change, as the stop advises, may not be
 enough here. In a measured case, a change to the description COLUMN of one sharing form followed by a publish
 of that table put the existing saved cell label live on every sharing form. That column is not a cell caption
 (a cell's caption is the description ATTRIBUTE of its label in the form XML), the saved label may be another
 maker's, and a publish of the table also puts every other unpublished change of that table live. The build
-writes nothing to repair this: before any such change, agree exactly which form changes, every sharing form,
-the full caption that should go live and the table's other pending changes. An adopt or `publication-risk`
-approval does not cover it. The stop, its code and its key are unchanged.
+writes nothing to repair this, and the stop, its code and its key are unchanged. To recover:
+
+1. Stop retrying a bare publish of the table, the app or all customizations. Changing the caption in the spec
+   does not rewrite the caption of a sub-grid that already exists.
+2. Read both layers of every sharing form, by its id, cell and language, and get the full values where the
+   note cut them or could not read them. Check the other cells of the form you mean to change for sharing
+   too, and the table's other unpublished changes. The note does not show every form a change could reach.
+3. Choose the cell label that should go live with the owners of the forms. In the measured case the live
+   label became the existing SAVED cell label, which may be another form's maker's, not the old published
+   one and not the text written to the `description` column. If the saved label is not wanted, or the reads
+   disagree, change the label on purpose with its owner, under its own approval.
+4. Before any write, by an agent or an operator, get exact approval that names the form and the change, every
+   sharing form the change must cover, the cell, language and full caption that should go live on each, and
+   the one table, with the table's other pending changes accounted for separately. If the scan was partial
+   or the impact is uncertain, there is no basis for approval: stop rather than approving a change for only
+   the forms returned. An adopt or `publication-risk` approval does not grant it.
+5. The measured method was a substantive PATCH of the systemform `description` COLUMN on one sharing form,
+   then a publish of that table only. The approval therefore covers the column change itself, the
+   caption(s) that should go live, every sharing form and the table's other pending changes, not only the
+   new column text. Saving or patching the form unchanged was not shown to work, and the method was not
+   measured on a managed form the build adopted.
+6. After the approved change, read every affected form and control again, check the approved values in both
+   layers, and run the build again. A caption that now reads as intended does not settle a publish the build
+   still has outstanding: the build's own checks of the whole group decide that.
+
+If the answer to a PATCH or a publish is lost (a timeout, a dropped connection), never send it again
+automatically. A fresh read shows what is there now, not that a delayed request will never run; keep that
+uncertainty in what you report. A `publication-risk` approval for a dispatch the build could not confirm
+stays separate, and never approves a repair.
 
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by

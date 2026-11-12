@@ -60,8 +60,18 @@ const formKey = (row) => {
 // a row with no form id cannot be told apart from one; either is refused, never deduplicated. The layers are checked apart: a form is in both layers as a rule,
 // and a layer may hold forms the other does not. `onRow(row, refuse)`, optional, sees each row as its page arrives and may refuse the rest of the layer
 // (a caller's own budget, e.g. of XML bytes) by throwing `refuse(why)`.
-function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow }, counter) {
+//
+// `progress`, optional, is the channel for a caller that can use PART of a layer (the diagnostic; never the deletion guard, which must refuse on any gap):
+// a page's rows are added to `progress.rows` only once collectionRows has ACCEPTED that page, which it shows by asking for the next one (or by returning).
+// So a page whose own answer is refused (a malformed continuation, a row past a budget, a repeat) never adds a row, and the rows of the pages before a
+// failure stay. A form that came back twice is put in `progress.conflicts`: neither copy says which is current, so the caller must not use it.
+function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow, progress }, counter) {
+  const commit = () => {
+    if (progress && counter.pending) progress.rows.push(...counter.pending);
+    counter.pending = null;
+  };
   const spend = () => {
+    commit();
     if (counter.reads >= maxReads) throw refuse(`within ${maxReads} reads`);
     counter.reads += 1;
   };
@@ -74,12 +84,16 @@ function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow }, cou
       for (const row of value) {
         const key = formKey(row);
         if (!key) throw incomplete(`a form came back with no form id (${JSON.stringify(row && row.formid !== undefined ? row.formid : null)})`);
-        if (counter.ids.has(key)) throw incomplete(`form ${key} came back twice`);
+        if (counter.ids.has(key)) {
+          if (progress) progress.conflicts.add(key);
+          throw incomplete(`form ${key} came back twice`);
+        }
         counter.ids.add(key);
         if (onRow) onRow(row, refuse);
       }
       const declared = declaredCount(body);
       if (declared !== undefined) counter.declared = Math.max(counter.declared, declared);
+      counter.pending = value;
     }
     return response;
   };
@@ -87,6 +101,7 @@ function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow }, cou
   const wrapped = { get: async (path) => { spend(); return tally(await client.get(path, paged())); } };
   if (typeof client.getAbsolute === 'function') wrapped.getAbsolute = async (url) => { spend(); return tally(await client.getAbsolute(url, paged())); };
   if (typeof client.apiUrl === 'function') wrapped.apiUrl = (path) => client.apiUrl(path);
+  wrapped.commit = commit;
   return wrapped;
 }
 
@@ -104,17 +119,20 @@ function budgeted(client, { maxReads, maxForms, refuse, incomplete, onRow }, cou
  *               short(declared, held)    fewer forms than an answer declared
  *               failed(error)            any other failure of a read, with collectionRows' (or the client's) error
  *   onRow     optional, see budgeted
+ *   progress  optional `{ rows: [], conflicts: new Set() }`, see budgeted: the rows of the pages accepted before a failure. It changes nothing
+ *             about what this function answers or throws
  *   stats     optional: its `reads` is set to the reads this layer took, whether it succeeded or not
  * @returns {Promise<{ rows: object[], reads: number }>} the rows as answered
  */
-async function readSystemFormLayer(client, { path, label, maxForms, maxReads, errors, onRow, stats }) {
+async function readSystemFormLayer(client, { path, label, maxForms, maxReads, errors, onRow, progress, stats }) {
   const own = new WeakSet();
   const mark = (error) => { if (error && typeof error === 'object') own.add(error); return error; };
-  const counter = { reads: 0, forms: 0, ids: new Set(), declared: 0 };
-  const reader = budgeted(client, { maxReads, maxForms, refuse: (why) => mark(errors.budget(why)), incomplete: (why) => mark(errors.incomplete(why)), onRow }, counter);
+  const counter = { reads: 0, forms: 0, ids: new Set(), declared: 0, pending: null };
+  const reader = budgeted(client, { maxReads, maxForms, refuse: (why) => mark(errors.budget(why)), incomplete: (why) => mark(errors.incomplete(why)), onRow, progress }, counter);
   let rows;
   try {
     rows = await collectionRows(reader, path, label, { code: errors.code });
+    reader.commit();
   } catch (error) {
     if (own.has(error)) throw error;
     throw errors.failed(error);

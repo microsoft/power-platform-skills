@@ -194,7 +194,7 @@ test('the stopped form is read afresh and must show the very hashes the stop dec
     const { result: r, rendered } = await observe(client, [{ ...entry, ...wrong }]);
     assert.deepEqual([r.scan.status, r.scan.reason, r.cells.length], ['unavailable', 'observations-changed', 0]);
     assert.equal(listReads(wire, at).length, 0);
-    assert.match(rendered.text, /^Shared form cells on table account could not be determined \(scan unavailable: observations-changed\); this is not evidence that no other form of the table shares a cell with the stopped form\.$/);
+    assert.match(rendered.text, /^Shared form cells on table account could not be determined \(scan unavailable: observations-changed\); this is not evidence that no other form of the table shares a cell with the stopped form, and it is not an approval basis for a change of the cell\.$/);
   }
   // A root that is no longer a form of this table, or a dashboard, is not explained either.
   const other = await over((w) => { principal(w); w.saved.get(CONTACT).formxml = form(cell(CELL, 'new')); });
@@ -256,14 +256,124 @@ test('a listing that cannot be read whole is a partial or unavailable answer wit
 });
 
 test('the budgets: forms, reads and XML bytes past the limit stop the layer (or leave one form unread) before any short answer is called complete', async () => {
-  const fill = (w) => { principal(w); for (let i = 0; i < 101; i += 1) put(w, { id: `f0000000-0000-4000-8000-${String(i).padStart(12, '0')}`, saved: form(cell(FRESH_CELL, 'x')), published: form(cell(FRESH_CELL, 'x')) }); };
-  for (const [limits, status] of [[{ maxForms: 50 }, 'unavailable'], [{ maxReads: 1 }, 'unavailable'], [{ maxTotalXmlBytes: 1000 }, 'unavailable'], [{ maxXmlBytes: 200 }, 'partial']]) {
+  const fill = (w) => {
+    principal(w);
+    for (let i = 0; i < 101; i += 1) put(w, { id: `f0000000-0000-4000-8000-${String(i).padStart(12, '0')}`, saved: form(cell(FRESH_CELL, 'x')), published: form(cell(FRESH_CELL, 'x')) });
+    w.saved.get(DRAFT).formxml = form(cell(CELL, 'RRR shared') + cell(FRESH_CELL, 'y'.repeat(2000)));
+  };
+  // A layer past its read budget keeps the first page it accepted (partial); one past the form or total XML budget on its first
+  // page keeps nothing (unavailable); one form past its own XML budget is left unread (partial).
+  for (const [limits, status] of [[{ maxForms: 50 }, 'unavailable'], [{ maxReads: 1 }, 'partial'], [{ maxTotalXmlBytes: 1000 }, 'unavailable'], [{ maxXmlBytes: 1500 }, 'partial']]) {
     const { wire, client } = await over(fill);
     const entry = await observed(client, ROOT);
     const at = wire.log.length;
     const { result } = await observe(client, [entry], { limits });
     assert.deepEqual([result.scan.status, result.scan.reason], [status, 'budget'], JSON.stringify(limits));
-    if (limits.maxReads) assert.equal(listReads(wire, at).length, 2, 'the read past the budget is never sent');
+    if (limits.maxReads) {
+      assert.equal(listReads(wire, at).length, 2, 'the read past the budget is never sent');
+      assert.deepEqual([result.scan.formsRead, result.scan.coverage], [{ saved: 100, published: 100 }, { saved: 'partial', published: 'partial' }]);
+    }
+  }
+});
+
+test('one XML byte budget holds the stopped form\'s own reads too: a stopped form past it is never parsed and opens no listing, and what it spent counts against the listing', async () => {
+  const diagnostics = require('../lib/form-caption-diagnostics.js');
+  const size = Buffer.byteLength(form(cell(CELL, 'RRR shared')), 'utf8');
+  for (const [limits, why] of [[{ maxXmlBytes: size - 1 }, 'one document past the per-form budget'], [{ maxTotalXmlBytes: size + 1 }, 'the two layers past the total budget']]) {
+    const { wire, client } = await over(principal);
+    const entry = await observed(client, ROOT);
+    const parsed = [];
+    const original = diagnostics.readFormCaptionCells;
+    diagnostics.readFormCaptionCells = (text) => { parsed.push(text.length); return original(text); };
+    const at = wire.log.length;
+    let result;
+    try {
+      ({ result } = await observe(client, [entry], { limits }));
+    } finally {
+      diagnostics.readFormCaptionCells = original;
+    }
+    assert.deepEqual([result.scan.status, result.scan.reason, result.cells.length], ['unavailable', 'budget', 0], why);
+    assert.deepEqual(parsed, [], `${why}: no parser reads the stopped form`);
+    assert.equal(listReads(wire, at).length, 0, `${why}: no listing is read`);
+  }
+  // The stopped form's two layers fit, and leave the listing too little: the first listing page is refused, never a "complete" scan.
+  const { wire, client } = await over(principal);
+  const entry = await observed(client, ROOT);
+  const at = wire.log.length;
+  const { result } = await observe(client, [entry], { limits: { maxTotalXmlBytes: 2 * size + 100 } });
+  assert.deepEqual([result.scan.status, result.scan.reason], ['unavailable', 'budget']);
+  assert.ok(listReads(wire, at).length > 0, 'the listing was asked for');
+  // The default budget reads the same table whole.
+  const whole = await over(principal);
+  const { result: complete } = await observe(whole.client, [await observed(whole.client, ROOT)]);
+  assert.equal(complete.scan.status, 'complete');
+});
+
+test('the stopped form\'s listing row must be the row of its fresh read: another name, description or layout is another moment, and nothing is joined', async () => {
+  const changes = [
+    ['name', (r) => ({ ...r, name: 'Account main renamed' })],
+    ['description', (r) => ({ ...r, description: 'changed meanwhile' })],
+    ['layout outside the cell', (r) => ({ ...r, formxml: r.formxml.replace(`{${TAB}}`, '{0a0a0a0a-0000-4000-8000-0000000000a2}') })],
+  ];
+  for (const layer of ['saved', 'published']) {
+    for (const [what, change] of changes) {
+      const { wire, client } = await over(principal);
+      const entry = await observed(client, ROOT);
+      scriptList(wire, layer, { statusCode: 200, body: { value: rowsOf(wire, layer).map((r) => (r.formid === ROOT ? change(r) : r)) } });
+      const { result } = await observe(client, [entry]);
+      assert.deepEqual([result.scan.status, result.scan.reason, result.cells.length], ['partial', 'observations-changed', 0], `${layer} ${what}`);
+    }
+  }
+});
+
+test('a layer whose later page fails keeps the forms of the pages it accepted: what they show is named, the scan is partial with what was read, and a form they do not list is not called absent', async () => {
+  const { wire, client } = await over(principal);
+  const entry = await observed(client, ROOT);
+  for (const layer of ['saved', 'published']) {
+    const next = `https://contoso.crm.dynamics.com/api/data/v9.0/systemforms?$skiptoken=later-${layer}`;
+    const rows = rowsOf(wire, layer).filter((r) => r.formid !== DRAFT);
+    scriptList(wire, layer, { statusCode: 200, body: { value: rows, '@odata.nextLink': next } });
+    wire.script((e) => e.url.includes(`later-${layer}`), { statusCode: 403, body: { error: { code: '0x80040220', message: 'denied' } } });
+  }
+  const { result, rendered } = await observe(client, [entry]);
+  assert.deepEqual([result.scan.status, result.scan.reason], ['partial', 'read-failed']);
+  assert.deepEqual(result.scan.coverage, { saved: 'partial', published: 'partial' });
+  const listed = (layer) => rowsOf(wire, layer).filter((r) => r.formid !== DRAFT).length;
+  assert.deepEqual(result.scan.formsRead, { saved: listed('saved'), published: listed('published') });
+  assert.deepEqual(formIds(result.cells[0]), [ROOT, PEER]);
+  assert.match(rendered.text, /The saved listing was read in part \(a later page could not be read\), the published listing in part/);
+  assert.match(rendered.text, /This scan is partial: it is not an approval basis\. Stop rather than approving a change for only the forms listed here\./);
+  // A form only on the unread page of one layer is not read there — never "form not returned".
+  const one = await over(principal);
+  const e2 = await observed(one.client, ROOT);
+  const next = 'https://contoso.crm.dynamics.com/api/data/v9.0/systemforms?$skiptoken=later-published';
+  scriptList(one.wire, 'published', { statusCode: 200, body: { value: rowsOf(one.wire, 'published').filter((r) => r.formid !== PEER), '@odata.nextLink': next } });
+  one.wire.script((e) => e.url.includes('later-published'), { statusCode: 403, body: { error: { code: '0x80040220', message: 'denied' } } });
+  const { result: r2 } = await observe(one.client, [e2]);
+  const peer = r2.cells[0].forms.find((f) => f.formId === PEER);
+  assert.deepEqual([peer.observedIn, peer.published], ['saved', { state: 'unreadable' }]);
+  // A form that came back twice across the pages is not used from either page.
+  const twice = await over(principal);
+  const e3 = await observed(twice.client, ROOT);
+  const link = 'https://contoso.crm.dynamics.com/api/data/v9.0/systemforms?$skiptoken=again';
+  const peerRow = rowsOf(twice.wire, 'published').find((r) => r.formid === PEER);
+  scriptList(twice.wire, 'published', { statusCode: 200, body: { value: rowsOf(twice.wire, 'published'), '@odata.nextLink': link } });
+  twice.wire.script((e) => e.url.includes('skiptoken=again'), { statusCode: 200, body: { value: [peerRow] } });
+  const { result: r3 } = await observe(twice.client, [e3]);
+  assert.deepEqual([r3.scan.status, r3.scan.reason], ['partial', 'incomplete-pages']);
+  const peer3 = r3.cells[0].forms.find((f) => f.formId === PEER);
+  assert.deepEqual(peer3.published, { state: 'unreadable' });
+});
+
+test('a returned form row with no readable name is an unreadable form (invalid-row) that leaves the scan partial, never a form left out', async () => {
+  for (const name of [undefined, null, 7]) {
+    const { wire, client } = await over(principal);
+    const entry = await observed(client, ROOT);
+    scriptList(wire, 'saved', { statusCode: 200, body: { value: rowsOf(wire, 'saved').map((r) => (r.formid === PEER ? { ...r, name } : r)) } });
+    const { result } = await observe(client, [entry]);
+    assert.deepEqual([result.scan.status, result.scan.reason], ['partial', 'invalid-row'], String(name));
+    const peer = result.cells[0].forms.find((f) => f.formId === PEER);
+    assert.deepEqual([peer.savedName, peer.saved], [null, { state: 'unreadable' }], String(name));
   }
 });
 
@@ -338,7 +448,7 @@ test('the note is bounded: at most eight entries of twenty forms, and an entry t
   assert.equal(shown + big.display.omittedCells, 8);
   assert.equal((big.text.match(/^ {2}form /gm) || []).length, shown * 20, 'every listed entry is whole');
   assert.ok(big.text.includes(`${big.display.omittedCells} more cell entr`));
-  assert.match(big.text, /This diagnostic sent no repair write and no publication\. Before any write, get exact approval .* does not grant it\.$/, 'the guidance is never cut');
+  assert.match(big.text, /This diagnostic sent no repair write and no publication\. Before any write, get exact approval .* does not grant it\. Never repeat .* "Form cells that another form shares"\.$/, 'the guidance is never cut');
 });
 
 test('the note rides on the stop as a non-enumerable, read-only property that never changes the stop and is never replaced', () => {

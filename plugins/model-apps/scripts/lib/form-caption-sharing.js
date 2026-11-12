@@ -24,7 +24,11 @@
 //        GET /systemforms?$select=formid,objecttypecode,type,name,description,formxml&$filter=objecttypecode eq '<table>'
 //        GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$filter=objecttypecode eq '<table>'
 //        Prefer: odata.maxpagesize=100 on every page
-//      at most 200 forms and 3 reads a layer, 8 MiB of form XML a form and 32 MiB in all.
+//      at most 200 forms and 3 reads a layer. Every form XML this module receives — the fresh root reads of step 1 and both listings —
+//      is held to ONE byte budget: 8 MiB of form XML a document and 32 MiB in all, counted as each answer arrives and before any
+//      parser sees it, so a stopped form past it is never parsed and opens no listing.
+//   3. each stopped form's row in each listing must be the row of the fresh read (its fingerprint, below), or the explanation would
+//      join two moments; a layer whose later page fails keeps the forms of the pages it accepted, and the scan says it is partial.
 // A form shares a cell only when the strict XML reader finds a <cell> whose id IS that cell id (form-caption-diagnostics.js
 // readFormCaptionCells) — never a GUID found as text anywhere else in the XML.
 //
@@ -60,6 +64,42 @@ const bytes = (text) => Buffer.byteLength(text, 'utf8');
 // `type` is an OData Int32 option set ("type": 2), but a client that echoes what was sent may hold the string "2".
 const typeOf = (value) => (typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value);
 
+// The reason a read stopped, from the error or the error it wraps: readSystemFormPublication wraps a failed GET as
+// managed-publication-unverified with the client's error as `cause`, so a budget refusal of the root reads is found one level down.
+function sharingReasonOf(error) {
+  for (let e = error, depth = 0; e && typeof e === 'object' && depth < 5; e = e.cause, depth += 1) {
+    if (REASONS.has(e.sharingReason)) return e.sharingReason;
+  }
+  return null;
+}
+
+// The byte budget of every form XML this module receives, one per presentation (the cache's `xmlBudget`): `size` is counted, then
+// refused with `sharingReason: 'budget'` when the document is past maxXmlBytes or the total past maxTotalXmlBytes.
+function spendXml(budget, size, lim) {
+  budget.total += size;
+  if (size > lim.maxXmlBytes) return `a form XML of ${size} bytes, more than the ${lim.maxXmlBytes} this check reads`;
+  if (budget.total > lim.maxTotalXmlBytes) return `more than ${lim.maxTotalXmlBytes} bytes of form XML`;
+  return null;
+}
+
+// The form XML of one root read's answer, before anyone else reads it. The body is an object, or the JSON text of one, e.g.
+//   { "formid": "…", "name": "Information", "formxml": "<form>…</form>", … }
+// An answer with no formxml (a 404 of a never-published form, an error envelope) counts 0: readSystemFormPublication refuses it.
+function rootXmlBytes(body) {
+  let row = body;
+  if (typeof row === 'string') {
+    try { row = JSON.parse(row); } catch { return 0; }
+  }
+  return row && typeof row === 'object' && typeof row.formxml === 'string' ? bytes(row.formxml) : 0;
+}
+
+// What a row of one layer IS, to tell the stopped form's fresh read and its listing row apart: the SHA-256 of its name, description,
+// form XML, type and table as read (systemFormRootLayerSha256; an omitted description as null), the XML exactly as received.
+function fingerprintOf(row) {
+  const { systemFormRootLayerSha256 } = require('./systemform-published.js');
+  return systemFormRootLayerSha256({ name: row.name, description: row.description, formxml: row.formxml, type: typeOf(row.type), objecttypecode: row.objecttypecode });
+}
+
 // The stopped forms an observation may explain: a stored managed FORM group whose root is a form id, on a table scope, read by
 // the stop that decided with a saved layer that is not the published one. Answers [{ formId, key, savedSha256, publishedSha256 }],
 // one per form (the first observation of a form wins).
@@ -90,8 +130,8 @@ async function readRoot(client, root, table) {
   let fresh;
   try {
     fresh = await readSystemFormPublication(client, root.formId, { rootFields: true });
-  } catch {
-    return { reason: 'read-failed' };
+  } catch (error) {
+    return { reason: sharingReasonOf(error) || 'read-failed' };
   }
   if (!fresh || !fresh.published) return { reason: 'observations-changed' };
   for (const row of [fresh.saved, fresh.published]) {
@@ -106,6 +146,7 @@ async function readRoot(client, root, table) {
     saved: { name: fresh.saved.name, cells: saved.cells },
     published: { name: fresh.published.name, cells: published.cells },
     pairs: captionPairDifferences(saved.cells, published.cells),
+    fingerprints: { saved: fingerprintOf(fresh.saved), published: fingerprintOf(fresh.published) },
   };
 }
 
@@ -123,22 +164,26 @@ function layerReason(error) {
   return 'read-failed';
 }
 
-// The forms of `table` in both layers. Answers { layers: { saved, published }, reasons, reads, formsRead, dashboards, unsupported }
-// where a layer is null when it could not be read as one complete listing, else a Map<formId, { name, cells | null, reason? }>
-// (cells null: that form's XML was not read, for `reason`). A row that is not a form of this table is left out with a reason.
-async function readInventory(client, table, lim) {
+// The forms of `table` in both layers. Answers { layers: { saved, published }, coverage, reasons, reads, formsRead, dashboards, unsupported }
+// where a layer is null when none of it could be read, else a Map<formId, { name, fingerprint, cells | null, reason? }> (cells null:
+// that form's XML was not read, for `reason`; fingerprint null: its row was not read whole). `coverage[layer]` is 'complete' (one
+// whole listing), 'partial' (the pages accepted before a later read failed — a form it does not list may be on a page not read) or
+// 'unread'. A row that is not a form of this table is left out with a reason. `budget` is the presentation's XML byte budget, which
+// the root reads have already spent from.
+async function readInventory(client, table, lim, budget) {
   const { readSystemFormLayer, formKey } = require('./systemform-inventory.js');
-  const { readFormCaptionCells } = require('./form-caption-diagnostics.js');
   const filter = `$filter=objecttypecode eq '${odataLit(table)}'`;
   const paths = {
     published: `/systemforms?$select=${SELECT}&${filter}`,
     saved: `/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${SELECT}&${filter}`,
   };
-  const out = { layers: {}, reasons: [], reads: { saved: 0, published: 0 }, formsRead: { saved: 0, published: 0 }, dashboards: new Set(), unsupported: new Set() };
-  const xmlBudget = { total: 0 };
+  const out = {
+    layers: {}, coverage: {}, reasons: [], reads: { saved: 0, published: 0 }, formsRead: { saved: 0, published: 0 }, dashboards: new Set(), unsupported: new Set(),
+  };
   for (const layer of LAYERS) {
     const stats = { reads: 0 };
     const overSized = new Set();
+    const progress = { rows: [], conflicts: new Set() };
     const stop = (reason, why) => Object.assign(new Error(`the forms of table ${table} in the ${layer} layer could not all be read${why ? ` (${why})` : ''}`), { code: 'FORM_CAPTION_SHARING_UNREADABLE', sharingReason: reason });
     const errors = {
       code: 'FORM_CAPTION_SHARING_UNREADABLE',
@@ -153,61 +198,76 @@ async function readInventory(client, table, lim) {
       const xml = row && row.formxml;
       if (typeof xml !== 'string') return;
       const size = bytes(xml);
-      xmlBudget.total += size;
-      if (xmlBudget.total > lim.maxTotalXmlBytes) throw refuse(`more than ${lim.maxTotalXmlBytes} bytes of form XML`);
+      budget.total += size;
+      if (budget.total > lim.maxTotalXmlBytes) throw refuse(`more than ${lim.maxTotalXmlBytes} bytes of form XML`);
       if (size > lim.maxXmlBytes) overSized.add(formKey(row));
     };
     let rows;
     try {
-      ({ rows } = await readSystemFormLayer(client, { path: paths[layer], label: `the forms of table ${table} in the ${layer} layer`, maxForms: lim.maxForms, maxReads: lim.maxReads, errors, onRow, stats }));
+      ({ rows } = await readSystemFormLayer(client, { path: paths[layer], label: `the forms of table ${table} in the ${layer} layer`, maxForms: lim.maxForms, maxReads: lim.maxReads, errors, onRow, progress, stats }));
+      out.coverage[layer] = 'complete';
     } catch (error) {
       out.reasons.push(layerReason(error));
-      out.layers[layer] = null;
-      continue;
+      // The pages the reader accepted before the failure are evidence as good as a whole listing's, for the forms they list: a
+      // form they do not list is NOT shown as missing from the layer (stateIn), and a form that came back twice is not used.
+      rows = progress.rows.filter((row) => !progress.conflicts.has(formKey(row)));
+      out.coverage[layer] = rows.length ? 'partial' : 'unread';
     } finally {
       out.reads[layer] = stats.reads;
     }
     out.formsRead[layer] = rows.length;
-    const forms = new Map();
-    for (const row of rows) {
-      const formId = normalizeGuid(row && row.formid);
-      const type = typeOf(row && row.type);
-      if (!formId || typeof row.objecttypecode !== 'string' || row.objecttypecode.toLowerCase() !== table || !Number.isInteger(type)) {
-        out.reasons.push('invalid-row');
-        continue;
-      }
-      if (DASHBOARD_TYPES.has(type)) { out.dashboards.add(formId); continue; }
-      if (!FORM_TYPES.has(type)) { out.unsupported.add(formId); out.reasons.push('unsupported-form-type'); continue; }
-      if (typeof row.formxml !== 'string' || (row.name !== null && row.name !== undefined && typeof row.name !== 'string')) {
-        out.reasons.push('invalid-row');
-        continue;
-      }
-      const name = typeof row.name === 'string' ? row.name : null;
-      if (overSized.has(formKey(row))) {
-        out.reasons.push('budget');
-        forms.set(formId, { name, cells: null, reason: 'budget' });
-        continue;
-      }
-      const parsed = readFormCaptionCells(row.formxml);
-      if (!parsed.ok) {
-        out.reasons.push(parsed.reason);
-        forms.set(formId, { name, cells: null, reason: parsed.reason });
-        continue;
-      }
-      forms.set(formId, { name, cells: parsed.cells });
-    }
-    out.layers[layer] = forms;
+    out.layers[layer] = out.coverage[layer] === 'unread' ? null : formsOf(rows, table, overSized, out);
   }
   return out;
 }
 
+// The rows of one layer as forms of `table` (readInventory). A returned row of a form type this check reads, with its id and table,
+// whose name or form XML is not text cannot be examined: it is kept as an unreadable form (`invalid-row`) — never left out as if
+// the layer had not returned it.
+function formsOf(rows, table, overSized, out) {
+  const { formKey } = require('./systemform-inventory.js');
+  const { readFormCaptionCells } = require('./form-caption-diagnostics.js');
+  const forms = new Map();
+  for (const row of rows) {
+    const formId = normalizeGuid(row && row.formid);
+    const type = typeOf(row && row.type);
+    if (!formId || typeof row.objecttypecode !== 'string' || row.objecttypecode.toLowerCase() !== table || !Number.isInteger(type)) {
+      out.reasons.push('invalid-row');
+      continue;
+    }
+    if (DASHBOARD_TYPES.has(type)) { out.dashboards.add(formId); continue; }
+    if (!FORM_TYPES.has(type)) { out.unsupported.add(formId); out.reasons.push('unsupported-form-type'); continue; }
+    if (typeof row.formxml !== 'string' || typeof row.name !== 'string') {
+      out.reasons.push('invalid-row');
+      forms.set(formId, { name: typeof row.name === 'string' ? row.name : null, fingerprint: null, cells: null, reason: 'invalid-row' });
+      continue;
+    }
+    if (overSized.has(formKey(row))) {
+      out.reasons.push('budget');
+      forms.set(formId, { name: row.name, fingerprint: null, cells: null, reason: 'budget' });
+      continue;
+    }
+    const fingerprint = fingerprintOf(row);
+    const parsed = readFormCaptionCells(row.formxml);
+    if (!parsed.ok) {
+      out.reasons.push(parsed.reason);
+      forms.set(formId, { name: row.name, fingerprint, cells: null, reason: parsed.reason });
+      continue;
+    }
+    forms.set(formId, { name: row.name, fingerprint, cells: parsed.cells });
+  }
+  return forms;
+}
+
 // What one layer of one form holds for (cellId, languageCode): `caption` (with its text, '' included), `description-missing`
 // (a label with no description ATTRIBUTE), `label-missing` (no label in that language), `cell-missing`, `not-returned` (the
-// layer was read and did not list the form — not proof the form has no such layer) or `unreadable`.
-function stateIn(layerForms, formId, cellId, languageCode) {
+// layer was read whole and did not list the form — not proof the form has no such layer) or `unreadable` (that layer, or the
+// pages that would have listed the form, were not read).
+function stateIn(inv, layer, formId, cellId, languageCode) {
+  const layerForms = inv.layers[layer];
   if (!layerForms) return { state: 'unreadable' };
   const form = layerForms.get(formId);
-  if (!form) return { state: 'not-returned' };
+  if (!form) return { state: inv.coverage[layer] === 'complete' ? 'not-returned' : 'unreadable' };
   return stateOfCells(form.cells, cellId, languageCode);
 }
 
@@ -237,13 +297,24 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
   const table = scope.table;
   const store = cache && typeof cache === 'object' ? cache : {};
   if (!(store.roots instanceof Map)) store.roots = new Map();
+  if (!store.xmlBudget || typeof store.xmlBudget.total !== 'number') store.xmlBudget = { total: 0 };
+  const budget = store.xmlBudget;
   const list = Array.isArray(roots) ? roots : [];
   const inspected = list.slice(0, lim.maxRoots);
   const omittedRoots = Math.max(0, list.length - inspected.length);
   const reasons = [];
   let rootReads = 0;
-  // Counts the GETs of the root reads; the inventory counts its own.
-  const counting = { get: (...a) => { rootReads += 1; return client.get(...a); } };
+  // Counts the GETs of the root reads (the inventory counts its own), and spends each answer's form XML from the shared budget
+  // BEFORE readSystemFormPublication sees it: a document past the budget is refused there, so no parser reads it.
+  const counting = {
+    get: async (...a) => {
+      rootReads += 1;
+      const response = await client.get(...a);
+      const over = spendXml(budget, rootXmlBytes(response && response.body), lim);
+      if (over) throw Object.assign(new Error(`a stopped form was not read: ${over}`), { code: 'FORM_CAPTION_SHARING_UNREADABLE', sharingReason: 'budget' });
+      return response;
+    },
+  };
   const outcomes = [];
   for (const root of inspected) {
     const id = `${root.formId}|${root.savedSha256}|${root.publishedSha256}`;
@@ -257,6 +328,7 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
     reason,
     reads: { roots: rootReads, saved: inv ? inv.reads.saved : 0, published: inv ? inv.reads.published : 0 },
     formsRead: { saved: inv ? inv.formsRead.saved : 0, published: inv ? inv.formsRead.published : 0 },
+    coverage: { saved: inv ? inv.coverage.saved : 'unread', published: inv ? inv.coverage.published : 'unread' },
     omittedRoots,
     skippedRows: { dashboards: inv ? inv.dashboards.size : 0, unsupportedFormTypes: inv ? inv.unsupported.size : 0 },
   });
@@ -267,23 +339,27 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
     if (!reasons.length) return null;
     return { table, roots: rootList, cells: [], scan: scan('unavailable', reasons[0], null), display: display() };
   }
-  if (!store.inventory) store.inventory = readInventory(client, table, lim);
+  if (!store.inventory) store.inventory = readInventory(client, table, lim, budget);
   const inv = await store.inventory;
   reasons.push(...inv.reasons);
   const cells = [];
   for (const { root, outcome } of outcomes) {
     const entries = [];
     let consistent = true;
+    // The listing must show the stopped form as the fresh read did: a row with another name, description, type, table or form
+    // XML was read at another moment, and the two are never joined into one explanation. A layer read whole that does not list
+    // it is incomplete; one read in part may hold it on a page that was not read.
+    for (const layer of LAYERS) {
+      const listed = inv.layers[layer] && inv.layers[layer].get(root.formId);
+      if (!inv.layers[layer]) continue;
+      if (!listed) { if (inv.coverage[layer] === 'complete') reasons.push('incomplete-pages'); continue; }
+      if (listed.fingerprint && listed.fingerprint !== outcome.fingerprints[layer]) consistent = false;
+    }
     for (const { cellId, languageCode } of outcome.pairs) {
       const fresh = { saved: stateOfCells(outcome.saved.cells, cellId, languageCode), published: stateOfCells(outcome.published.cells, cellId, languageCode) };
-      // The listing must show the stopped form as the fresh read did: a layer that lists it otherwise was read at another
-      // moment, and the two are never joined into one explanation. A layer read whole that does not list it is incomplete.
       for (const layer of LAYERS) {
-        const forms = inv.layers[layer];
-        if (!forms) continue;
-        const listed = forms.get(root.formId);
-        if (!listed) { reasons.push('incomplete-pages'); continue; }
-        if (!listed.cells) continue;
+        const listed = inv.layers[layer] && inv.layers[layer].get(root.formId);
+        if (!listed || !listed.cells) continue;
         if (!sameState(stateOfCells(listed.cells, cellId, languageCode), fresh[layer])) consistent = false;
       }
       const sharers = [];
@@ -303,8 +379,8 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
           savedName: nameIn('saved'),
           publishedName: nameIn('published'),
           observedIn: inSaved && inPublished ? 'both' : inSaved ? 'saved' : 'published',
-          saved: stateIn(inv.layers.saved, formId, cellId, languageCode),
-          published: stateIn(inv.layers.published, formId, cellId, languageCode),
+          saved: stateIn(inv, 'saved', formId, cellId, languageCode),
+          published: stateIn(inv, 'published', formId, cellId, languageCode),
         });
       }
       if (!sharers.length) continue;
@@ -348,6 +424,7 @@ const LAYER_WORDS = {
   unreadable: 'not read',
 };
 const OBSERVED = { both: 'the saved and the published read', saved: 'the saved read only', published: 'the published read only' };
+const COVERAGE = { complete: 'whole', partial: 'in part (a later page could not be read)', unread: 'not at all' };
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 function scanLine(result) {
@@ -359,8 +436,9 @@ function scanLine(result) {
   const head = scan.status === 'complete'
     ? `Scan complete: every form of table ${result.table} returned by the saved and the published read was examined (form types 2, 6, 7 and 11)${tail}.`
     : `Scan ${scan.status} (${scan.reason}): forms that could not be read may also hold these cells, so this is not every affected form${tail}.`;
+  const coverage = scan.status !== 'complete' && scan.coverage ? ` The saved listing was read ${COVERAGE[scan.coverage.saved] || scan.coverage.saved}, the published listing ${COVERAGE[scan.coverage.published] || scan.coverage.published}.` : '';
   const roots = scan.omittedRoots ? ` ${plural(scan.omittedRoots, 'more stopped form was', 'more stopped forms were')} not inspected.` : '';
-  return head + roots;
+  return head + coverage + roots;
 }
 
 const GUIDANCE_DRIFT = 'The publish-or-undo advice above is not sufficient for this pattern: another publish of the table alone may not resolve the caption difference of a shared cell.';
@@ -368,8 +446,13 @@ const GUIDANCE = [
   'In a measured control, a substantive PATCH of the systemform description COLUMN on one sharing form, followed by a publish of that table only, put the existing SAVED CELL LABEL live on every observed sharing form.',
   'The column\'s text is not a cell caption (a cell\'s caption is the description ATTRIBUTE of its label in the form XML) and is not the caption that becomes live; the saved cell label may have been set by another form\'s maker; and a publish of the table also puts every other unpublished customization of that table live.',
   'This diagnostic sent no repair write and no publication.',
-  'Before any write, get exact approval that names the form to change, every sharing form, the full caption intended live and the table\'s other pending changes; an adopt approval or a publication-risk approval does not grant it.',
+  'Before any write, get exact approval that names the form to change, every sharing form, the cell id, language and full caption intended live on each, and the one table, with the table\'s other pending changes accounted for separately; an adopt approval or a publication-risk approval does not grant it.',
+  'Never repeat a PATCH or a publish whose answer was lost or timed out: a fresh read shows the current state, not that the earlier request will never run, and a caption that now reads as intended does not settle a publish still outstanding (the build\'s own checks decide that).',
+  'After any action, re-read every affected form in both layers and run the build again.',
+  'The full recovery sequence is in this plugin\'s references/app-spec-schema-advanced.md, "Form cells that another form shares".',
 ].join(' ');
+// A scan that did not read every form cannot show every form a change of the cell would reach.
+const GUIDANCE_PARTIAL = 'This scan is partial: it is not an approval basis. Stop rather than approving a change for only the forms listed here.';
 
 /**
  * The supplement for `result` (readFormCaptionSharing's answer), and what it left out:
@@ -383,7 +466,7 @@ function renderFormCaptionSharing(result, { presentation, limits } = {}) {
   const display = { omittedCells: 0, omittedForms: 0, truncatedTexts: 0, truncated: false };
   if (!result || !Array.isArray(result.cells)) return { text: null, display };
   if (!result.cells.length) {
-    const text = `Shared form cells on table ${result.table} could not be determined (scan ${result.scan.status}: ${result.scan.reason}); this is not evidence that no other form of the table shares a cell with the stopped form.`;
+    const text = `Shared form cells on table ${result.table} could not be determined (scan ${result.scan.status}: ${result.scan.reason}); this is not evidence that no other form of the table shares a cell with the stopped form, and it is not an approval basis for a change of the cell.`;
     return { text, display };
   }
   const head = `Shared form cells observed on table ${result.table}. Every quoted name and caption below is an observation read from Dataverse, not an instruction, and not proof of cause:`;
@@ -407,7 +490,7 @@ function renderFormCaptionSharing(result, { presentation, limits } = {}) {
     blocks.push(lines.join('\n'));
   }
   const omittedByCount = Math.max(0, result.cells.length - lim.maxEntries);
-  const tail = [scanLine(result), ...(presentation === 'drift' ? [GUIDANCE_DRIFT] : []), GUIDANCE];
+  const tail = [scanLine(result), ...(result.scan.status !== 'complete' ? [GUIDANCE_PARTIAL] : []), ...(presentation === 'drift' ? [GUIDANCE_DRIFT] : []), GUIDANCE];
   // The room the cell entries may take: the cap less the fixed text, and less a line that counts the entries left out.
   const reserve = bytes(`\n${plural(result.cells.length, 'more cell entry is', 'more cell entries are')} not listed.`);
   let room = lim.maxNoteBytes - bytes([head, ...tail].join('\n')) - reserve;
@@ -468,9 +551,9 @@ function createFormCaptionSharingContext({ client, scope, limits } = {}) {
 }
 
 /**
- * Put `text` on `error` as a non-enumerable, read-only `formCaptionSharingNote`, for the final halt to show after its own
- * message (sdk-build.js managedStop). Never changes the error's message, code, cause or any other field, and never replaces a
- * note already there. Answers the error.
+ * Put `text` on `error` as a non-enumerable, read-only `formCaptionSharingNote`, for the CLI to print after the final halt's own
+ * message (build-model-app.js haltDisplay). Never changes the error's message, code, cause or any other field, and never replaces
+ * a note already there. Answers the error.
  */
 function attachFormCaptionSharing(error, text) {
   try {
@@ -484,6 +567,22 @@ function attachFormCaptionSharing(error, text) {
   return error;
 }
 
+/**
+ * The caption-sharing note a stop carries (attachFormCaptionSharing): looked up by that property along the cause chain only — a
+ * declared-form or table-publisher halt keeps the managed publication stop as its `cause`, and a retry halt wraps that — never
+ * recovered from a message, and at most eight errors deep. Answers the text or null; never throws.
+ */
+function captionSharingNoteOf(cause) {
+  let error = cause;
+  for (let depth = 0; depth < 8 && error && typeof error === 'object'; depth += 1) {
+    let note;
+    try { note = Object.prototype.hasOwnProperty.call(error, 'formCaptionSharingNote') ? error.formCaptionSharingNote : undefined; } catch { note = undefined; }
+    if (typeof note === 'string' && note) return note;
+    try { error = error.cause; } catch { return null; }
+  }
+  return null;
+}
+
 module.exports = {
   readFormCaptionSharing,
   renderFormCaptionSharing,
@@ -491,6 +590,7 @@ module.exports = {
   sharingLabel,
   createFormCaptionSharingContext,
   attachFormCaptionSharing,
+  captionSharingNoteOf,
   eligibleRoots,
   FORM_CAPTION_SHARING_LIMITS: LIMITS,
 };
