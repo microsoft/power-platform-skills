@@ -4040,6 +4040,139 @@ test('verifySpec charts: a declared chart with a managed binding is its bound ro
   assert.ok(legacy.checks.some((c) => c.kind === 'chart' && c.present));
 });
 
+// A declared form (forms[].reconcile "declared") is identified by its managed binding: the committed root, read by that id alone, never a
+// row of its name. A binding that is not settled, names no id, or is contradicted by the form's pin reads no form at all.
+const DF_ID = '22222222-2222-4222-8222-222222222222';
+const DF_OTHER = '33333333-3333-4333-8333-333333333333';
+const DF_KEY = 'new_o/main/f';
+const declaredFormSpec = (form = {}) => ({
+  entities: [{ schemaName: 'new_o', columns: [{ schemaName: 'new_s' }] }],
+  forms: [{ entity: 'new_o', name: 'F', reconcile: 'declared', ...form }],
+});
+const boundFormManifest = (id = DF_ID, rest = {}, key = DF_KEY) => ({ groups: [{ family: 'form', key, root: { id } }], pending: [], invalid: [], ...rest });
+function declaredFormReader(answer) {
+  const queries = [];
+  const layouts = [];
+  return {
+    queries,
+    layouts,
+    findTable: async () => ({ logicalName: 'new_o' }),
+    findColumns: async () => [{ logicalName: 'new_s' }],
+    sitemapXml: async () => '',
+    formTopology: async (entity, id) => { layouts.push(id); return '<form><tabs><tab name="general"><columns><column><sections><section name="main"><rows><row><cell id="{c1}"><control id="new_s" datafieldname="new_s"/></cell></row></rows></section></sections></column></columns></tab></tabs></form>'; },
+    queryRecords: async (table, o) => {
+      if (table !== 'systemform') return [];
+      queries.push(o.filter);
+      return answer(o, queries.length);
+    },
+  };
+}
+const formOf = (r) => r.checks.filter((c) => c.kind === 'form').map((c) => [c.name, c.present, c.detail]);
+const dfRow = (o = {}) => ({ formid: DF_ID, objecttypecode: 'new_o', type: 2, ...o });
+
+test('verifySpec: a declared form is read by its bound id alone, and an answer that is not that form of its table and type proves nothing', async () => {
+  const by = `the form its managed binding (${DF_KEY}) is bound to (${DF_ID})`;
+  const incomplete = `its bound form ${DF_ID} was read without its table or type`;
+  for (const [what, answer, present, detail, form] of [
+    ['the bound row', () => [dfRow()], true, ''],
+    ['its id braced and in capitals, its type a numeric string', () => [dfRow({ formid: `{${DF_ID.toUpperCase()}}`, type: '2' })], true, ''],
+    ['a declared QuickView', () => [dfRow({ type: 6 })], true, '', { formType: 'QuickView' }],
+    ['a pin equal to the binding, braced and in capitals', () => [dfRow()], true, '', { formId: `{${DF_ID.toUpperCase()}}` }],
+    ['no row', () => [], false, `${by} was not found on its table; a form of the same name is not taken in its place`],
+    ['another row', () => [dfRow({ formid: DF_OTHER })], false, `the read of its bound form ${DF_ID} answered another row; a form of the same name is not taken in its place`],
+    ['two rows', () => [dfRow(), dfRow()], false, `its bound form ${DF_ID} could not be identified: the read did not return one form row`],
+    ['not a list', () => ({ value: [dfRow()] }), false, `its bound form ${DF_ID} could not be identified: the read did not return one form row`],
+    ['no table', () => [dfRow({ objecttypecode: undefined })], false, incomplete],
+    ['no type', () => [{ formid: DF_ID, objecttypecode: 'new_o' }], false, incomplete],
+    ['an empty type', () => [dfRow({ type: '' })], false, incomplete],
+    ['another table', () => [dfRow({ objecttypecode: 'new_x' })], false, `its bound form ${DF_ID} belongs to table 'new_x', not 'new_o'`],
+    ['another type', () => [dfRow({ type: 6 })], false, `its bound form ${DF_ID} is a type-6 form, not the declared Main form (type 2)`],
+    ['a failed read', () => { throw new Error('socket hang up'); }, false, `its bound form ${DF_ID} could not be read: socket hang up`],
+  ]) {
+    const read = declaredFormReader(answer);
+    const key = `new_o/${((form && form.formType) || 'Main').toLowerCase()}/f`;
+    const r = await verifySpec(declaredFormSpec(form), read, { managedManifest: boundFormManifest(`{${DF_ID.toUpperCase()}}`, {}, key) });
+    assert.deepStrictEqual(formOf(r), [['F', present, detail]], what);
+    assert.deepStrictEqual(read.queries, [`formid eq ${DF_ID}`, `formid eq ${DF_ID}`], `${what}: its presence and its layout each read the bound id, and nothing else`);
+    assert.deepStrictEqual(read.layouts, present ? [DF_ID] : [], `${what}: only the bound form's layout is read`);
+  }
+});
+
+test('verifySpec: a declared form whose binding is unsettled, names no id, or is contradicted by its pin reads no form, whatever answers its name', async () => {
+  const namesake = () => [dfRow({ formid: DF_OTHER, name: 'F' })];
+  const open = (code) => `its managed binding (${DF_KEY}) is not settled (${code}) — unverified, not proven correct`;
+  const noId = `its managed binding (${DF_KEY}) records no form id — unverified, not proven correct`;
+  for (const [what, manifest, why, form] of [
+    ['an invalid group', { groups: [], pending: [], invalid: [{ family: 'form', key: DF_KEY, code: 'managed-binding-group-invalid' }] }, open('managed-binding-group-invalid')],
+    ['an unreadable store', { groups: [], pending: [], invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] }, open('managed-binding-store-unreadable')],
+    ['a pending create, given a root and a pin', { groups: [], pending: [{ family: 'form', key: DF_KEY, code: 'managed-attempt-pending', root: { id: DF_ID } }], invalid: [] }, open('managed-attempt-pending'), { formId: DF_ID }],
+    ['a pending entry beside a committed group', boundFormManifest(DF_ID, { pending: [{ family: 'form', key: DF_KEY, reason: 'an attempt is not proved' }] }), open('an attempt is not proved')],
+    ['a group with no usable id', boundFormManifest('not-a-guid'), noId],
+  ]) {
+    const read = declaredFormReader(namesake);
+    const r = await verifySpec(declaredFormSpec(form), read, { managedManifest: manifest });
+    assert.deepStrictEqual(read.queries, [], `${what}: no form is read, by its id, its pin or its name`);
+    assert.deepStrictEqual(read.layouts, [], what);
+    assert.deepStrictEqual(r.checks.filter((c) => c.kind.startsWith('form')), [], `${what}: nothing about it passes or fails`);
+    assert.deepStrictEqual(r.unverified.filter((u) => u.startsWith('form')), [`form:F (${why})`, `form-identities:new_o.F (${why})`], what);
+    assert.strictEqual(r.ok, true, `${what}: unverified does not fail verify`);
+  }
+  const read = declaredFormReader(namesake);
+  const r = await verifySpec(declaredFormSpec({ formId: DF_OTHER }), read, { managedManifest: boundFormManifest() });
+  assert.deepStrictEqual(formOf(r), [['F', false, `its formId ${DF_OTHER} is not the form its managed binding (${DF_KEY}) is bound to (${DF_ID}); correct or remove the formId`]]);
+  assert.deepStrictEqual(read.queries, [], 'a contradicting pin reads neither row');
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind.startsWith('form-')), [], 'no layout is held against another row');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: a declared form\'s layout read is its own: a second identity read that fails still fails the layout, and a reused reader follows a changed binding', async () => {
+  const read = declaredFormReader((o, n) => { if (n === 2) throw new Error('second read unavailable'); return [dfRow()]; });
+  const r = await verifySpec(declaredFormSpec(), read, { managedManifest: boundFormManifest(), concurrency: 1 });
+  assert.deepStrictEqual(formOf(r), [['F', true, '']]);
+  assert.deepStrictEqual(r.checks.filter((c) => c.kind === 'form-identities').map((c) => [c.present, c.detail]), [[false, `could not resolve the deployed form id (its bound form ${DF_ID} could not be read: second read unavailable) — the layout is unverified, not proven correct`]]);
+  // The same reader, two verifies, the binding moved between them: each reads the row its own manifest binds, nothing is remembered.
+  const rows = declaredFormReader((o) => [dfRow({ formid: o.filter.replace('formid eq ', '') })]);
+  for (const id of [DF_ID, DF_OTHER]) {
+    rows.queries.length = 0;
+    rows.layouts.length = 0;
+    const again = await verifySpec(declaredFormSpec(), rows, { managedManifest: boundFormManifest(id) });
+    assert.deepStrictEqual(formOf(again), [['F', true, '']], id);
+    assert.deepStrictEqual(rows.queries, [`formid eq ${id}`, `formid eq ${id}`], id);
+    assert.deepStrictEqual(rows.layouts, [id], id);
+  }
+  // One task at a time or four: the same checks, the same lists, the same reads.
+  const outcome = async (concurrency) => {
+    const reader = declaredFormReader(() => [dfRow()]);
+    const spec = declaredFormSpec();
+    spec.forms.push({ entity: 'new_o', name: 'G', reconcile: 'declared', formId: DF_OTHER }, { entity: 'new_o', name: 'H', reconcile: 'declared' });
+    const manifest = boundFormManifest(DF_ID, { groups: [{ family: 'form', key: DF_KEY, root: { id: DF_ID } }, { family: 'form', key: 'new_o/main/g', root: { id: DF_ID } }], invalid: [{ family: 'form', key: 'new_o/main/h', code: 'managed-binding-group-invalid' }] });
+    const res = await verifySpec(spec, reader, { managedManifest: manifest, concurrency });
+    return { checks: res.checks, missing: res.missing, unverified: res.unverified, queries: [...reader.queries].sort(), layouts: [...reader.layouts].sort() };
+  };
+  assert.deepStrictEqual(await outcome(4), await outcome(1));
+});
+
+test('verifySpec: an undeclared form, a declared one with nothing in the store, and any with the declared build off are still found by their names', async () => {
+  const { DECLARED_FEATURES } = require('../lib/declared-features.js');
+  const named = (o) => /name eq 'F'/.test(o.filter) ? [dfRow({ name: 'F' })] : [];
+  for (const [what, form, manifest, off] of [
+    ['undeclared, beside a binding of its key', { reconcile: undefined }, boundFormManifest(DF_OTHER)],
+    ['declared, nothing in the store', {}, { groups: [], pending: [], invalid: [] }],
+    ['declared, no manifest', {}, undefined],
+    ['declared, the declared build off', {}, boundFormManifest(DF_OTHER), true],
+  ]) {
+    const was = DECLARED_FEATURES.forms;
+    if (off) DECLARED_FEATURES.forms = false;
+    try {
+      const read = declaredFormReader(named);
+      const r = await verifySpec(declaredFormSpec(form), read, manifest ? { managedManifest: manifest } : {});
+      assert.deepStrictEqual(formOf(r), [['F', true, '']], what);
+      assert.strictEqual(read.queries.filter((q) => /name eq 'F'/.test(q)).length, 2, `${what}: ${JSON.stringify(read.queries)}`);
+      assert.deepStrictEqual((r.unverified || []).filter((u) => u.startsWith('form')), [], what);
+    } finally { DECLARED_FEATURES.forms = was; }
+  }
+});
+
 // A binding store that cannot be read holds no group, so every declared artifact would look unbound and be found by its name. A
 // declared dashboard, business rule and process flow are then unresolved, as declared views and charts are: a namesake never passes.
 test('verifySpec: an unreadable binding store, or an unusable group record, never lets a namesake pass for a declared dashboard, business rule or process flow', async () => {

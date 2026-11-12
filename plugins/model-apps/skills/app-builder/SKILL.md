@@ -184,8 +184,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `deactivateOtherMainForms`, `securityRoles` or a `mainFormOrder` place on a declared form (refused).
   An existing form is bound only with `--authorize "adopt:form:<table>/<formtype>/<name>"` (lower case;
   `overwrite:form:` for changes made elsewhere): explain it and let the maker choose. `--verify` checks a
-  declared form against the spec, sub-grid views included (a form whose publish is unconfirmed is unverified,
-  not passed). A download brings declared forms back only with `--include-managed --managed-manifest <store
+  declared form against the spec, sub-grid views included. It reads the form its binding records, never one
+  of the same name: a form whose binding is pending or unusable is listed unverified, and a bound form that is
+  gone fails. A form whose publish is unconfirmed is checked on its saved form, and its publish is listed
+  unverified beside that check. A download brings declared forms back only with `--include-managed --managed-manifest <store
   file>` (one with an event handler comes back with its handler library as an `external` web resource when
   that library is this publisher's own unmanaged script; otherwise it is left out and named in
   `managedForms.stale`, and its declaration is written ready to paste in the new file `managedFragments.file` names (`.maker-workspace/managed-fragments-<time>-<random>.json`)
@@ -815,8 +817,9 @@ node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<workin
 Pass `--language-code` only if the build was run with it. A line starting `⊘` under the verdict is a check verify
 could **not decide** (it is in the JSON result's `unverified` list): it is neither a pass nor a failure, so say what it
 was and what settles it — the language of the captions, which `--language-code` gives, or captions in a language the environment's
-form read does not carry that the translation export could not settle (the line says why), which only Power Apps can show — never report the run as "everything deployed" while
-one is listed.
+form read does not carry that the translation export could not settle (the line says why), which only Power Apps can show, or a declared
+form (or its Quick View target) whose managed binding is pending or unusable, which only a build that settles it does — a form of
+the same name never does — never report the run as "everything deployed" while one is listed.
 
 A `WARNING:` line on stderr — each one is repeated in the JSON result's `warnings` list, which is absent when there is
 none — is advice, not a verdict: a spec an earlier release accepted that the build would now refuse (it names the column

@@ -375,3 +375,89 @@ for (const [label, shape] of [['the namespace', (spy) => spy], ['the SDK\'s func
     assert.ok(promote.calls.createSourceFile >= 1, 'the promote gate parsed with the caller\'s compiler');
   });
 }
+
+// A page on a DECLARED form (forms[].reconcile "declared") is held to the form its managed binding names, as the form itself is. Validation and
+// the build refuse such a spec today, so verifySpec is called directly: a hand-made spec or a later release must not pass a namesake's embed.
+const BOUND_FORM = '66666666-0000-4000-8000-000000000006';
+const OTHER_FORM = '77777777-0000-4000-8000-000000000007';
+const HOST_KEY = 'contoso_item/main/item';
+const declaredHost = (spec, form = {}) => { Object.assign(spec.forms[0], { reconcile: 'declared' }, form); return spec; };
+const hostManifest = (rest = {}) => ({ groups: [{ family: 'form', key: HOST_KEY, root: { id: BOUND_FORM } }], pending: [], invalid: [], ...rest });
+// deployedReader's app, where only the bound row shows the page: a row of the form's name (FORM_ID, what a name read finds) and any other
+// row show the form without it. `reads` records the systemform filters and `layouts` the rows whose layout was read.
+function boundReader(options = {}) {
+  const reader = deployedReader(options);
+  const shown = deployedReader(options).formTopology;
+  const bare = deployedReader({ ...options, panel: '' }).formTopology;
+  reader.reads = [];
+  reader.layouts = [];
+  reader.queryRecords = async (table, o) => {
+    const filter = (o && o.filter) || '';
+    if (table === 'systemform') reader.reads.push(filter);
+    const byId = filter.match(/formid eq ([0-9a-f-]{36})/i);
+    if (byId) return [BOUND_FORM, OTHER_FORM, FORM_ID].includes(byId[1].toLowerCase()) ? [{ formid: byId[1], objecttypecode: 'contoso_item', type: 2 }] : [];
+    return [{ formid: /name eq 'Other'/.test(filter) ? OTHER_FORM : FORM_ID }];
+  };
+  reader.formTopology = async (entity, id) => { reader.layouts.push(String(id).toLowerCase()); return String(id).toLowerCase() === BOUND_FORM ? shown() : bare(); };
+  return reader;
+}
+const pageChecks = (r, kind = 'page') => r.checks.filter((c) => c.kind === kind).map((c) => [c.kind, c.name, c.present, c.detail]);
+const pageLines = (r) => (r.unverified || []).filter((u) => u.startsWith('page:'));
+
+test('verify: a page on a declared form is held to the form its binding names — a renamed bound form shows it, a namesake is never read in its place', async () => {
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const spec = declaredHost(specWith());
+  assert.ok(validateAppSpec(spec).errors.length > 0, 'validation still refuses a page on a declared form');
+  const reader = boundReader();
+  const r = await verifySpec(spec, reader, { managedManifest: hostManifest() });
+  assert.deepStrictEqual(pageChecks(r), [['page', 'Overview', true, ''], ['page', 'Panel', true, '']], JSON.stringify(r.missing));
+  assert.deepStrictEqual(pageLines(r), []);
+  assert.ok(!reader.reads.some((f) => /name eq/.test(f)), `no form is read by name: ${JSON.stringify(reader.reads)}`);
+  assert.ok(reader.layouts.length > 0 && reader.layouts.every((id) => id === BOUND_FORM), `only the bound row's layout is read: ${JSON.stringify(reader.layouts)}`);
+  // The same spec, not declared, is judged as before: its form is found by name, and the row of that name does not show the page.
+  const plain = specWith();
+  assert.deepStrictEqual(pageChecks(await verifySpec(plain, boundReader()))[1], ['page', 'Panel', false, "form 'Item' does not show it as declared (not-embedded)"]);
+  // A bound row that is gone is a miss that says a namesake is not taken in its place.
+  const gone = await verifySpec(spec, boundReader(), { managedManifest: { ...hostManifest(), groups: [{ family: 'form', key: HOST_KEY, root: { id: '88888888-0000-4000-8000-000000000008' } }] } });
+  assert.deepStrictEqual(pageChecks(gone)[1], ['page', 'Panel', false, `form 'Item': the form its managed binding (${HOST_KEY}) is bound to (88888888-0000-4000-8000-000000000008) was not found on its table; a form of the same name is not taken in its place`]);
+});
+
+test('verify: a page on a declared form whose binding is not settled is unverified, not passed or failed — its navigation entry is still checked, and a bad embed on another form still fails it', async () => {
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const open = `form 'Item': its managed binding (${HOST_KEY}) is not settled (managed-attempt-pending) — unverified, not proven correct; the declared embed was not compared`;
+  const pending = hostManifest({ groups: [], pending: [{ family: 'form', key: HOST_KEY, code: 'managed-attempt-pending', root: { id: BOUND_FORM } }] });
+
+  const onForm = boundReader();
+  const r = await verifySpec(declaredHost(specWith()), onForm, { managedManifest: pending });
+  assert.deepStrictEqual(pageChecks(r), [['page', 'Overview', true, '']], 'no page check for the page whose form is not known');
+  assert.deepStrictEqual(pageLines(r), [`page:Panel (${open})`]);
+  assert.ok(!r.missing.some((c) => c.kind === 'page'), JSON.stringify(r.missing));
+  assert.deepStrictEqual(onForm.layouts, [], 'no form layout is read for it');
+  assert.deepStrictEqual(onForm.reads, [], 'no form is read by id or by name for it');
+
+  // The page is also in the navigation: its entry is still checked, as it does not depend on the form.
+  const dual = declaredHost(specWith());
+  dual.pages[1].placement = 'sitemap';
+  dual.appShell.areas[0].groups[0].subAreas.push({ page: 'panel', title: 'Panel' });
+  const both = await verifySpec(dual, boundReader({ sitemapIds: [OVERVIEW_ID, PANEL_ID] }), { managedManifest: pending });
+  assert.deepStrictEqual(pageChecks(both, 'page-subarea').filter(([, name]) => name === 'Panel'), [['page-subarea', 'Panel', true, '']]);
+  assert.deepStrictEqual(pageChecks(both), [['page', 'Overview', true, '']]);
+  assert.deepStrictEqual(pageLines(both), [`page:Panel (${open})`]);
+
+  // A second form, not declared, that does not show the page: the page fails on it, and the unknown first form is still listed.
+  const two = declaredHost(specWith());
+  two.forms.push({ entity: 'contoso_item', name: 'Other', tabs: [{ name: 'tab_general', sections: [{ name: 'section_general', fields: ['contoso_name'] }] }], genPages: [{ key: 'panel', page: 'panel', tab: 'tab_general', section: 'section_general' }] });
+  const bad = await verifySpec(two, boundReader(), { managedManifest: pending });
+  assert.deepStrictEqual(pageChecks(bad)[1], ['page', 'Panel', false, "form 'Other' does not show it as declared (not-embedded)"]);
+  assert.deepStrictEqual(pageLines(bad), [`page:Panel (${open})`]);
+  assert.strictEqual(bad.ok, false);
+});
+
+test('verify: a page on a declared form whose formId pins another row than its binding fails, and neither row is read for it', async () => {
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const reader = boundReader();
+  const r = await verifySpec(declaredHost(specWith(), { formId: FORM_ID }), reader, { managedManifest: hostManifest() });
+  assert.deepStrictEqual(pageChecks(r)[1], ['page', 'Panel', false, `form 'Item': its formId ${FORM_ID} is not the form its managed binding (${HOST_KEY}) is bound to (${BOUND_FORM}); correct or remove the formId`]);
+  assert.deepStrictEqual(reader.layouts, []);
+  assert.deepStrictEqual(reader.reads, []);
+});

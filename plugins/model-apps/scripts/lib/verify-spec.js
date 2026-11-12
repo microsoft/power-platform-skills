@@ -13,7 +13,7 @@ const { sitemapEntityTables } = require('./app-spec.js');
 // XML_TAG / XML_ATTR are the one tag and attribute grammar for FormXML and SiteMap XML; they live with
 // liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
 const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName, normalizeLanguageCode, isLocalizedLabelMap } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName, normalizeLanguageCode, isLocalizedLabelMap, FORM_TYPE_CODE } = require('./app-spec.js');
 const { sameRelationship, compareRelationship, describeRelationship, describeIncomplete } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, webResourceContentState } = require('./sdk-build.js');
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
@@ -369,6 +369,57 @@ async function verifySpec(spec, read, opts = {}) {
     }
     return pin ? { key, id: pin, by: `the view its viewId pins (${pin})` } : null;
   };
+  // Which row is a DECLARED form (forms[].reconcile "declared", while the declared form build is on). The build takes the row its
+  // managed binding records before any pin or name (lib/form-layout-reconcile.js), so verify must too: a name read cannot tell the
+  // bound row from a namesake made since, and a binding that is pending, not usable, or in a store that cannot be read at all
+  // (openBindingIn) proves nothing about which row is the form. Answers, without any request:
+  //   null                 not declared, or nothing in the store for it: the caller's own route (pin, then name) stands, as it always did;
+  //   { key, open }        unsettled, or a committed group that names no usable id: unverified, and never looked up by id, pin or name;
+  //   { key, conflict }    a formId pin that is not the bound row: a failure, and no other row is read in its place;
+  //   { key, id, by }      the bound row: only this id may be read (readBoundFormId).
+  // A pending form has no root here even when its attempt reserved one (lib/declared-form-io.js readVerifyManifest attaches roots to
+  // rules and flows only), and one given anyway is not used: an attempt not yet proved does not identify the form.
+  const formIdentity = (f) => {
+    if (!isDeclaredFormOn(f)) return null;
+    const key = formLayoutKey(f);
+    const m = opts.managedManifest;
+    if (!m || !Array.isArray(m.groups)) return null;
+    const open = openBindingIn(m.pending, 'form', key) || openBindingIn(m.invalid, 'form', key);
+    if (open) return { key, open: notSettledDetail(key, open) };
+    const g = m.groups.find((x) => x && x.family === 'form' && x.key === key);
+    if (!g) return null;
+    const id = viewGuid(g.root && g.root.id);
+    if (!id) return { key, open: `its managed binding (${key}) records no form id — unverified, not proven correct` };
+    if (f.formId && viewGuid(f.formId) !== id) return { key, conflict: `its formId ${String(f.formId)} is not the form its managed binding (${key}) is bound to (${id}); correct or remove the formId` };
+    return { key, id, by: `the form its managed binding (${key}) is bound to (${id})` };
+  };
+  // The bound row of a declared form (formIdentity `who` with an id), read by that id alone. Answers the id when the row answered IS
+  // that id, on the form's table, of the form's type; null when nothing answers (the form is not there); and throws, with the reason
+  // as its message, when the read fails or its answer cannot identify the row. Its display name is not compared: a bound form a maker
+  // renamed is still the form (the build's own oracle checks root, table and type, not the name), which is why this is not
+  // resolveExistingFormId with the bound id as a pin — that holds a pin to its name too. Never followed by a read by name.
+  // The answer, e.g. [{ formid: '<guid>', objecttypecode: 'contoso_item', type: 2 }]; `type` is the systemform type code
+  // (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/systemform#type-choicesoptions), which a
+  // reader may give as a number or a numeric string.
+  const readBoundFormId = async (f, who) => {
+    let rows;
+    try {
+      rows = await read.queryRecords('systemform', { select: ['formid', 'objecttypecode', 'type'], filter: `formid eq ${who.id}`, top: 1 });
+    } catch (e) {
+      throw new Error(`its bound form ${who.id} could not be read: ${String((e && e.message) || e)}`);
+    }
+    if (Array.isArray(rows) && rows.length === 0) return null;
+    const row = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+    if (!row || typeof row !== 'object') throw new Error(`its bound form ${who.id} could not be identified: the read did not return one form row`);
+    if (viewGuid(row.formid) !== who.id) throw new Error(`the read of its bound form ${who.id} answered another row; a form of the same name is not taken in its place`);
+    if (row.objecttypecode == null || row.objecttypecode === '' || row.type == null || row.type === '') throw new Error(`its bound form ${who.id} was read without its table or type`);
+    const table = String(f.entity).toLowerCase();
+    if (String(row.objecttypecode).toLowerCase() !== table) throw new Error(`its bound form ${who.id} belongs to table '${row.objecttypecode}', not '${table}'`);
+    const formType = f.formType || 'Main';
+    const want = FORM_TYPE_CODE[formType];
+    if (Number(row.type) !== want) throw new Error(`its bound form ${who.id} is a type-${row.type} form, not the declared ${formType} form (type ${want})`);
+    return who.id;
+  };
   plan.each(spec.views || [], async ({ add: addCheck, unverified }, views) => {
   for (const v of views) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
@@ -709,9 +760,22 @@ async function verifySpec(spec, read, opts = {}) {
   };
   const canReadDefault = useCombinedFormRead || typeof read.formDefaultState === 'function';
   const resolvedMainFormsByIndex = [];
-  const formsResolved = plan.each(spec.forms || [], async ({ add }, forms, formIndex) => {
+  const formsResolved = plan.each(spec.forms || [], async ({ add, unverified }, forms, formIndex) => {
   for (const f of forms) {
     const name = f.name || `${f.entity} form`;
+    // A declared form is identified by its managed binding first (formIdentity): an unsettled one is unverified and read not at all,
+    // a contradicting pin fails, and a bound one is read by its id alone. A declared form is never a default or ordered form
+    // (formOrderSpecOf), so nothing below this concerns it.
+    const who = formIdentity(f);
+    if (who && who.open) { unverified.push(`form:${name} (${who.open})`); continue; }
+    if (who && who.conflict) { add('form', name, false, who.conflict); continue; }
+    if (who) {
+      let bound = null;
+      let detail = '';
+      try { bound = await readBoundFormId(f, who); } catch (e) { detail = e.message; }
+      add('form', name, !!bound, bound ? '' : detail || boundFormAbsent(who));
+      continue;
+    }
     // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
     // formId (which checks the row's table/type/name) — so verify can't be fooled by a same-named sibling
     // of another type, a mismatched pin, or a residual (entity,type,name) collision. resolveExistingFormId
@@ -1028,6 +1092,11 @@ async function verifySpec(spec, read, opts = {}) {
           `could not compile the layout to tell which fields the build places (${autoCompileError}) — the field state is unverified, not proven correct`);
         continue;
       }
+      // A declared form's layout is read from the row its binding identifies (formIdentity), as its presence is: one that is unsettled
+      // is unverified before anything is read, and a contradicting pin has already failed the form, so no other row's layout is held up.
+      const who = formIdentity(f);
+      if (who && who.open) { unverified.push(`${kind}:${entity}.${name} (${who.open})`); continue; }
+      if (who && who.conflict) continue;
       if (!canReadTopology) {
         add(kind, `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
@@ -1036,7 +1105,9 @@ async function verifySpec(spec, read, opts = {}) {
       let id = null;
       let idError = null;
       try {
-        id = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: f.formType, formId: f.formId });
+        id = who
+          ? await readBoundFormId(f, who)
+          : await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: f.formType, formId: f.formId });
       } catch (e) { idError = (e && e.message) || String(e); }
       if (!id) {
         // A form that genuinely does not exist was already reported by the existence check above, so
@@ -1964,24 +2035,36 @@ async function verifySpec(spec, read, opts = {}) {
   });
   // Why a page placed on a form is not shown as the spec declares it ('' when every form that embeds it shows it): each form is resolved by the
   // identity the build uses and read as deployed, then held to its embed (form-page-embeds.js verifyFormPageEmbed). Fail closed: a page no
-  // form embeds, a form that cannot be resolved or read, or an embed that is not as declared is a miss.
+  // form embeds, a form that cannot be resolved or read, or an embed that is not as declared is a miss. Answers { problem, unknown }:
+  // `unknown` lists the embeds of a declared form whose managed binding is not settled (formIdentity) — which row is that form is not
+  // known, so its embed is not compared, and the forms after it still are (a known-bad embed is never hidden behind an unknown one).
+  // Validation and the build refuse a page on a declared form today; this only keeps such a spec from being passed on a namesake.
   const formEmbedProblem = async (p, id) => {
     const embeds = formEmbedsOfPage(spec, p);
-    if (!embeds.length) return 'no form embeds it';
+    const unknown = [];
+    if (!embeds.length) return { problem: 'no form embeds it', unknown };
     for (const { form, embed } of embeds) {
       const name = form.name || `${form.entity} form`;
       const entity = String(form.entity || '').toLowerCase();
+      const who = formIdentity(form);
+      if (who && who.open) { unknown.push(`form '${name}': ${who.open}; the declared embed was not compared`); continue; }
+      if (who && who.conflict) return { problem: `form '${name}': ${who.conflict}`, unknown };
       let formId = null;
-      try { formId = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: form.formType, formId: form.formId }); } catch { formId = null; }
-      if (!formId) return `form '${name}' is not found`;
+      if (who) {
+        try { formId = await readBoundFormId(form, who); } catch (e) { return { problem: `form '${name}': ${e.message}`, unknown }; }
+        if (!formId) return { problem: `form '${name}': ${boundFormAbsent(who)}`, unknown };
+      } else {
+        try { formId = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: form.formType, formId: form.formId }); } catch { formId = null; }
+        if (!formId) return { problem: `form '${name}' is not found`, unknown };
+      }
       let xml = null;
       try { xml = await readFormXml(entity, formId); } catch { xml = null; }
       const verdict = verifyFormPageEmbed(xml, embed, id);
-      if (!verdict.ok) return `form '${name}' does not show it as declared (${verdict.reason})`;
+      if (!verdict.ok) return { problem: `form '${name}' does not show it as declared (${verdict.reason})`, unknown };
     }
-    return '';
+    return { problem: '', unknown };
   };
-  const pagesCheck = plan.section(async ({ add }) => {
+  const pagesCheck = plan.section(async ({ add, unverified }) => {
   const xml = await sitemapXml();
   if (implementedPages.length) {
     if (unableToRun) {
@@ -2035,13 +2118,20 @@ async function verifySpec(spec, read, opts = {}) {
           const exists = existenceIds.has(lid);
           const inSitemap = sitemapIds.has(lid);
           let problem = '';
+          let unknown = [];
           if (p.placement === 'form') {
-            if (exists) problem = inSitemap ? 'it is in the app\'s navigation, but the spec places it on a form only' : await formEmbedProblem(p, id);
+            if (exists) {
+              if (inSitemap) problem = 'it is in the app\'s navigation, but the spec places it on a form only';
+              else ({ problem, unknown } = await formEmbedProblem(p, id));
+            }
           } else if (exists && inSitemap && formEmbedsOfPage(spec, p).length) {
-            problem = await formEmbedProblem(p, id);
+            ({ problem, unknown } = await formEmbedProblem(p, id));
           }
           const present = exists && (p.placement === 'form' || inSitemap) && !problem;
-          add('page', p.name, present, problem);
+          // An embed whose form cannot be identified leaves the page neither passed nor failed: no `page` check, the reason listed instead.
+          // What does not depend on that form (its navigation entry, its code) is still checked.
+          for (const u of unknown) unverified.push(`page:${p.name} (${u})`);
+          if (!(present && unknown.length)) add('page', p.name, present, problem);
           if (!present) continue;
           // page-subarea: verify the sitemap XML specifically carries a GenPageId="<id>" binding.
           // Only emitted when the appShell references this page key (headless pages have no subarea to verify).
@@ -2587,7 +2677,7 @@ async function verifySpec(spec, read, opts = {}) {
         const t = tables[g.family];
         if (!t) continue;
         if (g.family === 'form' && declaredForms.has(g.key)) {
-          await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified });
+          await verifyManagedForm(spec, declaredForms.get(g.key), g, read, { add, unverified, formIdentity, readBoundFormId });
           continue;
         }
         if (g.family === 'dashboard' && declaredDashboards.has(g.key)) {
@@ -2710,6 +2800,11 @@ function openBindingIn(list, family, key) {
 // What an artifact openBindingIn found unsettled reports: why, by the entry's code or reason, and that nothing about it is proven.
 function notSettledDetail(key, open) {
   return `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct`;
+}
+
+// What a declared form's bound row (formIdentity) that no longer answers on its table reports: it is missing, and a namesake is not it.
+function boundFormAbsent(who) {
+  return `${who.by} was not found on its table; a form of the same name is not taken in its place`;
 }
 
 // The row a declared workflow (a business rule, family 'rule', or a process flow, 'bpf') is bound to in this workspace's store,
@@ -3167,10 +3262,12 @@ async function resolveSubgridView(spec, sg, child, read) {
 //   - a sub-grid's view is resolved as the build resolves it (resolveSubgridView) and matched exactly; a declared view the
 //     environment does not hold fails the form, and one that cannot be identified leaves the host out, listed as unverified;
 //   - a quick view's form is found by its (table, name) as a QuickView form; none or several answering cannot be judged, so the
-//     host is left out and listed as unverified rather than failed.
+//     host is left out and listed as unverified rather than failed. A quick view form the spec DECLARES (forms[].reconcile
+//     "declared") with a managed binding is found by that binding instead (formIdentity, readBoundFormId), never by its name: one
+//     unsettled, pinned elsewhere, or not answering as its bound row is left out and listed as unverified the same way.
 // A group whose publication is still in flight (dispatching or unconfirmed) is checked on its saved form like any other, and listed
 // as unverified too: the published layer it will show is not known yet.
-async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
+async function verifyManagedForm(spec, f, g, read, { add, unverified, formIdentity, readBoundFormId }) {
   const name = `${g.key} (${g.root.id})`;
   if (!read || typeof read.declaredForm !== 'function') { unverified.push(`managed:form ${g.key} (this reader cannot read a form by id)`); return; }
   if (!g.consumerState || !g.consumerState.children) { unverified.push(`managed:form ${g.key} (the managed group carries no child state to check)`); return; }
@@ -3203,6 +3300,19 @@ async function verifyManagedForm(spec, f, g, read, { add, unverified }) {
   for (const qv of f.quickViews || []) {
     if (!qv || !qv.lookup || !qv.targetEntity || !qv.form) continue;
     const target = String(qv.targetEntity).toLowerCase();
+    // The QuickView the spec declares for this lookup, as validation picks it (app-spec.js: its name on the target table, of type
+    // QuickView — a same-named Main form is not it). Its binding decides which row it is; with none, the name query below stands.
+    const declaredTarget = (spec.forms || []).find((x) => x && x.name === qv.form && String(x.entity).toLowerCase() === target && (x.formType || 'Main') === 'QuickView');
+    const who = declaredTarget && typeof formIdentity === 'function' ? formIdentity(declaredTarget) : null;
+    if (who) {
+      const leftOut = (reason) => unverified.push(`managed:form ${g.key} (the quick view form '${qv.form}' of '${target}' for lookup '${qv.lookup}': ${reason}; the requested host target was not compared)`);
+      if (who.open || who.conflict) { leftOut(who.open || who.conflict); continue; }
+      let id = null;
+      try { id = await readBoundFormId(declaredTarget, who); } catch (e) { leftOut(e.message); continue; }
+      if (!id) { leftOut(boundFormAbsent(who)); continue; }
+      quickViews.push({ lookupFieldName: String(qv.lookup).toLowerCase(), targetEntity: target, quickViewFormId: id });
+      continue;
+    }
     let rows = [];
     try {
       rows = typeof read.queryRecords === 'function'

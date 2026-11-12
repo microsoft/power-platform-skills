@@ -2292,6 +2292,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   unusable makes the chart `unverified`. Two charts with the spec's name on its table are present, their content `unverified`. A
   row read without its content columns (the eval's synthesized reader answers so) is checked for presence, and its type, its data
   and a declared title are `unverified`, never passed; a declared description is still checked when the row carries one.
+  A **declared form** (`reconcile: "declared"`) is found, and its layout read, by the row its managed binding records
+  (`formIdentity`), as the build takes it — before any `formId` pin or name. The bound row is read by that id alone
+  (`readBoundFormId`) and must answer as that id, on the form's table and of its form type; its display name is not compared,
+  so a form a maker renamed is still the form, and a form of the same name made beside it is never read in its place. A bound
+  row that no longer answers fails the form (`form`); a read that fails or answers another row, table or type fails it with
+  that reason. A binding that is pending, unusable, in a store that cannot be read, or that records no id lists the form (and
+  its layout) as `unverified`, and nothing is read for it — a namesake cannot settle it; a `formId` pin that is not the bound
+  row fails the form. A form with no managed binding, or an undeclared one, is found by its pin, then its name, as before.
+  The same identity holds a page a declared form embeds (no `page` check while that form is not known; its navigation entry is
+  still checked, and an embed on another form still fails it). Validation refuses such a spec today; this only keeps one from passing on a namesake.
   A relationship is verified by its **identity**, not its name: the answer has to state its schema name, its
   type, both its tables and, for a 1:N, its lookup column — for an N:N, its intersect table and the column each
   table has in it — and all of them have to match (`compareRelationship`, `lib/relationship-metadata.js`; an N:N's
@@ -3112,13 +3122,17 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   **Verify and download** (`lib/declared-form-io.js`): verify reads each bound declared form fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredForm`, never `readGroup`) and runs
   `verifyDeclaredForm` against the declaration and the store's recorded children (`managed-form` check);
-  a form whose publication is `dispatching` or `unconfirmed`, or a reader that cannot read by id, is listed
-  unverified, never passed. A sub-grid's view is resolved as the build resolves it (`resolveSubgridView`
-  mirrors `subgridViewId`: the named spec view, else the first spec view of the child table, else the default
+  a reader that cannot read by id is listed unverified and no check is made. A form whose publication is
+  `dispatching` or `unconfirmed` is still checked on its saved form, so its `managed-form` check may pass, and
+  its publication is listed unverified beside it: the saved body is proved, the published layer is not. A sub-grid's
+  view is resolved as the build resolves it (`resolveSubgridView` mirrors `subgridViewId`: the named spec view, else the first spec view of the child table, else the default
   public view) and matched exactly: a declared view the environment lacks fails, an ambiguous or unreadable
   one leaves the host out as unverified, and the oracle has no wildcard. A quick view's target is looked up by
-  name (ambiguous → unverified). `download-model-app.js --include-managed --managed-manifest <store file>`
-  (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
+  name (ambiguous → unverified), unless the spec declares that Quick View form with a managed binding: then it is
+  the bound row (`formIdentity`, `readBoundFormId`), never one of its name, and a binding that is unsettled,
+  pinned elsewhere, or a row that does not answer as it leaves that host out as unverified. A host left out is
+  not compared, so the `managed-form` check can still pass on the rest of the saved form beside that entry.
+  `download-model-app.js --include-managed --managed-manifest <store file>` (both or neither) restores each proved form with `hydrateDeclaredForm`, validating incrementally; a
   pending, unreadable or invalid one is left out and named. A form with `events` brings each handler library
   the spec does not declare (`librariesNotIn`), read by name through the download's SDK (`libraryEntry`, cached
   per run) and added as `{ name, displayName?, type: 'js', contentBase64, external: true }` together with the
