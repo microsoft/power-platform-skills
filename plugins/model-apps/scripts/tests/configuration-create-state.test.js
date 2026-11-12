@@ -748,6 +748,112 @@ test('quarantine never overwrites a file that took the archive name while the co
   assert.ok(fs.readFileSync(stateFile(dir)).equals(original));
 });
 
+// Plants a foreign file at a quarantine name at the very moment that name is installed (the real rename or link runs right after), as
+// a sync client or a person could; the install must refuse rather than replace it.
+function withForeignAtInstall(isTarget, fn) {
+  const planted = [];
+  const plant = (real) => (from, to, ...rest) => {
+    if (planted.length === 0 && isTarget(path.basename(String(to)))) {
+      fs.writeFileSync(String(to), 'FOREIGN EVIDENCE');
+      planted.push(String(to));
+    }
+    return real(from, to, ...rest);
+  };
+  return withFsPatch('renameSync', (real, ...args) => plant(real)(...args), () => withFsPatch('linkSync', (real, ...args) => plant(real)(...args), () => fn(planted)));
+}
+
+test('quarantine never replaces a file that takes the archive or a fresh marker name as it is installed', () => {
+  const dir = ws();
+  const original = unreadable(dir);
+  withForeignAtInstall((name) => /^configuration-create-state\.unreadable\.[0-9a-f-]{36}\.bin$/.test(name), (planted) => {
+    throwsCode(() => S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain', { transition: 'quarantine' });
+    assert.equal(planted.length, 1, 'the archive was installed');
+    assert.equal(fs.readFileSync(planted[0], 'utf8'), 'FOREIGN EVIDENCE');
+  });
+  assert.ok(fs.readFileSync(stateFile(dir)).equals(original));
+  const found = S.discoverConfigurationCreateState(dir, kt);
+  assert.equal(found.blocking, true);
+  assert.equal(found.quarantines[0].state, 'archiving');
+
+  const dir2 = ws();
+  const original2 = unreadable(dir2);
+  withForeignAtInstall((name) => /^configuration-create-state\.quarantine\.[0-9a-f-]{36}\.json$/.test(name), (planted) => {
+    throwsCode(() => S.quarantineUnreadableReceipt(dir2, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain', { transition: 'quarantine' });
+    assert.equal(planted.length, 1, 'the fresh marker was installed');
+    assert.equal(fs.readFileSync(planted[0], 'utf8'), 'FOREIGN EVIDENCE');
+  });
+  assert.ok(fs.readFileSync(stateFile(dir2)).equals(original2));
+  assert.deepEqual(fs.readdirSync(dir2).filter((n) => n.includes('.unreadable.')), [], 'nothing was archived');
+
+  // Without hard links there is no atomic no-replace: refuse, never fall back to a replacing rename.
+  const dir3 = ws();
+  const original3 = unreadable(dir3);
+  const renamedOnto = [];
+  withFsPatch('linkSync', () => { throw Object.assign(new Error('not supported'), { code: 'ENOTSUP' }); }, () => withFsPatch('renameSync', (real, from, to) => { renamedOnto.push(path.basename(String(to))); return real(from, to); }, () => {
+    throwsCode(() => S.quarantineUnreadableReceipt(dir3, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain', { transition: 'quarantine' });
+  }));
+  assert.ok(renamedOnto.every((n) => n.endsWith('.tmp')), 'no quarantine name was renamed onto');
+  assert.ok(fs.readFileSync(stateFile(dir3)).equals(original3));
+  assert.deepEqual(fs.readdirSync(dir3).filter((n) => !n.endsWith('.tmp')), [S.STATE_FILE]);
+});
+
+test('an archive name that is a folder or cannot be read is never a verified quarantine, and a continuation does not adopt it', () => {
+  const quarantined = () => {
+    const dir = ws();
+    unreadable(dir);
+    const { quarantineId } = S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE });
+    return { dir, quarantineId, archive: path.join(dir, `${S.ARCHIVE_FILE_PREFIX}${quarantineId}.bin`), marker: path.join(dir, `${S.QUARANTINE_FILE_PREFIX}${quarantineId}.json`) };
+  };
+  const denyArchive = (archive, fn) => {
+    const deny = (real, file, ...rest) => {
+      if (path.resolve(String(file)) === archive) throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+      return real(file, ...rest);
+    };
+    return withFsPatch('openSync', deny, () => withFsPatch('readFileSync', deny, fn));
+  };
+
+  // A folder at the archive name of a deferred quarantine.
+  const a = quarantined();
+  fs.unlinkSync(a.archive);
+  fs.mkdirSync(a.archive);
+  for (const found of [S.discoverConfigurationCreateState(a.dir, kt), S.discoverConfigurationQuarantines(a.dir)]) {
+    assert.equal(found.quarantines[0].archive, false);
+  }
+  assert.equal(S.discoverConfigurationCreateState(a.dir, kt).blocking, true);
+  throwsCode(() => S.quarantineUnreadableReceipt(a.dir, { acknowledgeUnknownDispatch: true, quarantineId: a.quarantineId, invalidate: OK_INVALIDATE }), 'configuration-create-state-invalid');
+  assert.ok(fs.statSync(a.archive).isDirectory());
+
+  // An archive this user cannot read.
+  const b = quarantined();
+  denyArchive(b.archive, () => {
+    const found = S.discoverConfigurationCreateState(b.dir, kt);
+    assert.equal(found.quarantines[0].archive, false);
+    assert.equal(found.blocking, true);
+  });
+
+  // An orphan archive that cannot be read, or that is a folder: its marker is not restored.
+  const c = quarantined();
+  const archived = fs.readFileSync(c.archive);
+  fs.unlinkSync(c.marker);
+  let invalidations = 0;
+  denyArchive(c.archive, () => {
+    throwsCode(() => S.quarantineUnreadableReceipt(c.dir, { acknowledgeUnknownDispatch: true, quarantineId: c.quarantineId, invalidate: () => { invalidations += 1; return { ok: true }; } }), 'configuration-create-state-invalid', { transition: 'quarantine' });
+  });
+  assert.equal(invalidations, 0);
+  assert.equal(fs.existsSync(c.marker), false);
+  assert.ok(fs.readFileSync(c.archive).equals(archived));
+  const d = quarantined();
+  fs.unlinkSync(d.marker);
+  fs.unlinkSync(d.archive);
+  fs.mkdirSync(d.archive);
+  assert.deepEqual(S.discoverConfigurationCreateState(d.dir, kt).orphanArchives, [d.quarantineId]);
+  throwsCode(() => S.quarantineUnreadableReceipt(d.dir, { acknowledgeUnknownDispatch: true, quarantineId: d.quarantineId, invalidate: OK_INVALIDATE }), 'configuration-create-state-invalid');
+  assert.equal(fs.existsSync(d.marker), false);
+  // The readable orphan of the same shape is adopted, as before.
+  S.quarantineUnreadableReceipt(c.dir, { acknowledgeUnknownDispatch: true, quarantineId: c.quarantineId, invalidate: OK_INVALIDATE });
+  assert.equal(S.discoverConfigurationCreateState(c.dir, kt).blocking, false);
+});
+
 test('a continuation keeps both files when the state file and its archive differ', () => {
   const dir = ws();
   unreadable(dir);

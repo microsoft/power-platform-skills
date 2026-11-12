@@ -26,7 +26,9 @@
  *   configuration-create-state.quarantine.<quarantineId>.json   a tombstone: { schema: 1, quarantineId, state: 'archiving'|'deferred',
  *                                                               dispatch: 'unknown', scope: 'workspace-configuration', archive }
  *   configuration-create-state.unreadable.<quarantineId>.bin    the original bytes, moved aside, never parsed or redacted
- * Any other `configuration-create-state.*` entry, an orphan archive, an `archiving` tombstone or an invalid one is blocking evidence.
+ * Any other `configuration-create-state.*` entry, an orphan archive, an `archiving` tombstone, an invalid one, or a tombstone whose
+ * archive is not a plain file this user can read is blocking evidence. The archive and a fresh tombstone are installed with an atomic
+ * no-replace (a hard link of a complete staged copy), so neither ever overwrites a file that took its name.
  *
  * FENCING. Every change runs synchronously under the record lease of the state file (lib/record-lease.js; no network I/O inside it),
  * re-reads the file, applies one change, writes it atomically (lib/apply-snapshot-store.js writeFileAtomic) and reads it back. The
@@ -74,7 +76,6 @@ const { writeFileAtomic, invalidateSnapshot } = require('./apply-snapshot-store.
 const { withRecordLease } = require('./record-lease.js');
 const { environmentFingerprint, workspaceRoot } = require('./page-ownership-records.js');
 const { assertPlainFileTarget } = require('./safe-fs.js');
-const { renameWithRetry } = require('./rename-retry.js');
 const { GUID_RE } = require('./creates-identity.js');
 const { RETRY } = require('./retry-policy.js');
 
@@ -567,14 +568,43 @@ function readEvidence(file) {
   try { return { bytes: fs.readFileSync(file) }; } catch { return { error: 'could not be read' }; }
 }
 
+// The one check of a quarantine archive, shared by both discovery functions and every continuation: a name in the folder listing is
+// not evidence. The archive counts only as a plain file (not a folder, link or junction) that this user can open and read; anything
+// else, including an access error, is invalid, never absent. Discovery opens it and reads one byte (an archive is the bytes of a file
+// of any size, so discovery does not read it all); a continuation that is about to write a marker for it passes `bytes` and reads it
+// whole. Answers { status: 'absent' } | { status: 'invalid', reason } | { status: 'valid', bytes? }.
+function inspectArchive(file, { bytes = false } = {}) {
+  let st;
+  try { st = fs.lstatSync(file); } catch (e) {
+    if (e && e.code === 'ENOENT') return { status: 'absent' };
+    return { status: 'invalid', reason: 'the quarantine archive could not be inspected' };
+  }
+  if (!st.isFile()) return { status: 'invalid', reason: 'the quarantine archive is not a plain file' };
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    if (!fs.fstatSync(fd).isFile()) return { status: 'invalid', reason: 'the quarantine archive is not a plain file' };
+    fs.readSync(fd, Buffer.alloc(1), 0, 1, 0);
+  } catch {
+    return { status: 'invalid', reason: 'the quarantine archive could not be read' };
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch { /* the check already has its answer */ }
+  }
+  if (!bytes) return { status: 'valid' };
+  const got = readEvidence(file);
+  if (!got || got.error) return { status: 'invalid', reason: 'the quarantine archive could not be read' };
+  return { status: 'valid', bytes: got.bytes };
+}
+
 // The names this module and its leases leave beside the state file, which are not evidence of their own:
 //   configuration-create-state.v1.json.lock            the record lease (lib/record-lease.js)
 //   configuration-create-state.v1.json.lock.reclaim    a reclaim claim of that lease (apply-snapshot-store.js acquireLease)
 //   <any state, marker or archive name>.<pid>.<time>.<random>.tmp   a temporary file of an atomic write; the target is authoritative
+//   <marker name>.<pid>.<time>.<random>.tmp.<pid>.<time>.<random>.tmp   the temporary file of the staged copy of a fresh marker
 const QUARANTINE_RE = /^configuration-create-state\.quarantine\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/;
 const ARCHIVE_RE = /^configuration-create-state\.unreadable\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.bin$/;
 const LEASE_RE = /^configuration-create-state\.v1\.json\.lock(?:\.reclaim)?$/;
-const TEMP_RE = /^configuration-create-state\.(?:v1\.json|quarantine\.[0-9a-f-]{36}\.json|unreadable\.[0-9a-f-]{36}\.bin)\.\d+\.\d+\.[0-9a-z]*\.tmp$/;
+const TEMP_RE = /^configuration-create-state\.(?:v1\.json|quarantine\.[0-9a-f-]{36}\.json|unreadable\.[0-9a-f-]{36}\.bin)(?:\.\d+\.\d+\.[0-9a-z]*\.tmp){1,2}$/;
 
 function listEvidence(root) {
   let names;
@@ -584,15 +614,47 @@ function listEvidence(root) {
   return names.filter((n) => n.startsWith(FILE_PREFIX)).sort();
 }
 
+// The quarantine part of a listing, shared by both discovery functions: every marker parsed, every archive inspected.
+function scanQuarantines(root, names) {
+  const markers = new Set();
+  const archives = new Set();
+  for (const n of names) {
+    let m = QUARANTINE_RE.exec(n);
+    if (m) markers.add(m[1]);
+    m = ARCHIVE_RE.exec(n);
+    if (m) archives.add(m[1]);
+  }
+  const quarantines = [];
+  for (const id of [...markers].sort()) {
+    const got = readEvidence(path.join(root, quarantineName(id)));
+    if (!got || got.error) {
+      quarantines.push({ quarantineId: id, status: 'invalid', reason: `a quarantine marker ${got ? got.error : 'vanished while it was read'}` });
+      continue;
+    }
+    try {
+      const q = parseQuarantine(got.bytes, id);
+      const archive = archives.has(id) && inspectArchive(path.join(root, archiveName(id))).status === 'valid';
+      quarantines.push({ quarantineId: id, status: 'valid', state: q.state, archive });
+    } catch (e) {
+      if (!e || e.code !== 'configuration-create-state-invalid') throw e;
+      quarantines.push({ quarantineId: id, status: 'invalid', reason: reasonOf(e) });
+    }
+  }
+  // An orphan archive blocks whatever it is; a continuation inspects it before it writes a marker for it.
+  return { quarantines, orphanArchives: [...archives].filter((id) => !markers.has(id)).sort() };
+}
+
 /**
  * Finds every piece of configuration create evidence in the workspace, before the current spec is interpreted (a context change must
  * not hide an older receipt). Answers:
  *   { root,                                     the checked workspace folder, or null when it does not exist
  *     sidecar: { status: 'absent' } | { status: 'valid', state } | { status: 'invalid', reason },
  *     quarantines: [{ quarantineId, status: 'valid', state: 'archiving'|'deferred', archive: boolean } | { quarantineId, status: 'invalid', reason }],
- *     orphanArchives: [quarantineId],           archives with no marker
+ *                                               `archive` is true only for a readable plain-file archive
+ *     orphanArchives: [quarantineId],           archive names with no marker, whatever they hold
  *     unknownEntries: number,                   other `configuration-create-state.*` names (never echoed: a name may be anything)
- *     blocking: boolean }                       true for an invalid sidecar or marker, an archiving marker, an orphan archive or an unknown entry
+ *     blocking: boolean }                       true for an invalid sidecar or marker, an archiving marker, a marker without a readable
+ *                                               plain-file archive, an orphan archive or an unknown entry
  */
 function discoverConfigurationCreateState(workspaceDir, { kindTable } = {}) {
   const root = rootOf(workspaceDir, false);
@@ -600,14 +662,8 @@ function discoverConfigurationCreateState(workspaceDir, { kindTable } = {}) {
   if (!root) return empty;
   const names = listEvidence(root);
   const result = { ...empty, quarantines: [], orphanArchives: [] };
-  const archives = new Set();
-  const markers = new Set();
   for (const name of names) {
-    if (name === STATE_FILE || LEASE_RE.test(name) || TEMP_RE.test(name)) continue;
-    let m = QUARANTINE_RE.exec(name);
-    if (m) { markers.add(m[1]); continue; }
-    m = ARCHIVE_RE.exec(name);
-    if (m) { archives.add(m[1]); continue; }
+    if (name === STATE_FILE || LEASE_RE.test(name) || TEMP_RE.test(name) || QUARANTINE_RE.test(name) || ARCHIVE_RE.test(name)) continue;
     result.unknownEntries += 1;
   }
   const side = readEvidence(path.join(root, STATE_FILE));
@@ -618,21 +674,9 @@ function discoverConfigurationCreateState(workspaceDir, { kindTable } = {}) {
       result.sidecar = { status: 'invalid', reason: reasonOf(e) };
     }
   }
-  for (const id of [...markers].sort()) {
-    const got = readEvidence(path.join(root, quarantineName(id)));
-    if (!got || got.error) {
-      result.quarantines.push({ quarantineId: id, status: 'invalid', reason: `a quarantine marker ${got ? got.error : 'vanished while it was read'}` });
-      continue;
-    }
-    try {
-      const q = parseQuarantine(got.bytes, id);
-      result.quarantines.push({ quarantineId: id, status: 'valid', state: q.state, archive: archives.has(id) });
-    } catch (e) {
-      if (!e || e.code !== 'configuration-create-state-invalid') throw e;
-      result.quarantines.push({ quarantineId: id, status: 'invalid', reason: reasonOf(e) });
-    }
-  }
-  for (const id of [...archives].sort()) if (!markers.has(id)) result.orphanArchives.push(id);
+  const { quarantines, orphanArchives } = scanQuarantines(root, names);
+  result.quarantines = quarantines;
+  result.orphanArchives = orphanArchives;
   result.blocking = result.sidecar.status === 'invalid' || result.unknownEntries > 0 || result.orphanArchives.length > 0
     || result.quarantines.some((q) => q.status === 'invalid' || q.state === 'archiving' || !q.archive);
   return result;
@@ -649,32 +693,11 @@ function readConfigurationCreateState(workspaceDir, { kindTable } = {}) {
   return parseCreateState(got.bytes, { kindTable });
 }
 
-/** The quarantine part of discovery, for the build guard and the CLI. */
+/** The quarantine part of discovery, for the build guard and the CLI: { root, quarantines, orphanArchives } as discovery answers them. */
 function discoverConfigurationQuarantines(workspaceDir) {
   const root = rootOf(workspaceDir, false);
   if (!root) return { root: null, quarantines: [], orphanArchives: [] };
-  const names = listEvidence(root);
-  const markers = new Set();
-  const archives = new Set();
-  for (const n of names) {
-    let m = QUARANTINE_RE.exec(n);
-    if (m) markers.add(m[1]);
-    m = ARCHIVE_RE.exec(n);
-    if (m) archives.add(m[1]);
-  }
-  const quarantines = [];
-  for (const id of [...markers].sort()) {
-    const got = readEvidence(path.join(root, quarantineName(id)));
-    if (!got || got.error) { quarantines.push({ quarantineId: id, status: 'invalid', reason: 'a quarantine marker could not be read' }); continue; }
-    try {
-      const q = parseQuarantine(got.bytes, id);
-      quarantines.push({ quarantineId: id, status: 'valid', state: q.state, archive: archives.has(id) });
-    } catch (e) {
-      if (!e || e.code !== 'configuration-create-state-invalid') throw e;
-      quarantines.push({ quarantineId: id, status: 'invalid', reason: reasonOf(e) });
-    }
-  }
-  return { root, quarantines, orphanArchives: [...archives].filter((id) => !markers.has(id)).sort() };
+  return { root, ...scanQuarantines(root, listEvidence(root)) };
 }
 
 // ── Verified persistence ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -984,14 +1007,39 @@ function resolveResolutionOffer(workspaceDir, { kindTable, context, unitId, mode
 }
 
 // ── Quarantine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Puts the complete, fsynced file `staged` at `dest` ONLY while `dest` does not exist, and atomically: a hard link fails with EEXIST when
+// the name is taken (NTFS and POSIX alike), where a rename would silently replace whatever took the name after any check. The record
+// lease serializes this plugin's writers, but not a sync client, a backup restore or a person, so the no-replace must be the operation
+// itself. A file system without hard links (FAT, some network shares: EPERM, ENOTSUP, EXDEV) is refused, never answered with a
+// replacing rename. The staged name is removed afterwards; a leftover one is a temporary name (TEMP_RE), not evidence.
+// See: https://nodejs.org/api/fs.html#fslinksyncexistingpath-newpath
+function installNoReplace(staged, dest) {
+  fs.linkSync(staged, dest);
+  try { fs.unlinkSync(staged); } catch { /* best effort: the destination is complete either way */ }
+}
+const stagedName = (file) => `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+
+// A fresh marker (`exclusive`) is staged under a temporary name and installed without replacing anything, so a marker with a fresh id
+// that somebody else wrote is never overwritten; the later state change of a marker this call owns replaces it under the lease.
 function writeMarker(root, id, stateWord, { exclusive }) {
   const file = path.join(root, quarantineName(id));
-  if (exclusive) {
-    let exists = true;
-    try { fs.lstatSync(file); } catch (e) { exists = !(e && e.code === 'ENOENT'); }
-    if (exists) throw halt('configuration-create-persistence-uncertain', { transition: 'quarantine', reason: 'a quarantine marker with a fresh id already exists' });
+  const text = serializeQuarantine(quarantineRecord(id, stateWord));
+  if (!exclusive) {
+    writeVerified(file, text, 'quarantine');
+    return;
   }
-  writeVerified(file, serializeQuarantine(quarantineRecord(id, stateWord)), 'quarantine');
+  const uncertain = (reason) => halt('configuration-create-persistence-uncertain', { transition: 'quarantine', reason });
+  const staged = stagedName(file);
+  try {
+    writeFileAtomic(staged, text);
+    installNoReplace(staged, file);
+  } catch (e) {
+    try { fs.unlinkSync(staged); } catch { /* best effort: a leftover staged copy is not evidence (TEMP_RE) */ }
+    throw uncertain(e && e.code === 'EEXIST' ? 'a quarantine marker with a fresh id already exists' : 'a quarantine marker could not be created without replacing a file');
+  }
+  let back;
+  try { back = fs.readFileSync(file); } catch { throw uncertain('the saved file could not be read back'); }
+  if (!back.equals(Buffer.from(text, 'utf8'))) throw uncertain('the saved file did not read back as written');
 }
 
 function readBytes(file) {
@@ -1006,37 +1054,44 @@ function fsyncFile(file) {
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
+// The archive of an id, checked as discovery checks it and read whole. Absent answers null; anything but a readable plain file is
+// invalid evidence that stays in place.
+function verifiedArchive(root, id) {
+  const got = inspectArchive(path.join(root, archiveName(id)), { bytes: true });
+  if (got.status === 'absent') return null;
+  if (got.status !== 'valid') {
+    throw invalidState(got.reason, { transition: 'quarantine', nextStep: 'Keep the marker and the archive name as they are; restore the archive as a plain file this user can read, or keep this workspace for manual handling.' });
+  }
+  return got.bytes;
+}
+
 // Moves the original state file to the archive name without overwriting anything: copy it to a temporary sibling (exclusive), fsync,
-// compare its bytes with the original, rename the copy to the archive name only while that name is free (every writer of these names
-// holds the record lease), compare again, then remove the original. The bytes are never parsed, redacted or hashed into any record.
-// A crash at any point leaves the original, the archive, or both, beside the `archiving` marker, and a continuation finishes it.
+// compare its bytes with the original, install the copy at the archive name with an atomic no-replace (installNoReplace), compare
+// again, then remove the original. The bytes are never parsed, redacted or hashed into any record. A crash at any point leaves the
+// original, the archive, or both, beside the `archiving` marker, and a continuation finishes it.
 function moveToArchive(root, id) {
   const original = path.join(root, STATE_FILE);
   const archive = path.join(root, archiveName(id));
   const uncertain = (reason) => halt('configuration-create-persistence-uncertain', { transition: 'quarantine', reason });
   const before = readBytes(original);
   if (!before) throw invalidState('the unreadable state file vanished before it was archived', { transition: 'quarantine' });
-  const tmp = `${archive}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  const tmp = stagedName(archive);
   try {
     fs.copyFileSync(original, tmp, fs.constants.COPYFILE_EXCL);
     fsyncFile(tmp);
     if (!fs.readFileSync(tmp).equals(before)) throw new Error('copy differs');
-    let free = false;
-    try { fs.lstatSync(archive); } catch (e) { free = !!e && e.code === 'ENOENT'; }
-    if (!free) throw new Error('archive name taken');
-    renameWithRetry(fs, tmp, archive);
+    installNoReplace(tmp, archive);
   } catch {
     try { fs.unlinkSync(tmp); } catch { /* best effort: a leftover temporary copy is not evidence (TEMP_RE) */ }
-    throw uncertain('the unreadable state file could not be copied to its archive');
+    throw uncertain('the unreadable state file could not be copied to its archive without replacing a file');
   }
   finishMove(root, id, before);
 }
 // The archive holds the original's bytes: remove the original. Bytes that differ are conflicting copies; both are kept.
 function finishMove(root, id, expected) {
   const original = path.join(root, STATE_FILE);
-  const archive = path.join(root, archiveName(id));
   const now = readBytes(original);
-  const kept = readBytes(archive);
+  const kept = verifiedArchive(root, id);
   if (!kept) throw halt('configuration-create-persistence-uncertain', { transition: 'quarantine', reason: 'the archive could not be read back' });
   if (now && (!now.equals(kept) || (expected && !expected.equals(kept)))) {
     throw invalidState('the state file and its archive differ; both are kept', { transition: 'quarantine', nextStep: 'Compare the two files yourself and keep the trustworthy one; nothing was overwritten or deleted.' });
@@ -1095,23 +1150,24 @@ function quarantineUnreadableReceipt(workspaceDir, { kindTable, acknowledgeUnkno
     const marker = found.quarantines.find((q) => q.quarantineId === id);
     if (!marker) {
       if (!found.orphanArchives.includes(id)) throw halt('configuration-create-approval-stale', { transition: 'quarantine', reason: 'no quarantine or archive with that id exists' });
+      // An archive name alone is not an archive: read it whole as a plain file before its marker says it is deferred.
+      if (!verifiedArchive(root, id)) throw invalidState('the archive of that quarantine vanished', { transition: 'quarantine' });
       invalidated();
       writeMarker(root, id, 'deferred', { exclusive: true });
       return id;
     }
     if (marker.status !== 'valid') throw invalidState('that quarantine marker is invalid', { transition: 'quarantine', nextStep: 'Keep the marker and its archive; restore a trustworthy copy of the marker or keep this workspace for manual handling.' });
     const original = path.join(root, STATE_FILE);
-    const archive = path.join(root, archiveName(id));
     if (marker.state === 'deferred') {
-      if (!readBytes(archive)) throw invalidState('the archive of that quarantine is missing', { transition: 'quarantine' });
+      if (!verifiedArchive(root, id)) throw invalidState('the archive of that quarantine is missing', { transition: 'quarantine' });
       return id;
     }
     if (found.sidecar.status === 'valid' && found.sidecar.state.units.length > 0) {
       throw halt('configuration-create-pending', { transition: 'quarantine', ...unitIds(found.sidecar.state.units[0]), reason: 'a readable saved state is present again', nextStep: 'Inspect and resolve its units; keep the quarantine marker and archive.' });
     }
+    const haveArchive = !!verifiedArchive(root, id);
     invalidated();
     const haveOriginal = !!readBytes(original);
-    const haveArchive = !!readBytes(archive);
     if (haveOriginal && !haveArchive) moveToArchive(root, id);
     else if (haveArchive) finishMove(root, id, null);
     else throw invalidState('neither the state file nor its archive is present', { transition: 'quarantine', nextStep: 'Restore the archive or the state file from a backup, then run the same command again.' });
