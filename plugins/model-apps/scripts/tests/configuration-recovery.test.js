@@ -196,6 +196,42 @@ test('the child list and the exact reads must agree', async () => {
   assert.equal((await R.observeRecordedUnit(R.createReadOnlyRecoveryContext(weird), unit, kt)).outcome, 'configuration-create-graph-unreadable', 'an answer of an unknown shape');
 });
 
+test('a recorded child that differs only in the child list is never a match, at prepare or at resolve', async () => {
+  // The collection answers an edited copy of the recorded child; its exact read still answers the recorded row.
+  const editedInList = (svc, unit, edit) => ({
+    ...svc.ports,
+    readChildren: async (kind, id) => {
+      const res = await svc.ports.readChildren(kind, id);
+      return { ok: true, children: res.children.map((c) => (c.row.id === unit.rows[1].id ? { kind: c.kind, row: edit(c.row) } : c)) };
+    },
+  });
+  const dir = ws();
+  const svc = fakeService();
+  const unit = interrupted(dir, apiUnit());
+  svc.seed(unit);
+  for (const [name, edit] of [
+    ['an edited field', (row) => ({ ...row, public: { ...row.public, isoptional: true } })],
+    ['another kind of edit', (row) => ({ ...row, public: { ...row.public, type: 11 } })],
+  ]) {
+    const ctx = R.createReadOnlyRecoveryContext(editedInList(svc, unit, edit));
+    const obs = await R.observeRecordedUnit(ctx, unit, kt);
+    assert.equal(obs.outcome, 'configuration-create-graph-unreadable', name);
+    assert.equal(obs.children.status, 'inconsistent', name);
+    await rejectsCode(() => R.prepareConfigurationResolution(ctx, options(dir, unit, { mode: 'accept-current' })), 'configuration-create-graph-unreadable');
+  }
+  assert.equal(unitOf(dir, unit.unitId).offer, null);
+
+  // Approved on a consistent graph, then the child list alone changes: resolve refuses, invalidates nothing and keeps the unit.
+  const plain = R.createReadOnlyRecoveryContext(svc.ports);
+  const offer = await R.prepareConfigurationResolution(plain, options(dir, unit, { mode: 'accept-current' }));
+  let invalidations = 0;
+  const later = R.createReadOnlyRecoveryContext(editedInList(svc, unit, (row) => ({ ...row, public: { ...row.public, isoptional: true } })));
+  await assert.rejects(() => R.resolveConfigurationResolution(later, options(dir, unit, { mode: 'accept-current', token: offer.token, invalidate: () => { invalidations += 1; return { ok: true }; } })));
+  assert.equal(invalidations, 0);
+  assert.ok(unitOf(dir, unit.unitId), 'the unit is kept');
+  assert.equal(svc.writes(), 0);
+});
+
 test('a new rule must be published, and a rule without a publication slot must stay unpublished', async () => {
   const outcomes = {};
   for (const [name, publicationRequired, statuscode] of [['published', true, 2], ['unpublished', true, 0], ['publishing', true, 1], ['unknown', true, 7], ['kept unpublished', false, 0], ['published without slot', false, 2]]) {

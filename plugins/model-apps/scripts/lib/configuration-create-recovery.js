@@ -148,20 +148,30 @@ async function observeRecordedUnit(context, unit, { kindTable } = {}) {
 
   // The whole child list of the root, so a child somebody else added (or a page this read missed) is seen, not assumed absent.
   const children = { status: 'complete', unexpected: 0 };
+  const listedRows = [];
   const rootStatus = rows.find((x) => x.id === unit.root.id).status;
   if (rootStatus !== 'missing') {
     const res = await settle(() => context.readChildren(unit.root.kind, unit.root.id));
     if (!isPlainObject(res) || res.ok !== true || !Array.isArray(res.children)) children.status = 'unreadable';
     else {
       const recorded = new Map(unit.rows.filter((r) => r.id !== unit.root.id).map((r) => [r.id, r]));
+      const exact = new Map(observed.filter((o) => !o.missing).map((o) => [o.id, o]));
       const listed = new Set();
       for (const c of res.children) {
         const p = isPlainObject(c) && typeof c.kind === 'string' && has(kindTable, c.kind) ? await project(context, c.kind, c.row, kindTable) : null;
         if (!p || listed.has(p.id) || p.parentId !== unit.root.id) { children.status = 'unreadable'; continue; }
         listed.add(p.id);
+        listedRows.push({ kind: c.kind, id: p.id, parentId: p.parentId, public: p.public });
         const rec = recorded.get(p.id);
-        if (!rec) { children.unexpected += 1; observed.push({ kind: c.kind, id: p.id, parentId: p.parentId, public: p.public, unexpected: true }); }
-        else if (rec.kind !== c.kind) children.status = 'unreadable';
+        if (!rec) { children.unexpected += 1; observed.push({ kind: c.kind, id: p.id, parentId: p.parentId, public: p.public, unexpected: true }); continue; }
+        if (rec.kind !== c.kind) { children.status = 'unreadable'; continue; }
+        // A recorded child must look the same in the collection as at its exact read (and, when that read matched, as recorded): a
+        // collection-only edit, or a stale page, is a graph this read cannot trust, never a match.
+        const st = rows.find((x) => x.id === p.id).status;
+        const at = exact.get(p.id);
+        if (st === 'unreadable' || !at) continue;
+        if (at.parentId !== p.parentId || !sameJson(at.public, p.public)) children.status = 'inconsistent';
+        else if (st === 'match' && (rec.parentId !== p.parentId || !sameJson(rec.public, p.public))) children.status = 'inconsistent';
       }
       // The list and the exact reads must agree both ways; a disagreement means one of them is incomplete.
       if (children.status === 'complete') {
@@ -202,9 +212,10 @@ async function observeRecordedUnit(context, unit, { kindTable } = {}) {
   if (lifecycle && lifecycle.expected === 'published' && (lifecycle.observed === 'unpublished' || lifecycle.observed === 'publishing')) codes.add(PRECEDENCE[5]);
   const outcome = PRECEDENCE.find((c) => codes.has(c)) || 'match';
 
-  // The hash binds an approval to exactly this observation: rows, unexpected children, membership and lifecycle, in a fixed order.
+  // The hash binds an approval to exactly this observation: rows, the child list as listed, membership and lifecycle, in a fixed order.
   observed.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const canonical = { unitId: unit.unitId, attemptId: unit.attemptId, rows: observed, membership, lifecycle, children };
+  listedRows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const canonical = { unitId: unit.unitId, attemptId: unit.attemptId, rows: observed, listed: listedRows, membership, lifecycle, children };
   const observation = {
     unitId: unit.unitId,
     outcome,
