@@ -373,6 +373,33 @@ test('the classifier refuses anything but the plan: ids, parents, columns, value
   assert.throws(() => B.createClassifier([{ token: 'a', planned: api }, { token: 'b', planned: planned('customApi', 'contoso_Calc') }]), /planned twice/);
 });
 
+// #847: the value a pending variable create still owes is sent as the real SDK sends it after the definition — the same
+// URL, body and headers, outside the solution — so the create classifier judges it as it judges the SDK's own request.
+test('postPlannedVariableValue sends the value row exactly as the SDK does, outside the solution, while the client stays scoped', async () => {
+  const ev = planned('environmentVariable', 'contoso_ApiBase');
+  const [, valuePost] = (await wireOf(ev)).sent;
+  const sent = [];
+  const sdk = await sdkOf(orgOf(), { screen(req) { if (req.method !== 'GET') sent.push({ ...req, headers: { ...req.headers } }); return null; } });
+  const header = (req) => Object.keys(req.headers).find((h) => h.toLowerCase() === 'mscrm.solutionuniquename');
+  await B.postPlannedVariableValue(sdk.dataverse, ev);
+  assert.equal(sent.length, 1);
+  const [req] = sent;
+  assert.equal(req.method, 'POST');
+  assert.equal(req.url, valuePost.url);
+  assert.deepEqual(JSON.parse(req.body), JSON.parse(valuePost.body));
+  assert.equal(JSON.parse(req.body).value, VALUE);
+  assert.equal(JSON.parse(req.body)['EnvironmentVariableDefinitionId@odata.bind'], `/environmentvariabledefinitions(${ev.plan.rows[0].id})`);
+  assert.equal(header(req), undefined, 'the value is sent outside the solution');
+  assert.ok(B.createClassifier([{ token: 'e', planned: ev }])(req), 'the classifier takes it as the planned value create');
+  await sdk.dataverse.post('/AddSolutionComponent', { ComponentId: ev.plan.rows[0].id, ComponentType: 380, SolutionUniqueName: SOL, AddRequiredComponents: false });
+  assert.ok(header(sent[1]), 'the original client keeps its solution');
+
+  await assert.rejects(B.postPlannedVariableValue({ post() {} }, ev), (e) => e.code === 'create-identity-unverified');
+  const definitionOnly = planned('environmentVariable', 'contoso_ApiBase', { bindings: A.readDeploymentBindings({}, spec()) });
+  await assert.rejects(B.postPlannedVariableValue(sdk.dataverse, definitionOnly), /plans no value create|has no value to send/);
+  assert.equal(sent.length, 2, 'neither refusal sends anything');
+});
+
 test('a bound Custom API edit as the real SDK sends it: the root PATCH on its own or in a change set, a child\'s labels on their own', async () => {
   const fresh = planned('customApi', 'contoso_Calc');
   const w = await wireOf(fresh);

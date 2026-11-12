@@ -741,6 +741,28 @@ function acceptResultFor(planned) {
   return acceptSaved({ type: planned.kind, id: planned.plan.rows[0].id });
 }
 
+/**
+ * #847: send the ONE value row of a planned environment-variable create on its own, exactly as the SDK sends it after
+ * the definition (its own POST, never in the solution: a value row would export this environment's value):
+ *   POST /environmentvariablevalues?$select=environmentvariablevalueid   (Prefer: return=representation, no solution header)
+ *   { "environmentvariablevalueid": "<V>", "value": "<private input>", "EnvironmentVariableDefinitionId@odata.bind": "/environmentvariabledefinitions(<D>)" }
+ * The ids and the value come from the plan only. `dataverse` is the run's solution-scoped client: its headerless sibling
+ * (withoutSolution) shares the same gated HTTP client, so the request still passes the run's classifier and fence. A
+ * client without that sibling is refused before anything is sent. Answers the service's answer (the created row).
+ */
+async function postPlannedVariableValue(dataverse, planned) {
+  const row = planned.rows.find((r) => r.kind === 'environmentVariableValue' && r.mode === 'create');
+  if (planned.kind !== 'environmentVariable' || !row) throw new TypeError(`postPlannedVariableValue: ${planned.kind} "${planned.key}" plans no value create`);
+  const value = privateOf(planned).secrets.get(rowKey(row.kind, row.key));
+  if (typeof value !== 'string' || value === '') throw new TypeError(`postPlannedVariableValue: ${planned.kind} "${planned.key}" has no value to send`);
+  if (!dataverse || typeof dataverse.withoutSolution !== 'function') {
+    throw Object.assign(new Error('the Dataverse client cannot send a request outside the solution; no value request was sent'), { code: 'create-identity-unverified' });
+  }
+  const k = KINDS.environmentVariableValue;
+  const body = { [k.pk]: row.id, [k.privateColumn]: value, [`${k.parentBind}@odata.bind`]: `/${k.parentSet}(${row.parentId})` };
+  return dataverse.withoutSolution().post(`/${k.set}?$select=${k.pk}`, body, { headers: { Prefer: 'return=representation' } });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Reads. None throws: a failed, refused or malformed read is `unknown`, never absence and never a difference.
 
@@ -1507,6 +1529,7 @@ module.exports = {
   declarationSha256Of,
   artifactFor,
   acceptResultFor,
+  postPlannedVariableValue,
   createClassifier,
   classifyConstituent,
   createSetClassifier,
