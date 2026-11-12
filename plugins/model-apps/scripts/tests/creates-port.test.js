@@ -238,10 +238,16 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 // so that edge is gated as well. The build command requires managed-create-transport.js only to make (and compose) the managed create
 // gate of an apply where protected configuration is in play (sdk-build.js protectedConfigurationInPlay), and the engine requires the
 // configuration hookup's modules only inside protectedConfigurationFor, which it calls only once that gate exists; those edges are gated
-// too. Apart
+// too. The configuration runtime (configuration-build.js, made only for an App Spec that declares configuration) requires the default
+// create writer and its plan and receipt modules (#807) only inside createUnitsFor and the receipt guard only in a preflight that has its
+// capability, and configuration-artifacts.js requires the plan and
+// receipt modules only inside the create-unit helpers a step with ctx.createUnits calls; build-model-app.js attaches the writer's bridge
+// through configuration-create-bridge.js, which requires nothing. Those edges are gated too. Apart
 // from those gated edges the default build must load none of the new modules, and must still hand the engine the plain pass-through.
 const GATED_EDGES = [['sdk-build.js', 'creates-stable-build.js'], ['sdk-build.js', 'creates-catalog.js'], ['sdk-build.js', 'rule-settlement.js'], ['app-spec.js', 'rule-settlement.js'], ['declared-rule-io.js', 'rule-settlement.js'], ['sdk-build.js', 'bpf-settlement.js'], ['app-spec.js', 'bpf-settlement.js'], ['declared-bpf-io.js', 'bpf-settlement.js'], ['dashboard-reconcile.js', 'creates-identity.js'], ['dashboard-recovery-workspace.js', 'creates-local.js'], ['verify-model-app.js', 'configuration-protected.js'],
-  ['build-model-app.js', 'managed-create-transport.js'], ['sdk-build.js', 'managed-create-context.js'], ['sdk-build.js', 'configuration-create-bindings.js'], ['sdk-build.js', 'configuration-protected.js']];
+  ['build-model-app.js', 'managed-create-transport.js'], ['sdk-build.js', 'managed-create-context.js'], ['sdk-build.js', 'configuration-create-bindings.js'], ['sdk-build.js', 'configuration-protected.js'],
+  ['configuration-build.js', 'configuration-create-writer.js'], ['configuration-build.js', 'configuration-create-state.js'], ['configuration-build.js', 'configuration-create-plan.js'], ['configuration-build.js', 'configuration-create-recovery.js'],
+  ['configuration-artifacts.js', 'configuration-create-plan.js'], ['configuration-artifacts.js', 'configuration-create-state.js']];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
 function requireGraph(entry, { gated = false } = {}) {
@@ -311,6 +317,24 @@ test('the default build loads none of the stable-identity modules and still wire
   }
   assert.match(engine, /if \(opts\.managedCreateGate && workflowStore && !opts\.protectedConfiguration\) \{/);
   assert.equal(engine.match(/protectedConfigurationFor\(/g).length, 2, 'defined once, called once behind the gate');
+  // The default create writer (#807): the build attaches its bridge through a module that requires nothing, the configuration runtime
+  // requires the writer, plan and receipt modules only inside createUnitsFor, and configuration-artifacts.js requires the plan and the
+  // receipt modules only inside the create-unit helpers.
+  assert.match(command, /require\('\.\/lib\/configuration-create-bridge\.js'\)\.attachConfigurationCreateBridge\(sdk, \{/);
+  assert.equal(command.match(/require\('\.\/lib\/configuration-create-(writer|plan|state|bindings)\.js'\)/g), null, 'the build command requires none of the create modules');
+  assert.equal(fs.readFileSync(path.join(SCRIPTS, 'lib', 'configuration-create-bridge.js'), 'utf8').match(/require\(/g), null, 'the bridge requires nothing');
+  const runtime = fs.readFileSync(path.join(SCRIPTS, 'lib', 'configuration-build.js'), 'utf8');
+  const unitsFactory = runtime.slice(runtime.indexOf('function createUnitsFor('), runtime.indexOf('function createDeclarationsOf('));
+  for (const m of ['configuration-create-writer', 'configuration-create-state', 'configuration-create-plan']) {
+    assert.equal(unitsFactory.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required in createUnitsFor`);
+    assert.equal(runtime.match(new RegExp(`require\\('\\./${m}\\.js'\\)`, 'g')).length, 1, `${m}.js is required nowhere else in the runtime`);
+  }
+  assert.match(runtime, /if \(ctx\.createUnits && ctx\.createUnits\.available\) \{\n\s+const units = ctx\.createUnits;\n\s+try \{\n\s+require\('\.\/configuration-create-recovery\.js'\)\.preflightConfigurationCreates\(\{/);
+  assert.equal(runtime.match(/require\('\.\/configuration-create-recovery\.js'\)/g).length, 1, 'the receipt guard is required only behind the create capability');
+  const artifacts = fs.readFileSync(path.join(SCRIPTS, 'lib', 'configuration-artifacts.js'), 'utf8');
+  for (const m of ['configuration-create-plan', 'configuration-create-state']) {
+    for (const line of artifacts.split('\n').filter((l) => l.includes(`require('./${m}.js')`))) assert.match(line, /^ {2,}/, `${m}.js is required only inside a function`);
+  }
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');
