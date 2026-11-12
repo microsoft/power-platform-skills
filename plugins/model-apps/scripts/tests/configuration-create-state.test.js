@@ -413,8 +413,21 @@ test('admission refuses a unit beyond the unit, row or byte limit, counting its 
   huge.rows[0].public.description = 'x'.repeat(S.LIMITS.maxBytes - small - 64);
   const preparedSize = small + huge.rows[0].public.description.length - 'null'.length + 2;
   assert.ok(preparedSize <= S.LIMITS.maxBytes, 'the prepared form alone would fit');
-  throwsCode(() => prepare(sized, huge), 'configuration-create-shape-refused');
+  // Admission itself refuses it, not the size check every save makes afterwards.
+  assert.match(throwsCode(() => prepare(sized, huge), 'configuration-create-shape-refused').message, /no room for this unit and its later transitions/);
   assert.equal(fs.existsSync(stateFile(sized)), false);
+});
+
+test('a save whose later transitions could pass the byte limit is refused and keeps the saved file', () => {
+  const dir = ws();
+  prepare(dir, envUnit({ value: false }));
+  const before = fs.readFileSync(stateFile(dir));
+  const e = throwsCode(() => S.withCreateStateTransaction(dir, kt, (draft) => {
+    draft.units[0].rows[0].public.description = 'x'.repeat(S.LIMITS.maxBytes);
+    return draft;
+  }), 'configuration-create-shape-refused');
+  assert.match(e.message, /would exceed its size limit/);
+  assert.ok(fs.readFileSync(stateFile(dir)).equals(before));
 });
 
 // ── Persistence ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -661,6 +674,23 @@ test('an interrupted quarantine leaves an archiving barrier that blocks and that
   S.quarantineUnreadableReceipt(dir2, { acknowledgeUnknownDispatch: true, quarantineId: q2.quarantineId.toUpperCase(), invalidate: OK_INVALIDATE });
   assert.equal(fs.existsSync(stateFile(dir2)), false);
   assert.ok(fs.readFileSync(path.join(dir2, `${S.ARCHIVE_FILE_PREFIX}${q2.quarantineId}.bin`)).equals(original2));
+});
+
+test('quarantine never overwrites a file that took the archive name while the copy was made', () => {
+  const dir = ws();
+  const original = unreadable(dir);
+  let archive;
+  // `<archive>.<pid>.<ms>.<random>.tmp` is the temporary copy; plant a foreign file at `<archive>` right after it is written.
+  withFsPatch('copyFileSync', (real, from, to, flags) => {
+    real(from, to, flags);
+    archive = String(to).replace(/\.\d+\.\d+\.[0-9a-z]*\.tmp$/, '');
+    fs.writeFileSync(archive, 'foreign');
+  }, () => {
+    throwsCode(() => S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain', { transition: 'quarantine' });
+  });
+  assert.ok(archive.endsWith('.bin'));
+  assert.equal(fs.readFileSync(archive, 'utf8'), 'foreign');
+  assert.ok(fs.readFileSync(stateFile(dir)).equals(original));
 });
 
 test('a continuation keeps both files when the state file and its archive differ', () => {
