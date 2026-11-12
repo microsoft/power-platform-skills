@@ -629,14 +629,25 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   would be run three more times, after every earlier phase, with a log that blames the service. The halts that wrap a failure of the service (`pages-publish-failed`, `pages-existence-failed`, `pages-sitemap-read-failed`, `pages-shared-check-failed`, `pages-read-throttled`) follow it: a 429 or a 503 is run again, a refusal is not. A listing that fails *before*
   anything is written leaves nothing to duplicate, and is retried like any transient halt. A transient halt *later* in the same run (a 503 on a later read or write, say) still re-runs the whole build,
   which reads each page again — as each rebuild does — and a page that already holds its content is not written (and is published only if this workspace did not record that this very content was published), so its history does not record the prompt again.
-  **A publish refused because another customization holds the lock waits longer before the build's next run** (#848; `publishLockRefusalOf`, `lib/retry-policy.js`; `lockWaitMs`, build-model-app.js). The lock is
-  judged only when the answer is a 429, its `error.code` is one of `CUSTOMIZATION_LOCK_CODES` (each also in the transient codes; `0x80071154` is not one of them, its wait is the ordinary one), and the request was a
-  publish — the plugin's own `PublishXml` of its app components (`publishAppComponents` keeps the answer on its error with `notePublishRefusal`, non-enumerable) or the SDK's `PublishXml`/`PublishAllXml`, which
-  `lib/sdk-http-client.js` keeps by the answer's `Retry-After` on the error body (`HTTP_RETRY_AFTER`, a non-enumerable symbol, uncapped, with the moment it was read). A 500 or 503 with a lock code, a lock named only
-  in words, a lock on another request and a service-protection 429 keep the ordinary schedule. The wait before the next run is about 30 s, 60 s and 90 s (plus jitter under a second), or the `Retry-After` when that
-  is longer, and is spent from the run's throttle budget: a wait the budget has no room for is cut to what is left (or the build stops with `throttle-budget-exhausted` when the service asked for more than is left).
-  The number of runs does not change (the same `maxRetries`), and each run writes the content again before its publish — a publish is never sent again on its own. The log names the refusal ("a publish was refused
-  because another customization is running"), and a build that stops on it says how many times the publish was refused and how long it waited, and to run the same command again once that operation has finished.
+  **A web-resource or generative-page publish refused because another customization holds the lock waits longer before the build's next run** (#848; `publishLockRefusalOf`, `lib/retry-policy.js`;
+  `lockWaitMs`, build-model-app.js). The lock is judged only when the answer is a 429, its `error.code` is one of `CUSTOMIZATION_LOCK_CODES` (each also in the transient codes; `0x80071154` is not one of them,
+  its wait is the ordinary one), the request was the SDK's `PublishXml`/`PublishAllXml` (`lib/sdk-http-client.js` keeps the answer's `Retry-After` on the error body: `HTTP_RETRY_AFTER`, a non-enumerable symbol,
+  uncapped, with the moment it was read), and the refusal is found under one of the two errors whose next run proves the target by id before it publishes it again. The guarantee is exactly this: **before
+  a lock-refused target is published again, the next run has either written it again by id, or read it back by id after the wait and found it holding the content the build would write** — a mismatch is written
+  again by id first. An import that held the lock may have replaced the target's saved layer while the build waited, so a publish with neither in front of it could publish that instead.
+  - `WEB_RESOURCE_UNVERIFIED` with the row's id (a spec web resource, the generated app icon, the page manifest): the spec's resources and the icon are written again by id whatever was published
+    (`writeOwnedWebResource`); the page manifest's published copy is read (its row must be the recorded id) and compared whole, and written again by id only where it differs — where it already holds the
+    content it is kept and not published again (`persistPageManifest`).
+  - `pages-publish-failed` (a page saved and not published): the next run reads the page by id from the service (`lib/genpage-sdk.js` `update` → `readServer`) and compares the source, name, data sources,
+    model and connector/action bindings with the spec's page (`planEdits`); what differs is written by id before the one publish. The compiled row (`page.compiled`) is not compared — the SDK derives it
+    from the source.
+  Every other publish the lock refuses — a table's, a form's, a view's, a site map's, an app module's (the SDK's, or the plugin's own `publishAppComponents`), the final `PublishAllXml` — keeps the ordinary
+  3/6/12 s waits, as in 2.27.0: its next run is not proven to write or read the target first, so a longer wait would only make a blind re-publish of it likelier to land. A 500 or 503 with a lock code, a lock
+  named only in words, a lock on another request and a service-protection 429 keep the ordinary schedule too. The lock's wait before the next run is about 30 s, 60 s and 90 s (plus jitter under a second),
+  or the `Retry-After` when that is longer, and is spent from the run's throttle budget: a wait the budget has no room for is cut to what is left (or the build stops with `throttle-budget-exhausted` when the
+  service asked for more than is left). The number of runs does not change (the same `maxRetries`). The log names the refusal ("a publish was refused because another customization is running"), and a build
+  that stops on it says how many times the publish was refused and how long it waited, and to run the same command again once that operation has finished. Pinned over the vendored SDK and the production
+  HTTP client by `tests/lock-refused-page-publish-real-bundle.test.js` (a page: read back and published once; changed during the wait: written by id, then published) and `tests/web-resource-unconfirmed.test.js`.
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. Environment variables and connection references are the

@@ -1102,7 +1102,7 @@ test('retry loop: the waits the loop takes are on stderr — the retry line says
 
 // ── A publish the customization lock refused waits longer before the next run (#848) ──────────────────────────────────────────────────────────────────
 // The lock is held by another customization — a solution import, another publish — for a minute or more, so the ordinary 3/6/12 s backoff spent the three runs
-// again while it was still held. A publish it refused waits about 30, 60 and 90 s instead, and longer when the answer's Retry-After asks it. The runs are the
+// again while it was still held. A page or web-resource publish it refused waits about 30, 60 and 90 s instead, and longer when the answer's Retry-After asks it. The runs are the
 // same three: only the wait before each is longer, and it is drawn from the same five-minute budget as any other throttle. The SDK raises the refusal as:
 //   { name: 'ConnectionError', code: 'CONNECTION_ERROR', statusCode: 429, url: 'https://x/api/data/v9.2/PublishXml',
 //     cause: { error: { code: '0x8004F064', message: 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.' } } }
@@ -1115,26 +1115,43 @@ const publishAnswerError = ({ status = 429, code = '0x8004F064', url = 'https://
   return Object.assign(new Error(`HTTP ${status} from ${url}: ${message}`), { name: 'ConnectionError', code: 'CONNECTION_ERROR', statusCode: status, url, cause: body });
 };
 const secondsOf = (sleeps) => sleeps.map((ms) => Math.floor(ms / 1000));
+// The two publishes the lock's wait is for, as the build raises them (lib/sdk-build.js): a generative page saved and not published (the halt `pages-publish-failed`,
+// whose next run reads the page by id after the wait and writes what differs before it publishes), and a web resource written and not confirmed (`WEB_RESOURCE_UNVERIFIED`
+// with its id, whose next run writes it again by id before it publishes). Each carries the publish's answer as its cause.
+const pageRefused = (opts) => {
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const { retryFrom } = require('../lib/retry-policy.js');
+  const cause = publishAnswerError(opts);
+  return new BuildHalt(`page "Overview" was updated as p1 and saved, but publishing it failed (${cause.message})`, { phase: 'pages', code: 'pages-publish-failed', recoverable: true, ...retryFrom(cause) });
+};
+const resourceRefused = (opts) => {
+  const { serviceFailure } = require('../lib/retry-policy.js');
+  const cause = publishAnswerError(opts);
+  return Object.assign(serviceFailure(`Web resource 'contoso_/app.js' (wr-1): ${cause.message}`, { cause }), { code: 'WEB_RESOURCE_UNVERIFIED', id: 'wr-1' });
+};
 
-test('retry loop: a publish the customization lock refused waits about 30, then 60 s before the next run — the same runs as before, only the waits are longer', async () => {
-  const out = await throttleDriver({ failures: (n) => (n <= 2 ? publishAnswerError() : null) });
+test('retry loop: a page or web-resource publish the customization lock refused waits about 30, then 60 s before the next run — the same runs as before, only the waits are longer', async () => {
+  const out = await throttleDriver({ failures: (n) => (n <= 2 ? pageRefused() : null) });
   assert.strictEqual(out.halt, null);
   assert.strictEqual(out.attempts, 3, 'no run is added');
   assert.deepStrictEqual(secondsOf(out.sleeps), [30, 60], `the lock's waits, with under a second of jitter: ${out.sleeps}`);
   assert.strictEqual(out.throttle.spentMs(), out.sleeps[0] + out.sleeps[1], 'a 429, so both come out of the run\'s budget, as every throttle\'s wait does');
   assert.ok(out.logs.some((l) => /a publish was refused because another customization is running/.test(l) && /retrying \(attempt 1\/3\) after 30\d{3}ms/.test(l)), out.logs.join('\n'));
-  // Every code the platform gives the lock, either case, and the namespaced and PublishAllXml forms of the action, are the lock.
+  // Every code the platform gives the lock, either case, and the namespaced and PublishAllXml forms of the action, are the lock — for a page and for a web resource.
   for (const [code, url] of [['0x80071151', 'https://x/api/data/v9.2/PublishXml'], ['0x80090412', 'https://x/api/data/v9.0/Microsoft.Dynamics.CRM.PublishXml'], ['0x8004f061', 'https://x/api/data/v9.2/PublishAllXml'], ['0x8004F077', 'https://x/api/data/v9.2/PublishXml']]) {
-    const one = await throttleDriver({ failures: (n) => (n === 1 ? publishAnswerError({ code, url }) : null) });
-    assert.deepStrictEqual(secondsOf(one.sleeps), [30], `${code} ${url}: ${one.sleeps}`);
+    for (const refused of [pageRefused, resourceRefused]) {
+      const one = await throttleDriver({ failures: (n) => (n === 1 ? refused({ code, url }) : null) });
+      assert.deepStrictEqual(secondsOf(one.sleeps), [30], `${refused.name} ${code} ${url}: ${one.sleeps}`);
+    }
   }
 });
 
 test('retry loop: a lock that outlasts the three runs stops the build as before — the same halt — and says the publish was refused and to run the command again once the other operation is done', async () => {
-  const out = await throttleDriver({ failures: () => publishAnswerError() });
+  const out = await throttleDriver({ failures: () => pageRefused() });
   assert.strictEqual(out.attempts, 4, 'the three runs again, and not a fifth');
   assert.deepStrictEqual(secondsOf(out.sleeps), [30, 60, 90], `${out.sleeps}`);
   assert.strictEqual(out.halt.code, 'CONNECTION_ERROR', 'the failure itself, as it always was');
+  assert.strictEqual(out.halt.cause.code, 'pages-publish-failed');
   assert.strictEqual(out.halt.phase, 'pages');
   const said = out.logs.join('\n');
   assert.match(said, /a publish was refused 4 times because another customization \(a solution import or another publish\) was running; the build waited 18\d s for it\. Run the same command again once that operation has finished/);
@@ -1143,10 +1160,10 @@ test('retry loop: a lock that outlasts the three runs stops the build as before 
 });
 
 test('retry loop: the Retry-After of a lock-refused publish is honoured — a longer ask is waited, as what is left of it, and an ask that does not fit stops the build with the budget\'s halt', async () => {
-  const asked = (askedMs) => (n, clock) => (n === 1 ? publishAnswerError({ ask: { askedMs, notBefore: clock + askedMs } }) : null);
+  const asked = (askedMs) => (n, clock) => (n === 1 ? pageRefused({ ask: { askedMs, notBefore: clock + askedMs } }) : null);
   assert.deepStrictEqual((await throttleDriver({ failures: asked(45000) })).sleeps, [45000], 'longer than the lock\'s 30 s: the service\'s ask');
   assert.deepStrictEqual(secondsOf((await throttleDriver({ failures: asked(10000) })).sleeps), [30], 'shorter: the lock\'s own wait');
-  const long = await throttleDriver({ failures: (n, clock) => publishAnswerError({ ask: { askedMs: 400000, notBefore: clock + 400000 } }) });
+  const long = await throttleDriver({ failures: (n, clock) => resourceRefused({ ask: { askedMs: 400000, notBefore: clock + 400000 } }) });
   assert.strictEqual(long.attempts, 1);
   assert.deepStrictEqual(long.sleeps, []);
   assert.strictEqual(long.halt.code, 'throttle-budget-exhausted');
@@ -1157,24 +1174,24 @@ test('retry loop: the Retry-After of a lock-refused publish is honoured — a lo
 test('retry loop: the lock\'s own wait takes no more than the budget has left — and when not even the ordinary backoff fits, the build stops as it did', async () => {
   const { makeThrottleBudget } = require('../lib/throttle-budget.js');
   const spent = (ms) => { const b = makeThrottleBudget(); b.spend(ms); return b; };
-  const tight = await throttleDriver({ budget: spent(280000), failures: (n) => (n === 1 ? publishAnswerError() : null) });
+  const tight = await throttleDriver({ budget: spent(280000), failures: (n) => (n === 1 ? pageRefused() : null) });
   assert.strictEqual(tight.halt, null);
   assert.deepStrictEqual(tight.sleeps, [20000], 'the 20 s that are left, not the lock\'s 30');
-  const none = await throttleDriver({ budget: spent(298000), failures: (n) => (n === 1 ? publishAnswerError() : null) });
+  const none = await throttleDriver({ budget: spent(298000), failures: (n) => (n === 1 ? pageRefused() : null) });
   assert.strictEqual(none.attempts, 1);
   assert.strictEqual(none.halt.code, 'throttle-budget-exhausted', 'not even the ordinary 3 s fit');
 });
 
-test('retry loop: only a 429 that names the lock by its code, answered to a publish, waits for the lock — every other transient failure keeps the ordinary 3, 6, 12 s', async () => {
+test('retry loop: only a 429 that names the lock by its code, answered to a page or web-resource publish, waits for the lock — every other transient failure keeps the ordinary 3, 6, 12 s', async () => {
   const ordinary = [
-    ['a service-protection 429 to a publish', publishAnswerError({ code: '0x80072322', message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.' })],
-    ['a lock answered to a read of views', publishAnswerError({ url: 'https://x/api/data/v9.2/savedqueries?$select=name' })],
-    ['a lock answered to a custom action whose name ends like a publish', publishAnswerError({ url: 'https://x/api/data/v9.2/contoso_PublishXml' })],
-    ['a 500 to a publish that carries a lock code', publishAnswerError({ status: 500 })],
-    ['a 503 to a publish', publishAnswerError({ status: 503, code: null, message: 'Service Unavailable' })],
-    ['a 429 to a publish that names the lock only in words', publishAnswerError({ code: null, message: `CustomizationLockException: ${LOCK_WORDS}` })],
-    ['another concurrent operation answered to a publish', publishAnswerError({ code: '0x80071154' })],
-    ['a SQL timeout to a publish', publishAnswerError({ status: 500, code: '0x80044151', message: 'SQL timeout expired.' })],
+    ['a service-protection 429 to a publish', pageRefused({ code: '0x80072322', message: 'Number of requests exceeded the limit of 6000 over time window of 300 seconds.' })],
+    ['a lock answered to a read of views', pageRefused({ url: 'https://x/api/data/v9.2/savedqueries?$select=name' })],
+    ['a lock answered to a custom action whose name ends like a publish', resourceRefused({ url: 'https://x/api/data/v9.2/contoso_PublishXml' })],
+    ['a 500 to a publish that carries a lock code', pageRefused({ status: 500 })],
+    ['a 503 to a publish', pageRefused({ status: 503, code: null, message: 'Service Unavailable' })],
+    ['a 429 to a publish that names the lock only in words', pageRefused({ code: null, message: `CustomizationLockException: ${LOCK_WORDS}` })],
+    ['another concurrent operation answered to a publish', resourceRefused({ code: '0x80071154' })],
+    ['a SQL timeout to a publish', pageRefused({ status: 500, code: '0x80044151', message: 'SQL timeout expired.' })],
   ];
   for (const [what, failure] of ordinary) {
     const out = await throttleDriver({ failures: () => failure });
@@ -1183,25 +1200,29 @@ test('retry loop: only a 429 that names the lock by its code, answered to a publ
     assert.ok(!/another customization/.test(out.logs.join('\n')), what);
   }
   // A wait the caller set (--retry-delay, a test) is the wait, for the lock as for anything else.
-  const set = await throttleDriver({ retryDelayMs: 0, failures: (n) => (n === 1 ? publishAnswerError() : null) });
+  const set = await throttleDriver({ retryDelayMs: 0, failures: (n) => (n === 1 ? pageRefused() : null) });
   assert.deepStrictEqual(set.sleeps, [0]);
 });
 
-test('retry loop: the app publish the plugin sends itself (publishAppComponents), refused by the lock, waits for the lock too — and for the Retry-After its answer gave', async () => {
+// The lock's wait is only for a publish whose next run proves its target by id before publishing it again. Any other publish the lock refused — a table's, a form's,
+// a view's, a site map's, an app's (the SDK's, or the plugin's own publishAppComponents), the bulk publish — keeps the ordinary wait, as before: its next run is not
+// shown to write or read the target first, so a longer wait would only make a blind re-publish likelier to land.
+test('retry loop: a lock-refused publish whose next run is not proven to write or read its target first — a table, an app, the plugin\'s own app publish — keeps the ordinary 3, 6, 12 s', async () => {
+  const { BuildHalt } = require('../lib/entity-provision.js');
+  const { retryFrom } = require('../lib/retry-policy.js');
+  const bare = await throttleDriver({ failures: () => publishAnswerError() });
+  assert.strictEqual(bare.attempts, 4);
+  assert.deepStrictEqual(secondsOf(bare.sleeps), [3, 6, 12], `the SDK's table or app publish, refused by the lock: ${bare.sleeps}`);
+  assert.ok(!/another customization/.test(bare.logs.join('\n')), bare.logs.join('\n'));
+  const tableHalt = () => new BuildHalt('publishing table contoso_item failed', { phase: 'publish', code: 'publish-failed', recoverable: true, ...retryFrom(publishAnswerError({ code: '0x80071151', ask: { askedMs: 60000, notBefore: 1800000000000 + 60000 } })) });
+  assert.deepStrictEqual(secondsOf((await throttleDriver({ failures: (n) => (n === 1 ? tableHalt() : null) })).sleeps), [3], 'under another halt, with a Retry-After of its own: the ordinary wait');
+
   const { publishAppComponents } = require('../lib/app-components.js');
   const APP = '11111111-2222-3333-4444-555555555555';
-  const refuse = (headers) => publishAppComponents({ post: async () => ({ status: 429, headers, body: { error: { code: '0x80071151', message: LOCK_WORDS } } }) }, APP, { sleep: async () => {} }).then(() => null, (e) => e);
-  const bare = await refuse({});
-  assert.strictEqual(bare.code, 'APP_TABLES_NOT_PUBLISHED', 'the refusal is what it always was');
-  assert.deepStrictEqual(Object.keys(bare).sort(), ['code', 'statusCode'], 'and carries nothing more that prints or compares');
-  const out = await throttleDriver({ failures: (n) => (n === 1 ? bare : null) });
-  assert.deepStrictEqual(secondsOf(out.sleeps), [30]);
-  const withAsk = await refuse({ 'Retry-After': '50' });
-  const asked = await throttleDriver({ failures: (n) => (n === 1 ? withAsk : null) });
-  assert.deepStrictEqual(asked.sleeps, [50000], 'the 50 s it asked, longer than the lock\'s 30');
-  // A refusal of another kind keeps the ordinary wait.
-  const other = await publishAppComponents({ post: async () => ({ status: 429, headers: {}, body: { error: { code: '0x80072322', message: 'Number of requests exceeded the limit.' } } }) }, APP, { sleep: async () => {} }).then(() => null, (e) => e);
-  assert.deepStrictEqual(secondsOf((await throttleDriver({ failures: (n) => (n === 1 ? other : null) })).sleeps), [3]);
+  const refused = await publishAppComponents({ post: async () => ({ status: 429, headers: { 'Retry-After': '50' }, body: { error: { code: '0x80071151', message: LOCK_WORDS } } }) }, APP, { sleep: async () => {} }).then(() => null, (e) => e);
+  assert.strictEqual(refused.code, 'APP_TABLES_NOT_PUBLISHED', 'the refusal is what it always was');
+  assert.deepStrictEqual(Object.keys(refused).sort(), ['code', 'statusCode'], 'and carries nothing more');
+  assert.deepStrictEqual(secondsOf((await throttleDriver({ failures: (n) => (n === 1 ? refused : null) })).sleeps), [3], 'the plugin\'s own app publish: the ordinary wait');
 });
 
 test('transient auto-retry: a non-transient halt is NOT retried (the budget is not consulted)', async () => {

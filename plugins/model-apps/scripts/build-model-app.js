@@ -1094,9 +1094,10 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       // asked (the SDK's error holds no headers), and the client tells the budget instead (`declined`, lib/throttle-budget.js). The service said it was not ready for longer than the run may wait, so running the phases again would meet the
       // same answer: stop here, as for a wait of the build's own that does not fit — and so on the last run as on the first.
       const refused = transient && ask.throttled && declinedCount() > declinedBefore ? throttle.declined() : null;
-      // A publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf: a 429 with a lock's code, to a publish): the next run waits for the lock,
-      // longer than the ordinary backoff (LOCK_WAITS_MS), and for what the answer's Retry-After asked when that is longer still. It is the same run again — every
-      // write in front of the publish is sent again with it — so no publish is sent again without what it publishes being written first; and no run is added.
+      // A publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf: a 429 with a lock's code, to the publish of a web resource or a generative
+      // page): the next run waits for the lock, longer than the ordinary backoff (LOCK_WAITS_MS), and for what the answer's Retry-After asked when that is longer still.
+      // It is the same run again, and no run is added. Before that run publishes the target again it writes it again by id (a web resource), or reads it by id after this
+      // wait and writes what differs from the spec (a page) — the only publishes the classifier admits, so no publish follows the wait unproven.
       const lock = transient ? publishLockRefusalOf(err) : null;
       if (lock) lockRefusals += 1;
       if (refused) {
@@ -1112,8 +1113,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
         const leftOf = (askedMs, notBefore) => (notBefore > 0 ? Math.ceil(Math.min(askedMs || Infinity, Math.max(0, notBefore - now())) / 1000) * 1000 : 0);
         const asked = leftOf(ask.askedMs, ask.notBefore);
-        // The Retry-After of the lock's answer (the HTTP client's moment, or, for the plugin's own publish, which has none, the whole ask) is honoured whole, never clamped.
-        const lockAsked = lock ? (lock.notBefore > 0 ? leftOf(lock.askedMs, lock.notBefore) : Math.ceil(lock.askedMs / 1000) * 1000) : 0;
+        // The Retry-After of the lock's answer (lib/sdk-http-client.js records the ask and the moment it was read) is honoured whole, never clamped: what is left of it.
+        const lockAsked = lock ? leftOf(lock.askedMs, lock.notBefore) : 0;
         const delay = Math.max(backoff, asked, lockAsked);
         if (ask.throttled && !throttle.fits(delay)) {
           // The wait does not fit what is left of the run's budget.
@@ -1471,7 +1472,7 @@ function backoffMs(attempt) {
   return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
 }
 
-// The wait before the next run after a publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf): ~30 s, 60 s, 90 s, with the same jitter. The
+// The wait before the next run after a web-resource or page publish the customization lock refused (lib/retry-policy.js, publishLockRefusalOf): ~30 s, 60 s, 90 s, with the same jitter. The
 // lock is held for as long as the operation that holds it runs — a solution import, another publish — which is a minute and more, so the ordinary backoff spent all
 // three runs while it was still held (#848). The runs are the same three: only the wait before each is longer. 180 s in all, inside the five-minute budget a run
 // allows itself for waiting out a throttle (lib/throttle-budget.js), which a 429 draws from.

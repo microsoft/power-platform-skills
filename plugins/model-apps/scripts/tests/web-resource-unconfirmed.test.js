@@ -408,9 +408,9 @@ test('the build\'s own re-run of the halt writes it again by id in the same invo
   assert.equal(s.row(SCRIPT).publishedContent, base64(SCRIPT_CODE));
 });
 
-// #848: the run after a publish the lock refused waits for the lock — about 30 s, then 60 s, or what the answer's Retry-After asked when that is longer — and
-// that is all that changes. It is the same whole run again, so the content is written again by id before every publish that follows a refused one: no publish
-// is sent again without the write in front of it. The answer reaches the build through the real HTTP client, which records its Retry-After on the body.
+// #848: the run after a publish of a spec web resource the lock refused waits for the lock — about 30 s, then 60 s, or what the answer's Retry-After asked when
+// that is longer — and that is all that changes. It is the same whole run again, which writes the resource again by id whatever was published, so no publish is
+// sent again without the write in front of it. The answer reaches the build through the real HTTP client, which records its Retry-After on the body.
 test('the build\'s own re-run of a publish the lock refused waits for the lock, honouring the Retry-After the answer gave, and writes the content again by id before each publish', async () => {
   const s = scenario({ realClient: true });
   let left = 2;
@@ -624,8 +624,8 @@ const { FakeGenPageServer, ACCOUNT_TABLE } = require('./helpers/fake-genpage-ser
 const PAGE_CODE = "import * as React from 'react';\nexport default function Overview() { return <div>Overview</div>; }\n";
 const MANIFEST = 'contoso_publishreview_pagemanifest';
 
-function pageScenario(t) {
-  const s = scenario();
+function pageScenario(t, options = {}) {
+  const s = scenario(options);
   const server = new FakeGenPageServer();
   server.serveTable({ ...ACCOUNT_TABLE, logicalName: 'contoso_page_only', schemaName: 'contoso_PageOnly', entitySetName: 'contoso_page_onlys' });
   s.org.fake.seedDefaultViews('contoso_page_only', 'Page Data');
@@ -737,6 +737,44 @@ test('the same, inside one invocation: the build\'s own re-run of the halt binds
   assert.deepEqual(listsPages(p.manifest()), p.created);
 });
 
+// #848, for the page manifest: the run after its publish the lock refused waits for the lock, and before that run publishes the manifest again it reads
+// the published copy (whose row must be the recorded one: assertUnconfirmedWebResourceIdentity) and compares it whole with what it would write — after the
+// wait. Where the copy differs (here: the manifest was created and never published) it writes the content again by id and only then publishes; where the
+// copy already holds it (here: set during the wait, as a publish by another operation could) it keeps it, and publishes nothing again. Through the real
+// HTTP client, which records the answer's Retry-After on the body.
+test('a page manifest whose publish the lock refused: after the lock\'s wait the next run writes it again by id before it publishes it, or keeps a published copy that holds its content and does not publish it again', async (t) => {
+  for (const kept of [false, true]) {
+    const p = pageScenario(t, { realClient: true });
+    let left = 1;
+    p.org.intercept((c) => namesWebResource(c) && left > 0 && (left -= 1, true), () => ({ status: 429, headers: { 'Retry-After': '40' }, body: { error: LOCK } }));
+    const sdk = createClientSdk({ workspaceStorage: createNodeWorkspaceStorage(p.dir), instanceUrl: p.org.origin, httpClient: p.httpClient });
+    await sdk.initWorkspace();
+    const sleeps = [];
+    let mark = -1;
+    const result = await buildModelApp(p.pageSpec(), { apply: true, publish: true, maxRetries: 3, appDir: p.dir, workspaceDir: p.dir }, {
+      sdk,
+      warn: (w) => p.warnings.push(String(w)),
+      log: () => {},
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        mark = p.org.calls.length;
+        if (kept) { const row = p.row(MANIFEST); row.publishedContent = row.content; }
+      },
+      runBuild: (runSpec, options) => runSdkBuild(runSpec, { ...options, phases: ['app-shell', 'pages', 'publish'], env: p.org.origin, genpage: p.backend }),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors || result.halt));
+    assert.equal(sleeps.length, 1, `${kept}: one wait`);
+    assert.ok(sleeps[0] >= 30000, `${kept}: the lock's wait: ${sleeps}`);
+    const id = p.row(MANIFEST).webresourceid;
+    const after = p.org.calls.slice(mark);
+    const touches = after.filter((c) => (c.method !== 'GET' && c.path === `/webresourceset(${id})`) || (namesWebResource(c) && c.body.ParameterXml.toLowerCase().includes(id)))
+      .map((c) => (c.path === '/PublishXml' ? 'publish' : `${c.method} by id`));
+    if (kept) assert.deepEqual(touches, [], 'the published copy holds the content: neither written nor published again');
+    else assert.deepEqual(touches, ['PATCH by id', 'publish'], 'written again by id, and only then published');
+    assert.equal(manifestCreates(p.org.calls), 1);
+    assert.deepEqual(listsPages(p.manifest()), p.created);
+  }
+});
 test('a manifest UPDATE whose publish the lock refuses — a second page added: the next run reads the published manifest (the old one), binds the new page by its receipt, and writes the manifest again by the id it read', async (t) => {
   const p = pageScenario(t);
   const first = await p.build(p.pageSpec());

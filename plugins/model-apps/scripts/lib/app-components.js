@@ -7,7 +7,6 @@
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
 const { odataLit } = require('./odata.js');
 const { postPublishXml } = require('./publish-xml.js');
-const { notePublishRefusal } = require('./retry-policy.js');
 const { dashboardNameKey, FORM_GUID_RE, formIdentityKey, compareVersions, isPluginVersion, APP_MEMBERSHIP_MIN_VERSION, APP_THEME_MIN_VERSION } = require('./app-spec.js');
 const { isMainForm } = require('./form-order.js');
 const { compareText } = require('./compare-text.js');
@@ -265,8 +264,7 @@ async function publishAppComponents(client, appId, { sleep } = {}) {
   // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/publishxml
   const response = await postPublishXml(client, `<importexportxml><appmodules><appmodule>${id}</appmodule></appmodules></importexportxml>`, { sleep });
   if (!response || response.status < 200 || response.status >= 300) {
-    // The answer's code and Retry-After are recorded, not printed: a publish the customization lock refused waits for the lock before the build runs again (#848).
-    throw notePublishRefusal(componentError('APP_TABLES_NOT_PUBLISHED', `app '${id}' tables were pinned but publishing returned HTTP ${response && response.status}; re-run the build`, response && response.status), response);
+    throw componentError('APP_TABLES_NOT_PUBLISHED', `app '${id}' tables were pinned but publishing returned HTTP ${response && response.status}; re-run the build`, response && response.status);
   }
 }
 
