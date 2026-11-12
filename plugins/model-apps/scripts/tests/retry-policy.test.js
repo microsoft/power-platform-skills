@@ -559,7 +559,7 @@ test('throttleAskOf: what a throttled failure asks of the next send — the long
 // #848: what the build reads of a publish the customization lock refused. The HTTP client records the Retry-After of an answer that is not a success on its body —
 // the body the SDK keeps as its ConnectionError's `cause` — and not as anything that prints or compares; publishLockRefusalOf finds the refusal along the chain only
 // when the answer is a 429, its code is one the platform gives the lock, the request was a publish, and that publish is one whose target the next run proves by id first
-// (a web resource written and not confirmed, a page saved and not published).
+// (a web resource written and not confirmed) — not a generative page saved and not published, whose next run does not compare the compiled runtime it publishes.
 test('a publish the lock refused: the client records the Retry-After the answer gave, invisibly, and the rule finds the refusal only for a 429 with a lock code to a publish the next run proves by id', async () => {
   const { createAzHttpClient, HTTP_RETRY_AFTER } = require('../lib/sdk-http-client.js');
   const { publishLockRefusalOf } = require('../lib/retry-policy.js');
@@ -583,22 +583,23 @@ test('a publish the lock refused: the client records the Retry-After the answer 
   assert.strictEqual((await http.get('https://contoso.crm.dynamics.com/api/data/v9.2/accounts')).body[HTTP_RETRY_AFTER], undefined, 'a success is the caller\'s data, untouched');
 
   const sdkError = (statusCode, url, body) => Object.assign(new Error(`HTTP ${statusCode} from ${url}: x`), { code: 'CONNECTION_ERROR', statusCode, url, cause: body });
-  // The two publishes whose target the next run proves by id first, as the build raises them (lib/sdk-build.js): a web resource written and not confirmed, and a page saved and not published.
+  // The publish whose target the next run proves by id first, as the build raises it (lib/sdk-build.js): a web resource written and not confirmed.
   const WR_ID = '2b857bb3-fc46-4be3-987a-0d002c6ea843';
   const unconfirmed = (cause, id = WR_ID) => Object.assign(new Error('unconfirmed'), { code: 'WEB_RESOURCE_UNVERIFIED', ...(id ? { id } : {}), cause });
   const halt = (cause) => new BuildHalt('web-resources failed', { phase: 'web-resources', code: 'WEB_RESOURCE_UNVERIFIED', recoverable: true, cause: unconfirmed(cause) });
   const pageHalt = (cause, code = 'pages-publish-failed') => new BuildHalt('page "Overview" was updated and saved, but publishing it failed', { phase: 'pages', code, recoverable: true, cause });
   assert.deepStrictEqual(publishLockRefusalOf(halt(sdkError(429, PUBLISH, refused.body))), { code: '0x80071151', askedMs: 400000, notBefore: at + 400000 });
-  assert.deepStrictEqual(publishLockRefusalOf(pageHalt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/Microsoft.Dynamics.CRM.PublishAllXml', { error: { code: '0x8004F064' } }))), { code: '0x8004f064', askedMs: 0, notBefore: 0 });
+  assert.deepStrictEqual(publishLockRefusalOf(halt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/Microsoft.Dynamics.CRM.PublishAllXml', { error: { code: '0x8004F064' } }))), { code: '0x8004f064', askedMs: 0, notBefore: 0 });
   for (const [what, error] of [
-    ['a 500', pageHalt(sdkError(500, PUBLISH, LOCKED))],
-    ['a read', pageHalt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries', LOCKED))],
+    ['a 500', halt(sdkError(500, PUBLISH, LOCKED))],
+    ['a read', halt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries', LOCKED))],
     ['a custom action', halt(sdkError(429, 'https://contoso.crm.dynamics.com/api/data/v9.2/contoso_PublishXml', LOCKED))],
     ['a service-protection limit', halt(sdkError(429, PUBLISH, { error: { code: '0x80072322' } }))],
-    ['a code only in words', pageHalt(sdkError(429, PUBLISH, { error: { message: 'CustomizationLockException 0x80071151' } }))],
-    ['a bare 429', pageHalt(Object.assign(new Error('HTTP 429 from PublishXml'), { statusCode: 429 }))],
-    // A lock-refused publish whose next run is not proven to write or read its target first: a table's, an app's, the bulk publish — under no such error, or under another.
+    ['a code only in words', halt(sdkError(429, PUBLISH, { error: { message: 'CustomizationLockException 0x80071151' } }))],
+    ['a bare 429', halt(Object.assign(new Error('HTTP 429 from PublishXml'), { statusCode: 429 }))],
+    // A lock-refused publish whose next run is not proven to write or read its target first: a table's, an app's, the bulk publish, a generative page's — under no such error, or under another.
     ['a publish of no proven kind', sdkError(429, PUBLISH, LOCKED)],
+    ['a generative page saved and not published', pageHalt(sdkError(429, PUBLISH, refused.body))],
     ['a publish under another halt', pageHalt(sdkError(429, PUBLISH, LOCKED), 'pages-sitemap-read-failed')],
     ['an unconfirmed write that names no id', new BuildHalt('x', { phase: 'web-resources', code: 'X', recoverable: true, cause: unconfirmed(sdkError(429, PUBLISH, LOCKED), null) })],
     ['nothing', undefined],  ]) assert.strictEqual(publishLockRefusalOf(error), null, what);

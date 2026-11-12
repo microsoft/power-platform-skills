@@ -485,18 +485,17 @@ function publishAnswerOf(error) {
 
 // The publishes the longer wait is for: those whose target the build's next run proves by id before it is published again. A publish the lock refused is not shown to
 // have changed nothing (lib/sdk-http-client.js, publishOnce), and an import that held the lock may have replaced the target's saved layer, so a publish may follow the
-// wait only when the next run has, by then, written the target again by id or read it by id and found it holding the content it is to publish:
+// wait only when the next run has, by then, written the target again by id or read it by id and found it holding the content it is to publish. Only one kind is:
 //   - a web resource written and not confirmed — `WEB_RESOURCE_UNVERIFIED` with the resource's id (lib/sdk-build.js): the next run writes a spec web resource or the
 //     app icon again by id whatever was published, and only then publishes it (writeOwnedWebResource); it reads the page manifest's published copy (the recorded row,
 //     assertUnconfirmedWebResourceIdentity), compares it whole, and writes it again by id where it differs — where it does not, it is not published again
-//     (persistPageManifest);
-//   - a generative page saved and not published — the halt `pages-publish-failed` (lib/sdk-build.js): the next run reads the page by id from the service, after the
-//     wait (lib/genpage-sdk.js, update: readServer), compares what it holds with the spec's page (planEdits: source, name, data sources, model, bindings), writes what
-//     differs, and only then publishes it.
-// Every other publish — a table's, a form's, a view's, a site map's, an app's, the bulk publish, the plugin's own app publish — keeps the ordinary wait: its next run
-// is not proven to have rewritten or read back the target first, so a longer wait would only make a blind re-publish of it likelier to land.
-const reconciledPublish = (error) => (error.code === 'WEB_RESOURCE_UNVERIFIED' && typeof error.id === 'string' && error.id.length > 0)
-  || (isHalt(error) && error.code === 'pages-publish-failed');
+//     (persistPageManifest).
+// A generative page saved and not published (the halt `pages-publish-failed`) is NOT one: its next run reads the page by id and compares the source, name, data
+// sources, model and bindings (lib/genpage-sdk.js, planEdits), but not the compiled runtime the service publishes, so a page whose compiled row an import replaced
+// while the build waited would be published as it is. It keeps the ordinary wait, as in 2.27.0.
+// Every other publish — a table's, a form's, a view's, a site map's, an app's, the bulk publish, the plugin's own app publish — keeps the ordinary wait too: its next
+// run is not proven to have rewritten or read back the target first, so a longer wait would only make a blind re-publish of it likelier to land.
+const reconciledPublish = (error) => error.code === 'WEB_RESOURCE_UNVERIFIED' && typeof error.id === 'string' && error.id.length > 0;
 
 // A publish the customization lock refused, found along the failure's chain, as { code, askedMs, notBefore } — or null. All four must hold: the publish was one of
 // those above (the refusal is found under the error that says so), the service answered 429 (a 500 or a 503 that carries a lock code is a failure of another kind, and

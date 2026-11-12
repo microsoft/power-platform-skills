@@ -7,14 +7,14 @@
 //   HTTP 429  Retry-After: 40
 //   { "error": { "code": "0x80071151", "message": "Cannot start the requested operation [Publish] because there is another [Import] running at this moment." } }
 //
-// The build waits for the lock before its next run (build-model-app.js, LOCK_WAITS_MS), and that run must not publish the page blind: an
-// import that held the lock may have replaced the page's saved layer while the build waited. What the next run does instead (lib/genpage-sdk.js,
-// update): it reads the page by id from the service — after the wait — compares what it holds with the spec's page, writes what differs, and only
-// then publishes. The cases pin that over the wire, by a timestamped ledger of every request and the build's waits:
+// A page's publish is NOT one the build waits longer for (lib/retry-policy.js, reconciledPublish): its next run reads the page by id and compares the
+// source, but not the compiled runtime the service publishes (lib/genpage-sdk.js, planEdits), so a longer wait would give an import more time to
+// replace a compiled row the next run would publish unseen. It keeps the ordinary wait of 2.27.0 — about 3 s, whatever the Retry-After — and the
+// cases pin that, and what the next run does, over the wire, by a timestamped ledger of every request and the build's waits:
 //   * nothing changed while the build waited: the page is read by id after the wait, NOT written, and published exactly once more — and the
 //     environment publishes the content the build wrote;
-//   * the saved page changed while the build waited (another workspace's draft stands in for an import replacing the saved layer): the page is
-//     read by id after the wait, written by id, and only then published — and the environment publishes the spec's content, not the other.
+//   * the saved page changed while the build waited (another workspace's draft): the page is read by id after the wait, written by id, and only then
+//     published — and the environment publishes the spec's content, not the other.
 // Only this test's own page's publish is refused, in front of the fake.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -98,13 +98,13 @@ async function lockedBuild(duringWait) {
   };
 }
 
-test('a page publish the lock refused: after the wait the page is read back by id, found unchanged, and published exactly once more — never written blind', async () => {
+test('a page publish the lock refused keeps the ordinary wait of about 3 s; after it the page is read back by id, found unchanged, and published exactly once more — never written blind', async () => {
   const out = await lockedBuild();
   assert.strictEqual(out.result.ok, true, out.log.join('\n'));
   assert.strictEqual(out.refused, 1);
   assert.strictEqual(out.sleeps.length, 1, 'one wait, before the one run again');
-  assert.ok(out.sleeps[0] >= 30000, `the lock's wait (the Retry-After of 40 s, or the lock's own 30 s): ${out.sleeps}`);
-  assert.ok(out.log.some((l) => /a publish was refused because another customization is running/.test(l)), out.log.join('\n'));
+  assert.ok(out.sleeps[0] >= 3000 && out.sleeps[0] < 4000, `the ordinary first wait of about 3 s, as in 2.27.0 — not the lock's 30 s, nor the Retry-After of 40 s: ${out.sleeps}`);
+  assert.ok(!out.log.some((l) => /another customization/.test(l)), out.log.join('\n'));
   assert.strictEqual(out.writesBetween, 0, 'nothing written to the page between the refusal and the wait');
   assert.strictEqual(out.publishesAfter.length, 1, 'exactly one publish of the page after the wait');
   assert.ok(out.firstRead >= 0 && out.firstRead < out.publishesAfter[0], `the page is read by id after the wait (${out.firstRead}) and before it is published (${out.publishesAfter[0]})`);
@@ -114,11 +114,12 @@ test('a page publish the lock refused: after the wait the page is read back by i
   assert.deepStrictEqual(out.org.unexpected, []);
 });
 
-test('a page publish the lock refused: when the saved page changes during the wait (an import replacing it), the next run reads it by id, writes it again by id, and only then publishes it', async () => {
+test('a page publish the lock refused, ordinary wait: when the saved page changes during it, the next run reads it by id, writes it again by id, and only then publishes it', async () => {
   const out = await lockedBuild((org, pageId) => org.pageServer.otherWorkspaceDraft(pageId, PAGE_TSX, THEIRS));
   assert.strictEqual(out.result.ok, true, out.log.join('\n'));
   assert.strictEqual(out.refused, 1);
   assert.strictEqual(out.sleeps.length, 1);
+  assert.ok(out.sleeps[0] >= 3000 && out.sleeps[0] < 4000, `the ordinary wait: ${out.sleeps}`);
   assert.strictEqual(out.publishesAfter.length, 1, 'exactly one publish of the page after the wait');
   const publish = out.publishesAfter[0];
   assert.ok(out.firstRead >= 0 && out.firstRead < publish, `read by id after the wait (${out.firstRead}), before the publish (${publish})`);
