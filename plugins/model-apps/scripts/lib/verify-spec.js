@@ -2239,7 +2239,7 @@ async function verifySpec(spec, read, opts = {}) {
   // named `bpfUniqueName(flow.name)` (live-measured), and holding privileges on it is what lets a
   // persona run the process. Subset semantics as everywhere else — a persona legitimately holds far
   // more than this one grant.
-  plan.each(spec.businessProcessFlows || [], async ({ add }, flows) => {
+  plan.each(spec.businessProcessFlows || [], async ({ add, unverified }, flows) => {
   for (const f of flows) {
     if (!f || !f.securityRoles || !Array.isArray(f.securityRoles.personas)) continue;
     if (typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
@@ -2259,19 +2259,47 @@ async function verifySpec(spec, read, opts = {}) {
     // we could not look, so the derivation stands and the privilege read below fails closed anyway.
     let backingTable = bpfUniqueName(f.name);
     let flowMissing = false;
-    try {
-      const rows = await read.queryRecords('workflow', {
-        select: ['workflowid', 'uniquename'],
-        filter: bpfFilter(f.name, String(f.entity).toLowerCase()),
-        orderBy: 'createdon asc',
-        top: 5,
-      });
-      const row = rows && rows[0];
-      if (!row) flowMissing = true;
-      else if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
-      // A row WITHOUT a uniquename keeps the derivation: the flow demonstrably exists, so the
-      // derived name is the best available answer for anything this tool created.
-    } catch { /* could not look — keep the derivation; the privilege read below fails closed */ }
+    // A DECLARED flow is the row the presence check above holds it to (boundWorkflowOf), read here by its id, as the build grants its
+    // roles on the backing table of its settled row (sdk-build.js): a same-named flow found by name has another table, whose grants
+    // would prove nothing about this one. A binding the store cannot settle, a pending attempt that names no row, and a read that
+    // fails or answers another row are unverified, never checked on a table found by name or derived from it.
+    const boundFlow = boundWorkflowOf(opts.managedManifest, 'bpf', `${String(f.entity).toLowerCase()}/${f.name}`, f.reconcile === 'declared');
+    if (boundFlow) {
+      if (!boundFlow.id) {
+        unverified.push(`bpf-roles:${f.name} (${boundFlow.open || 'an earlier build\'s change of it is still waiting to be proved, and the store does not name its row, so it is not looked up by name'})`);
+        continue;
+      }
+      const want = String(boundFlow.id).toLowerCase().replace(/^\{|\}$/g, '');
+      let list;
+      try {
+        list = Array.from((await read.queryRecords('workflow', { select: ['workflowid', 'uniquename'], filter: `workflowid eq ${boundFlow.id}`, top: 1 })) || []);
+      } catch (e) {
+        unverified.push(`bpf-roles:${f.name} (its bound row ${boundFlow.id} could not be read: ${String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 200)})`);
+        continue;
+      }
+      const row = list.find((w) => w && String(w.workflowid || '').toLowerCase().replace(/^\{|\}$/g, '') === want);
+      if (!row && list.length) { unverified.push(`bpf-roles:${f.name} (the read of its bound row ${boundFlow.id} answered another row)`); continue; }
+      if (!row) {
+        add('bpf-roles', f.name, false, `its bound row ${boundFlow.id} is not there, so its backing table cannot be identified and no role grant on it can be verified`);
+        continue;
+      }
+      // A row WITHOUT a uniquename keeps the derivation, as below: the flow demonstrably exists.
+      if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
+    } else {
+      try {
+        const rows = await read.queryRecords('workflow', {
+          select: ['workflowid', 'uniquename'],
+          filter: bpfFilter(f.name, String(f.entity).toLowerCase()),
+          orderBy: 'createdon asc',
+          top: 5,
+        });
+        const row = rows && rows[0];
+        if (!row) flowMissing = true;
+        else if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
+        // A row WITHOUT a uniquename keeps the derivation: the flow demonstrably exists, so the
+        // derived name is the best available answer for anything this tool created.
+      } catch { /* could not look — keep the derivation; the privilege read below fails closed */ }
+    }
     if (flowMissing) {
       add('bpf-roles', f.name, false,
         `no business process flow named '${f.name}' exists on '${String(f.entity).toLowerCase()}', so its backing table cannot be identified and no role grant on it can be verified`);
