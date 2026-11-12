@@ -2949,6 +2949,28 @@ test('two later builds completing one refused variable value send it once', asyn
   assert.equal(outs.filter((o) => o.halt === null).length >= 1, true, outs.map(said).join(' | '));
   assert.deepEqual(variableRows(h), [1, 1]);
   assert.ok(variableGroup(h).committed);
+
+  // The same race cut deterministically at the store: a claim on a capture taken before another claim is refused; a claim
+  // on a fresh capture replaces the first claim's epoch, so the first claimant's seal is refused before anything leaves;
+  // and once one claimant sealed the value, no later claim is admitted.
+  const cut = await valueRefusedSecret();
+  cut.allow();
+  const [c1, c2, c3] = [await laterProcess(cut.h), await laterProcess(cut.h), await laterProcess(cut.h)];
+  const p = variableGroup(cut.h).pending;
+  const v = valueRowOf(p);
+  const claim = (n) => ({ id: v.id, parentId: v.parentId, capture: n.ctx.captureReadOnly([p.token])[0], declarationSha256: p.declarationSha256 });
+  const early = claim(c2);
+  const first = c1.ctx.claimValue(p.token, claim(c1));
+  assert.throws(() => c2.ctx.claimValue(p.token, early), /changed since its value was checked/);
+  const second = c3.ctx.claimValue(p.token, claim(c3));
+  assert.ok(second.epoch > first.epoch);
+  const seal = (n, epoch) => n.store.sealRowDispatch({ token: p.token, epoch, rows: [{ kind: v.kind, key: v.key, id: v.id, sentFields: ['value'], sentSha256: '0'.repeat(64) }] });
+  assert.throws(() => seal(c1, first.epoch));
+  assert.equal(valueRowOf(variableGroup(cut.h).pending).dispatched, false, 'the replaced claim sealed nothing');
+  seal(c3, second.epoch);
+  const late = await laterProcess(cut.h);
+  assert.throws(() => late.ctx.claimValue(p.token, claim(late)), /was, or may have been, sent/);
+  assert.deepEqual(variableRows(cut.h), [1, 0], 'nothing was sent at the store cuts');
 });
 
 // A process that stops at the durable seal (the value's possibly-sent mark): before it, nothing left and a later build
@@ -3035,7 +3057,12 @@ test('the release before this one reads every variable value record this one wri
     const out = await pass(await laterProcess(h, [], OLD), secretSpec(), variableSettings(secretSpec(), KV, OLD));
     assert.deepEqual(variablePosts(out), [], `${cut}: ${said(out)}`);
     assert.deepEqual(variableRows(h), rows, cut);
-    assert.equal(out.halt === null, cut === 'committed', `${cut}: ${said(out)}`);
+    // The release's own reading of each record, pinned by code: an unsent value is a completion it does not make, a
+    // possibly-sent one is adopted only under the value's own approval (the definition is receipted), and only a completed
+    // record builds. A reader that took any of them for a create to make again would stop on another code, or send.
+    const expected = { refused: 'create-completion-required', claimed: 'create-completion-required', sealed: 'create-completion-required', 'acknowledged-pending': 'create-ownership-required', committed: null };
+    assert.equal(out.halt && out.halt.code, expected[cut], `${cut}: ${said(out)}`);
+    if (cut === 'acknowledged-pending') assert.match(out.halt.message, /yours: "adopt:environmentVariableValue:contoso_key\/value"\.$/, said(out));
   }
 });
 
