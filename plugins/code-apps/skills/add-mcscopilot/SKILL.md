@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: sonnet
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - Cross-cutting concerns.
 
 # Add Microsoft Copilot Studio
 
@@ -18,13 +18,19 @@ model: sonnet
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](../../shared/shared-instructions.md).
 
 ### Step 2: Add Connector
 
-**First, find the connection ID** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
+Get the connection as described in [connector-reference.md](../../shared/connector-reference.md#connections).
 
-Run the `/list-connections` skill. Find the Microsoft Copilot Studio connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
+**CLI 1.3.0+ (`PA_INLINE_CONNECTIONS=yes`):** tell the user that adding Microsoft Copilot Studio may create a connection with their account, then run the add without `-c` and handle the result with the outcome table in connector-reference.md:
+
+```bash
+pa app add data-source --connector microsoftcopilotstudio --non-interactive
+```
+
+**Older CLIs:** run `/list-connections` to find the Microsoft Copilot Studio connection ID (if none exists, create one with `pa connection create` as described in connector-reference.md), then:
 
 ```bash
 pa app add data-source --connector microsoftcopilotstudio -c <connection-id>
@@ -66,7 +72,7 @@ if (agentResponse) {
 }
 ```
 
-Use `Grep` to find specific methods in the generated service file (generated files can be very large — see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find specific methods in the generated service file (generated files can be very large — see [connector-reference.md](../../shared/connector-reference.md#inspecting-large-generated-files)).
 
 #### Known Issues
 

@@ -452,6 +452,18 @@ function failureLine(error) {
   };
 }
 
+// The environment's connections as rows (connectionRowFromSdk's shape): the SDK's read, or `pac connection list` when the SDK refuses
+// (lib/sdk-first.js), answered as sdkFirst answers ({ source, value[, fallback, warnings] }). One definition for every reader of them:
+// this script, a build's proof of a connection reference's binding (build-model-app.js) and a managed download's (download-model-app.js),
+// so a download cannot call a reference bound on connections a rebuild would not see. `env` is a validated Dataverse origin.
+async function readConnections(env) {
+  return sdkFirst(env, {
+    ...connectivity,
+    fromSdk: async (sdk) => (await sdk.listConnections()).map(connectionRowFromSdk),
+    fromPac: async (refusal) => listConnectionsWithPac(env, refusal),
+  });
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const { positional } = parseArgs(argv);
@@ -476,11 +488,7 @@ async function main() {
     // The validated origin, not the caller's text, is what every read below is made for. A URL that is not a Dataverse origin is refused
     // here, before the Azure CLI or PAC is started (PAC used to run first, and the text was refused only by the query after it).
     const env = requireDataverseOrigin(envUrl);
-    const listed = await sdkFirst(env, {
-      ...connectivity,
-      fromSdk: async (sdk) => (await sdk.listConnections()).map(connectionRowFromSdk),
-      fromPac: async (refusal) => listConnectionsWithPac(env, refusal),
-    });
+    const listed = await readConnections(env);
     const connections = listed.value;
 
     // NB: on `connectionreference`, `connectionid` is a plain String attribute (not a Dataverse
@@ -531,6 +539,7 @@ module.exports = {
   failureLine,
   connectionRowFromSdk,
   listConnectionsWithPac,
+  readConnections,
   // The `pac connection list` parsers are exported for unit tests. They consume loosely
   // structured CLI output whose shape varies across PAC builds (JSON, fixed-width table,
   // whitespace table), which is exactly the code most likely to break silently on a CLI

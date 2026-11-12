@@ -260,7 +260,7 @@ test('genpage-worker-output.js prints a result that quotes the longest path a co
 const USAGE_CASES = [
   ['add-page-to-solution.js'], ['ai-preflight.js'], ['apps.js', ['list']], ['build-model-app.js'], ['connector.js', ['operations']],
   ['create-connection-reference.js'], ['dataverse-request.js'], ['download-model-app.js'], ['genpage.js', ['list']], ['list-connections.js'],
-  ['list-custom-apis.js'], ['list-languages.js'], ['list-tables.js'], ['preview-app.js'], ['preview-form.js'],
+  ['list-command-states.js'], ['list-custom-apis.js'], ['list-languages.js'], ['list-tables.js'], ['preview-app.js'], ['preview-form.js'],
   ['promote-intent-pages.js'], ['provision-entities.js'], ['provision-solution.js'], ['solution-settings.js', ['template']], ['teardown-model-app.js'],
   ['verify-model-app.js'], ['write-app-spec-doc.js'], ['write-page-plan.js'],
 ].map(([script, args = []]) => ({ script, args }));
@@ -289,7 +289,7 @@ test('every script\'s usage error is what it always was: the message, then the u
 // scripts that hand the error to emitResult, emitResult's.
 const THROW_CASES = [
   ['ai-preflight.js'], ['apps.js', ['list']], ['connector.js', ['operations']], ['genpage.js', ['list']], ['genpage-base.js', ['check']], ['genpage-upload.js'],
-  ['list-languages.js'], ['list-tables.js'], ['build-model-app.js'], ['download-model-app.js'], ['provision-entities.js'], ['provision-solution.js'],
+  ['list-command-states.js'], ['list-languages.js'], ['list-tables.js'], ['build-model-app.js'], ['download-model-app.js'], ['provision-entities.js'], ['provision-solution.js'],
   ['teardown-model-app.js'], ['verify-model-app.js'], ['write-app-spec-doc.js'],
 ].map(([script, args = []]) => ({ script, args }));
 

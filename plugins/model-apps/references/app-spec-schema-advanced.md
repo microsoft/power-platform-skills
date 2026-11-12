@@ -114,11 +114,13 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   takes no arguments. **Without a parameter the function is invoked with no arguments**, so
   `primaryControl` is `undefined` and the button appears to do nothing — the error is visible only
   in the browser console, and the build, the deployed rows and `--verify` all still look correct.
-- **Button edits are not applied on rebuild.** The command phase is discover-then-skip: it creates a
-  bar only when none exists. To change a deployed button, delete the entity's commands (or tear down)
-  and rebuild.
+- **Button edits in `commands[]` are not applied on rebuild.** The command phase is discover-then-skip: it creates a
+  bar only when none exists. To change a deployed button's label, script or other properties, delete the entity's commands (or tear down)
+  and rebuild. To only show, hide, enable or disable an existing button, use `commandStates[]` (below).
 - **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
-- **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
+- **`hidden`** / **`disabled`** set *static* visibility/enablement. A modern button with `disabled: true`
+  is not shown at all (live checks found it absent from the bar, not greyed out), so `disabled` acts like
+  `hidden`. **Conditional (rule-based)
   visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
   that can't be authored headlessly.
 - **`type`** is `Button` (default), `FlyoutAnchor`, or `SplitButton`. A flyout/split container holds
@@ -126,6 +128,106 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   the menu items live under it. Top-level buttons emit as **loose controls**; a *titled* group is not
   supported (it needs a parent command-bar row the SDK doesn't synthesize from scratch). The command
   lands in the Default solution but is entity-scoped, so it shows on the entity's command bar.
+
+### Listing the existing buttons — `list-command-states.js` (read-only)
+```bash
+node scripts/list-command-states.js --env <envUrl> --app <uniqueName> [--entity <logical>] [--location MainTab|HomeTab|ContextualTab]
+```
+Prints every modern command button of the app's tables (or of the one `--entity`), each with its
+`rowId`, `bar`, `scope` (`table`, `app`, `other-app`), stored `hidden` / `disabled`, and `candidate`.
+It only reads; a write flag is a usage error.
+- **Pick a button by `rowId`, never by caption.** Two buttons with the same caption on one bar each
+  name the other in `sameCaption`; an unlabelled button has `caption: null`.
+- **Excluded buttons are listed, not left out**, each with every reason it is not a candidate:
+  `shape-unreadable`, `id-mismatch`, `context-not-table`, `context-mismatch`, `table-not-in-app`,
+  `location-unsupported`, `location-mismatch`, `app-scoped` (scoped to an app — this one or another — not to its table: only
+  table-scoped buttons are candidates in this version), `not-standard-button`
+  (a flyout or split container, or a group), `nested` (a menu item), `not-default-origin` (migrated
+  or system), `inactive`, `managed`, `not-customizable`, `flags-unreadable`, `visibility-formula`
+  (Power Fx visibility or classic rules: `visibilitytype` other than empty or 0, or a visibility-formula field set; the
+  empty `visibilitytype` the platform stores on a button `commands[]` wrote is static), `formula-action` (a Power Fx on-select), `version-unavailable` (the
+  platform keeps no row versions for commands). The listing does not check each row's own version; the
+  build does, and refuses a row without one (`command-state-version-unavailable`).
+- A bar the App Spec has no name for (a stored location other than 0, 1, 2) is `bar: "unsupported"`.
+- **`candidate` describes the row's shape only.** It does not prove the app renders the button, or
+  where.
+- A failed or incomplete read prints `{ "ok": false, "code": "command-state-…", "error" }` with
+  exit 1 — never a shorter list.
+
+## commandStates[] (optional — show or hide existing buttons)
+```jsonc
+"minimumPluginVersion": "2.24.0",            // required: an older plugin refuses the spec instead of ignoring it
+"app": { "uniqueName": "new_support", ... },  // required: the app the buttons are checked against
+"commandStates": [
+  { "entity": "new_ticket", "location": "MainTab", "scope": "table",
+    "rowId": "11111111-1111-4111-8111-111111111111",   // from list-command-states.js — never invented
+    "hidden": true },                                  // and/or "disabled": true|false
+  { "entity": "new_ticket", "location": "HomeTab", "scope": "table",
+    "rowId": "22222222-2222-4222-8222-222222222222", "hidden": false, "disabled": false }
+]
+```
+Sets the stored **hidden** and **disabled** flags of a modern command button that already exists,
+picked by its row id. Nothing else about the button changes, and a row is never created.
+- **Fields are closed and exact.** `entity` is a table declared in `entities[]`; `location` is exactly
+  `MainTab`, `HomeTab` or `ContextualTab` and must be the row's bar; `scope` is exactly `"table"`;
+  `rowId` is the lower- or upper-case id `list-command-states.js` prints (no braces, not all zeros), one
+  entry per row; set `hidden`, `disabled` or both. A flag you leave out is never changed or compared
+  with a wanted value, but both stored flags must read as `true` or `false`: a row whose other flag
+  cannot be read is refused before anything is written (`command-state-row-unreadable`);
+  `false` is an instruction, not "unset". An unknown field (for example `isdisabled`) is refused with
+  `command-state-spec-invalid`.
+- **Table-scoped buttons only.** `scope: "app"` is refused with `command-state-app-scope-unverified`,
+  and so is a row that turns out to be scoped to an app.
+- **Only candidates are written:** an active, unmanaged, customizable, top-level plain button with no
+  Power Fx visibility or on-select formula, on the declared table and bar, that the platform keeps row
+  versions for — the listing's `candidate: true`. A button with an empty (null) `visibilitytype` and
+  every visibility-formula field empty — what `commands[]` writes — counts as static; the build never
+  writes `visibilitytype`.
+- **Only a full build with `--publish` applies them.** A partial range, a changed-only fast apply or an
+  apply without `--publish` is refused before anything is read (`command-state-phase-unsupported`,
+  `command-state-publish-required`); exactly `--stage data` leaves them alone. A spec that also has
+  keyed `commands[]` (`key`) is refused (`command-state-keyed-unsupported`), and so is `commands[]` that
+  would create a new bar on a table whose existing button `commandStates` edits
+  (`command-state-legacy-create-conflict`): create the button in one build, add its state in a later one.
+- **Exact approvals, printed by a dry run.** A dry run reads each row and prints, for every row that
+  needs a change, `--authorize overwrite:command-state:<table>/<bar>/<rowId>/<sha256>` — one version of
+  one row under one intent in one environment — and for every declared table
+  `--authorize publish:command-state-table:<table>/<sha256>`. An apply without every one of them
+  writes nothing (`command-state-approval-required`, `command-state-publication-approval-required`);
+  a row changed after its dry run needs a new token (`command-state-approval-stale`). There is no
+  wildcard and no blanket approval. Such a halt prints the tokens it needs on the console, never into
+  the build's log or status files.
+- **Publishing a table publishes ALL saved customizations on it** (anyone's, not only these buttons),
+  for every app that shows the table — which is why it has its own approval.
+- **One conditional write per row.** The build sends only the flags that differ, with `If-Match` on
+  the version it read. A row changed in between is refused (`command-state-version-conflict`) and never
+  overwritten. A write whose answer was lost is never sent again (`command-state-write-unknown`): read
+  the row with `list-command-states.js` before building again.
+- **Success needs the table's publication.** The build publishes each declared table with the tables
+  it publishes before the app; until that publication is seen to succeed after the row's write, the
+  build reports `command-state-publish-unconfirmed`, saying for each table what its rows are known to
+  hold ("saved, not published"; or, when that is all it knows, "held after a write with no usable answer",
+  "held other flags than declared at its last read", "could not be read at its last read", "write outcome
+  unknown" or "not written") —
+  a saved row holds the flags, but the button may still show its old state. A row that held its flags
+  after its write (or already held them) and then changed before the build finished its rows is reported
+  as `drifted`, with what the build did to it first (`command-state-not-confirmed`).
+- **What the bar shows.** Live checks found a saved flag change served to a fresh browser session at
+  once; a session with cached data can keep showing the old bar until it reloads its data (refresh, or
+  clear the site's stored data). A button set to `disabled: true` was not shown at all, as with `hidden`.
+- **The end of the build checks again.** After its app work the build resolves the app afresh and reads
+  every declared row once more: a table no longer in the app, or a row that no longer holds its flags,
+  fails the build. Nothing is rolled back — the rows it wrote stay written, and the message says what this
+  build did to each row (wrote it, found it already set, or sent a write that got no usable answer) and
+  what each read found. When the build retries itself, a row an earlier attempt wrote is still reported
+  as written by that attempt, and is never written again.
+- **Delayed publication is not fenced.** A table publish that was sent can still complete after a
+  halt, or after you remove the entry. This release keeps no record across runs: the next publishing
+  run requests the table again only because `commandStates` still names it.
+- **`--verify` checks stored flags** of each declared row — not how the button renders (a verify of
+  `--stage data` lists them as phase-skipped and reads no row). A changed-only
+  apply of a spec with `commandStates` always runs the full build. Removing an entry, or a teardown,
+  does not restore a flag, and download does not write `commandStates` back into a spec.
 
 ## businessRules[] (optional — declarative form logic, no code)
 
@@ -529,8 +631,11 @@ medical note, a national identifier, a private comment. Needs `minimumPluginVers
 - **`--verify`** checks that each declared column is stored secured, that each profile holds exactly
   its declared permissions, and that each named user and team holds the profile. These are metadata
   reads made as the build's account; they do not prove what a user without the profile sees.
-- **Download** writes `isSecured: true` for a secured column. Profiles and their assignments are not
-  downloaded.
+- **Download** writes `isSecured: true` for a secured column. Profiles, their permissions and their
+  assignments are not downloaded: a plain or managed download names each custom profile it finds (in the
+  app's solution, or holding a permission on a column it secures; never System Administrator) in a NOTE
+  and in its result's `fieldSecurityProfiles.omitted`, by id and name only. A rebuild of the downloaded spec
+  neither changes nor recreates a profile.
 - **Teardown** never deletes a profile (users and teams can hold it beyond this app): it keeps each
   declared profile, with its permissions and assignments, and names it as kept, by name only. Remove a
   profile yourself once no one needs it.
@@ -645,6 +750,22 @@ spec's new columns.
   list, in order (`quick-find <table>`); a stored search template such as `{0}%` is kept and verifies.
   A changed list is written without any `--authorize` key: `overwrite:quickfind:<table>` approves only
   replacing a local copy that differs from the server's (see Local copy below).
+- **Download.** A plain download leaves declared views out. With both `--include-managed` and
+  `--managed-manifest <store file>` (the build's `managed-bindings.<hash>.json`), each declared view a
+  `createIdentity` build created comes back in `views[]` with `reconcile: "declared"`, its `viewId`,
+  `activeOnly: false` and every condition it holds, when the store proves it unchanged since that build,
+  saved and published alike, and while the app's solution still holds it. A rebuild from it writes nothing to
+  the view; the rest of the rebuild runs as for any spec (its tables, forms and app are still published, its
+  sitemap written, its app components added). The download never adds a view to a solution. The spec gets `createIdentity: "stable-v1"`
+  with it. The `viewId` binds the view in that environment: remove it before building the spec elsewhere.
+  Any other declared view is left out, named with its reason in `managedViews.omitted` and in a warning,
+  and stays in the download's note. Each declared chart such a build created comes back in `charts[]` the
+  same way, as its table and name, `reconcile: "declared"`, `chartType`, `groupBy`, `measure`, and its
+  description and title when set; it carries no id, so only a build that uses the same store binds it (the
+  store names the exact row, never a same-named chart). A chart whose query holds anything a declaration
+  cannot say (a filter, a join, an order, a second series, a date grouping) or that was renamed is left out,
+  named in `managedCharts.omitted`; so is one the app's solution no longer holds. Its styling is not in the
+  spec; a rebuild that writes nothing to the chart keeps it.
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
@@ -810,7 +931,9 @@ are only added.
   neither on it; the default and order checks of the table's plain forms are unchanged.
 - **Download.** A plain download leaves declared forms out. To bring them back, pass both
   `--include-managed` and `--managed-manifest <store file>`, the `managed-bindings.<hash>.json` file in the
-  build's `.maker-workspace` for that environment and app. Each form the store proves comes back with
+  build's `.maker-workspace` for that environment and app. The download only reads that file: when a build
+  changes it while the download runs, the download stops with `managed-manifest-changed` and writes
+  nothing, so run it again. Each form the store proves comes back with
   `reconcile: "declared"` and as it was declared (`autoSubgrids` and stated `false` flags included); a form
   that is pending, gone or not valid is left out and named. A declared form with an event handler
   (`events`) comes back with each handler library the spec does not declare, added to `webResources[]` as
@@ -1151,7 +1274,8 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
 ## createIdentity (optional — stable create ids for declared views and charts)
 
 Requires `minimumPluginVersion: "2.21.0"`. Write it on a **new** app only; never add it to an existing or
-downloaded spec. The only value is `"stable-v1"`; any other value is a validation error
+downloaded spec. A managed download writes it back itself, and only with the declared views and charts it
+restores (one the store proves this field's build created). The only value is `"stable-v1"`; any other value is a validation error
 (`create-identity-invalid`), and a spec without the field builds exactly as before.
 
 ```jsonc
@@ -1218,4 +1342,239 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   A page edit makes that check under the app's build and pages leases, so it is refused with
   `build-locked` while a build of the app runs in the same workspace; run it again once the build ends.
 - **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
-  a file it cannot read, is reported as unverified, never as a pass.
+  a file it cannot read, is reported as unverified, never as a pass. A bound declared chart is checked at
+  its bound row only; a chart with the same name is never taken in its place.
+
+## configurationIdentity (optional — exact ids for protected configuration)
+
+Set `minimumPluginVersion: "2.23.0"` with it (a lower or missing floor is a lint warning: older plugins
+ignore the field, keep no binding store for configuration and find these items by name). The only value
+is `"stable-v1"`; any other value is a validation error (`create-identity-invalid`), and a spec without
+the field builds exactly as before.
+
+```jsonc
+{ "minimumPluginVersion": "2.23.0", "configurationIdentity": "stable-v1",
+  "environmentVariables": [ /* … */ ], "connectionReferences": [ /* … */ ],
+  "customApis": [ /* … */ ], "duplicateDetectionRules": [ /* … */ ] }
+```
+
+- **What it covers.** The declared environment variables, connection references, Custom APIs (with
+  their request parameters and response properties) and duplicate detection rules (with their
+  conditions). Each is created at an id the spec fixes and recorded in the build's binding store
+  (`managed-bindings.<hash>.json`, the same file as `createIdentity`; keep it with the build workspace).
+  A later build finds each row by that id, never by name: a bound row deleted outside the plugin stops
+  the build with `configuration-row-not-found` and is never replaced by a namesake.
+- **The binding store comes from the build.** Under the field, a build that cannot open the binding
+  store for configuration stops before any request is sent (`create-identity-unverified`).
+- **Opting in does not migrate an existing app by itself.** Setting `configurationIdentity: "stable-v1"`
+  does not move or rename anything. A namesake created earlier at another id stops the first protected
+  create with `create-identity-conflict`, even if it is the only match; nothing is created or bound. When
+  it is the only match and the item is an environment variable, a connection reference or a Custom API,
+  the stop then says whether the build can adopt that row at its own id. It can
+  when the row and every solution component under it are in the App Spec's solution (an environment
+  variable's value row is never a solution component, so it is not asked to be one); its fixed fields match the
+  declaration (the name's case, a variable's type, a reference's connector, a Custom API's binding,
+  bound table, function flag and processing steps, a child's type);
+  every row under it is one the App Spec declares; the change the build would then make is one it makes
+  on a bound row; and an environment variable's value or a connection reference's connection already is
+  the one the deployment settings name (the build never writes a first or different one after
+  adopting). The stop then lists the fields the build would change afterwards, by
+  name only, never a value, and one approval per row: `adopt:<kind>:<key>@<row id>`, with `+<16 hex>`
+  on the root when it lists fields, and `adopt:<child kind>:<key>/<child>@<row id>` for each row under
+  it. Check that each row is yours, then pass every token as printed with its own `--authorize`. The
+  build reads everything again just before it records the binding and sends nothing to adopt; in the
+  same build it then sends only the fields the stop listed, and stops that item with nothing sent if it
+  finds any other change. If a row is replaced, the field list changes or a membership is removed, the
+  tokens adopt nothing and the next build prints new ones; if the row is deleted, the tokens are not used
+  and the item is created at its own id. A duplicate rule made before the opt-in is never adopted: its
+  stop stays exactly as before, and `adopt:duplicateRule:<key>` keeps its one meaning (the rule at its
+  own reserved id, even when the key itself ends in what looks like `@<row id>`).
+  Otherwise the stop says why the row cannot be adopted. A stop that names several such items lists the
+  tokens of each with its own id and field list. Several namesakes of one item stop as before, and the
+  plain `adopt:<kind>:<key>` token never selects a namesake. Plugin versions before this form refuse
+  the `@<row id>` tokens before anything is sent; after an adoption they bind an adopted row that has
+  no rows under it, and stop on one that has with `create-identity-unverified`. You can also keep the
+  app without the field, or move it to the reserved ids outside the plugin. For a duplicate rule,
+  moving to a reserved id means creating a separate replacement and arranging the cutover outside the
+  plugin; it is not an in-place id change. The plugin does not plan or perform that migration. Never
+  edit or reset the binding store to substitute ids. Leaving `configurationIdentity` absent is only for
+  an app that has not started keeping protected configuration bindings: do not remove it to bypass an
+  existing protected binding or a create still being settled. An app that already has protected
+  bindings cannot go back: see "Removing the field" below.
+- **An uncertain lookup is not absence.** If the namesake lookup a first create needs cannot be read
+  completely (a failed read, a page that cannot be continued), the build stops with
+  `create-identity-unverified` and creates or binds nothing for that item. Restore access or reliable
+  reads and build again.
+- **No deletion.** Under the field, clearing an environment variable's value (a deployment-settings
+  `Value` of `null`, which deletes its value row), removing a Custom API child, or an unexpected delete
+  in a protected change stops with `configuration-protected-removal-unsupported` before anything is sent, authorized or not
+  (a removed duplicate-rule condition is a rule edit: `configuration-edit-unsupported`). Make the
+  change outside the plugin, with the maker portal or the Web API. Supported changes keep their
+  `--authorize` tokens, and builds without the field are unchanged. Deleting a bound row outside the
+  plugin does not release its binding: the next build stops with `configuration-row-not-found`. Never
+  delete or reset the binding store to clear a stop.
+- **Removing the field.** Removing `configurationIdentity` from an App Spec whose binding store still
+  holds a declared protected item (bound, or a create still being settled) stops the build before any
+  request with `create-identity-opt-in-required`: those items would otherwise be found by name again,
+  where a namesake could stand in for the bound row. Put the field back.
+- **Verify reads the bound ids.** Under the field, `verify-model-app` checks each declared protected
+  item at the id its binding holds, read-only, never by name: a bound row that is gone fails with
+  `configuration-row-not-found` even when a namesake exists, an item with no binding (or no readable
+  binding store) fails with `create-identity-unverified`, and an item whose create is still being
+  settled is reported unverified. Keep the build workspace with the binding store where verify runs.
+  A protected duplicate rule's conditions are checked at their bound ids too, as the build pairs them:
+  criteria swapped between two bound condition rows fails with `DRIFT`, naming the conditions
+  (`/conditions/<key>`), as the build refuses that rule (`configuration-edit-unsupported`). Verify
+  judges that rule with the build's own read-only check, so an edit the build refuses fails with
+  `DRIFT`, naming what it can: a condition added, removed or renamed in the declaration, a condition
+  row the declaration does not name, `conditions` omitted while the rule's binding holds conditions, or
+  a changed root field (for example `/matchingEntity`). `/definition` appears alone when the build
+  refuses and no declared field says why (for example the rule's publication state changed). A bound
+  row that is gone stays `configuration-row-not-found`, a binding read that could not be completed stays
+  `create-identity-unverified`, and a rule whose content could not be read whole keeps its own read
+  error (for example `DUPLICATE_RULE_READ_INCOMPLETE`): no edit can be judged from any of them.
+- **Checked before anything is sent.** Every declared protected item is read and judged before the
+  build's first service change, the solution version included: a first create's reserved id and its
+  namesake lookup too, so a create that would stop with `create-identity-conflict` or
+  `create-identity-unverified` stops the whole build with nothing sent. An edit the plugin does not
+  make stops the whole build there, with nothing sent (`configuration-edit-unsupported`).
+- **Duplicate rules: create only.** A protected duplicate rule is created with its conditions, completes
+  its initial publication/state, and is then only verified; later edits are outside the plugin. A
+  later change of its fields, conditions or state stops with: "This protected duplicate rule can be
+  created with its conditions and initial state, then verified. Later field, condition or state edits
+  are not supported. No service changes were sent by this build. Make this edit outside the plugin,
+  keeping the binding store and exact ids." A rule unpublished outside the plugin is not published
+  again: the build stops.
+- **Custom APIs.**
+
+  | Change to a bound Custom API | Result |
+  |---|---|
+  | One request on its own: the root's editable fields, one new child, or one child's labels | made |
+  | The root's editable fields together with one or more new children | made, as one change set |
+  | Two or more new children, nothing else | made, as one change set |
+  | Removing one child | stops: `configuration-protected-removal-unsupported` |
+  | Anything else (two label edits, labels with any other change, a removal with any other change, a child's fixed field) | stops: `configuration-edit-unsupported` |
+
+  The refusal reads: "This protected Custom API change is not a supported single request or create-only
+  changeset. No service changes were sent by this build. Separate supported non-removing single-request
+  edits across builds, or make the change outside the plugin. Removals require maintenance outside the
+  plugin." Every write names the row's exact id and its current version (`If-Match`). A change of
+  `isPrivate` still needs `--authorize`. An implementation registered outside the plugin (the API's
+  plug-in type) is kept: no write sends it, and an edit is complete only while the row still holds the
+  implementation it was planned over. One replaced or removed while the edit is written leaves the edit
+  unfinished with `create-identity-conflict`, and the next build sends nothing for it.
+- **Environment variables and connection references** are edited at their exact ids, each as one
+  checked change over the item's whole plan: a definition edit, the first value (created at the id the
+  spec fixes, then bound) or a new value for its own value row. A value row under a bound definition
+  that the binding does not hold is never overwritten or adopted, whatever `--authorize` tokens are
+  given: the build stops with `create-identity-conflict` before anything is sent. A bound value that the
+  deployment settings do not name in this run is kept, and nothing is sent for it. A connection
+  reference's prompting behaviour is never sent: a new one is expected to hold the platform's default,
+  and one changed outside the plugin after it was bound is kept, as a Custom API's implementation is
+  (an edit is complete only while the row still holds the value it was planned over).
+- **Local copy.** Before it reads a protected item into the workspace, the build checks the workspace
+  copy. A protected item whose local copy differs from the server's (an edit an earlier run did not send,
+  or one made by hand), or cannot be compared with it, is refused before anything is written
+  (`workspace-copy-unsent-edits`), and verify stops too; the copy and its binding are kept. Put any change
+  to keep into the spec, then approve replacing the local copy with the server's: the `overwrite:` key the
+  refusal prints, `--authorize overwrite:<kind>:<key>` (for example
+  `--authorize overwrite:customApi:contoso_calc`; the kind is `customApi`, `environmentVariable`,
+  `connectionReference` or `duplicateRule`). With that key the build reads the server's row and puts it in
+  place of the local copy (a create the server never took leaves no copy); if it cannot read that row,
+  it keeps the copy and stops. The key names the item, not a version of its copy: it replaces the local
+  copy as it is when the approved build runs, including any edit made after the stop was printed, as the
+  views' and charts' `overwrite:` key does. Check the copy again before you give it, and do not edit the
+  copy while that build runs. The key is read only with `configurationIdentity: "stable-v1"`.
+  The build never replaces or discards the local copy on its own, also when a protected send fails or its
+  answer is lost: the copy is kept with every edit in it, including one made while the build was sending,
+  and a later build that finds it stops on it until you give that key. Nothing else discards it. The unfinished send
+  itself is still decided from what the build recorded before sending (below); giving the key never sends
+  it again. The build command keeps these items' copies in a working folder of its own and removes it
+  when the command ends, so a copy kept after a failed send lasts until then: the stop applies within
+  that command, and the next command reads the server's rows afresh.
+- **Download.** A plain download writes none of these items. With both `--include-managed` and
+  `--managed-manifest <store file>`, each item the store holds is read again at its bound id and written
+  back into its list only when a rebuild of it through that store would change nothing: every bound row
+  still reads as the build committed it, the app's solution still holds it, and the spec still validates.
+  The restored spec gets `configurationIdentity: "stable-v1"` and a floor of at least
+  `minimumPluginVersion: "2.25.0"`. Anything else is left out with a fixed reason (`changed`, `missing`,
+  `unread`, `not-in-solution`, `pending`, …), a WARNING, and an entry in the result's `omitted`; a
+  restored item that leaves parts out names them, never their values, in a NOTE and the result's `withheld`.
+  A rebuild without `--deployment-settings` leaves those parts as they are.
+  - *Environment variables* (`managedEnvironmentVariables`): the schema name, type, name, description,
+    required flag and, for a data source, its connector, parameter key and a parent the download also
+    restores. The current value, `defaultValue` and `valueSchema` are never written (`withheld` names
+    them). A `secret` variable is left out (`secret-withheld`), as is a data source whose parent is not
+    restored (`parent-unproven`), a variable with more than one value row (`multiple-values`) and a
+    required variable with neither a default nor a value (`required-value-missing`: a rebuild of it would
+    stop as incomplete, and a download never fills one in).
+  - *Connection references* (`managedConnectionReferences`): the logical name, connector, name and
+    description. Which connection it is bound to is never written (`withheld` names `connection`, and
+    `connectionParameters` or `promptingBehavior` when the row sets them); a rebuild without settings
+    keeps the binding the row has. A reference to a custom connector is left out
+    (`unsupported-dependency`), and so is one a page of the app names unless the download proves it bound
+    as a rebuild's page gate does — its connection is among the environment's connections (read as
+    `list-connections.js` reads them) and is one of the reference's connector (`page-unready`):
+    declaring it would stop a rebuild before that page, which a plain download does not. No connection,
+    one of another connector, or connections that cannot be read all leave it out. A restored reference a
+    page names is gated like any declared one, so a rebuild stops before that page if its connection is
+    gone by then.
+  - *Custom APIs* (`managedCustomApis`): the unique name, labels, binding and bound table, flags,
+    allowed processing steps and execute privilege, with both child lists complete: each request
+    parameter's and response property's unique name, type, table, labels and (a request parameter's)
+    optional flag. Only a scaffold comes back: an API with a registered implementation (a plug-in type) is
+    left out (`implemented`), since the spec never declares one, and so is an API a page of the app calls
+    (`page-unready`): its rebuild would stop before that page until it had one. A child renamed, added or
+    deleted outside the plugin leaves the whole API out. Labels come back in the one language the row
+    answers in; on an environment with more than one language the others are not written (`withheld`
+    names `otherLanguageLabels`) and a rebuild leaves them as they are.
+  - *Duplicate rules* (`managedDuplicateDetectionRules`) are never brought back: each is left out
+    (`state-unproven`) without being read. A rule's status (published or unpublished) is part of what it
+    declares, and the store records its fields and conditions but not the status its build left it in, so a
+    rule published or unpublished by hand cannot be told from one its build left that way. The downloaded
+    spec declares no rule, and a rebuild of it leaves every rule as it is.
+- **Unfinished work is checked first, declared or not.** Before its first service change, every build
+  reads the binding store for protected items whose create or edit has not finished. If the App Spec no
+  longer declares such an item, the build stops with `managed-settlement-pending` and sends nothing.
+  This applies with or without the field and whatever phases run. Declare the item again, with the
+  field, to finish it.
+  An item that finished before it was removed from the App Spec does not stop the build.
+- **`--changed-only` runs the whole build.** While the field is set, or the binding store holds
+  configuration state, a `--changed-only` apply runs the full build and prints
+  `changed-only: FULL — protected configuration is in play`. Its record of the last apply does not cover
+  these rows, so it cannot tell that one was deleted, that an edit is refused or that the store cannot
+  be read; the full build checks them before its first service change and stops instead. With or without
+  the field, a change to an environment variable, connection reference, Custom API or duplicate-detection
+  rule also makes a `--changed-only` apply a full build.
+- **An edit that did not finish.** The next build decides a Custom API, environment variable or
+  connection reference edit from what the first one recorded before sending. A complete edit is
+  recorded and never sent again. An edit that no request can have reached is sent once, at the same ids.
+  If its target is already there, nothing is sent, and the edit is recorded only if its rows are
+  exactly what the plugin would make: one that needs an approval (a private value) or whose solution
+  membership was removed stops, and is never reported unchanged.
+  If its rows changed since then, it is dropped while nothing was sent; otherwise the build stops until
+  you restore them. Anything else keeps its stop.
+  An edit or create the SDK refuses before its first request (for example a Custom API label edit on an
+  environment with more than one language, `CUSTOM_API_LABELS_UNSUPPORTED`) stops that build and leaves
+  nothing unfinished: the next build is judged on what the App Spec then declares, the earlier
+  declaration, another edit or the same one.
+- **A create that did not finish.** The next build decides it from what the first one recorded before
+  sending, never from today's rows, and sends nothing while it does: a create that is complete is bound;
+  a create that is missing a row, its solution membership or the rule's initial state stops with
+  `create-completion-required` — complete it under the same ids, then build again. An initial
+  publication that failed or whose answer was lost is never sent again by the build: publish the rule
+  under the same id yourself. The one exception is a rule whose content was saved, but whose publish
+  request the record proves was never sent (the run stopped first). The next build sends that publish
+  once, then binds the rule. If the rule's conditions still need your approval, the build asks for it
+  first. Rows that no answer proved this build's own are bound only after you check
+  them and approve each one exactly: the stop (`create-ownership-required`) lists the tokens, such as
+  `adopt:duplicateRule:<key>` and one per child (`adopt:<child kind>:<key>/<child>`, both parts
+  percent-encoded, for example `adopt:customApiRequestParameter:contoso_calc/request%3Aa`). Pass each as
+  printed with its own `--authorize`; a root's token never covers its children, and the tokens are read
+  only with the field and only for declared items. A declaration changed since the create was prepared
+  stops with `managed-pending-intent-changed`: put the original declaration back, finish the create,
+  then make the change. A row that differs from what was sent stops with `create-identity-conflict`.
+- **Retries keep the ids.** When a later step of the same build fails with a transient error and the
+  build runs again, the second attempt finds each protected row at the id the first one bound and sends
+  nothing for it. A protected create whose answer was lost stops the build (`create-outcome-unknown`)
+  and is never retried; the next build decides it as above.

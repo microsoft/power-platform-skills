@@ -17,17 +17,19 @@ cat ~/.claude/.code-apps-preview-last-version-check 2>/dev/null
 
 ### Step 2: Read the local version
 
-Read `${PLUGIN_ROOT}/.plugin/plugin.json` and extract the `name` and `version` fields.
+Read [plugin.json](../plugin.json) relative to this document.
+Extract the `name` and `version` fields.
 
 ### Step 3: Fetch the latest version from the marketplace
 
-Fetch the remote marketplace manifest using Bash:
+Fetch the remote plugin manifest using the client's shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/marketplace.json 2>/dev/null
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/code-apps/plugin.json
 ```
 
-Find the plugin entry whose `name` matches the local plugin name, then parse its `version` field.
+Check that the remote `name` matches the local plugin name.
+Read the remote `version` field. Marketplace entries do not contain versions.
 
 ### Step 4: Compare versions
 
@@ -40,11 +42,17 @@ Compare the local version against the remote version using semver rules — spli
 ```
 ╔══════════════════════════════════════════════════════════════╗
 ║  UPDATE AVAILABLE: v{local} → v{remote}                    ║
-║  Run: claude plugin update code-apps-preview                ║
+║  Update code-apps-preview in your active client.            ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
 **If versions match or the local version is newer**, print nothing.
+
+Use the active client's update command:
+
+- Copilot CLI or Claude Code: `/plugin update code-apps-preview@power-platform-skills`.
+- Codex: `codex plugin marketplace upgrade power-platform-skills`.
+- Other clients: use that client's documented plugin update action.
 
 ### Step 6: Update the timestamp
 

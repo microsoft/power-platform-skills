@@ -197,3 +197,11 @@ test("opens records through openDatasetItem", () => {
 
     expect(ds.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "first" }));
 });
+
+test("open and paging actions render as Fluent v9 buttons", () => {
+    const { buttons } = render(dataSet({ hasNextPage: true, hasPreviousPage: true }));
+
+    // fui-Button is the stable class Fluent v9 puts on every Button root.
+    expect(buttons().length).toBe(4);
+    expect(buttons().every((button) => button.classList.contains("fui-Button"))).toBe(true);
+});

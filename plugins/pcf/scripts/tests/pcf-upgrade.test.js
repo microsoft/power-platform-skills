@@ -406,7 +406,7 @@ test('CLI rejects explicit empty --steps selections without changing any project
       assert.match(result.stderr, /Usage:/);
       assert.match(result.stderr, /--steps (?:must include at least one step id|requires a value)/);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -430,7 +430,7 @@ test('runUpgrade limits apply to selected steps and rejects unknown step ids', (
     assert.equal(unknown.ok, false);
     assert.match(unknown.error, /Unknown --steps value 'UNKNOWN_STEP'/);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -449,7 +449,7 @@ test('runUpgrade applies relative to the discovered project root when started fr
     assert.deepEqual(result.changedFiles, [path.join(projectDir, 'package.json')]);
     assert.doesNotMatch(String(result.error || ''), /outside the PCF project/);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -468,7 +468,7 @@ test('runUpgrade can collect and apply a UTF-8 BOM package.json without dropping
     const after = fs.readFileSync(packagePath, 'utf8');
     assert.equal(after.charCodeAt(0), 0xFEFF);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -495,7 +495,7 @@ test('runUpgrade refuses a dirty git tree before applying changes', () => {
     assert.match(result.error, /uncommitted changes/);
     assert.deepEqual(result.applied, []);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -534,7 +534,7 @@ test('runUpgrade refuses apply outside a git work tree unless allowDirty is pass
     assert.equal(allowed.ok, true);
     assert.ok(allowed.applied.includes('DEPS_TO_MATRIX'));
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -560,7 +560,7 @@ test('runUpgrade reports a failing transform without writing earlier computed fi
     assert.equal(result.after, null);
     assert.equal(fs.readFileSync(pkg, 'utf8'), beforePackage);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -585,7 +585,7 @@ test('applyUpgrade computes all transforms before writing any file', () => {
     assert.equal(fs.readFileSync(pkg, 'utf8'), '{"name":"before"}\n');
     assert.equal(fs.readFileSync(proj, 'utf8'), '<Project />\n');
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -641,7 +641,7 @@ test('applyUpgrade restores every target when a writer truncates then throws', (
     run(afterPkg);
     run(afterProj);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -685,7 +685,7 @@ test('applyUpgrade rolls back earlier writes when a later write fails', () => {
     assert.equal(fs.readFileSync(pkg, 'utf8'), '{"name":"before"}\n');
     assert.equal(fs.readFileSync(proj, 'utf8'), '<Project />\n');
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -712,7 +712,7 @@ test('applyUpgrade refuses a project file symlink that resolves outside the proj
     }, projectDir), /outside the PCF project/);
     assert.equal(fs.readFileSync(outsidePackage, 'utf8'), '{"name":"outside"}\n');
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -745,7 +745,7 @@ test('applyUpgrade writes a project reached through a linked parent directory', 
     assert.deepEqual(result.applied, ['DEPS_TO_MATRIX']);
     assert.equal(fs.readFileSync(path.join(projectReal, 'package.json'), 'utf8'), '{"name":"after"}\n');
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -775,7 +775,7 @@ test('runUpgrade rolls back every rewritten file when reinstall fails after safe
     assert.deepEqual(fs.readFileSync(pkg), originalPackage);
     assert.equal(result.after, null);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -814,7 +814,7 @@ test('applyUpgrade restores the lockfile a failed reinstall rewrote and removes 
       if (hadLockfile) assert.deepEqual(fs.readFileSync(lock), originalLock);
       else assert.equal(fs.existsSync(lock), false, 'a lockfile the failed install created is removed');
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 });
@@ -853,7 +853,7 @@ test('applyUpgrade writes safe files, runs npm install, and skips install when r
     const skipped = applyUpgrade({ steps: [{ id: 'REINSTALL' }] }, projectDir, { noInstall: true });
     assert.deepEqual(skipped.skipped, ['REINSTALL: run npm install in the PCF project']);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -899,7 +899,7 @@ test('runUpgrade accepts --steps REINSTALL alone', () => {
     const reinstall = result.plan.steps.find((step) => step.id === 'REINSTALL');
     assert.equal(reinstall.requiresStep, null);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -923,7 +923,7 @@ test('runUpgrade records the skipped reinstall when --steps REINSTALL is used wi
     assert.deepEqual(result.applied, []);
     assert.deepEqual(result.skipped, ['REINSTALL: run npm install in the PCF project']);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -949,7 +949,7 @@ test('selecting DEPS_TO_MATRIX still reinstalls and publishes requiresStep', () 
     assert.equal(reinstall.requiresStep, null);
     assert.ok(result.plan.steps.every((step) => Object.hasOwn(step, 'requiresStep')));
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -970,7 +970,7 @@ test('selecting DEPS_TO_MATRIX and REINSTALL installs once', () => {
     assert.equal(npm.calls.length, 1);
     assert.equal(result.plan.steps.filter((step) => step.id === 'REINSTALL').length, 1);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -990,6 +990,6 @@ test('unknown --steps lists every selectable id including REINSTALL', () => {
     assert.match(result.error, /Choose one of: .*REINSTALL/);
     assert.match(result.error, /DEPS_TO_MATRIX/);
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

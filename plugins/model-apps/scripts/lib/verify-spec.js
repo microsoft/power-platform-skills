@@ -37,6 +37,8 @@ const { verifyDeclaredDashboard } = require('./declared-dashboard-io.js');
 const { verifyDeclaredRule, declaredRulesByKey } = require('./declared-rule-io.js');
 const { verifyDeclaredBpf, declaredBpfsByKey } = require('./declared-bpf-io.js');
 const { declaredFeatureOn } = require('./declared-features.js');
+const { isDeclaredChart, declaredChartKey } = require('./chart-reconcile.js');
+const { chartContentChecks } = require('./chart-verify.js');
 const { childRelationshipsFor } = require('./app-spec.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
 const { formOrderSpecOf, isDeclaredFormOn, isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
@@ -49,6 +51,7 @@ const { verifyDateBehaviors } = require('./date-behavior.js');
 const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
 const { expectedQuickFindProjection } = require('./quick-find.js');
 const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
+const { usesCommandStates, normalizeCommandStates } = require('./command-state-contract.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -418,10 +421,67 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
   });
-  plan.each(spec.charts || [], async ({ add }, charts) => {
+  // CHARTS — presence, then content. A chart is found, then held to what the spec says it is (lib/chart-verify.js chartContentChecks):
+  // its type, the query it draws (table, group-by column, measure), and the description and title the build owns. A chart that exists
+  // with another type, grouping, measure or an added filter used to pass on its name alone.
+  //
+  // Which row is the chart: a DECLARED chart (charts[].reconcile "declared") that the managed bindings of this workspace
+  // (`opts.managedManifest`) bind is the bound row, read by its id — the build resolves it so, and a namesake made since is not it. A
+  // bound row that is gone is missing; the name is not asked in its place. A group with an attempt still pending, or a stored record
+  // that is not usable, proves nothing about the chart: it is unverified (its managed listing says why). Every other chart is found by
+  // its name on its table, as before; two charts of that name are not told apart, so the chart is present but its content unverified.
+  //
+  // The content columns are read only for the comparison; a reader that answers without them (the eval's synthesized reader answers
+  // ids) has its charts checked for presence, and their content named unverified — a row's presence never stands in for what it holds.
+  const chartGuid = (g) => String(g || '').trim().toLowerCase().replace(/^\{|\}$/g, '');
+  const chartSelect = ['savedqueryvisualizationid', 'primaryentitytypecode', 'name', 'description', 'datadescription', 'presentationdescription'];
+  const chartBinding = (ch) => {
+    const m = opts.managedManifest;
+    if (!m || !Array.isArray(m.groups) || !isDeclaredChart(ch)) return null;
+    const key = declaredChartKey(ch);
+    const unsettled = (list) => (Array.isArray(list) ? list : []).find((x) => x && ((x.family === 'chart' && x.key === key) || x.family === 'store'));
+    const open = unsettled(m.pending) || unsettled(m.invalid);
+    if (open) return { key, open: `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct` };
+    const g = m.groups.find((x) => x && x.family === 'chart' && x.key === key);
+    if (!g) return null;
+    const id = chartGuid(g.root && g.root.id);
+    if (!id) return { key, open: `its managed binding (${key}) records no chart id — unverified, not proven correct` };
+    return { key, id };
+  };
+  plan.each(spec.charts || [], async ({ add, unverified }, charts) => {
   for (const ch of charts) {
-    const rows = await read.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid'], filter: `primaryentitytypecode eq '${String(ch.entity).toLowerCase()}' and name eq '${odataLit(ch.name)}'`, top: 1 });
-    add('chart', ch.name, rows && rows[0]);
+    const entity = String(ch.entity).toLowerCase();
+    const bound = chartBinding(ch);
+    if (bound && bound.open) { unverified.push(`chart:${ch.name} (${bound.open})`); continue; }
+    let row;
+    let ambiguous = false;
+    if (bound) {
+      const rows = await read.queryRecords('savedqueryvisualization', { select: chartSelect, filter: `savedqueryvisualizationid eq ${bound.id}`, top: 1 });
+      const got = rows && rows[0];
+      // Present only when the row answered IS the bound row, on the chart's table where the row says which.
+      const sameTable = !got || got.primaryentitytypecode == null || String(got.primaryentitytypecode).toLowerCase() === entity;
+      if (!got || chartGuid(got.savedqueryvisualizationid) !== bound.id || !sameTable) {
+        add('chart', ch.name, false, `the chart its managed binding (${bound.key}) is bound to (${bound.id}) was not found${got && !sameTable ? ' on its table' : ''}; a chart of the same name is not taken in its place`);
+        continue;
+      }
+      row = got;
+    } else {
+      const rows = await read.queryRecords('savedqueryvisualization', { select: chartSelect, filter: `primaryentitytypecode eq '${entity}' and name eq '${odataLit(ch.name)}'`, top: 2 });
+      const list = Array.isArray(rows) ? rows : [];
+      // A row that says it is on another table is not this chart (a reader that did not apply the table filter).
+      const onTable = list.filter((r) => r && (r.primaryentitytypecode == null || String(r.primaryentitytypecode).toLowerCase() === entity));
+      row = onTable[0];
+      ambiguous = new Set(onTable.map((r) => chartGuid(r.savedqueryvisualizationid)).filter(Boolean)).size > 1;
+    }
+    add('chart', ch.name, row);
+    if (!row) continue;
+    if (ambiguous) {
+      unverified.push(`chart-data:${ch.name} (several charts on ${entity} have this name, so which one the spec describes is not known)`);
+      continue;
+    }
+    const content = chartContentChecks(ch, row, ch.name);
+    for (const c of content.checks) add(c.kind, c.name, c.present, c.detail);
+    unverified.push(...content.unverified);
   }
   });
   // DASHBOARDS — existence, then that every deployed chart tile is internally consistent (#586 item 3).
@@ -1378,6 +1438,35 @@ async function verifySpec(spec, read, opts = {}) {
       try { present = !!(await read.commandBar(entity)); } catch { present = false; }
       add('command', `${entity} command bar`, present);
     }
+    });
+  }
+
+  // Command states: each declared commandStates[] entry's row holds the flags it declares (verifyCommandStates, lib/command-state-read.js). Unlike
+  // the existence check above this is not best-effort: a spec that declares states asked for them to be checked, so a reader that cannot read
+  // command rows, or a read that fails, fails every entry — never a pass and never left out. Only stored flags are checked, not how the button renders.
+  // A verify of a run that did not run the commands phase (exactly --stage data, which leaves command states alone) reports each entry as
+  // phase-skipped and reads no row: that run never applied them. A verify with no phase list is unrestricted and still checks every entry.
+  const commandsPhaseRan = !ranPhases || ranPhases.has('commands');
+  if (usesCommandStates(spec)) {
+    plan.each([spec], async ({ add, phaseSkipped }) => {
+      const label = (s) => `${s.entity} ${s.bar} row ${s.rowId}`;
+      if (!commandsPhaseRan) {
+        for (const s of normalizeCommandStates(spec)) phaseSkipped.push(`command-state:${label(s)}`);
+        return;
+      }
+      let checks;
+      if (typeof read.commandStates !== 'function') {
+        checks = normalizeCommandStates(spec).map((s) => ({ name: label(s), present: false, detail: 'this reader cannot read command rows' }));
+      } else {
+        try {
+          checks = await read.commandStates(spec);
+        } catch (error) {
+          // Said as the feature says a failed read (lib/command-state-read.js readFailureText): a status and a code, never the service's text.
+          const { readFailureText } = require('./command-state-read.js');
+          checks = normalizeCommandStates(spec).map((s) => ({ name: label(s), present: false, detail: `could not be read: ${readFailureText(error)}` }));
+        }
+      }
+      for (const c of checks) add('command-state', c.name, c.present, c.detail);
     });
   }
 
@@ -2349,17 +2438,19 @@ async function verifySpec(spec, read, opts = {}) {
 
   // The configuration kinds: one check per declared item and aspect (definition, binding, value, implementation, publication, version),
   // in declaration order. A Custom API whose implementation is not proven (no plug-in type: a scaffold) is reported as unverified, not as
-  // missing — the API is deployed; whether it runs is not something a read can prove. A reader without the getter says so.
+  // missing — the API is deployed; whether it runs is not something a read can prove. A reader without the getter says so. Under
+  // `configurationIdentity: "stable-v1"` the getter reads each item at the id the workspace's binding store holds (`opts.managedManifest`),
+  // and an item whose attempt is still pending (managed-settlement-pending) proves nothing yet: it is unverified, never a pass.
   if (require('./configuration-artifacts.js').usesConfiguration(spec)) {
     plan.section(async ({ add, unverified }) => {
       if (!read || typeof read.configuration !== 'function') {
         unverified.push('configuration (this reader cannot read configuration items)');
         return;
       }
-      for (const c of await read.configuration(spec, opts.configurationBindings)) {
+      for (const c of await read.configuration(spec, opts.configurationBindings, opts.managedManifest)) {
         const name = `${c.kind} ${c.key}: ${c.name}`;
         if (c.ok) add('configuration', name, true);
-        else if (c.code === 'CUSTOM_API_IMPLEMENTATION_UNPROVEN') unverified.push(`configuration:${name} (${c.code})`);
+        else if (c.code === 'CUSTOM_API_IMPLEMENTATION_UNPROVEN' || c.code === 'managed-settlement-pending') unverified.push(`configuration:${name} (${c.code})`);
         else add('configuration', name, false, `${c.code}${Array.isArray(c.fields) && c.fields.length ? ` (${c.fields.join(', ')})` : ''}`);
       }
     });

@@ -528,14 +528,31 @@ test("registered hook commands honor hard-disable even with spaces in plugin roo
   fs.writeFileSync(path.join(copiedRoot, "scripts/lib/telemetry/ikey.json"), JSON.stringify({ ...fixtureData.config, disabled: true }));
   const hooks = require("../../hooks/hooks.json").hooks;
   assert.deepEqual(Object.keys(hooks), ["PreToolUse", "UserPromptSubmit"]);
+  // Restrict PATH to exclude PAC, but preserve the host environment PowerShell
+  // needs to start. An empty environment can hang Windows PowerShell before Node.
+  const shell = process.platform === "win32"
+    ? path.join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe")
+    : "/bin/sh";
   for (const name of Object.keys(hooks)) {
     const command = hooks[name][0].hooks[0].command;
     for (const rootVariable of ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"]) {
-      const result = spawnSync(command, {
-        shell: true, input: JSON.stringify({ prompt: `/${PLUGIN_NAME}:generate-ppmplugin`, tool_input: { skill: `${PLUGIN_NAME}:generate-ppmplugin` } }),
-        env: { PATH: path.dirname(process.execPath), [rootVariable]: copiedRoot, ...fixtureData.env },
-        timeout: 3000, encoding: "utf8",
+      const args = process.platform === "win32"
+        ? ["-NoLogo", "-NoProfile", "-Command", command]
+        : ["-c", command];
+      const result = spawnSync(shell, args, {
+        input: JSON.stringify({ prompt: `/${PLUGIN_NAME}:generate-ppmplugin`, tool_input: { skill: `${PLUGIN_NAME}:generate-ppmplugin` } }),
+        env: {
+          ...process.env,
+          PATH: path.dirname(process.execPath),
+          PLUGIN_ROOT: "",
+          CLAUDE_PLUGIN_ROOT: "",
+          [rootVariable]: copiedRoot,
+          ...fixtureData.env,
+        },
+        // Include PowerShell cold-start time, as the shared hook-command suite does.
+        timeout: 15000, encoding: "utf8",
       });
+      assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, "");
       assert.equal(result.stderr, "");

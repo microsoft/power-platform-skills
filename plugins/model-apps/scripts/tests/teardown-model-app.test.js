@@ -156,6 +156,25 @@ test('such a spec is still refused before any teardown for any other problem, an
   assert.strictEqual(sdk.calls.length, 0, 'no SDK calls on a bad spec');
 });
 
+// A key a view or one of its filters does not take is refused by the build and the lint the same way (#827), and an earlier release accepted
+// and ignored it: under the structural profile it is a warning, so an app built from such a spec is still torn down, behind the same authorization.
+const VIEW_KEY_TYPO = "view 'Active Tickets': unknown key 'filter' — did you mean 'filters'?; the build does not read it, so it is refused rather than built without it (allowed: entity, name, description, columns, sort, filters, activeOnly, reconcile, key, viewId, linkEntities)";
+
+test('a spec whose view carries a key it does not take is still torn down: the dry run lists the same plan, and apply deletes', async () => {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.views.find((v) => v.name === 'Active Tickets').filter = [{ attr: 'new_status', op: 'eq', value: 1 }];
+  const structural = validateAppSpec(spec, { profile: 'structural' });
+  assert.deepStrictEqual([structural.ok, structural.errors, structural.warnings], [true, [], [VIEW_KEY_TYPO]], 'the finding is a warning there');
+  const r = await teardownModelApp(spec, { apply: false }, { sdk: { queryRecords: async () => [] } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const plain = await teardownModelApp(desk, { apply: false }, { sdk: { queryRecords: async () => [] } });
+  assert.deepStrictEqual(r.plan, plain.plan, 'the plan of the same spec without the key');
+  const sdk = presentSdk();
+  const applied = await teardownModelApp(spec, { apply: true, allowDestructive: true }, { sdk });
+  assert.strictEqual(applied.ok, true, JSON.stringify(applied.errors));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
+});
+
 // A key a table's `primaryAttribute` does not take is refused the same way, and an earlier release accepted and ignored it just the
 // same: under the structural profile it is a warning, so such an app is still torn down, behind the same authorization.
 const PRIMARY_ATTRIBUTE_TYPO = "entity new_ticket: unknown key 'maxlength' on primaryAttribute — did you mean 'maxLength'? (allowed: schemaName, displayName, autoNumberFormat, required, maxLength)";

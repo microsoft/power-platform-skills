@@ -83,7 +83,14 @@ application of planned edits.
 
 ## Instructions
 
-Follow these phases in order for every `/genpage` invocation.
+Follow these phases in order for every `/genpage` invocation, except for two requests that build nothing:
+
+- **Pull existing pages into the project** without editing them (for example "bring these pages into my repo",
+  "put the maker-made pages under source control"): follow [Pulling existing pages into the
+  project](#pulling-existing-pages-into-the-project) instead of the phases.
+- **Promote pages to another environment** (test, production, another development environment): read
+  [promotion.md](../../references/promotion.md) and follow it. Read it only for such a request. When the same
+  run also builds pages, read it after Phase 6.7.
 
 **Every `<…>` you fill into a command goes in single quotes** (`'<working-dir>/prompt.txt'`, `'<App Name>'`).
 PowerShell and bash expand nothing inside them — not `$name`, not `$(…)`, not a backtick — and a space does not split
@@ -886,7 +893,7 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
 9. Check the generated file for the Griffel shorthands that `makeStyles` drops at
-   runtime:
+   runtime, and for a scroll context:
 
    ```powershell
    node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
@@ -918,6 +925,13 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    keys, and so is a key computed from an expression (`[key]: …`), whose name it
    cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
    `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+
+   The same command checks that the page establishes a scroll context
+   (`references/rules.md`, **Page Layout**): the host shows a page in a container of
+   fixed height and never scrolls it, so a page with none is cut off below the fold.
+   `no-scroll-context`, `scroll-context-unproven` and `scroll-context-padding` are
+   problems like any other, each with the edit that fixes it: apply it and run the
+   check again.
 
    Then review the page for iteration that another page compiler can lose:
 
@@ -1039,7 +1053,8 @@ check themselves; run it on every generated page, exactly as in step 9 of Phase 
 node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
 ```
 
-and fix what it reports in the page yourself before Phase 6. A page that has not
+and fix what it reports in the page yourself before Phase 6, its scroll context
+included (step 9). A page that has not
 exited 0 is not deployed. Review every generated page for iteration that another page
 compiler can lose as well, and fix it yourself: the workers follow the same rule
 (`references/rules.md`, **Common Errors > 5. Iteration that another page compiler can lose**).
@@ -1194,7 +1209,8 @@ did not already have (below). The result is `"code":"griffel-shorthand"`, with e
 and what each way out does in `error` (and the same list in `problems`). That is the same check as
 `check-griffel-styles.js`, held at the one place every upload passes, so a page that skipped the earlier gate still cannot
 ship a key it added without its border. Fix the page and run the upload again; no flag skips it, and
-`--overwrite-deployed` does not. The upload reads the code file once and writes exactly the text it checked, so a change saved
+`--overwrite-deployed` does not. The upload does not check a page's scroll context: only `check-griffel-styles.js`
+does (Phase 5b step 9). The upload reads the code file once and writes exactly the text it checked, so a change saved
 to the file after the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: the SDK
 compiles the checked file itself.
 
@@ -1439,6 +1455,10 @@ referenced Custom APIs are a separate deployment prerequisite (bound by `name`),
 A built-in operation binding (`WhoAmI`, `RetrieveVersion`) needs nothing at all: it names an
 operation the platform defines, so there is no component to add or deploy.
 
+When the user asks to promote the pages to another environment, read
+[promotion.md](../../references/promotion.md) now: managed or unmanaged, full solution or patch, the version
+number, the dependency check, the import order, rollback, and what travels with a page.
+
 ### Phase 7: Verify in Browser (Optional)
 
 After successful deployment, ask the user via `AskUserQuestion`:
@@ -1511,3 +1531,52 @@ deploy, verify, summarize. Built-in operations (`WhoAmI`, `RetrieveVersion`) are
 Phase 3; Edit Phase 4 handles `dataverse_operation_discovery_required`, forwards this run's
 built-in operation contract through every planner round, and re-probes `dataverse-operations`
 before an add or replace is applied — the create flow's Phase 4.6b is not visited.
+
+---
+
+## Pulling existing pages into the project
+
+Use this when the user asks to bring existing generative pages — maker-authored ones included — into their project or
+source control without changing them. It runs no planner and no agent, uploads nothing and writes nothing to the
+environment: it only reads pages and writes their files locally.
+
+1. **Mode and environment.** Resolve the interaction mode (`resolve-interaction-mode.js`, as in Phase 1) and capture
+   the environment URL with `node "${PLUGIN_ROOT}/scripts/check-auth.js"` (add `--env '<envUrl>'` when the user named
+   the environment). Use that `envUrl` for every command below. Read its result as Phase 2a does: on `ok: false`
+   show the `message` verbatim and stop (`blocker: "usage"` alone means fix the command line and rerun it).
+2. **Choose the pages.** List them, never guess them:
+   - the pages of one app: `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'`, then
+     `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>' --app-id '<app-id>'`;
+   - every page in the environment, including pages in no app: `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>'`.
+
+   **Attended:** ask with `AskUserQuestion` (multi-select; label each page by `name`, the page id in the description).
+   **Unattended:** pull only the pages `$ARGUMENTS` names by id or exact name; when none is named, or a name matches
+   more than one page, halt and report what is needed.
+3. **Choose the folder.** The project root: the genpage project at or above the current directory (a folder holding a
+   `package.json` beside a `genpage.d.ts`), otherwise the current directory, or the folder the user names. Each page
+   lands in `<project-root>/<page-id>/` as `page.tsx`, `config.json` and, when the page has a prompt, `prompt.txt`.
+   When `<project-root>/<page-id>/` already exists, the download replaces the local files. **Attended:** ask
+   "Replace the local copy" or "Skip this page" for each such page. **Unattended:** skip it and report it. A pull
+   never replaces local work nobody agreed to replace.
+4. **Download** all the chosen pages in one command (add `--app-id '<app-id>'` only when every page came from that
+   app's list: with it, a page that is not in the app's saved navigation is refused):
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage.js" download --env '<envUrl>' --page-id '<page-id1>,<page-id2>' --output-directory '<project-root>'
+   ```
+
+   It prints `{ "ok": true, "pages": [ { "pageId", "name", "directory", "files", "replaced", "removed" } ] }`
+   (Edit Phase 2 describes the fields). A failure (exit 1) leaves the folders as they were: report it and stop.
+5. **Record the base** of each page, so a later edit or upload can tell whether the deployed page changed since:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/genpage-base.js" record --page-id '<page-id>' --file '<project-root>/<page-id>/page.tsx'
+   ```
+
+   Add `--app-id '<app-id>'` when the page came from an app's list. The marker holds hashes and ids only, so it may
+   be committed with the page.
+6. **Log and report.** Append a `## Pull` section to `workflow-log.md` in each pulled page's folder: the commands,
+   their JSON results, and every `AskUserQuestion` or `Unattended default:` line. Then show the user each page's name,
+   id and folder, and the pages skipped and why. Do not edit, build or upload the pulled pages in this request. To
+   change one later, run the edit flow and name the pulled `page.tsx` as the local copy (edit-flow.md, "Starting
+   from a local copy").

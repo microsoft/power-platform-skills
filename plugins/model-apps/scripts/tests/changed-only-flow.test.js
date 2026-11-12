@@ -338,6 +338,42 @@ test('run: NOOP does not call buildModelApp and reports up-to-date', async () =>
   } finally { rm(dir); }
 });
 
+// Protected configuration's checks and edits run only in the full build (build-model-app.js, which never enters this flow while its
+// managed-create gate exists): any caller that hands the flow that gate gets a full build, never a no-op or a fast apply.
+test('run: with protected configuration in play (a managed-create gate) neither a NOOP nor a FAST apply is taken — the full build runs', async () => {
+  for (const content of ['v1', 'v2']) {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(baseSpec(), 'v1'));
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: { ...baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor(content) }), managedCreateGate: {} } });
+      assert.notStrictEqual(r.noop, true, content);
+      assert.strictEqual(r.changedOnly.decision, 'full', content);
+      assert.strictEqual(r.changedOnly.reason, flow.PROTECTED_CONFIGURATION_FULL, content);
+      assert.strictEqual(record.length, 1, `${content}: the full build ran`);
+      assert.strictEqual(record[0].phases, undefined, `${content}: every phase`);
+    } finally { rm(dir); }
+  }
+});
+
+// commandStates are applied only by a full build, which reads every declared row and asks for approval of what it finds: an unchanged spec is not
+// proof that a row still holds its flags (it can have been edited in the designer since), so neither a NOOP nor a FAST apply is taken.
+test('run: a spec that declares commandStates never takes a NOOP or a FAST apply — the full build runs', async () => {
+  const withStates = () => ({ ...baseSpec(), commandStates: [{ entity: 'new_x', location: 'MainTab', scope: 'table', rowId: '11111111-1111-4111-8111-111111111111', hidden: true }] });
+  for (const content of ['v1', 'v2']) {
+    const dir = ws();
+    try {
+      seedEligible(dir, annotate(withStates(), 'v1'));
+      const record = [];
+      const r = await flow.runChangedOnlyApply({ spec: withStates(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { buildModelApp: stubBuild(record), readContent: readFor(content) }) });
+      assert.notStrictEqual(r.noop, true, content);
+      assert.strictEqual(r.changedOnly.decision, 'full', content);
+      assert.strictEqual(r.changedOnly.reason, flow.COMMAND_STATES_FULL, content);
+      assert.strictEqual(record.length, 1, `${content}: the full build ran`);
+      assert.strictEqual(record[0].phases, undefined, `${content}: every phase`);
+    } finally { rm(dir); }
+  }
+});
 test('run: FULL baseline (fresh app, appId null at start) writes an ELIGIBLE snapshot', async () => {
   const dir = ws();
   try {

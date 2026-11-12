@@ -234,6 +234,8 @@
       background: var(--white);
     }
 
+    .segmented[hidden] { display: none; }
+
     .segmented button, .ghost {
       border: 0;
       border-radius: 8px;
@@ -584,7 +586,7 @@
         </div>
         <div class="slide-controls" id="slideControls" role="tablist" aria-label="Template page preview"></div>
         <div class="preview-controls">
-          <div class="segmented" role="group" aria-label="Preview size">
+          <div class="segmented" id="previewViewControls" role="group" aria-label="Preview size">
             <button class="active" data-view="desktop" data-focus-key="view-desktop" aria-pressed="true">Desktop</button>
             <button data-view="mobile" data-focus-key="view-mobile" aria-pressed="false">Mobile</button>
           </div>
@@ -647,7 +649,8 @@
     const model = __JSON_MODEL__;
     const storageKey = `power-pages-create-site:${location.pathname}`;
     const saved = JSON.parse(sessionStorage.getItem(storageKey) || "{}");
-    let currentView = saved.view === "mobile" ? "mobile" : "desktop";
+    const hasMobilePreviews = model.template.previews.some((preview) => Boolean(preview.mobile));
+    let currentView = saved.view === "mobile" && hasMobilePreviews ? "mobile" : "desktop";
     const allowRefreshPause = model.presentation?.allowRefreshPause !== false;
     let autoRefreshPaused = allowRefreshPause && saved.autoRefreshPaused === true;
     let refreshTimer;
@@ -673,9 +676,14 @@
       if (!preview) {
         document.getElementById("previewCard").hidden = true;
         document.getElementById("slideControls").hidden = true;
+        document.getElementById("previewViewControls").hidden = true;
         return;
       }
 
+      document.getElementById("previewViewControls").hidden = false;
+      if (!preview[currentView]) {
+        currentView = preview.desktop ? "desktop" : "mobile";
+      }
       const image = document.getElementById("previewImage");
       image.src = preview[currentView];
       image.alt = `${currentView} preview of ${model.template.displayName}: ${preview.displayName}`;
@@ -685,6 +693,8 @@
         const selected = button.dataset.view === currentView;
         button.classList.toggle("active", selected);
         button.setAttribute("aria-pressed", String(selected));
+        button.hidden = button.dataset.view === "mobile" && !hasMobilePreviews;
+        button.disabled = !preview[button.dataset.view];
       });
       document.querySelectorAll("[data-slide]").forEach((button) => {
         const selected = button.dataset.slide === currentSlide;

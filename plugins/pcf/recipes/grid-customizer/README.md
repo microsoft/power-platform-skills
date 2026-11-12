@@ -31,7 +31,7 @@ A maker configures it after the control is packaged and imported:
 1. Add the **Power Apps grid control** to the target table/grid.
 2. Set the grid's **Customizer control** property to this component's full logical name, for example `<publisher prefix>_Contoso.Controls.GridCustomizer`.
 3. Save and publish the table/grid customizations.
-4. Open the grid and verify the text-cell renderer/editor behavior.
+4. Open the grid and verify the text-cell renderer/editor and the Choice-cell renderer behavior.
 
 Microsoft Learn states that multiple customizer controls can exist in an environment, but each grid can have only one customizer control assigned. Use a separate customizer component when two grids need incompatible renderer/editor behavior.
 
@@ -45,6 +45,7 @@ Designer paths:
 - Registers a `PAOneGridCustomizer` in `init` through `EventName`.
 - Keeps the documented `factory.fireEvent(eventName, customizer)` call isolated in `customizerBridge.ts`, which carries the `pcf-extension-pattern: grid-customizer` marker accepted by the code gate.
 - Supplies `Text` cell renderer and editor overrides as a minimal, accessible starting point.
+- Supplies an `OptionSet` (Choice) cell renderer that shows the grid's `formattedValue` label, never the stored option number. It returns `null` when the value or the label is missing, so the grid's own renderer shows the cell.
 - Returns `null` for `null` or `undefined` text values so the Power Apps grid uses its internal renderer fallback.
 - Does not mutate grid row data, column definitions, or renderer/editor params.
 - Keeps state per control instance; there is no module-global mutable state and no hard-coded element id.
@@ -52,7 +53,7 @@ Designer paths:
 ## Limits
 
 - Model-driven apps only; Power Pages does not support virtual controls.
-- This recipe customizes text cells only. Add more data types in `customizers/CellRendererOverrides.tsx` and `customizers/CellEditorOverrides.tsx`.
+- This recipe customizes text cells (renderer and editor) and Choice cells (renderer only; the grid's own editor edits them). Add more data types in `customizers/CellRendererOverrides.tsx` and `customizers/CellEditorOverrides.tsx`.
 - The customizer functions must stay pure and lightweight because the grid can call them repeatedly and can dispose rendered elements at any time.
 - Renderers and editors must not write grid data directly. Use the editor callbacks supplied by the grid and normal platform save behavior.
 - No network, file, navigation, or Dataverse Web API calls are used.

@@ -154,7 +154,7 @@ function PageBody(props: Props) {
     };
 
     return (
-        <div style={{ width: '100%', height: '100%', padding: '0.5rem', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <div style={{ width: '100%', height: '100%', overflowY: 'auto', padding: '0.5rem', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <ProgressBar
                 value={progress}
                 thickness="large"

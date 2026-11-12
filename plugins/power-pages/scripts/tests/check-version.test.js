@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { compareSemver, formatUpdateMessage, readMarketplaceName } = require('../check-version');
+const { compareSemver, formatUpdateMessage, readMarketplaceName, readPluginManifest } = require('../check-version');
 
 test('compareSemver returns 0 for equal versions', () => {
   assert.equal(compareSemver('1.2.0', '1.2.0'), 0);
@@ -83,4 +83,21 @@ test('readMarketplaceName falls back to legacy marketplace path', () => {
 
 test('readMarketplaceName returns null for nonexistent path', () => {
   assert.equal(readMarketplaceName('/nonexistent/path'), null);
+});
+
+test('readPluginManifest prefers .plugin, falls back to the legacy mirror, and returns null without either', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-manifest-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.equal(readPluginManifest(root), null);
+  fs.mkdirSync(path.join(root, '.claude-plugin'));
+  fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '1.0.0' }));
+  assert.equal(readPluginManifest(root).version, '1.0.0');
+  fs.mkdirSync(path.join(root, '.plugin'));
+  fs.writeFileSync(path.join(root, '.plugin', 'plugin.json'), JSON.stringify({ version: '2.0.0' }));
+  assert.equal(readPluginManifest(root).version, '2.0.0');
+});
+
+test('readPluginManifest defaults to this plugin root', () => {
+  const expected = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '.plugin', 'plugin.json'), 'utf8'));
+  assert.equal(readPluginManifest().version, expected.version);
 });

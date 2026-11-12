@@ -1036,53 +1036,61 @@ test('a managed download with nothing to write as fragments writes nothing there
   });
 });
 
+// The managed download of an app with one declared process and one generative page into a folder that holds a maker's edit of that page
+// and an older spec: the real page download runs over a page backend, and the restore input is the flow this wire built. Call inside
+// withBpf. `run()` downloads; `staged()` says whether the download was asked to stage its pages; `stagingLeft()` lists staging folders left.
+async function managedPagesFixture() {
+  const { runDownload } = require('../download-model-app.js');
+  const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
+  const { fakeGenpage } = require('./helpers/fake-genpage.js');
+  // Its own flow, persona and app id, so the tests that use it stand without the persona-proof tests (and their constants) above.
+  const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
+  const dispatcher = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
+  const appId = '00000000-0000-0000-0000-00000000a333';
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('declared-bpf-');
+  assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [dispatcher] })).err, undefined);
+  const out = makeTempDir('declared-bpf-');
+  const pid = '00000000-0000-4000-8000-00000000bbbb';
+  const pageFile = path.join(out, 'pages', pid, 'page.tsx');
+  fs.mkdirSync(path.dirname(pageFile), { recursive: true });
+  fs.writeFileSync(pageFile, 'MAKER EDIT THAT MUST SURVIVE FAILURE');
+  const oldSpec = JSON.stringify({ ...specWith([]), pages: [{ key: 'old', name: 'Page', pageId: pid }] });
+  fs.writeFileSync(path.join(out, 'app-spec.json'), oldSpec);
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${pid}" Title="Page"/><SubArea Entity="new_ticket"/></Group></Area></SiteMap>`;
+  const layer = '00000000-0000-4000-8000-00000000cccc';
+  const pageSdk = currentReadSdk({
+    fetchArtifact: async () => ({ name: 'BP App', uniqueName: APP, siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Records', subAreas: [{ type: 'GenPage', genPageId: pid, title: 'Page' }, { type: 'Entity', entity: 'new_ticket' }] }] }] } }),
+    queryRecords: async (logical) => {
+      if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: layer, uniquename: APP }];
+      if (logical === 'appmodulecomponent') return [{ objectid: '00000000-0000-4000-8000-00000000dddd', componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: xml }];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Ticket', primaryNameAttribute: 'new_subject' }),
+  }, { appId, layerId: layer, sitemapXml: xml });
+  const source = 'export default function Page(){return null;}';
+  const genpage = fakeGenpage({ pages: [{ pageId: pid, name: 'Page', source }] });
+  let staged;
+  const run = () => download(wire, out, ['--include-managed', '--managed-manifest', storeFileOf(dir)], {
+    // The real page download, over a page backend; the restore input is the flow this wire built.
+    runDownload: async (args) => {
+      const real = await runDownload({ ...args, sdk: pageSdk, genpage });
+      assert.equal(real.ok, true, JSON.stringify(real));
+      staged = args.stagePages;
+      return { ...real, spec: specWith([]) };
+    },
+  });
+  const stagingLeft = () => fs.readdirSync(out).filter((n) => n.startsWith('.download-pages.'));
+  return { out, pageFile, oldSpec, source, run, stagingLeft, staged: () => staged };
+}
+
 test('a fragments file that cannot be written leaves every output that was there as it was: the page tree, the spec and the baseline are published only after it', async () => {
   await withBpf(true, async () => {
-    const { runDownload } = require('../download-model-app.js');
-    const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
-    const { fakeGenpage } = require('./helpers/fake-genpage.js');
-    // Its own flow, persona and app id, so this test stands without the persona-proof tests (and their constants) above.
-    const roled = { ...FLOW, securityRoles: { personas: ['Dispatcher'] } };
-    const dispatcher = { persona: 'Dispatcher', jobs: [{ name: 'Triage tickets', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] };
-    const appId = '00000000-0000-0000-0000-00000000a333';
-    const wire = createWorkflowWire();
-    const dir = makeTempDir('declared-bpf-');
-    assert.equal((await build(wire, dir, { ...specWith([roled]), personas: [dispatcher] })).err, undefined);
-    const out = makeTempDir('declared-bpf-');
-    const pid = '00000000-0000-4000-8000-00000000bbbb';
-    const pageFile = path.join(out, 'pages', pid, 'page.tsx');
-    fs.mkdirSync(path.dirname(pageFile), { recursive: true });
-    fs.writeFileSync(pageFile, 'MAKER EDIT THAT MUST SURVIVE FAILURE');
-    const oldSpec = JSON.stringify({ ...specWith([]), pages: [{ key: 'old', name: 'Page', pageId: pid }] });
-    fs.writeFileSync(path.join(out, 'app-spec.json'), oldSpec);
+    const { out, pageFile, oldSpec, source, run, stagingLeft, staged } = await managedPagesFixture();
     // A file where the fragments folder goes: no new file can be made in it.
     const ws = path.join(out, '.maker-workspace');
     fs.writeFileSync(ws, 'maker notes');
-    const xml = `<SiteMap><Area><Group><SubArea GenPageId="${pid}" Title="Page"/><SubArea Entity="new_ticket"/></Group></Area></SiteMap>`;
-    const layer = '00000000-0000-4000-8000-00000000cccc';
-    const pageSdk = currentReadSdk({
-      fetchArtifact: async () => ({ name: 'BP App', uniqueName: APP, siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Records', subAreas: [{ type: 'GenPage', genPageId: pid, title: 'Page' }, { type: 'Entity', entity: 'new_ticket' }] }] }] } }),
-      queryRecords: async (logical) => {
-        if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: layer, uniquename: APP }];
-        if (logical === 'appmodulecomponent') return [{ objectid: '00000000-0000-4000-8000-00000000dddd', componenttype: 62 }];
-        if (logical === 'sitemap') return [{ sitemapxml: xml }];
-        return [];
-      },
-      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Ticket', primaryNameAttribute: 'new_subject' }),
-    }, { appId, layerId: layer, sitemapXml: xml });
-    const source = 'export default function Page(){return null;}';
-    const genpage = fakeGenpage({ pages: [{ pageId: pid, name: 'Page', source }] });
-    let staged;
-    const run = () => download(wire, out, ['--include-managed', '--managed-manifest', storeFileOf(dir)], {
-      // The real page download, over a page backend; the restore input is the flow this wire built.
-      runDownload: async (args) => {
-        const real = await runDownload({ ...args, sdk: pageSdk, genpage });
-        assert.equal(real.ok, true, JSON.stringify(real));
-        staged = args.stagePages;
-        return { ...real, spec: specWith([]) };
-      },
-    });
-    const stagingLeft = () => fs.readdirSync(out).filter((n) => n.startsWith('.download-pages.'));
     {
       const before = snapshotTree(out);
       const failed = await run();
@@ -1092,7 +1100,7 @@ test('a fragments file that cannot be written leaves every output that was there
       assert.equal(fs.readFileSync(path.join(out, 'app-spec.json'), 'utf8'), oldSpec);
       assert.match(failed.emitted[0].payload.error, /No other output was written\.$/);
       assert.deepEqual(stagingLeft(), [], 'the staging folder is removed');
-      assert.equal(staged, true, 'the managed download stages its pages');
+      assert.equal(staged(), true, 'the managed download stages its pages');
       assert.deepEqual(snapshotTree(out), before, 'no baseline, no fragments, no leftover name: the app folder is exactly as it was');
     }
     fs.unlinkSync(ws);
@@ -1105,6 +1113,31 @@ test('a fragments file that cannot be written leaves every output that was there
     assert.deepEqual(stagingLeft(), []);
   });
 });
+
+for (const [what, plant, refusal] of [
+  ['read-only', (file) => fs.chmodSync(file, 0o444), (e) => e.code === 'IO_ERROR' && e.reason === 'read-only'],
+  ['a hard link', (file, elsewhere) => fs.linkSync(file, path.join(elsewhere, 'twin.json')), (e) => e.code === 'UNSAFE_OUTPUT' && e.reason === 'hard-link'],
+]) {
+  test(`a managed download whose app-spec.json is ${what} is refused before the fragments file or pages/ is written: the app folder is exactly as it was`, async () => {
+    await withBpf(true, async () => {
+      const { out, pageFile, oldSpec, run, stagingLeft, staged } = await managedPagesFixture();
+      const specFile = path.join(out, 'app-spec.json');
+      const elsewhere = makeTempDir('declared-bpf-');
+      plant(specFile, elsewhere);
+      try {
+        const before = snapshotTree(out);
+        await assert.rejects(run(), (e) => refusal(e) && /^refusing to write .*app-spec\.json: .* The download stopped before replacing anything: /.test(e.message));
+        assert.equal(staged(), true, 'the managed download stages its pages');
+        assert.equal(fs.readFileSync(pageFile, 'utf8'), 'MAKER EDIT THAT MUST SURVIVE FAILURE');
+        assert.equal(fs.readFileSync(specFile, 'utf8'), oldSpec);
+        assert.deepEqual(stagingLeft(), [], 'the staging folder is removed');
+        assert.deepEqual(snapshotTree(out), before, 'no fragments, no baseline, no new pages, no leftover name: the app folder is exactly as it was');
+      } finally {
+        fs.chmodSync(specFile, 0o666);
+      }
+    });
+  });
+}
 
 
 test('the fragments file is made by an exclusive create under a new name: a name that is taken, even at the last moment, is left as it is and another is used', () => {
