@@ -9,9 +9,10 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 - **Same-named declared views (#845):** `--verify` checks each declared view against its own row (managed binding, then `viewId`, then name), so two same-named views on one table, each with its own `key`, no longer fail verification.
 - `--changed-only` sees an edit to the earlier of two same-named declared views and runs the full build that applies it.
+- Both views of such a pair join the app's components and declared pins, not only the later one.
 - **Sensitive configuration stays off disk (#846, #847):** environment-variable values, defaults, value schemas, secret references and connection ids are kept in memory, never written to workspace files.
 - A protected secret-variable create the service refuses stops with the service's reason and can be completed with corrected settings or retired; one a 2.26 build left pending now says how to retire it.
-- Copies an earlier version left in a workspace are never read, hidden or deleted: the build names their folders and refuses one it cannot prove clean.
+- Copies an earlier version left in a workspace are never used as configuration, hidden or deleted: the build names their folders and refuses one it cannot prove clean.
 
 ### Limits
 
