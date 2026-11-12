@@ -117,31 +117,46 @@ data-migration step (covered at the end of this prompt).
           // ... auth setup omitted ...
 
           var sourceQuery = new QueryExpression("adx_<source>") {
-              ColumnSet = new ColumnSet("<custom_column1>", "<custom_column2>", "<source>id")
+              ColumnSet = new ColumnSet("<custom_column1>", "<custom_column2>", "<source>id"),
+              PageInfo = new PagingInfo { Count = 5000, PageNumber = 1 }
           };
-          var sourceRows = service.RetrieveMultiple(sourceQuery);
+          sourceQuery.AddOrder("<source>id", OrderType.Ascending);
 
           var batch = new ExecuteMultipleRequest {
               Requests = new OrganizationRequestCollection(),
               Settings = new ExecuteMultipleSettings { ContinueOnError = false, ReturnResponses = false }
           };
 
-          foreach (var src in sourceRows.Entities) {
-              var newRow = new Entity("<prefix>_<target>");
-              newRow["<prefix>_powerpagecomponentid"] = new EntityReference(
-                  "powerpagecomponent", src.Id);
-              newRow["<custom_column1>"] = src["<custom_column1>"];
-              // ... copy remaining custom columns ...
-              batch.Requests.Add(new CreateRequest { Target = newRow });
+          while (true) {
+              var sourceRows = service.RetrieveMultiple(sourceQuery);
+              foreach (var src in sourceRows.Entities) {
+                  var newRow = new Entity("<prefix>_<target>");
+                  newRow["<prefix>_powerpagecomponentid"] = new EntityReference(
+                      "powerpagecomponent", src.Id);
+                  newRow["<custom_column1>"] = src.GetAttributeValue<object>("<custom_column1>");
+                  // ... copy remaining custom columns ...
+                  batch.Requests.Add(new CreateRequest { Target = newRow });
 
-              if (batch.Requests.Count == 1000) {
-                  service.Execute(batch);
-                  batch.Requests.Clear();
+                  if (batch.Requests.Count == 1000) {
+                      var response = (ExecuteMultipleResponse)service.Execute(batch);
+                      if (response.IsFaulted) throw new InvalidOperationException("Data migration batch failed; inspect response.Responses before resuming.");
+                      batch.Requests.Clear();
+                  }
               }
+              if (!sourceRows.MoreRecords) break;
+              sourceQuery.PageInfo.PageNumber++;
+              sourceQuery.PageInfo.PagingCookie = sourceRows.PagingCookie;
           }
-          if (batch.Requests.Count > 0) service.Execute(batch);
+          if (batch.Requests.Count > 0) {
+              var response = (ExecuteMultipleResponse)service.Execute(batch);
+              if (response.IsFaulted) throw new InvalidOperationException("Data migration batch failed; inspect response.Responses before resuming.");
+          }
 
       Adapt the placeholders to the user's actual table/column names.
+      Retrieve every page before declaring completion. Review batch faults and
+      reconcile already-created rows before retrying; this create-only skeleton
+      is not safe to rerun blindly.
+      Paging reference: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/org-service/queryexpression/page-results
 
    c. After data migration, the user must:
       - Update any Liquid/FetchXML references to the old adx_* custom

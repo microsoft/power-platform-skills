@@ -1,8 +1,15 @@
 # HTML Reports Integration Guide
 
-This document explains how to integrate the HTML report templates and generation scripts into the `migrate-datamodel` skill workflow.
+The `migrate-datamodel` skill has four high-level phases and two report owners:
 
-> **Note on the execution report.** Parts of this guide are historical. The **execution/progress report** (`datamodel-migration-report.html`) is now the **live report**, rendered from `migration-state.json` by `scripts/lib/render-live-report.js` and driven by `scripts/update-state.js` — it is re-rendered after every step, not produced from a static template. `generate-migration-reports.js` owns only the **customization report**, the staged remediation rewrites, and the augmented prompts. Disregard any step below that describes `generate-migration-reports.js` generating or writing the execution report.
+| Report | Owner | When updated |
+|---|---|---|
+| `customization-report.html` | `scripts/generate-migration-reports.js` and `assets/customization-report.html` | After locating a PAC customization CSV |
+| `datamodel-migration-report.html` | `scripts/update-state.js` and `scripts/lib/render-live-report.js` | After each state update |
+
+The generator never writes the execution/progress report. Do not replace the live
+report with a static template, example command results, or a fabricated success.
+The authoritative workflow and approval gates are in [SKILL.md](./SKILL.md).
 
 ## Waiting for user input
 
@@ -29,8 +36,7 @@ Approved agent-run package installations reuse the report-wide now-running banne
 indeterminate bar and elapsed time, not an installation percentage or ETA.
 Keep the banner through asynchronous installation and installed-package/version
 verification; clear it when verified or before handing control back to the user.
-See [Package installation progress](./SKILL.md#package-installation-progress) for
-the shared lifecycle used by dependency, template, and late-precheck installs.
+See [Package installation progress](./SKILL.md#package-installation-progress).
 
 ## Restart and readiness
 
@@ -64,273 +70,109 @@ decision. Warnings, incomplete checks, unavailable tools and user-reported resul
 must remain distinguishable from an executed passing test. Finishing the sub-step
 for an explicit defer/skip does not mean runtime validation passed.
 
-## Folder Structure
+## Customization analysis and staged remediation
 
-```
-plugins/power-pages/skills/migrate-datamodel/
-├── assets/
-│   ├── customization-report.html      # Template for customization report
-│   └── README.md                      # Template documentation
-├── scripts/
-│   └── generate-migration-reports.js  # Utility to generate reports from data
-├── SKILL.md
-└── DESIGN.md
-```
+On the Authoring Track, locate the CSV at step 2.3 and remediate at step 2.4.
+On the Downstream Track, these are steps 3.3 and 3.4; findings can indicate an
+upstream ALM gap. Use the actual CSV emitted by the approved PAC migration, not
+an additional migration command merely to obtain a report.
 
-## Workflow Integration
-
-### Phase 8: Customization Report & Analysis
-
-**Current flow (SKILL.md):**
-
-1. Download customization report via PAC CLI
-2. Parse and categorize findings
-3. Generate HTML report
-4. Present findings to user
-
-**Implementation:**
+Generate the customization report:
 
 ```text
-# Phase 8 step 1: Download Customization Report
-pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --siteCustomizationReportPath "./migration-report"
-
-# Phase 8 step 2: Parse findings
-# ... parsing logic ...
-
-# Phase 8 step 3: Generate HTML report
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --customization-report "./migration-report/SiteCustomization.csv" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --template-name "<TEMPLATE_NAME>" --output-dir "./migration-reports"
-
-# Share with user
-echo "Customization report: file://$(pwd)/migration-reports/customization-report.html"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --customization-report "<CSV_PATH>" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --template-name "<TEMPLATE_NAME>" --output-dir "<OUTPUT_DIR>"
 ```
 
-### Phase 9: Automated Remediation (subset)
-
-For automatable fixes (Data Model Extensions only), the same script is invoked with `--automate` and `--env-url`:
+Stage supported FetchXML rewrites and Liquid annotations against downloaded source:
 
 ```text
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --siteCustomizationReportPath "./migration-report/SiteCustomization.csv" --env-url "https://org.crm.dynamics.com" --automate --environment-type "<ENV_TYPE>" --output-dir "./migration-reports"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --customization-report "<CSV_PATH>" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --site-path "<SITE_ROOT>" --automate-fetchxml --automate-liquid --output-dir "<OUTPUT_DIR>"
 ```
 
-The script creates missing string attributes via Dataverse Web API and logs results into the execution report. All other customization types (Liquid, FetchXML, plugins, workflows) are flagged as manual.
+Separate invocations of the two flags preserve both selected passes. Reruns rebuild
+proposals from current source and remove obsolete proposals when no changes remain.
+The legacy `--automate` flag is a compatibility no-op: it does not create columns or
+perform Dataverse writes. No `--env-url` is needed for local report generation.
 
-### Phase 12: Execution Report & Summary
+Outputs:
 
-**Current flow (SKILL.md):**
+- `customization-report.html`: escaped findings, HTTP(S) guidance links and snippet previews.
+- `remediation-staged/`: proposed source files; live source remains unchanged.
+- `remediation-diff.json`: combined FetchXML/Liquid diff, bound to its source site root.
+- `plugin-remediation-prompt.txt`: guidance for customer-owned plugin source, when applicable.
+- `dme-remediation-prompt.txt`: solution-package guidance for supported metadata tables.
 
-1. Present validation checklist
-2. Run rollback (if needed)
-3. Generate execution report
-4. Present final summary
+Data Model Extensions are manual: create a reviewed custom table with a lookup to
+`powerpagecomponent`, preserve the custom column types, migrate all pages of source
+rows, and update consumers. Non-metadata or unmapped findings require separate manual
+review and must not receive the metadata-table transformation. No direct schema writes
+are made by this generator. Plugin guidance preserves the legacy `adx_*` logical
+attribute names exposed by EDM while changing the registered entity/type handling.
 
-**Implementation:**
+Only after explicit review and approval, apply staged files to the same site:
 
 ```text
-# During Phases 1–11: skill collects timing and results
-# Track all commands, results, and timing
-
-# At end of Phase 12: generate execution report
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --portal-id "<PORTAL_ID>" --template-name "<TEMPLATE_NAME>" --execution-data "phase1,phase2,phase3,phase4,phase5,phase6,phase7,phase8,phase9,phase10,phase11,phase12" --output-dir "./migration-reports"
-
-# Share with user
-echo "Execution report: file://$(pwd)/migration-reports/datamodel-migration-report.html"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/apply-remediation.js" --output-dir "<OUTPUT_DIR>" --site-root "<SITE_ROOT>"
 ```
 
-## Data Structures
+Applying to a different root is rejected. Follow the track-specific upload and
+approval sequence in [SKILL.md](./SKILL.md); applying local files is not deployment.
 
-### Customization Report CSV (from PAC CLI)
+## Snapshot comparison in the live report
 
-The CSV contains:
-- **Type of customization** — Category (Liquid, Data Model Extension, Plugin, etc.)
-- **Guidance** — Microsoft link to remediation docs
-- **Snippet** — Code snippet or detail
-- **Location** — File path or table name
+Capture SDM/EDM snapshots with `snapshot-site.js` and compare them with
+`diff-snapshots.js` at the Phase 3.1 safety gate. Both flat downloaded sites and
+configuration under `.powerpages-site/` are recognized.
 
-Example:
-```
-Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% assign homeurl = website.adx_partialurl %}","web-templates/header/Header.webtemplate.source.html"
-Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_websiteid","Table name : adx_ad"
-```
+The Pages & Components card uses the same identity/state/value/hash comparison
+as the diff CLI, not just equal counts. Navigation includes inactive links,
+state, target and display order. Site settings support aggregate and per-record
+layouts. Parse errors and ambiguous identities prevent a verified match;
+expected SDM-only download differences remain reviewable warnings.
 
-### Execution Data Structure (to be tracked by skill)
+## Execution report and final summary
 
-During skill execution, collect:
-
-```json
-{
-  "siteName": "Contoso Portal",
-  "websiteId": "076bf556-9ae6-ee11-a203-6045bdf0328e",
-  "portalId": "07f35d71-c45a-4a05-9702-8f127559e48e",
-  "templateName": "Starter layout 1",
-  "startTime": "2024-04-20T10:30:00Z",
-  "prerequisites": [
-    {
-      "name": "PAC CLI Version",
-      "required": "1.31.6 or higher",
-      "actual": "1.32.1",
-      "status": "success"
-    }
-  ],
-  "pacCommands": [
-    {
-      "step": 1,
-      "description": "Verify Authentication",
-      "command": "pac auth who",
-      "status": "success",
-      "output": "Authenticated to https://org12345.crm.dynamics.com"
-    },
-    {
-      "step": 2,
-      "description": "List Available Sites",
-      "command": "pac pages list",
-      "status": "success",
-      "output": "Found 3 websites"
-    }
-  ],
-  "phases": [
-    {
-      "number": 1,
-      "title": "Verify Prerequisites",
-      "status": "completed",
-      "results": [
-        {
-          "type": "success",
-          "title": "PAC CLI Verified",
-          "description": "PAC CLI version 1.32.1 meets minimum requirement"
-        }
-      ]
-    }
-  ],
-  "customizations": {
-    "liquidReferences": 8,
-    "dataModelExtensions": 15,
-    "pluginsRegistered": 2,
-    "customWorkflows": 1
-  },
-  "remediationRequired": true,
-  "remediationSteps": [
-    {
-      "type": "Liquid References",
-      "count": 8,
-      "guidance": "Replace adx_* Liquid objects with powerpagecomponent equivalents"
-    }
-  ],
-  "endTime": "2024-04-20T10:45:00Z"
-}
-```
-
-## Integration Points in SKILL.md
-
-### Phase 8: Customization Report Generation
-
-The skill calls the script after parsing the CSV from PAC CLI:
+Initialize and update state using the commands in [SKILL.md](./SKILL.md). Reuse the
+resolved migration subfolder printed by initialization for every subsequent command.
+To re-render the existing state without changing progress:
 
 ```text
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --customization-report "<REPORT_PATH>" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --template-name "<TEMPLATE_NAME>" --output-dir "<OUTPUT_DIR>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/update-state.js" --output-dir "<OUTPUT_DIR>" --render-only
 ```
 
-Open the generated HTML report in your browser: `file://<OUTPUT_DIR>/customization-report.html`
+Record actual command outputs, approvals and validation outcomes throughout all
+four phases. Phase 4.2 records the final status; generating a report is not evidence
+that a migration or runtime test passed. Completion telemetry uses only existing
+shared fields; migration-specific phase/template details remain local.
 
-### Phase 9: Automated Remediation
+## CSV format and dependencies
 
-The same script runs with `--automate` to apply safe fixes via Dataverse API (Data Model Extensions only):
+PAC CSV columns are `Type of customization`, `Guidance`, `Snippet`, and `Location`:
 
-```text
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --siteCustomizationReportPath "<REPORT_PATH>" --env-url "<ENV_URL>" --automate --environment-type "<ENV_TYPE>" --output-dir "<OUTPUT_DIR>"
+```csv
+Type of customization,Guidance,Snippet,Location
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% assign homeurl = website.adx_partialurl %}",web-templates/header/Header.webtemplate.source.html
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,Table name : adx_webpage   Column name : contoso_redirecturl,Table name : adx_webpage
 ```
 
-### Phase 12: Final Execution Report
+The generator uses Node.js standard-library modules, bundled validation helpers
+and a built-in CSV parser;
+no `npm install` is required. The parser supports quoted fields, doubled quotes,
+embedded newlines and CRLF. Repeated template tokens are replaced globally, with
+literal replacement values.
 
-At the end of post-migration validation:
+## Opening reports
 
-```text
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" --site-name "<SITE_NAME>" --website-id "<WEBSITE_ID>" --portal-id "<PORTAL_ID>" --template-name "<TEMPLATE_NAME>" --output-dir "<OUTPUT_DIR>"
-```
-
-The execution report includes:
-
-- All PAC commands executed and their results
-- Prerequisite verification status
-- Migration phase details
-- Customization analysis summary
-- Remediation guidance
-- Post-migration validation checklist
-- Next steps
-
-Open the report in your browser: `file://<OUTPUT_DIR>/datamodel-migration-report.html`
-
-## Using `browser_navigate` to Open Reports
-
-In the Claude skill, after generating reports, use Playwright to open them in the user's browser:
+Use the generator's printed file URL or open the HTML file directly. Code that
+constructs a URL must use Node's `pathToFileURL`, not string concatenation:
 
 ```javascript
-// Open customization report
-await browser_navigate(`file://${path.resolve('./migration-reports/customization-report.html')}`);
-
-// Take accessibility snapshot
-const snapshot = await browser_snapshot();
-console.log('Report loaded successfully');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const reportUrl = pathToFileURL(path.resolve(outputDir, 'customization-report.html')).href;
 ```
 
-Or inform the user of the file path for manual opening:
-
-```
-I've generated two detailed reports in the `migration-reports` folder:
-
-1. **Customization Report**: Shows all customizations found
-   Open: file://${pwd}/migration-reports/customization-report.html
-
-2. **Execution Report**: Shows all migration steps and results
-   Open: file://${pwd}/migration-reports/datamodel-migration-report.html
-
-You can open these files in your browser to review the details.
-```
-
-## Development Notes
-
-### Template Customization
-
-If you need to modify the templates:
-
-1. Edit `customization-report.html` in the `assets/` folder
-2. Update the placeholder documentation in `assets/README.md`
-3. Update the placeholder replacement logic in `generate-migration-reports.js`
-
-### Adding New Customization Types
-
-To add a new customization type badge:
-
-1. Add the CSS class in the template (e.g., `.badge-newtype { ... }`)
-2. Update the `badgeMap` in `generate-migration-reports.js`
-3. Update the documentation
-
-### CSV Parsing
-
-The script uses a built-in CSV parser (no npm dependency) — see `parseCSV()` in `generate-migration-reports.js`. It handles quoted values, embedded quotes (`""` → `"`), and `\r\n` line endings.
-
-### Dependencies
-
-The script imports only:
-
-- Node stdlib: `fs`, `path`
-- The plugin-shared validation helpers at `plugins/power-pages/scripts/lib/validation-helpers.js` (provides `getAuthToken`, `makeRequest`, `getEnvironmentUrl`)
-
-No `npm install` is required to run the script.
-
-## Sample Output
-
-After running the generation script:
-
-```
-✓ Customization report generated: <OUTPUT_DIR>/customization-report.html
-✓ Execution report generated: <OUTPUT_DIR>/datamodel-migration-report.html
-
-Reports generated successfully!
-Open in browser: file:///C:/path/to/migration-reports/customization-report.html
-```
-
-Both HTML files are self-contained (no external dependencies) and can be:
-- Opened directly in any modern browser
-- Saved for later reference
-- Included in documentation
-- Shared with stakeholders
+Both reports are self-contained HTML and can be opened offline. When changing the
+customization template, update [assets/README.md](./assets/README.md) and its
+placeholder tests. Migration regression tests live under
+`../../scripts/tests/` and run in the Power Pages path-filtered workflow.

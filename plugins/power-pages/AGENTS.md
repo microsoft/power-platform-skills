@@ -13,13 +13,20 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 
 Keep `migrate-datamodel`'s four phases, track selection, and approval gates unchanged
 when maintaining its scripts. Snapshot comparisons must not pass incomplete parses
-or ambiguous duplicate identities. Initialization must verify the website and
+or ambiguous duplicate identities. Reuse the strict aggregate parser and site-root
+resolver; retain inactive navigation links, target/order/state, and both site-setting
+layouts. The live comparison must use record-level diff semantics, not just counts.
+Initialization must verify the website and
 environment identity before resuming or resetting an existing folder. Remediation
 reruns rebuild the selected FetchXML/Liquid passes from current source, preserving
 both passes without modifying live files before the approved apply step.
 Validate saved state and snapshot/remediation records before dereferencing them;
 invalid input must produce a clear error without replacing usable state or partially
 applying a proposal with missing staged files.
+Bind remediation apply to the manifest's canonical site root. DME checklists apply
+only to mapped metadata tables; unsupported findings remain explicit manual review.
+Completion telemetry uses existing approved fields and shared regional dispatch;
+do not transmit migration-specific phase/template data through `eventInfo`.
 Keep migration instructions shell-independent: use `migration-runtime.js` for
 discovery, UTF-8 solution capture, delays, and bounded read-only polling, not
 PowerShell/Bash loops. PAC runs through the shared argument-array runner; retain
@@ -43,7 +50,7 @@ user-controlled login. Keep input notices/progress synchronized and record only
 the current matching-site result; warnings, skipped scope, cancellation and
 unavailable tools are not an unconditional pass. Preserve earlier-result,
 defer/skip and final-status/rollback choices.
-Regression coverage lives in `scripts/tests/{diff-snapshots,snapshot-site,update-state,generate-migration-reports,apply-remediation}.test.js`.
+Regression coverage lives in `scripts/tests/{diff-snapshots,snapshot-site,update-state,generate-migration-reports,apply-remediation,render-live-report,detect-template,migration-telemetry}.test.js`.
 
 ## Non-SPA creation and shared design quality
 

@@ -84,7 +84,8 @@ const KEY_FIELDS = {
 // identity), because the value carries operational meaning. siteSettings is
 // the classic case: same setting key, but the value changed, is interesting.
 const VALUE_FIELDS = {
-  siteSettings: 'value',
+  siteSettings: ['value'],
+  webLinks: ['pageId', 'externalUrl', 'displayOrder'],
 };
 
 function makeKey(rec, fields) {
@@ -118,7 +119,7 @@ function diffCategory(category, sdmInventory, edmInventory) {
   }
 
   const keyFields = KEY_FIELDS[category] || ['name'];
-  const valueField = VALUE_FIELDS[category];
+  const valueFields = VALUE_FIELDS[category] || [];
 
   // Duplicate logical identities cannot be paired reliably. Do not silently
   // overwrite them, even when both downloads contain the same record count.
@@ -153,7 +154,7 @@ function diffCategory(category, sdmInventory, edmInventory) {
     if ((sdmRec.contentHash ?? null) !== (edmRec.contentHash ?? null)) {
       contentChanged.push({ key, sdmHash: sdmRec.contentHash, edmHash: edmRec.contentHash, record: sdmRec });
     }
-    if (valueField) {
+    for (const valueField of valueFields) {
       const sdmVal = sdmRec[valueField];
       const edmVal = edmRec[valueField];
       if (String(sdmVal ?? '') !== String(edmVal ?? '')) {
@@ -366,4 +367,6 @@ function main() {
   process.exit(diff.overallStatus === 'fail' ? 1 : 0);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { diffCategory };

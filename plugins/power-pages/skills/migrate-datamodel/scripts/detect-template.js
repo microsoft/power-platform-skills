@@ -27,6 +27,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { resolvePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
 
 // D365 portals — have a site-inspection signal (except CSS) AND an anchor solution.
 const D365 = {
@@ -66,11 +67,17 @@ function parseArgs(argv) {
   return out;
 }
 
-function readText(file) {
+function readText(file, required = false) {
   try {
-    return fs.readFileSync(file, 'utf8');
-  } catch {
-    return '';
+    const bytes = fs.readFileSync(file);
+    // Windows PowerShell Out-File writes FF FE + UTF-16LE by default; PAC's
+    // Node capture writes UTF-8. Honor the BOM instead of matching NUL-separated names.
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return bytes.subarray(2).swap16().toString('utf16le');
+    return bytes.toString('utf8').replace(/^\uFEFF/, '');
+  } catch (error) {
+    if (!required && error.code === 'ENOENT') return '';
+    throw new Error(`Could not read template detection input ${file}: ${error.message}`);
   }
 }
 
@@ -124,7 +131,7 @@ function inspectSite(siteRoot) {
 function loadInstalledSolutions(opts) {
   const found = new Set(opts.solutions.map((s) => s));
   if (opts.solutionsFile) {
-    const text = readText(opts.solutionsFile);
+    const text = readText(opts.solutionsFile, true);
     // Scan for each known anchor uniquename regardless of pac output formatting.
     const known = [...D365_ANCHORS, ...GROUP_B_ANCHORS];
     for (const name of known) {
@@ -246,6 +253,7 @@ function main() {
     process.exit(1);
   }
 
+  opts.siteRoot = resolvePowerPagesSiteRoot(opts.siteRoot) || path.resolve(opts.siteRoot);
   const inspection = inspectSite(opts.siteRoot);
   const installed = loadInstalledSolutions(opts);
   const resolution = resolve(inspection, installed);
@@ -260,4 +268,11 @@ function main() {
   process.stdout.write(JSON.stringify(result, null, opts.pretty ? 2 : 0) + '\n');
 }
 
-main();
+if (require.main === module) {
+  try { main(); } catch (error) {
+    process.stderr.write(`ERROR: ${error.message}\n`);
+    process.exitCode = 1;
+  }
+}
+
+module.exports = { resolve, inspectSite, loadInstalledSolutions };

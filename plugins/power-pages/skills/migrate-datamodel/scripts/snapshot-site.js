@@ -25,6 +25,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { parseSimpleYaml } = require('../../../scripts/lib/powerpages-config');
+const { loadAggregateRecords } = require('../../../scripts/lib/non-spa-metadata');
+const { resolvePowerPagesSiteRoot } = require('../../../scripts/lib/validation-helpers');
 
 function parseArgs(argv) {
   const out = {};
@@ -86,45 +88,15 @@ function extractLanguageTag(filename, suffix) {
   return /^[a-z]{2,3}(-[A-Z]{2,4})?$/i.test(last) ? last : null;
 }
 
-// Pull each top-level "- " block out of a collection YAML and turn each block
-// into a flat record by line-parsing. parseSimpleYaml doesn't handle arrays
-// of objects, so we do this directly. Sufficient for sitesetting.yml,
-// webrole.yml, sitemarker.yml, and the *.weblinkset.weblink.yml sibling.
+// Reuse strict aggregate parsing so malformed fields cannot silently disappear
+// from a migration baseline. It also handles quoted and multiline YAML scalars.
 function parseCollectionFile(filePath, errors) {
-  const records = [];
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const lines = content.split(/\r?\n/);
-    let current = null;
-    for (const rawLine of lines) {
-      if (/^- /.test(rawLine)) {
-        if (current) records.push(current);
-        current = {};
-        const rest = rawLine.slice(2);
-        addKeyValueToRecord(current, rest);
-      } else if (current && /^\s+/.test(rawLine) && rawLine.trim()) {
-        addKeyValueToRecord(current, rawLine.trim());
-      }
-    }
-    if (current) records.push(current);
+    return loadAggregateRecords(filePath);
   } catch (e) {
     errors.push({ filePath, message: e.message });
+    return [];
   }
-  return records;
-}
-
-function addKeyValueToRecord(rec, line) {
-  const sep = line.indexOf(':');
-  if (sep === -1) return;
-  const key = line.slice(0, sep).trim();
-  let value = line.slice(sep + 1).trim();
-  if (!key) return;
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    value = value.slice(1, -1);
-  } else if (value === 'true') value = true;
-  else if (value === 'false') value = false;
-  else if (/^-?\d+$/.test(value)) value = Number(value);
-  rec[key] = value;
 }
 
 // ── Per-artifact scanners ──────────────────────────────────────────────────
@@ -214,10 +186,12 @@ function scanWebLinkSets(siteRoot) {
       const linksFile = f.replace('.weblinkset.yml', '.weblinkset.weblink.yml');
       const linkRecs = fs.existsSync(linksFile) ? parseCollectionFile(linksFile, errors) : [];
       const links = linkRecs
-        .filter((r) => (r.statecode ?? 0) === 0) // active links only for nav count
         .map((r) => ({
           name: r.adx_name || null,
           displayOrder: typeof r.adx_displayorder === 'number' ? r.adx_displayorder : null,
+          pageId: r.adx_pageid || null,
+          externalUrl: r.adx_externalurl || null,
+          stateCode: typeof r.statecode === 'number' ? r.statecode : null,
         }))
         .sort((a, b) => (a.displayOrder ?? 999) - (b.displayOrder ?? 999) || String(a.name).localeCompare(String(b.name)));
 
@@ -226,8 +200,9 @@ function scanWebLinkSets(siteRoot) {
         name: rec.adx_name || null,
         language,
         stateCode: typeof rec.statecode === 'number' ? rec.statecode : null,
-        linkCount: links.length,
-        linkNames: links.map((l) => l.name),
+        linkCount: links.filter((link) => (link.stateCode ?? 0) === 0).length,
+        linkNames: links.filter((link) => (link.stateCode ?? 0) === 0).map((l) => l.name),
+        links,
       });
     }
   }
@@ -240,10 +215,10 @@ function scanWebLinkSets(siteRoot) {
 function deriveWebLinks(linkSetsResult) {
   const inventory = [];
   for (const set of linkSetsResult.inventory || []) {
-    for (const linkName of set.linkNames || []) {
+    for (const link of set.links || []) {
       inventory.push({
+        ...link,
         slug: set.slug,
-        name: linkName,
         parentSet: set.name,
         language: set.language,
       });
@@ -349,7 +324,7 @@ function sortInventory(arr, ...keys) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const siteRoot = args['site-root'];
+  let siteRoot = args['site-root'];
   const outputDir = args['output-dir'];
   const label = args['label'];
   const withContentHash = !!args['with-content-hash'];
@@ -363,15 +338,25 @@ function main() {
     console.error(`Site root not found: ${siteRoot}`); process.exit(1);
   }
 
+  siteRoot = resolvePowerPagesSiteRoot(siteRoot) || path.resolve(siteRoot);
+  const webLinkSets = scanWebLinkSets(siteRoot);
+  const siteSettings = scanTopLevelCollection(siteRoot, 'sitesetting.yml',
+    { name: 'adx_name', value: 'adx_value' });
+  const individualSettings = scanFlatFolder(siteRoot, 'site-settings', '.sitesetting.yml',
+    { name: 'adx_name', value: 'adx_value' });
+  siteSettings.inventory.push(...individualSettings.inventory);
+  siteSettings.parseErrors.push(...individualSettings.parseErrors);
+  siteSettings.count = siteSettings.inventory.length;
+
   const categories = {
     webPages: scanWebPages(siteRoot, withContentHash),
     contentSnippets: scanContentSnippets(siteRoot, withContentHash),
-    webLinkSets: scanWebLinkSets(siteRoot),
+    webLinkSets,
     // webLinks is derived from the per-set link inventory captured by
     // scanWebLinkSets above. It exposes each individual link as its own
     // record so the Navigation group in the live report shows the actual
     // navigation items, not just the menu containers.
-    webLinks: deriveWebLinks(scanWebLinkSets(siteRoot)),
+    webLinks: deriveWebLinks(webLinkSets),
     webTemplates: scanWebTemplates(siteRoot, withContentHash),
     webFiles: scanFlatFolder(siteRoot, 'web-files', '.webfile.yml',
       { name: 'adx_name', partialUrl: 'adx_partialurl' }),
@@ -393,8 +378,7 @@ function main() {
       { name: 'adx_name' }),
     columnPermissionProfiles: scanPerSlugFolder(siteRoot, 'column-permission-profiles', '.columnpermissionprofile.yml',
       { name: 'adx_name' }),
-    siteSettings: scanTopLevelCollection(siteRoot, 'sitesetting.yml',
-      { name: 'adx_name', value: 'adx_value' }),
+    siteSettings,
     webRoles: scanTopLevelCollection(siteRoot, 'webrole.yml',
       { name: 'adx_name' }),
     siteMarkers: scanTopLevelCollection(siteRoot, 'sitemarker.yml',

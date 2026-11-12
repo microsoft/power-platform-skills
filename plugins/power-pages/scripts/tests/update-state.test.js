@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { buildInitialState } = require('../../skills/migrate-datamodel/scripts/lib/migration-state-schema');
+const { buildInitialState, rebuildPhasesForTrack } = require('../../skills/migrate-datamodel/scripts/lib/migration-state-schema');
 
 const script = path.join(__dirname, '../../skills/migrate-datamodel/scripts/update-state.js');
 const websiteId = '00000000-0000-0000-0000-000000000001';
@@ -28,6 +28,24 @@ test('initial state retains the four-phase authoring workflow', () => {
   assert.equal(state.track, 'A');
   assert.deepEqual(state.phases.map((phase) => phase.id), [1, 2, 3, 4]);
   assert.equal(state.site.environmentUrl, null);
+});
+
+test('switching tracks preserves shared phase progress and rebuilds track-specific phases', () => {
+  const state = buildInitialState({ webSiteId: websiteId, outputDir: 'migration-reports' });
+  const shared = [state.phases[0], state.phases[3]];
+  state.phases[0].subSteps[0].status = 'completed';
+  state.phases[3].subSteps[0].output = 'Existing result';
+  state.phases[1].subSteps[0].status = 'completed';
+  rebuildPhasesForTrack(state, 'B');
+  assert.equal(state.phases[0], shared[0]);
+  assert.equal(state.phases[3], shared[1]);
+  assert.equal(state.phases[1].subSteps.length, 3);
+  assert.equal(state.phases[2].subSteps.length, 6);
+  assert.equal(state.phases[1].subSteps[0].status, 'pending');
+  rebuildPhasesForTrack(state, 'A');
+  assert.equal(state.phases[1].subSteps.length, 4);
+  assert.equal(state.phases[2].subSteps.length, 4);
+  assert.throws(() => rebuildPhasesForTrack(state, 'invalid'), /unknown track/);
 });
 
 test('init records identity and matching resume preserves progress and prints its output directory', (t) => {

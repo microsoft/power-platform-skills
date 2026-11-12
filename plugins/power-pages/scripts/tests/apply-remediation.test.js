@@ -16,7 +16,8 @@ function setup(t) {
   fs.mkdirSync(site);
   fs.mkdirSync(staged, { recursive: true });
   const manifestPath = path.join(output, 'remediation-diff.json');
-  const writeManifest = (value) => fs.writeFileSync(manifestPath, JSON.stringify(value));
+  const writeManifest = (value) => fs.writeFileSync(manifestPath,
+    JSON.stringify(value && typeof value === 'object' ? { siteRoot: site, ...value } : value));
   const run = (...args) => spawnSync(process.execPath, [
     script, '--site-root', site, '--output-dir', output, ...args,
   ], { encoding: 'utf8' });
@@ -77,4 +78,20 @@ test('traversal paths are rejected without copying or deleting files', (t) => {
   assert.equal(result.status, 4);
   assert.match(result.stderr, /must stay inside/);
   assert.ok(fs.existsSync(fixture.staged));
+});
+
+test('a different or missing manifest site identity cannot receive staged files', (t) => {
+  const fixture = setup(t);
+  const otherSite = path.join(path.dirname(fixture.site), 'other-site');
+  fs.mkdirSync(otherSite);
+  fs.writeFileSync(path.join(fixture.staged, 'page.html'), 'proposal');
+  fs.writeFileSync(path.join(fixture.site, 'page.html'), 'original');
+  for (const siteRoot of [otherSite, null, 'relative-site']) {
+    fixture.writeManifest({ siteRoot, files: [{ relativePath: 'page.html' }] });
+    const result = fixture.run();
+    assert.equal(result.status, 4);
+    assert.match(result.stderr, /siteRoot|does not match/);
+    assert.equal(fs.readFileSync(path.join(fixture.site, 'page.html'), 'utf8'), 'original');
+    assert.ok(fs.existsSync(fixture.staged));
+  }
 });

@@ -3,8 +3,8 @@
  * update-state.js
  *
  * CLI for managing migration-state.json and re-rendering datamodel-migration-report.html.
- * Every mutating command (a) loads state.json, (b) applies the change, (c) bumps
- * lastUpdatedAt, (d) writes state.json back, and (e) re-renders the HTML report.
+ * Every mutating command (a) loads migration-state.json, (b) applies the change,
+ * (c) bumps lastUpdatedAt, (d) writes migration-state.json back, and (e) re-renders the HTML report.
  *
  * USAGE
  *   # initialize a fresh state inside a per-migration subfolder
@@ -23,7 +23,7 @@
  *
  *   # mark a sub-step's status / output
  *   node update-state.js --output-dir <DIR> --set-step 1.1 --status completed \
- *       --output "PAC CLI v1.47.1 · environment Ashmigration"
+ *       --output "PAC CLI v1.47.1 · environment Contoso"
  *
  *   # mark a phase's status (in-progress / completed / blocked)
  *   node update-state.js --output-dir <DIR> --set-phase 1 --status completed
@@ -78,8 +78,8 @@
  *       '{"id":"migration-mode","label":"Migration mode","choice":"configurationData → Authoring Track","rationale":"Dev env — migrate metadata locally; allows remediation before refs"}'
  *
  *   # set migration track (called at end of step 1.7 once env type + mode known)
- *   # A = Authoring Track  (mode configurationData|all — Dev/Test/UAT/Single env)
- *   # B = Downstream Track (mode configurationDataReferences — Prod, ALM assumed)
+ *   # A = Authoring Track  (mode configurationData|all — Dev/Single env)
+ *   # B = Downstream Track (mode configurationDataReferences — Test/UAT/Prod, ALM assumed)
  *   node update-state.js --output-dir <DIR> --set-track A
  *   node update-state.js --output-dir <DIR> --set-track B
  *

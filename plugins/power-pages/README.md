@@ -188,6 +188,20 @@ Generative AI Search components, Flex Containers, and spacers.
 
 ### Data modeling
 
+#### `/migrate-datamodel`
+
+> "Migrate my existing site from the Standard to the Enhanced data model"
+
+Guides an existing site through discovery, track-aware configuration setup,
+migration and validation with explicit approval gates and a live progress report.
+Stages FetchXML rewrites and Liquid review suggestions without changing live
+source until approved. Data Model Extensions and plugins receive manual
+remediation prompts, not direct schema or plugin-code changes.
+
+Snapshot comparison checks identities, states, navigation targets/order, setting
+values and optional content hashes; incomplete parses cannot be reported as a
+clean comparison. Test this preview migration on a non-production environment first.
+
 #### `/setup-datamodel`
 
 > "Create Dataverse tables for my site"

@@ -31,8 +31,8 @@
 
 const fs = require('fs');
 const path = require('path');
-// const { parse: parseCSV } = require('csv-parse/sync');
-const { getAuthToken, makeRequest, getEnvironmentUrl } = require('../../../scripts/lib/validation-helpers');
+const { pathToFileURL } = require('node:url');
+const { getAuthToken, makeRequest } = require('../../../scripts/lib/validation-helpers');
 
 // Map of adx_* entity logical names to their powerpagecomponenttype value.
 // Source: https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model#site-component-type-and-values
@@ -65,13 +65,14 @@ const COMPONENT_TYPE_MAP = {
   'adx_redirect': 30,
   'adx_publishingstatetransitionrule': 31,
   'adx_shortcut': 32,
+  'adx_cloudflowconsumer': 33,
 };
 
 // Map of adx_* tables to the dedicated Liquid object suggested by the migration doc.
 // Source: https://learn.microsoft.com/en-us/power-pages/configure/liquid/liquid-objects
 const LIQUID_OBJECT_MAP = {
   'adx_weblinkset': { object: 'weblinks', usage: "weblinks['<Web Link Set name>']" },
-  'adx_weblinks': { object: 'weblinks', usage: "weblinks['<Web Link Set name>']" },
+  'adx_weblink': { object: 'weblinks', usage: "weblinks['<Web Link Set name>'].weblinks" },
   'adx_contentsnippet': { object: 'snippets', usage: "snippets['<snippet name>']" },
   'adx_sitesetting': { object: 'settings', usage: "settings['<setting name>']" },
   'adx_sitemarker': { object: 'sitemarkers', usage: "sitemarkers['<marker name>']" },
@@ -234,8 +235,8 @@ function generateCustomizationSection(type, items) {
   let html = `
     <div class="customization-section">
       <div class="section-header">
-        <span class="badge ${badge}">${typeLabel}</span>
-        <h2>${type}</h2>
+        <span class="badge ${badge}">${escapeHtml(typeLabel)}</span>
+        <h2>${escapeHtml(type)}</h2>
         <span class="customization-count">${items.length}</span>
       </div>
       <table class="customization-table">
@@ -251,11 +252,20 @@ function generateCustomizationSection(type, items) {
 
   items.forEach(item => {
     const snippet = item.snippet ? item.snippet.substring(0, 200) + (item.snippet.length > 200 ? '...' : '') : '';
+    let guidance = escapeHtml(item.guidance || 'No guidance provided');
+    try {
+      const url = new URL(item.guidance);
+      if (url.protocol === 'https:' || url.protocol === 'http:') {
+        guidance = `<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">View Guidance</a>`;
+      }
+    } catch {
+      // PAC normally supplies an absolute guidance URL; malformed values remain plain text.
+    }
     html += `
           <tr>
-            <td>${item.location || 'N/A'}</td>
-            <td><div class="snippet">${escapeHtml(item.snippet || '')}</div></td>
-            <td><a href="${item.guidance}" target="_blank">View Guidance</a></td>
+            <td>${escapeHtml(item.location || 'N/A')}</td>
+            <td><div class="snippet">${escapeHtml(snippet)}</div></td>
+            <td>${guidance}</td>
           </tr>
     `;
   });
@@ -351,7 +361,7 @@ function generateCustomizationReportHtml(args, customizations) {
  */
 async function makeRequestWithRetry(options, maxRetries = 3, retryAfterMs = 10000) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const result = await makeRequest(options);
+    const result = await makeRequest({ ...options, includeHeaders: true });
     if (result.statusCode !== 429) return result;
     if (attempt < maxRetries) {
       const retryAfterHeader = result.headers && result.headers['retry-after'];
@@ -525,7 +535,7 @@ function categorizeLiquidFinding(snippet) {
  * Categorize a plugin finding by class-name prefix.
  *
  * Microsoft.*   → system plugin, no user action needed (auto-handled by Power Pages Core)
- * Adxstudio.*   → legacy framework plugin; verify V2 EDM solution is installed (Phase 6 check)
+ * Adxstudio.*   → legacy framework plugin; verify V2 EDM solution is installed (step 1.6)
  * (anything else) → custom user plugin; needs code refactor + re-registration
  */
 function categorizePlugin(snippet) {
@@ -551,10 +561,10 @@ function categorizePlugin(snippet) {
     action = `System plugin (\`${pluginName}\`) — no user action needed. Power Pages Core handles this on EDM.`;
   } else if (/^Adxstudio\./i.test(pluginName)) {
     category = 'adxstudio';
-    action = `Legacy Adxstudio framework plugin (\`${pluginName}\`) — verify the V2 EDM-compatible version of Power Pages Core / template solution is installed (covered by Phase 6). No code changes typically needed.`;
+    action = `Legacy Adxstudio framework plugin (\`${pluginName}\`) — verify the V2 EDM-compatible version of Power Pages Core / template solution is installed (covered by step 1.6). No code changes typically needed.`;
   } else {
     category = 'custom';
-    action = `Custom plugin (\`${pluginName}\`) — refactor the plugin code to target \`powerpagecomponent\` (was \`${entity || 'adx_*'}\`), update attribute references, and re-register the plugin step${
+    action = `Custom plugin (\`${pluginName}\`) — refactor the plugin code to target \`powerpagecomponent\` (was \`${entity || 'adx_*'}\`), preserve existing \`adx_*\` logical attribute names exposed by EDM, and re-register the plugin step${
       stepName ? ` (was: ${stepName})` : ''
     }.`;
   }
@@ -592,7 +602,7 @@ function buildDataModelExtensionChecklists(items) {
   const groups = {};
   for (const item of items) {
     const { table, column } = parseDataModelExtension(item.snippet || '');
-    if (!table || !column) continue;
+    if (!table || !column || !Object.hasOwn(COMPONENT_TYPE_MAP, table.toLowerCase())) continue;
     if (!groups[table]) {
       groups[table] = { sourceTable: table, columns: [], snippets: [] };
     }
@@ -675,7 +685,9 @@ async function executeAutomatedRemediation(customizations, envUrl) {
           snippet: item.snippet,
           location: item.location,
           reason: table && column
-            ? `Custom column \`${column}\` on \`${table}\` — see per-table remediation checklist below.`
+            ? Object.hasOwn(COMPONENT_TYPE_MAP, table.toLowerCase())
+              ? `Custom column \`${column}\` on \`${table}\` — see per-table remediation checklist below.`
+              : `Finding on \`${table}\` is outside the supported metadata-table mapping. Review manually; do not apply the EDM custom-table transformation.`
             : 'Could not parse table/column; review manually.',
           parsed: { table, column },
         });
@@ -805,10 +817,13 @@ function rewriteTagBlocks(content, tagName, changes, skipped) {
     // For outer <entity> tags, hide nested <link-entity>...</link-entity> behind placeholders
     // so the filter regex only matches the entity's own (direct-child) filter.
     const linkEntityBlocks = [];
+    // Keep sentinels printable and distinct from literal source text.
+    let linkPlaceholder = '__MIGRATION_LINK_ENTITY_';
+    while (body.includes(linkPlaceholder)) linkPlaceholder = `_${linkPlaceholder}`;
     let scanBody = body;
     if (tagName === 'entity') {
       scanBody = body.replace(/<link-entity\b[\s\S]*?<\/link-entity>/g, (linkBlock) => {
-        const placeholder = ` LINK_ENTITY_${linkEntityBlocks.length} `;
+        const placeholder = `${linkPlaceholder}${linkEntityBlocks.length}__`;
         linkEntityBlocks.push(linkBlock);
         return placeholder;
       });
@@ -838,7 +853,7 @@ function rewriteTagBlocks(content, tagName, changes, skipped) {
     // Restore link-entity blocks from placeholders.
     let newBody = newScanBody;
     if (linkEntityBlocks.length > 0) {
-      newBody = newBody.replace(/ LINK_ENTITY_(\d+) /g, (_, idx) => linkEntityBlocks[parseInt(idx, 10)]);
+      newBody = newBody.replace(new RegExp(`${linkPlaceholder}(\\d+)__`, 'g'), (_, idx) => linkEntityBlocks[parseInt(idx, 10)]);
     }
 
     changes.push({ tag: tagName, entity: entityName, typeValue });
@@ -1039,7 +1054,7 @@ function executeFetchXmlRewrites(sitePath, outputDir) {
   for (const file of files) {
     results.filesScanned++;
     const content = fs.readFileSync(file, 'utf-8');
-    if (!/<entity\b[^>]*\bname\s*=\s*['"]adx_/.test(content)) continue;
+    if (!/<(?:link-)?entity\b[^>]*\bname\s*=\s*['"]adx_/.test(content)) continue;
 
     const { newContent, changes, skipped } = rewriteFetchXmlInContent(content);
     if (changes.length > 0 && newContent !== content) {
@@ -1108,7 +1123,7 @@ function executeLiquidRewrites(sitePath, outputDir) {
         linesAdded: diff.linesAdded,
         linesRemoved: diff.linesRemoved,
         hunks: diff.hunks,
-        changeSummary: suggestions.map((s) => `${s.original || s.match || ''} → ${s.suggestion || s.replacement || ''}`),
+        changeSummary: suggestions.map((s) => `${s.entity} → ${s.suggestion}`),
         livePath: file,
         stagedPath,
       });
@@ -1464,7 +1479,7 @@ async function main() {
     // clobber the live report every time this script runs for the customization pass.
 
     console.log('\nReports generated successfully!');
-    console.log(`Open in browser: file://${path.resolve(customizationPath)}`);
+    console.log(`Open in browser: ${pathToFileURL(path.resolve(customizationPath)).href}`);
 
     // Print the augmented-prompt handoff to the terminal with clear visual separators.
     printAugmentedPromptsToConsole(promptResults);
@@ -1476,4 +1491,9 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { diffLines, structuredDiff, unifiedDiff };
+module.exports = {
+  diffLines, structuredDiff, unifiedDiff, parseCSV, normalizeLocationPath,
+  fillPlaceholders, generateCustomizationSection, rewriteFetchXmlInContent,
+  annotateLiquidEntitiesInContent, buildDataModelExtensionChecklists, categorizePlugin,
+  makeRequestWithRetry,
+};

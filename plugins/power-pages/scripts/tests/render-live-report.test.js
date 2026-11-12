@@ -5,6 +5,54 @@ const path = require('node:path');
 const { buildInitialState } = require('../../skills/migrate-datamodel/scripts/lib/migration-state-schema');
 const { renderLiveReport } = require('../../skills/migrate-datamodel/scripts/lib/render-live-report');
 
+function components(sdm, edm, sdmErrors = {}) {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  const snapshot = (inventory, parseErrors = {}) => ({
+    counts: Object.fromEntries(Object.entries(inventory).map(([category, records]) => [category, records.length])),
+    inventory, parseErrors,
+  });
+  const html = renderLiveReport(state, { sdmSnapshot: snapshot(sdm, sdmErrors), edmSnapshot: snapshot(edm) });
+  return html.slice(html.indexOf('id="tab-pages"'), html.indexOf('id="tab-migration"') > 0
+    ? html.indexOf('id="tab-migration"') : undefined);
+}
+
+test('equal inventory counts cannot hide replacement identities or changed values in the report', () => {
+  const replaced = components({ webTemplates: [{ name: 'Before' }] }, { webTemplates: [{ name: 'After' }] });
+  assert.match(replaced, /comp-pill mismatch/);
+  assert.match(replaced, /Different records/);
+  assert.doesNotMatch(replaced, /comp-pill match"/);
+  const changed = components({ siteSettings: [{ name: 'Search', value: 'true' }] },
+    { siteSettings: [{ name: 'Search', value: 'false' }] });
+  assert.match(changed, /comp-pill warn/);
+  assert.match(changed, /Changed records/);
+  assert.match(changed, /0 of 1 categories matched/);
+});
+
+test('parse failures, ambiguous identities and one-sided content loss cannot render a clean match', () => {
+  const records = { webTemplates: [{ name: 'Header', contentHash: 'hash' }] };
+  assert.match(components(records, records, { webTemplates: [{ message: 'invalid YAML' }] }),
+    /Incomplete snapshot/);
+  const duplicate = { basicForms: [{ name: 'Same', slug: 'one' }, { name: 'Same', slug: 'two' }] };
+  assert.match(components(duplicate, duplicate), /comp-pill mismatch/);
+  assert.match(components(records, { webTemplates: [{ name: 'Header', contentHash: null }] }),
+    /comp-pill warn/);
+  assert.match(components(records, records), /1 of 1 categories matched/);
+});
+
+test('prompt links allow local files but never executable URI schemes', () => {
+  const state = buildInitialState({ webSiteId: 'site-id', outputDir: 'migration-reports' });
+  for (const promptPath of ['javascript:alert(1)', 'data:text/html,test', '\tjavascript:alert(1)', '//contoso.com/x']) {
+    state.augmentedPrompts.plugin = { status: 'ready', path: promptPath };
+    const html = renderLiveReport(state);
+    assert.ok(!html.includes(`href="${promptPath}"`));
+    assert.match(html, /unsupported link/);
+  }
+  for (const promptPath of ['plugin-remediation-prompt.txt', 'file:///tmp/plugin-prompt.txt']) {
+    state.augmentedPrompts.plugin.path = promptPath;
+    assert.ok(renderLiveReport(state).includes(`href="${promptPath}"`));
+  }
+});
+
 for (const track of ['A', 'B']) {
   test(`track ${track} labels the existing percentage as workflow completion`, () => {
     const state = buildInitialState({

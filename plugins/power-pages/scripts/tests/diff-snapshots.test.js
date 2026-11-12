@@ -135,3 +135,14 @@ test('null snapshots and null inventory records produce descriptive validation e
   assert.match(record.stderr, /inventory records must be objects/);
   assert.doesNotMatch(record.stderr, /TypeError|Cannot read properties/);
 });
+
+test('navigation order and target changes warn even with identical names and counts', (t) => {
+  const link = { name: 'Home', parentSet: 'Main', language: 'en-US',
+    pageId: 'original-page', externalUrl: null, displayOrder: 1, stateCode: 0 };
+  const result = compare(t, { webLinks: [link] }, {
+    webLinks: [{ ...link, pageId: 'other-page', externalUrl: 'https://contoso.com', displayOrder: 2 }],
+  });
+  assert.equal(result.diff.overallStatus, 'warn');
+  assert.deepEqual(result.diff.categories.webLinks.valueChanged.map((change) => change.field),
+    ['pageId', 'externalUrl', 'displayOrder']);
+});

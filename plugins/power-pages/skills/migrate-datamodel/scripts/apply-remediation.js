@@ -92,6 +92,12 @@ function main() {
     throw new Error('remediation-diff.json must contain an object with a files array');
   }
   const files = payload.files;
+  if (typeof payload.siteRoot !== 'string' || !path.isAbsolute(payload.siteRoot)) {
+    throw new Error('remediation-diff.json must contain an absolute siteRoot');
+  }
+  if (fs.realpathSync(siteRoot) !== fs.realpathSync(payload.siteRoot)) {
+    throw new Error('Selected site root does not match the remediation manifest siteRoot');
+  }
   for (const entry of files) {
     if (!entry || typeof entry !== 'object' || typeof entry.relativePath !== 'string' ||
         entry.relativePath.trim() === '') {

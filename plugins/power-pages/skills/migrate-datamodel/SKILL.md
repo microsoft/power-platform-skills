@@ -1352,7 +1352,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    Validate the pasted value is a GUID (`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`). Re-prompt if invalid, keeping the input notice visible. Once valid, store it and `--clear-input` — also needed for rollback in Phase 4.
 
-   > **Do not run the update command until Portal Id is available.** Both `--updateDataModelVersion` and `--revertToStandardDataModel` reject empty Portal Id ([PAPortalMigrateDataModelVerb.cs:214](C:/Users/ashwanikumar/source/repos/PowerPlatform-Scale-AdminTools/src/cli/bolt.module.paportal/verbs/PAPortalMigrateDataModelVerb.cs#L214)).
+   > **Do not run the update command until Portal Id is available.** Both `--updateDataModelVersion` and `--revertToStandardDataModel` require Portal Id. See the [public PAC CLI reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/pages#pac-pages-migrate-datamodel).
 
 2. **Confirm Activation**
 
@@ -1860,8 +1860,9 @@ Identical to the Authoring Track's step 3.4: ask for explicit restart approval, 
 
 5. **Emit Completion Telemetry**
 
-   Fire the anonymous `skill_completed` 1DS event with a per-phase rollup built
-   from `migration-state.json`. This is best-effort and fails closed — never
+   After the end-of-Phase-4 report update below, emit the `skill_completed` 1DS
+   event with terminal outcome and elapsed duration from `migration-state.json`.
+   Pending/in-progress state is not emitted as success. This is best-effort and fails closed — never
    block or surface errors from it:
 
    ```text
@@ -1870,8 +1871,10 @@ Identical to the Authoring Track's step 3.4: ask for explicit restart approval, 
 
    `<OUTPUT_DIR>` is the per-migration subfolder holding `migration-state.json`.
    The script honors the plugin telemetry kill switch / opt-out and sends only
-   non-PII product signals (track, migration mode, template, per-phase status +
-   duration). No site names, URLs, environment names, or paths are sent.
+   the existing shared completion fields, including outcome and duration.
+   `eventInfo` contains only the approved Entra object ID when available.
+   Track, template, phase summaries, site names, URLs, environment names and paths
+   stay local. The shared dispatcher owns regional routing and opt-out enforcement.
 
 **Output**: Migration complete (or rolled back), final summary printed, skill usage recorded.
 
@@ -1946,3 +1949,8 @@ Use this for FetchXML and Liquid customization mapping:
 | Shortcut | 32 |
 | Cloud Flow | 33 |
 | UX Component | 34 |
+
+This table lists platform types. Automatic FetchXML rewriting supports only
+the explicit legacy-table mappings in the generator, including
+`adx_cloudflowconsumer` (33). UX Component (34) has no supported legacy-table
+mapping here; unmapped entities remain unchanged and require manual review.

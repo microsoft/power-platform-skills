@@ -1,6 +1,6 @@
 # Skill Design: Migrate Site from Standard Data Model (SDM) to Enhanced Data Model (EDM)
 
-**Status:** Implemented (12-phase plan; preview feature, ALM integration deferred)
+**Status:** Implemented (four-phase workflow; preview feature, ALM integration deferred)
 **Source Doc:** [Migrate standard data model sites to enhanced data model (preview)](https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model)
 **Plugin:** power-pages
 
@@ -36,9 +36,9 @@ On the **Downstream Track** (18 sub-steps total), **Phase 2 — Setting Up Metad
 - Site discovery via `pac pages list -v` (Portal Id auto-captured from verbose output)
 - **In-flight migration detection** (step 1.4) — handles already-running, completed, failed, and reverted prior migrations
 - Dependency and template-package validation
-- Environment-aware migration mode recommendation (Dev → `all`, Test/UAT/Prod → `configurationData`)
+- Environment-aware migration mode recommendation (Dev/Single → `configurationData` or approved `all`; Test/UAT/Prod → `configurationDataReferences`)
 - Customization report generation (always, for any environment)
-- Pre-migration customization remediation (manual guidance + automated fixes for Data Model Extensions)
+- Track-aware customization remediation (staged FetchXML rewrites and Liquid annotations; manual solution-package guidance for Data Model Extensions and plugins)
 - Migration execution with bounded polling (30-min ceiling + wait/reset/exit escape hatch)
 - Data model version flip via Portal Id (captured from `pac pages list -v` when available; manual `/_services/about` fallback otherwise)
 - Rollback to SDM
@@ -367,6 +367,11 @@ For FetchXML and Liquid rewrites, map `adx_*` entity → `powerpagecomponenttype
 | Shortcut | 32 |
 | Cloud Flow | 33 |
 | UX Component | 34 |
+
+This is the platform component-type catalog, not a promise of automatic rewrites
+for every type. The rewriter maps `adx_cloudflowconsumer` to Cloud Flow (33).
+UX Component (34) has no supported legacy-table mapping in this skill and requires
+manual review; unmapped entities are reported without modification.
 
 ---
 

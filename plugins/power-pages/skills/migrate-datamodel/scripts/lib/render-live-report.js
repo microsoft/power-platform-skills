@@ -28,6 +28,9 @@ const {
   isReportExcludedCategory,
   getCategoryMetadata,
 } = require('./edm-table-classification');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const { diffCategory } = require('../diff-snapshots');
 
 // ── HTML escaping ──────────────────────────────────────────────────────────
 
@@ -47,6 +50,19 @@ function escapeHtmlAllowingInline(s) {
   return escaped
     .replace(/&lt;(\/?(?:code|strong|em|br))&gt;/g, '<$1>')
     .replace(/&lt;br\s*\/&gt;/g, '<br/>');
+}
+
+function localReportLink(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const link = value.trim();
+  if (!link || /[\u0000-\u001f\u007f]/.test(link)) return null;
+  if (/^[\\/]{2}/.test(link)) return null;
+  if (path.isAbsolute(link)) return pathToFileURL(link).href;
+  if (/^file:/i.test(link)) {
+    try { return new URL(link).href; } catch { return null; }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(link) || /^[\\/]{2}/.test(link)) return null;
+  return link;
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
@@ -479,6 +495,11 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
   for (const k of Object.keys(edmCounts)) {
     if (edmCounts[k] > 0 && !isReportExcludedCategory(k)) allCats.add(k);
   }
+  for (const snapshot of [sdmSnapshot, edmSnapshot]) {
+    for (const [category, errors] of Object.entries(snapshot?.parseErrors || {})) {
+      if (errors.length > 0 && !isReportExcludedCategory(category)) allCats.add(category);
+    }
+  }
   const categories = [...allCats].sort();
 
   const isPending = !edmSnapshot;
@@ -490,7 +511,13 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
   const perCategory = categories.map((cat) => {
     const sdmN = sdmCounts[cat] || 0;
     const edmN = edmCounts[cat] || 0;
-    const isSdmOnlyExpected = cat === 'tags' && edmN === 0 && sdmN > 0;
+    const sdmRecords = sdmInventory[cat] || [];
+    const edmRecords = edmInventory[cat] || [];
+    const hasParseErrors = (sdmSnapshot.parseErrors?.[cat]?.length || 0) +
+      (edmSnapshot?.parseErrors?.[cat]?.length || 0) > 0;
+    const comparison = diffCategory(cat, sdmRecords, edmRecords);
+    const incomplete = hasParseErrors || sdmRecords.length !== sdmN || edmRecords.length !== edmN;
+    const isSdmOnlyExpected = comparison.sdmOnlyCategory && edmN === 0 && sdmN > 0 && !incomplete;
 
     let pillCls, icon, meta;
     let isMatchForGroup = false;
@@ -502,19 +529,21 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
       pillCls = 'warn';
       icon = '⚠';
       meta = 'SDM-only';
-      isMatchForGroup = true;
-      matchedCount++; // expected difference — counts as matched
-    } else if (sdmN === edmN) {
+    } else if (!incomplete && comparison.status === 'pass') {
       pillCls = 'match';
       icon = '✓';
       meta = '';
       isMatchForGroup = true;
       matchedCount++;
+    } else if (!incomplete && comparison.status === 'warn') {
+      pillCls = 'warn';
+      icon = '⚠';
+      meta = 'Changed records';
     } else {
       pillCls = 'mismatch';
       icon = '✗';
       const delta = edmN - sdmN;
-      meta = (delta > 0 ? '+' : '') + delta;
+      meta = incomplete ? 'Incomplete snapshot' : delta === 0 ? 'Different records' : (delta > 0 ? '+' : '') + delta;
     }
 
     const pillRight = isPending
@@ -528,8 +557,6 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
       </div>`;
 
     // Two-column records preview (SDM | EDM), first 5 of each side.
-    const sdmRecords = (sdmInventory[cat] || []).slice(0, 5);
-    const edmRecords = (edmInventory[cat] || []).slice(0, 5);
     const hasRecords = sdmRecords.length > 0 || edmRecords.length > 0;
     const renderColUl = (records, kind) => {
       if (isPending && kind === 'edm') {
@@ -538,7 +565,7 @@ function renderPagesComponentsSection({ sdmSnapshot, edmSnapshot }) {
       if (records.length === 0) {
         return '<li class="record-empty">— no records —</li>';
       }
-      return records.map((r) => `<li>${escapeHtml(describeRecord(r, cat))}</li>`).join('');
+      return records.slice(0, 5).map((r) => `<li>${escapeHtml(describeRecord(r, cat))}</li>`).join('');
     };
     const recordsBlock = hasRecords
       ? `
@@ -623,8 +650,8 @@ ${items.map((i) => i.html).join('\n')}
     summary = `<div class="comp-summary ${allMatched ? 'match' : 'partial'}">
     <strong>${matchedCount} of ${totalCats} categories matched ${allMatched ? '✓' : '⚠'}</strong>
     ${allMatched
-      ? '— every Power Pages component migrated cleanly from SDM to EDM.'
-      : `— ${unmatched} ${unmatched === 1 ? 'category needs' : 'categories need'} attention. Mismatches are flagged <span class="status-x">✗</span> with the count delta; the SDM-only <code>tags</code> category is <em>expected</em> to differ and is flagged <span class="status-warn">⚠ SDM-only</span>.`}
+      ? '— captured metadata identities, states, values and available content hashes match. This does not replace runtime validation.'
+      : `— ${unmatched} ${unmatched === 1 ? 'category needs' : 'categories need'} review. Differences and incomplete snapshots are flagged even when counts match; SDM-only download categories are expected differences, not verified matches.`}
   </div>`;
   }
 
@@ -1294,9 +1321,10 @@ function renderPromptCard(kind, prompt) {
     <div class="prompt-state">${escapeHtmlAllowingInline(prompt.summary || 'Pending.')}</div>
   </div>`;
   }
-  const link = prompt.path
-    ? `<div class="links"><a href="${escapeHtml(prompt.path)}">📄 ${escapeHtml(prompt.path.replace(/^.*[\\/]/, ''))}</a></div>`
-    : '';
+  const href = localReportLink(prompt.path);
+  const link = href
+    ? `<div class="links"><a href="${escapeHtml(href)}">📄 ${escapeHtml(prompt.path.replace(/^.*[\\/]/, ''))}</a></div>`
+    : prompt.path ? `<div class="links">${escapeHtml(prompt.path)} (unsupported link)</div>` : '';
   return `<div class="prompt-card ready">
     <h4>${t.icon} ${escapeHtml(t.label)}</h4>
     <p>${escapeHtmlAllowingInline(prompt.summary || '')}</p>

@@ -5,19 +5,17 @@
  * emit-telemetry.js
  *
  * Fires a single `skill_completed` 1DS event for the migrate-datamodel skill,
- * rolling up per-phase outcomes from migration-state.json into the dynamic
- * `eventInfo` column (Option A — one terminal event, phase summary embedded;
- * no per-phase live events, no shared-hook changes).
+ * deriving only terminal outcome and elapsed duration from migration-state.json.
+ * Migration details stay local; no new eventInfo fields are transmitted.
  *
  * Design contract:
  *   - READ-ONLY against the shared telemetry library (reached via the plugin's
- *     `scripts/lib/telemetry` symlink). Touches nothing shared.
+ *     bundled `scripts/lib/telemetry` library). Touches nothing shared.
  *   - Fails CLOSED: any error → exit 0, nothing thrown, migration unaffected.
  *   - Honors the same kill switch (ikey.json `disabled` / missing iKey) and the
  *     per-plugin user opt-out that the emit dispatcher enforces.
- *   - `eventInfo` carries only non-PII product signals (track, migration mode,
- *     template enum, per-phase status + duration). No site names, URLs, env
- *     names, slugs, or filesystem paths.
+ *   - `eventInfo` carries only the existing approved aadObjectId when available.
+ *     No template names, phase text, site URLs or filesystem paths are emitted.
  *
  * USAGE
  *   node emit-telemetry.js --output-dir "<MIGRATION_SUBDIR>"
@@ -48,18 +46,22 @@ function main() {
     return; // telemetry library unavailable → no-op
   }
 
-  const { ikey, collectorUrl, eventStreamName, disabled } = readIkey();
+  const { cfg, ikeyPath, eventStreamName, disabled } = readIkey();
   // Repo-side hard-off / unconfigured: gate before any work so a disabled or
   // unconfigured plugin costs effectively nothing. (The per-plugin user opt-out
   // is enforced later by the detached dispatcher, which still writes the local
   // diagnostic mirror but skips the POST.)
-  if (disabled || !ikey) return;
+  if (disabled) return;
+  const { loadResolver } = require(path.join(TELEMETRY_DIR, "lib", "resolver-loader"));
+  const resolver = loadResolver(path.dirname(ikeyPath));
+  if (!(resolver ? resolver.isProvisioned(cfg) : cfg.instrumentationKey)) return;
 
   const outputDir = parseOutputDir(process.argv.slice(2));
   const state = loadState(outputDir);
   if (!state) return; // no state → nothing meaningful to report
 
   const rollup = buildPhaseRollup(state);
+  if (!rollup) return; // Pending/in-progress state is not a successful completion.
 
   const fields = {
     pluginName: "power-pages",
@@ -72,19 +74,18 @@ function main() {
     skillName: SKILL_NAME,
     outcome: rollup.outcome,
     durationMs: rollup.durationMs,
-    eventInfo: rollup.eventInfo,
+    eventInfo: {},
   };
 
   if (rollup.outcome === "failure") {
     fields.errorClass = "phaseBlocked";
-    fields.errorDescription = rollup.blockedPhaseId
-      ? `phase-${rollup.blockedPhaseId}`
-      : "phaseBlocked";
+    fields.errorDescription = "phaseBlocked";
   }
 
   const pacAuth = safeCall(() => pacAuthLib.readPacAuth(), null);
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
+  if (pacAuth && pacAuth.objectId) fields.eventInfo.aadObjectId = pacAuth.objectId;
 
   const agentInfo = safeCall(
     () => ({
@@ -99,13 +100,12 @@ function main() {
 
   try {
     emitSpawn.fireAndForget(eventsLib.buildSkillCompleted(eventStreamName, fields), {
-      iKey: ikey,
-      collectorUrl,
+      cloud: (pacAuth && pacAuth.cloud) || "",
       configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "",
       fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
       // lib/ is shared, so the dispatcher's __dirname default would hit shared/'s
       // placeholder ikey.json — point it at this plugin's real config.
-      ikeyJsonPath: path.join(TELEMETRY_DIR, "ikey.json"),
+      ikeyJsonPath: ikeyPath,
     });
   } catch {
     // fail closed
@@ -131,46 +131,17 @@ function loadState(outputDir) {
   }
 }
 
-// Build the non-PII phase rollup + derive the terminal outcome and duration.
+// Only derive approved top-level metrics; user-editable migration fields stay local.
 function buildPhaseRollup(state) {
-  const phases = Array.isArray(state.phases) ? state.phases : [];
-
-  const phaseSummaries = phases.map((p) => ({
-    id: p.id,
-    title: typeof p.title === "string" ? p.title : null, // static blueprint text, not user data
-    status: p.status || "pending",
-    durationMs: phaseDurationMs(p),
-  }));
-
-  const blocked = phaseSummaries.find((p) => p.status === "blocked");
-  const completedCount = phaseSummaries.filter((p) => p.status === "completed").length;
-
+  if (!state || !Array.isArray(state.phases) || state.phases.length === 0 ||
+      state.phases.some((phase) => !phase || typeof phase !== "object")) return null;
+  const blocked = state.phases.find((p) => p.status === "blocked");
+  if (!blocked && !state.phases.every((p) => p.status === "completed")) return null;
   const outcome = blocked ? "failure" : "success";
-
-  const eventInfo = {
-    track: state.track || null, // "A" | "B" — product enum, not user data
-    migrationMode: (state.site && state.site.migrationMode) || null,
-    template: (state.site && state.site.template) || null,
-    currentDataModel: (state.site && state.site.currentDataModel) || null,
-    phasesTotal: phaseSummaries.length,
-    phasesCompleted: completedCount,
-    phasesBlocked: blocked ? 1 : 0,
-    phases: phaseSummaries,
-  };
-
   return {
     outcome,
     durationMs: skillDurationMs(state),
-    blockedPhaseId: blocked ? blocked.id : null,
-    eventInfo,
   };
-}
-
-function phaseDurationMs(phase) {
-  const start = Date.parse(phase && phase.startedAt);
-  const end = Date.parse(phase && phase.completedAt);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
-  return end - start;
 }
 
 function skillDurationMs(state) {
@@ -198,15 +169,15 @@ function readIkey() {
   try {
     const cfg = JSON.parse(fs.readFileSync(ikeyPath, "utf8"));
     return {
-      ikey: cfg.instrumentationKey || "",
-      collectorUrl: cfg.collector_url || "",
+      cfg,
+      ikeyPath,
       eventStreamName: cfg.event_stream_name || "",
       disabled: cfg.disabled === true,
     };
   } catch {
     // Missing/unreadable → fail CLOSED (disabled), matching the dispatcher's
     // kill-switch semantics so a missing config can't bypass the off-switch.
-    return { ikey: "", collectorUrl: "", eventStreamName: "", disabled: true };
+    return { cfg: null, ikeyPath, eventStreamName: "", disabled: true };
   }
 }
 
@@ -226,9 +197,12 @@ function safeCall(fn, fallback) {
   }
 }
 
-try {
-  main();
-} catch {
-  // Absolute fail-closed guard — telemetry must never break the skill.
+if (require.main === module) {
+  try {
+    main();
+  } catch {
+    // Telemetry must never interrupt migration.
+  }
 }
-process.exit(0);
+
+module.exports = { main, buildPhaseRollup, readIkey };
