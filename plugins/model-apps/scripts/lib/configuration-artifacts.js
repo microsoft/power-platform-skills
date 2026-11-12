@@ -597,12 +597,15 @@ function tagged(kind, key, code, outcome, report) {
 // - our own failures (tagged above) carry their bucket;
 // - the port's typed stops carry lower-case codes (create-identity-conflict: a row of that name sits at another
 //   id; create-identity-unverified: the derived id could not be read; create-outcome-unknown;
-//   create-completion-required) and pass through unchanged, so a caller can name them;
+//   create-completion-required; create-value-refused) and pass through unchanged, so a caller can name them;
 // - the port's create-refused stop (`nothingCreated`: the service refused every request unstarted and the port released
 //   the attempt, #847) is refused even after execute was entered: the store itself proves nothing it sent can land;
 // - any other failure after execute was entered is unknown: what was sent is not known.
 const PORT_CODE = /^create-[a-z0-9-]{2,60}$/;
-const UNKNOWN_PORT_CODES = new Set(['create-identity-unverified', 'create-outcome-unknown', 'create-completion-required']);
+// create-value-refused (#847): an environment variable's definition was sent and its value request was refused before it
+// started; the attempt stays pending (unfinished, never released), so it is routed as unknown like the others.
+const VALUE_REFUSED_CODE = 'create-value-refused';
+const UNKNOWN_PORT_CODES = new Set(['create-identity-unverified', 'create-outcome-unknown', 'create-completion-required', VALUE_REFUSED_CODE]);
 function portCode(error) {
   return error && typeof error.code === 'string' && PORT_CODE.test(error.code) ? error.code : null;
 }
@@ -611,7 +614,7 @@ function routeFailure(error, sent) {
   if (error && error[TAGGED]) return error.report || { bucket: error.outcome === 'nothing' ? 'refused' : 'unknown', code: error.code };
   const code = portCode(error);
   if (code && error.nothingCreated === true && !UNKNOWN_PORT_CODES.has(code)) return { bucket: 'refused', code, ...serviceCodeOf(error) };
-  if (code) return { bucket: sent || UNKNOWN_PORT_CODES.has(code) ? 'unknown' : 'refused', code };
+  if (code) return { bucket: sent || UNKNOWN_PORT_CODES.has(code) ? 'unknown' : 'refused', code, ...valueRefusedOf(error) };
   if (sent) return { bucket: 'unknown', code: 'create-outcome-unknown' };
   return { bucket: 'refused', code: codeOf(error) === 'UNEXPECTED_ERROR' ? 'CREATE_REFUSED' : codeOf(error) };
 }
@@ -619,6 +622,12 @@ function routeFailure(error, sent) {
 // The Dataverse error code a refused request was answered with (`0x80072040`), carried to the halt line; anything else
 // is dropped, so a message or a value can never ride along.
 const serviceCodeOf = (error) => (error && typeof error.serviceCode === 'string' && /^0x[0-9a-f]{8}$/i.test(error.serviceCode) ? { serviceCode: error.serviceCode } : {});
+// The only diagnostics a create-value-refused stop carries past the port (#847): the validated service code and the
+// attempt token the protected port took from its own attempt (a canonical GUID, never parsed from service text), which
+// the halt line spells into the exact retire approval. Any other code, or any other property, carries nothing.
+const valueRefusedOf = (error) => (error && error.code === VALUE_REFUSED_CODE
+  ? { ...serviceCodeOf(error), ...(typeof error.pendingAttemptToken === 'string' && GUID.test(error.pendingAttemptToken) ? { pendingAttemptToken: lower(error.pendingAttemptToken) } : {}) }
+  : {});
 
 const portOf = (ctx) => (ctx.creates && typeof ctx.creates.run === 'function' ? ctx.creates : null);
 
@@ -741,7 +750,7 @@ async function locate(ctx, kind, key, identity) {
     } catch (error) {
       // A read of the identity's id that failed proves nothing either way: never absence. A typed stop of the
       // resolver keeps its code (a conflict is refused, the rest stay unknown) and the id it names.
-      throw identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error));
+      throw Object.assign(identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error)), valueRefusedOf(error));
     }
     if (resolved && resolved.state === 'present' && typeof resolved.id === 'string' && resolved.id) {
       if (exactPort) await refuseLocalDraft(ctx.sdk, kind, resolved.id);
@@ -782,7 +791,7 @@ async function planOne(ctx, kindPlan, entry, plan) {
     if (code && !UNKNOWN_PORT_CODES.has(code)) return refuse(code);
     // The id the stop names, and the safe handle a maker inspects it by (the same shape a lost create reports).
     const id = code ? stoppedId(error) : null;
-    const line = { kind, key, code: code || codeOf(error), ...(id ? { id } : {}) };
+    const line = { kind, key, code: code || codeOf(error), ...(id ? { id } : {}), ...valueRefusedOf(error) };
     if (id) Object.defineProperty(line, 'handle', { value: identityHandle(kind, key, kindPlan.identity(entry), { id }), enumerable: false });
     plan.unknown.push(line);
     return null;
@@ -1899,7 +1908,7 @@ async function applyCreate(op, ctx, result, known) {
     const lost = routed.bucket === 'unknown' && error && error[TAGGED];
     pushFinding(result, routed.bucket, {
       kind, key, id: routed.bucket === 'unknown' && given ? given.id : undefined,
-      code: lost ? 'create-outcome-unknown' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode,
+      code: lost ? 'create-outcome-unknown' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode, pendingAttemptToken: routed.pendingAttemptToken,
     }, routed.bucket === 'unknown' ? handle : null);
     return;
   }
@@ -2052,7 +2061,7 @@ async function applyUpdate(op, ctx, result, known) {
     const routed = routeFailure(error, false);
     // A write (not a create) whose answer was lost: what it changed is not known.
     const lost = routed.bucket === 'unknown' && error && error[TAGGED] && !error.report;
-    pushFinding(result, routed.bucket, { kind, key, id, code: lost ? 'CONFIGURATION_WRITE_UNKNOWN' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode }, routed.bucket === 'unknown' ? handle : null);
+    pushFinding(result, routed.bucket, { kind, key, id, code: lost ? 'CONFIGURATION_WRITE_UNKNOWN' : routed.code, cause: lost ? routed.code : undefined, serviceCode: routed.serviceCode, pendingAttemptToken: routed.pendingAttemptToken }, routed.bucket === 'unknown' ? handle : null);
     return;
   }
   if (stop) { pushFinding(result, stop.bucket, { kind, key, id, code: stop.code }, handle); return; }
@@ -2531,7 +2540,10 @@ function configurationContext({ sdk, creates, managed, bindings, solutionUniqueN
 const configurationDestructive = (plan) => [...new Set(((plan && plan.operations) || []).filter((op) => op.destructive).flatMap((op) => op.authorize || []))];
 
 // A halt item: kind, key and fixed code, plus the tokens a refusal needs consent for (DESTRUCTIVE_CHANGE_UNAUTHORIZED's `authorize`).
-const haltItem = ({ kind, key, code, authorize, serviceCode }) => ({ kind, key, code, ...(Array.isArray(authorize) && authorize.length ? { authorize: authorize.slice() } : {}), ...serviceCodeOf({ serviceCode }) });
+const haltItem = ({ kind, key, code, authorize, serviceCode, pendingAttemptToken }) => ({
+  kind, key, code, ...(Array.isArray(authorize) && authorize.length ? { authorize: authorize.slice() } : {}), ...serviceCodeOf({ serviceCode }),
+  ...(code === VALUE_REFUSED_CODE ? valueRefusedOf({ code, pendingAttemptToken }) : {}),
+});
 
 // The configuration halt's text. A refusal that needs consent ends with the exact flags that give it, e.g.
 //   environmentVariable contoso_Mode (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize environmentVariable:contoso_mode:defaultValue)
@@ -2571,12 +2583,31 @@ const REFUSED_FIX = {
 };
 const refusedHint = (p) => `the service refused it${p.serviceCode ? ` (${p.serviceCode})` : ''}: nothing was created or changed and nothing is left pending; `
   + `${REFUSED_FIX[p.kind] || 'correct its definition in the App Spec'}, then build again, or remove it from the App Spec`;
+// A protected variable whose definition was sent and whose value request the service refused before it started
+// (create-value-refused, #847): the attempt stays pending, so the line says what is pending, what to correct and how only
+// the missing value is sent; with the attempt's own token it also spells the exact retire approval:
+//   environmentVariable contoso_Key (create-value-refused) (the service refused the value request (0x80072040) before it started; ...)
+// `p` is a halt item: kind, key, and the validated serviceCode / pendingAttemptToken only (valueRefusedOf); a code or a
+// token that does not validate is left out, never replaced by server text.
+function valueRefusedHint(p) {
+  const code = typeof p.serviceCode === 'string' && /^0x[0-9a-f]{8}$/i.test(p.serviceCode) ? ` (${p.serviceCode})` : '';
+  const token = typeof p.pendingAttemptToken === 'string' && GUID.test(p.pendingAttemptToken) ? lower(p.pendingAttemptToken) : null;
+  const retire = token
+    ? ' To stop tracking this attempt instead, remove the variable from the App Spec and its entry from deployment settings, then run the build with --apply '
+      + `${authorizeFlags([`retire:${p.kind}:${portKeyOf(p.kind, p.key)}@${token}`])}. No row is deleted by retirement; restoring the declaration while its derived id is occupied stops with create-identity-conflict`
+    : '';
+  return `the service refused the value request${code} before it started; the variable is still pending and its definition may remain at the original id. `
+    + 'This build does not recreate or delete the definition. Correct its value in the deployment settings (for a secret, use a Key Vault secret reference this environment can read), '
+    + 'keep its App Spec definition unchanged, and build again. After fresh checks and any required ownership approval, only the missing value can be sent.'
+    + retire;
+}
 // `extraHint(item)` is optional and supplied only by the build's configuration runtime (configuration-build.js), which
 // derives it from its own trusted state, never from a failure's text: a nonempty string is appended in parentheses after
 // the line's existing text. It is advice only, so an answer that is not a string, or a throw, leaves the line as it was.
 // Without it the message is byte-identical to before.
 function configurationHaltMessage(items, extraHint) {
-  const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : p.code === 'create-refused' ? ` (${refusedHint(p)})` : '');
+  const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : p.code === 'create-refused' ? ` (${refusedHint(p)})`
+    : p.code === VALUE_REFUSED_CODE && p.kind === 'environmentVariable' ? ` (${valueRefusedHint(p)})` : '');
   const extra = (p) => {
     if (typeof extraHint !== 'function') return '';
     try {
@@ -3319,6 +3350,7 @@ module.exports = {
   configurationContext,
   configurationDestructive,
   configurationHaltMessage,
+  valueRefusedHint,
   configurationAuthorizationKeys,
   // The `--authorize` flags spelled as one shell argument each (commandArgOrPlaceholder): the protected preflight's
   // overwrite approval names a duplicate rule's key, which may hold white space or quotes.

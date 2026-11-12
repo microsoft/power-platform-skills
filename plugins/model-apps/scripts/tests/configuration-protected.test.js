@@ -2570,6 +2570,228 @@ test('a secret variable whose create the service refused no longer holds a build
   assert.deepEqual(variableRows(h), [0, 0]);
 });
 
+// #847: the real SDK sends a variable with a value as two requests — the definition, then the value on its own — so the
+// service can take the definition and refuse only the value (a Key Vault reference this environment cannot read). The
+// value is then the one thing still owed: a corrected rebuild sends only it, once, and never the definition again.
+const VALUE_REFUSAL = { statusCode: 400, body: { error: { code: '0x80072040', message: 'the Key Vault reference was refused' } } };
+const isValuePost = (r) => r.method === 'POST' && r.path.split('?')[0] === '/environmentvariablevalues';
+const isDefinitionPost = (r) => r.method === 'POST' && r.path.split('?')[0] === '/environmentvariabledefinitions';
+async function valueRefusedSecret({ spec = secretSpec(), settings = secretValue() } = {}) {
+  let refuse = true;
+  const h = await harness({ intercept: (req) => (refuse && isValuePost(req) ? VALUE_REFUSAL : undefined) });
+  const first = await pass(h, spec, settings);
+  return { h, first, allow: () => { refuse = false; }, refuseAgain: () => { refuse = true; } };
+}
+const valueRefusedLine = (token, code = '0x80072040') => `1 configuration item not completed: environmentVariable contoso_Key (create-value-refused) (the service refused the value request (${code}) before it started; `
+  + 'the variable is still pending and its definition may remain at the original id. This build does not recreate or delete the definition. '
+  + 'Correct its value in the deployment settings (for a secret, use a Key Vault secret reference this environment can read), keep its App Spec definition unchanged, and build again. '
+  + 'After fresh checks and any required ownership approval, only the missing value can be sent. To stop tracking this attempt instead, remove the variable from the App Spec and its entry '
+  + `from deployment settings, then run the build with --apply --authorize 'retire:environmentVariable:contoso_key@${token}'. No row is deleted by retirement; restoring the declaration `
+  + 'while its derived id is occupied stops with create-identity-conflict)';
+
+test('a secret variable whose value request alone the service refused stops with create-value-refused; the corrected rebuild sends only the value, once', async () => {
+  const { h, first, allow } = await valueRefusedSecret();
+  const pending = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.ok(pending, 'the definition was sent: the attempt stays pending');
+  assert.equal(first.halt && first.halt.code, 'configuration-incomplete', first.halt && first.halt.message);
+  assert.equal(first.halt.message, valueRefusedLine(pending.token));
+  assert.deepEqual(first.step.outcome.refused, []);
+  assert.deepEqual(variableRows(h), [1, 0], 'the definition landed, the value did not');
+  assert.ok(!fs.readFileSync(h.store.file, 'utf8').includes('vault-sample'), 'the store holds no Key Vault reference');
+  assert.ok(!JSON.stringify(first.step.outcome).includes('vault-sample'));
+
+  allow();
+  // The failed push left the workspace copy as the SDK wrote it: replacing it stays the maker's approval.
+  const done = await pass(reopen(h), secretSpec(), { ...secretValue(), ...overwriteCopy('environmentVariable', 'contoso_key') });
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent.filter(isDefinitionPost), [], 'the definition is never sent again');
+  assert.equal(done.sent.filter(isValuePost).length, 1, 'only the value, once');
+  assert.deepEqual(variableRows(h), [1, 1]);
+  const bound = committed(h, 'environmentVariable', 'contoso_key');
+  assert.ok(bound);
+  assert.equal(bound.records[0].id, pending.root.id, 'at the original definition id');
+  const rerun = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(rerun.halt, null);
+  assert.deepEqual(rerun.sent, []);
+});
+
+const valueBuild = (h, approvals = [], settings = secretValue()) => pass(reopen(h, approvals), secretSpec(), { ...settings, ...overwriteCopy('environmentVariable', 'contoso_key') });
+const epochOf = (h) => h.store.readGroup('environmentVariable', 'contoso_key').pending.sendWindow.epoch;
+
+test('a variable value the service refuses again is sent once per build under a new claim, the definition never; the corrected build completes it', async () => {
+  const { h, first, allow } = await valueRefusedSecret();
+  const { token } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.equal(first.halt.message, valueRefusedLine(token));
+  const before = epochOf(h);
+  const again = await valueBuild(h);
+  assert.equal(again.halt && again.halt.message, valueRefusedLine(token), again.halt && again.halt.message);
+  assert.deepEqual(again.sent.filter(isDefinitionPost), []);
+  assert.equal(again.sent.filter(isValuePost).length, 1, 'one value request, no loop');
+  assert.ok(epochOf(h) > before, 'the value was claimed under a new epoch');
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending.token, token, 'the same attempt');
+  assert.deepEqual(variableRows(h), [1, 0]);
+
+  allow();
+  const done = await valueBuild(h);
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent.filter(isVariableCreate).map((r) => r.path.split('?')[0]), ['/environmentvariablevalues']);
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.ok(committed(h, 'environmentVariable', 'contoso_key'));
+});
+
+test('a refused variable value is not sent while its deployment-settings value is missing; the attempt and its definition stay', async () => {
+  const { h } = await valueRefusedSecret();
+  const { token } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  const out = await pass(reopen(h), secretSpec(), overwriteCopy('environmentVariable', 'contoso_key'));
+  assert.ok(out.halt);
+  assert.ok(out.halt.message.includes('still owes its original value row. Supply its value in deployment settings, keep its App Spec definition unchanged, and build again. No value request was sent for this item'), out.halt.message);
+  assert.deepEqual(out.sent.filter(isVariableCreate), []);
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending.token, token);
+  assert.deepEqual(variableRows(h), [1, 0]);
+});
+
+test('a refused variable value retires under the token its stop prints: nothing deleted or sent, and the restored declaration stops on the definition', async () => {
+  const { h, first } = await valueRefusedSecret();
+  const flag = retireFlagOf(first.halt);
+  const { token } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.equal(flag, `retire:environmentVariable:contoso_key@${token}`);
+  const other = await pass(retiring(h, [flag.replace(/@.*$/, '@00000000-0000-4000-8000-000000000009')], noConfig()), noConfig());
+  assert.equal(other.halt && other.halt.code, 'managed-settlement-pending', other.halt && other.halt.message);
+  const out = await pass(retiring(h, [flag], noConfig()), noConfig());
+  assert.equal(out.halt, null, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.deepEqual(out.sent, [], 'nothing is deleted or sent');
+  assert.equal(h.store.readGroup('environmentVariable', 'contoso_key').pending, null);
+  assert.deepEqual(variableRows(h), [1, 0]);
+  const back = await pass(reopen(h), secretSpec(), secretValue());
+  assert.equal(back.halt && back.halt.code, 'create-identity-conflict', back.halt && back.halt.message);
+  assert.deepEqual(back.sent, []);
+});
+
+// A definition whose answer was lost: its value was never sent, but no answer proves this attempt made the definition, so
+// the value waits for the maker's ordinary approval of that definition (the namesake @<id> form does not stand in for it).
+async function lostDefinition({ land = true } = {}) {
+  let org = null;
+  let lose = true;
+  const h = await harness({ intercept: async (req) => {
+    if (!lose || !isDefinitionPost(req)) return undefined;
+    lose = false;
+    if (land) await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+  } });
+  org = h.org;
+  const first = await pass(h, secretSpec(), secretValue());
+  assert.ok(first.halt);
+  assert.equal(first.sent.filter(isValuePost).length, 0, 'the value was never reached');
+  return h;
+}
+
+test('a variable whose definition answer was lost sends its never-sent value only after the maker approves the landed definition', async () => {
+  const h = await lostDefinition();
+  assert.deepEqual(variableRows(h), [1, 0]);
+  const { root } = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  const held = await valueBuild(h);
+  assert.equal(held.halt && held.halt.code, 'create-ownership-required', held.halt && held.halt.message);
+  assert.ok(held.halt.message.includes(`the saved definition of environmentVariable "contoso_key" at ${root.id} matches the pending create, but no recorded answer proves this attempt created it.`), held.halt.message);
+  assert.ok(held.halt.message.includes('adopt:environmentVariable:contoso_key'), held.halt.message);
+  assert.deepEqual(held.sent.filter(isVariableCreate), []);
+  const namesake = await valueBuild(h, [`adopt:environmentVariable:contoso_key@${root.id}`]);
+  assert.ok(namesake.halt, 'the namesake approval does not stand in');
+  assert.deepEqual(namesake.sent.filter(isVariableCreate), []);
+
+  const done = await valueBuild(h, ['adopt:environmentVariable:contoso_key']);
+  assert.equal(done.halt, null, done.halt && `${done.halt.code}: ${done.halt.message}`);
+  assert.deepEqual(done.sent.filter(isVariableCreate).map((r) => r.path.split('?')[0]), ['/environmentvariablevalues']);
+  assert.deepEqual(variableRows(h), [1, 1]);
+  assert.equal(committed(h, 'environmentVariable', 'contoso_key').records[0].id, root.id);
+});
+
+test('a variable whose definition answer was lost and did not land sends nothing', async () => {
+  const h = await lostDefinition({ land: false });
+  assert.deepEqual(variableRows(h), [0, 0]);
+  const out = await valueBuild(h, ['adopt:environmentVariable:contoso_key']);
+  assert.ok(out.halt);
+  assert.deepEqual(out.sent.filter(isVariableCreate), []);
+  assert.ok(h.store.readGroup('environmentVariable', 'contoso_key').pending);
+});
+
+test('a variable value whose answer was lost may have been sent: it is never claimed or sent again, landed or not', async () => {
+  for (const land of [true, false]) {
+    let org = null;
+    let lose = true;
+    const h = await harness({ intercept: async (req) => {
+      if (!lose || !isValuePost(req)) return undefined;
+      lose = false;
+      if (land) await org.request({ url: `${org.origin}/api/data/v9.0${req.path}`, method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+      return { statusCode: 503, body: { error: { code: '0x80040216', message: 'the answer was lost' } } };
+    } });
+    org = h.org;
+    const first = await pass(h, secretSpec(), secretValue());
+    assert.ok(first.halt);
+    assert.ok(!first.halt.message.includes('create-value-refused'), first.halt.message);
+    const pending = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+    const value = pending.rowProtocol.rows.find((r) => r.parentId !== null);
+    assert.equal(value.dispatched, true, `land=${land}: the value stays possibly sent`);
+    const again = await valueBuild(h, ['adopt:environmentVariable:contoso_key']);
+    assert.ok(again.halt, `land=${land}`);
+    assert.deepEqual(again.sent.filter(isVariableCreate), [], `land=${land}: nothing is sent again`);
+    assert.deepEqual(variableRows(h), [1, land ? 1 : 0]);
+  }
+});
+
+// The store's claim of the one unsent value, over the record a real refused value request left: it re-checks the record
+// under its lease and moves only the epoch; the context claims an attempt once per process.
+function valueClaimOf(h, ctx = reopen(h).ctx) {
+  const pending = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  const value = pending.rowProtocol.rows.find((r) => r.parentId !== null);
+  const [capture] = ctx.captureReadOnly([pending.token]);
+  return { ctx, pending, args: { token: pending.token, id: value.id, parentId: value.parentId, capture, declarationSha256: pending.declarationSha256 } };
+}
+const storeCode = (fn) => { try { fn(); } catch (e) { return e.code; } return null; };
+
+test('the store claims a refused variable value only as recorded, and the claim moves only the epoch', async () => {
+  const { h } = await valueRefusedSecret();
+  const { pending, args } = valueClaimOf(h);
+  assert.equal(pending.acknowledgedRoot, true, 'the run that saw the definition acknowledged receipted it');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, declarationSha256: 'f'.repeat(64) })), 'managed-binding-generation-conflict');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, id: pending.root.id })), 'managed-create-request-mismatch');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, parentId: '00000000-0000-4000-8000-000000000009' })), 'managed-create-request-mismatch');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow({ ...args, capture: { ...args.capture, digest: 'x' } })), 'managed-binding-generation-conflict');
+  assert.equal(epochOf(h), pending.sendWindow.epoch, 'a refused claim writes nothing');
+
+  const { epoch } = h.store.claimUnsentValueRow(args);
+  assert.equal(epoch, pending.sendWindow.epoch + 1);
+  const after = h.store.readGroup('environmentVariable', 'contoso_key').pending;
+  assert.deepEqual(after.rowProtocol.rows, pending.rowProtocol.rows, 'no row flag changes');
+  assert.equal(after.acknowledgedRoot, true);
+  assert.equal(after.token, pending.token);
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow(args)), 'managed-binding-generation-conflict', 'the old capture is stale after the claim');
+});
+
+test('the store refuses a value claim over a definition its own answer never acknowledged unless the maker approved it', async () => {
+  const h = await lostDefinition();
+  const { pending, args } = valueClaimOf(h);
+  assert.notEqual(pending.acknowledgedRoot, true, 'a matching read never receipts the definition');
+  assert.equal(storeCode(() => h.store.claimUnsentValueRow(args)), 'managed-settlement-pending');
+  assert.equal(epochOf(h), pending.sendWindow.epoch);
+  assert.equal(h.store.claimUnsentValueRow({ ...args, rootApproved: true }).epoch, pending.sendWindow.epoch + 1);
+  // A context without the approval refuses; one with it claims, once.
+  assert.equal(storeCode(() => valueClaimOf(h).ctx.claimValue(pending.token, valueClaimOf(h).args)), 'managed-settlement-pending');
+  const approvedCtx = reopen(h, ['adopt:environmentVariable:contoso_key']).ctx;
+  const claim = valueClaimOf(h, approvedCtx);
+  assert.equal(approvedCtx.claimValue(pending.token, claim.args).epoch, pending.sendWindow.epoch + 2);
+  const second = valueClaimOf(h, approvedCtx);
+  assert.equal(storeCode(() => approvedCtx.claimValue(pending.token, second.args)), 'managed-settlement-pending', 'one claim per attempt per process');
+  assert.equal(epochOf(h), pending.sendWindow.epoch + 2);
+});
+
+test('a later process never receipts a variable definition from a matching read alone', async () => {
+  const h = await lostDefinition();
+  const { pending } = valueClaimOf(h);
+  const ctx = reopen(h).ctx;
+  assert.equal(ctx.receiptPartialVariableRoot({ token: pending.token, epoch: pending.sendWindow.epoch, observation: { rows: [{ kind: 'environmentVariable', key: 'contoso_key', id: pending.root.id, state: 'present', parentId: null, projectionSha256: pending.rowProtocol.rows.find((r) => r.parentId === null).expectedSha256 }] }, declarationSha256: pending.declarationSha256 }), false);
+  assert.notEqual(h.store.readGroup('environmentVariable', 'contoso_key').pending.acknowledgedRoot, true);
+});
+
 test('a secret variable whose create answer was lost stays pending: never sent again, and dropped only under its exact retire approval', async () => {
   let org = null;
   let lose = true;

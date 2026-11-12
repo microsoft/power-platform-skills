@@ -704,6 +704,49 @@ test('protected configuration through the build command: a dropped item whose cr
   assert.equal(store.readGroup('customApi', 'contoso_calc').pending, null);
   assert.deepEqual(org.unexpected, []);
 });
+
+// #847: through the build command, a secret variable whose definition the service took and whose value request alone it
+// refused stops with create-value-refused and its exact retire approval; each rebuild sends only the value, and the
+// corrected one completes the variable at the original definition id. No Key Vault reference reaches anything printed.
+test('protected configuration through the build command: a refused variable value is sent alone on each rebuild, and the corrected rebuild completes it', async () => {
+  let refuse = true;
+  const org = commandOrg({ intercept: (req) => (refuse && req.method === 'POST' && req.path.split('?')[0] === '/environmentvariablevalues'
+    ? { statusCode: 400, body: { error: { code: '0x80072040', message: `refused ${KV}` } } } : undefined) });
+  const spec = protectedSpec({ environmentVariables: [{ schemaName: 'contoso_ApiKey', type: 'secret' }], customApis: [], duplicateDetectionRules: [] });
+  const settingsFile = path.join(makeTempDir('config-value-settings-'), 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiKey', Value: KV }] }));
+  const argv = [...DATA, '--deployment-settings', settingsFile];
+  const first = await runCommand(spec, { org, argv });
+  const store = () => openManagedBindings({ workspaceDir: path.join(first.appDir, '.maker-workspace'), environment: org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' });
+  const { token } = store().readGroup('environmentVariable', 'contoso_apikey').pending;
+  const said = (out) => `${out.stderr} ${JSON.stringify(out.payload)} ${out.thrown ? out.thrown.message : ''}`;
+  assert.ok(said(first).includes('environmentVariable contoso_ApiKey (create-value-refused) (the service refused the value request (0x80072040) before it started;'), said(first).slice(-1500));
+  assert.ok(said(first).includes(`--apply --authorize 'retire:environmentVariable:contoso_apikey@${token}'`), said(first).slice(-1500));
+  assert.ok(!said(first).includes('contoso-kv') && !fs.readFileSync(store().file, 'utf8').includes('contoso-kv'), 'no Key Vault reference is printed or stored');
+  assert.deepEqual(rootCreates(org), ['POST /environmentvariabledefinitions', 'POST /environmentvariablevalues']);
+
+  let mark = org.requests.length;
+  const again = await runAgain(spec, first, argv);
+  assert.ok(said(again).includes('(create-value-refused)'), said(again).slice(-1500));
+  assert.deepEqual(rootCreates(org, mark), ['POST /environmentvariablevalues'], 'only the value, once');
+
+  refuse = false;
+  mark = org.requests.length;
+  const done = await runAgain(spec, first, argv);
+  assert.equal(done.thrown && done.thrown.message, undefined, 'the corrected run did not halt');
+  assert.equal(done.exitCode, 0, done.stderr.slice(-600));
+  assert.deepEqual(rootCreates(org, mark), ['POST /environmentvariablevalues']);
+  assert.equal(org.rows('environmentvariabledefinitions').length, 1);
+  assert.equal(org.rows('environmentvariablevalues').length, 1);
+  const group = store().readGroup('environmentVariable', 'contoso_apikey');
+  assert.equal(group.pending, null);
+  assert.equal(group.committed.records[0].id, org.rows('environmentvariabledefinitions')[0].environmentvariabledefinitionid);
+  mark = org.requests.length;
+  const rerun = await runAgain(spec, first, argv);
+  assert.equal(rerun.exitCode, 0, rerun.stderr.slice(-600));
+  assert.deepEqual(rootCreates(org, mark), []);
+  assert.deepEqual(org.unexpected, []);
+});
 test('protected configuration through the build command: a later phase\u2019s transient failure runs the whole build again and the configuration rows stay where they are', async () => {
   let refused = 0;
   // The sample data's first create meets a customization lock, which the build retries whole; the second succeeds.

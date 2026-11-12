@@ -28,6 +28,7 @@ const { normalizeGuid, isAuthorized, approvalKey, canonicalJson } = require('./r
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { defaultApprovalToken } = require('./managed-create-context.js');
 const { attemptProvenUnsent } = require('./managed-bindings.js');
+const { withConfigurationWrite } = require('./configuration-transport.js');
 
 const IDENTITY = 'stable-v1';
 const EDIT_CODE = 'configuration-edit-unsupported';
@@ -38,6 +39,9 @@ const OWNERSHIP_CODE = 'create-ownership-required';
 const OPT_IN_CODE = 'create-identity-opt-in-required';
 // A create or edit the service refused unstarted and the run released (#847, refusedStop): nothing pending is left.
 const REFUSED_CODE = 'create-refused';
+// A variable whose definition was sent and whose value request the service refused before it started (#847,
+// valueRefusedStop): the attempt stays pending, and only its value may be sent later (completeValueOnce).
+const VALUE_REFUSED_CODE = 'create-value-refused';
 // A local workspace copy that differs from the server's: the declared views' and charts' stop (sdk-build.js
 // refuseUnsentCopy), with the same way on — keep what you want in the App Spec, then approve replacing the copy.
 const DRAFT_CODE = 'workspace-copy-unsent-edits';
@@ -789,6 +793,157 @@ async function publishOnce(env, ctx, item, scope = null) {
   return settled.verdict;
 }
 
+// #847: the value row of a protected variable create, sent after its definition. The real SDK sends a variable with a
+// value as TWO requests — the definition's POST, then the value's own POST outside the solution — so the service can
+// accept the first and refuse the second (a Key Vault reference this environment cannot read, say). The attempt then
+// holds a definition that may have been made and a value that its own record proves never left (the transport reset it
+// to `dispatched: false` from a definite unstarted refusal). That one value is the only thing such a build may still send.
+const VALUE_ROW_KIND = 'environmentVariableValue';
+const VALUE_MESSAGES = {
+  input: (key) => `the pending create of environmentVariable "${key}" still owes its original value row. Supply its value in deployment settings, keep its App Spec definition unchanged, and build again. No value request was sent for this item`,
+  ownership: (key, id) => `the saved definition of environmentVariable "${key}" at ${id} matches the pending create, but no recorded answer proves this attempt created it. `
+    + 'Its original value is absent and was never dispatched. Check that the definition is yours before giving the printed approval; after approval and fresh checks, only that value can be sent. '
+    + 'No value request was sent for this item',
+  unverified: (key) => `the original definition and value rows for environmentVariable "${key}" could not be read completely; no value request was sent for this item`,
+  conflict: (key) => `environmentVariable "${key}" has a row that differs from its pending create; no definition or value was replaced and no value request was sent for this item`,
+  membership: (key) => `the pending create of environmentVariable "${key}" is missing required solution membership. Restore that membership under the original ids, then build again. No value request was sent for this item`,
+};
+
+// The definition and value rows of an attempt that is an original variable create of exactly those two rows, or null.
+function variableRowsOf(attempt) {
+  const p = attempt && attempt.rowProtocol;
+  if (!p || !Array.isArray(p.rows) || p.rows.length !== 2) return null;
+  const root = p.rows.find((r) => r.parentId === null);
+  const value = p.rows.find((r) => r.parentId !== null);
+  return root && value && value.kind === VALUE_ROW_KIND ? { root, value } : null;
+}
+
+/**
+ * Whether a pending variable create owes ONLY its value row, and may send it (#847). Read only and synchronous over what
+ * the caller read: `item` (locateItem's pending item, its attempt as the store holds it now) and `observation` (B.observe
+ * of today's plan, read after the attempt). Answers:
+ *   null                       not this case: the generic recovery halt stands (another family, an edit, a value that was
+ *                              or may have been sent, a changed declaration — managed-pending-intent-changed —, a
+ *                              definition read absent, a value already there: its ordinary recovery judges it);
+ *   { halt: verdict }          this case, but the value cannot be sent yet: its input is missing, a row or membership is
+ *                              unreadable, differs or is missing, or the definition's ownership needs the maker's approval;
+ *   { ready: { declarationSha256 } }   the value is owed and everything it needs was proved: resolve sends it once.
+ * Every condition is one the store re-checks under its lease when the value is claimed (claimUnsentValueRow), except the
+ * service reads, which completeValueOnce repeats after the claim.
+ */
+function valueOwed(env, ctx, item, observation) {
+  const a = item.attempt;
+  const { planned } = item;
+  if (!ctx || item.edit || item.adoption || planned.kind !== 'environmentVariable' || !a || !a.rowProtocol) return null;
+  if (a.phase !== 'sending' || a.baseGeneration !== null || !a.expected || a.expected.baseObservation !== null || a.savedObservation !== null) return null;
+  const p = a.rowProtocol;
+  const pair = variableRowsOf(a);
+  if (!pair || p.preserved.length || p.completion.ruleState !== null || p.effects.some((e) => e.kind === 'rule-state')) return null;
+  const { root, value } = pair;
+  if (root.mode !== 'create' || root.dispatched !== true || root.id !== normalizeGuid(a.root.id)) return null;
+  if (value.mode !== 'create' || value.sensitiveInput !== true || value.parentId !== root.id || value.dispatched
+    || value.sentFields !== null || value.sentSha256 !== null || (a.acknowledgedChildCreates || []).some((c) => c.kind === value.kind && c.key === value.key)) return null;
+  // The declaration is judged over the attempt's OWN rows (not today's plan, which drops a value the settings no longer
+  // supply), so a missing value is not mistaken for a changed declaration and a changed one keeps its own halt.
+  const declarationSha256 = B.declarationSha256Of(env.spec, { kind: planned.kind, key: item.declaredKey, solution: planned.solution, rows: p.rows, ruleState: p.completion.ruleState });
+  if (declarationSha256 !== a.declarationSha256) return null;
+  const { key } = planned;
+  const halt = (code, message, extra = {}) => ({ halt: { action: 'halt', code, message, ...extra } });
+  // Deployment settings name a value to send: neither "" (leave alone), null (clear) nor no entry at all.
+  const input = env.bindings && env.bindings.environmentVariables instanceof Map ? env.bindings.environmentVariables.get(key) : undefined;
+  if (!input || typeof input.value !== 'string' || input.value === '') return halt(COMPLETION_CODE, VALUE_MESSAGES.input(key));
+  if (!sameRows(planned.plan.rows, p.rows)) return null;
+  const seen = (r) => ((observation && observation.rows) || []).find((x) => x.kind === r.kind && x.key === r.key);
+  const d = seen(root);
+  const v = seen(value);
+  if (!d || !v || d.state === 'unknown' || v.state === 'unknown') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  if (d.state === 'absent') return null;
+  if (d.state !== 'present') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  if (normalizeGuid(d.id) !== root.id || (d.parentId ? normalizeGuid(d.parentId) : null) !== null || d.projectionSha256 !== root.expectedSha256) {
+    return halt(CONFLICT_CODE, VALUE_MESSAGES.conflict(key), { rows: [{ id: root.id }] });
+  }
+  if (v.state === 'present') return null;
+  if (v.state !== 'absent') return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  const members = new Map(((observation && observation.members) || []).map((m) => [normalizeGuid(m.id), m.state]));
+  const states = p.completion.members.map((m) => members.get(normalizeGuid(m.id)));
+  if (states.some((s) => s !== 'present' && s !== 'absent')) return halt(UNVERIFIED_CODE, VALUE_MESSAGES.unverified(key));
+  if (states.some((s) => s !== 'present')) return halt(COMPLETION_CODE, VALUE_MESSAGES.membership(key));
+  // The definition is this attempt's own creation only by its own receipted answer; otherwise the maker approves it by
+  // its ordinary root token (adopt:environmentVariable:<key>), never by the namesake adoption's @<id> form.
+  const approval = defaultApprovalToken(planned.kind, a.root.key, root);
+  if (a.acknowledgedRoot !== true && !ctx.approvals().includes(approval)) {
+    return halt(OWNERSHIP_CODE, VALUE_MESSAGES.ownership(key, root.id), { rows: [{ id: root.id }], approvals: [approval] });
+  }
+  return { ready: { declarationSha256 } };
+}
+
+/**
+ * Send the value valueOwed proved owed, once, and settle the attempt (#847):
+ *   1. capture the attempt (captureReadOnly) BEFORE a fresh read, and judge that read (valueOwed) again;
+ *   2. claim the value under a new epoch (ctx.claimValue → store.claimUnsentValueRow): the store re-checks the capture
+ *      and the attempt under its lease, and the context refuses a second claim in this process;
+ *   3. read again and judge again after the claim, so a row changed meanwhile stops the send;
+ *   4. send the ONE value POST (B.postPlannedVariableValue) in the send-once scope and the attempt's fenced create set,
+ *      classified so that only that value row's create passes; the transport seals it dispatched before it leaves;
+ *   5. a definite unstarted refusal stops create-value-refused (the attempt stays pending; the next build may try again
+ *      while its record still proves the value never left); any other unchecked answer is create-outcome-unknown and
+ *      the value is never sent again;
+ *   6. an acknowledged value is observed and settled; the item is present only when the attempt commits.
+ * Answers { state: 'present', id } for resolve; anything else throws, typed.
+ */
+async function completeValueOnce(env, ctx, item) {
+  const { planned } = item;
+  const { kind, key } = planned;
+  const rootId = planned.plan.rows[0].id;
+  const fail = (verdict) => { const h = withWayOut(item, haltOf(kind, key, verdict)); throw stop(h.code, h.message, h); };
+  const judge = async () => {
+    const group = env.store.readGroup(kind, key);
+    const attempt = group.pending && group.pending.token === item.token ? group.pending : null;
+    if (!attempt) fail({ code: UNVERIFIED_CODE, message: VALUE_MESSAGES.unverified(key) });
+    const observation = await B.observe(env.dataverse, planned);
+    const owed = valueOwed(env, ctx, { ...item, attempt }, observation);
+    if (owed && owed.ready) return { attempt, ready: owed.ready };
+    return fail(owed ? owed.halt : ctx.classify(item.token, observation, { declarationSha256: planned.plan.declarationSha256 }));
+  };
+  const [capture] = ctx.captureReadOnly([item.token]);
+  const first = await judge();
+  const { value } = variableRowsOf(first.attempt);
+  const claimed = ctx.claimValue(item.token, { id: value.id, parentId: value.parentId, capture, declarationSha256: first.ready.declarationSha256 });
+  await judge();
+  const base = B.createSetClassifier([{ token: claimed.token, planned }]);
+  // Only the value row's own create: the definition, a PATCH, a $batch, a membership or any other row is refused unsent.
+  const classify = (req) => {
+    const d = base(req);
+    return d && d.type === 'rows' && d.token === claimed.token && d.rows.length === 1 && d.rows[0].kind === VALUE_ROW_KIND
+      && d.rows[0].key === value.key && normalizeGuid(d.rows[0].id) === value.id ? d : null;
+  };
+  // The service answers the created row (Prefer: return=representation); a body naming another row is not this create.
+  const acceptResult = (res) => res === undefined || res === null || res === ''
+    || (typeof res === 'object' && !Array.isArray(res) && !res.error && (res.environmentvariablevalueid === undefined || normalizeGuid(res.environmentvariablevalueid) === value.id));
+  const pushed = await withConfigurationWrite(() => ctx.run({ attempts: [claimed], classify, deleteCode: B.DELETE_CODE, label: `configuration value ${kind} ${key}`, acceptResult },
+    () => B.postPlannedVariableValue(env.dataverse, planned)));
+  const mine = ctx.facts(item.token).filter((f) => f.type === 'row' && f.kind === VALUE_ROW_KIND && f.key === value.key);
+  const refused = !pushed.checked && !pushed.localError ? mine.find((f) => f.notStarted === true) : null;
+  if (refused) throw valueRefusedStop(kind, key, rootId, refused, item.token);
+  if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key, id: rootId });
+  if (!pushed.checked || mine.length !== 1 || mine[0].outcome !== 'acknowledged') {
+    throw stop('create-outcome-unknown', `the value of ${kind} "${key}" was not acknowledged; it is not sent again`, { kind, key, id: rootId });
+  }
+  const [settled] = ctx.settle([{ token: item.token, observation: await B.observe(env.dataverse, planned), declarationSha256: first.ready.declarationSha256 }]);
+  if (settled.verdict.action !== 'commit') fail(settled.verdict);
+  return { state: 'present', id: rootId };
+}
+
+// The stop for a variable whose value request the service refused before it started, the definition sent before it
+// (#847). Unlike refusedStop, the attempt is NOT released — its definition may be there — so it routes as unknown
+// (configuration-artifacts.js UNKNOWN_PORT_CODES). It carries only the answer's validated Dataverse code and the attempt's
+// own token (never service text), which the halt line spells into the retire approval (A.valueRefusedHint).
+function valueRefusedStop(kind, key, id, fact, token) {
+  const serviceCode = typeof fact.serviceCode === 'string' ? fact.serviceCode : null;
+  return stop(VALUE_REFUSED_CODE, `the ${kind} "${key}": ${A.valueRefusedHint({ kind, key, serviceCode, pendingAttemptToken: token })}`,
+    { kind, key, id, serviceCode, pendingAttemptToken: token });
+}
+
 // The way out of a pending create that only its own ids can complete (#847). A create the service refused under an earlier
 // plugin version is pending in phase "sending" with no record that nothing started (2.26.0 kept none), so it reads as
 // possibly sent and a build given corrected settings still stops here: nothing proves its rows were never made, and an
@@ -1023,6 +1178,11 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       if (item.state === 'pending') {
         const rec = await recoverPending(env, ctx, item);
         if (rec.verdict.action === 'halt') {
+          // A variable create whose value alone is owed and provably never left: resolve sends it once (valueOwed);
+          // one that cannot be sent yet names exactly why, before anything is sent.
+          const value = valueOwed(env, ctx, item, rec.observation);
+          if (value && value.ready) continue;
+          if (value) { halts.push(withWayOut(item, haltOf(kind, item.planned.key, value.halt))); continue; }
           // A saved rule create whose initial publication provably never left: resolve sends it once (unsentPublication).
           const owed = unsentPublication(ctx, item, rec);
           if (owed && owed.would.action === 'commit') continue;
@@ -1177,6 +1337,10 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
         }
         // Nothing the attempt sent can have been applied: it is created again, under the same ids (run resumes it).
         if (verdict.action === 'resume') return { state: 'absent', id: rootId };
+        // A variable create whose value alone is owed and provably never left: sent once, fenced, then settled (#847).
+        const value = verdict.action === 'halt' ? valueOwed(await env(), ctx, item, observation) : null;
+        if (value && value.ready) return completeValueOnce(await env(), ctx, item);
+        if (value) verdict = value.halt;
         // A saved rule create whose initial publication provably never left: sent once, fenced, then settled.
         const owed = unsentPublication(ctx, item, rec);
         if (owed) verdict = owed.would.action === 'commit' ? await publishOnce(await env(), ctx, item, hintScope) : owed.would;
@@ -1226,6 +1390,22 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       const refused = refusedUnsent(ctx, attempt, pushed);
       const released = !pushed.checked && ctx.release(attempt);
       if (refused && released) throw refusedStop(kind, planned.key, id, refused, 'create');
+      // A variable whose definition this run sent and whose value request the service refused unstarted (#847): the
+      // attempt stays pending (the definition may be there, so it is never released) and the stop says so. When this
+      // run's own answer acknowledged the definition and a fresh exact read now finds it as prepared, that root is
+      // receipted first, so a later build can send only the value without an ownership approval.
+      if (refused && !released && !pushed.localError && kind === 'environmentVariable') {
+        const mine = ctx.facts(attempt.token).filter((f) => f.type === 'row');
+        const root = planned.plan.rows[0];
+        // This run's own answer for the definition (kept `unchecked`, since the run as a whole was not), and the value's
+        // durable unstarted reset; a conflict anywhere, or a definition answer that never came, is not this case.
+        const rootAnswered = mine.some((f) => f.kind === root.kind && f.key === root.key && (f.outcome === 'unchecked' || f.outcome === 'acknowledged'));
+        const valueFact = mine.find((f) => f.kind === VALUE_ROW_KIND && f.notStarted === true);
+        if (rootAnswered && valueFact && !mine.some((f) => f.outcome === 'conflict')) {
+          ctx.receiptPartialVariableRoot({ token: attempt.token, epoch: attempt.epoch, observation: await B.observe(dataverse, planned), declarationSha256: planned.plan.declarationSha256 });
+          throw valueRefusedStop(kind, planned.key, id, valueFact, attempt.token);
+        }
+      }
       if (pushed.error) throw pushed.error;
       if (pushed.localError) throw stop(pushed.localError.code || UNVERIFIED_CODE, String(pushed.localError.message || pushed.localError), { kind, key: planned.key, id });
       if (!pushed.checked) throw stop('create-outcome-unknown', `the ${kind} "${planned.key}" create was not acknowledged`, { kind, key: planned.key, id });
