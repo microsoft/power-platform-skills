@@ -724,7 +724,7 @@ Prompt:
   Plan the data model for a Power Apps mobile app whose screens are already approved.
 
   Requirements brief (confirmed with user):
-  <requirements_brief — bullet points from Step 2b>
+  <requirements_brief — the `brief` in `.tmp/requirements.json`>
 
   Plan document: <working_dir>/native-app-plan.md
   Approved screens: the plan's ## Screens section, including ### Data Contract. The data model

@@ -118,7 +118,7 @@ const SECTIONS = new Set([
  */
 const PHASES_BY_BUILD_ORDER = {
   'screens-first': [
-    { id: 'requirements', title: 'Understand what to build', detail: 'One setup question and the feature brief', skillSteps: '2, 2b' },
+    { id: 'requirements', title: 'Understand what to build', detail: 'One setup question and the confirmed brief', skillSteps: '0, 2' },
     { id: 'scaffold', title: 'Bring the app online', detail: 'Prepare the template and initialize the Power Apps project', skillSteps: '3' },
     { id: 'screen-plan', title: 'Plan the screens', detail: 'Screens, navigation, and the data each one shows', skillSteps: '4 / screen graph gate' },
     { id: 'screens', title: 'Build the screens', detail: 'Navigation, sample data, and every screen in parallel', skillSteps: '5, 6, 7' },
@@ -133,7 +133,7 @@ const PHASES_BY_BUILD_ORDER = {
     { id: 'run', title: 'Run it on a device', detail: 'Final checks, then start Metro and scan the QR code', skillSteps: '15, 16, 17' },
   ],
   'data-model-first': [
-    { id: 'requirements', title: 'Understand what to build', detail: 'Confirm the feature brief', skillSteps: '2, 2b, 2c' },
+    { id: 'requirements', title: 'Understand what to build', detail: 'The setup question, the confirmed brief, and a rough plan preview', skillSteps: '0, 2, 2b, 2c' },
     { id: 'architecture', title: 'Approve the architecture', detail: 'Device capabilities, connectors, and data platform', skillSteps: '3 / Gate 1' },
     { id: 'data-model', title: 'Design the data model', detail: 'Tables, columns, and relationships', skillSteps: '3 / Gate 2', dataverseOnly: true },
     { id: 'screen-plan', title: 'Plan the screens', detail: 'Screen graph, navigation, and per-screen specs', skillSteps: '3 / Gates 3-4' },

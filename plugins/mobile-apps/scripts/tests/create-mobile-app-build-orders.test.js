@@ -44,7 +44,14 @@ test('the build order is asked once, after routing confirms a fresh creation', (
   // Existing-app requests leave the skill before any build-order question.
   assert.ok(step0.indexOf('**Existing-app changes leave this skill before resume handling.**') < choose);
 
+  // The user says what to build before choosing how: the requirements come first, and the
+  // question opens with the brief they produced.
+  const gather = step0.indexOf('#### Gather the requirements');
+  assert.ok(fresh < gather && gather < choose, 'the requirements are gathered before the build order');
+  assert.match(step0.slice(gather, choose), /<working_dir>\/\.tmp\/requirements\.json/);
+
   const question = step0.slice(choose, continuation);
+  assert.match(question, /"Here's what I'll build:", the brief's bullets/);
   assert.match(question, /`--screens-first` or `--data-model-first` in `\$ARGUMENTS` chooses without asking/);
   assert.match(question, /one `AskUserQuestion`/);
   // Screens first is the recommended, first option, and says what the user gets from it.

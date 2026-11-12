@@ -1,11 +1,11 @@
 # Data model first - `/create-mobile-app`
 
 Read this file in full when Step 0 of [`SKILL.md`](../SKILL.md) chooses the **data model first** build order.
-`SKILL.md` has already routed the request, confirmed a fresh template or a creation continuation, and resolved the Power Apps CLI (`PA_KIND`).
+`SKILL.md` has already routed the request, confirmed a fresh template or a creation continuation, resolved the Power Apps CLI (`PA_KIND`), and gathered the requirements into `.tmp/requirements.json`; choosing this order confirmed the brief.
 
 ## Workflow
 
-Intent and creation-state checks and the build-order choice ([`SKILL.md`](../SKILL.md) Step 0) → prerequisites → requirements (iOS + Android fixed) →
+Intent and creation-state checks, the requirements (iOS + Android fixed), and the build-order choice ([`SKILL.md`](../SKILL.md) Step 0) → prerequisites →
 rough plan preview → Gate 1 architecture (native capabilities, connectors,
 then data platform) → Gate 2 Dataverse model when selected → Gates 3 and 4
 screen graph/specifications → environment and template preparation → app
@@ -112,7 +112,7 @@ leaves a plan that explains nothing:
 | Section | Written at | Contents |
 |---|---|---|
 | `environment` | Step 1, confirmed Step 4 | `displayName`, `environmentId`, `environmentUrl`, `tenantId`, `publisherPrefix` |
-| `requirements` | Steps 2 and 2b | `appName`, `slug`, `platforms`, `aesthetic`, `industry`, `brief`, `features[]` |
+| `requirements` | Step 2b | `appName`, `slug`, `platforms`, `aesthetic`, `industry`, `brief`, `features[]` |
 | `architecture` | Gate 1 | `dataPlatform`, `nativeCapabilities[]` and `connectors[]` as `{ name, reason }` — a bare name cannot be approved or rejected, the reason is the decision |
 | `dataModel` | Gate 2 | `connectorOnly` when there are no tables; otherwise `tables[]` with `logicalName`, `displayName`, `status` (`new`/`reused`/`modified`, or the plan's `create`/`reuse`/`extend`), `purpose` (what it holds), **`reason` (why it is created, reused or extended)**, `columns[]` (`logicalName`, `displayName`, `type`, `key: PK\|FK`), `relationships[]` (`relatedTable`, `name`, `cardinality`) |
 | `offline` | Gate 2 | `enabled`, `mode`, `tables[]`, `rationale` |
@@ -158,7 +158,7 @@ itself, so it is written on every creation path after Step 0's routing decision.
 
 **Telemetry checkpoint: `validate_development_toolchain`**
 
-Run all checks first — no point gathering requirements if the toolchain isn't ready.
+Run all checks first — no point planning if the toolchain isn't ready.
 
 **Important: npm auth and Power Platform app auth are separate.** The account used for `npm install` can be different from the account used by the Power Apps CLI (`$PA`):
 
@@ -189,18 +189,18 @@ Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbac
 
 Capture target Power Platform environment for the remaining flow.
 
-**Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `pa app init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `pa app init` because init needs `--environment-id`.
+**Source of truth for env selection: the setup question's answer first, the generated `power.config.json` second.** The setup question in `SKILL.md` Step 0 offers the template's `ENV=<id>` or takes another environment ID, and records the answer as `environmentId` in `.tmp/requirements.json`; pass that ID to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If both are empty, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `pa app init` because init needs `--environment-id`.
 
 | Step | Source | When user is asked |
 |---|---|---|
-| 0. `power.config.json` has `environmentId` | `scripts/resolve-environment.js <environment-id>` | Never — automatic after `pa app init` |
-| 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
+| 0. `.tmp/requirements.json` has `environmentId` | `scripts/resolve-environment.js <environment-id>` | Never — the setup question already asked |
+| 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if the requirements and `power.config.json` hold no ID, or the user wants a different env |
 | 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
-| 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
+| 3. User wants different env | Ask for another env ID and re-run resolver | Only if resolution fails or the user asks to change it |
 | 4. `$PA app init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
-TARGET_ENV="<environment-id-or-empty>"
+TARGET_ENV=$(node -e "try { console.log(require('./.tmp/requirements.json').environmentId || '') } catch { console.log('') }")
 if [ -z "$TARGET_ENV" ] && [ -f power.config.json ]; then
   TARGET_ENV=$(node -e "try { const id=require('./power.config.json').environmentId || ''; console.log(id); } catch { console.log(''); }")
 fi
@@ -217,9 +217,9 @@ echo "✓ Target env URL: $ACTIVE_ENV_URL"
 echo "✓ Target tenant: ${ACTIVE_TENANT_ID:-unknown}"
 ```
 
-**Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, then re-run the capture block above. Do not run `pa app init` here; Step 6 owns initialization after the user confirms the target environment.
+**Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, write it as `environmentId` in `.tmp/requirements.json` with the `Write` tool, then re-run the capture block above. Do not run `pa app init` here; Step 6 owns initialization after the user confirms the target environment.
 
-Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6 (`pa app init`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
+Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (name-collision pre-flight), Step 6 (`pa app init`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
 
 If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenant>` in the foreground. If `pa app init` later uses the wrong account, follow shared-instructions standalone CLI auth handling and retry once.
 
@@ -263,31 +263,23 @@ Do NOT block on null detection — the user can still proceed; the Power Apps CL
 
 If the script exits non-zero (rare — should always exit 0 with `prefix: null`), treat it as the null case and continue.
 
-### Step 2 — Gather requirements
+### Step 2 — Read the requirements
 
-**Telemetry checkpoint: `gather_app_requirements`**
+[`SKILL.md`](../SKILL.md) Step 0 gathered the requirements, and recorded their telemetry checkpoint, before the build-order question; choosing this order confirmed the brief.
+Read `<working_dir>/.tmp/requirements.json` and ask none of it again:
 
-Skip questions the user already answered in `$ARGUMENTS`.
-
-If the user gave no description, ask one open-ended question first:
-
-> "What would you like to build? Describe it in your own words — what it does, who uses it, and what problem it solves."
-
-Then collect with `AskUserQuestion` (batch where possible):
-
-| Question | Default |
+| Field | Use |
 |---|---|
-| App display name | derived from description |
-| Aesthetic | minimal / playful / professional / matches existing brand |
-| Target environment | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1.6, or choose "use a different environment" and provide another environment ID |
+| `appName` | `<displayName>` |
+| `slug` | The app slug, derived from the name. Step 2c shows it, so the user can change it with `edit`. |
+| `aesthetic` | The overall look |
+| `environmentId` | The target environment, resolved at Step 1 |
+| `industry`, `features` | The domain and the feature list, for Step 2c's estimates and the planner |
+| `brief` | `<requirements_brief>`, the confirmed brief. It replaces the thin `$ARGUMENTS` as the primary input to the planner. |
 
 Set `<target_platforms> = "ios, android"` for every new app. Do not ask the
 user to choose between iOS and Android; the mobile template targets both and
 downstream planning must retain platform-specific behavior for each.
-
-**App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
-
-**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js <id> --no-cache` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`. Do not persist the selection before Step 2c approval.
 
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
@@ -310,10 +302,9 @@ Don't enter plan mode here — that's the planner agent's job in Step 3.
 
 **Application Insights requirement normalization:** If the user's description asks for Application Insights, telemetry, app analytics, diagnostics, traces, or monitoring of this generated app, note it for a post-creation `/setup-app-insights` run (Application Insights is no longer configured during creation) and explicitly tell the planner that it is host/runtime configuration, not a data connector or planning constraint. The planner must not propose the Azure Application Insights connector, a custom telemetry connector, telemetry tables, or telemetry screens unless the user separately asked to build an in-app analytics dashboard. If the user names specific custom events (for example `OrderSubmitted` or `InspectionCompleted`), preserve those event names and their approved scalar properties in the corresponding per-screen specs so screen builders can emit them through `getCustomEventsLogger()`; do not convert them into connectors or data-model artifacts.
 
-### Step 2b — Requirements discovery
+### Step 2b — Open the plan
 
-Create the plan now that the display name is known, and open the first phase. Write
-`<tmp>/plan-init.json` with the `Write` tool first — the display name is the user's own text, and
+Create the plan now, record the brief, and open the first phase. Write `<working_dir>/.tmp/plan-init.json` with the `Write` tool first — the display name is the user's own text, and
 a `"`, a backtick or `$(…)` in it would break out of a shell argument before Node saw it:
 
 ```json
@@ -322,90 +313,16 @@ a `"`, a backtick or `$(…)` in it would break out of a shell argument before N
 
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' init --json-file <tmp>/plan-init.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Waiting for your answers to the setup questions"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' init --json-file '<working_dir>/.tmp/plan-init.json'
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section requirements --json-file '<working_dir>/.tmp/requirements.json'
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Brief confirmed"
 ```
 
-The note is what raises the waiting-for-input banner on the plan, so the user can tell from the page
-that the run is blocked on them rather than still working. **Set one whenever you are about to ask a
-question and the answer gates the run.** It clears itself on the next status change, so there is
-nothing to remember to take down.
+The phase stays open: Step 2c still asks the user to approve the plan preview, and a closed phase cannot report that the run is waiting on them.
+A `--note` is what raises the waiting-for-input banner on the plan, so the user can tell from the page that the run is blocked on them rather than still working.
+**Set one whenever you are about to ask a question and the answer gates the run.** It clears itself on the next status change, so there is nothing to remember to take down.
 
-> **Goal:** Turn the user's thin prompt into a confirmed feature brief before the planner runs. The planner agent receives this brief verbatim — richer input means better data model inference, accurate connector detection, and correct screen specs.
-
-#### Step 2b.0 — Prompt richness scoring (decides which path to take)
-
-Before asking anything, score the description on four signals. The score decides whether we ask a multi-select feature picker, a single confirmation, or skip the discovery question entirely.
-
-Run this scorer mentally on `<description>` (the prompt the user gave with `/create-mobile-app`, plus any clarifying text from Step 2). Count how many of the four trip:
-
-| Signal | Trips when |
-|---|---|
-| **Word count** | description has ≥ 60 words |
-| **Distinct nouns** | description names ≥ 5 distinct domain nouns (people, things, documents, places — e.g. "inspector", "aircraft", "gate", "defect", "evidence") |
-| **Action verbs** | description uses ≥ 3 workflow verbs from this set: log, track, submit, assign, notify, scan, upload, approve, verify, complete, capture, override, dispatch, review, sign |
-| **Domain phrase** | description names a known industry domain — match against the industry table in [`shared/references/universal-patterns.md`](../../../shared/references/universal-patterns.md) (airline, hospital, retail, manufacturing, field-service, finance, logistics, …) OR explicitly says "field operations" / "ground operations" / "site visit" / similar |
-
-Tier the result:
-
-| Score | Tier | What to do |
-|---|---|---|
-| **4 / 4** | `auto-plan` | **Skip both questions.** Extract the brief silently from `<description>`, write `native-app-plan.md` placeholder, fall through to Step 2c. The user's next interaction is the cost-estimate gate. |
-| **3 / 4** | `one-tap` | **Skip the multi-select.** Extract the brief, show it once, ask only "Look right? (yes / adjust)". On `yes` → Step 2c. On `adjust` → fall through to walk-through. |
-| **≤ 2 / 4** | `walk-through` | **Current behaviour.** Run the multi-select feature picker described in Step 2b.1, then the brief confirmation. |
-
-Print the chosen tier so the user knows which path is running:
-
-> "→ Prompt richness: 4/4 — skipping discovery questions, extracting brief and going straight to the plan-cost preview." *(or 3/4 / ≤2/4 with the matching path name)*
-
-`--full-discovery` escape hatch: if `$ARGUMENTS` contains `--full-discovery`, force `walk-through` regardless of score. Use this in dogfood runs where you want to exercise the multi-select path.
-
-`--no-discovery` escape hatch: if `$ARGUMENTS` contains `--no-discovery`, force `auto-plan` regardless of score. Use this for fully-headless runs from the wrapper templates repo.
-
-#### Step 2b.1 — Walk-through path (only when tier = `walk-through`)
-
-Read [`references/requirements-discovery.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/requirements-discovery.md). Infer context-aware options from the user's description, ask exactly one structured `AskUserQuestion`, and never use markdown checkboxes in the question text.
-
-Wait for the user's response. Summarize their answers into a **requirements brief** — 4–8 bullet points covering what users can do, what data is tracked, and integrations.
-
-Confirm once:
-> "Here's the brief I'll use for planning:
-> • *(bullet 1)*
-> • *(bullet 2)*
-> ...
-> Look right? (yes / adjust)"
-
-Store the confirmed brief as `<requirements_brief>`. This replaces the thin `$ARGUMENTS` as the primary input to the planner.
-
-#### Step 2b.2 — One-tap path (tier = `one-tap`)
-
-Skip the multi-select question. Extract a 6–10 bullet brief directly from `<description>` covering: user roles, key entities, primary workflow, severity / status enums if present, integrations / connectors, native capabilities, and any explicit constraints. Show it with a single confirm:
-
-> "Your description is detailed enough to skip the feature picker. Here's the brief I extracted:
-> • *(bullet 1)*
-> • *(bullet 2)*
-> ...
-> Look right? (yes / adjust / start over)"
-
-- `yes` → store as `<requirements_brief>`, fall through to Step 2c.
-- `adjust` → drop to Step 2b.1 (walk-through) so the user can edit via the multi-select.
-- `start over` → return to Step 2 and re-prompt for the description.
-
-#### Step 2b.3 — Auto-plan path (tier = `auto-plan`)
-
-Skip both the multi-select AND the brief confirmation. Extract the brief silently and store it as `<requirements_brief>`. Print it as a transparency log only:
-
-> "→ Auto-plan tier (4/4). Extracted brief from your description:
-> • *(bullet 1)*
-> • *(bullet 2)*
-> ...
-> → Going straight to the plan-cost preview (Step 2c). The brief above is locked in unless you abort there."
-
-Do not ask for confirmation here — the user agreed to this when their prompt scored 4/4. The plan-preview gate at Step 2c remains in force as the last cheap exit before any side effects.
-
-#### Step 2b.4 — Common to all paths
-
-**Auto-proceed after `yes` (or after auto-plan transparency log).** Fall through directly to Step 2c (plan preview). Do NOT add a separate "Proceed to planning?" prompt — the brief confirmation IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
+**Go straight to Step 2c (plan preview).** Do NOT add a separate "Proceed to planning?" prompt — choosing this build order confirmed the brief, and that IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
 
 Infer a provisional Dataverse planning mode before Step 2c:
 
@@ -440,24 +357,9 @@ Set tentative defaults (the preview preference applies at Step 6.75):
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
 
-**Record the confirmed brief.** The phase stays open: Step 2c still asks the user to approve the
-plan preview, and a closed phase cannot report that the run is waiting on them.
-
-Write `<tmp>/requirements.json` with the `Write` tool first — every value here came from the user,
-and none of it may go through the shell:
-
-```json
-{"appName":"<displayName>","slug":"<slug>","platforms":"iOS and Android","aesthetic":"<aesthetic>","industry":"<industry>","brief":"<confirmed brief>","features":["<feature>"]}
-```
-
-```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section requirements --json-file <tmp>/requirements.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Brief confirmed"
-```
-
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** before the run touches the app itself — no `pa app init`, no Dataverse writes, no agent tokens spent on planning. The one thing already written is the build plan under `docs/`, which Step 2b created so the user has something to read while answering; an abort here leaves that folder and nothing else. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** before the run touches the app itself — no `pa app init`, no Dataverse writes, no agent tokens spent on planning. The only things already written are the requirements in `.tmp/requirements.json` and the build plan under `docs/`, which Step 2b created so the user has something to read while answering; an abort here leaves those and nothing else. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -508,8 +410,8 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 | User answer | Action |
 |---|---|
 | `proceed` (or empty / Enter) | Continue to Step 3. Default. |
-| `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No working dir mutations** — Step 2c runs before `mkdir -p <working_dir>` in Step 3. |
-| `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
+| `edit` | Revise the brief from the user's changes, write it to `.tmp/requirements.json` with the `Write` tool, re-run Step 2b's `set --section requirements`, and return here for a fresh preview. **No app changes** — only the requirements file and the plan are rewritten; Step 2c runs before Step 3 touches the template. |
+| `abort` | Print `"Aborted at Step 2c. The app is unchanged. Re-run /create-mobile-app when ready."` and exit cleanly. No memory bank, no scaffold. |
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.
@@ -849,7 +751,7 @@ Prompt:
   Plan a Power Apps mobile app.
 
   Requirements brief (confirmed with user):
-  <requirements_brief — bullet points from Step 2b>
+  <requirements_brief — the `brief` in `.tmp/requirements.json`>
 
   Design vibe opt-in: <design_vibe_opt_in — always "deferred" unless `--no-design` is in $ARGUMENTS, in which case use "skip". Never invent yes/no/other values.>
   Visual companion: <visual_companion — "yes" or "no">
@@ -971,7 +873,7 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
    **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${PLUGIN_ROOT}/agents/native-app-planner.md) Step 6):**
    - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
-   - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
+   - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
 

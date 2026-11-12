@@ -479,8 +479,9 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
     // screens build, and JavaScript packages wait until after the preview, which needs none.
     [
       'validate_fresh_template',
-      'validate_development_toolchain',
+      // SKILL.md gathers the requirements for both orders before the build-order question.
       'gather_app_requirements',
+      'validate_development_toolchain',
       'select_app_environment',
       'prepare_template_files',
       'initialize_power_apps_project',
@@ -509,8 +510,9 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
       .map((match) => match[1]),
     [
       'validate_fresh_template',
-      'validate_development_toolchain',
+      // SKILL.md gathers the requirements for both orders before the build-order question.
       'gather_app_requirements',
+      'validate_development_toolchain',
       'plan_app_architecture',
       'select_app_environment',
       'prepare_template_files',

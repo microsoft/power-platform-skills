@@ -53,12 +53,13 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 3. **Fresh-template mode** — `/create-mobile-app` validates and prepares an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
-6. **Two build orders** - `/create-mobile-app` routes the request and asks for a
-   build order at Step 0 of `skills/create-mobile-app/SKILL.md`, then loads only
+6. **Two build orders** - `/create-mobile-app` routes the request, gathers the
+   requirements with one setup question, and then asks for a build order (showing
+   the brief) at Step 0 of `skills/create-mobile-app/SKILL.md`, then loads only
    that order's flow file. Keep each order's steps in its own flow file, and keep
-   what both share (routing, the creation-state table, the child-skill handoff
-   context) in `SKILL.md`.
-   - **Screens first** (recommended) asks one setup question, scaffolds, drafts
+   what both share (routing, the creation-state table, the requirements, the
+   child-skill handoff context) in `SKILL.md`.
+   - **Screens first** (recommended) scaffolds, drafts
      the screen graph itself, gets it approved (screen graph gate), builds every
      screen in parallel with `preview-screen-builder` on sample data behind the
      data layer in

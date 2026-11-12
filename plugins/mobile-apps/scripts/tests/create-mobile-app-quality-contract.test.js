@@ -234,13 +234,13 @@ test('template preparation is delegated to the deterministic script', () => {
   // A refused folder is reported, never repaired by hand.
   assert.match(skill, /\| 34 \| Preparation refused the folder \| Report its exact error and STOP\.[^\n]*never fall back to rewriting files by hand/);
 
-  // Step 2b writes the plan skeleton before preparation, so the creation-state evidence is
+  // Step 2 writes the plan skeleton before preparation, so the creation-state evidence is
   // gathered at Step 0, before anything in this run has written a file. A plan alone is
   // creation's own artifact, never proof of a created app.
   const startup = skill.slice(skill.indexOf('### Step 0 —'), skill.indexOf('### Step 1 —'));
   assert.match(startup, /for f in memory-bank\.md native-app-plan\.md docs\/\.run-plan\.json \.datamodel-manifest\.json; do \[ -e "\$f" \] && echo "FOUND \$f"; done/);
   assert.match(startup, /`FOUND native-app-plan\.md` or `FOUND docs\/\.run-plan\.json` alone \| Creation's own planning artifacts, allowed on a fresh starter/);
-  assert.ok(skill.indexOf('### Step 0 —') < skill.indexOf('### Step 2b —'));
+  assert.ok(skill.indexOf('### Step 0 —') < skill.indexOf('### Step 2 — The plan files'));
 });
 
 test('Power Apps initialization directly invokes the CLI with approved values', () => {

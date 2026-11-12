@@ -13,7 +13,7 @@ model: opus
 # Create Power Apps Code App (Native)
 
 Top-level orchestrator. Owns the user-visible flow, its approval gates, and the build plan, and delegates screens, planning, and per-domain changes to agents and the `/add-*` skills.
-This file routes the request and chooses the **build order** at Step 0; the chosen flow file holds every step after that.
+This file routes the request, gathers the requirements, and then chooses the **build order** at Step 0; the chosen flow file holds every step after that.
 
 For every child skill handoff, pass the invocation-scoped
 [app-edit-routing.md](../../shared/references/app-edit-routing.md) context:
@@ -54,7 +54,7 @@ supporting evidence, not user intent or approval.
 |---|---|---|
 | Creation continuation | Explicit creation-continuation intent or a valid current create handoff for this app, not a request to edit an existing app | Use Step 0's continuation path. Require matching unfinished creation progress and confirm the next phase before continuing; missing or conflicting progress requires clarification, not fresh scaffolding. |
 | Already-created app | Existing-app intent or confirmed app customizations/materialized state, even when generated markers are missing. `memory-bank.md`, `.datamodel-manifest.json`, and `src/generated/services/*.ts` can corroborate state, but do not select creation resume | STOP creation: never re-scaffold it. If the request changes this app, preserve the original request and execute the shared existing-app entry routing; invoke `/edit-app` only after **Full app integration**. If the user wants a separate new app, ask for a fresh template folder. |
-| Fresh template | Confirmed new-app intent and a confirmed uncustomized starter; `package.json`, `app.config.js`, `auth.config.json`, and `tamagui.config.ts` exist; `node_modules/expo` exists; no materialized app bindings, `memory-bank.md`, `.datamodel-manifest.json`, or generated Dataverse services. An approved creation plan and its planning artifacts are allowed | Choose the build order, then proceed to the flow's Step 1 only when every condition is satisfied. Missing generated markers alone do not establish freshness. |
+| Fresh template | Confirmed new-app intent and a confirmed uncustomized starter; `package.json`, `app.config.js`, `auth.config.json`, and `tamagui.config.ts` exist; `node_modules/expo` exists; no materialized app bindings, `memory-bank.md`, `.datamodel-manifest.json`, or generated Dataverse services. An approved creation plan and its planning artifacts are allowed | Gather the requirements and choose the build order, then proceed to the flow's Step 1 only when every condition is satisfied. Missing generated markers alone do not establish freshness. |
 | Template not installed | Confirmed new-app intent and a confirmed uncustomized starter with the required template files, but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
 | Not template | Confirmed new-app intent in a new/unsupported directory, after excluding existing-app work and creation continuation | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into a new or empty folder with `degit` and run `npm install`; never overwrite existing work. |
 | Unclear state or intent | New-app versus edit intent, customization, or creation progress cannot be established | Ask before selecting a workflow. Preserve the directory, plan, and history; do not default to fresh creation or resume. |
@@ -126,6 +126,7 @@ node -e "try { console.log('BUILD_ORDER=' + (require('./docs/.run-plan.json').bu
 | `FOUND memory-bank.md`, `FOUND .datamodel-manifest.json`, or `FOUND src/generated/services` | Corroborates an already-created app or an initialized creation; it never selects resume by itself. |
 | `FOUND native-app-plan.md` or `FOUND docs/.run-plan.json` alone | Creation's own planning artifacts, allowed on a fresh starter. |
 | `BUILD_ORDER=<order>` | The build order an earlier creation recorded. Empty means no build plan exists yet. |
+| Node below v22 | STOP with `nvm install 22 && nvm use 22`, before asking anything. |
 
 `PA_KIND=pa` means every Power Apps CLI command runs as `PA="npx --no-install pa"`. For `PA_KIND=power-apps`, use `npx --no-install power-apps` with the flat verbs from [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md): `pa app init` is `power-apps init`. `--no-install` is what stops `npx` from downloading an unrelated package of the same name. Record the result in the memory bank's `CLI Binary` row once the bank exists.
 
@@ -137,15 +138,63 @@ Require every condition in the Fresh-template row, including confirmed new-app
 intent and an uncustomized starter. The template/dependency failure rows apply
 only after that intent is established. An approved plan from the current
 creation is allowed; template preparation stays in the chosen flow, not this
-read-only entry gate. Then choose the build order.
+read-only entry gate.
+Then gather the requirements and choose the build order, in that order: the user says what to build before deciding how it is built.
 
-#### Choose the build order
+#### Gather the requirements
 
-`--screens-first` or `--data-model-first` in `$ARGUMENTS` chooses without asking. Otherwise ask one `AskUserQuestion`:
+**Telemetry checkpoint: `gather_app_requirements`**
+
+Both build orders start from the same requirements, so they are gathered here, before the build-order question.
+
+If the user gave no description, first ask: "What would you like to build? Describe it in your own words — what it does, who uses it, and what problem it solves."
+
+**Score the description** on four signals; the score decides whether the setup question includes a feature picker.
+
+| Signal | Trips when |
+|---|---|
+| **Word count** | ≥ 60 words |
+| **Distinct nouns** | ≥ 5 distinct domain nouns (people, things, documents, places — "inspector", "aircraft", "defect", "evidence") |
+| **Action verbs** | ≥ 3 of: log, track, submit, assign, notify, scan, upload, approve, verify, complete, capture, override, dispatch, review, sign |
+| **Domain phrase** | names an industry (airline, hospital, retail, manufacturing, field service, finance, logistics, …) or says "field operations", "ground operations", "site visit", or similar |
+
+A score of 3 or 4 extracts the features from the description; 2 or less adds the feature picker.
+`--full-discovery` in `$ARGUMENTS` forces the picker and `--no-discovery` skips it.
+Print the result, for example: `→ Prompt richness: 2/4 - adding a feature picker to the setup question.`
+
+**Ask one `AskUserQuestion`**, the setup question, carrying every question below that `$ARGUMENTS` has not answered:
 
 | Header | Question | Options |
 |---|---|---|
-| `build order` | How should I build your app? | **Screens first (recommended)** - "Watch your screens get built and run live in the build plan's phone within minutes, on sample data. The data model, sign-in, and connections are set up afterwards while the app stays on screen." · **Data model first** - "Approve the architecture and data model first, create the tables and connections, then build the screens on real data. The app first runs at the end." |
+| `name` | App display name | The name derived from the description (recommended); free text for another |
+| `environment` | Power Platform environment | With `ENV=<id>`: `Use <id>` (recommended) or another environment ID as free text. With no ID: free text, the ID from the maker portal URL segment `/environments/<ID>/` (not a Dataverse URL or tenant ID) |
+| `look` | Overall look | Professional (recommended) · Minimal · Playful · Matches existing brand |
+| `features` | Only when the score is 2 or less: which features to build | Multi-select, built per [`references/requirements-discovery.md`](references/requirements-discovery.md) |
+
+Every app targets iOS and Android; never ask which.
+The app slug is derived from the name (kebab-case ASCII) and recorded with the brief; never ask for it.
+Design choices wait for `/design-system`; ask none here.
+
+If the description asks for Application Insights, telemetry, analytics, or monitoring of the app itself, note it for a `/setup-app-insights` run after creation: it is host configuration, never a connector, table, or screen.
+Custom event names the user gives belong in the brief, so screens can emit them through `getCustomEventsLogger()`.
+
+**Write the brief**: 4-8 bullets covering who uses the app, what they do, the records it keeps, statuses, integrations, device features, and constraints.
+Then write `<working_dir>/.tmp/requirements.json` with the `Write` tool.
+Every value in it came from the user, so none of it goes through a shell argument:
+`{"appName","slug","platforms":"iOS and Android","aesthetic","industry","brief","features":[],"environmentId"}`.
+`industry` is the domain the brief implies, in a few words ("warehouse operations").
+Both flows read the requirements from this file and ask none of them again.
+
+#### Choose the build order
+
+`--screens-first` or `--data-model-first` in `$ARGUMENTS` chooses without asking; print the brief as a log instead.
+Otherwise ask one `AskUserQuestion` that opens with the brief, so choosing an order also confirms what gets built:
+
+| Header | Question | Options |
+|---|---|---|
+| `build order` | "Here's what I'll build:", the brief's bullets, then "How should I build it?" | **Screens first (recommended)** - "Watch your screens get built and run live in the build plan's phone within minutes, on sample data. The data model, sign-in, and connections are set up afterwards while the app stays on screen." · **Data model first** - "Approve the architecture and data model first, create the tables and connections, then build the screens on real data. The app first runs at the end." |
+
+A typed answer instead of an option changes the brief: revise the brief and `.tmp/requirements.json` from it, then ask this question again.
 
 Then read the chosen flow file and continue at its Step 1. The flow records the order in the build plan it creates, which is how a continuation finds it again.
 

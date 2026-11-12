@@ -167,7 +167,7 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: first a build-order question. With **Screens first** (recommended), one setup question and one screen-list approval follow, then your first screen runs in the build plan's phone about five minutes after the prompt, before any table or connector exists; after you confirm it, the design system, data model, and connections are added. With **Data model first**, ~6 prompts (wizard + gates) approve the architecture, data model, and screens up front, then ~5 minutes of scaffolding, table creation, and parallel screen builds. Either way, the end state is a working Notes app with a project-local Metro session ready to scan and debug. Pass `--screens-first` or `--data-model-first` to skip the question.
+Expected: first one setup question (name, environment, look, and the features for a short prompt), then a build-order question that shows the brief. With **Screens first** (recommended), one screen-list approval follows, then your first screen runs in the build plan's phone about five minutes after the prompt, before any table or connector exists; after you confirm it, the design system, data model, and connections are added. With **Data model first**, ~6 prompts (wizard + gates) approve the architecture, data model, and screens up front, then ~5 minutes of scaffolding, table creation, and parallel screen builds. Either way, the end state is a working Notes app with a project-local Metro session ready to scan and debug. Pass `--screens-first` or `--data-model-first` to skip the question.
 
 If creation stops, explicitly ask to continue that creation. The skill checks
 the [memory bank](#glossary), saved build-plan progress, and current artifacts,
@@ -209,28 +209,26 @@ Five typical flows:
 > /create-mobile-app I want a field inspection app where technicians log site visits with photos, GPS location, and notes
 ```
 
-What happens: the skill first asks for a **build order**. Both make the same app; they differ in what you see first. Pass `--screens-first` or `--data-model-first` to skip the question.
+What happens: the skill first asks one **setup question** (~30s) — the app name, environment, look, and, for a short prompt, the features to build. It then shows the brief and asks for a **build order**; choosing one confirms the brief, and typing a change revises it. Both orders make the same app; they differ in what you see first. Pass `--screens-first` or `--data-model-first` to skip the question.
 
 **Screens first (recommended)** - watch your screens get built and run live in the build plan's phone within minutes, then make them real:
-1. **Setup question** (~30s) — one question for the app name, environment, look, and, for a short prompt, the features to build
-2. **Scaffold** — validates the prepared template folder and runs `pa app init` while the screens are planned
-3. **Screen graph gate** — approve the screen list, navigation, and the data each screen shows
-4. **Live preview gate** — all screens are built in parallel on realistic sample data and run live in the build plan's phone frame (`expo start`, no sign-in), the first one a few minutes after your prompt; try them, ask for changes, and confirm
-5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker; the live preview restyles itself
-6. **Architecture and data model gates** — native capabilities, connectors, and the data platform, then the Dataverse model, all derived from the screens you approved
-7. **Make it real** — auth, Dataverse tables, native capabilities, and connectors, then the app's data layer is switched from sample data to the real sources without touching the screens
-8. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
+1. **Scaffold** — validates the prepared template folder and runs `pa app init` while the screens are planned
+2. **Screen graph gate** — approve the screen list, navigation, and the data each screen shows
+3. **Live preview gate** — all screens are built in parallel on realistic sample data and run live in the build plan's phone frame (`expo start`, no sign-in), the first one a few minutes after your prompt; try them, ask for changes, and confirm
+4. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker; the live preview restyles itself
+5. **Architecture and data model gates** — native capabilities, connectors, and the data platform, then the Dataverse model, all derived from the screens you approved
+6. **Make it real** — auth, Dataverse tables, native capabilities, and connectors, then the app's data layer is switched from sample data to the real sources without touching the screens
+7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 Your first screen runs in the build plan's phone about five minutes after the prompt, not counting the time you spend answering; the rest of the build happens after you confirm the screens.
 
 **Data model first** - approve the architecture and data model up front, then build the screens on real data:
-1. **Wizard** (~30s) — confirms device class / aesthetic
-2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
-3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
-4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
-5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
-6. **Scaffold + build** — validates the prepared template folder, runs `pa app init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
+1. **Plan preview** — a rough estimate of tables, screens, and time from the confirmed brief, with a last chance to edit the brief or abort
+2. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
+3. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
+4. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
+5. **Scaffold + build** — validates the prepared template folder, runs `pa app init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
+6. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 End state: a working app you can iterate on with hot reload.
 

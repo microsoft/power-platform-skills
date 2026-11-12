@@ -1,6 +1,6 @@
 # Requirements Discovery Reference
 
-Use this only for the `features` question in `/create-mobile-app` Step 2, asked when the prompt scores 2 or less.
+Use this only for the `features` question in `/create-mobile-app`'s setup question (`SKILL.md` Step 0, before the build-order choice), asked when the prompt scores 2 or less.
 
 ## Infer Options From The Brief
 
@@ -44,7 +44,7 @@ PDF/pen rules:
 
 ## Ask Shape
 
-The `features` question rides in Step 2's single setup `AskUserQuestion`, beside the name, environment, and look questions. Inferred items are `recommended: true`; plausible extras are unselected. Keep 2-6 options total and allow freeform input.
+The `features` question rides in the single setup `AskUserQuestion`, beside the name, environment, and look questions. Inferred items are `recommended: true`; plausible extras are unselected. Keep 2-6 options total and allow freeform input.
 
 ```json
 {
@@ -68,4 +68,4 @@ Rules:
 - Use the `header` field as a stable answer key, such as `features`.
 - Never include `[x]` or `[ ]` checkbox markdown in the `question` field; it produces invalid tool parameters.
 
-After the answer, Step 2b writes the requirements brief from the selected features and the description. It does not ask the user to confirm the brief: the screen graph gate is where they review what gets built.
+After the answer, `SKILL.md` writes the requirements brief from the selected features and the description, and opens the build-order question with it. Choosing an order confirms the brief, and a typed answer changes it, so nothing asks to confirm the brief separately.

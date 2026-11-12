@@ -94,8 +94,8 @@ test('connectivity wording is owned by the post-materialization offline flow', (
 test('the wizard targets iOS and Android without asking a platform question', () => {
   const gatherRequirements = section(
     createSkill,
-    '### Step 2 — Gather requirements',
-    '### Step 2b — Requirements discovery',
+    '### Step 2 — Read the requirements',
+    '### Step 2b — Open the plan',
   );
   assert.doesNotMatch(gatherRequirements, /\| Target platforms \|/);
   assert.match(gatherRequirements, /<target_platforms> = "ios, android"/i);

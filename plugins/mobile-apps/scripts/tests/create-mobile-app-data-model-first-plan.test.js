@@ -46,12 +46,18 @@ test('the trust report is written as soon as the gate it depends on closes', () 
   assert.ok(gate1Close !== -1 && proposedAt > gate1Close, 'the first pass belongs with the Gate 1 batch');
 });
 
-test('the skill flags the run as blocked before its first question', () => {
+test('the plan opens on a confirmed brief, and raises the waiting banner before its first question', () => {
   const skill = createSkillDataModelFirst();
+  // The setup and build-order questions are answered in SKILL.md before the plan exists, so
+  // Step 2b opens the requirements phase on a brief the user has already confirmed.
   const open = skill.match(/step --id requirements --status active([^\n]*)/);
   assert.ok(open, 'the requirements phase must be opened');
-  assert.match(open[1], /--note "Waiting for your answers/,
-    'the first prompt must raise the waiting banner');
+  assert.match(open[1], /--note "Brief confirmed"/);
+  assert.ok(skill.indexOf('#### Choose the build order') < skill.indexOf('init --json-file'),
+    'the plan is created after the build order is chosen');
+  // Step 2c's plan preview is the first question asked on the plan, so it raises the banner.
+  const preview = skill.slice(skill.indexOf('### Step 2c '), skill.indexOf('### Step 2d '));
+  assert.match(preview, /step --id requirements --status active --note "Waiting for you to approve the plan preview"/);
 });
 
 

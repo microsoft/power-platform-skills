@@ -87,27 +87,34 @@ test('connectivity wording is owned by the post-materialization offline flow', (
 });
 
 test('the wizard targets iOS and Android without asking a platform question', () => {
+  // Both build orders share the setup question, which SKILL.md asks before the build order.
   const gatherRequirements = section(
     createSkill,
-    '### Step 2 — The setup question',
-    '### Step 2b — The requirements brief',
+    '#### Gather the requirements',
+    '#### Choose the build order',
   );
   assert.doesNotMatch(gatherRequirements, /\| (?:Target )?platforms? \|/i);
   assert.match(gatherRequirements, /Every app targets iOS and Android; never ask which/);
   assert.match(createSkill, /"platforms":"iOS and Android"/);
 });
 
-test('every setup answer is collected in one question, before the plan exists', () => {
-  const setup = section(createSkill, '### Step 2 — The setup question', '### Step 3 —');
+test('every setup answer is collected in one question, before the build order and the plan', () => {
+  const setup = section(createSkill, '#### Gather the requirements', '#### Choose the build order');
   // One question, with the name, environment, look, and (for a thin prompt) the features, so
   // the user answers once and the run goes straight to building.
   assert.equal((setup.match(/AskUserQuestion/g) || []).length, 1);
   for (const header of ['name', 'environment', 'look', 'features']) {
     assert.match(setup, new RegExp(`^\\| \`${header}\` \\|`, 'm'), `the setup question has no ${header} row`);
   }
-  // The brief is printed, not confirmed: the screen graph gate is where the user reviews it.
-  assert.match(setup, /Print it as a log rather than asking to confirm it/);
+  // The brief is confirmed by the build-order answer, not by a question of its own.
+  const choose = section(createSkill, '#### Choose the build order', '#### Creation continuation');
+  assert.match(choose, /opens with the brief, so choosing an order also confirms what gets built/);
+  assert.match(choose, /A typed answer instead of an option changes the brief/);
   assert.doesNotMatch(createSkill, /Does this look right\?/);
+  // Screens first asks nothing more until its screen graph gate.
+  const planFiles = section(createSkill, '### Step 2 — The plan files', '### Step 3 —');
+  assert.doesNotMatch(planFiles, /AskUserQuestion/);
+  assert.ok(createSkill.indexOf('#### Choose the build order') < createSkill.indexOf('init --json-file'));
 });
 
 test('screens are planned, built, and previewed before any architecture or data-source work', () => {

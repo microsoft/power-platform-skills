@@ -1,7 +1,7 @@
 # Screens first - Phase A of `/create-mobile-app`
 
 Read this file in full when Step 0 of [`SKILL.md`](../SKILL.md) chooses the **screens first** build order.
-`SKILL.md` has already routed the request, confirmed a fresh template, and started the run; its Step 0 output (`PA_KIND`, the Node and npm versions, and `ENV`) feeds Step 1 here.
+`SKILL.md` has already routed the request, confirmed a fresh template, gathered the requirements into `.tmp/requirements.json`, and had the brief confirmed by the build-order answer; its Step 0 output (`PA_KIND` and `ENV`) feeds Step 3 here.
 
 ## Workflow
 
@@ -9,7 +9,7 @@ The run is **preview-first**: the user tries their app in the build plan's phone
 
 **Phase A - get the app on screen (this file, Steps 1-8)**
 
-Startup checks and the build-order choice ([`SKILL.md`](../SKILL.md) Step 0) → one setup question → scaffold, `pa app init`, and the preview server, then you draft the screen graph → **screen graph gate** → navigation shell → screens built in parallel, data layer written alongside → the phone goes live with the first finished screen → whole-app checks → **preview gate**.
+Startup checks, the setup question, and the build-order choice ([`SKILL.md`](../SKILL.md) Step 0) → scaffold, `pa app init`, and the preview server, then you draft the screen graph → **screen graph gate** → navigation shell → screens built in parallel, data layer written alongside → the phone goes live with the first finished screen → whole-app checks → **preview gate**.
 
 **Phase B - make it real ([`make-it-real.md`](make-it-real.md), Steps 9-17)**
 
@@ -26,7 +26,7 @@ Phase A keeps both small:
 - **Read only what a step names.** Agents read their own instructions; leave `agents/*.md`, design references, samples, and Phase B to the agents and steps that use them.
 - **Batch.** Run each step's commands as the single shell command it gives, and send independent tool calls in one message.
 - **Delegate the screens, draft the graph.** You hold the brief already, so you draft the screen graph yourself in one write and a script renders it; one `preview-screen-builder` per screen builds in parallel while you write the data layer.
-- **Ask three times at most after the build order:** the setup question, the screen graph gate, and the preview gate. A Power Apps CLI sign-in is the only other interruption. Repair TypeScript errors yourself, without asking how.
+- **Ask twice at most after the build order:** the screen graph gate and the preview gate. A Power Apps CLI sign-in is the only other interruption. Repair TypeScript errors yourself, without asking how.
 - **Wait on files, not notices.** Each builder writes a done file as it finishes, and the go-live command waits on the entry screen's; a background completion notice can arrive up to a minute later.
 - **Trust the checks.** `check-web-preview.js` proves the app bundles, and the user looks at the phone. Leave the browser to them: no opening, screenshotting, or driving it to inspect the preview.
 - **Record later.** A script fills the memory bank's facts at Step 3; Step 9.0 records the rest and writes the per-screen specs from the built screens.
@@ -142,54 +142,16 @@ Continue with the values in the memory bank, `.tmp/requirements.json`, and `powe
 
 **Telemetry checkpoint: `validate_development_toolchain`**
 
-Everything this step checks is already in Step 0's output, so send its checkpoint command in the same message as Step 2's question.
-Read the rest of Step 0's output:
-
-- Node below v22: STOP with `nvm install 22 && nvm use 22`.
-- `ENV=<id>`: the template already names an environment; the setup question confirms it. An empty `ENV=` means the setup question asks for one.
+Step 0 has already checked Node, and the setup question settled the environment in `.tmp/requirements.json`, so send this checkpoint's command in the same message as Step 2's writes.
 
 npm feed sign-in and Power Apps CLI sign-in are separate accounts; a Power Apps CLI browser sign-in later in the run is expected and unrelated to the npm feed.
 Phase A does not use Azure CLI: Step 9.0 resolves the environment's Dataverse URL and tenant, after the preview.
 Do not probe Xcode, Java, Android Studio, or CocoaPods: native builds are the user's own step, outside this skill.
 
-### Step 2 — The setup question
+### Step 2 — The plan files
 
-**Telemetry checkpoint: `gather_app_requirements`**
-
-If the user gave no description, first ask: "What would you like to build? Describe it in your own words — what it does, who uses it, and what problem it solves."
-
-**Score the description** on four signals; the score decides whether the setup question includes a feature picker.
-
-| Signal | Trips when |
-|---|---|
-| **Word count** | ≥ 60 words |
-| **Distinct nouns** | ≥ 5 distinct domain nouns (people, things, documents, places — "inspector", "aircraft", "defect", "evidence") |
-| **Action verbs** | ≥ 3 of: log, track, submit, assign, notify, scan, upload, approve, verify, complete, capture, override, dispatch, review, sign |
-| **Domain phrase** | names an industry (airline, hospital, retail, manufacturing, field service, finance, logistics, …) or says "field operations", "ground operations", "site visit", or similar |
-
-A score of 3 or 4 extracts the features from the description; 2 or less adds the feature picker.
-`--full-discovery` in `$ARGUMENTS` forces the picker and `--no-discovery` skips it.
-Print the result, for example: `→ Prompt richness: 2/4 - adding a feature picker to the setup question.`
-
-**Ask one `AskUserQuestion`** carrying every question below that `$ARGUMENTS` has not answered:
-
-| Header | Question | Options |
-|---|---|---|
-| `name` | App display name | The name derived from the description (recommended); free text for another |
-| `environment` | Power Platform environment | With `ENV=<id>`: `Use <id>` (recommended) or another environment ID as free text. With no ID: free text, the ID from the maker portal URL segment `/environments/<ID>/` (not a Dataverse URL or tenant ID) |
-| `look` | Overall look | Professional (recommended) · Minimal · Playful · Matches existing brand |
-| `features` | Only when the score is 2 or less: which features to build | Multi-select, built per [`references/requirements-discovery.md`](requirements-discovery.md) |
-
-Every app targets iOS and Android; never ask which.
-The app slug is derived from the name (kebab-case ASCII) and shown with the brief; never ask for it.
-Design choices wait for `/design-system` at Step 9; ask none here.
-
-If the description asks for Application Insights, telemetry, analytics, or monitoring of the app itself, note it for a `/setup-app-insights` run after creation: it is host configuration, never a connector, table, or screen. Custom event names the user gives belong in the brief, so screens can emit them through `getCustomEventsLogger()`.
-
-### Step 2b — The requirements brief
-
-Write the brief: 4-8 bullets covering who uses the app, what they do, the records it keeps, statuses, integrations, device features, and constraints.
-Print it as a log rather than asking to confirm it; the screen graph gate is where the user reviews what gets built.
+The requirements and the brief come from [`SKILL.md`](../SKILL.md) Step 0, and the user confirmed the brief by choosing this order; ask nothing here.
+The screen graph gate is where the user reviews what gets built.
 
 Set tentative defaults:
 
@@ -198,9 +160,8 @@ Set tentative defaults:
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, and short-circuits Step 9 to a no-op (the preview keeps the template's default theme, and screens keep the look's defaults).
 
-Then write three files with the `Write` tool, in one message. Every value in them came from the user, so none of it goes through a shell argument:
+Then write two files with the `Write` tool, in one message. The app name came from the user, so it does not go through a shell argument:
 
-- `<working_dir>/.tmp/requirements.json`: `{"appName","slug","platforms":"iOS and Android","aesthetic","industry","brief","features":[],"environmentId"}`. `industry` is the domain the brief implies, in a few words ("warehouse operations").
 - `<working_dir>/.tmp/plan-init.json`: `{"appName","dataPlatform":"unknown","buildOrder":"screens-first"}`. The build order selects this flow's phases in the plan, and a continued run reads it back.
 - `<working_dir>/native-app-plan.md`, the plan skeleton in Step 4.1.
 
@@ -215,7 +176,7 @@ Run it with the telemetry calls for Steps 3.1-3.4 around their parts:
 
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
-# Steps 2 and 2b ran before the plan existed, so it opens with the brief already recorded.
+# The requirements were gathered before the plan existed, so it opens with the brief already recorded.
 node "$DOCS" --working-dir '<working_dir>' init --json-file '<working_dir>/.tmp/plan-init.json'
 node "$DOCS" --working-dir '<working_dir>' set --section requirements --json-file '<working_dir>/.tmp/requirements.json'
 node "$DOCS" --working-dir '<working_dir>' step --id requirements --status done --note "Brief ready"
@@ -316,7 +277,7 @@ Screens come first because they are what the preview shows, and the data model i
 
 #### 4.1 — The plan skeleton
 
-Written at Step 2b, before the scaffold.
+Written at Step 2, before the scaffold.
 `<working_dir>/native-app-plan.md` holds these headings, filled with only what is known:
 
 - `# <App Name> — Native App Plan`
