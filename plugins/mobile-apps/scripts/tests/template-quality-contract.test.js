@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 const {
   hasNavigationTapGuard,
 } = require('../../hooks/validate-navigation-idempotency');
@@ -101,7 +102,7 @@ test('bundled dependencies match the current host-factory template boundary', ()
 });
 
 test('create flow keeps host theme foregrounds aligned with Tamagui brand accents', () => {
-  const skill = read('skills/create-mobile-app/SKILL.md');
+  const skill = createSkillWorkflow();
   const integration = read('skills/design-system/references/tamagui-integration.md');
   assert.match(skill, /appLightTheme/);
   assert.match(skill, /appDarkTheme/);

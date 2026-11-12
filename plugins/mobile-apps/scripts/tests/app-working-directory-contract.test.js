@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { shellBlocks } = require('./helpers/markdown-shell-blocks');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const nativeRoot = path.join(pluginRoot, 'skills/add-native');
@@ -262,10 +263,10 @@ test('documented normalization arguments preserve literal root contents without 
 
 test('delegated creation planning and recovery blocks bind each fresh invocation to the owner root', (t) => {
   const { directory, owner, caller } = fixture(t);
-  const create = read(path.join(pluginRoot, 'skills/create-mobile-app/SKILL.md'));
+  const create = createSkillWorkflow();
   const sections = [
     ['### Foreground Dataverse planning snapshot and evidence', '#### Planner completion dispatch'],
-    ['#### Dataverse planning recovery', '#### Step 3.0a'],
+    ['#### Dataverse planning recovery', '#### Post-plan publisher-prefix gate'],
   ];
   const blocks = sections.flatMap(([start, end]) => {
     const begin = create.indexOf(start);

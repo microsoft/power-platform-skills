@@ -20,6 +20,8 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | Created | _<ISO date>_ |
 | Metro logs | `.powernative/metro-logs/` — sanitized source used by `/debug-app`; do not copy ephemeral values from log filenames into this file |
 | Metro launch command | `npm run dev` |
+| Data layer | `src/hooks/data/` — screens read data and device features only through it; `node scripts/check-data-layer.js` (plugin) lists anything still on sample data |
+| Web preview command | `POWER_APPS_WEB_PREVIEW=1 npx --no-install expo start --port <free port> --localhost` — sample-data preview shown in the build plan's phone frame before real data is connected |
 
 ## Power Platform context
 
@@ -80,7 +82,7 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 
 | Connector kind | Service file | Connection ID | Owner | When added |
 |---|---|---|---|---|
-| dataverse | (multiple, see Data Model) | (built-in) | — | Step 8 of /create-mobile-app |
+| dataverse | (multiple, see Data Model) | (built-in) | — | Step 12 of /create-mobile-app |
 
 ## Screens (live inventory)
 

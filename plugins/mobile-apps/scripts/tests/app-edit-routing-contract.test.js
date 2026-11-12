@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { isInvocable, readInvocationMetadata } = require('../lib/mobileapp-hook-utils');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 // Windows checkouts can use CRLF; the prose contracts should not depend on Git's EOL setting.
@@ -14,7 +15,7 @@ const shared = read('shared/shared-instructions.md');
 const routing = read('shared/references/app-edit-routing.md');
 const removal = read('shared/references/data-source-removal.md');
 const edit = skill('edit-app');
-const create = skill('create-mobile-app');
+const create = createSkillWorkflow();
 const pluginCheck = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.';
 
 function section(text, start, end) {
@@ -184,7 +185,7 @@ test('create calls native and data leaves without routing its partial app into e
   for (const [start, end, expected] of [
     ['Invoke skill: /add-native', 'Run sequentially.', /approved capability row/],
     ['Invoke skill: /add-dataverse', '`/add-dataverse` validates', /bound operation-manifest artifacts/],
-    ['### Step 10 — Add connectors', '### Step 10b', /connector row and supplied/],
+    ['### Step 13.1 — Add connectors', '### Step 14 ', /connector row and supplied/],
   ]) {
     const handoff = section(create, start, end);
     assert.match(handoff, /MOBILE_APP_ORCHESTRATING=1/);
@@ -588,7 +589,9 @@ test('scoped feature context preserves the separate upstream browser suppression
   assert.match(routing, /MOBILE_APP_ORCHESTRATING=1/);
   assert.match(routing, /CODE_APPS_NATIVE_ORCHESTRATING=1/);
   assert.match(routing, /suppresses browser openers/);
-  const creation = section(create, '### Step 6.75', '#### Branch A');
+  const creation = section(create, '### Step 9 — Design system', '### Step 9.2');
+  // The live preview context travels with the same handoff, so /design-system skips its mockups.
+  assert.match(creation, /live_preview: http:\/\/localhost:<port>/);
   assert.match(creation, /Environment:\s+CODE_APPS_NATIVE_ORCHESTRATING=1/);
   assert.match(creation, /Context:\s+MOBILE_APP_ORCHESTRATING=1/);
   assert.match(edit, /CODE_APPS_NATIVE_ORCHESTRATING=1[\s\S]*suppress intermediate browser tabs/);

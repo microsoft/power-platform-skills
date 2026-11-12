@@ -1540,7 +1540,7 @@ Next:
 ─────────────────────────────────────────────
 ```
 
-After printing the summary, **offer one-click sample-data seeding** — but only when invoked manually (not from `/create-mobile-app`, which handles this in its own Step 8.5).
+After printing the summary, **offer one-click sample-data seeding** — but only when invoked manually (not from `/create-mobile-app`, which handles this in its own Step 12.5).
 
 - **For a valid scoped orchestrator handoff with `--skip-planning`**: skip the
   prompt. The orchestrator invokes `/add-sample-data` separately.

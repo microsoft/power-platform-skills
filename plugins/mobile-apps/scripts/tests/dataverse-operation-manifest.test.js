@@ -19,6 +19,7 @@ const {
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 const NOW = '2026-08-19T00:00:00.000Z';
 const SNAPSHOT_AT = '2026-08-18T23:55:00.000Z';
@@ -1624,10 +1625,7 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
     /structured schema[\s\S]*regenerate the complete aliases[\s\S]*service-required names/,
   );
   assert.match(skill, /--approval-receipt <working_dir>\/\.tmp\/mobile-plan-status\.json/);
-  const createSkill = fs.readFileSync(path.join(
-    __dirname,
-    '../../skills/create-mobile-app/SKILL.md',
-  ), 'utf8');
+  const createSkill = createSkillWorkflow();
   assert.match(
     createSkill,
     /foreground planning snapshot[\s\S]*never authorizes a write/,

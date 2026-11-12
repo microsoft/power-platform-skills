@@ -21,6 +21,7 @@ const {
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 const { readProcessScope } = require('../lib/mobile-telemetry-session');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -464,10 +465,8 @@ test('shared instructions own checkpoint execution and lifecycle rules', () => {
 
 test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
   const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
-  const workflow = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app', 'SKILL.md'),
-    'utf8',
-  );
+  // Phase A (SKILL.md) then Phase B (references/make-it-real.md), in run order.
+  const workflow = createSkillWorkflow();
 
   assert.match(shared, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js"/);
   assert.doesNotMatch(shared, /node "\$\{CLAUDE_SKILL_DIR\}/);
@@ -475,23 +474,29 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
   assert.deepEqual(
     [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
       .map((match) => match[1]),
+    // Preview-first order: the screens are planned, built on sample data, and previewed
+    // before any architecture, auth, or data-source work. The data layer is written while the
+    // screens build, and JavaScript packages wait until after the preview, which needs none.
     [
       'validate_fresh_template',
       'validate_development_toolchain',
       'gather_app_requirements',
-      'plan_app_architecture',
       'select_app_environment',
       'prepare_template_files',
       'initialize_power_apps_project',
       'validate_scaffold_typescript',
+      'plan_app_screens',
+      'wire_app_navigation',
+      'build_and_validate_screens',
+      'generate_preview_data_layer',
+      'launch_web_preview',
+      'install_approved_javascript_dependencies',
+      'plan_app_architecture',
       'configure_native_authentication',
       'apply_dataverse_data_model',
       'configure_native_capabilities',
-      'install_approved_javascript_dependencies',
       'generate_connector_data_sources',
-      'wire_app_navigation',
-      'generate_shared_code_and_screen_skeletons',
-      'build_and_validate_screens',
+      'connect_real_data_sources',
       'validate_screen_design_quality',
       'launch_metro_dev_server',
     ],
@@ -500,10 +505,18 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
 
 test('every tracked operational skill has precise checkpoint markers', () => {
   for (const skillName of TRACKED_SKILL_NAMES) {
-    const workflow = fs.readFileSync(
-      path.join(PLUGIN_ROOT, 'skills', skillName, 'SKILL.md'),
-      'utf8',
-    );
+    // A skill may keep later phases in references/*.md, which the checkpoint emitter also
+    // reads (getTelemetryCheckpointNames), so their markers obey the same rules. SKILL.md
+    // comes first: its shared-instructions link precedes every marker in the skill.
+    const skillDir = path.join(PLUGIN_ROOT, 'skills', skillName);
+    const referencesDir = path.join(skillDir, 'references');
+    const references = fs.existsSync(referencesDir)
+      ? fs.readdirSync(referencesDir).filter((name) => name.endsWith('.md')).sort()
+      : [];
+    const workflow = [
+      path.join(skillDir, 'SKILL.md'),
+      ...references.map((name) => path.join(referencesDir, name)),
+    ].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
     const matches = [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)];
 
     if (CHECKPOINT_EXEMPT_SKILLS.has(skillName)) {

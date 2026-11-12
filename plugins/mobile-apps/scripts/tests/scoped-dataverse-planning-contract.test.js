@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { cacheMatchesTarget, canUseCachedResolution, parseArgs } = require('../resolve-environment');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
@@ -16,7 +17,7 @@ const planning = read(planningPath);
 const setup = skill('setup-datamodel');
 const edit = skill('edit-app');
 const dataverse = skill('add-dataverse');
-const create = skill('create-mobile-app');
+const create = createSkillWorkflow();
 
 function section(text, start, end) {
   const from = text.indexOf(start);
@@ -126,10 +127,10 @@ test('scope and selected environment are established before compact discovery', 
 test('scoped planning adapts only the named create helper sections, not its wizard or gates', () => {
   const evidence = section(planning, '## 2.', '## 3.');
   assert.match(planning, /does not invoke `\/create-mobile-app` or add another approval gate/);
-  assert.match(evidence, /Read and execute only\n\[Foreground Dataverse planning snapshot and evidence\]\(\.\.\/\.\.\/skills\/create-mobile-app\/SKILL\.md#foreground-dataverse-planning-snapshot-and-evidence\)/);
+  assert.match(evidence, /Read and execute only\n\[Foreground Dataverse planning snapshot and evidence\]\(\.\.\/\.\.\/skills\/create-mobile-app\/references\/make-it-real\.md#foreground-dataverse-planning-snapshot-and-evidence\)/);
   assert.match(evidence, /ending before \*\*Planner completion dispatch\*\*/);
   assert.match(evidence, /not permission to run the create wizard, its planner, scaffolding, or gates/);
-  assert.match(planning, /\[Dataverse planning recovery\]\(\.\.\/\.\.\/skills\/create-mobile-app\/SKILL\.md#dataverse-planning-recovery\)/);
+  assert.match(planning, /\[Dataverse planning recovery\]\(\.\.\/\.\.\/skills\/create-mobile-app\/references\/make-it-real\.md#dataverse-planning-recovery\)/);
   assert.match(evidence, /`<dataverse_planning_mode>` \| `required` only for this Dataverse delta/);
   assert.match(evidence, /Exact existing targets and necessary dependencies, not every table used anywhere/);
   assert.match(evidence, /Every proposed final custom logical name, including adapted names/);
@@ -216,7 +217,7 @@ test('structured metadata expansion and deterministic revision precede generic r
   assert.match(recovery, /already-unavailable names are not fetched repeatedly/);
   assert.match(recovery, /On no progress,\nrevise inline using current evidence/);
   assert.match(recovery, /Never import creation's Gate 1\/2 prompts/);
-  const canonical = section(create, '#### Dataverse planning recovery', '#### Step 3.0a');
+  const canonical = section(create, '#### Dataverse planning recovery', '#### Post-plan publisher-prefix gate');
   assert.match(canonical, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
   assert.match(canonical, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
   assert.match(canonical, /If it is empty, do not issue another network request/);
@@ -305,7 +306,7 @@ test('creation retains its complete receipt-owned fast path and fails closed on 
   assert.match(fast, /Do not reconstruct tables[\s\S]*from Markdown on this path/);
   assert.match(fast, /Supplied execution\nartifacts never override `--plan-only` or a planning-phase caller/);
   assert.match(fast, /return the proposal without entering Step 3/);
-  assert.match(section(create, '### Step 8 — Apply', 'Invoke skill: /add-dataverse'), /Step 8 cannot create or refresh this receipt/);
+  assert.match(section(create, '### Step 12 — Apply', 'Invoke skill: /add-dataverse'), /Step 12 cannot create or refresh this receipt/);
 });
 
 test('both publish paths still require cache recovery before completion without replaying writes', () => {

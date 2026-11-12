@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n?/g, '\n');
@@ -13,7 +14,7 @@ const design = read('skills/design-system/SKILL.md');
 const refresh = read('skills/design-system/references/refresh-flow.md');
 const inputs = read('skills/design-system/references/input-modes.md');
 const schema = read('skills/design-system/references/design-system-schema.md');
-const create = read('skills/create-mobile-app/SKILL.md');
+const create = createSkillWorkflow();
 const branch = integration.slice(
   integration.indexOf('## Approved dark palette (conditional)'),
   integration.indexOf('## Restored dark state'),

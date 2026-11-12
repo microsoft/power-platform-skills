@@ -18,10 +18,16 @@
     `style=` attributes, and Mermaid injects stylesheets. Inline CSS cannot execute.
   - `img-src data:` only - the brand mark and the QR are both inlined, so no image is ever
     fetched, and an injected `<img src=...>` cannot call out.
-  - No `connect-src`, `frame-src` or `object-src`: the plan never talks to the network.
-    The phone uses an inline `srcdoc` document, not a fetched frame.
+  - No `connect-src` or `object-src`: the plan itself never talks to the network. The mockup
+    carousel uses an inline `srcdoc` document, not a fetched frame.
+  - `frame-src` is the one exception, and it is loopback-only: the live stage frames the app
+    running in the local Expo web server the skill started (`npx --no-install expo start`), for example
+    `http://localhost:8082`. Only `http://localhost:*` and `http://127.0.0.1:*` are named, so an
+    injected frame cannot load remote content. `app-docs.js` (normalizePreviewUrl) refuses any
+    other URL before it reaches this page, and the page checks it again before drawing the frame.
+    https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/frame-src
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-src http://localhost:* http://127.0.0.1:*; base-uri 'none'; form-action 'none'"/>
 <title>__PLAN_TITLE__ - __APP_NAME__</title>
 <!--
   Mermaid is pinned to an exact version and checked against a hash of its bytes.
@@ -72,7 +78,10 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .pill-live{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
 .shell{display:flex;align-items:flex-start;}
 .layout{display:flex;min-height:calc(100vh - 65px);flex:1;min-width:0;}
-.rail{width:430px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
+/* `safe center` falls back to the top when the phone and its links are taller than a short
+   window; plain `center` overflowed both ends, hiding the title and the link-out with no way to
+   scroll to them. https://developer.mozilla.org/en-US/docs/Web/CSS/justify-content#safe */
+.rail{width:430px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
 .rail-title{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
 .device{width:300px;height:620px;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;flex-shrink:0;}
 .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
@@ -108,6 +117,12 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .car-dots{display:flex;gap:5px;}
 .car-dot{width:6px;height:6px;border-radius:50%;background:var(--border-light);}
 .car-dot.on{background:var(--accent);}
+/* Live stage - the running app from the local Expo web server, scaled to the same 375-wide phone
+   viewport as the mockups. A browser reports zero safe-area insets, so the app would draw its
+   header under the notch; the frame starts below it instead, and the strip above takes the
+   device body's colour so it reads as bezel rather than as part of the app. */
+.live{position:absolute;inset:0;background:#1f1f1f;}
+.live .car-frame{top:22px;}
 .rail-caption{font-size:12px;color:var(--text-dim);text-align:center;min-height:32px;padding:0 10px;}
 /* Stage 3 - QR */
 .qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#fff;padding:0 26px;text-align:center;}
@@ -200,6 +215,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   border-radius:999px;font-size:13.5px;max-width:min(380px,calc(100vw - 48px));
   box-shadow:0 6px 20px rgba(0,0,0,.12);background-color:#fff8f2;}
 .input-banner[hidden]{display:none;}
+/* While the phone rail is a side column, keep the banner over the plan instead of the phone: the
+   preview gate raises it exactly when the user needs to use the live app. */
+@media(min-width:1181px){.input-banner{right:454px;}}
 .input-banner-icon{font-size:11px;flex-shrink:0;animation:bannerPulse 1.6s ease-in-out infinite;}
 .input-banner-text{line-height:1.35;flex:1;min-width:0;}
 .input-banner-text b{display:block;font-weight:650;}
@@ -393,7 +411,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
     <div class="section" id="tab-datamodel">
       <h2>Data model</h2>
-      <div class="section-desc">Tables approved at Gate 2, and how each one was sourced.</div>
+      <div class="section-desc">Tables approved at the data model gate, and how each one was sourced.</div>
 
       <div id="approval-datamodel"></div>
       <div class="stats-grid">
@@ -435,7 +453,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
     <div class="section" id="tab-screens">
       <h2>Screens</h2>
-      <div class="section-desc">The screen graph approved at Gate 3 and the per-screen specs from Gate 4.</div>
+      <div class="section-desc">The screen graph approved at the screen graph gate, and the per-screen specs built from it.</div>
       <div id="approval-screens"></div>
       <div id="screensPlanDoc"></div>
       <div id="graphContainer"></div>
@@ -515,6 +533,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   // Code-owned, substituted at render time; never plan data.
   var brandIcon = document.getElementById('brandLogo').getAttribute('src') || '';
   var capabilities = __JSON_CAPABILITIES__;
+  // The user's display name; JSON-encoded at render time and only ever used as text.
+  var appName = __JSON_APP_NAME__;
 
   var STATUS_CLASS = {
     done: 'is-done', active: 'is-active', failed: 'is-failed',
@@ -751,15 +771,21 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     if (!container) return;
     container.textContent = '';
 
-    function add(href, label) {
+    function add(href, label, rel) {
       if (!href) return;
       var link = el('a', 'rail-link', label);
       link.setAttribute('href', href);
       link.setAttribute('target', '_blank');
-      link.setAttribute('rel', 'noopener');
+      link.setAttribute('rel', rel || 'noopener');
       container.appendChild(link);
     }
 
+    // The phone draws the live app at phone width; a tab gives it the whole window and the
+    // browser's dev tools. noreferrer as well as noopener: it is a different origin from this
+    // page, and the plan's own path is nothing the app needs to see.
+    if (phone.stage === 'live' && isLoopbackPreview(phone.previewUrl)) {
+      add(phone.previewUrl, 'Open the live preview in a browser tab \u2197', 'noopener noreferrer');
+    }
     add(summary.screenPreviewHref, 'Open screens full size \u2197');
     // The QR is already drawn in the phone; this is for scanning it larger, and it links the
     // PNG rather than the inlined data URI because browsers block top-level navigation to a
@@ -901,6 +927,47 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     return '<!DOCTYPE html>' + source.documentElement.outerHTML;
   }
 
+  /**
+   * Re-check the live-preview URL before it becomes a frame `src`.
+   *
+   * `app-docs.js` already refuses anything but the local Expo web server, and the CSP `frame-src`
+   * names only the two loopback hosts. This is the third line, so a plan state edited by hand or
+   * written by a future bug still cannot frame something else. A prefix test is not enough:
+   * `http://localhost:8082@example.com/` starts with `http://localhost:`, but everything before
+   * the `@` is userinfo and its host is example.com. So the port must be followed by `/` or the
+   * end of the string, which leaves no room for userinfo, and a query or fragment is refused as
+   * normalizePreviewUrl refuses them.
+   * https://url.spec.whatwg.org/#concept-basic-url-parser
+   */
+  function isLoopbackPreview(url) {
+    return typeof url === 'string'
+      && /^http:\/\/(?:localhost|127\.0\.0\.1):\d{1,5}(?:\/[^\s?#\\]*)?$/.test(url);
+  }
+
+  /**
+   * Scale a 375-wide phone viewport into the device screen instead of reflowing it into the
+   * narrower rail. The carousel and the live preview both use it, so a mockup and the running app
+   * are laid out at the same phone width. Mockups are drawn for exactly 375 x 812, so they keep
+   * that size and are letterboxed. `fillHeight` gives the running app whatever height fills the
+   * screen, as a real phone of another size would.
+   */
+  function fitViewport(box, viewport, fillHeight) {
+    var fit = function () {
+      var height = fillHeight ? box.clientHeight * 375 / box.clientWidth : 812;
+      var scale = Math.min(box.clientWidth / 375, box.clientHeight / height);
+      viewport.style.height = height + 'px';
+      viewport.style.transform = 'scale(' + scale + ')';
+      viewport.style.left = (box.clientWidth - 375 * scale) / 2 + 'px';
+      viewport.style.top = (box.clientHeight - height * scale) / 2 + 'px';
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fit).observe(box);
+  }
+
+  // The live preview's frame, once drawn. The reload guard at the bottom of the page watches it.
+  var liveFrame = null;
+
   function renderPhone() {
     if (phone.stage === 'screens' && phone.previewHtml) phone.screens = previewScreens(phone.previewHtml);
     railPreviewLink();
@@ -935,6 +1002,32 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       return;
     }
 
+    // An unchecked URL falls through to the building animation rather than drawing a frame.
+    if (phone.stage === 'live' && isLoopbackPreview(phone.previewUrl)) {
+      title.textContent = 'Live preview';
+      var live = el('div', 'live');
+      var liveBox = el('div', 'car-frame');
+      liveFrame = document.createElement('iframe');
+      // allow-scripts: this is the real app, and it is nothing without its JavaScript.
+      // allow-same-origin: normally unsafe beside allow-scripts, because a same-origin frame can
+      // remove its own sandbox. Here the frame is cross-origin to this file:// page, so it keeps
+      // its own http://localhost origin and still cannot reach the plan. Without it the frame
+      // gets an opaque origin and loses localStorage, IndexedDB and cookies, which Expo web and
+      // its sign-in rely on.
+      // allow-forms and allow-popups: the app's forms submit, and sign-in may open a window.
+      // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe#sandbox
+      liveFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+      liveFrame.setAttribute('referrerpolicy', 'no-referrer');
+      liveFrame.setAttribute('title', 'Live preview of ' + appName);
+      liveFrame.setAttribute('src', phone.previewUrl);
+      liveBox.appendChild(liveFrame);
+      live.appendChild(liveBox);
+      screen.appendChild(live);
+      fitViewport(liveBox, liveFrame, true);
+      caption.textContent = 'Sample data. Edits hot-reload here.';
+      return;
+    }
+
     if (phone.stage === 'screens' && phone.screens && phone.screens.length) {
       title.textContent = 'Your screens';
       var index = 0;
@@ -955,16 +1048,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       screen.appendChild(car);
       controls.appendChild(nav);
       controls.hidden = false;
-
-      var fit = function () {
-        var scale = Math.min(frame.clientWidth / 375, frame.clientHeight / 812);
-        viewport.style.transform = 'scale(' + scale + ')';
-        viewport.style.left = (frame.clientWidth - 375 * scale) / 2 + 'px';
-        viewport.style.top = (frame.clientHeight - 812 * scale) / 2 + 'px';
-      };
-      fit();
-      window.addEventListener('resize', fit);
-      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fit).observe(frame);
+      fitViewport(frame, viewport);
 
       var show = function (i) {
         index = Math.max(0, Math.min(phone.screens.length - 1, i));
@@ -1017,7 +1101,14 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     });
     bld.appendChild(caps);
     screen.appendChild(bld);
-    caption.textContent = 'Your screens appear here once the design is locked.';
+    // A recorded preview address on the `building` stage means the preview has already run and
+    // the skill stopped it to connect real data: plain Expo web cannot sign in to Dataverse, so the
+    // wired app would only show errors there. The address stays in state, but the server is gone,
+    // so nothing frames or links it; the caption says what comes next instead. A `live` stage
+    // whose address failed the page check also lands here, and keeps the default caption.
+    caption.textContent = phone.stage === 'building' && phone.previewUrl
+      ? 'Connecting real data. The QR code to open the app on your phone appears here next.'
+      : 'A live preview of your app appears here once its screens are built.';
   }
 
   /**
@@ -1525,7 +1616,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var items = screens.list || [];
     renderMermaid('graphContainer',
       items.length ? buildScreenGraph(items, screens.navigation) : '',
-      'The screen graph will appear here after Gate 3.');
+      'The screen graph will appear here after the screen graph gate.');
 
     var container = document.getElementById('screensContainer');
     container.textContent = '';
@@ -1680,8 +1771,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 
   function renderTrust() {
-    // The trust report is drafted at Gate 1 and finalised at Step 10, but no gate puts it to the
-    // user, so the default wording would send them to the terminal for a prompt that never comes.
+    // The trust report is drafted at the architecture gate and finalised once the capabilities
+    // are wired (Step 13), but no gate puts it to the user, so the default wording would send
+    // them to the terminal for a prompt that never comes.
     approvalBanner('approval-trust', 'trust',
       'Draft - written from the approved plan, and finalised once the capabilities are wired');
     var trust = sections.trust || {};
@@ -1835,9 +1927,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
    */
   var STORE_TAB = 'mobile-plan-tab';
   var STORE_SCROLL = 'mobile-plan-scroll';
-  var RELOAD_MS = 10000;
+  var RELOAD_MS = 4000;
   var QUIET_MS = 30000;
   var lastInteraction = 0;
+  // Captured now: currentScript is only set while this script first runs, not in later callbacks.
+  var scriptNonce = (document.currentScript && document.currentScript.nonce) || '';
 
   function showTab(tab) {
     var button = document.querySelector('.nav-btn[data-tab="' + tab + '"]');
@@ -1861,6 +1955,25 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     window.addEventListener(event, function () { lastInteraction = Date.now(); }, { passive: true });
   });
 
+  // The live preview is a cross-origin frame, so the clicks, keys and scrolls a reader makes
+  // inside it go to that frame's document and never reach the listeners above. Without this,
+  // someone trying out their app would have it reset under them by the next reload. Pointer
+  // entry and focus are the two signals that do cross the frame boundary, so either one counts
+  // as using the page. Leaving restarts the quiet window, so the reload still waits QUIET_MS
+  // after the reader is done rather than firing on the next tick.
+  var pointerInPreview = false;
+  if (liveFrame) {
+    liveFrame.addEventListener('pointerenter', function () { pointerInPreview = true; });
+    liveFrame.addEventListener('pointerleave', function () {
+      pointerInPreview = false;
+      lastInteraction = Date.now();
+    });
+  }
+
+  function usingLivePreview() {
+    return !!liveFrame && (pointerInPreview || document.activeElement === liveFrame);
+  }
+
   window.addEventListener('beforeunload', function () {
     try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
   });
@@ -1872,10 +1985,41 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     if (savedScroll > 0) window.scrollTo(0, savedScroll);
   } catch (e) { /* sessionStorage unavailable; first-tab default is fine */ }
 
+  // Reload only when the plan changed. Every reload restarts the live app in the phone on its
+  // first screen with its sample data reset, and a timed refresh did that every few seconds while
+  // the user was trying the app. A file:// page cannot fetch, so it cannot ask whether its own file
+  // changed, but it can still load a classic script: app-docs.js rewrites
+  // create-app-plan.version.js beside this page on every render, and the page loads it each tick.
+  // The nonce lets that script past this page's CSP. If it cannot load (a plan rendered before the
+  // sidecar existed, or a browser that blocks file scripts), fall back to the timed refresh rather
+  // than leave the page stale.
+  var planChanged = false;
+  window.__planVersion = function (version) {
+    if (version !== summary.version) planChanged = true;
+  };
+  function checkPlanVersion() {
+    var probe = document.createElement('script');
+    if (scriptNonce) probe.setAttribute('nonce', scriptNonce);
+    probe.addEventListener('load', function () { probe.remove(); });
+    probe.addEventListener('error', function () { planChanged = true; probe.remove(); });
+    probe.src = 'create-app-plan.version.js?t=' + Date.now();
+    (document.head || document.body).appendChild(probe);
+  }
+
   if (!summary.settled) {
     setInterval(function () {
+      if (!planChanged) {
+        checkPlanVersion();
+        return;
+      }
       // Never interrupt someone who is reading. The next tick picks it up.
       if (Date.now() - lastInteraction < QUIET_MS) return;
+      // Focus can leave the frame without an event this page reliably sees, so a tick that
+      // finds the preview in use restarts the quiet window itself.
+      if (usingLivePreview()) {
+        lastInteraction = Date.now();
+        return;
+      }
       if (document.hidden) return;
       try { sessionStorage.setItem(STORE_SCROLL, String(window.scrollY)); } catch (e) { /* ignore */ }
       // A plain reload() is not enough. This page is opened over file://, so it carries no
@@ -1884,8 +2028,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       // which is why the build animation could persist until a hard refresh. Reloading through
       // a URL that differs every time is the only lever a file:// page has.
       var fresh = location.href.split('#')[0].split('?')[0] + '?t=' + Date.now();
-      // replace(), not assign(): this fires every few seconds, and each one would otherwise be
-      // a back-button entry the reader has to escape.
+      // replace(), not assign(): the plan changes many times in a run, and each reload would
+      // otherwise be a back-button entry the reader has to escape.
       location.replace(fresh);
     }, RELOAD_MS);
   }

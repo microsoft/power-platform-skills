@@ -181,7 +181,7 @@ Print confirmation:
 
 **Telemetry checkpoint: `open_screen_preview`**
 
-**Do NOT prompt.** The `visual_companion` flag in `<working_dir>/memory-bank.md` already encodes the answer; asking again is redundant. The flag is set by `/design-system` (Step 6.75) during project creation, or defaults to `yes` if `/design-system` was not run.
+**Do NOT prompt.** The `visual_companion` flag in `<working_dir>/memory-bank.md` already encodes the answer; asking again is redundant. The flag is set by `/design-system` (`/create-mobile-app` Step 9) during project creation, or defaults to `yes` if `/design-system` was not run.
 
 Read the flag and act:
 

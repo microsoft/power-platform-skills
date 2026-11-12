@@ -10,7 +10,9 @@ const test = require('node:test');
 
 const {
   HOST_TSCONFIG,
+  WEB_PREVIEW_ENV,
   assertFreshTemplate,
+  ensureWebPreviewOutput,
   prepareMobileTemplate,
   prepareRootLayout,
 } = require('../prepare-mobile-template');
@@ -124,6 +126,10 @@ test('preparation is idempotent and preserves generated and existing helper file
   assert.ok(first.removedLegacyFiles.includes('src/hooks/useContacts.ts'));
   assert.ok(!first.writtenFiles.includes('src/components/index.tsx'));
   assert.ok(!first.writtenFiles.includes('src/generated/index.ts'));
+  // The preview data layer's shared contract sits one folder deeper than the other helpers; the
+  // screens built before any data source exists import it, so it must be copied with its folder.
+  assert.ok(first.writtenFiles.includes('src/hooks/data/core.ts'));
+  assert.ok(fs.existsSync(path.join(projectRoot, 'src', 'hooks', 'data', 'core.ts')));
   assert.deepStrictEqual(fs.readFileSync(generatedPath, 'utf8'), '// generated-owner sentinel\n');
   assert.deepStrictEqual(fs.readFileSync(existingHelperPath, 'utf8'), '// existing-helper sentinel\n');
   assert.deepStrictEqual(
@@ -263,6 +269,26 @@ test('fresh-template validation allows the approved plan but blocks created-app 
   fs.mkdirSync(generatedServices, { recursive: true });
   fs.writeFileSync(path.join(generatedServices, 'CreatedService.ts'), 'export {};\n');
   assert.throws(() => assertFreshTemplate(projectRoot), /src\/generated\/services\/\*\.ts/);
+});
+
+test('fresh-template validation requires the template-owned dev lifecycle scripts, not their bodies', (context) => {
+  const projectRoot = copyTemplate();
+  context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  const packagePath = path.join(projectRoot, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+
+  // Any non-empty body is the template's choice.
+  fs.writeFileSync(packagePath, JSON.stringify({ ...pkg, scripts: { ...pkg.scripts, dev: 'custom-dev', predev: 'custom-predev' } }));
+  assert.doesNotThrow(() => assertFreshTemplate(projectRoot));
+
+  for (const scriptName of ['dev', 'predev']) {
+    for (const value of [undefined, '   ', 42]) {
+      const scripts = { ...pkg.scripts, [scriptName]: value };
+      if (value === undefined) delete scripts[scriptName];
+      fs.writeFileSync(packagePath, JSON.stringify({ ...pkg, scripts }));
+      assert.throws(() => assertFreshTemplate(projectRoot), new RegExp(`scripts\\.${scriptName} to be a non-empty command`));
+    }
+  }
 });
 
 function writeLayoutFixture(source) {
@@ -469,4 +495,43 @@ test('failed full preparation restores every mutated file', () => {
   }), /must not wrap Slot with SafeAreaView/);
 
   assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
+
+test('the sample-data web preview opts out of per-request server rendering, and nothing else does', () => {
+  const projectRoot = copyTemplate();
+  const result = prepareMobileTemplate({ workingDir: projectRoot, displayName: 'Preview App', slug: 'preview-app' });
+  assert.strictEqual(result.webPreviewOutput, 'added');
+  assert.ok(result.writtenFiles.includes('app.config.js'));
+
+  // The host's default is static output; only the preview env var switches it to single.
+  const createConfig = loadAppConfig(path.join(projectRoot, 'app.config.js'));
+  const hostDefault = { web: { bundler: 'metro', output: 'static' } };
+  const previous = process.env[WEB_PREVIEW_ENV];
+  try {
+    delete process.env[WEB_PREVIEW_ENV];
+    assert.strictEqual(createConfig({ config: hostDefault }).web.output, 'static');
+    process.env[WEB_PREVIEW_ENV] = '1';
+    const preview = createConfig({ config: hostDefault }).web;
+    assert.deepStrictEqual(preview, { bundler: 'metro', output: 'single' });
+  } finally {
+    if (previous === undefined) delete process.env[WEB_PREVIEW_ENV];
+    else process.env[WEB_PREVIEW_ENV] = previous;
+  }
+
+  // Idempotent: a second pass finds the override and changes nothing.
+  const before = fs.readFileSync(path.join(projectRoot, 'app.config.js'), 'utf8');
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'present');
+  assert.strictEqual(fs.readFileSync(path.join(projectRoot, 'app.config.js'), 'utf8'), before);
+});
+
+test('an unrecognized customization hook is reported, not rewritten', () => {
+  const projectRoot = copyTemplate();
+  const configPath = path.join(projectRoot, 'app.config.js');
+  const custom = fs.readFileSync(configPath, 'utf8').replace(
+    'function customizeExpoConfig(config) {',
+    'const customizeExpoConfig = (config) => {',
+  );
+  fs.writeFileSync(configPath, custom);
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'unsupported');
+  assert.strictEqual(fs.readFileSync(configPath, 'utf8'), custom);
 });

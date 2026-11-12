@@ -8,9 +8,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
-  PHASES, PHONE_STAGES, SECTIONS, applyStep, initState, loadState, outputPath, save, setPhone,
-  setSection, summarize,
+  PHASES, PHONE_STAGES, SECTIONS, VERSION_FILE, applyStep, initState, loadState, normalizePreviewUrl,
+  outputPath, save, setPhone, setSection, summarize,
 } = require('../app-docs');
+const { createSkillExecution, createSkillWorkflow } = require('./helpers/create-skill');
 
 const scriptPath = path.resolve(__dirname, '..', 'app-docs.js');
 
@@ -89,16 +90,16 @@ test('a note does not outlive the status it was written with', () => {
 
   // How the gate protocol actually runs: open with an "awaiting" note, close with a bare
   // --status done. The note used to stick, so an approved gate kept asking for approval.
-  applyStep(state, { id: 'architecture', status: 'active', note: 'Gate 1 — awaiting your approval' });
+  applyStep(state, { id: 'architecture', status: 'active', note: 'Architecture gate - awaiting your approval' });
   applyStep(state, { id: 'architecture', status: 'done' });
   const architecture = state.phases.find((phase) => phase.id === 'architecture');
   assert.equal(architecture.status, 'done');
   assert.equal(architecture.note, '', 'the awaiting-approval note must not survive approval');
 
   // An explicit note on the closing call is kept.
-  applyStep(state, { id: 'data-model', status: 'active', note: 'Gate 2 — awaiting your approval' });
-  applyStep(state, { id: 'data-model', status: 'done', note: 'Gate 2 — 6 tables approved' });
-  assert.equal(state.phases.find((p) => p.id === 'data-model').note, 'Gate 2 — 6 tables approved');
+  applyStep(state, { id: 'data-model', status: 'active', note: 'Data model gate - awaiting your approval' });
+  applyStep(state, { id: 'data-model', status: 'done', note: 'Data model gate - 6 tables approved' });
+  assert.equal(state.phases.find((p) => p.id === 'data-model').note, 'Data model gate - 6 tables approved');
 
   // A repeated status keeps its note, so progress updates survive a refresh.
   applyStep(state, { id: 'screens', status: 'active', note: '3 of 12 screens built' });
@@ -108,21 +109,19 @@ test('a note does not outlive the status it was written with', () => {
   // Opening the next phase auto-closes the live one, and the note goes with that status too.
   // A gate left open on its awaiting note otherwise kept asking for approval on a phase the plan
   // already showed as done.
-  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 3 — awaiting your approval' });
-  applyStep(state, { id: 'scaffold', status: 'active' });
+  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Screen graph gate - awaiting your approval' });
+  applyStep(state, { id: 'screens', status: 'active' });
   const screenPlan = state.phases.find((p) => p.id === 'screen-plan');
   assert.equal(screenPlan.status, 'done');
   assert.equal(screenPlan.note, '', 'an auto-closed phase must not keep its awaiting note');
 });
 
 test('the skill closes every gate with a fresh note', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   const body = skill.slice(skill.indexOf('\n### Step '));
   // Clearing on status change means a gate closed without a note simply goes blank, which is
   // correct but less useful than saying it was approved.
-  for (const gate of ['architecture', 'data-model', 'screen-plan']) {
+  for (const gate of ['screen-plan', 'preview', 'architecture', 'data-model']) {
     const closes = [...body.matchAll(new RegExp(`step --id ${gate} --status done([^\n]*)`, 'g'))];
     assert.ok(closes.length > 0, `${gate} must be closed somewhere`);
     for (const [, rest] of closes) {
@@ -132,20 +131,19 @@ test('the skill closes every gate with a fresh note', () => {
 });
 
 test('the trust report is written as soon as the gate it depends on closes', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   const body = skill.slice(skill.indexOf('\n### Step '));
 
-  // The tab told the user it would fill after Gate 1 while the skill only wrote it at Step 10,
-  // so it sat empty for most of the run. A proposed pass lands with Gate 1 and Step 10 finalises.
+  // The tab told the user it would fill after the architecture gate while the skill only wrote
+  // it once capabilities were wired, so it sat empty for most of the run. A proposed pass lands
+  // with the architecture gate (Step 10.9) and Step 13.1 finalises it.
   const writes = [...body.matchAll(/set --section trust[^\n]*--state (proposed|approved)/g)].map((m) => m[1]);
   assert.deepEqual(writes, ['proposed', 'approved'],
     'trust must be proposed at the gate that settles capabilities, then approved once wired');
 
   const proposedAt = body.indexOf('set --section trust');
   const gate1Close = body.indexOf('step --id architecture --status done');
-  assert.ok(gate1Close !== -1 && proposedAt > gate1Close, 'the first pass belongs with the Gate 1 batch');
+  assert.ok(gate1Close !== -1 && proposedAt > gate1Close, 'the first pass belongs with the architecture gate batch');
 });
 
 test('sections merge so a later step can add to an earlier one', () => {
@@ -166,6 +164,68 @@ test('unknown phases, statuses and sections are rejected by name', () => {
   assert.throws(() => setSection(state, 'nope', {}), /Unknown section 'nope'/);
   assert.throws(() => setSection(state, 'environment', ['a']), /must be a JSON object/);
   assert.ok(SECTIONS.has('dataModel'));
+  assert.deepEqual(state.phases.map((p) => p.id), PHASES.map((p) => p.id),
+    'a rejected step must not change the phase list');
+});
+
+test('a plan from an older skill gains the phases added since, where they run', (t) => {
+  const root = project('docs-legacy-phases');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // A plan seeded by the skill before the preview-first reorder: no `preview` or `wiring`, and
+  // the old order, with the gates ahead of the scaffold. `init` returns it unchanged on resume.
+  const LEGACY = ['requirements', 'architecture', 'data-model', 'screen-plan', 'scaffold', 'design',
+    'auth', 'dataverse', 'capabilities', 'screens', 'run'];
+  const legacy = initState(root, { appName: 'Legacy' });
+  legacy.phases = LEGACY.map((id) => ({ ...PHASES.find((p) => p.id === id), status: 'done', note: '' }));
+  legacy.phases.find((p) => p.id === 'run').status = 'pending';
+  save(root, legacy);
+
+  const resumed = initState(root, { appName: 'Legacy' });
+  assert.deepEqual(resumed.phases.map((p) => p.id), LEGACY, 'init must hand back the stored plan');
+
+  // The resumed run's first call naming a new phase used to fail as an unknown phase.
+  applyStep(resumed, { id: 'preview', status: 'active', note: 'Preview gate - awaiting your answer' });
+  applyStep(resumed, { id: 'wiring', status: 'active' });
+  const ids = resumed.phases.map((p) => p.id);
+
+  // Each lands after every phase PHASES runs before it, so neither reads as pending above work
+  // that has to happen first.
+  const at = (id) => ids.indexOf(id);
+  for (const id of ['requirements', 'scaffold', 'screen-plan', 'screens']) {
+    assert.ok(at(id) < at('preview'), `preview must come after ${id}`);
+  }
+  assert.ok(at('preview') < at('wiring'));
+  assert.ok(at('wiring') < at('run'));
+  assert.equal(ids.length, LEGACY.length + 2);
+
+  const preview = resumed.phases.find((p) => p.id === 'preview');
+  assert.equal(preview.status, 'done', 'opening wiring closes the preview, as for any phase');
+  assert.equal(preview.title, 'Try the running app');
+  assert.equal(resumed.phases.find((p) => p.id === 'wiring').status, 'active');
+
+  // And it survives the round trip to disk and into the page.
+  save(root, resumed);
+  assert.deepEqual(loadState(root).phases.map((p) => p.id), ids);
+  assert.match(fs.readFileSync(outputPath(root), 'utf8'), /Connect real data/);
+
+  // Only ids PHASES knows are added; anything else is still a typo reported by name.
+  assert.throws(() => applyStep(resumed, { id: 'previews', status: 'done' }), /Unknown phase 'previews'/);
+  assert.equal(resumed.phases.length, LEGACY.length + 2);
+});
+
+test('a missing phase is restored to its exact place in a plan already in run order', () => {
+  const state = initState(project('docs-missing-phase'), { appName: 'App' });
+  state.phases = state.phases.filter((p) => p.id !== 'preview' && p.id !== 'wiring');
+
+  applyStep(state, { id: 'wiring', status: 'pending' });
+  applyStep(state, { id: 'preview', status: 'pending' });
+  assert.deepEqual(state.phases.map((p) => p.id), PHASES.map((p) => p.id));
+  for (const id of ['preview', 'wiring']) {
+    const phase = state.phases.find((p) => p.id === id);
+    assert.equal(phase.status, 'pending');
+    assert.equal(phase.note, '');
+  }
 });
 
 test('captured choices reach the rendered page', () => {
@@ -346,7 +406,7 @@ test('an ordinary question raises the banner, not just an approval gate', () => 
   assert.equal(summarize(state).awaitingInput, 'Waiting for your answers to the setup questions');
 
   // A gate's own wording still works.
-  applyStep(state, { id: 'architecture', status: 'active', note: 'Gate 1 — awaiting your approval' });
+  applyStep(state, { id: 'architecture', status: 'active', note: 'Architecture gate - awaiting your approval' });
   assert.match(summarize(state).awaitingInput, /awaiting your approval/);
 
   // Answering clears it, because the note does not outlive its status.
@@ -358,14 +418,16 @@ test('an ordinary question raises the banner, not just an approval gate', () => 
   assert.equal(summarize(state).awaitingInput, '');
 });
 
-test('the skill flags the run as blocked before its first question', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
-  const open = skill.match(/step --id requirements --status active([^\n]*)/);
-  assert.ok(open, 'the requirements phase must be opened');
-  assert.match(open[1], /--note "Waiting for your answers/,
-    'the first prompt must raise the waiting banner');
+test('the plan opens with the brief already recorded, because its only question came first', () => {
+  const skill = createSkillWorkflow();
+  // The setup question (Step 2) is the run's first and is asked before the plan exists, so no
+  // banner can be raised for it. The plan therefore opens at Step 3 with requirements done, and
+  // a later `requirements --status active` would re-open a question nobody is being asked.
+  const step3 = skill.slice(skill.indexOf('### Step 3 '), skill.indexOf('### Step 4 '));
+  const initAt = step3.indexOf('init --json-file');
+  const doneAt = step3.search(/step --id requirements --status done --note "/);
+  assert.ok(initAt !== -1 && doneAt > initAt, 'Step 3 creates the plan, then records the brief as done');
+  assert.doesNotMatch(skill, /step --id requirements --status active/);
 });
 
 test('a failed run says so, because that is the last thing the page will ever show', () => {
@@ -395,7 +457,8 @@ test('the topbar shows the approved data platform, not the placeholder init was 
   const root = project('docs-platform');
   let state = initState(root, { appName: 'App', dataPlatform: 'unknown' });
   // `init` runs at Step 2b, before the platform is chosen, and nothing updates the top-level
-  // value - so the pill read "Data: unknown" for the whole run. Before Gate 1 it says so in words.
+  // value - so the pill read "Data: unknown" for the whole run. Before the architecture gate it
+  // says so in words.
   save(root, state);
   let html = fs.readFileSync(outputPath(root), 'utf8');
   assert.match(html, /Data: not decided yet/);
@@ -410,8 +473,9 @@ test('the topbar shows the approved data platform, not the placeholder init was 
 test('a section nobody is asked to approve does not raise the waiting banner', () => {
   const root = project('docs-trust-banner');
   let state = initState(root, { appName: 'App' });
-  // `trust` is written `proposed` at Gate 1 and only finalised at Step 10, but no gate asks the
-  // user to answer for it. Treating it as a gate held the banner up for most of the run.
+  // `trust` is written `proposed` at the architecture gate and only finalised at Step 13, but no
+  // gate asks the user to answer for it. Treating it as a gate held the banner up for most of the
+  // run.
   state = setSection(state, 'trust', { permissions: [] }, 'proposed');
   assert.equal(summarize(state).awaitingInput, '');
 
@@ -421,9 +485,7 @@ test('a section nobody is asked to approve does not raise the waiting banner', (
 });
 
 test('the skill marks a phase failed before it stops', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
 
   // `failed` settles the page, which stops the self-refresh. Listing the value without ever
   // issuing it left the last phase `active`, so a terminal STOP produced a plan that reloaded
@@ -462,13 +524,11 @@ test('an editor link survives a path containing ?, # or %', () => {
 });
 
 test('the skill records a skipped design step instead of leaving it open', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
-  const design = skill.slice(skill.indexOf('### Step 6.75'), skill.indexOf('### Step 7 '));
+  const skill = createSkillWorkflow();
+  const design = skill.slice(skill.indexOf('### Step 9 — Design system'), skill.indexOf('### Step 9.2 '));
 
   // `--no-design` returns before the `done` call. Opening the phase on that branch left it
-  // active through auth and most of Step 8, until opening the next phase auto-closed it as
+  // active through the architecture gate, until opening the next phase auto-closed it as
   // done - reporting a design system that was never built.
   const skipAt = design.indexOf('step --id design --status skipped');
   const openAt = design.indexOf('step --id design --status active');
@@ -478,9 +538,7 @@ test('the skill records a skipped design step instead of leaving it open', () =>
 });
 
 test('nested skills are handed the orchestration flag, not just told about it', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   // `/design-system` and its style picker gate every browser opener on this variable. Asserting
   // it was set without passing it made those guards dead code: the nested skill saw a standalone
   // run and opened tabs over the build plan anyway.
@@ -494,20 +552,21 @@ test('a section still proposed between two gates does not read as a question', (
   const root = project('docs-between-gates');
   const state = initState(root, { appName: 'Field Readings' });
 
-  // `screens` is proposed at Gate 3 and stays proposed until Step 3.9, because one section
-  // covers both gates. Between Gate 3's approval and Gate 4 the plan therefore showed "Review
-  // the screen plan, then answer in your terminal" while the planner was busy writing specs and
-  // nobody had been asked anything.
+  // `screens` is proposed at the screen graph gate and stays proposed while the planner writes
+  // the per-screen specs into it. Once the graph was approved the plan therefore showed "Review
+  // the screen plan, then answer in your terminal" while the planner was busy and nobody had been
+  // asked anything.
   setSection(state, 'screens', { list: [] }, 'proposed');
 
-  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 3 — awaiting your approval' });
+  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Screen graph gate - awaiting your approval' });
   assert.match(summarize(state).awaitingInput, /awaiting your approval/);
 
-  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 3 approved — writing per-screen specs' });
+  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Screen graph approved - writing per-screen specs' });
   assert.equal(summarize(state).awaitingInput, '', 'a progress note means the run is working, not waiting');
 
-  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 4 — awaiting your approval of the screen specs' });
-  assert.match(summarize(state).awaitingInput, /Gate 4/);
+  // The next question comes from a later gate, and it is that gate's note the banner shows.
+  applyStep(state, { id: 'preview', status: 'active', note: 'Preview gate - awaiting your answer' });
+  assert.match(summarize(state).awaitingInput, /Preview gate/);
 });
 
 test('a gate that forgets its note is still not silent', () => {
@@ -521,9 +580,7 @@ test('a gate that forgets its note is still not silent', () => {
 });
 
 test('every step that blocks on the user says so in the plan', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   const lines = skill.split('\n');
 
   const headings = [];
@@ -550,41 +607,42 @@ test('every step that blocks on the user says so in the plan', () => {
   });
   asks.delete('(preamble)');
 
-  // Step 2 asks before `init` runs at Step 2b, so there is no plan to raise a banner on.
-  const EXEMPT = new Set(['2']);
+  // Step 2 asks before `init` runs at Step 3, so there is no plan to raise a banner on.
+  // Step 17 is the closing menu, checked separately below.
+  const EXEMPT = new Set(['2', '17']);
   const silent = [...asks].filter((step) => !raises.has(step) && !EXEMPT.has(step)).sort();
   assert.deepEqual(silent, [], 'these steps ask the user but never raise the waiting banner');
 
-  // The exemption must stay true: the plan is created at 2b.
-  assert.match(skill, /### Step 2b[\s\S]{0,1200}init --json-file/, 'the plan is created at Step 2b');
+  // The exemption must stay true: the plan is created at Step 3, after the setup question.
+  assert.match(skill, /### Step 3 [\s\S]{0,1600}init --json-file/, 'the plan is created at Step 3');
 
-  // Step 3 counts as raising through one generic call, so every gate must be in the table that
-  // call is applied to. Step 3 opened on "Planning — approval gates ahead" with no gate ever
-  // raising its own note, which also suppressed the proposed-section fallback for all four.
-  for (const [gate, id] of [['1', 'architecture'], ['2', 'data-model'], ['3', 'screen-plan'], ['4', 'screen-plan']]) {
-    assert.match(skill, new RegExp(`^\\| ${gate} - [^|]+\\| \`${id}\` \\|`, 'm'), `Gate ${gate} has no row in the gate table`);
+  // Every named gate has a row in the build-plan protocol's gate table, with the phase it
+  // raises. A gate missing from the table once shipped with no banner at all, and an earlier
+  // version opened planning on "approval gates ahead" with no gate ever raising its own note.
+  for (const [gate, id] of [['Screen graph', 'screen-plan'], ['Preview', 'preview'], ['Architecture', 'architecture'], ['Data model', 'data-model']]) {
+    assert.match(skill, new RegExp(`^\\| ${gate}[^|]*\\| [^|]+\\| \`${id}\` \\|`, 'm'), `${gate} gate has no row in the gate table`);
   }
 
-  // Step 13's menu is not a gate. The build has finished and the plan has settled, so
+  // Step 17's menu is not a gate. The build has finished and the plan has settled, so
   // re-opening a phase there would restart the reload loop.
-  assert.ok(!raises.has('13'), 'the closing menu must not re-open a phase');
+  assert.ok(!raises.has('17'), 'the closing menu must not re-open a phase');
   assert.match(skill, /Do \*\*not\*\* re-open the `run` phase/);
 });
 
 test('each phase opens before its first step does any work', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
+  assert.match(skill, /^DOCS="\$\{PLUGIN_ROOT\}\/scripts\/app-docs\.js"$/m);
   const lines = skill.split('\n');
 
-  // With no phase open the plan reads "Waiting to start". Step 8 opened `dataverse` only after
-  // its tables were created, and `screens` opened at the end of the first wave in Step 11 - so
+  // With no phase open the plan reads "Waiting to start". An earlier version opened `dataverse`
+  // only after its tables were created, and `screens` at the end of the first screen wave - so
   // the two longest stretches of the run showed nothing in progress.
-  // Step 2 runs before the plan exists, so requirements opens at 2b. The gate phases are opened
-  // by Step 3's gate table, which the blocking-step test checks.
-  const OPENED_AT = { requirements: '2b' };
+  // Gate phases are opened where their gate is raised, which the blocking-step test checks
+  // through the gate table. Requirements' work (Steps 2 and 2b) finishes before the plan exists,
+  // so the plan records it as done at Step 3, which the test above checks.
+  const OPENED_AT = {};
   for (const phase of PHASES) {
-    if (/Gate/.test(phase.skillSteps)) continue;
+    if (/gate/i.test(phase.skillSteps) || phase.id === 'requirements') continue;
     const step = OPENED_AT[phase.id] || phase.skillSteps.split(/[,\s]+/)[0];
     const start = lines.findIndex((line) => line.startsWith(`### Step ${step} `));
     assert.ok(start >= 0, `no heading for Step ${step}`);
@@ -600,7 +658,8 @@ test('each phase opens before its first step does any work', () => {
       const marker = /^\s*```(\w*)/.exec(lines[i]);
       if (marker) { fence = fence === null ? marker[1] : null; continue; }
       if (fence === null || fence === 'json' || !lines[i].trim()) continue;
-      assert.match(lines[i], /app-docs\.js|^\s*#/,
+      // `$DOCS` is how a block names app-docs.js once it has assigned it.
+      assert.match(lines[i], /app-docs\.js|^\s*node "\$DOCS" |^\s*#/,
         `Step ${step} runs \`${lines[i].trim().slice(0, 60)}\` before opening '${phase.id}'`);
     }
   }
@@ -618,18 +677,14 @@ test('a stopped plan names the failed phase by id, and a resume reopens it', () 
   assert.equal(summarize(state).failedPhase, '');
   assert.equal(summarize(state).settled, false);
 
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   const resume = skill.slice(skill.indexOf('### Step 0 '), skill.indexOf('### Step 1 '));
   assert.match(resume, /step --id <failedPhase> --status active/);
   assert.match(resume, /docs\/create-app-plan\.html/, 'a resume skips 2b, so it must reopen the plan');
 });
 
 test('every waiting note is taken down by the step that set it', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   const calls = [...skill.matchAll(/step --id ([a-z-]+) --status ([a-z]+)([^\n]*)/g)].map((m) => ({
     phase: m[1],
     status: m[2],
@@ -649,18 +704,25 @@ test('phase order matches the order the skill actually runs them', () => {
   const order = PHASES.map((phase) => phase.id);
   const at = (id) => order.indexOf(id);
 
-  // The gates run at Step 3 and the scaffold group at Steps 5-6. These two lists drifted
-  // apart once before, and because the test agreed with the stale list it stayed green while
-  // a completed "Bring the app online" rendered above three still-pending gates.
-  assert.ok(at('architecture') < at('scaffold'), 'the gates are answered before anything is built');
-  assert.ok(at('data-model') < at('scaffold'));
-  assert.ok(at('screen-plan') < at('scaffold'));
+  // The preview-first order. These two lists drifted apart once before, and because the test
+  // agreed with the stale list it stayed green while a completed "Bring the app online" rendered
+  // above three still-pending gates.
+  assert.deepEqual(order, [
+    'requirements', 'scaffold', 'screen-plan', 'screens', 'preview', 'design', 'architecture',
+    'data-model', 'auth', 'dataverse', 'capabilities', 'wiring', 'run',
+  ]);
 
-  assert.ok(at('requirements') < at('scaffold'), 'dependencies must land before the app can run');
-  assert.ok(at('scaffold') < at('design'), 'the project exists before a design system is written into it');
-  assert.ok(at('screen-plan') < at('design'), 'design is locked after the screens are planned');
-  assert.ok(at('design') < at('screens'), 'screens are built against a settled design');
-  assert.ok(at('dataverse') < at('screens'), 'generated services exist before screens use them');
+  assert.ok(at('requirements') < at('scaffold'), 'the brief is confirmed before anything is built');
+  assert.ok(at('scaffold') < at('screens'), 'the project exists before screens are written into it');
+  assert.ok(at('screen-plan') < at('screens'), 'screens are built from the approved screen graph');
+  assert.ok(at('screens') < at('preview'), 'the preview shows screens that already exist');
+  for (const later of ['design', 'architecture', 'data-model', 'dataverse', 'capabilities']) {
+    assert.ok(at('preview') < at(later), `the user sees the app before ${later} is settled`);
+  }
+  assert.ok(at('data-model') < at('dataverse'), 'tables are approved before they are created');
+  assert.ok(at('architecture') < at('capabilities'), 'capabilities are wired once approved');
+  assert.ok(at('dataverse') < at('wiring'), 'generated services exist before sample data is swapped out');
+  assert.ok(at('capabilities') < at('wiring'), 'connectors exist before sample data is swapped out');
   assert.equal(order[order.length - 1], 'run', 'running on a device is the last thing that happens');
 });
 
@@ -671,18 +733,12 @@ test('phase order is derived from where the skill actually runs each step', () =
   // `skillSteps` metadata: the metadata records which steps a phase spans, and those spans
   // legitimately interleave (setup's background install is collected long after discovery
   // starts), whereas the transition calls are the moments the plan actually advances.
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
-
-  // The "Build documentation protocol" preamble shows a worked example of the gate calls.
-  // It is documentation, not execution, so start scanning at the first real step heading.
-  const firstStep = skill.indexOf('\n### Step ');
-  assert.ok(firstStep > 0, 'SKILL.md must have step headings');
-  const body = skill.slice(firstStep);
+  // The build-plan protocol (SKILL.md) and make-it-real.md's preamble show worked examples of
+  // the gate calls. They are documentation, not execution, so scan only the steps.
+  const body = createSkillExecution();
 
   // e.g. `node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done`
-  // `skipped` is excluded: the connector-only branch at Step 3.9 marks both Dataverse
+  // `skipped` is excluded: the connector-only branch at Step 10.9 marks both Dataverse
   // phases skipped up front, which is a statement about applicability rather than a point
   // in the execution order.
   const calls = [...body.matchAll(/step --id ([a-z-]+) --status (active|done)\b/g)];
@@ -713,9 +769,7 @@ test('phase order is derived from where the skill actually runs each step', () =
 });
 
 test('every phase the skill opens is also closed', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   const body = skill.slice(skill.indexOf('\n### Step '));
   const calls = [...body.matchAll(/step --id ([a-z-]+) --status (active|done|skipped)/g)];
 
@@ -731,9 +785,7 @@ test('every phase the skill opens is also closed', () => {
 });
 
 test('each phase points at skill steps that still exist', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
+  const skill = createSkillWorkflow();
   const headings = new Set(
     [...skill.matchAll(/^### Step ([0-9a-z.]+)/gm)].map((m) => m[1].replace(/\.$/, '')),
   );
@@ -881,6 +933,12 @@ test('the plan never reloads over a reader, and never resets their place', () =>
   // Reading, typing, scrolling or clicking defers the reload; a hidden tab never reloads.
   assert.match(template, /Date\.now\(\) - lastInteraction < QUIET_MS/);
   assert.match(template, /if \(document\.hidden\) return;/);
+  // So does using the live preview, whose events never reach this page: it is a cross-origin
+  // frame, so its pointer entry and focus are the only signals. run-plan-page.test.js drives this.
+  assert.match(template, /liveFrame\.addEventListener\('pointerenter'/);
+  assert.match(template, /liveFrame\.addEventListener\('pointerleave', function \(\) \{\s*pointerInPreview = false;\s*lastInteraction = Date\.now\(\);/);
+  assert.match(template, /document\.activeElement === liveFrame/);
+  assert.match(template, /if \(usingLivePreview\(\)\) \{/);
   // And it stops altogether once the build is finished.
   assert.match(template, /if \(!summary\.settled\)/);
 
@@ -923,21 +981,117 @@ test('every renderer the page defines is also invoked', () => {
   }
 });
 
-test('the device rail moves through building, screens and QR', () => {
+test('the device rail moves through building, live and QR, and still accepts the legacy carousel', () => {
   const root = project('docs-rail');
   const state = initState(root, { appName: 'App' });
   assert.equal(state.phone.stage, 'building', 'a new plan starts on the animation');
 
-  setPhone(state, { stage: 'screens', screens: [{ name: 'Home', html: '<div>Home</div>' }] });
-  assert.equal(state.phone.stage, 'screens');
+  setPhone(state, { stage: 'live', previewUrl: 'http://localhost:8082' });
+  assert.equal(state.phone.stage, 'live');
+  assert.equal(state.phone.previewUrl, 'http://localhost:8082/');
+
+  // Step 14 stops the web preview and returns to the animation. The address stays: the page
+  // reads it to say the run is now connecting real data.
+  setPhone(state, { stage: 'building' });
+  assert.equal(state.phone.stage, 'building');
+  assert.equal(state.phone.previewUrl, 'http://localhost:8082/');
 
   setPhone(state, { stage: 'qr', qrUrl: 'exp://192.168.1.4:8081' });
   assert.equal(state.phone.qrUrl, 'exp://192.168.1.4:8081');
-  // Screens survive the move to QR, so the stage is a view choice rather than a data reset.
+  // The preview address survives the move to QR, so the stage is a view choice rather than a
+  // data reset.
+  assert.equal(state.phone.previewUrl, 'http://localhost:8082/');
+
+  // `screens` stays for `/design-system`'s mockup carousel.
+  setPhone(state, { stage: 'screens', screens: [{ name: 'Home', html: '<div>Home</div>' }] });
+  assert.equal(state.phone.stage, 'screens');
   assert.equal(state.phone.screens.length, 1);
 
   assert.throws(() => setPhone(state, { stage: 'nope' }), /Unknown stage 'nope'/);
-  assert.ok(PHONE_STAGES.has('building') && PHONE_STAGES.has('screens') && PHONE_STAGES.has('qr'));
+  for (const stage of ['building', 'live', 'screens', 'qr']) assert.ok(PHONE_STAGES.has(stage), stage);
+});
+
+test('the live stage needs a preview address, and a rejected one changes nothing', () => {
+  const state = initState(project('docs-live-url'), { appName: 'App' });
+  const before = JSON.stringify(state.phone);
+
+  assert.throws(() => setPhone(state, { stage: 'live' }), /needs --preview-url/);
+  assert.throws(() => setPhone(state, { stage: 'live', previewUrl: 'https://example.com:443/' }),
+    /Invalid --preview-url/);
+  assert.equal(JSON.stringify(state.phone), before, 'a refused update must leave the phone as it was');
+
+  // Once an address is recorded, returning to the stage reuses it.
+  setPhone(state, { stage: 'live', previewUrl: 'http://127.0.0.1:19006/' });
+  setPhone(state, { stage: 'building' });
+  setPhone(state, { stage: 'live' });
+  assert.equal(state.phone.previewUrl, 'http://127.0.0.1:19006/');
+});
+
+test('the preview address must be the local Expo web server and nothing else', () => {
+  // Accepted, and rebuilt into one canonical form.
+  assert.equal(normalizePreviewUrl('http://localhost:8082'), 'http://localhost:8082/');
+  assert.equal(normalizePreviewUrl('http://127.0.0.1:19006/'), 'http://127.0.0.1:19006/');
+  assert.equal(normalizePreviewUrl('  http://LOCALHOST:8082/app  '), 'http://localhost:8082/app');
+
+  // The page frames this URL, so anything that is not loopback http with an explicit port is
+  // refused - including values that merely start with an accepted prefix.
+  const rejected = {
+    'https://localhost:8082': /only http:/,
+    'http://example.com:80': /localhost or 127\.0\.0\.1/,
+    'http://localhost.example.com:8082': /localhost or 127\.0\.0\.1/,
+    'http://localhost:8082@example.com/': /localhost or 127\.0\.0\.1/,
+    'http://[::1]:8082/': /localhost or 127\.0\.0\.1/,
+    'javascript:alert(1)': /only http:/,
+    'data:text/html,<b>x</b>': /only http:/,
+    'http://user:pw@localhost:8082': /credentials/,
+    'http://user@localhost:8082': /credentials/,
+    'http://localhost': /explicit port/,
+    'http://localhost/': /explicit port/,
+    'http://localhost:80/': /explicit port/,
+    'http://localhost:8082/?x=1': /query or fragment/,
+    'http://localhost:8082/#top': /query or fragment/,
+    'http://localhost:8082/?': /query or fragment/,
+    'localhost:8082': /only http:/,
+    '': /not a URL/,
+  };
+  for (const [value, reason] of Object.entries(rejected)) {
+    assert.throws(() => normalizePreviewUrl(value), reason, `'${value}' must be refused`);
+  }
+  assert.throws(() => normalizePreviewUrl(undefined), /not a URL/);
+});
+
+test('the phone CLI records a live preview and refuses a remote one', (t) => {
+  const root = project('docs-phone-live');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  seeded(root);
+  const run = (...args) => spawnSync(process.execPath, [
+    scriptPath, '--working-dir', root, 'phone', '--stage', 'live', ...args,
+  ], { encoding: 'utf8' });
+
+  const ok = run('--preview-url', 'http://localhost:8082');
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(JSON.parse(ok.stdout.trim()).stage, 'live');
+  assert.equal(loadState(root).phone.previewUrl, 'http://localhost:8082/');
+  const html = fs.readFileSync(outputPath(root), 'utf8');
+  const phone = JSON.parse(html.match(/<script id="phoneData" type="application\/json">([\s\S]*?)<\/script>/)[1]);
+  assert.deepEqual([phone.stage, phone.previewUrl], ['live', 'http://localhost:8082/']);
+
+  const previous = loadState(root);
+  const remote = run('--preview-url', 'https://contoso.com:8082/');
+  assert.equal(remote.status, 1);
+  assert.match(remote.stderr, /Invalid --preview-url/);
+  const missing = run('--preview-url');
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /--preview-url requires/);
+  assert.deepEqual(loadState(root), previous, 'a refused address must not change the plan');
+
+  // What Step 14 runs once it stops the web server: back to the animation, address kept.
+  const back = spawnSync(process.execPath, [
+    scriptPath, '--working-dir', root, 'phone', '--stage', 'building',
+  ], { encoding: 'utf8' });
+  assert.equal(back.status, 0, back.stderr);
+  assert.deepEqual([loadState(root).phone.stage, loadState(root).phone.previewUrl],
+    ['building', 'http://localhost:8082/']);
 });
 
 test('progress is reported as steps, never as a percentage', () => {
@@ -970,4 +1124,29 @@ test('both diagrams render through the same path', () => {
   // explanation above names mermaid.render(), and matching prose would count it twice.
   const code = template.split('\n').filter((line) => !/^\s*(\*|\/\/)/.test(line)).join('\n');
   assert.equal((code.match(/mermaid\.render\(/g) || []).length, 1);
+});
+
+test('each render publishes the version an open plan checks, and it moves only with the plan', () => {
+  // The open page reloads only when this version differs from its own, because a reload restarts
+  // the live app in the phone. So a re-render that changes nothing must keep the version, and
+  // a real change must move it.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'app-docs-version-'));
+  const state = initState(root, { appName: 'Version check' });
+  const versionOf = () => {
+    const sidecar = fs.readFileSync(path.join(path.dirname(outputPath(root)), VERSION_FILE), 'utf8');
+    const reported = sidecar.match(/window\.__planVersion\("([0-9a-f]{16})"\)/);
+    assert.ok(reported, 'the sidecar reports a version to the page');
+    const embedded = fs.readFileSync(outputPath(root), 'utf8').match(/"version":"([0-9a-f]{16})"/);
+    assert.equal(embedded[1], reported[1], 'the page and its sidecar agree after a render');
+    return reported[1];
+  };
+
+  save(root, state);
+  const first = versionOf();
+  save(root, state);
+  assert.equal(versionOf(), first, 'a render that changes nothing keeps the version');
+
+  applyStep(state, { id: 'requirements', status: 'done', note: 'Brief confirmed' });
+  save(root, state);
+  assert.notEqual(versionOf(), first, 'a changed plan gets a new version');
 });

@@ -91,7 +91,7 @@ export default function RecipeFormScreen() {
                       autoComplete="off"
                       enterKeyHint="next"
                       value={field.value}
-                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+                      onChange={(event) => field.onChange(event.target.value)}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
@@ -113,7 +113,7 @@ export default function RecipeFormScreen() {
                       numberOfLines={4}
                       enterKeyHint="enter"
                       value={field.value ?? ''}
-                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+                      onChange={(event) => field.onChange(event.target.value)}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
@@ -136,7 +136,7 @@ export default function RecipeFormScreen() {
                       enterKeyHint="done"
                       value={String(field.value ?? '')}
                       onChange={(event) => {
-                        const value = event.target?.value ?? event.nativeEvent?.text ?? ''
+                        const value = event.target.value
                         field.onChange(Number(value) || 0)
                       }}
                       onBlur={field.onBlur}

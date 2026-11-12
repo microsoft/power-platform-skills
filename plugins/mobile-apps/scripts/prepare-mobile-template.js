@@ -22,6 +22,9 @@ const SHARED_FILES = [
   ['hooks/useCursorListData.ts', 'src/hooks/useCursorListData.ts'],
   ['hooks/useListData.ts', 'src/hooks/useListData.ts'],
   ['hooks/useSearchFilter.ts', 'src/hooks/useSearchFilter.ts'],
+  // The preview data layer's shared contract. Screens are built against `@/hooks/data` before
+  // any data source exists, so this must be present before the first screen skeleton is written.
+  ['hooks/data/core.ts', 'src/hooks/data/core.ts'],
   ['utils/index.ts', 'src/utils/index.ts'],
   ['utils/formatters.ts', 'src/utils/formatters.ts'],
   ['utils/text.ts', 'src/utils/text.ts'],
@@ -93,6 +96,21 @@ function assertFreshTemplate(projectRoot) {
   }
 
   verifyHostTsconfig(projectRoot);
+  verifyLifecycleScripts(projectRoot);
+}
+
+// `npm run dev` is the development entry point, and npm runs `predev` before it. The
+// template owns both command bodies and may change them as the native host evolves, so
+// check only that each is a non-empty string: comparing or rewriting them would pin a
+// host version. Failing here, before `pa app init`, beats discovering it at the end of
+// a run when the dev server will not start.
+function verifyLifecycleScripts(projectRoot) {
+  const pkg = readJson(path.join(projectRoot, 'package.json'));
+  for (const scriptName of ['dev', 'predev']) {
+    if (typeof pkg.scripts?.[scriptName] !== 'string' || pkg.scripts[scriptName].trim() === '') {
+      throw new Error(`Expected package.json scripts.${scriptName} to be a non-empty command.`);
+    }
+  }
 }
 
 function updateIdentity(projectRoot, displayName, slug) {
@@ -114,6 +132,39 @@ function updateIdentity(projectRoot, displayName, slug) {
   const packageJson = readJson(packagePath);
   packageJson.name = slug;
   writeJson(packagePath, packageJson);
+}
+
+const WEB_PREVIEW_ENV = 'POWER_APPS_WEB_PREVIEW';
+
+// Inserted at the top of the template's `customizeExpoConfig(config)` hook, the one place the
+// template reserves for Expo config overrides. The native host sets `web.output: 'static'`, and in
+// development that makes the Expo dev server render every page request on the server. Measured
+// against Expo SDK 55: each render kept roughly 30 MB, so the build plan's live phone frame, which
+// reloads every 10 seconds during a run, exhausted a 4 GB heap within the hour. `single` serves the
+// client-rendered shell with no per-request render and stayed flat over the same load. The
+// override applies only when `/create-mobile-app` starts its sample-data preview with
+// POWER_APPS_WEB_PREVIEW=1, so `npm run web`, `bundle:web`, and native builds keep the host default.
+const WEB_PREVIEW_OVERRIDE = `
+  // Sample-data web preview started by /create-mobile-app: serve a client-rendered shell instead
+  // of server-rendering every request, which grows the dev server's memory on each reload.
+  if (process.env.${WEB_PREVIEW_ENV} === '1') {
+    config.web = { ...config.web, output: 'single' };
+  }
+`;
+
+/**
+ * Returns `present` when the override already exists, `added` after inserting it, or `unsupported`
+ * when the hook is not in its template shape. Unsupported is not an error: the preview still runs,
+ * only with per-request server rendering.
+ */
+function ensureWebPreviewOutput(projectRoot) {
+  const appConfigPath = path.join(projectRoot, 'app.config.js');
+  const appConfig = fs.readFileSync(appConfigPath, 'utf8');
+  if (appConfig.includes(WEB_PREVIEW_ENV)) return 'present';
+  const hook = /function customizeExpoConfig\(config\)\s*\{\n/;
+  if (!hook.test(appConfig)) return 'unsupported';
+  fs.writeFileSync(appConfigPath, appConfig.replace(hook, (match) => `${match}${WEB_PREVIEW_OVERRIDE.slice(1)}`));
+  return 'added';
 }
 
 function removeEmptyPowerConfig(projectRoot) {
@@ -157,6 +208,8 @@ function copySharedFiles(projectRoot, samplesRoot) {
       preserved.push(destinationRelativePath);
       continue;
     }
+    // Some helpers live below the top-level source folders (for example `hooks/data/`).
+    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
     fs.copyFileSync(sourcePath, destinationPath);
     copied.push(destinationRelativePath);
   }
@@ -560,9 +613,11 @@ function prepareMobileTemplate(options) {
   let removedPowerConfig;
   let removedLegacyFiles;
   let sharedFiles;
+  let webPreviewOutput;
   let writtenFiles;
   try {
     updateIdentity(projectRoot, options.displayName, options.slug);
+    webPreviewOutput = ensureWebPreviewOutput(projectRoot);
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
     removedLegacyFiles = removeLegacyExamples(projectRoot);
     sharedFiles = copySharedFiles(projectRoot, samplesRoot);
@@ -592,6 +647,7 @@ function prepareMobileTemplate(options) {
     removedLegacyFiles,
     copiedSharedFiles: sharedFiles.copied,
     preservedSharedFiles: sharedFiles.preserved,
+    webPreviewOutput,
   };
 }
 
@@ -619,7 +675,9 @@ module.exports = {
   SHARED_FILES,
   assertFreshTemplate,
   copySharedFiles,
+  WEB_PREVIEW_ENV,
   ensureProviderProps,
+  ensureWebPreviewOutput,
   ensureSafeAreaProviderWrapper,
   prepareMobileTemplate,
   prepareRootLayout,

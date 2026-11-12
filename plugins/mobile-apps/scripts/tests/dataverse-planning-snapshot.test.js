@@ -23,6 +23,7 @@ const {
   validateSnapshot,
 } = require('../create-dataverse-snapshot');
 const { renderPlanningEvidence } = require('../render-dataverse-planning-evidence');
+const { createSkillWorkflow } = require('./helpers/create-skill');
 
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
@@ -1433,10 +1434,7 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
     path.join(pluginRoot, 'agents', 'native-app-planner.md'),
     'utf8',
   );
-  const createSkill = fs.readFileSync(
-    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
-    'utf8',
-  );
+  const createSkill = createSkillWorkflow();
   const snapshotScript = fs.readFileSync(
     path.join(pluginRoot, 'scripts', 'create-dataverse-snapshot.js'),
     'utf8',
@@ -1449,12 +1447,12 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
   assert.match(architect, /--validate-only/);
   assert.match(architect, /Do not use `Read`, `Grep`, or shell\s+output to load the full snapshot/s);
   assert.match(architect, /detailLevel: core/);
-  assert.doesNotMatch(architect, /approving Gate 1|user sees it at Gate 1/);
+  assert.doesNotMatch(architect, /approving (?:Gate 1|the architecture gate)|user sees it at (?:Gate 1|the architecture gate)/);
   assert.match(planner, /Dataverse planning forwarding is verbatim/);
   assert.match(planner, /Do not duplicate raw evidence/);
   assert.match(planner, /validate-dataverse-planning-decisions\.js/);
-  assert.match(planner, /only exit `0` permits\s+embedding and Gate 2/);
-  assert.match(planner, /Gate 1\s+architecture acceptance does not satisfy this data-model precondition/);
+  assert.match(planner, /only exit `0` permits\s+embedding and the data model gate/);
+  assert.match(planner, /Architecture\s+gate acceptance does not satisfy this data-model precondition/);
   assert.match(planner, /preserve the validator's exact stderr first line/);
   assert.match(planner, /NEEDS_REVISION: dataverse-plan-validation/);
   assert.match(planner, /Do not\s+rewrite one signal as the other/);
@@ -1468,7 +1466,7 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
   assert.match(createSkill, /strongCollisionCandidates/);
   assert.match(createSkill, /coreCandidates/);
   assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
-  assert.match(createSkill, /same validation MUST run before Gate 2 is shown/);
+  assert.match(createSkill, /same validation MUST run before the data model gate is shown/);
   assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
   assert.match(createSkill, /DETAIL_ATTEMPTED_NAMES/);
   assert.match(createSkill, /selectedTables` with `detailLevel: full`/);

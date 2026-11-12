@@ -247,7 +247,7 @@ Missing sections → skill surfaces error, asks user to re-run.
 
 ## How Tamagui Integration Uses tokens.ts
 
-`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b and
+`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9.2 and
 `/edit-app` Step 5 must follow the authoritative
 [`tamagui-integration.md`](./tamagui-integration.md) implementation rather than
 maintaining a second config example here:

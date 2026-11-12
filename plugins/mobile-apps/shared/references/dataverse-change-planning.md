@@ -52,7 +52,7 @@ services, server schema/data, or the live plan before its owning approval.
 ## 2. Obtain the canonical compact evidence
 
 Read and execute only
-[Foreground Dataverse planning snapshot and evidence](../../skills/create-mobile-app/SKILL.md#foreground-dataverse-planning-snapshot-and-evidence),
+[Foreground Dataverse planning snapshot and evidence](../../skills/create-mobile-app/references/make-it-real.md#foreground-dataverse-planning-snapshot-and-evidence),
 ending before **Planner completion dispatch**. This is the shared helper recipe,
 not permission to run the create wizard, its planner, scaffolding, or gates.
 Bind its inputs as follows:
@@ -140,7 +140,7 @@ at the owner's existing approval gate. Surface `Adapt`/`Defer` and other
 concerns there; a deferred required dependency cannot be described as complete.
 
 Handle structured signals before generic agent retry limits, using
-[Dataverse planning recovery](../../skills/create-mobile-app/SKILL.md#dataverse-planning-recovery):
+[Dataverse planning recovery](../../skills/create-mobile-app/references/make-it-real.md#dataverse-planning-recovery):
 
 | Result | Owner action |
 |---|---|
