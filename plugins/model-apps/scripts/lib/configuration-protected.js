@@ -891,7 +891,7 @@ function publicationHintOf({ store, owned }, { spec, source, kind, key, code, gu
     if (code !== COMPLETION_CODE && code !== UNVERIFIED_CODE) return null;
     if (!source || typeof source !== 'object' || !owned.has(source)) return null;
     const scope = SCOPES.get(source);
-    if (!scope || scope.spec !== spec || scope.store !== store) return null;
+    if (!scope || scope.spec !== spec || scope.store !== store || scope.replaced) return null;
     if ((scope.resolve || scope.run) && (source.resolve !== scope.resolve || source.run !== scope.run)) return null;
     const note = scope.notes.get(noteKey(kind, key));
     if (!note || note.kind !== kind || note.key !== key || note.code !== code) return null;
@@ -1305,11 +1305,30 @@ function protectedConfigurationPort({ spec, store, ctx, dataverse, solution, bin
       return { outcome: 'updated', id: rootId, childIds, result: pushed.value };
     },
   };
-  // This port's own notes (#808), kept with its original resolve and run: a port whose methods were replaced is not the
-  // one that observed the stop, so publicationHintOf answers nothing for it.
+  // This port's own notes (#808), kept with its original methods: a port whose methods were replaced is not the one that
+  // observed the stop, so publicationHintOf answers nothing for it.
   const hintScope = scopeOf(port, spec, store);
   hintScope.resolve = port.resolve;
   hintScope.run = port.run;
+  // Provenance is fixed when a method is replaced, never inferred from the methods found afterwards: a wrapper that puts
+  // the original back before it calls it and then throws a stop of its own would otherwise look like the original when
+  // the stop is formatted. So each method is an accessor that reads and writes exactly as a plain property does (the
+  // build calls whatever is there, so execution is unchanged), but whose first write of any other function marks this
+  // port's notes unusable for good. Not configurable, so a saved descriptor cannot be put back round the marker.
+  for (const name of Object.keys(port)) {
+    if (typeof port[name] !== 'function') continue;
+    const original = port[name];
+    let current = original;
+    Object.defineProperty(port, name, {
+      enumerable: true,
+      configurable: false,
+      get: () => current,
+      set: (value) => {
+        if (value !== original) hintScope.replaced = true;
+        current = value;
+      },
+    });
+  }
   return port;
 }
 

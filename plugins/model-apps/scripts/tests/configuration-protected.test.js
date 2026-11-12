@@ -1352,6 +1352,74 @@ test('the guidance is given only for the hookup\'s own port, unchanged and in pl
   assert.equal(own.publicationHint({ spec: args.spec, source: raw, kind: 'duplicateRule', key: 'email', code: raw.halts[0].code, guardId: raw.halts[0].id }), null);
 });
 
+test('a stand-in that puts the protected port or its resolver back before calling it, then throws its own stop, keeps today\'s text', async () => {
+  // As refusingPublish, plus `tap`: run once at the next request the service sees, so during a step that has started.
+  let tap = null;
+  const h = await harness({
+    intercept: ({ method, path }) => {
+      if (tap) { const once = tap; tap = null; once(); }
+      return method === 'POST' && /PublishDuplicateRule$/.test(path) ? refusedPublish : undefined;
+    },
+  });
+  await pass(h, configSpec());
+  const ruleId = h.store.readGroup('duplicateRule', 'email').pending.root.id;
+  const hint = hintOf('"Same email"', '"email"', ruleId);
+  const today = stepStop('create-completion-required');
+  const canary = 'canary-0f3b9a-private-text';
+  let forgedCount = 0;
+  const forged = () => { forgedCount += 1; return Object.assign(new Error(canary), { code: 'create-completion-required', id: ruleId, key: 'another-key' }); };
+  // `before` changes the runtime before the step; `during` changes it at the step's first request, after it has started.
+  const step = async (before, { during } = {}) => {
+    const runtime = createConfigurationRuntime({ spec: configSpec(), sdk: h.sdk, opts: { protectedConfiguration: reopen(h).protectedConfiguration }, appUniqueName: 'contoso_configured' });
+    if (before) before(runtime);
+    const mark = h.org.requests.length;
+    if (during) tap = () => during(runtime);
+    const out = await runtime.apply('data-model');
+    assert.equal(tap, null, 'a change meant for the step was made during it');
+    assert.deepEqual(h.org.requests.slice(mark).filter((r) => r.method !== 'GET'), [], 'nothing is sent');
+    assert.ok(!JSON.stringify(out).includes(canary), 'the stand-in\'s text never reaches the result');
+    assert.equal(out.halt && out.halt.code, 'configuration-incomplete');
+    return out.halt.message;
+  };
+  // The resolver replaced in place by one that restores the original, calls it, and replaces its genuine stop.
+  const selfRestoringResolver = (rt) => {
+    const port = rt.ctx.creates;
+    const original = port.resolve;
+    port.resolve = async (q) => {
+      if (q.kind !== 'duplicateRule') return original(q);
+      port.resolve = original;
+      try { await original(q); } catch { /* the genuine stop, replaced below */ }
+      throw forged();
+    };
+  };
+  // The same with the whole port: a stand-in that puts the protected port back in ctx.creates before calling it.
+  const selfRestoringPort = (rt) => {
+    const port = rt.ctx.creates;
+    rt.ctx.creates = {
+      ...port,
+      resolve: async (q) => {
+        if (q.kind !== 'duplicateRule') return port.resolve(q);
+        rt.ctx.creates = port;
+        try { await port.resolve(q); } catch { /* the genuine stop, replaced below */ }
+        throw forged();
+      },
+    };
+  };
+  for (const change of [selfRestoringResolver, selfRestoringPort]) {
+    const before = forgedCount;
+    assert.equal(await step(change), today, `${change.name} before the step`);
+    assert.equal(await step(null, { during: change }), today, `${change.name} during the step`);
+    assert.equal(forgedCount, before + 2, `${change.name} threw its own stop each time`);
+  }
+  // The port's own path still explains its stop: untouched, and with its own port and resolver written back unchanged.
+  assert.equal(await step(), `${today} (${hint})`);
+  assert.equal(await step((rt) => {
+    const port = rt.ctx.creates;
+    rt.ctx.creates = port;
+    port.resolve = port.resolve; // eslint-disable-line no-self-assign
+  }), `${today} (${hint})`);
+});
+
 test('the guidance reader answers only for the stop it observed and the store record that proves it, and reads nothing from the service', async () => {
   const h = await refusingPublish();
   await pass(h, configSpec());

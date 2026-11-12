@@ -3576,7 +3576,11 @@ rebuild; `status: "published"` does not bypass the pending attempt. This is word
 store field or code. The protected module notes the stop it settled (`noteStop`, keyed by the hookup's own
 preflight result or port and the attempt's token, root and declaration digest) and `publicationHint` answers only
 for that note, re-checked against the binding store; the build asks it only for its own port, so a replaced or
-wrapped port, another hookup or a raw helper keeps today's text. `configurationHaltMessage` takes the advice as
+wrapped port, another hookup or a raw helper keeps today's text. Which port and methods ran is fixed when they are
+replaced, never inferred from what is in place once the step ends: `ctx.creates` and each port method are
+non-configurable accessors that read and write as plain properties but remember the first write of anything else,
+and the build checks its port and methods both before the step and after it, so a stand-in that puts the original
+back before calling it, then throws a stop of its own, still keeps today's text. `configurationHaltMessage` takes the advice as
 an optional callback and appends it to the item in parentheses. A pending EDIT is decided by
 the rows its attempt persisted (`settlePendingEdit`, answering `settled`, `retired` or `needs-write`): complete
 -> committed read-only; already at its target -> accepted read-only only when that acceptance commits (its

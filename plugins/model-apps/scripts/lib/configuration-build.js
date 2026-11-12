@@ -142,6 +142,28 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
     // The id the managed-artifacts manifest records for an item (synchronous), so a bound item keeps its id.
     boundIdOf: opts.managedIdOf,
   });
+  // Whether this runtime's create port was ever swapped (#808). Fixed when it happens, never inferred from what
+  // ctx.creates holds once a step is done: a stand-in that puts the protected port back before calling it and then throws
+  // a stop of its own would otherwise look like the port's own stop. `creates` reads and writes as a plain property does,
+  // so every step calls whatever is there exactly as before; only the first write of another port is remembered, and the
+  // accessor is not configurable, so it cannot be taken out and put back round the marker.
+  let portSwapped = false;
+  if (protectedPort) {
+    let current = ctx.creates;
+    Object.defineProperty(ctx, 'creates', {
+      enumerable: true,
+      configurable: false,
+      get: () => current,
+      set: (value) => {
+        if (value !== protectedPort) portSwapped = true;
+        current = value;
+      },
+    });
+  }
+  // The protected port's own methods as the hookup issued it: a step that starts with any other one is not explained.
+  const protectedMethods = protectedPort ? { resolve: protectedPort.resolve, run: protectedPort.run } : null;
+  const portIntact = () => Boolean(protectedPort) && !portSwapped && ctx.creates === protectedPort
+    && protectedPort.resolve === protectedMethods.resolve && protectedPort.run === protectedMethods.run;
   // What this run last observed of each item a page can name, `<kind>:<lower key>` -> blocker | null. Filled by
   // apply('data-model') from its own reads and by beforePages from fresh reads; an apply replaces what it covers.
   const observed = new Map();
@@ -229,6 +251,9 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
     // Plan, apply and observe ONE phase's items. Returns {outcome, blocking, halt, plan}.
     async apply(phase) {
       if (phase !== 'solution' && phase !== 'data-model') throw new TypeError(`configuration runtime: unknown phase ${phase}`);
+      // Captured before the step runs and carried to the formatting below (#808): a step that did not start on the
+      // protected port's own methods gets today's text, whatever is in place once it ends.
+      const intactAtStart = portIntact();
       const step = await C.runConfigurationStep(spec, ctx, phase);
       const before = step.outcome.unknown.length;
       await record(step.outcome);
@@ -241,7 +266,7 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       // this runtime's protected port's own: exactly one unknown outcome for the item, carrying its id, from exactly one
       // planning source (its plan read, or its one create). The step's own halt is left as it was; a new one carries the
       // advice, and only when there is any.
-      if (halt && publicationHint && protectedPort && ctx.creates === protectedPort) {
+      if (halt && publicationHint && intactAtStart && portIntact()) {
         const same = (p) => (f) => f && f.kind === p.kind && f.key === p.key;
         const extraHint = (p) => {
           const found = step.outcome.unknown.filter((f) => same(p)(f) && f.code === p.code);
