@@ -2470,9 +2470,11 @@ const tokenless = (text) => {
 };
 // An adopted form whose publish answers success and is not applied: the published read keeps the old caption, the saved
 // read the caption the publish shipped.
-async function splitPublish({ origin = 'adopted', savedXml = SAVED_SPLIT, publishedXml = PUBLISHED_SPLIT } = {}) {
-  const s = await setup();
+// `before(s)` arranges the org further before the publish; `wire` is the wire's options.
+async function splitPublish({ origin = 'adopted', savedXml = SAVED_SPLIT, publishedXml = PUBLISHED_SPLIT, before, wire } = {}) {
+  const s = await setup(wire);
   committedForm(s, { id: MAIN, key: 'account/main', publishedXml, savedXml, origin });
+  if (before) before(s);
   s.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 204, unapplied: true });
   const at = s.wire.log.length;
   const e = await caught(publishManagedScope({
@@ -2595,6 +2597,139 @@ test('caption diagnostics never reach a dashboard or a created form, and never c
   d.wire.saved.get(DASH).formxml = SAVED_SPLIT;
   const dash = await readSystemFormRootLayers(d.sdk.dataverse, { root: { kind: 'dashboard', key: 'ops', id: DASH }, records: [{ ...rec('dashboard', 'ops', DASH), origin: 'adopted' }] });
   assert.deepEqual(Object.keys(dash).sort(), ['publishedSha256', 'savedSha256']);
+});
+
+// Shared form cells (lib/form-caption-sharing.js): once a caption-related publication stop is decided and its table blocked, the
+// other forms of that table that hold the stopped form's cell id are read with GETs and shown on a display-only note beside the
+// stop, with a second barrier label. The stop itself — its code, message, data, the store and the approval it names — is exactly
+// the one a run whose table has no such sharer gives.
+const SHARE_PEER = '33333333-3333-4333-8333-333333333301';
+const SHARE_FRESH = '33333333-3333-4333-8333-333333333302';
+const SHARE_CONTACT = '33333333-3333-4333-8333-333333333303';
+const SHARE_OWN_CELL = '0f0f0f0f-0000-4000-8000-0000000000f1';
+const PLANNED_SPLIT = captionForm(cellXml(CAP_CELL, 'Planned'));
+// Other forms of the org: with `shared`, "Account copy" holds MAIN's cell id behind another control in another section and
+// reads the same pair of captions; without it, it holds a cell of its own. A form with a cell of its own and MAIN's captions,
+// and a contact form holding MAIN's cell id, are never sharers.
+function putNeighbours(s, { shared = true } = {}) {
+  const copy = (caption) => captionForm(cellXml(shared ? CAP_CELL : CAP_CELL2, caption, { control: 'subgrid_copy' }), { section: '0e0e0e0e-0000-4000-8000-0000000000e1' });
+  const put = (id, name, table, savedXml, publishedXml) => {
+    s.wire.putForm({ formid: id, name, objecttypecode: table, type: 2, formxml: publishedXml }, { publishedToo: true });
+    s.wire.saved.get(id).formxml = savedXml;
+  };
+  put(SHARE_PEER, 'Account copy', 'account', copy('Inspections'), copy('Issues'));
+  put(SHARE_FRESH, 'Account fresh', 'account', captionForm(cellXml(SHARE_OWN_CELL, 'Inspections')), captionForm(cellXml(SHARE_OWN_CELL, 'Issues')));
+  put(SHARE_CONTACT, 'Contact main', 'contact', SAVED_SPLIT, PUBLISHED_SPLIT);
+}
+const SHARING_LABEL = /^shared form cells observed on table account: 1 cell entry reused by other forms of the table \(read-only observation; see the stop for recovery guidance\)$/;
+const isTableListing = (x) => /^systemforms(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\))?$/i.test(x.path);
+
+// An owed form whose saved layer a maker changed after the commit, in a caption: the drift stop, as a run sees it.
+async function sharedDrift({ shared, wire } = {}) {
+  const s = await setup(wire);
+  committedForm(s, { id: MAIN, key: 'account/main', publishedXml: PUBLISHED_SPLIT, savedXml: PLANNED_SPLIT });
+  s.wire.saved.get(MAIN).formxml = SAVED_SPLIT;
+  if (shared !== undefined) putNeighbours(s, { shared });
+  const at = s.wire.log.length;
+  const e = await caught(publishForms(s.sdk, s.store, s.barrier, [MAIN_G]));
+  return {
+    s, e,
+    requests: s.wire.log.slice(at).map((x) => `${x.method} ${x.path}`),
+    store: tokenless(fs.readFileSync(s.store.file, 'utf8')),
+    withheld: s.barrier.withheld(),
+  };
+}
+
+test('shared form cells, drift stop: the note names every form holding the cell and its captions, qualifies the publish-or-undo advice, and leaves the stop and the store exactly as without a sharer', async () => {
+  const run = await sharedDrift({ shared: true });
+  const control = await sharedDrift({ shared: false });
+  assert.equal(run.e.code, 'create-completion-required');
+  assert.equal(run.e.message, control.e.message, 'the same message');
+  assert.deepEqual(Object.keys(run.e), Object.keys(control.e), 'the same data');
+  assert.equal(JSON.stringify(run.e), JSON.stringify(control.e));
+  assert.equal(run.store, control.store, 'the same store bytes');
+  assert.deepEqual(run.requests, control.requests, 'the same requests');
+  assert.ok(run.requests.every((r) => r.startsWith('GET ')), run.requests.join('\n'));
+  assert.equal(run.s.wire.publishes().length, 0);
+  assert.equal(pubOf(run.s.store).state, 'owed');
+  assert.equal(Object.prototype.propertyIsEnumerable.call(run.e, 'formCaptionSharingNote'), false);
+  const note = run.e.formCaptionSharingNote;
+  assert.ok(note.includes(`Cell ${CAP_CELL}, language 1033, of stopped form ${MAIN}: 2 forms of the table hold this cell id.`), note);
+  assert.ok(note.includes(`  form ${MAIN} (name "Main"): saved "Inspections"; published "Issues"; the cell is in the saved and the published read.`), note);
+  assert.ok(note.includes(`  form ${SHARE_PEER} (name "Account copy"): saved "Inspections"; published "Issues"; the cell is in the saved and the published read.`), note);
+  assert.match(note, /Scan complete: every form of table account returned by the saved and the published read was examined/);
+  assert.match(note, /The publish-or-undo advice above is not sufficient for this pattern/);
+  for (const absent of [SHARE_FRESH, SHARE_CONTACT, 'Planned']) assert.ok(!note.includes(absent), absent);
+  assert.equal(control.e.formCaptionSharingNote, undefined, 'no sharer, no note');
+  // The table stays blocked by the stop's own label; the observation adds one display-only label beside it.
+  const [w] = run.withheld;
+  const [cw] = control.withheld;
+  assert.equal(w.table, 'account');
+  assert.deepEqual(w.blockedBy.slice(0, -1), cw.blockedBy);
+  assert.match(w.blockedBy[w.blockedBy.length - 1], SHARING_LABEL);
+  assert.equal(cw.blockedBy.some((l) => /shared form cells/.test(l)), false);
+});
+
+test('shared form cells, unconfirmed stop: the note rides on the stop without the drift sentence, and the next run shows it again — read-only, the dispatch still unconfirmed', async () => {
+  const control = await splitPublish({ before: (s) => putNeighbours(s, { shared: false }) });
+  const run = await splitPublish({ before: (s) => putNeighbours(s) });
+  assert.equal(run.e.code, PUBLICATION_UNCONFIRMED);
+  assert.equal(run.e.message.split(run.token).join('<token>'), control.e.message.split(control.token).join('<token>'));
+  assert.deepEqual(run.shape, control.shape);
+  assert.equal(run.store, control.store);
+  assert.deepEqual(run.requests, control.requests);
+  assert.equal(run.s.wire.publishes('account').length, 1, 'the one publish it always sent');
+  const note = run.e.formCaptionSharingNote;
+  assert.ok(note.includes(`  form ${SHARE_PEER} (name "Account copy"): saved "Inspections"; published "Issues";`), note);
+  assert.doesNotMatch(note, /publish-or-undo/, 'this stop printed no such advice');
+  assert.match(note, /an adopt approval or a publication-risk approval does not grant it/);
+  assert.equal(control.e.formCaptionSharingNote, undefined);
+  assert.ok(run.s.barrier.withheld()[0].blockedBy.some((l) => SHARING_LABEL.test(l)));
+
+  // The next run's read-only confirmation: the same answer, nothing written, the label beside its block.
+  const next = await splitConfirm(run.s);
+  const controlNext = await splitConfirm(control.s);
+  assert.deepEqual(next.r.confirmed, []);
+  assert.equal(next.unchanged, true);
+  assert.deepEqual(next.requests, controlNext.requests);
+  assert.ok(next.requests.every((r) => r.startsWith('GET ')));
+  assert.deepEqual(next.labels.slice(0, -1).map((l) => l.split(run.token).join('<token>')), controlNext.labels.map((l) => l.split(control.token).join('<token>')));
+  assert.match(next.labels[next.labels.length - 1], SHARING_LABEL);
+
+  // A later publish of the scope, and a later change of the form, each stop on the dispatch with the note.
+  const n = await nextRun(run.s);
+  const owed = await caught(publishForms(n.sdk, n.store, n.barrier, [MAIN_G]));
+  assert.equal(owed.code, PUBLICATION_UNCONFIRMED);
+  assert.match(owed.formCaptionSharingNote, new RegExp(`form ${SHARE_PEER} \\(name "Account copy"\\)`));
+  const m = await nextRun(run.s);
+  const settle = await caught(runManagedFeature({ ...ports(run.s.wire, m.sdk, { key: 'account/main', id: MAIN, formxml: PLANNED_SPLIT }), store: m.store, barrier: m.barrier, client: m.sdk.dataverse }));
+  assert.equal(settle.code, PUBLICATION_UNCONFIRMED);
+  // The feature's halt wraps the stop as its cause; the note stays on the stop (the build reads it down the cause chain).
+  assert.match(settle.cause.message, /has a publish that may have been sent and is not proved ended/);
+  assert.match(settle.cause.formCaptionSharingNote, new RegExp(`form ${SHARE_PEER} \\(name "Account copy"\\)`));
+  assert.equal(run.s.wire.publishes('account').length, 1, 'nothing more was published');
+  assert.equal(pubOf(m.store).state, 'unconfirmed');
+});
+
+test('shared form cells in an organization with a second language: the stop decided on the saved layer as compared, and that is what is explained', async () => {
+  const wire = { platform: { secondLanguage: 1036 } };
+  const run = await splitPublish({ wire, before: (s) => putNeighbours(s) });
+  assert.equal(run.e.code, PUBLICATION_UNCONFIRMED);
+  assert.ok(run.e.formCaptionSharingNote.includes(`  form ${SHARE_PEER} (name "Account copy"): saved "Inspections"; published "Issues";`), run.e.formCaptionSharingNote);
+  assert.match(run.e.formCaptionSharingNote, /Scan complete/);
+  const drift = await sharedDrift({ shared: true, wire });
+  assert.equal(drift.e.code, 'create-completion-required');
+  assert.match(drift.e.formCaptionSharingNote, /The publish-or-undo advice above is not sufficient/);
+});
+
+test('shared form cells are never read for a publish that goes through: a healthy owed publish lists no table', async () => {
+  const s = await setup();
+  putNeighbours(s);
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: SAVED_SPLIT }), store: s.store, barrier: s.barrier });
+  const at = s.wire.log.length;
+  assert.equal((await publishForms(s.sdk, s.store, s.barrier, [MAIN_G])).sent, true);
+  assert.equal(pubOf(s.store).state, 'confirmed');
+  assert.equal(s.wire.log.slice(at).filter(isTableListing).length, 0);
 });
 
 // Straight after a publish the platform may answer a cell caption still being rewritten (the wire's `rewritingReads`), while a

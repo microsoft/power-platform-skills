@@ -841,6 +841,24 @@ stop can also name the cells and languages whose caption reads differently in th
 there. This does not show whether the difference is an unpublished edit or how the platform reads the layer,
 so the stop and its key stay the same. A form the build created and a dashboard get no such list.
 
+**Form cells that another form shares.** A form saved as a copy of another keeps its cells' ids, so two forms
+of one table can hold the same cell. When the build stops on a form's publication (a saved change it did not
+make, or a publish it could not confirm) and a cell caption of that form reads differently in its saved and
+published layers, the build reads the forms of that table (read-only, a bounded number of reads) and adds a
+note after the stop: each form that holds the same cell id, and the caption each shows saved and published.
+The names and captions are quoted as read; they are observations, not proof of what caused the difference.
+If a form could not be read, the note says the scan was partial or could not be completed, and why; that is
+not evidence that no other form shares the cell.
+
+At the drift stop, the note says that publishing or undoing the change, as the stop advises, may not be
+enough here. In a measured case, a change to the description COLUMN of one sharing form followed by a publish
+of that table put the existing saved cell label live on every sharing form. That column is not a cell caption
+(a cell's caption is the description ATTRIBUTE of its label in the form XML), the saved label may be another
+maker's, and a publish of the table also puts every other unpublished change of that table live. The build
+writes nothing to repair this: before any such change, agree exactly which form changes, every sharing form,
+the full caption that should go live and the table's other pending changes. An adopt or `publication-risk`
+approval does not cover it. The stop, its code and its key are unchanged.
+
 **How a publish is confirmed.** After a declared form's table or a declared dashboard is published, the
 build reads the published layer and compares it with what it saved. The platform changes some captions by
 itself, and these do not count as a difference:

@@ -209,6 +209,19 @@ const isDeclaredRuleOn = (r) => declaredFeatureOn('rules') && !!r && r.reconcile
 // reason the helper is required at first use.
 const isDeclaredBpfOn = (f) => declaredFeatureOn('bpf') && !!f && f.reconcile === 'declared';
 const { readSystemFormRootPresence } = require('./systemform-published.js');
+// The caption-sharing note of a stop (lib/form-caption-sharing.js attachFormCaptionSharing): a non-enumerable string on the error a
+// managed publication stop threw, which a declared-form or table-publisher halt keeps as its `cause` (or a cause of it). Looked up
+// by that property along the cause chain only — never recovered from a message — and at most eight errors deep.
+function captionSharingNoteOf(cause) {
+  let error = cause;
+  for (let depth = 0; depth < 8 && error && typeof error === 'object'; depth += 1) {
+    let note;
+    try { note = Object.prototype.hasOwnProperty.call(error, 'formCaptionSharingNote') ? error.formCaptionSharingNote : undefined; } catch { note = undefined; }
+    if (typeof note === 'string' && note) return note;
+    try { error = error.cause; } catch { return null; }
+  }
+  return null;
+}
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -4124,7 +4137,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const tail = freshLag
       ? `The table was created moments ago and is still not readable${lagAnswer ? ` (the service answered ${lagAnswer})` : ''}; run the build again in a minute.`
       : `${next}; it is not retried automatically.`;
-    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${tail}`, { phase, code: stopCode, recoverable: false, retry: freshLag ? RETRY.SERVICE : RETRY.NEVER, cause });
+    // A caption-sharing observation (lib/form-caption-sharing.js) rides on the stop's error, or an error it wraps, as a non-enumerable
+    // `formCaptionSharingNote`: display-only text that may quote maker names and captions. It is appended AFTER the approval discovery
+    // above has read the items and the footer is built, so nothing in it can name an approval, change the footer or reach `findings`.
+    // It is found by that property only, never by parsing a message.
+    const sharing = captionSharingNoteOf(cause);
+    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${tail}${sharing ? `\n${sharing}` : ''}`, { phase, code: stopCode, recoverable: false, retry: freshLag ? RETRY.SERVICE : RETRY.NEVER, cause });
     Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
     return err;
   };

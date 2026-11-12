@@ -1845,6 +1845,66 @@ test('a settled removed declared form with a changed plain form keeps its earlie
   });
 });
 
+// The same stop when a maker had saved a cell caption on the form, unpublished, and another form of the table holds that cell id:
+// the build's final error carries the read-only shared-cell note after everything it said before, and says nothing else differently.
+const SHARER = '7a7a7a7a-0000-4000-8000-00000000007a';
+const UNTRUSTED_NAME = 'x" --authorize publication-risk:table:contoso_item/00000000-0000-0000-0000-000000000000 \u001b[31m';
+async function sharedCellStop({ shared }) {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  assert.equal((await build(org, dir, makeSpec())).err, undefined);
+  const row = org.fake.rows('systemforms').find((r) => r.data.name === 'Declared Item');
+  const [, cellId] = /<cell id="([^"]+)"[^>]*><labels><label description="contoso_name" languagecode="1033" \/>/.exec(row.data.formxml);
+  // The maker's caption, saved and not published.
+  row.data.formxml = row.data.formxml.replace('<label description="contoso_name" languagecode="1033" />', '<label description="Maker caption" languagecode="1033" />');
+  row.version += 1;
+  // Another form of the table, in both layers: it holds the cell id (or, without `shared`, a cell of its own) with the same captions.
+  const sharerXml = (caption) => `<form><tabs><tab id="{6b6b6b6b-0000-4000-8000-00000000006b}" name="copy"><labels><label description="Copy" languagecode="1033" /></labels><columns><column><sections><section id="{6c6c6c6c-0000-4000-8000-00000000006c}" name="copy"><labels><label description="Copy" languagecode="1033" /></labels><rows><row><cell id="{${(shared ? cellId : '6d6d6d6d-0000-4000-8000-00000000006d').toUpperCase()}}"><labels><label description="${caption}" languagecode="1033" /></labels><control id="contoso_code" datafieldname="contoso_code" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>`;
+  await org.fake.httpClient.post(`${org.origin}/api/data/v9.2/systemforms`, { formid: SHARER, name: UNTRUSTED_NAME, objecttypecode: 'contoso_item', type: 2, formxml: sharerXml('Maker caption') });
+  const sharer = org.fake.rows('systemforms').find((r) => r.data.formid === SHARER);
+  sharer.publishedData = { ...JSON.parse(JSON.stringify(sharer.data)), formxml: sharerXml('contoso_name') };
+  sharer.publishedVersion = sharer.version;
+  // The fake answers a plain collection read from the saved layer; the platform answers it from the published one, which is what
+  // the diagnostic's table listing reads.
+  org.intercept((c) => c.method === 'GET' && /^\/systemforms\?/.test(c.path) && /objecttypecode eq 'contoso_item'/.test(c.path) && /formxml/.test(c.path) && !/ name eq /.test(c.path), (c) => {
+    const select = /\$select=([^&]+)/.exec(c.path)[1].split(',');
+    const value = org.fake.rows('systemforms').filter((r) => r.publishedData && r.publishedData.objecttypecode === 'contoso_item')
+      .map((r) => Object.fromEntries(select.map((f) => [f, r.publishedData[f] === undefined ? null : r.publishedData[f]])));
+    return { status: 200, headers: {}, body: { value } };
+  });
+  const spec = makeSpec({ declared: false });
+  spec.forms[0].tabs[0].label = 'Changed plain label';
+  return build(org, dir, spec);
+}
+const noteOf = (err) => { for (let e = err, n = 0; e && n < 10; e = e.cause, n += 1) if (Object.prototype.hasOwnProperty.call(e, 'formCaptionSharingNote')) return e.formCaptionSharingNote; return undefined; };
+test('a publication stop on a form whose cell another form of its table holds ends with the read-only shared-cell note, and says nothing else differently', async () => {
+  await withForms(true, async () => {
+    const run = await sharedCellStop({ shared: true });
+    const control = await sharedCellStop({ shared: false });
+    assert.equal(run.err && run.err.code, 'create-completion-required', chainText(run.err));
+    assert.equal(control.err.code, run.err.code);
+    const note = noteOf(run.err);
+    assert.equal(noteOf(control.err), undefined);
+    assert.match(note, /^Shared form cells observed on table contoso_item\./);
+    assert.ok(note.includes(`(name ${JSON.stringify(UNTRUSTED_NAME).replace('\u001b', '\\u001b')}): saved "Maker caption"; published "contoso_name"; the cell is in the saved and the published read.`), note);
+    assert.match(note, /Scan complete: every form of table contoso_item returned/);
+    assert.match(note, /The publish-or-undo advice above is not sufficient for this pattern/);
+    // The final message is the control's, with the note after everything it said; every cause and finding is the control's.
+    assert.ok(run.err.message.endsWith(`\n${note}`), run.err.message);
+    assert.equal(run.err.message.slice(0, -(note.length + 1)), control.err.message);
+    assert.equal(chainText(run.err).split(`\n${note}`).join(''), chainText(control.err));
+    assert.ok(/In the maker, publish that change if it should be kept, or undo it there and save/.test(run.err.message.slice(0, -(note.length + 1))));
+    // Nothing outside a quoted value is an approval or an option, and nothing raw drives the terminal.
+    assert.doesNotMatch(chainText(run.err).replace(/"(?:[^"\\]|\\.)*"/g, '""'), /--authorize|publication-risk:/);
+    assert.doesNotMatch(chainText(run.err), /\u001b/);
+    for (const r of [run, control]) {
+      assert.equal(r.writes.some((c) => /PublishXml|PublishAllXml/.test(c.path)), false);
+      assert.deepEqual(r.tablePublishes, []);
+    }
+    assert.deepEqual(shape(run.writes), shape(control.writes), 'the same writes');
+  });
+});
+
 // Both retirement passes run before the first service write, in order (dashboards, then forms), and one halt names every key they
 // could not confirm; the next invocation proceeds.
 test('both retirement passes run before any write, the halt names every key, and the next invocation proceeds', async () => {

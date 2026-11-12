@@ -45,7 +45,7 @@
 // the form, if it is theirs) and runs the delete again. The reads are not atomic against a maker editing forms at the same moment, so a delete should still run
 // in a quiet window; a dependency-aware delete in the platform would close that gap.
 const { readXmlElements } = require('./strict-xml.js');
-const { collectionRows } = require('./app-components.js');
+const { readSystemFormLayer, FORMS_PER_READ } = require('./systemform-inventory.js');
 
 const UX_AGENT_CONTROL = 'mscrmcontrols.uxagentcontrol';
 const GUID_TEXT = /^[ \t\r\n]*\{?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\}?[ \t\r\n]*$/;
@@ -55,10 +55,9 @@ const LAYERS = Object.freeze([
   { layer: 'published', path: `/systemforms?$select=${SELECT}` },
   { layer: 'saved', path: `/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${SELECT}` },
 ]);
-// How many forms one read asks for (`Prefer: odata.maxpagesize`), and so how long one read takes: about 22 ms a form in the saved layer as measured, so a page
-// of 100 was 2 to 4 s against the 60 s a read may take. That is a measurement, not a bound: a read that is slower still, or fails, refuses the delete.
-const FORMS_PER_READ = 100;
-const PAGED = Object.freeze({ headers: Object.freeze({ Prefer: `odata.maxpagesize=${FORMS_PER_READ}` }) });
+// How many forms one read asks for is the shared reader's (systemform-inventory.js FORMS_PER_READ, `Prefer: odata.maxpagesize=100`), and so is how long one
+// read takes: about 22 ms a form in the saved layer as measured, so a page of 100 was 2 to 4 s against the 60 s a read may take. That is a measurement,
+// not a bound: a read that is slower still, or fails, refuses the delete.
 // The most forms the scan reads in one layer: more than five times the largest environment measured (3700 forms). A layer with more is refused rather than
 // cut short. At the measured cost that is about ten minutes of saved-layer reads, so the cap bounds how long a delete can spend here.
 const MAX_FORMS_PER_LAYER = 20000;
@@ -75,68 +74,19 @@ function pageIdOf(value) {
   return match[1].toLowerCase();
 }
 
-// The fewest forms an answer declares its query matches, or undefined when it declares none. Dataverse sends a count only to a query that asks ($count=true,
-// which this scan does not), so a count is evidence the scan uses when an answer carries one, never something it requires:
-//   { "@odata.count": 251, "value": [ … ] }                                                                   (251 forms: at least 251)
-//   { "@odata.count": 5000, "@Microsoft.Dynamics.CRM.totalrecordcount": 5000, "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded": true, … }
-//                                                                                                            (more than 5000: at least 5001)
-//   { "@odata.count": 5000, "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded": false, … }               (exactly 5000: at least 5000)
-//   { "@Microsoft.Dynamics.CRM.totalrecordcount": -1, … }                                                    (-1: not counted)
-// The count stops at 5000 (500 for an elastic table). With no `totalrecordcountlimitexceeded` it is "that many, or more", so a LOWER bound: fewer forms read
-// than it says is a scan that missed some; more is not a contradiction. `totalrecordcountlimitexceeded: true` says the forms are MORE than the count, so the
-// bound is one more than it — a scan that stops at exactly the cap missed some. Only the boolean `true` raises the bound; `false`, or any other value, leaves
-// the count as it is (never lowers it, and never reads a count where there is none).
-// See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/count-rows
-function declaredCount(body) {
-  const exceeded = body['@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded'] === true ? 1 : 0;
-  const counts = [body['@odata.count'], body['@Microsoft.Dynamics.CRM.totalrecordcount']].filter((n) => Number.isSafeInteger(n) && n >= 0);
-  return counts.length ? Math.max(...counts) + exceeded : undefined;
-}
-
-// A form id as one key whatever its letter case or braces ("{CCCC…}" and "cccc…" are one form), or '' when the row holds none.
-const formKey = (row) => {
-  const text = String(row && row.formid !== undefined && row.formid !== null ? row.formid : '').trim();
-  const match = GUID.exec(text);
-  return match ? match[1].toLowerCase() : text.toLowerCase();
-};
-
-// The client as the scan of ONE layer uses it: every read asks for FORMS_PER_READ forms (the first and every continuation — the paging rule above), every read
-// and every form is counted, and the read past `maxReads` — or any read once more than `maxForms` forms have come back — is refused before it is sent.
-//
-// It also holds the pages to being ONE listing of the layer. Paging makes a scan many answers, and the platform's continuation (`$skiptoken`) is opaque, so the
-// only evidence that the pages fit together is in the rows: each form once, and at least as many forms as an answer declares (`declaredCount`). A form that
-// comes back twice is a page that repeats another — and a page that repeats one may have taken the place of the forms that should have been there — and
-// a row with no form id cannot be told apart from one; either is refused, never deduplicated. The layers are checked apart: a form is in both layers as a rule,
-// and a layer may hold forms the other does not.
-function budgeted(client, { layer, maxReads, maxForms }, counter) {
-  const refuse = (why) => guardError(`the forms in the ${layer} layer could not all be read ${why}, so it is not known whether one embeds the page. Nothing was deleted.`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', budgetExhausted: true });
-  const incomplete = (why) => guardError(`the forms in the ${layer} layer could not all be read: ${why}, so the pages are not one complete list of the forms and it is not known whether one embeds the page. Nothing was deleted.`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', incompleteScan: true });
-  const spend = () => {
-    if (counter.reads >= maxReads) throw refuse(`within ${maxReads} reads`);
-    counter.reads += 1;
+// The paging, the budget and the check that the pages are ONE complete listing of a layer (a form twice or with no id, fewer forms than an answer
+// declares) are the shared reader's: systemform-inventory.js. What is this guard's own is that it reads every table, and the words of a refusal:
+// every one is GENPAGE_FORM_REFERENCES_UNREADABLE, and nothing is deleted. A layer past the budget is `budgetExhausted`, pages that are not one listing
+// `incompleteScan`; any other failure keeps the reader's error as `cause`.
+function refusals(layer) {
+  const code = 'GENPAGE_FORM_REFERENCES_UNREADABLE';
+  return {
+    code,
+    budget: (why) => guardError(`the forms in the ${layer} layer could not all be read ${why}, so it is not known whether one embeds the page. Nothing was deleted.`, { code, budgetExhausted: true }),
+    incomplete: (why) => guardError(`the forms in the ${layer} layer could not all be read: ${why}, so the pages are not one complete list of the forms and it is not known whether one embeds the page. Nothing was deleted.`, { code, incompleteScan: true }),
+    short: (declared, held) => guardError(`the forms in the ${layer} layer could not all be read: the answers declare at least ${declared} forms but the pages held ${held}, so the pages are not one complete list of the forms and it is not known whether one embeds the page. Nothing was deleted.`, { code, incompleteScan: true }),
+    failed: (error) => guardError(`the forms in the ${layer} layer could not be read (${String((error && error.message) || error)}), so it is not known whether one embeds the page`, { code, cause: error }),
   };
-  const tally = (response) => {
-    const body = response && response.body;
-    const value = body && body.value;
-    if (Array.isArray(value)) {
-      counter.forms += value.length;
-      if (counter.forms > maxForms) throw refuse(`— the layer holds more than ${maxForms} forms, the most this check reads`);
-      for (const row of value) {
-        const key = formKey(row);
-        if (!key) throw incomplete(`a form came back with no form id (${JSON.stringify(row && row.formid !== undefined ? row.formid : null)})`);
-        if (counter.ids.has(key)) throw incomplete(`form ${key} came back twice`);
-        counter.ids.add(key);
-      }
-      const declared = declaredCount(body);
-      if (declared !== undefined) counter.declared = Math.max(counter.declared, declared);
-    }
-    return response;
-  };
-  const paged = () => ({ headers: { ...PAGED.headers } });
-  const wrapped = { get: async (path) => { spend(); return tally(await client.get(path, paged())); } };
-  if (typeof client.getAbsolute === 'function') wrapped.getAbsolute = async (url) => { spend(); return tally(await client.getAbsolute(url, paged())); };
-  if (typeof client.apiUrl === 'function') wrapped.apiUrl = (path) => client.apiUrl(path);
-  return wrapped;
 }
 
 /**
@@ -153,20 +103,12 @@ async function readAllFormLayers(client, { maxForms = MAX_FORMS_PER_LAYER, maxRe
   let reads = 0;
   const forms = [];
   for (const { layer, path } of LAYERS) {
-    const counter = { reads: 0, forms: 0, ids: new Set(), declared: 0 };
-    const reader = budgeted(client, { layer, maxReads, maxForms }, counter);
+    const stats = { reads: 0 };
     let rows;
     try {
-      rows = await collectionRows(reader, path, `the forms in the ${layer} layer`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE' });
-    } catch (error) {
-      if (error && error.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && (error.budgetExhausted || error.incompleteScan)) throw error;
-      throw guardError(`the forms in the ${layer} layer could not be read (${String((error && error.message) || error)}), so it is not known whether one embeds the page`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', cause: error });
+      ({ rows } = await readSystemFormLayer(client, { path, label: `the forms in the ${layer} layer`, maxForms, maxReads, errors: refusals(layer), stats }));
     } finally {
-      reads += counter.reads;
-    }
-    // Checked once the last page is in: a count an answer declared is a lower bound on the forms (declaredCount), so a scan that ends with fewer missed some.
-    if (counter.ids.size < counter.declared) {
-      throw guardError(`the forms in the ${layer} layer could not all be read: the answers declare at least ${counter.declared} forms but the pages held ${counter.ids.size}, so the pages are not one complete list of the forms and it is not known whether one embeds the page. Nothing was deleted.`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', incompleteScan: true });
+      reads += stats.reads;
     }
     for (const row of rows) {
       forms.push({
