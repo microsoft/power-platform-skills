@@ -104,6 +104,11 @@ from the selected target's verifiable metadata;
 do not copy the policy's expected values to make a check pass. Missing or
 mismatched fingerprint blocks deployment even when the version label matches.
 
+Online Dataverse query availability is a separate, read-only check in
+[data-performance.md](references/data-performance.md). An older SDK or stale
+generated service gets an upgrade/refresh message; it does not authorize a
+dependency change or override this package-owned native release contract.
+
 ## Standard prereq snippet for skills
 
 Most skills only need the always-required tier. Copy this into Step 1.

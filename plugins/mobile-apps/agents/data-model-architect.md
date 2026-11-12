@@ -416,8 +416,10 @@ dependency-tier counts.
 
 When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
 
-This step exists because the generated SDK has no `$expand`. It classifies each
-cross-entity field into a supported formatted lookup or bounded chained fetch.
+This step verifies each cross-entity field against relationship metadata and
+the capability-aware read contract in `shared/references/data-performance.md`.
+Prefer supported expansion for new arbitrary related-field reads, not a column
+created solely to copy/display another table's value.
 Dataverse does not support defining calculated/formula expressions through
 code, so this audit never proposes generated formula metadata.
 
@@ -437,12 +439,28 @@ code, so this audit never proposes generated formula metadata.
 
    - **`recommends: formatted-lookup`** — verify the source is the primary
      display name of a direct lookup. Create no column.
+   - **`recommends: expand`** — verify each exact navigation property and selected
+     column from the foreground snapshot; never guess from lookup/schema names.
+     Verify SDK/generator availability and the execution target. For a newly
+     created relationship, record the required post-provisioning metadata read
+     and generated-service check before builders may use it. Create no column.
+   - **`recommends: apply`** — verify the approved grouped Data query's source
+     service, parent/group keys, source bounds, and result aliases. It runs once
+     per page/load, never per row, and creates no aggregate/copied column.
+   - **`recommends: saved-query`** — verify that the approved table/system view
+     actually returns this field or alias with the planned row identity and
+     nullability. Do not replace its projection with invented expand options.
    - **`recommends: chained-fetch`** — create no column. The screen-builder
      performs one bounded related request outside row rendering.
    - **`recommends: external-projection-required`** — record a blocker for a hot
      list/dashboard field that cannot use the direct lookup annotation. Omit
-     the field until the user supplies a maker-created formula column or other
-     server-owned projection.
+     implementation until a supported query or existing server-owned projection
+     is approved. Do not silently drop the field.
+
+   Audit grouped apply and saved-view contracts in the screen Data entries too:
+   validate source/group keys or table/view identity, result fields, and the
+   correct paging mode. Existing computed/business columns remain read-only
+   dependencies; do not reinterpret a calculation as a raw expanded value.
 
 3. **De-duplicate.** Collapse identical source/resolution pairs and track all
    consuming screens.
@@ -456,7 +474,7 @@ code, so this audit never proposes generated formula metadata.
    |---|---|---|---|
    | Flight | formatted-lookup | cr3e9_flightid primary display | inspections list |
    | Inspector email | chained-fetch | _ownerid_value → systemuser.internalemailaddress | inspection detail |
-   | Gate code | external-projection-required | cr3e9_flightid → cr3e9_gateid → cr3e9_code | home |
+   | Gate code | expand (online; verify generated service) | verified flight → gate navigation path; cr3e9_code | home |
    ```
 
    In `mode: default` (Step 6a runs because `_screens_section.md` was found), append this subsection to the Step 7 output. In `mode: cross-entity-audit`, append it directly to the existing `_dm_section.md` (read it, append the subsection AFTER `### Notes` if present, otherwise at the end, then write back) and skip Step 7 entirely — return immediately.

@@ -379,48 +379,42 @@ function buildBlockMessage(filePath, selectViolations, payloadViolations) {
   return lines.join('\n');
 }
 
-let inputData = '';
-process.stdin.on('data', (chunk) => {
-  inputData += chunk;
-});
-process.stdin.on('end', () => {
-  let input;
-  try {
-    input = JSON.parse(inputData || '{}');
-  } catch {
-    process.exit(0);
-  }
+if (require.main === module) {
+  let inputData = '';
+  process.stdin.on('data', (chunk) => {
+    inputData += chunk;
+  });
+  process.stdin.on('end', () => {
+    let input;
+    try {
+      input = JSON.parse(inputData || '{}');
+    } catch {
+      process.exit(0);
+    }
 
-  const toolName = input.tool_name || input.toolName;
-  const toolInput = input.tool_input || input.toolInput || {};
+    const toolName = input.tool_name || input.toolName;
+    const toolInput = input.tool_input || input.toolInput || {};
 
-  if (!isWriteTool(toolName)) {
-    process.exit(0);
-  }
+    if (!isWriteTool(toolName)) process.exit(0);
 
-  const filePath = toolInput.file_path || toolInput.filePath;
-  if (!isWatchedFile(filePath)) {
-    process.exit(0);
-  }
+    const filePath = toolInput.file_path || toolInput.filePath;
+    if (!isWatchedFile(filePath)) process.exit(0);
 
-  const content = extractContent(toolName, toolInput);
-  if (!content) {
-    process.exit(0);
-  }
+    const content = extractContent(toolName, toolInput);
+    if (!content) process.exit(0);
 
-  const selectViolations = findForbiddenSelectColumns(content);
-  const payloadViolations = findServerManagedCreatePayload(content);
+    const selectViolations = findForbiddenSelectColumns(content);
+    const payloadViolations = findServerManagedCreatePayload(content);
+    if (selectViolations.length === 0 && payloadViolations.length === 0) process.exit(0);
 
-  if (selectViolations.length === 0 && payloadViolations.length === 0) {
-    process.exit(0);
-  }
-
-  process.stderr.write(buildBlockMessage(filePath, selectViolations, payloadViolations) + '\n');
-  process.exit(2);
-});
+    process.stderr.write(buildBlockMessage(filePath, selectViolations, payloadViolations) + '\n');
+    process.exit(2);
+  });
+}
 
 // Exported for tests / cross-module reuse.
 module.exports = {
+  findMatchingBrace,
   findForbiddenSelectColumns,
   findServerManagedCreatePayload,
   topLevelKeys,

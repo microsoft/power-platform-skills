@@ -118,3 +118,8 @@ jobs:
                   node ../scripts/validate-mobile-files.js \
                     --project-root . \
                     --all-source
+
+            - name: test-dataverse-query-samples
+              shell: bash
+              working-directory: plugins/mobile-apps
+              run: node --test scripts/tests/template/*.test.js

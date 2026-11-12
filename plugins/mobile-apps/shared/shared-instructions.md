@@ -61,6 +61,13 @@ their own operation-specific gates.
 
 ## Data-source invocation scope
 
+For new Dataverse query design, read
+[data-performance.md](references/data-performance.md). It owns capability
+checks for expand/apply/saved views, generated result types, continuation
+handling, column fidelity, and the separate offline boundary. Inspect installed
+SDK/generator support before planning; verify actual services after generation.
+Updating the plugin or SDK never migrates an existing app's queries or schema.
+
 Before data-source work, bind the invocation through
 [app-working-directory.md](references/app-working-directory.md) before reading
 even the minimal local app markers. A child's launch directory is not its app root.
