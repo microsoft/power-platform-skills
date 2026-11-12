@@ -325,8 +325,8 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
 }
 
 // Display encoding of every maker-controlled string (a form name, a caption): truncated to `max` code points first, then
-// JSON-quoted (so `"`, `\`, CR/LF, ESC and every C0 control are escaped and the value is ONE closed quoted string), then the
-// characters JSON leaves raw that still act on a terminal or reorder text — DEL and C1 controls, the Arabic letter mark, the
+// JSON-quoted (so `"`, `\`, CR/LF, ESC and every control below U+0020 are escaped and the value is ONE closed quoted string), then
+// the characters JSON leaves raw that still act on a terminal or reorder text — DEL and U+0080-U+009F, the Arabic letter mark, the
 // left-to-right/right-to-left marks, the line and paragraph separators and the bidi embedding/override/isolate controls — made
 // visible as \uXXXX. A value such as  x" --authorize publication-risk:table:account/…  renders as  "x\" --authorize …" : still
 // one quoted value, never an instruction. The truncation marker is OUTSIDE the closing quote.
