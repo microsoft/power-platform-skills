@@ -28,7 +28,8 @@
  *   configuration-create-state.unreadable.<quarantineId>.bin    the original bytes, moved aside, never parsed or redacted
  * Any other `configuration-create-state.*` entry, an orphan archive, an `archiving` tombstone, an invalid one, or a tombstone whose
  * archive is not a plain file this user can read is blocking evidence. The archive and a fresh tombstone are installed with an atomic
- * no-replace (a hard link of a complete staged copy), so neither ever overwrites a file that took its name.
+ * no-replace (a hard link of a complete staged copy), so neither ever overwrites a file that took its name; removing the staged name
+ * afterwards is a step of the quarantine, and a continuation finishes it when it was interrupted.
  *
  * FENCING. Every change runs synchronously under the record lease of the state file (lib/record-lease.js; no network I/O inside it),
  * re-reads the file, applies one change, writes it atomically (lib/apply-snapshot-store.js writeFileAtomic) and reads it back. The
@@ -75,7 +76,7 @@ const { sha256 } = require('./hash.js');
 const { writeFileAtomic, invalidateSnapshot } = require('./apply-snapshot-store.js');
 const { withRecordLease } = require('./record-lease.js');
 const { environmentFingerprint, workspaceRoot } = require('./page-ownership-records.js');
-const { assertPlainFileTarget } = require('./safe-fs.js');
+const { assertPlainFileTarget, unlinkWithRetry } = require('./safe-fs.js');
 const { GUID_RE } = require('./creates-identity.js');
 const { RETRY } = require('./retry-policy.js');
 
@@ -599,7 +600,8 @@ function inspectArchive(file, { bytes = false } = {}) {
 // The names this module and its leases leave beside the state file, which are not evidence of their own:
 //   configuration-create-state.v1.json.lock            the record lease (lib/record-lease.js)
 //   configuration-create-state.v1.json.lock.reclaim    a reclaim claim of that lease (apply-snapshot-store.js acquireLease)
-//   <any state, marker or archive name>.<pid>.<time>.<random>.tmp   a temporary file of an atomic write; the target is authoritative
+//   <any state, marker or archive name>.<pid>.<time>.<random>.tmp   a temporary file of an atomic write, or the staged copy of a
+//                                                                  quarantine file (releaseOwnStagedName); the target is authoritative
 //   <marker name>.<pid>.<time>.<random>.tmp.<pid>.<time>.<random>.tmp   the temporary file of the staged copy of a fresh marker
 const QUARANTINE_RE = /^configuration-create-state\.quarantine\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/;
 const ARCHIVE_RE = /^configuration-create-state\.unreadable\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.bin$/;
@@ -1011,13 +1013,64 @@ function resolveResolutionOffer(workspaceDir, { kindTable, context, unitId, mode
 // the name is taken (NTFS and POSIX alike), where a rename would silently replace whatever took the name after any check. The record
 // lease serializes this plugin's writers, but not a sync client, a backup restore or a person, so the no-replace must be the operation
 // itself. A file system without hard links (FAT, some network shares: EPERM, ENOTSUP, EXDEV) is refused, never answered with a
-// replacing rename. The staged name is removed afterwards; a leftover one is a temporary name (TEMP_RE), not evidence.
+// replacing rename.
+//
+// Removing the staged name afterwards is a step of the protocol, not housekeeping: until it is gone the installed file has two names,
+// and the plain-file guard (safe-fs.js assertPlainFileTarget) rightly refuses to replace a hard-linked file, so a marker whose staged
+// name stayed could never be changed from `archiving` to `deferred`. The removal is retried as a Windows lock needs (a scanner holds a
+// file it has just seen written); a name that still stays throws `stagedNameKept`, and the caller halts with the continuation that
+// removes it (releaseOwnStagedName), which is also what a crash between the link and the removal needs.
 // See: https://nodejs.org/api/fs.html#fslinksyncexistingpath-newpath
 function installNoReplace(staged, dest) {
   fs.linkSync(staged, dest);
-  try { fs.unlinkSync(staged); } catch { /* best effort: the destination is complete either way */ }
+  try { unlinkWithRetry(fs, staged); } catch { throw Object.assign(new Error('the staged name could not be removed'), { stagedNameKept: true }); }
 }
 const stagedName = (file) => `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The halt of an install whose file is in place but whose staged name stayed: nothing is lost, and the continuation finishes it.
+const stagedNameKept = (id) => halt('configuration-create-persistence-uncertain', {
+  transition: 'quarantine',
+  reason: 'a quarantine file was installed, but its staged copy could not be removed',
+  nextStep: `Once the build workspace files can be changed again, finish the quarantine with --quarantine-id ${id}; it removes the staged copy only when it is the same file.`,
+});
+
+// The continuation's half of the link-before-unlink boundary of installNoReplace: removes the staged name that an interrupted install
+// of `<root>/<fileName>` left, and only that one. A sibling is removed only when ALL of this holds:
+//   - its name is the protocol's staged name of exactly this file (stagedName: `<fileName>.<pid>.<ms>.<random>.tmp`, one suffix), and
+//     it is the only such name that is the same file;
+//   - it is the same file as `fileName` (the same device and file id, read with `bigint`: a Windows file id is 64 bits), and the file
+//     has exactly these two names. A file id alone is not proof: Windows does not guarantee it unique on ReFS
+//     (https://learn.microsoft.com/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information), and a file system that gives no
+//     id (0) cannot say, so the bytes must match too and a third name of any kind leaves everything as it is.
+// Anything else is left alone: another hard link is somebody's, a temporary file of a write is a different file, and the plain-file
+// guard then refuses the later replacement as it should. Removing a name of a file that keeps its other name loses no byte.
+function releaseOwnStagedName(root, fileName) {
+  const uncertain = (reason) => halt('configuration-create-persistence-uncertain', { transition: 'quarantine', reason });
+  const dest = path.join(root, fileName);
+  let target;
+  try { target = fs.lstatSync(dest, { bigint: true }); } catch (e) {
+    if (e && e.code === 'ENOENT') return;
+    throw uncertain('a quarantine file could not be inspected');
+  }
+  if (!target.isFile() || target.nlink !== 2n || target.ino === 0n) return;
+  let names;
+  try { names = fs.readdirSync(root); } catch { throw uncertain('the build workspace folder could not be listed'); }
+  const pattern = new RegExp(`^${escapeRegExp(fileName)}\\.\\d+\\.\\d+\\.[0-9a-z]*\\.tmp$`);
+  const same = [];
+  for (const n of names) {
+    if (!pattern.test(n)) continue;
+    let st;
+    try { st = fs.lstatSync(path.join(root, n), { bigint: true }); } catch { continue; }
+    if (st.isFile() && st.nlink === 2n && st.dev === target.dev && st.ino === target.ino) same.push(n);
+  }
+  if (same.length !== 1) return;
+  const staged = path.join(root, same[0]);
+  let sameBytes;
+  try { sameBytes = fs.readFileSync(staged).equals(fs.readFileSync(dest)); } catch { throw uncertain('a staged quarantine copy could not be read'); }
+  if (!sameBytes) return;
+  try { unlinkWithRetry(fs, staged); } catch { throw uncertain('a staged quarantine copy could not be removed'); }
+}
 
 // A fresh marker (`exclusive`) is staged under a temporary name and installed without replacing anything, so a marker with a fresh id
 // that somebody else wrote is never overwritten; the later state change of a marker this call owns replaces it under the lease.
@@ -1034,7 +1087,8 @@ function writeMarker(root, id, stateWord, { exclusive }) {
     writeFileAtomic(staged, text);
     installNoReplace(staged, file);
   } catch (e) {
-    try { fs.unlinkSync(staged); } catch { /* best effort: a leftover staged copy is not evidence (TEMP_RE) */ }
+    if (e && e.stagedNameKept) throw stagedNameKept(id);
+    try { fs.unlinkSync(staged); } catch { /* best effort: a staged copy that was never installed is not evidence (TEMP_RE) */ }
     throw uncertain(e && e.code === 'EEXIST' ? 'a quarantine marker with a fresh id already exists' : 'a quarantine marker could not be created without replacing a file');
   }
   let back;
@@ -1081,8 +1135,9 @@ function moveToArchive(root, id) {
     fsyncFile(tmp);
     if (!fs.readFileSync(tmp).equals(before)) throw new Error('copy differs');
     installNoReplace(tmp, archive);
-  } catch {
-    try { fs.unlinkSync(tmp); } catch { /* best effort: a leftover temporary copy is not evidence (TEMP_RE) */ }
+  } catch (e) {
+    if (e && e.stagedNameKept) throw stagedNameKept(id);
+    try { fs.unlinkSync(tmp); } catch { /* best effort: a copy that was never installed is not evidence (TEMP_RE) */ }
     throw uncertain('the unreadable state file could not be copied to its archive without replacing a file');
   }
   finishMove(root, id, before);
@@ -1150,6 +1205,7 @@ function quarantineUnreadableReceipt(workspaceDir, { kindTable, acknowledgeUnkno
     const marker = found.quarantines.find((q) => q.quarantineId === id);
     if (!marker) {
       if (!found.orphanArchives.includes(id)) throw halt('configuration-create-approval-stale', { transition: 'quarantine', reason: 'no quarantine or archive with that id exists' });
+      releaseOwnStagedName(root, archiveName(id));
       // An archive name alone is not an archive: read it whole as a plain file before its marker says it is deferred.
       if (!verifiedArchive(root, id)) throw invalidState('the archive of that quarantine vanished', { transition: 'quarantine' });
       invalidated();
@@ -1157,6 +1213,10 @@ function quarantineUnreadableReceipt(workspaceDir, { kindTable, acknowledgeUnkno
       return id;
     }
     if (marker.status !== 'valid') throw invalidState('that quarantine marker is invalid', { transition: 'quarantine', nextStep: 'Keep the marker and its archive; restore a trustworthy copy of the marker or keep this workspace for manual handling.' });
+    // An install interrupted between its link and the removal of the staged name (a lock, a crash) left the marker or the archive
+    // with a second, staged name; the plain-file guard would refuse every later change of that marker.
+    releaseOwnStagedName(root, quarantineName(id));
+    releaseOwnStagedName(root, archiveName(id));
     const original = path.join(root, STATE_FILE);
     if (marker.state === 'deferred') {
       if (!verifiedArchive(root, id)) throw invalidState('the archive of that quarantine is missing', { transition: 'quarantine' });

@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const { sha256 } = require('../lib/hash.js');
 const S = require('../lib/configuration-create-state.js');
 
@@ -795,6 +796,127 @@ test('quarantine never replaces a file that takes the archive or a fresh marker 
   assert.ok(renamedOnto.every((n) => n.endsWith('.tmp')), 'no quarantine name was renamed onto');
   assert.ok(fs.readFileSync(stateFile(dir3)).equals(original3));
   assert.deepEqual(fs.readdirSync(dir3).filter((n) => !n.endsWith('.tmp')), [S.STATE_FILE]);
+});
+
+// The staged name installNoReplace gives a quarantine file before it links it: `<marker or archive name>.<pid>.<ms>.<random>.tmp`.
+const STAGED_MARKER_RE = /^configuration-create-state\.quarantine\.[0-9a-f-]{36}\.json\.\d+\.\d+\.[0-9a-z]*\.tmp$/;
+const STAGED_ARCHIVE_RE = /^configuration-create-state\.unreadable\.[0-9a-f-]{36}\.bin\.\d+\.\d+\.[0-9a-z]*\.tmp$/;
+const markerOf = (dir, id) => path.join(dir, `${S.QUARANTINE_FILE_PREFIX}${id}.json`);
+const archiveOf = (dir, id) => path.join(dir, `${S.ARCHIVE_FILE_PREFIX}${id}.bin`);
+const tmpNames = (dir) => fs.readdirSync(dir).filter((n) => n.endsWith('.tmp'));
+// Every unlink of a staged name `re` matches fails with EBUSY: `times` failures, then the file system is healthy again.
+function withStagedUnlinkBusy(re, times, fn) {
+  let left = times;
+  return withFsPatch('unlinkSync', (real, p) => {
+    if (left > 0 && re.test(path.basename(String(p)))) { left -= 1; throw Object.assign(new Error('busy'), { code: 'EBUSY' }); }
+    return real(p);
+  }, fn);
+}
+function assertFinished(dir, id, original) {
+  const found = S.discoverConfigurationCreateState(dir, kt);
+  assert.equal(found.blocking, false);
+  assert.deepEqual(found.quarantines, [{ quarantineId: id, status: 'valid', state: 'deferred', archive: true }]);
+  assert.equal(fs.lstatSync(markerOf(dir, id)).nlink, 1, 'the marker has one name');
+  assert.equal(fs.lstatSync(archiveOf(dir, id)).nlink, 1, 'the archive has one name');
+  assert.ok(fs.readFileSync(archiveOf(dir, id)).equals(original));
+  assert.equal(fs.existsSync(stateFile(dir)), false);
+  assert.deepEqual(tmpNames(dir), [], 'no staged name is left');
+}
+
+test('a staged name that stays after an install halts the quarantine, and a continuation on healthy storage removes it and finishes', () => {
+  for (const [what, re] of [['marker', STAGED_MARKER_RE], ['archive', STAGED_ARCHIVE_RE]]) {
+    const dir = ws();
+    const original = unreadable(dir);
+    withStagedUnlinkBusy(re, Infinity, () => {
+      throwsCode(() => S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain', { transition: 'quarantine', reason: 'a quarantine file was installed, but its staged copy could not be removed' });
+    });
+    const [q] = S.discoverConfigurationCreateState(dir, kt).quarantines;
+    assert.equal(q.state, 'archiving', `${what}: the barrier stays`);
+    const installed = what === 'marker' ? markerOf(dir, q.quarantineId) : archiveOf(dir, q.quarantineId);
+    assert.equal(fs.lstatSync(installed).nlink, 2, `${what}: the staged name still holds the installed file`);
+    assert.ok(fs.readFileSync(stateFile(dir)).equals(original), `${what}: the original is kept`);
+    S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, quarantineId: q.quarantineId, invalidate: OK_INVALIDATE });
+    assertFinished(dir, q.quarantineId, original);
+  }
+
+  // One lock on the staged marker name, then healthy storage: the quarantine finishes, by its retry or by the continuation.
+  const dir = ws();
+  const original = unreadable(dir);
+  let id;
+  withStagedUnlinkBusy(STAGED_MARKER_RE, 1, () => {
+    try { id = S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }).quarantineId; } catch (e) {
+      assert.equal(e.code, 'configuration-create-persistence-uncertain', e.message);
+    }
+  });
+  if (!id) {
+    id = S.discoverConfigurationCreateState(dir, kt).quarantines[0].quarantineId;
+    S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, quarantineId: id, invalidate: OK_INVALIDATE });
+  }
+  assertFinished(dir, id, original);
+});
+
+test('a crash between the link and the removal of the staged name leaves a quarantine that a continuation finishes', () => {
+  const child = String.raw`
+    const fs = require('node:fs');
+    const S = require(process.argv[1]);
+    const re = new RegExp(process.argv[3]);
+    const real = fs.unlinkSync;
+    fs.unlinkSync = (p) => { if (re.test(require('node:path').basename(String(p)))) process.exit(70); return real(p); };
+    S.quarantineUnreadableReceipt(process.argv[2], { acknowledgeUnknownDispatch: true, invalidate: () => ({ ok: true }) });
+    process.exit(0);`;
+  for (const [what, re] of [['marker', STAGED_MARKER_RE], ['archive', STAGED_ARCHIVE_RE]]) {
+    const dir = ws();
+    const original = unreadable(dir);
+    const run = spawnSync(process.execPath, ['-e', child, require.resolve('../lib/configuration-create-state.js'), dir, re.source], { encoding: 'utf8' });
+    assert.equal(run.status, 70, `${what}: the child stopped right after the link: ${run.stderr}`);
+    // The dead child's record lease is left behind; taking over a lease is record-lease.js's own subject, so the test removes it.
+    fs.rmSync(path.join(dir, `${S.STATE_FILE}.lock`), { force: true });
+    const [q] = S.discoverConfigurationCreateState(dir, kt).quarantines;
+    assert.equal(q.state, 'archiving');
+    assert.equal(tmpNames(dir).filter((n) => re.test(n)).length, 1, `${what}: the staged name was left`);
+    S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, quarantineId: q.quarantineId, invalidate: OK_INVALIDATE });
+    assertFinished(dir, q.quarantineId, original);
+  }
+});
+
+test('a continuation removes no hard link and no file that it cannot prove is its own staged name', () => {
+  // The staged name stayed, and somebody else also linked the marker: three names, none removed, the marker is not replaced.
+  const dir = ws();
+  const original = unreadable(dir);
+  withStagedUnlinkBusy(STAGED_MARKER_RE, Infinity, () => {
+    throwsCode(() => S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain');
+  });
+  const [q] = S.discoverConfigurationCreateState(dir, kt).quarantines;
+  const foreign = path.join(dir, 'marker-backup.json');
+  fs.linkSync(markerOf(dir, q.quarantineId), foreign);
+  throwsCode(() => S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, quarantineId: q.quarantineId, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain', { reason: 'the saved file is not a plain file that can be replaced' });
+  assert.ok(fs.existsSync(foreign));
+  assert.equal(tmpNames(dir).filter((n) => STAGED_MARKER_RE.test(n)).length, 1, 'the staged name is kept beside a foreign link');
+  assert.equal(fs.lstatSync(markerOf(dir, q.quarantineId)).nlink, 3);
+  assert.equal(S.discoverConfigurationCreateState(dir, kt).quarantines[0].state, 'archiving');
+  const kept = fs.existsSync(stateFile(dir)) ? stateFile(dir) : archiveOf(dir, q.quarantineId);
+  assert.ok(fs.readFileSync(kept).equals(original), 'the original bytes are kept');
+
+  // The marker's only other name is a foreign link, and a file with the staged name and the same bytes is a separate file: neither is removed.
+  const dir2 = ws();
+  const original2 = unreadable(dir2);
+  withFsPatch('copyFileSync', () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); }, () => {
+    throwsCode(() => S.quarantineUnreadableReceipt(dir2, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain');
+  });
+  const [q2] = S.discoverConfigurationCreateState(dir2, kt).quarantines;
+  const marker2 = markerOf(dir2, q2.quarantineId);
+  const foreign2 = path.join(dir2, 'marker-backup.json');
+  fs.linkSync(marker2, foreign2);
+  const lookalike = `${marker2}.1.2.abc.tmp`;
+  fs.copyFileSync(marker2, lookalike);
+  throwsCode(() => S.quarantineUnreadableReceipt(dir2, { acknowledgeUnknownDispatch: true, quarantineId: q2.quarantineId, invalidate: OK_INVALIDATE }), 'configuration-create-persistence-uncertain', { reason: 'the saved file is not a plain file that can be replaced' });
+  assert.ok(fs.existsSync(foreign2) && fs.existsSync(lookalike));
+  assert.equal(fs.lstatSync(marker2).nlink, 2);
+  // Once the foreign link is gone the continuation finishes, and the separate look-alike file is still not touched.
+  fs.unlinkSync(foreign2);
+  S.quarantineUnreadableReceipt(dir2, { acknowledgeUnknownDispatch: true, quarantineId: q2.quarantineId, invalidate: OK_INVALIDATE });
+  assert.ok(fs.readFileSync(archiveOf(dir2, q2.quarantineId)).equals(original2));
+  assert.ok(fs.existsSync(lookalike), 'a separate file is never removed');
 });
 
 test('an archive name that is a folder or cannot be read is never a verified quarantine, and a continuation does not adopt it', () => {
