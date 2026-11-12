@@ -274,15 +274,31 @@ async function inspectCreateUnit(context, unit, { kindTable } = {}) {
 // ── Declarations and deferral ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // A declaration names one configuration root the current build would touch: { kind, key?, id?, names?: [string], dependsOn?: [ref] }
 // where a ref is { kind, key?, id?, name? }. A deferred unit's root may not come back by its stable key, its recorded id (root or row),
-// or a logical name that matches its key or a string field of its recorded root projection (case-insensitive, as Dataverse compares
-// names), and nothing may depend on it.
+// or a name that matches its key or its root's logical identity (case-insensitive, as Dataverse compares names), and nothing may depend
+// on it. Only a root kind's own identity field is an alias: an entity name, connector id or display name the root merely mentions is
+// shared by unrelated roots, so matching on it would stop unrelated work.
+// The identity field names per root kind, matched case-insensitively against the recorded public projection (a kind table may spell
+// them in camelCase, as `schemaName`, or as the lower-case Dataverse column).
+const ROOT_IDENTITY_FIELDS = Object.freeze({
+  'env-definition': Object.freeze(['schemaname']),
+  'connection-reference': Object.freeze(['connectionreferencelogicalname', 'logicalname']),
+  'custom-api': Object.freeze(['uniquename']),
+  'duplicate-rule': Object.freeze(['name']),
+});
+function rootAliases(unit) {
+  const rootRow = unit.rows.find((r) => r.id === unit.root.id);
+  const fields = ROOT_IDENTITY_FIELDS[unit.root.kind] || [];
+  const values = Object.entries(rootRow ? rootRow.public : {})
+    .filter(([field, v]) => fields.includes(field.toLowerCase()) && typeof v === 'string' && v)
+    .map(([, v]) => v);
+  return [unit.root.key, ...values].map((s) => s.toLowerCase());
+}
 function refMatches(ref, unit) {
   if (!isPlainObject(ref)) return false;
   if (typeof ref.id === 'string' && unit.rows.some((r) => r.id === ref.id.toLowerCase())) return true;
   if (ref.kind !== undefined && ref.kind !== unit.root.kind) return false;
   if (typeof ref.key === 'string' && ref.key === unit.root.key) return true;
-  const rootRow = unit.rows.find((r) => r.id === unit.root.id);
-  const aliases = [unit.root.key, ...Object.values(rootRow ? rootRow.public : {}).filter((v) => typeof v === 'string')].map((s) => s.toLowerCase());
+  const aliases = rootAliases(unit);
   const names = [...(Array.isArray(ref.names) ? ref.names : []), ref.name, ref.key].filter((s) => typeof s === 'string' && s);
   return names.some((n) => aliases.includes(n.toLowerCase()));
 }

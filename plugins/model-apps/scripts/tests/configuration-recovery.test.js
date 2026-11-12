@@ -408,6 +408,39 @@ test('a deferred root cannot come back by key, id, name or dependency', () => {
   R.assertDeferredUnitsExcluded(saved, [{ kind: 'custom-api', key: 'contoso_DoThing' }]);
 });
 
+test('only a root kind\'s logical identity is an alias of a deferred root, never a value it merely mentions', () => {
+  const deferAll = (dir) => {
+    const saved = S.readConfigurationCreateState(dir, kt);
+    return { ...saved, units: saved.units.map((u) => ({ ...u, state: 'deferred' })) };
+  };
+  // A rule names the entity it watches; another rule on the same entity is unrelated work.
+  const ruleDir = ws();
+  interrupted(ruleDir, ruleUnit({ key: 'contoso_account_dupes' }));
+  const rules = deferAll(ruleDir);
+  R.assertDeferredUnitsExcluded(rules, [{ kind: 'duplicate-rule', key: 'contoso_account_check', names: ['account'] }]);
+  R.assertDeferredUnitsExcluded(rules, [{ kind: 'env-definition', key: 'contoso_Setting', dependsOn: [{ kind: 'duplicate-rule', name: 'account' }] }]);
+  assert.throws(() => R.assertDeferredUnitsExcluded(rules, [{ kind: 'duplicate-rule', key: 'contoso_renamed', names: ['CONTOSO_ACCOUNT_DUPES'] }]), { code: 'configuration-create-pending' });
+
+  // A custom API whose unique name differs from its key comes back by that unique name, but not by another string field.
+  const apiDir = ws();
+  const api = apiUnit({ key: 'contoso_DoThing' });
+  api.rows[0].public = { ...api.rows[0].public, uniquename: 'contoso_LogicalThing' };
+  interrupted(apiDir, api);
+  const apis = deferAll(apiDir);
+  assert.throws(() => R.assertDeferredUnitsExcluded(apis, [{ kind: 'custom-api', key: 'contoso_Renamed', names: ['contoso_logicalthing'] }]), { code: 'configuration-create-pending' });
+
+  // A connection reference comes back by its logical name, not by the connector it uses.
+  const crDir = ws();
+  const crId = G();
+  interrupted(crDir, {
+    root: { kind: 'connection-reference', key: 'contoso_conn', id: crId }, publicIntentSha256: H('intent cr'), publicPlanSha256: H('plan cr'), publicationRequired: false,
+    rows: [{ kind: 'connection-reference', key: 'contoso_conn', id: crId, parentId: null, role: 'create', public: { connectionreferencelogicalname: 'contoso_sharedoffice', connectorid: '/providers/Microsoft.PowerApps/apis/shared_office365', displayname: 'Office' }, privateFields: ['connectionId'] }],
+  });
+  const crs = deferAll(crDir);
+  R.assertDeferredUnitsExcluded(crs, [{ kind: 'connection-reference', key: 'contoso_other', names: ['/providers/Microsoft.PowerApps/apis/shared_office365', 'Office'] }]);
+  assert.throws(() => R.assertDeferredUnitsExcluded(crs, [{ kind: 'connection-reference', key: 'contoso_other', names: ['CONTOSO_SHAREDOFFICE'] }]), { code: 'configuration-create-pending' });
+});
+
 test('cancel-unsent removes a wholly prepared unit, and is refused once anything was sent or a quarantine exists', async () => {
   const dir = ws();
   const h = prepare(dir, apiUnit());
