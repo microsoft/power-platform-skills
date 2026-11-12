@@ -304,14 +304,18 @@ function sameCreateStateContext(a, b) {
 }
 
 // ── Strict parse and canonical serialization ─────────────────────────────────────────────────────────────────────────────────────────
-function depthOf(v) {
-  if (v === null || typeof v !== 'object') return 0;
-  let max = 0;
-  for (const x of Array.isArray(v) ? v : Object.values(v)) {
-    const d = depthOf(x);
-    if (d > max) max = d;
+// True when `v` nests objects or arrays deeper than `limit`. Iterative and stops at the first value past the limit: a 16 MiB file of
+// valid JSON can nest millions of levels (`[[[[...]]]]`), and a recursive walk of that throws an untyped RangeError (stack overflow)
+// instead of the typed state-invalid verdict that lets the operator quarantine the file.
+function nestsDeeperThan(v, limit) {
+  const stack = [[v, 0]];
+  while (stack.length > 0) {
+    const [x, depth] = stack.pop();
+    if (x === null || typeof x !== 'object') continue;
+    if (depth + 1 > limit) return true;
+    for (const child of Array.isArray(x) ? x : Object.values(x)) if (child !== null && typeof child === 'object') stack.push([child, depth + 1]);
   }
-  return max + 1;
+  return false;
 }
 function exactKeys(o, keys) {
   if (!isPlainObject(o)) return false;
@@ -506,7 +510,7 @@ function parseJsonStrict(bytes, fail) {
   try { text = UTF8.decode(buf); } catch { throw fail('the saved file is not UTF-8 text'); }
   let raw;
   try { raw = JSON.parse(text); } catch { throw fail('the saved file is not complete JSON'); }
-  if (depthOf(raw) > LIMITS.maxDepth) throw fail('the saved file nests deeper than the limit');
+  if (nestsDeeperThan(raw, LIMITS.maxDepth)) throw fail('the saved file nests deeper than the limit');
   // JSON has no NaN or Infinity, but a number literal too large for a double (1e400) parses to Infinity.
   if (!finiteNumbersOnly(raw)) throw fail('the saved file holds a number that is not finite');
   return { raw, buf };

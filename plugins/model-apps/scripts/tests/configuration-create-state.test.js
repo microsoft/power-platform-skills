@@ -391,6 +391,24 @@ test('the parser refuses a file over 16 MiB, 128 units or 4096 rows without trun
   assert.match(throwsCode(() => parseObj(o), 'configuration-create-state-invalid').message, /more rows than the limit/);
 });
 
+test('valid JSON nested far past the depth limit is a typed invalid state that can be quarantined', () => {
+  const dir = ws();
+  const bytes = Buffer.from(`${'['.repeat(20000)}0${']'.repeat(20000)}`);
+  fs.writeFileSync(stateFile(dir), bytes);
+  assert.match(throwsCode(() => S.parseCreateState(bytes, kt), 'configuration-create-state-invalid').message, /deeper than the limit/);
+  const marker = Buffer.from(`${'{"a":'.repeat(20000)}0${'}'.repeat(20000)}`);
+  const id = G();
+  fs.writeFileSync(path.join(dir, `${S.QUARANTINE_FILE_PREFIX}${id}.json`), marker);
+  const found = S.discoverConfigurationCreateState(dir, kt);
+  assert.equal(found.sidecar.status, 'invalid');
+  assert.deepEqual(found.quarantines.map((q) => q.status), ['invalid']);
+  fs.unlinkSync(path.join(dir, `${S.QUARANTINE_FILE_PREFIX}${id}.json`));
+  const res = S.quarantineUnreadableReceipt(dir, { acknowledgeUnknownDispatch: true, invalidate: OK_INVALIDATE });
+  assert.equal(res.halt.code, 'configuration-create-reconciled');
+  assert.ok(fs.readFileSync(path.join(dir, `${S.ARCHIVE_FILE_PREFIX}${res.quarantineId}.bin`)).equals(bytes));
+  assert.equal(S.discoverConfigurationCreateState(dir, kt).blocking, false);
+});
+
 test('admission refuses a unit beyond the unit, row or byte limit, counting its later transitions, and keeps the saved file', () => {
   const dir = ws();
   for (let i = 0; i < S.LIMITS.maxUnits; i += 1) prepare(dir, envUnit({ key: `contoso_S${i}`, value: false }));
