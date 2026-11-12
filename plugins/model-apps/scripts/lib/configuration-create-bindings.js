@@ -9,6 +9,8 @@
 //   createClassifier(entries)            the gate's classifier: which planned row (or completion effect) a request is
 //   classifyConstituent(entries, req)    the same, for one constituent of a $batch change set (a bound Custom API's edit)
 //   readConfigurationRow(dv, kind, id)   one exact-id read: present (with its row version), absent (only a 404 0x80040217) or unknown
+//   readDefaultConfigurationRow(dv, kind, id)  the same strict read for the default create path, without a Custom API's
+//                                        implementation lookup (configuration-create-plan.js)
 //   readConfigurationConflicts(dv, p)    the fully paged namesake queries a create must run first
 //   observe(dv, planned)                 the fresh read a recovery or a settle judges, the root's complete child graph included
 //   readComponentTypes(dv)               the ObjectTypeCode of each member table
@@ -205,8 +207,9 @@ const KINDS = Object.freeze({
     },
     binds: {},
   },
-  // A condition is only ever created inside its rule's deep insert: a condition sent on its own (a direct POST or the
-  // platform's CompoundUpdateDuplicateDetectionRule $batch) is refused, so its parent is never bound by a body.
+  // The protected path creates a condition only inside its rule's deep insert, so here its parent is never bound by a
+  // body. The platform does accept a condition POSTed on its own (204) with a supplied id, the solution header and
+  // `regardingobjectid@odata.bind` to its rule; configuration-create-plan.js sends conditions that way (#807).
   duplicateRuleCondition: {
     set: 'duplicateruleconditions', pk: 'duplicateruleconditionid', parentSet: 'duplicaterules',
     parentBind: null, parentColumn: '_regardingobjectid_value', nav: 'DuplicateRule_DuplicateRuleConditions',
@@ -777,22 +780,58 @@ const NOT_FOUND = '0x80040217';
  * `@odata.etag` when it is a row version (W/"<n>"), else null — a plan cannot update the row from such a read (planOf).
  */
 async function readConfigurationRow(dataverse, kind, id) {
+  return readSelectedRow(dataverse, kind, id, PROTECTED_READ_COLUMNS[kind], 'readConfigurationRow');
+}
+
+// The columns each exact-id read selects. The protected reader selects every mapped column, a Custom API's implementation
+// lookup (`_plugintypeid_value`, PRESERVED) included: a bound row's edit is proved only while it still holds the same
+// implementation. The default (non-protected) create path never writes, plans or proves that lookup, so its reader leaves it
+// out: requiring a column the projection never uses would turn a row without it into an unreadable one.
+const PROTECTED_READ_COLUMNS = Object.freeze(Object.fromEntries(Object.entries(KINDS).map(([kind, k]) => [kind, Object.freeze(Object.keys(k.columns))])));
+const DEFAULT_READ_COLUMNS = Object.freeze(Object.fromEntries(Object.entries(KINDS).map(([kind, k]) => [kind, Object.freeze(Object.keys(k.columns).filter((col) => col !== '_plugintypeid_value'))])));
+
+/**
+ * The strict check of one row a read selected `columns` of (each a column of the kind's map): the row must carry every
+ * selected column (Dataverse answers `null` for an empty one) but the private one, whose absence is a masked value, and every
+ * value must decode. Answers the decoded row (decode, 'read') or { unreadable: '<reason>' }. Pure: a collection read applies
+ * it to each listed row, the exact-id read to its one answer.
+ */
+function decodeSelectedRow(kind, body, columns) {
+  const k = KINDS[kind];
+  if (!isPlain(body)) return { unreadable: 'the read answered no row' };
+  if (columns.some((col) => k.columns[col] !== PRIVATE && !has(body, col))) return { unreadable: 'the read left out a selected column' };
+  const decoded = decode(kind, body, 'read');
+  if (!decoded) return { unreadable: 'a column holds a value this build cannot read' };
+  return decoded;
+}
+
+// The one strict exact-id read both readers share; `columns` is one of the fixed descriptors above, never a caller's list.
+async function readSelectedRow(dataverse, kind, id, columns, who) {
   const k = KINDS[kind];
   const want = normalizeGuid(id);
-  if (!k || !want) throw new TypeError(`readConfigurationRow: ${kind} ${id} is not a configuration row`);
+  if (!k || !want) throw new TypeError(`${who}: ${kind} ${id} is not a configuration row`);
   if (!canRead(dataverse)) return { state: 'unknown', reason: 'no reader is available' };
-  const res = await answer(() => dataverse.get(`/${k.set}(${want})?$select=${[k.pk, ...Object.keys(k.columns)].join(',')}`));
+  const res = await answer(() => dataverse.get(`/${k.set}(${want})?$select=${[k.pk, ...columns].join(',')}`));
   if (!res.ok) {
     if (res.status === 404 && res.code === NOT_FOUND) return { state: 'absent' };
     return { state: 'unknown', reason: `the read failed (HTTP ${res.status})` };
   }
   if (normalizeGuid(res.body[k.pk]) !== want) return { state: 'unknown', reason: 'the read answered another row' };
-  if (Object.entries(k.columns).some(([col, spec]) => spec !== PRIVATE && !has(res.body, col))) return { state: 'unknown', reason: 'the read left out a selected column' };
-  const decoded = decode(kind, res.body, 'read');
-  if (!decoded) return { state: 'unknown', reason: 'a column holds a value this build cannot read' };
+  const decoded = decodeSelectedRow(kind, res.body, columns);
+  if (decoded.unreadable) return { state: 'unknown', reason: decoded.unreadable };
   const etag = res.body['@odata.etag'];
   const rowVersion = typeof etag === 'string' && ROW_VERSION.test(etag) ? etag : null;
   return { state: 'present', kind, id: want, parentId: decoded.parentId === undefined ? null : decoded.parentId, rowVersion, decoded };
+}
+
+/**
+ * The default create path's exact-id read: readConfigurationRow's answers and refusals over a fixed descriptor without a
+ * Custom API's implementation lookup:
+ *   GET /customapis(<id>)?$select=customapiid,uniquename,name,displayname,...,executeprivilegename
+ * A row is present without `_plugintypeid_value`; a missing column the descriptor selects is still unknown.
+ */
+async function readDefaultConfigurationRow(dataverse, kind, id) {
+  return readSelectedRow(dataverse, kind, id, DEFAULT_READ_COLUMNS[kind], 'readDefaultConfigurationRow');
 }
 
 /**
@@ -1472,6 +1511,18 @@ module.exports = {
   classifyConstituent,
   createSetClassifier,
   readConfigurationRow,
+  readDefaultConfigurationRow,
+  DEFAULT_READ_COLUMNS,
+  decodeSelectedRow,
+  // The closed decoder, the label pinning and the option tables the default create path (configuration-create-plan.js)
+  // builds and projects its rows with, so the protected and the default path read one definition.
+  decodeConfigurationRow: decode,
+  pinApiLabels,
+  EV_TYPES,
+  API_BINDINGS,
+  API_STEPS,
+  PARAM_TYPES,
+  MATCH_CODES,
   readConfigurationConflicts,
   readAllPages,
   readComponentTypes,
