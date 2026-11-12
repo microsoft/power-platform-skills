@@ -879,7 +879,12 @@ async function preflightProtectedConfiguration({ spec, store, ctx, dataverse, so
       // own (a failed send included): a diff says that the copy differs, never whose the difference is.
       if (item.state !== 'unbound' && !item.adoption && sdk) {
         const id = item.planned.plan.rows[0].id;
-        if (await hasUnsyncedEdits(sdk, kind, id)) {
+        // A copy an earlier version left that the workspace overlay cannot prove clean is refused by the SDK itself
+        // (WORKSPACE_LEGACY_CONFIGURATION_COPY, naming its two files): that refusal is rethrown so the item stops with its
+        // own remedy (remove those files), not the overwrite approval below, which the same refusal would defeat. Required
+        // here, as in configuration-artifacts.js, so the overlay module loads only where a protected build reaches this.
+        const { isLegacyCopyRefusal } = require('./workspace-configuration-memory.js');
+        if (await hasUnsyncedEdits(sdk, kind, id, { rethrow: isLegacyCopyRefusal })) {
           if (!approvesOverwrite(authorizedOverwrite, overwriteKey(kind, item.planned.key))) {
             halts.push({ kind, key: item.planned.key, id, code: DRAFT_CODE, message: draftMessage(kind, item.planned.key, id), overwrite: `overwrite:${overwriteKey(kind, item.planned.key)}` });
             continue;

@@ -931,6 +931,27 @@ test('a bound protected item whose workspace copy differs from the server\'s is 
   assert.deepEqual((await pass(reopen(h), spec)).sent, []);
 });
 
+test('a workspace copy an earlier version left, which the SDK refuses, stops the preflight with its own code and remedy, never an overwrite approval that cannot clear it', async () => {
+  const h = await harness();
+  const spec = apiSpec();
+  await created(h, spec);
+  const bundle = require('../vendor/cds-maker-sdk.cjs');
+  const { LEGACY_COPY_CODE } = require('../lib/workspace-configuration-memory.js');
+  // The refusal the workspace overlay raises at the SDK's first touch of a legacy copy it cannot prove clean
+  // (lib/workspace-configuration-memory.js): an overwrite fetch is refused the same way, so an overwrite approval
+  // could never clear it; only the maker's removal of the two files does.
+  const diff = h.sdk.diffArtifact.bind(h.sdk);
+  h.sdk.diffArtifact = async (kind, ...rest) => {
+    if (kind === 'customApi') throw new bundle.SdkError(LEGACY_COPY_CODE, 'customApis/<id>.json and its metadata were left by an earlier version; delete those two files');
+    return diff(kind, ...rest);
+  };
+  const out = await pass(reopen(h), spec);
+  assert.equal(out.halt && out.halt.code, LEGACY_COPY_CODE, out.halt && `${out.halt.code}: ${out.halt.message}`);
+  assert.ok(out.halt.message.includes('delete those two files'), out.halt.message);
+  assert.ok(!out.halt.message.includes('--authorize overwrite:'), out.halt.message);
+  assert.deepEqual(out.sent, [], 'nothing is written');
+});
+
 // A protected edit the org refuses, with a local edit written into the shared workspace copy at some point of the
 // build's own send. `inject(h, id, sdk)` installs the edit; answers the harness, the root id and the edited App Spec.
 async function refusedSendWith(inject) {

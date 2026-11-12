@@ -1559,6 +1559,14 @@ test('#845: a bound or pinned view whose row is gone is missing, and its namesak
   const held = await verifySpec(spec, reader, { managedManifest: open });
   assert.ok(held.unverified.includes('view:contoso_item.Twin (its managed binding (v2) is not settled (managed-settlement-pending) — unverified, not proven correct)'));
   assert.deepEqual(viewChecks(held), [['view', true, ''], ['view-columns', true, '']], 'only the settled view is checked');
+  // A binding store that cannot be read proves no binding either: each declared view is unverified, as a declared chart is,
+  // never read by its name in place of the row the store may bind.
+  const unreadable = { revision: 0, groups: [], pending: [], invalid: [{ family: 'store', key: 'managed-bindings', code: 'managed-binding-store-unreadable' }] };
+  const blind = await verifySpec(spec, reader, { managedManifest: unreadable });
+  assert.deepEqual(viewChecks(blind), [], 'no view is checked by its name');
+  for (const key of ['v1', 'v2']) {
+    assert.ok(blind.unverified.includes(`view:contoso_item.Twin (its managed binding (${key}) is not settled (managed-binding-store-unreadable) — unverified, not proven correct)`), JSON.stringify(blind.unverified));
+  }
 });
 
 test('#845 control: a spec without same-named views records and verifies exactly as before', async () => {

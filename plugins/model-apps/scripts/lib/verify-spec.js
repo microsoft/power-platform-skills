@@ -338,7 +338,9 @@ async function verifySpec(spec, read, opts = {}) {
   // download writes one for each view), and the build makes and binds a row for each: the name finds only one of them, so the other
   // view's columns and filters used to be held to its namesake's row and failed. A row read by id must be that id, on the view's
   // table; when it is not there the view is missing, and a view of the same name is not taken in its place. A binding with an attempt
-  // still pending, or a group record that is not usable, proves nothing yet: the view is unverified (its managed listing says why).
+  // still pending, a group record that is not usable, or a binding store that cannot be read at all (an `invalid` entry of family
+  // `store`, as readManagedManifest reports it; declared charts treat it the same) proves nothing yet: the view is unverified (its
+  // managed listing says why), never read by its name in place of the row the store may bind.
   // A keyed view that shares its table and name with another view of the spec, and has neither binding nor pin, is found by its name
   // as before, but which of the rows of that name it is cannot be told, so its content is unverified rather than held to a row that
   // may be the other view's; a check that fails on such a view names its key. Every other view is read by its name, as it always was.
@@ -356,7 +358,7 @@ async function verifySpec(spec, read, opts = {}) {
     const pin = v.viewId === undefined ? '' : viewGuid(v.viewId);
     const m = opts.managedManifest;
     if (m && Array.isArray(m.groups)) {
-      const unsettled = (list) => (Array.isArray(list) ? list : []).find((x) => x && x.family === 'view' && x.key === key);
+      const unsettled = (list) => (Array.isArray(list) ? list : []).find((x) => x && ((x.family === 'view' && x.key === key) || x.family === 'store'));
       const open = unsettled(m.pending) || unsettled(m.invalid);
       if (open) return { key, open: `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct` };
       const g = m.groups.find((x) => x && x.family === 'view' && x.key === key);
