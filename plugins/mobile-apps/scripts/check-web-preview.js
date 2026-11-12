@@ -36,11 +36,19 @@ function stripAnsi(text) {
   return String(text || '').replace(ANSI, '');
 }
 
+/**
+ * GET a URL and read its whole body within `timeoutMs`. `fetch()` resolves as soon as the headers
+ * arrive, so the timer stays armed until the body has been read too: a server that sends headers
+ * and then stalls mid-body would otherwise outlive the caller's budget. A failure before or during
+ * the body rejects, so callers treat both as an unreachable preview.
+ */
 async function fetchWithTimeout(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { signal: controller.signal, headers: { Accept: '*/*' } });
+    const response = await fetch(url, { signal: controller.signal, headers: { Accept: '*/*' } });
+    const body = Buffer.from(await response.arrayBuffer());
+    return { ok: response.ok, status: response.status, body };
   } finally {
     clearTimeout(timer);
   }
@@ -85,7 +93,7 @@ async function waitForPage(url, deadline) {
   while (Date.now() < deadline) {
     try {
       const response = await fetchWithTimeout(url, Math.max(1000, Math.min(30000, deadline - Date.now())));
-      const body = await response.text();
+      const body = response.body.toString('utf8');
       if (response.ok) return { html: body };
       // A 500 that carries Expo's error payload is a compile failure, not a server still starting:
       // waiting longer cannot fix it, so report it now.
@@ -138,13 +146,9 @@ async function checkWebPreview(rawUrl, { timeoutMs = 180000 } = {}) {
     return { status: 'unreachable', url, message: `Bundle request failed: ${error.message}` };
   }
 
-  if (response.ok) {
-    // Drain the body so the connection closes cleanly; the content itself is not needed.
-    await response.arrayBuffer();
-    return { status: 'ok', url };
-  }
+  if (response.ok) return { status: 'ok', url };
 
-  const body = await response.text();
+  const body = response.body.toString('utf8');
   let detail;
   try {
     detail = JSON.parse(body);

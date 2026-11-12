@@ -206,11 +206,16 @@ export async function previewDeviceResult<T>(value: T, latencyMs = 400): Promise
 /**
  * An ISO date (`yyyy-mm-dd`) relative to today, for sample records. Fixed calendar dates go stale:
  * a week after generation every "upcoming" sample is overdue and the dashboard lies.
+ *
+ * It is the device's local calendar date, because screens compare against the local "today"
+ * (`getFullYear`/`getMonth`/`getDate`). `toISOString()` would format the UTC date instead, which
+ * differs for hours each day away from UTC: at 00:30 in UTC+10 it still says yesterday.
  */
 export function daysFromToday(days: number): string {
   const date = new Date();
   date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 export interface SourceQueryState<T> {

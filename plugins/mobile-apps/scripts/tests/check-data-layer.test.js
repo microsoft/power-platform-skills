@@ -100,6 +100,25 @@ test('a fully wired data layer passes --require-wired, and its binding is record
   assert.equal(result.sources[0].target, 'cr123_inspection');
 });
 
+test('a data-layer module with no binding marker fails in either mode', () => {
+  // An unmarked device action still returns sample results, yet it would appear nowhere in
+  // previewBound and --require-wired would pass with it unwired.
+  const root = project({
+    ...BASE,
+    'src/hooks/data/inspections.ts': WIRED_ENTITY,
+    'src/hooks/data/device.ts': [
+      "import { previewDeviceResult } from './core';",
+      "export const capturePhoto = () => previewDeviceResult({ uri: 'sample' });",
+    ].join('\n'),
+  });
+  for (const requireWired of [false, true]) {
+    const result = checkDataLayer(root, { requireWired });
+    assert.equal(result.status, 'violations');
+    assert.deepEqual(result.violations.map((violation) => [violation.file, violation.rule]),
+      [['src/hooks/data/device.ts', 'unmarked-module']]);
+  }
+});
+
 test('screens and components may not reach past the data layer', () => {
   const root = project({
     ...BASE,

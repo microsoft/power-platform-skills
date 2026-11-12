@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
@@ -148,4 +149,26 @@ test('template path aliases are inherited from the host tsconfig', () => {
   const tsconfig = JSON.parse(read('template/tsconfig.json'));
   assert.strictEqual(tsconfig.extends, '@microsoft/power-apps-native-host/config/tsconfig');
   assert.strictEqual(tsconfig.compilerOptions, undefined);
+});
+
+test('daysFromToday returns the local calendar date, not the UTC one', () => {
+  // Screens compare sample dates with the device's local "today". Run the helper in a UTC+10 zone at
+  // 00:30 local time, when the UTC date is still yesterday. core.ts is TypeScript, so its plain-JS
+  // body is lifted out with its two type annotations removed.
+  const source = read('shared/samples/src/hooks/data/core.ts');
+  const fn = /export function daysFromToday\(days: number\): string \{[\s\S]*?\n\}/.exec(source);
+  assert.ok(fn, 'core.ts defines daysFromToday');
+  const js = fn[0].replace(/^export /, '').replace(/: (?:number|string)\b/g, '');
+  const probe = `
+    const RealDate = Date;
+    const now = new RealDate(2026, 10, 12, 0, 30).getTime();
+    globalThis.Date = class extends RealDate { constructor(...args) { super(...(args.length ? args : [now])); } };
+    ${js}
+    process.stdout.write(JSON.stringify([daysFromToday(0), daysFromToday(1), daysFromToday(-1)]));`;
+  const run = spawnSync(process.execPath, ['-e', probe], {
+    encoding: 'utf8',
+    env: { ...process.env, TZ: 'Australia/Brisbane' },
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  assert.deepStrictEqual(JSON.parse(run.stdout), ['2026-11-12', '2026-11-13', '2026-11-11']);
 });

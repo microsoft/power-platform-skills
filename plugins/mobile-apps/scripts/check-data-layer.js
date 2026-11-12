@@ -12,7 +12,9 @@
  *      wrapper, or a fixture file directly would keep working on sample data, or break the web
  *      preview, no matter what the data layer is wired to.
  *   2. Every source and device action says what it is bound to, so the run can report exactly
- *      what is still on sample data instead of shipping fake records silently.
+ *      what is still on sample data instead of shipping fake records silently. A module in the
+ *      layer with no marker at all fails in either mode: it may be serving sample data, and
+ *      nothing would report it, so `--require-wired` could pass with it unwired.
  *
  * Bindings are declared with marker comments around each source or device action:
  *
@@ -222,6 +224,18 @@ function checkDataLayer(projectRoot, { requireWired = false } = {}) {
     sources.push(...markers.sources);
     deviceActions.push(...markers.deviceActions);
     violations.push(...markers.violations);
+    // Every module besides core.ts, index.ts, and fixtures holds an entity's source or the device
+    // actions (preview-data-layer.md, "Layout"), so one with neither marker has a binding nobody
+    // declared, and its sample data would never show up in previewBound or fail --require-wired.
+    // A module whose markers are malformed is already reported for that, once.
+    if (markers.sources.length === 0 && markers.deviceActions.length === 0 && markers.violations.length === 0) {
+      violations.push({
+        file: toPosix(file),
+        line: 1,
+        rule: 'unmarked-module',
+        detail: 'declares no DATA SOURCE or DEVICE ACTION marker, so its binding cannot be checked',
+      });
+    }
   }
 
   const previewBound = [

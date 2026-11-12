@@ -97,6 +97,40 @@ test('a server that never answers is unreachable once the budget runs out', asyn
   assert.equal(result.status, 'unreachable');
 });
 
+test('a bundle whose body stalls after the headers is unreachable within the budget', async () => {
+  // fetch() resolves on the headers, so a timer cleared there would let a stalled body hang the
+  // check far past --timeout-ms.
+  const stub = await serve((request, response) => {
+    if (request.url === '/') return response.end(PAGE);
+    response.writeHead(200, { 'Content-Type': 'application/javascript' });
+    return response.write('var __BUNDLE_START_TIME__=0;');
+  });
+  try {
+    const started = Date.now();
+    const result = await checkWebPreview(stub.url, { timeoutMs: 1500 });
+    assert.equal(result.status, 'unreachable');
+    assert.ok(Date.now() - started < 10000, 'the budget bounds the body read too');
+  } finally {
+    stub.server.closeAllConnections();
+    await close(stub.server);
+  }
+});
+
+test('a bundle connection dropped mid-body is reported as unreachable, not thrown', async () => {
+  const stub = await serve((request, response) => {
+    if (request.url === '/') return response.end(PAGE);
+    response.writeHead(500, { 'Content-Type': 'application/json', 'Content-Length': '1000' });
+    response.write('{"type":"Unab');
+    return response.socket.destroy();
+  });
+  try {
+    const result = await checkWebPreview(stub.url, { timeoutMs: 5000 });
+    assert.equal(result.status, 'unreachable');
+  } finally {
+    await close(stub.server);
+  }
+});
+
 test('helpers parse the shapes Expo actually produces', () => {
   assert.equal(stripAnsi('\u001b[0m\u001b[90m 33 |\u001b[39m }'), ' 33 | }');
   assert.match(entryBundleUrl(PAGE, 'http://localhost:19006/'), /^http:\/\/localhost:19006\/node_modules\/expo-router\/entry\.bundle\?.*lazy=false/);

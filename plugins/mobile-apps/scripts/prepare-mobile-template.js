@@ -173,9 +173,14 @@ function ensureWebPreviewOutput(projectRoot) {
   const appConfigPath = path.join(projectRoot, 'app.config.js');
   const appConfig = fs.readFileSync(appConfigPath, 'utf8');
   if (appConfig.includes(WEB_PREVIEW_ENV)) return 'present';
-  const hook = /function customizeExpoConfig\(config\)\s*\{\n/;
-  if (!hook.test(appConfig)) return 'unsupported';
-  fs.writeFileSync(appConfigPath, appConfig.replace(hook, (match) => `${match}${WEB_PREVIEW_OVERRIDE.slice(1)}`));
+  // Accept CRLF as well as LF after the brace: a Windows checkout with core.autocrlf gives the
+  // template CRLF line endings, and the override must still go in. The inserted lines take the
+  // file's own line ending, so the edit does not leave app.config.js with mixed endings.
+  const hook = /function customizeExpoConfig\(config\)\s*\{(\r?\n)/;
+  const match = hook.exec(appConfig);
+  if (!match) return 'unsupported';
+  const override = WEB_PREVIEW_OVERRIDE.slice(1).replace(/\n/g, match[1]);
+  fs.writeFileSync(appConfigPath, appConfig.replace(hook, (opening) => `${opening}${override}`));
   return 'added';
 }
 
@@ -203,9 +208,31 @@ function removeLegacyExamples(projectRoot) {
   return removed;
 }
 
+const HELPER_DIRECTORIES = ['components', 'hooks', 'utils', 'tokens', 'native'].map((directory) => path.join('src', directory));
+
+/**
+ * Every directory preparation can create, shallowest first: the helper folders made up front, the
+ * folder of every copied file (the data layer's core.ts sits one level deeper, in hooks/data), and
+ * their ancestors (a fresh template has no src/ at all). Rollback removes the ones that did not
+ * exist before, deepest first. A leftover src/hooks/data/ is not harmless: screen-builder and
+ * /edit-app read its presence as "this app has a data layer".
+ */
+function preparationDirectories() {
+  const directories = new Set();
+  const add = (relativePath) => {
+    for (let directory = path.normalize(relativePath); directory && directory !== '.'; directory = path.dirname(directory)) {
+      directories.add(directory);
+    }
+  };
+  HELPER_DIRECTORIES.forEach(add);
+  [...SHARED_FILES, ...DATA_LAYER_FILES].forEach(([, destination]) => add(path.dirname(destination)));
+  const depth = (directory) => directory.split(path.sep).length;
+  return [...directories].sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
+}
+
 function copySharedFiles(projectRoot, samplesRoot, files = SHARED_FILES) {
-  for (const directory of ['components', 'hooks', 'utils', 'tokens', 'native']) {
-    fs.mkdirSync(path.join(projectRoot, 'src', directory), { recursive: true });
+  for (const directory of HELPER_DIRECTORIES) {
+    fs.mkdirSync(path.join(projectRoot, directory), { recursive: true });
   }
 
   const copied = [];
@@ -629,8 +656,7 @@ function capturePreparationState(projectRoot) {
     });
   }
 
-  const directories = ['components', 'hooks', 'utils', 'tokens', 'native']
-    .map((directory) => path.join('src', directory))
+  const directories = preparationDirectories()
     .map((relativePath) => ({
       relativePath,
       existed: fs.existsSync(path.join(projectRoot, relativePath)),

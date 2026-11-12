@@ -19,6 +19,9 @@ node "${PLUGIN_ROOT}/scripts/check-data-layer.js" --project-root '<working_dir>'
 node "${PLUGIN_ROOT}/scripts/check-data-layer.js" --project-root '<working_dir>' --require-wired  # after wiring
 ```
 
+Every module in the layer other than `core.ts`, `index.ts`, and `fixtures/` declares its binding with the markers shown below.
+A module with no marker fails the check in either mode, because nothing could report what it is bound to.
+
 An app created before the data layer existed has no `src/hooks/data/`.
 The checker reports `status: absent` and its screens keep importing generated services directly; keep that shape when editing such an app.
 
@@ -184,6 +187,7 @@ At wiring time that one screen is rebuilt to embed the real `src/native/barcodeS
 
 Fixtures read like the real app: domain-specific names, plausible values, and every status and edge the screens style (an overdue item, an empty optional field, a long title).
 Use `daysFromToday(n)` from `core.ts` for dates, so "upcoming" and "overdue" stay true whenever the preview runs.
+It returns the device's local calendar date; for a time on that day, build a local date-time such as ``new Date(`${daysFromToday(0)}T08:00:00`)``, never a UTC one.
 Match the contract's **Sample records** count, defaulting to 12 for cursor lists and 6 for bounded ones; enough to scroll and paginate, few enough to read.
 Reference fields point at ids that exist in the referenced entity's fixtures.
 

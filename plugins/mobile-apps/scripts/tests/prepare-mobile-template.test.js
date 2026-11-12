@@ -814,3 +814,53 @@ test('an unrecognized customization hook is reported, not rewritten', () => {
   assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'unsupported');
   assert.strictEqual(fs.readFileSync(configPath, 'utf8'), custom);
 });
+
+test('a CRLF checkout of the template still gets the web-preview override, in its own line endings', () => {
+  // A Windows checkout with core.autocrlf gives app.config.js CRLF endings; the override must still
+  // go in, without leaving the file half LF and half CRLF.
+  const projectRoot = copyTemplate();
+  const configPath = path.join(projectRoot, 'app.config.js');
+  const crlf = fs.readFileSync(configPath, 'utf8').replace(/\r?\n/g, '\r\n');
+  fs.writeFileSync(configPath, crlf);
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'added');
+  const updated = fs.readFileSync(configPath, 'utf8');
+  assert.match(updated, new RegExp(WEB_PREVIEW_ENV));
+  assert.doesNotMatch(updated, /[^\r]\n/, 'every line still ends in CRLF');
+  assert.strictEqual(ensureWebPreviewOutput(projectRoot), 'present');
+});
+
+test('a failed screens-first preparation leaves no directory it created behind', () => {
+  // Directory presence is meaningful: screen-builder and /edit-app treat an existing src/hooks/data/
+  // as a data-layer app. So rollback must remove the folders it made (the template has no src/ at
+  // all), deepest first, while keeping any folder that was already there.
+  function directories(root) {
+    const found = [];
+    (function visit(relative) {
+      for (const entry of fs.readdirSync(path.join(root, relative), { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === 'node_modules') continue;
+        found.push(path.join(relative, entry.name));
+        visit(path.join(relative, entry.name));
+      }
+    })('');
+    return found.sort();
+  }
+  function failPreparation(projectRoot) {
+    const layoutPath = path.join(projectRoot, 'app', '_layout.tsx');
+    fs.writeFileSync(layoutPath, fs.readFileSync(layoutPath, 'utf8').replace('<Slot />', '<SafeAreaView><Slot /></SafeAreaView>'));
+    const before = { files: fileSnapshot(projectRoot), directories: directories(projectRoot) };
+    assert.throws(() => prepareMobileTemplate({
+      workingDir: projectRoot, displayName: 'Rollback Probe', slug: 'rollback-probe', screensFirst: true,
+    }), /must not wrap Slot with SafeAreaView/);
+    assertSnapshotsEqual(before.files, fileSnapshot(projectRoot));
+    assert.deepStrictEqual(directories(projectRoot), before.directories);
+  }
+
+  const fresh = copyTemplate();
+  assert.ok(!fs.existsSync(path.join(fresh, 'src')));
+  failPreparation(fresh);
+
+  const existing = copyTemplate();
+  fs.mkdirSync(path.join(existing, 'src', 'hooks'), { recursive: true });
+  failPreparation(existing);
+  assert.ok(fs.existsSync(path.join(existing, 'src', 'hooks')), 'a folder that was already there stays');
+});
