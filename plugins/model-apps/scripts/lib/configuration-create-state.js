@@ -695,14 +695,16 @@ function busy(root) {
   return halt('configuration-create-state-busy', { reason: `its lock ${lock} is held or could not be created` });
 }
 
-// The largest fixed-shape form the state can take before any unit is added or removed again: every create row dispatched (the longest
-// dispatch word), every publication acknowledged, every unit carrying the largest offer, and the largest revision. Admission measures
-// this, so no later transition of an admitted unit can be refused for size.
+// The largest fixed-shape form the state can take before any unit is added or removed again: every unit deferred (the longest unit
+// state word: an open unit may be deferred explicitly at any time), every create row dispatched (the longest dispatch word), every
+// publication acknowledged, every unit carrying the largest offer, and the largest revision. Admission measures this, and so does every
+// later save, so no later transition of an admitted unit can be refused for size.
 function worstCaseBytes(state) {
   const worst = JSON.parse(JSON.stringify(state));
   worst.revision = Number.MAX_SAFE_INTEGER;
   const sha = 'f'.repeat(64);
   for (const u of worst.units) {
+    u.state = 'deferred';
     for (const r of u.rows) if (r.role === 'create') r.dispatch = 'dispatched';
     if (u.publication) u.publication.dispatch = 'acknowledged';
     u.offer = { mode: 'accept-current', nonceSha256: sha, observedPublicSha256: sha, publicIntentSha256: sha, privateAcknowledgmentRequired: false };

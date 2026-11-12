@@ -448,6 +448,43 @@ test('a save whose later transitions could pass the byte limit is refused and ke
   assert.ok(fs.readFileSync(stateFile(dir)).equals(before));
 });
 
+test('admission reserves room to defer every admitted unit, with several open units at the exact byte limit', () => {
+  // The largest form two admitted units can reach: both deferred, every create row dispatched, an accept-current offer on each and
+  // the largest revision. A description sized to that form fills the 16 MiB exactly.
+  const twoUnits = () => [envUnit({ key: 'contoso_First', value: false }), envUnit({ key: 'contoso_Second' })];
+  const sampleDir = ws();
+  for (const u of twoUnits()) prepare(sampleDir, u);
+  const worst = readRaw(sampleDir);
+  worst.revision = Number.MAX_SAFE_INTEGER;
+  for (const u of worst.units) {
+    u.state = 'deferred';
+    for (const r of u.rows) if (r.role === 'create') r.dispatch = 'dispatched';
+    u.offer = { mode: 'accept-current', nonceSha256: 'f'.repeat(64), observedPublicSha256: 'f'.repeat(64), publicIntentSha256: 'f'.repeat(64), privateAcknowledgmentRequired: false };
+  }
+  worst.units[1].rows[0].public.description = '';
+  const padding = S.LIMITS.maxBytes - Buffer.byteLength(S.serializeCreateState(worst));
+  const admit = (dir, extra) => {
+    const [first, second] = twoUnits();
+    second.rows[0].public.description = 'x'.repeat(padding + extra);
+    return [prepare(dir, first), prepare(dir, second)];
+  };
+  assert.match(throwsCode(() => admit(ws(), 1), 'configuration-create-shape-refused').message, /no room for this unit and its later transitions/);
+  const dir = ws();
+  const handles = admit(dir, 0);
+  const second = unitOf(dir, handles[1].unitId);
+  for (const r of createRows(second)) S.sealCreateRow(handles[1], r.id);
+  for (const h of handles) {
+    const { revision } = S.readConfigurationCreateState(dir, kt);
+    const { token } = S.prepareResolutionOffer(dir, { ...kt, context: CONTEXT, unitId: h.unitId, mode: 'defer', expectedRevision: revision });
+    assert.equal(S.resolveResolutionOffer(dir, { ...kt, context: CONTEXT, unitId: h.unitId, mode: 'defer', token }).deferred, true);
+  }
+  for (const h of handles) {
+    const { revision } = S.readConfigurationCreateState(dir, kt);
+    S.prepareResolutionOffer(dir, { ...kt, context: CONTEXT, unitId: h.unitId, mode: 'accept-current', observedPublicSha256: 'a'.repeat(64), expectedRevision: revision });
+  }
+  assert.deepEqual(S.readConfigurationCreateState(dir, kt).units.map((u) => u.state), ['deferred', 'deferred']);
+});
+
 // ── Persistence ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('a failed write, rename or read-back is persistence-uncertain, says the row was not dispatched, and kills the handle', () => {
   const failures = {
