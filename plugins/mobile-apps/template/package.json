@@ -17,7 +17,7 @@
   "dependencies": {
     "@expo/metro-runtime": "55.0.11",
     "@expo/vector-icons": "15.1.1",
-    "@microsoft/power-apps": "1.2.13",
+    "@microsoft/power-apps": "1.6.0",
     "@microsoft/power-apps-native-host": "^0.5.1",
     "@microsoft/power-apps-native-offline": "^0.1.32",
     "@react-native-async-storage/async-storage": "^2.1.2",
@@ -83,7 +83,7 @@
   },
   "devDependencies": {
     "@babel/core": "7.29.6",
-    "@microsoft/power-apps-cli": "0.15.3",
+    "@microsoft/power-apps-cli": "1.4.1",
     "@tamagui/babel-plugin": "2.4.5",
     "@types/react": "19.2.14",
     "babel-preset-expo": "55.0.18",

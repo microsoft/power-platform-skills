@@ -4,31 +4,28 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
 const { verifyDataverseServices } = require('../verify-dataverse-services');
+const { checkQuerySupport } = require('../check-dataverse-query-support');
+const { runCliSync } = require('../lib/process-runner');
 
 const environmentId = process.env.POWER_APPS_LIVE_DATAVERSE_ENVIRONMENT_ID;
 const environmentUrl = process.env.POWER_APPS_LIVE_DATAVERSE_URL;
-const defaultCli = path.resolve(__dirname, '..', '..', 'template', 'node_modules', '.bin', 'power-apps');
+const defaultCli = path.resolve(__dirname, '..', '..', 'template', 'node_modules', '.bin',
+  process.platform === 'win32' ? 'pa.cmd' : 'pa');
 const cliBin = process.env.POWER_APPS_LIVE_CLI_BIN || defaultCli;
 const skipReason = environmentId && environmentUrl && fs.existsSync(cliBin)
   ? false
   : 'set Dataverse environment variables and POWER_APPS_LIVE_CLI_BIN';
 
 function runCli(cwd, args) {
-  const result = spawnSync(
+  const stdout = runCliSync(
     cliBin,
     args,
     { cwd, encoding: 'utf8', timeout: 90000, killSignal: 'SIGKILL' },
   );
-  assert.equal(
-    result.status,
-    0,
-    `${args[0]} failed: ${result.stderr || result.stdout}`,
-  );
-  return result;
+  return { stdout };
 }
 
 test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
@@ -49,7 +46,7 @@ test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
   assert.equal(runCli(root, ['--version']).stdout.trim(), version);
 
   runCli(root, [
-    'init',
+    'app', 'init',
     '--non-interactive',
     '--environment-id',
     environmentId,
@@ -66,13 +63,13 @@ test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
     '--json',
   ]);
   runCli(root, [
-    'add-data-source',
+    'app', 'add', 'data-source',
     '--non-interactive',
-    '--api-id',
+    '--connector',
     'dataverse',
     '--org-url',
     environmentUrl,
-    '--resource-name',
+    '--table',
     'systemuser',
     '--json',
   ]);
@@ -82,4 +79,13 @@ test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
   assert.equal(services[0].logicalName, 'systemuser');
   assert.equal(services[0].entitySetName, 'systemusers');
   assert.equal(services[0].serviceFile, 'SystemusersService.ts');
+  // The probe project uses the template's installed SDK without downloading a second copy.
+  fs.symlinkSync(
+    path.resolve(__dirname, '..', '..', 'template', 'node_modules'),
+    path.join(root, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  assert.deepEqual(checkQuerySupport(root).services[0].supported, {
+    expand: true, apply: true, 'saved-query': true,
+  });
 });

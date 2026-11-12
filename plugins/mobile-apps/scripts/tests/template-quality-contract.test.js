@@ -92,7 +92,8 @@ test('bundled dependencies match the current host-factory template boundary', ()
   }
   assert.strictEqual(packageJson.dependencies['expo-media-library'], undefined);
   assert.strictEqual(packageJson.dependencies['expo-modules-core'], undefined);
-  assert.strictEqual(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.15.3');
+  assert.strictEqual(packageJson.dependencies['@microsoft/power-apps'], '1.6.0');
+  assert.strictEqual(packageJson.devDependencies['@microsoft/power-apps-cli'], '1.4.1');
   // Step 12 runs `npx --no-install qrcode`, so the QR generator must come from this pin.
   assert.strictEqual(packageJson.devDependencies.qrcode, '1.5.4');
   assert.strictEqual(packageJson.overrides.metro, '0.83.8');

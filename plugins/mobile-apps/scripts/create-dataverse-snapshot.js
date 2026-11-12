@@ -63,19 +63,19 @@ const BASE_METADATA_COLLECTIONS = [
   {
     property: 'ManyToOneRelationships',
     result: 'manyToOneRelationships',
-    select: 'SchemaName,ReferencingAttribute,ReferencedEntity,ReferencedAttribute,IsManaged,CascadeConfiguration',
+    select: 'SchemaName,ReferencingAttribute,ReferencedEntity,ReferencedAttribute,ReferencingEntityNavigationPropertyName,ReferencedEntityNavigationPropertyName,IsManaged,CascadeConfiguration',
     label: 'many-to-one relationships',
   },
   {
     property: 'OneToManyRelationships',
     result: 'oneToManyRelationships',
-    select: 'SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedAttribute,IsManaged,CascadeConfiguration',
+    select: 'SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedAttribute,ReferencingEntityNavigationPropertyName,ReferencedEntityNavigationPropertyName,IsManaged,CascadeConfiguration',
     label: 'one-to-many relationships',
   },
   {
     property: 'ManyToManyRelationships',
     result: 'manyToManyRelationships',
-    select: 'SchemaName,Entity1LogicalName,Entity1IntersectAttribute,Entity2LogicalName,Entity2IntersectAttribute,IntersectEntityName,IsManaged',
+    select: 'SchemaName,Entity1LogicalName,Entity1IntersectAttribute,Entity1NavigationPropertyName,Entity2LogicalName,Entity2IntersectAttribute,Entity2NavigationPropertyName,IntersectEntityName,IsManaged',
     label: 'many-to-many relationships',
   },
   {
@@ -1504,6 +1504,8 @@ async function loadDetailedEntity(request, entity, {
       lookupColumn: relationship.ReferencingAttribute,
       targetTable: relationship.ReferencedEntity,
       targetColumn: relationship.ReferencedAttribute,
+      navigationProperty: relationship.ReferencingEntityNavigationPropertyName || null,
+      partnerNavigationProperty: relationship.ReferencedEntityNavigationPropertyName || null,
       managed: Boolean(relationship.IsManaged),
       cascadeConfiguration: relationship.CascadeConfiguration
         ? { ...relationship.CascadeConfiguration }
@@ -1514,6 +1516,8 @@ async function loadDetailedEntity(request, entity, {
       childTable: relationship.ReferencingEntity,
       childLookupColumn: relationship.ReferencingAttribute,
       parentColumn: relationship.ReferencedAttribute,
+      navigationProperty: relationship.ReferencedEntityNavigationPropertyName || null,
+      partnerNavigationProperty: relationship.ReferencingEntityNavigationPropertyName || null,
       managed: Boolean(relationship.IsManaged),
       cascadeConfiguration: relationship.CascadeConfiguration
         ? { ...relationship.CascadeConfiguration }
@@ -1523,8 +1527,10 @@ async function loadDetailedEntity(request, entity, {
       schemaName: relationship.SchemaName,
       entity1: relationship.Entity1LogicalName,
       entity1IntersectAttribute: relationship.Entity1IntersectAttribute,
+      entity1NavigationProperty: relationship.Entity1NavigationPropertyName || null,
       entity2: relationship.Entity2LogicalName,
       entity2IntersectAttribute: relationship.Entity2IntersectAttribute,
+      entity2NavigationProperty: relationship.Entity2NavigationPropertyName || null,
       intersectTable: relationship.IntersectEntityName,
       managed: Boolean(relationship.IsManaged),
     })),

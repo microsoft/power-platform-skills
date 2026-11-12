@@ -351,6 +351,22 @@ separate approval. Cloud-flow integration is not supported.
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
+### Dataverse query support
+
+New apps use Power Apps SDK `1.6.0` and CLI `1.4.1` for typed related-record
+expansion, aggregation (`apply`), saved system views, and saved-query
+continuation links. Related display fields use supported queries rather than
+new calculated/copied columns. Direct lookup labels still use formatted values.
+See [data-performance.md](shared/references/data-performance.md) for column
+types, paging, and native/offline limitations.
+
+For an existing app, run `/check-updates` and request Dataverse query support.
+It offers SDK/CLI updates individually, validates approved changes, and asks
+you to refresh existing data sources sequentially with the resolved local CLI.
+SDK installation and service refresh are separate steps. This does **not**
+migrate app queries, replace your template, or remove calculated columns.
+Unchanged older apps do not need to upgrade just to deploy.
+
 Use `/edit-app` for post-generation improvements. Users can invoke it directly
 or ask naturally, for example, "This app already exists; add an asset detail
 screen." For a natural-language existing-app feature request, the generated app

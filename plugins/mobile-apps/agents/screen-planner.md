@@ -412,7 +412,6 @@ For each screen the user adds, provide this compact shape:
 - **Sign-out affordance** — REQUIRED on the Profile screen and omitted from every other screen. Write `visible Button "Sign out" using useAuth().signOut with confirm`; sign-out returns to `/login` after completion.
 - **Data** — which generated services it calls, with method names (e.g., bounded lookup: `AccountsService.getAll({ top: 50, orderBy: ['name asc'], select: ['name'] })`; cursor list: `InspectionsService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'inspectionid asc'], select: [...] })` plus `skipToken` continuation support)
 - **Custom events** (emit only when the user explicitly requested named custom events; omit otherwise) — list each event name, trigger, and approved scalar properties. Example: `OrderSubmitted after successful create; properties: item_count, has_discount`. Never include operation results or response payloads, form values, free text, record titles, personal identifiers, tokens, precise coordinates, nested objects, or complete URLs. Do not spec a model-supplied `duration_ms` (or any other timing) scalar — the planner cannot reliably measure durations; when a timing is genuinely needed, capture it at runtime from the logger's `trackScenario()` measured duration instead of a hand-written property.
-- **Related entity fields** (REQUIRED if any UI field on the screen displays data from an entity OTHER than the primary `Data` service's table; OMIT entirely otherwise) — one entry per cross-entity field. The `data-model-architect`'s Step 6a Cross-entity Read Audit reads this block to decide which calculated columns to propose. Mechanical schema:
 - **Related entity fields** (REQUIRED if any UI field on the screen displays data from an entity OTHER than the primary `Data` service's table; OMIT entirely otherwise) — one entry per cross-entity field. The `data-model-architect` audits that each field has a supported read path. Mechanical schema:
 
   ```yaml
@@ -421,19 +420,33 @@ For each screen the user adds, provide this compact shape:
       source: <dotted path from primary entity to resolved column, e.g. cr3e9_flightid → cr3e9_gateid → cr3e9_gatename>
       cardinality: "1:1" | "1:many" | "M:N"
       archetype_class: list | detail | tab-root | dashboard
-      recommends: formatted-lookup | chained-fetch | external-projection-required
+      recommends: formatted-lookup | expand | apply | saved-query | chained-fetch | external-projection-required
+      navigation_path: <exact metadata navigation names; required for expand>
+      select: <required columns at each expanded hop; required for expand>
+      execution: online | verified-offline
   ```
 
-  **Mechanical derivation of `recommends`** (no judgement — pick from this table):
+  **Mechanical derivation of `recommends`** — use the installed SDK/generator
+  capability report from `data-performance.md`, not a claim that every SDK
+  supports expand. New services are rechecked after generation. Existing app
+  reads are preserved unless the user's current feature request changes them.
 
   | `archetype_class` | `cardinality` | `recommends` |
   |---|---|---|
   | `list`, `tab-root`, `dashboard` | direct lookup primary display | `formatted-lookup` |
-  | `list`, `tab-root`, `dashboard` | any other `1:1` related field | `external-projection-required` |
-  | `detail` | `1:1` | `chained-fetch` |
-  | `list`, `tab-root`, `dashboard` | `1:many` or `M:N` per-row field/aggregate | `external-projection-required` |
-  | `detail` | `1:many` | `chained-fetch` |
-  | `detail` | `M:N` | `external-projection-required` unless a generated intersect-table service and exact bounded query contract are already named in the approved data model |
+  | any | any other `1:1` related field | `expand` when supported; detail may use a bounded `chained-fetch` otherwise; hot lists require an existing projection or block |
+  | `detail` | bounded `1:many` or `M:N` | `expand` with a legal collection/paging contract, or a verified bounded child/intersect-service `chained-fetch` |
+  | `list`, `tab-root`, `dashboard` | per-row collection/aggregate | `apply` with one supported grouped query in Data, keyed by parent ID; otherwise `external-projection-required`. Never per-row calls. |
+  | any | field/alias already returned by an approved saved system view | `saved-query`; verify its source, alias, optionality, and row identity in the Data contract instead of adding expand options to the view call |
+
+  For aggregates, the Data field specifies `getAll<TResult>`, the exact apply
+  expression, result aliases/types, source bounds, and grouping keys. For a
+  saved system view, specify `getSavedQuery<TResult>`, verified table/view ID,
+  optional/aliased fields, and `cursorMode: nextLink`. A saved view owns selection
+  and ordering and does not accept arbitrary filter/search options.
+  Do not plan FetchXML/SQL/personal-view APIs or parameter aliases.
+  For offline requirements, verify runtime support and profile coverage of
+  every related table/column; do not infer support from the online SDK.
 
   **`archetype_class` mapping from `Archetype`:** `List` → `list`; `Tab-root` → `tab-root` (or `dashboard` if `Operational pattern: home-dashboard` / `assignment-dashboard`); `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` / `Empty-onboarding` → `detail` (cold path, single-record context).
 
@@ -452,7 +465,10 @@ For each screen the user adds, provide this compact shape:
       source: cr3e9_flightid → cr3e9_gateid → cr3e9_gatename
       cardinality: "1:1"
       archetype_class: list
-      recommends: external-projection-required
+      recommends: expand
+      navigation_path: <verified inspection-to-flight and flight-to-gate navigation names>
+      select: <flight primary ID, gate primary ID and cr3e9_gatename>
+      execution: online
     - field: "Defect count"
       source: cr3e9_inspectionzoneid → cr3e9_defect (1:many)
       cardinality: "1:many"
@@ -460,10 +476,12 @@ For each screen the user adds, provide this compact shape:
       recommends: external-projection-required
   ```
 
-  **Hard rule:** if the screen displays a related-entity field but you do NOT emit a `related_entity_fields` block for it, the data-model-architect cannot propose the calc column, the screen-builder will hit `BLOCKED` at scaffold time, and the user will see a `—` cell in the built app. The block is the ONLY signal — there is no fallback inference.
+  **Hard rule:** every related UI field needs a verified read contract. Missing
+  navigation metadata or capability evidence must be resolved before building;
+  never compensate by inventing a calculated/copied column or a blank cell.
 - **Audit** (omit for read-only / non-write screens) — one line per audit-bearing action: `<trigger>: event <code> (<event label>); payload: <field, field, field>`. Example: `On submit: event 100000006 (Inspection Submitted); payload: inspectionId, submittedAt, defectCount, openCriticalCount.` The screen-builder wraps the payload field list in `JSON.stringify({...})` and writes the full `cr3e9_audit_log_entriesService.create(...)` call from the Generated Services table — do NOT spell out the wrapper or service name.
 - **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly copy the exact quoted `@odata.bind` property from the generated target model and pair it with the entity set, e.g. `'cr3e9_projectid@odata.bind': '/cr3e9_projects(<guid>)'` when that exact key exists in `src/generated/models/<Entity>Model.ts`. Never derive casing from Dataverse schema-name conventions. Without the generated-model key, mark the spec `BLOCKED: lookup write key not verified`. Skip for read-only and no-lookup screens.
-- **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
+- **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` for a bounded lookup. Ordinary OData cursor reads use `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken`, and server-side `filter` for search. Saved-query cursor reads use `getSavedQuery`, `maxPageSize`, and unchanged `nextLink` with `cursorMode: nextLink`; the view owns selection/order, and arbitrary search/filter options are unavailable. Do not imply that `top: 50` alone is pagination.
 - **Native capabilities** — name the resolved package/version and wrapper, plus
   iOS/Android permission-denied and unsupported states. Preserve document
   picking vs PDF generation vs PDF viewing vs pen capture boundaries.

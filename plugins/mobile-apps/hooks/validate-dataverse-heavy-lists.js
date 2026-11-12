@@ -11,6 +11,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { findMatchingBrace, topLevelKeys } = require('./validate-dataverse-payload');
 
 function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
@@ -105,7 +106,7 @@ function findCursorViolations(content) {
     violations.push('Cursor-paginated screens must not use `useSearchFilter`; it filters only loaded rows. Push search into the service `filter` option.');
   }
 
-  if (!/\b(useCursorListData|useInfiniteQuery)\s*\(/.test(content)) {
+  if (!/\b(useCursorListData|useInfiniteQuery)(?:<[^;\n]*>)?\s*\(/.test(content)) {
     violations.push('Cursor-paginated screens must use `useCursorListData` or React Query `useInfiniteQuery`.');
   }
 
@@ -113,12 +114,18 @@ function findCursorViolations(content) {
     violations.push('Cursor-paginated FlatList must wire `onEndReached` to load the next page.');
   }
 
-  const hasServiceGetAll = /\b\w+Service\.getAll\s*\(/.test(content);
-  if (hasServiceGetAll) {
-    if (!/\bselect\s*:/.test(content)) {
+  const getAllCalls = [...content.matchAll(/\b\w+Service\.getAll(?:<[^;\n]*>)?\s*\(\s*(\{)?/g)];
+  const hasSavedQuery = /\b\w+Service\.getSavedQuery(?:<[^;\n]*>)?\s*\(/.test(content);
+  for (const call of getAllCalls) {
+    const start = call[1] ? call.index + call[0].lastIndexOf('{') : -1;
+    const end = start >= 0 ? findMatchingBrace(content, start) : -1;
+    const options = end >= 0 ? content.slice(start + 1, end) : content;
+    // An aggregate elsewhere on the screen must not exempt an ordinary list query.
+    const hasAggregation = end >= 0 && topLevelKeys(options).includes('apply');
+    if (!hasAggregation && !/\bselect\s*:/.test(options)) {
       violations.push('Cursor-paginated Dataverse `getAll` calls must include `select` so heavy lists do not fetch every column.');
     }
-    if (!/\borderBy\s*:/.test(content)) {
+    if (!hasAggregation && !/\borderBy\s*:/.test(options)) {
       violations.push('Cursor-paginated Dataverse `getAll` calls must include deterministic `orderBy`, including a unique key.');
     }
     if (!/\bmaxPageSize\s*:/.test(content)) {
@@ -129,6 +136,16 @@ function findCursorViolations(content) {
     }
     if (/\bskip\s*:/.test(content) && !/\bskipToken\s*:/.test(content)) {
       violations.push('Cursor-paginated Dataverse reads must not use SDK `skip`; use returned `skipToken` for the next page.');
+    }
+  }
+
+  if (hasSavedQuery) {
+    if (!/\bmaxPageSize\s*:/.test(content) || !/\bnextLink\s*(?:[:,}])/.test(content)) {
+      violations.push('Saved-query pages must pass maxPageSize and the complete returned nextLink to getSavedQuery.');
+    }
+    if (/\buseCursorListData(?:<[^;\n]*>)?\s*\(/.test(content)
+      && !/\bcursorMode\s*:\s*['"]nextLink['"]/.test(content)) {
+      violations.push('Saved queries require useCursorListData cursorMode: "nextLink"; the default skip-token mode loses the saved-query continuation.');
     }
   }
 
@@ -145,7 +162,7 @@ function buildBlockMessage(filePath, violations) {
   ];
   for (const violation of violations) lines.push(`  - ${violation}`);
   lines.push('');
-  lines.push('Required fix: use `useCursorListData`/`useInfiniteQuery`, SDK `maxPageSize`, `skipToken`, server-side `filter`, deterministic `orderBy`, `select`, and FlatList `onEndReached`. If the generated service has no cursor support, return BLOCKED instead of falling back to `useListData`.');
+  lines.push('Required fix: use `useCursorListData`/`useInfiniteQuery` and FlatList `onEndReached`. Ordinary OData uses maxPageSize, skipToken, server-side filter, deterministic orderBy, and select. Saved queries use cursorMode: "nextLink" and complete links, with selection/order owned by the view. If the generated service has no required support, return BLOCKED instead of using a bounded list.');
   return lines.join('\n');
 }
 

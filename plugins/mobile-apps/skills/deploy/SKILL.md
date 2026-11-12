@@ -121,6 +121,19 @@ Web is **exempt**, and so is Dev Player. The Code App, `npm run dev`, and the br
 
 **Telemetry checkpoint: `build_power_apps_bundle`**
 
+Before building, inspect the app's approved query contracts and actual query
+call sites. Only if it uses expand, apply, or `getSavedQuery`, run
+`node "${PLUGIN_ROOT}/scripts/check-dataverse-query-support.js" --project-root
+'<working_dir>' --table '<logical-name>' --require '<used-features>'` for each
+affected Dataverse service. Follow
+[data-performance.md](../../shared/references/data-performance.md), including
+typed result/pagination and offline-runtime verification. If a query's required
+capability is missing, STOP and point to `/check-updates` plus the user-run
+retained-source refresh. Never install, refresh, migrate queries, or rewrap
+silently during deployment. Older apps that do not use these features are not
+required to upgrade. An SDK/CLI-only JavaScript update does not itself require
+a new native base; native-package/runtime changes keep their existing gates.
+
 **Print before starting:**
 > "→ Building production web bundle via `npm run build` (= `expo export --platform web`). ~30–90 seconds."
 

@@ -219,18 +219,16 @@ const bad = await CrInspectionreportService.getAll({
 const bad2 = record['_cr_inspectorid_value@OData.Community.Display.V1.FormattedValue']; // use lookupName() instead
 ```
 
-### `$expand` is NOT supported
+### Related fields and query capabilities
 
-`IGetAllOptions` (the interface accepted by all generated `getAll` / `get` methods) has no `expand` field. Do not attempt to pass `$expand` — it will be silently ignored.
-
-If you need **additional columns** from the related record beyond its primary name, call a second `Service.get()`:
-
-```typescript
-// Only in detail screens (one record shown) — never inside a list map()
-const inspector = await SystemuserService.get(record._cr_inspectorid_value, {
-  select: ['fullname', 'internalemailaddress', 'jobtitle'],
-})
-```
+For new queries on a supported SDK and refreshed generated service, use typed
+`expand` for related columns instead of creating calculated/copied fields.
+Use exact metadata navigation names and narrow nested selections. The single
+source of truth for capability checks, generic results, apply, saved views,
+pagination, all column types, and legacy/offline boundaries is
+[data-performance.md](../../../shared/references/data-performance.md).
+Existing apps retain their queries; `/check-updates` offers approved dependency
+updates and asks the user to refresh data sources without migrating app code.
 
 Common lookup fields: `_primarycontactid_value`, `_customerid_value`, `_ownerid_value`, `_parentaccountid_value`, `_transactioncurrencyid_value`
 

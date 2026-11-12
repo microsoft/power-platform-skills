@@ -1096,7 +1096,11 @@ Column shapes that have non-obvious gotchas (handle carefully):
 
   **Pre-flight M:N:** a relationship can only pre-exist on a table that already existed at Step 4. If **either** endpoint was just created in this run, skip the probe — nothing can be there. Otherwise read `ManyToManyRelationships` from that table's Step 4 snapshot: present → skip (already exists); absent → proceed. Query `RelationshipDefinitions(SchemaName='<prefix>_<table1>_<table2>')?$select=SchemaName` only when the snapshot did not cover it.
 
-  **In the generated service:** M:N relationships are queried via the intersect entity name (e.g., `cr123_tag_inspection`) — the SDK does not expose a direct M:N navigation helper; the screen-builder must query the intersect table directly. Flag this in the Step 7 summary if any M:N relationships are created.
+  **In the generated service:** supported SDK/services can read a bounded M:N
+  collection using its exact metadata navigation property in `expand`. Follow
+  `data-performance.md` for nested-option and child-continuation restrictions.
+  If expansion cannot meet the required paging contract, use only a verified
+  generated intersect/child-service query; never invent an intersect service.
 
 - **Column `@odata.type` and required fields — reference table (verified against Dataverse OData API):**
 
@@ -1157,9 +1161,10 @@ Legacy workflow XAML and generated formula serialization must not be synthesized
 
 - Do not invoke `create-calculated-column.js`; it is a fail-closed guard for
   legacy callers.
-- Cross-entity fields must use a supported formatted lookup annotation or
-  bounded chained fetch as documented in `data-performance.md`.
-- For a hot list field that cannot use either path, mark it
+- Cross-entity fields use supported formatted lookups, typed expansions,
+  grouped aggregates, or bounded chained fetches as documented in
+  `data-performance.md`. New display joins do not require calculated columns.
+- For a hot list field that cannot use a supported query or existing projection, mark it
   `external-projection-required` and omit it from this mutation run. The user
   may create a formula column in Power Apps or supply another server-owned
   projection outside this PR, then rerun Step 4a to validate and reuse it.
@@ -1278,6 +1283,22 @@ service, STOP before screen generation:
 ```text
 BLOCKED: required Dataverse service missing for <logical-name>. Schema action=<reuse|extend|create>; app usage=<screens/hooks that require it>.
 ```
+
+For planned expand/apply/saved-query reads, run the shared capability check
+against each affected logical table before handing services to builders:
+
+```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/check-dataverse-query-support.js" \
+  --project-root '<working_dir>' --table '<logical-name>' --require '<planned-features>'
+```
+
+`<planned-features>` is a comma-separated subset of `expand,apply,saved-query`,
+not all features for every table. Read fresh relationship navigation metadata
+after creating a relationship; never guess its navigation name. An unsupported
+existing service is not permission to refresh outside approved scope: direct
+the user to `/check-updates` and the retained-source refresh workflow.
+Keep existing app queries and server columns unchanged.
 
 ### Step 6b — Publish customizations
 

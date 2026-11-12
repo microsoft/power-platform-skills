@@ -732,9 +732,10 @@ dispatch `data-model-architect`. Skip silently when no related fields exist.
 
 **Detection (cheap):** before spawning, `Grep` the locked plan for `related_entity_fields:` in `<working_dir>/native-app-plan.md`. Zero matches → skip Step 5c entirely, mark `[x]` and proceed to Step 6. One or more matches → spawn the audit pass below.
 
-This step exists because the SDK has no `$expand`. It verifies that every
-cross-entity field uses a formatted lookup or bounded chained fetch, and flags
-hot-path fields that require an externally supplied projection. It never
+This step verifies that every cross-entity field has metadata-grounded navigation
+and a supported read contract: formatted lookup, expand, grouped apply, bounded
+chained fetch, or an existing projection. Follow `data-performance.md` for the
+installed SDK/generator check and separate online/offline capabilities. It never
 synthesizes calculated/formula metadata and must preserve the already approved
 `.tmp/dataverse-schema-contract.json` unchanged.
 
@@ -769,9 +770,9 @@ If 5c.1 wrote a `### Cross-entity Reads` addendum, present it to the user as a G
 ```
 ## Gate 2 — Addendum: Cross-entity Reads
 
-The screen plan reads N fields from related entities. The generated SDK has no
-$expand, so each field must use a formatted lookup, a bounded chained fetch, or
-an external server-owned projection.
+The screen plan reads N fields from related entities. Each field needs a
+verified read path supported by the installed SDK, generated services, and
+execution target; no calculated column is created solely for a display join.
 
 Proposed read paths:
 
