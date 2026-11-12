@@ -1135,6 +1135,45 @@ test('protected configuration in fresh processes: a create whose answer was lost
   assert.deepEqual(org.unexpected, []);
 });
 
+// #847 across OS processes: the first stops with create-value-refused, the second (corrected settings) sends only the value and
+// completes the variable at the definition id the first process stored on disk, and the third sends nothing.
+test('protected configuration in fresh processes: a refused variable value is completed alone by the next process, and the third sends nothing', async () => {
+  const p = processCommands();
+  let refuse = true;
+  const org = commandOrg({ intercept: (req) => (refuse && req.method === 'POST' && req.path.split('?')[0] === '/environmentvariablevalues'
+    ? { statusCode: 400, body: { error: { code: '0x80072040', message: 'the Key Vault reference was refused' } } } : undefined) });
+  const spec = protectedSpec({ environmentVariables: [{ schemaName: 'contoso_ApiKey', type: 'secret' }], customApis: [], duplicateDetectionRules: [] });
+  const settingsFile = path.join(p.root, 'settings.json');
+  fs.writeFileSync(settingsFile, JSON.stringify({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiKey', Value: KV }] }));
+  const argv = [...DATA, '--deployment-settings', settingsFile];
+  const said = (out) => `${out.stderr} ${JSON.stringify(out.payload)} ${out.thrown ? out.thrown.message : ''}`;
+  const group = () => openManagedBindings({ workspaceDir: path.join(p.appDir, '.maker-workspace'), environment: org.origin, appUniqueName: 'contoso_configprobe', solutionUniqueName: 'ContosoSol' })
+    .readGroup('environmentVariable', 'contoso_apikey');
+
+  const first = await p.command(org, spec, { argv });
+  assert.ok(said(first).includes('environmentVariable contoso_ApiKey (create-value-refused)'), said(first).slice(-1500));
+  assert.deepEqual(rootCreates(org), ['POST /environmentvariabledefinitions', 'POST /environmentvariablevalues']);
+  const { root } = group().pending;
+
+  refuse = false;
+  let mark = org.requests.length;
+  const done = await p.command(org, spec, { argv });
+  assert.equal(done.thrown, null, done.thrown && done.thrown.message);
+  assert.equal(done.exitCode, 0, done.stderr.slice(-900));
+  assert.deepEqual(rootCreates(org, mark), ['POST /environmentvariablevalues'], 'only the value, once');
+  assert.equal(group().pending, null);
+  assert.equal(group().committed.records[0].id, root.id, 'at the definition id the first process stored');
+
+  mark = org.requests.length;
+  const again = await p.command(org, spec, { argv });
+  assert.equal(again.exitCode, 0, again.stderr.slice(-900));
+  assert.deepEqual(org.writes(mark), []);
+  assert.deepEqual([org.rows('environmentvariabledefinitions').length, org.rows('environmentvariablevalues').length], [1, 1]);
+  assert.equal(new Set(p.pids).size, 3, 'three OS processes');
+  assert.ok(!p.pids.includes(process.pid));
+  assert.deepEqual(org.unexpected, []);
+});
+
 // A protected Custom API whose implementation (a plug-in type) was registered outside the plugin, as an App Spec cannot declare
 // one (configuration-artifacts.js refuses `pluginTypeId`). The build never writes the implementation; a bound row keeps the exact
 // plug-in type its fresh read found, and the edit is proved only while the row still holds that one.

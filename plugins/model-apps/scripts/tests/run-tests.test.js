@@ -407,6 +407,22 @@ test('the model-apps CI workflow gives every suite run the previous release\'s S
   }
 });
 
+// The downgrade tests (configuration-protected.test.js) run the release before this one over the binding store this one writes, and FAIL
+// in CI without it: each job that runs the suite fetches that release by its hash and names its scripts — the same commit
+// helpers/downgrade-release.js extracts from git history and checks the version of, so the two cannot drift apart on the next release.
+test('the model-apps CI workflow gives every suite run the release before this one, which the downgrade tests run', () => {
+  const { DOWNGRADE_RELEASE } = require('./helpers/downgrade-release.js');
+  const wf = fs.readFileSync(WORKFLOW, 'utf8');
+  for (const id of ['test-model-apps-scripts', 'test-model-apps-lexer-oracles']) {
+    const job = workflowJob(wf, id);
+    const fetchAt = job.indexOf(`git fetch --no-tags --depth=1 origin ${DOWNGRADE_RELEASE}`);
+    assert.ok(fetchAt >= 0, `${id} fetches the release (${DOWNGRADE_RELEASE}) by its hash`);
+    assert.ok(job.includes('git archive -o "$RUNNER_TEMP/model-apps-downgrade.tar" FETCH_HEAD plugins/model-apps/.plugin/plugin.json plugins/model-apps/scripts/lib plugins/model-apps/scripts/vendor'), `${id} extracts its manifest and code under RUNNER_TEMP`);
+    assert.match(job, /echo "MODEL_APPS_DOWNGRADE_SCRIPTS=\$RUNNER_TEMP\/model-apps-downgrade\/plugins\/model-apps\/scripts" >> "\$GITHUB_ENV"/, `${id} names it to the later steps`);
+    assert.ok(fetchAt < job.search(/^ {14}run: node scripts\/run-tests\.js[ \t]*$/m), `${id} fetches it before the suite runs`);
+  }
+});
+
 // The eval tests and runners read committed fixtures, which a Windows checkout gives CRLF line ends, and the routing runner starts agent CLIs as
 // child processes (.cmd shims on Windows), so the eval job runs on every system and Node version the suite job runs on; the lexer's oracle
 // sweeps compare it with parsers whose identifier tables are not those of the Node version's engine, so they run on both Node versions. Text
