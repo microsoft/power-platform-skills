@@ -3129,8 +3129,13 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   its layers are the table's forms listed: `GET systemforms?$filter=objecttypecode eq '<table>'` and its
   `RetrieveUnpublishedMultiple()`, `Prefer: odata.maxpagesize=100`, through the shared paged reader
   `lib/systemform-inventory.js` (also behind `lib/page-reference-guard.js`), bounded in reads, forms and XML bytes.
-  ONE byte budget (8 MiB a document, 32 MiB in all) covers the fresh root reads and both listings, spent as each
-  answer arrives and before any parser sees it, so a root past it is never parsed and opens no listing. The root's
+  ONE byte budget (8 MiB a document, 32 MiB in all) covers the fresh root reads and both listings. It is metered in
+  the reader only (`createXmlBudget`/`chargeXml`: `meteredClient` for the root reads, `readSystemFormLayer`'s
+  `xmlBudget` for every page, repeated rows included): each answer is charged once on arrival, before any check,
+  conflict record, fingerprint or parser sees it; an answer past it is refused whole and no later read is sent; the
+  diagnostic never measures XML. So a root past it is never parsed and opens no listing, and a form repeated on a
+  refused page (or whose copy is past the one-document budget) is never hashed or kept and, if it is the stopped
+  form, drops its explanation. The deletion guard passes no `xmlBudget`. The root's
   listing row must fingerprint as its fresh read (`systemFormRootLayerSha256` of name, description, form XML, type
   and table, both layers), else `observations-changed`. The paged reader's optional `progress` channel keeps the
   rows of the pages it accepted before a later failure (the deletion guard does not pass it, and keeps its

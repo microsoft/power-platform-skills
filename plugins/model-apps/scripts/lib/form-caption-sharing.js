@@ -25,8 +25,11 @@
 //        GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$filter=objecttypecode eq '<table>'
 //        Prefer: odata.maxpagesize=100 on every page
 //      at most 200 forms and 3 reads a layer. Every form XML this module receives — the fresh root reads of step 1 and both listings —
-//      is held to ONE byte budget: 8 MiB of form XML a document and 32 MiB in all, counted as each answer arrives and before any
-//      parser sees it, so a stopped form past it is never parsed and opens no listing.
+//      is held to ONE byte budget: 8 MiB of form XML a document and 32 MiB in all. The reader (systemform-inventory.js: meteredClient
+//      for the root reads, readSystemFormLayer's `xmlBudget` for every page) charges each answer once as it arrives, before anything
+//      here sees it, and refuses an answer past it whole; this module never measures XML. So a stopped form past it is never parsed
+//      and opens no listing, no read is sent once it is spent, and a repeated copy on a refused page is never hashed or kept: the
+//      stopped form it repeats is treated as contradicted.
 //   3. each stopped form's row in each listing must be the row of the fresh read (its fingerprint, below), or the explanation would
 //      join two moments; a layer whose later page fails keeps the forms of the pages it accepted, and the scan says it is partial.
 // A form shares a cell only when the strict XML reader finds a <cell> whose id IS that cell id (form-caption-diagnostics.js
@@ -65,32 +68,15 @@ const bytes = (text) => Buffer.byteLength(text, 'utf8');
 const typeOf = (value) => (typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value);
 
 // The reason a read stopped, from the error or the error it wraps: readSystemFormPublication wraps a failed GET as
-// managed-publication-unverified with the client's error as `cause`, so a budget refusal of the root reads is found one level down.
+// managed-publication-unverified with the client's error as `cause`, so a budget refusal of the root reads (systemform-inventory.js
+// meteredClient, XML_BUDGET_CODE) is found one level down.
 function sharingReasonOf(error) {
+  const { XML_BUDGET_CODE } = require('./systemform-inventory.js');
   for (let e = error, depth = 0; e && typeof e === 'object' && depth < 5; e = e.cause, depth += 1) {
     if (REASONS.has(e.sharingReason)) return e.sharingReason;
+    if (e.code === XML_BUDGET_CODE) return 'budget';
   }
   return null;
-}
-
-// The byte budget of every form XML this module receives, one per presentation (the cache's `xmlBudget`): `size` is counted, then
-// refused with `sharingReason: 'budget'` when the document is past maxXmlBytes or the total past maxTotalXmlBytes.
-function spendXml(budget, size, lim) {
-  budget.total += size;
-  if (size > lim.maxXmlBytes) return `a form XML of ${size} bytes, more than the ${lim.maxXmlBytes} this check reads`;
-  if (budget.total > lim.maxTotalXmlBytes) return `more than ${lim.maxTotalXmlBytes} bytes of form XML`;
-  return null;
-}
-
-// The form XML of one root read's answer, before anyone else reads it. The body is an object, or the JSON text of one, e.g.
-//   { "formid": "…", "name": "Information", "formxml": "<form>…</form>", … }
-// An answer with no formxml (a 404 of a never-published form, an error envelope) counts 0: readSystemFormPublication refuses it.
-function rootXmlBytes(body) {
-  let row = body;
-  if (typeof row === 'string') {
-    try { row = JSON.parse(row); } catch { return 0; }
-  }
-  return row && typeof row === 'object' && typeof row.formxml === 'string' ? bytes(row.formxml) : 0;
 }
 
 // What a row of one layer IS, to tell the stopped form's fresh read and its listing row apart: the SHA-256 of its name, description,
@@ -100,12 +86,12 @@ function fingerprintOf(row) {
   return systemFormRootLayerSha256({ name: row.name, description: row.description, formxml: row.formxml, type: typeOf(row.type), objecttypecode: row.objecttypecode });
 }
 
-// The fingerprint of any copy a listing returned, or null (it then matches no fresh read) for one that cannot be fingerprinted or
-// whose form XML is past the one-document budget — a fresh read past it was refused, so such a copy cannot be the fresh read, and
-// it is not hashed.
-function fingerprintOfCopy(row, lim) {
+// The fingerprint of any copy a listing returned, or null for one that cannot be fingerprinted — e.g. a copy whose form XML the
+// reader took out as past the one-document budget (XML_OVER_BUDGET): it is not hashed, and the caller cannot check it.
+function fingerprintOfCopy(row) {
+  const { XML_OVER_BUDGET } = require('./systemform-inventory.js');
   try {
-    if (!row || typeof row !== 'object' || (typeof row.formxml === 'string' && bytes(row.formxml) > lim.maxXmlBytes)) return null;
+    if (!row || typeof row !== 'object' || row[XML_OVER_BUDGET]) return null;
     return fingerprintOf(row);
   } catch {
     return null;
@@ -181,8 +167,11 @@ function layerReason(error) {
 // that form's XML was not read, for `reason`; fingerprint null: its row was not read whole). `coverage[layer]` is 'complete' (one
 // whole listing), 'partial' (the pages accepted before a later read failed — a form it does not list may be on a page not read) or
 // 'unread'. A row that is not a form of this table is left out with a reason. `conflicts[layer]`, set only for a layer whose pages
-// repeated a form, is a Map<formId, row[]> of every copy received of each repeated form: none of them is in `layers`, and the caller
-// compares them with what it read itself. `budget` is the presentation's XML byte budget, which the root reads have already spent from.
+// repeated a form, is a Map<formId, fingerprint[]> of every copy received of each repeated form: none of them is in `layers`, and the
+// caller compares them with what it read itself. `uncheckable[layer]` is the repeated forms with a copy that cannot be compared — on
+// a page the XML budget refused, or with XML past the one-document budget — so the caller must treat each as contradicted.
+// `budget` is the presentation's XML byte budget (createXmlBudget), shared with the root reads; the reader charges every page to it
+// as the page arrives, so no byte is measured here.
 async function readInventory(client, table, lim, budget) {
   const { readSystemFormLayer, formKey } = require('./systemform-inventory.js');
   const filter = `$filter=objecttypecode eq '${odataLit(table)}'`;
@@ -191,12 +180,11 @@ async function readInventory(client, table, lim, budget) {
     saved: `/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${SELECT}&${filter}`,
   };
   const out = {
-    layers: {}, coverage: {}, conflicts: {}, reasons: [], reads: { saved: 0, published: 0 }, formsRead: { saved: 0, published: 0 }, dashboards: new Set(), unsupported: new Set(),
+    layers: {}, coverage: {}, conflicts: {}, uncheckable: {}, reasons: [], reads: { saved: 0, published: 0 }, formsRead: { saved: 0, published: 0 }, dashboards: new Set(), unsupported: new Set(),
   };
   for (const layer of LAYERS) {
     const stats = { reads: 0 };
-    const overSized = new Set();
-    const progress = { rows: [], conflicts: new Set(), conflictRows: [] };
+    const progress = { rows: [], conflicts: new Set(), conflictRows: [], uncheckable: new Set() };
     const stop = (reason, why) => Object.assign(new Error(`the forms of table ${table} in the ${layer} layer could not all be read${why ? ` (${why})` : ''}`), { code: 'FORM_CAPTION_SHARING_UNREADABLE', sharingReason: reason });
     const errors = {
       code: 'FORM_CAPTION_SHARING_UNREADABLE',
@@ -205,19 +193,9 @@ async function readInventory(client, table, lim, budget) {
       short: (declared, held) => stop('incomplete-pages', `the answers declare at least ${declared} forms, the pages held ${held}`),
       failed: (error) => Object.assign(stop(layerReason(error)), { cause: error }),
     };
-    // Counted as each page arrives, before any XML is parsed: one form past its own budget is left unread; the layers past the
-    // budget in all stop the scan of that layer (a partial answer, never a shorter "complete" one).
-    const onRow = (row, refuse) => {
-      const xml = row && row.formxml;
-      if (typeof xml !== 'string') return;
-      const size = bytes(xml);
-      budget.total += size;
-      if (budget.total > lim.maxTotalXmlBytes) throw refuse(`more than ${lim.maxTotalXmlBytes} bytes of form XML`);
-      if (size > lim.maxXmlBytes) overSized.add(formKey(row));
-    };
     let rows;
     try {
-      ({ rows } = await readSystemFormLayer(client, { path: paths[layer], label: `the forms of table ${table} in the ${layer} layer`, maxForms: lim.maxForms, maxReads: lim.maxReads, errors, onRow, progress, stats }));
+      ({ rows } = await readSystemFormLayer(client, { path: paths[layer], label: `the forms of table ${table} in the ${layer} layer`, maxForms: lim.maxForms, maxReads: lim.maxReads, errors, progress, stats, xmlBudget: budget }));
       out.coverage[layer] = 'complete';
     } catch (error) {
       out.reasons.push(layerReason(error));
@@ -226,28 +204,35 @@ async function readInventory(client, table, lim, budget) {
       rows = progress.rows.filter((row) => !progress.conflicts.has(formKey(row)));
       out.coverage[layer] = rows.length ? 'partial' : 'unread';
       if (progress.conflicts.size) {
+        // Each copy is kept as its fingerprint only: no repeated row's XML outlives this loop.
         const copies = new Map();
+        const uncheckable = new Set([...progress.uncheckable].map((key) => normalizeGuid(key)).filter(Boolean));
         for (const row of [...progress.rows, ...progress.conflictRows]) {
           if (!progress.conflicts.has(formKey(row))) continue;
           const formId = normalizeGuid(row.formid);
-          if (formId) copies.set(formId, [...(copies.get(formId) || []), row]);
+          if (!formId) continue;
+          const fingerprint = fingerprintOfCopy(row);
+          if (fingerprint === null) uncheckable.add(formId);
+          else copies.set(formId, [...(copies.get(formId) || []), fingerprint]);
         }
         out.conflicts[layer] = copies;
+        out.uncheckable[layer] = uncheckable;
       }
     } finally {
       out.reads[layer] = stats.reads;
     }
     out.formsRead[layer] = rows.length;
-    out.layers[layer] = out.coverage[layer] === 'unread' ? null : formsOf(rows, table, overSized, out);
+    out.layers[layer] = out.coverage[layer] === 'unread' ? null : formsOf(rows, table, out);
   }
   return out;
 }
 
 // The rows of one layer as forms of `table` (readInventory). A returned row of a form type this check reads, with its id and table,
 // whose name or form XML is not text cannot be examined: it is kept as an unreadable form (`invalid-row`) — never left out as if
-// the layer had not returned it.
-function formsOf(rows, table, overSized, out) {
-  const { formKey } = require('./systemform-inventory.js');
+// the layer had not returned it. A row whose XML the reader took out as past the one-document budget (XML_OVER_BUDGET) is kept as
+// unread for `budget`.
+function formsOf(rows, table, out) {
+  const { XML_OVER_BUDGET } = require('./systemform-inventory.js');
   const { readFormCaptionCells } = require('./form-caption-diagnostics.js');
   const forms = new Map();
   for (const row of rows) {
@@ -259,14 +244,14 @@ function formsOf(rows, table, overSized, out) {
     }
     if (DASHBOARD_TYPES.has(type)) { out.dashboards.add(formId); continue; }
     if (!FORM_TYPES.has(type)) { out.unsupported.add(formId); out.reasons.push('unsupported-form-type'); continue; }
+    if (typeof row.name === 'string' && row[XML_OVER_BUDGET]) {
+      out.reasons.push('budget');
+      forms.set(formId, { name: row.name, fingerprint: null, cells: null, reason: 'budget' });
+      continue;
+    }
     if (typeof row.formxml !== 'string' || typeof row.name !== 'string') {
       out.reasons.push('invalid-row');
       forms.set(formId, { name: typeof row.name === 'string' ? row.name : null, fingerprint: null, cells: null, reason: 'invalid-row' });
-      continue;
-    }
-    if (overSized.has(formKey(row))) {
-      out.reasons.push('budget');
-      forms.set(formId, { name: row.name, fingerprint: null, cells: null, reason: 'budget' });
       continue;
     }
     const fingerprint = fingerprintOf(row);
@@ -319,24 +304,17 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
   const table = scope.table;
   const store = cache && typeof cache === 'object' ? cache : {};
   if (!(store.roots instanceof Map)) store.roots = new Map();
-  if (!store.xmlBudget || typeof store.xmlBudget.total !== 'number') store.xmlBudget = { total: 0 };
+  const { createXmlBudget, meteredClient } = require('./systemform-inventory.js');
+  if (!store.xmlBudget || typeof store.xmlBudget.received !== 'number') store.xmlBudget = createXmlBudget(lim);
   const budget = store.xmlBudget;
   const list = Array.isArray(roots) ? roots : [];
   const inspected = list.slice(0, lim.maxRoots);
   const omittedRoots = Math.max(0, list.length - inspected.length);
   const reasons = [];
   let rootReads = 0;
-  // Counts the GETs of the root reads (the inventory counts its own), and spends each answer's form XML from the shared budget
-  // BEFORE readSystemFormPublication sees it: a document past the budget is refused there, so no parser reads it.
-  const counting = {
-    get: async (...a) => {
-      rootReads += 1;
-      const response = await client.get(...a);
-      const over = spendXml(budget, rootXmlBytes(response && response.body), lim);
-      if (over) throw Object.assign(new Error(`a stopped form was not read: ${over}`), { code: 'FORM_CAPTION_SHARING_UNREADABLE', sharingReason: 'budget' });
-      return response;
-    },
-  };
+  // The root reads go through the reader's metered client: it counts each GET sent (the inventory counts its own), and charges each
+  // answer to the shared budget BEFORE readSystemFormPublication sees it — an answer past it is refused there, so no parser reads it.
+  const counting = meteredClient(client, budget, { onRead: () => { rootReads += 1; } });
   const outcomes = [];
   for (const root of inspected) {
     const id = `${root.formId}|${root.savedSha256}|${root.publishedSha256}`;
@@ -374,8 +352,10 @@ async function readFormCaptionSharing(client, { scope, roots, limits, cache } = 
     // each copy received of it is still what the platform answered: one that is not the fresh read contradicts it, wherever it
     // came (even on the page that left the layer unread).
     for (const layer of LAYERS) {
+      // A copy that could not be compared (refused by the budget, or its XML past it) is treated as a contradiction: never restored.
+      if (inv.uncheckable[layer] && inv.uncheckable[layer].has(root.formId)) consistent = false;
       const copies = inv.conflicts[layer] && inv.conflicts[layer].get(root.formId);
-      if (copies && copies.some((row) => fingerprintOfCopy(row, lim) !== outcome.fingerprints[layer])) consistent = false;
+      if (copies && copies.some((fingerprint) => fingerprint !== outcome.fingerprints[layer])) consistent = false;
       const listed = inv.layers[layer] && inv.layers[layer].get(root.formId);
       if (!inv.layers[layer]) continue;
       if (!listed) { if (inv.coverage[layer] === 'complete') reasons.push('incomplete-pages'); continue; }

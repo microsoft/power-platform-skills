@@ -395,6 +395,109 @@ test('a page that repeats forms is evidence against every form it repeats: none 
   assert.deepEqual([onlyPage.scan.status, onlyPage.scan.coverage.published, onlyPage.cells.length], ['partial', 'unread', 0]);
 });
 
+// Every consumer of form XML after the reader — the cell parser and the fingerprint — recording each document it is handed.
+async function consumersSee(run) {
+  const publication = require('../lib/systemform-published.js');
+  const diagnostics = require('../lib/form-caption-diagnostics.js');
+  const seen = [];
+  const parse = diagnostics.readFormCaptionCells;
+  const hash = publication.systemFormRootLayerSha256;
+  diagnostics.readFormCaptionCells = (text) => { seen.push(text); return parse(text); };
+  publication.systemFormRootLayerSha256 = (row) => { seen.push(row.formxml); return hash(row); };
+  try {
+    return { result: await run(), seen };
+  } finally {
+    diagnostics.readFormCaptionCells = parse;
+    publication.systemFormRootLayerSha256 = hash;
+  }
+}
+const xmlSize = (text) => Buffer.byteLength(text, 'utf8');
+const xmlOf = (rows) => rows.reduce((n, r) => n + xmlSize(r.formxml), 0);
+const keptCopies = async (cache, layer) => [...(((await cache.inventory).conflicts[layer]) || new Map()).values()].flat();
+
+test('every byte of form XML is charged once, as it arrives and before anything reads it: past the budget no read is sent and nothing is parsed, hashed or kept', async () => {
+  const sharing = (client, entries, limits, cache) => consumersSee(() => readFormCaptionSharing(client, { scope: ACCOUNT, roots: eligibleRoots(entries, ACCOUNT), limits, cache }));
+  const gets = (wire, from) => wire.log.slice(from).filter((e) => e.method === 'GET').length;
+  // The stopped forms' own reads: the first stopped form's second layer is past the budget, so it is refused on arrival, and the second
+  // stopped form and the listings are never asked for.
+  {
+    const { wire, client } = await over(principal);
+    const entries = [await observed(client, ROOT), await observed(client, PEER, 'account/peer')];
+    const cap = Math.max(xmlSize(wire.saved.get(ROOT).formxml), xmlSize(wire.published.get(ROOT).formxml)) + 1;
+    const cache = {};
+    const at = wire.log.length;
+    const { result, seen } = await sharing(client, entries, { maxTotalXmlBytes: cap }, cache);
+    assert.deepEqual([result.scan.status, result.scan.reason, result.scan.reads.roots], ['unavailable', 'budget', 2]);
+    assert.equal(gets(wire, at), 2, 'no read is sent once the budget refused one');
+    assert.ok(cache.xmlBudget.total <= cap, `${cache.xmlBudget.total} bytes taken in against ${cap}`);
+    assert.deepEqual(seen, [], 'nothing past the budget is parsed or hashed');
+  }
+  // A listing page: the saved listing is one byte past what the stopped form left, so none of it is parsed or hashed, and the
+  // published listing is never asked for.
+  {
+    const { wire, client } = await over(principal);
+    const entry = await observed(client, ROOT);
+    const rootXml = [wire.saved.get(ROOT).formxml, wire.published.get(ROOT).formxml];
+    const cap = xmlOf([wire.saved.get(ROOT), wire.published.get(ROOT)]) + xmlOf(rowsOf(wire, 'saved')) - 1;
+    const cache = {};
+    const { result, seen } = await sharing(client, [entry], { maxTotalXmlBytes: cap }, cache);
+    assert.equal(result.scan.reason, 'budget');
+    assert.deepEqual([result.scan.coverage, result.scan.reads.saved, result.scan.reads.published], [{ saved: 'unread', published: 'unread' }, 1, 0]);
+    assert.ok(cache.xmlBudget.total <= cap, `${cache.xmlBudget.total} bytes taken in against ${cap}`);
+    assert.ok(seen.every((x) => rootXml.includes(x)), 'only the stopped form\'s own fresh reads are parsed or hashed');
+  }
+  // A repeated copy on a page past the aggregate: it is neither hashed nor kept, and the stopped form it may contradict explains nothing.
+  {
+    const { wire, client } = await over(principal);
+    const entry = await observed(client, ROOT);
+    const cap = xmlOf([wire.saved.get(ROOT), wire.published.get(ROOT)]) + xmlOf(rowsOf(wire, 'saved')) + xmlOf(rowsOf(wire, 'published'));
+    const later = form(cell(CELL, 'ZZZ old')).replace('</form>', '<!-- read later --></form>');
+    const link = 'https://contoso.crm.dynamics.com/api/data/v9.0/systemforms?$skiptoken=past-budget';
+    scriptList(wire, 'published', { statusCode: 200, body: { value: rowsOf(wire, 'published'), '@odata.nextLink': link } });
+    wire.script((e) => e.url.includes('skiptoken=past-budget'), { statusCode: 200, body: { value: [{ ...rowsOf(wire, 'published').find((r) => r.formid === ROOT), formxml: later }] } });
+    const cache = {};
+    const { result, seen } = await sharing(client, [entry], { maxTotalXmlBytes: cap }, cache);
+    assert.deepEqual([result.scan.status, result.scan.coverage.published, result.cells.length], ['partial', 'partial', 0]);
+    assert.ok(!seen.includes(later), 'the copy past the budget is never hashed');
+    assert.ok(!(await keptCopies(cache, 'published')).some((k) => k === later || (k && k.formxml === later)), 'nor kept');
+    assert.equal(cache.xmlBudget.total, cap);
+  }
+  // A repeated copy past the one-document budget: taken out of its row by the reader, so it is neither hashed nor kept, and the
+  // stopped form it repeats explains nothing.
+  {
+    const { wire, client } = await over(principal);
+    const entry = await observed(client, ROOT);
+    const big = form(cell(CELL, 'ZZZ old')).replace('</form>', `<!-- ${'x'.repeat(4000)} --></form>`);
+    const link = 'https://contoso.crm.dynamics.com/api/data/v9.0/systemforms?$skiptoken=big-copy';
+    scriptList(wire, 'published', { statusCode: 200, body: { value: rowsOf(wire, 'published'), '@odata.nextLink': link } });
+    wire.script((e) => e.url.includes('skiptoken=big-copy'), { statusCode: 200, body: { value: [{ ...rowsOf(wire, 'published').find((r) => r.formid === ROOT), formxml: big }] } });
+    const cache = {};
+    const { result, seen } = await sharing(client, [entry], { maxXmlBytes: xmlSize(big) - 1 }, cache);
+    assert.deepEqual([result.scan.status, result.cells.length], ['partial', 0]);
+    assert.ok(!seen.includes(big), 'the copy past the one-document budget is never hashed');
+    assert.ok(!(await keptCopies(cache, 'published')).some((k) => k === big || (k && k.formxml === big)), 'nor kept');
+  }
+});
+
+test('at the default budget a page of repeated large copies is refused whole: it is not hashed, and what was taken in stays within the budget', async () => {
+  const padded = (caption) => form(cell(CELL, caption)).replace('</form>', `<!-- ${'x'.repeat(1024 * 1024)} --></form>`);
+  const { wire, client } = await over((w) => {
+    put(w, { id: ROOT, name: 'Account main', saved: padded('RRR shared'), published: padded('ZZZ old') });
+    put(w, { id: PEER, name: 'Account copy', saved: padded('RRR shared'), published: padded('ZZZ peer') });
+  });
+  const entry = await observed(client, ROOT);
+  const rootPublished = wire.published.get(ROOT).formxml;
+  const link = 'https://contoso.crm.dynamics.com/api/data/v9.0/systemforms?$skiptoken=many-copies';
+  scriptList(wire, 'published', { statusCode: 200, body: { value: rowsOf(wire, 'published'), '@odata.nextLink': link } });
+  wire.script((e) => e.url.includes('skiptoken=many-copies'), { statusCode: 200, body: { value: Array.from({ length: 28 }, () => ({ ...rowsOf(wire, 'published').find((r) => r.formid === ROOT) })) } });
+  const cache = {};
+  const { result, seen } = await consumersSee(() => readFormCaptionSharing(client, { scope: ACCOUNT, roots: eligibleRoots([entry], ACCOUNT), cache }));
+  assert.deepEqual([result.scan.status, result.scan.coverage.published, result.cells.length], ['partial', 'partial', 0]);
+  assert.ok(cache.xmlBudget.total <= 32 * 1024 * 1024, `${cache.xmlBudget.total} bytes taken in`);
+  // The fresh read, parsed and hashed, and the first page's copy, hashed: none of the refused page's copies.
+  assert.equal(seen.filter((x) => x === rootPublished).length, 3, 'no copy on the refused page is hashed');
+});
+
 test('a returned form row with no readable name is an unreadable form (invalid-row) that leaves the scan partial, never a form left out', async () => {
   for (const name of [undefined, null, 7]) {
     const { wire, client } = await over(principal);
